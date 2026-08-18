@@ -1,0 +1,828 @@
+[
+  {
+    "id": "hand-flow",
+    "title": "How a Hand of Hold'em Runs",
+    "summary": "Follow one hand from the posted blinds to the showdown: what gets dealt, who acts when, and the four chances to bet.",
+    "topic": "rules-and-flow",
+    "difficulty": "intro",
+    "estimatedMinutes": 8,
+    "prerequisites": [],
+    "blocks": [
+      {
+        "kind": "prose",
+        "text": "A hand of No-Limit Hold'em is a fixed sequence. The cards change every time; the sequence never does. Every decision you will spend the rest of this lab studying happens inside this one skeleton, so it is worth being able to recite it before worrying about whether to call."
+      },
+      { "kind": "heading", "text": "The skeleton" },
+      {
+        "kind": "list",
+        "ordered": true,
+        "items": [
+          "Post. Before anyone sees a card, the two players left of the button put in the small blind and the big blind. Some games also collect an ante from every player. With only two players at the table this works differently, and the blinds lesson covers that separately.",
+          "Deal. Every player receives two private cards, dealt one at a time round the table, starting left of the button. Only you ever see yours.",
+          "Preflop betting. The player left of the big blind acts first. The round continues until everyone still in has matched the largest bet or folded.",
+          "Flop. Three community cards are dealt face up. A second betting round begins, this time with the first player left of the button.",
+          "Turn. A fourth community card. Third betting round, same order as the flop.",
+          "River. A fifth community card. Fourth and final betting round.",
+          "Showdown. If two or more players are still in, hands are compared and the best five-card hand takes the pot."
+        ]
+      },
+      {
+        "kind": "callout",
+        "tone": "insight",
+        "title": "Four betting rounds, five shared cards",
+        "text": "Two private cards, five community cards, four opportunities to put units in. Everything else in poker is choices made inside that frame."
+      },
+      {
+        "kind": "prose",
+        "text": "One detail from live rooms that sometimes confuses newcomers: a human dealer usually burns a card face down before dealing each street. It is an anti-cheating ritual. It changes no probability, because a card you have not seen is a card you have not seen, whether it is in the deck or face down beside it."
+      },
+      { "kind": "heading", "text": "What ends a betting round" },
+      {
+        "kind": "list",
+        "items": [
+          "Everyone still able to act has matched the largest bet — including the case where nobody bet at all and everyone simply checked. A player who is already all-in for less has nothing left to match, and is not waited on.",
+          "Everyone folded to one player, who wins immediately and never has to show.",
+          "Nobody who is still in has units left to bet, because they are all-in. Remaining streets are then dealt with no betting."
+        ]
+      },
+      { "kind": "heading", "text": "Most pots never reach a showdown" },
+      {
+        "kind": "prose",
+        "text": "It is easy to assume the point of the game is to make the best hand. Most hands are not decided that way. The pot goes to whoever is last standing, and usually that happens because everybody else folded. Winning the pot and holding the best hand are two different achievements, and the gap between them is where a large part of poker strategy lives — it is the whole source of what later lessons call fold equity."
+      },
+      {
+        "kind": "callout",
+        "tone": "misconception",
+        "title": "\"You need the best hand to win\"",
+        "text": "You need the best hand to win a showdown. You win a pot by being the last player who has not folded. Those are different, and the second happens far more often than the first."
+      },
+      { "kind": "heading", "text": "One hand tells you almost nothing" },
+      {
+        "kind": "prose",
+        "text": "Because five community cards are still to come preflop, even a large edge is only an edge. Two hands that look worlds apart in strength often run out closer than people expect, and the reverse is true too. This is the reason this lab judges decisions rather than results, and it is why a losing hand is not evidence of a mistake."
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": { "kind": "equity", "heroCards": "AhKs", "opponents": ["7c7d"] },
+        "caption": "Ace-king against a pair of sevens, all five community cards still to come. Ask the app how often each hand wins. Whatever it says, notice that neither side is anywhere near certain — and that a single hand therefore cannot tell you who played better."
+      },
+      { "kind": "heading", "text": "The seats rotate" },
+      {
+        "kind": "prose",
+        "text": "After every hand the button moves one seat clockwise, so the blinds move with it. Nobody pays the blinds for ever, and nobody gets to act last for ever. Over a full rotation everyone has paid the same forced bets and played from every position — which is why the cost of the blinds is a shared cost rather than a private misfortune."
+      },
+      {
+        "kind": "prose",
+        "text": "When it is your turn, this app shows exactly which actions are legal and the exact bounds on each one. Treat that list as a rules teacher rather than a menu: if an action you expected is missing, there is a rule behind its absence, and the next lesson covers most of them."
+      }
+    ],
+    "keyTakeaways": [
+      "Every hand runs the same way: blinds, hole cards, then four betting rounds separated by the flop, the turn and the river.",
+      "You get two private cards and share five, and your hand is the best five out of those seven.",
+      "A betting round ends when everyone still in has matched the largest bet, when only one player is left, or when nobody has units left to bet.",
+      "Most pots are won because everyone else folded, not at a showdown — winning the pot and holding the best hand are different things.",
+      "The button rotates every hand, so blind costs and positional advantages are shared over time.",
+      "Because so many cards are still to come, one hand's result says almost nothing about the quality of the decisions in it."
+    ],
+    "quizId": "quiz-hand-flow",
+    "glossaryTerms": [
+      "street",
+      "blinds",
+      "ante",
+      "button",
+      "showdown",
+      "all-in",
+      "pot",
+      "units",
+      "fold-equity"
+    ]
+  },
+  {
+    "id": "betting-actions",
+    "title": "Actions, and What Each One Commits You To",
+    "summary": "Check, call, bet, raise, fold and all-in — what each one costs, the minimum-raise rule, and why every raise should be stated as a total.",
+    "topic": "rules-and-flow",
+    "difficulty": "intro",
+    "estimatedMinutes": 9,
+    "prerequisites": ["hand-flow"],
+    "blocks": [
+      {
+        "kind": "prose",
+        "text": "There are only five things you can do at your turn — plus a sixth word, all-in, which names a way of doing three of them rather than an action of its own. Knowing what each one commits you to, and what it does not, removes a surprising share of beginner mistakes before any strategy is involved."
+      },
+      { "kind": "heading", "text": "The actions" },
+      {
+        "kind": "list",
+        "items": [
+          "Fold. You give up the hand. Whatever you already put in stays in the pot; it stopped being yours the moment it went in. Folding is the only action that guarantees you risk nothing further.",
+          "Check. Available only when nothing is owed. It keeps your hand for free and passes the decision along.",
+          "Bet. The first voluntary units on a street. It sets a price everyone after you must match, raise, or refuse.",
+          "Call. Match the current bet level. You pay only the difference between what you have already committed this street and that level.",
+          "Raise. Increase the bet level. Everyone who wants to continue must now match the new, higher total.",
+          "All-in is not a sixth action. It is a bet, a raise or a call that happens to use your last units — and it caps what you can win from each opponent at what you risked."
+        ]
+      },
+      {
+        "kind": "callout",
+        "tone": "insight",
+        "title": "Folding when you could check is legal, and never useful",
+        "text": "This app lists it anyway, because hiding a legal action teaches a wrong model of the game. But if checking costs nothing, checking is never worse than folding: you keep every way the hand could still win."
+      },
+      { "kind": "heading", "text": "\"Raise to\", not \"raise by\"" },
+      {
+        "kind": "prose",
+        "text": "Suppose the bet is 20 and someone says \"raise 60\". Did they mean a new total of 60, or 60 more on top, making 80? Both readings are common, which means the phrase carries no information. This lab always states a raise as a destination: \"raise to 100\" means that when your action is done, you will have 100 committed on this street. When you type an amount into the app, you are typing a total, not an increment."
+      },
+      {
+        "kind": "callout",
+        "tone": "misconception",
+        "title": "\"Raise by\" is a habit worth losing",
+        "text": "In a live room an ambiguous verbal raise gets ruled on by the floor, and the ruling is often not the one you had in mind — you can be bound to a smaller raise than you intended, in a spot where the size was the whole point. State the total, every time."
+      },
+      { "kind": "heading", "text": "The minimum raise" },
+      {
+        "kind": "prose",
+        "text": "You cannot raise by a trivial amount. The rule is about the increment, not the total: a raise must increase the bet level by at least as much as the largest complete bet or raise already made on this street, and never by less than one big blind. Preflop the big blind counts as the first bet, which is why the first raise must at least double it."
+      },
+      {
+        "kind": "formula",
+        "expression": "minimum raise-to = current bet level + max(largest complete bet or raise so far this street, one big blind)",
+        "explanation": "The second term inside the max is what stops the minimum from collapsing on a street where nobody has bet yet, since the largest raise so far would be zero. It is also exactly why the first preflop raise must reach two big blinds."
+      },
+      {
+        "kind": "prose",
+        "text": "Work it through with the blinds at 10 and 20. Someone opens to 60: they raised the level by 40 over the big blind. The next raise must therefore reach at least 100, not 80 and not 120. If instead that player had made it 180, the increment would be 160 and the following raise would have to reach at least 340. The minimum climbs as the aggression escalates, which is why a raising war gets expensive so quickly."
+      },
+      {
+        "kind": "callout",
+        "tone": "warning",
+        "title": "\"No-limit\" is about the ceiling, not the rules",
+        "text": "The maximum you can put in is your whole stack — that is what no-limit means. There is still a floor, and it is the minimum raise. Both bounds are shown to you before you act; a bet outside them is simply rejected."
+      },
+      { "kind": "heading", "text": "What a call actually commits you to" },
+      {
+        "kind": "prose",
+        "text": "A call settles one street. Calling on the flop does not oblige you to call on the turn, and there is no such thing as being committed to a hand by a call you have already made. What a call does do is choose the size of the pot you will be playing next. Every call buys a card at a stated price and simultaneously hands you a larger pot to defend with the same stack — those two effects are what the stack-to-pot ratio turns into a single number later in the syllabus."
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": { "kind": "potOdds", "pot": 100, "toCall": 50 },
+        "caption": "A concrete price: the pot stands at 100 including your opponent's bet, and calling costs you 50. Ask the app what share of the eventual pot you are buying with that call. That share, not the raw size of the bet, is what a price means."
+      },
+      {
+        "kind": "prose",
+        "text": "One last habit. The units already in the pot are not a reason to put more in. They are gone in every branch of every decision, including the branch where you fold. The only live question at your turn is whether the next units are worth their price — and \"I have already put so much in\" is the most expensive sentence in poker."
+      }
+    ],
+    "keyTakeaways": [
+      "Fold, check, bet, call and raise are the whole vocabulary; all-in is one of those actions using your last units.",
+      "Units already in the pot are not yours, and a fold never gets them back — which is a reason to ignore them, not to keep calling.",
+      "State a raise as a total ('raise to 100'), because 'raise 60' has two meanings and the ruling may not be yours.",
+      "A raise's increment must match the largest complete bet or raise so far on the street, and never be less than one big blind.",
+      "A call settles the price of one street only, but it also chooses how big a pot you will play on the next one."
+    ],
+    "quizId": "quiz-betting-actions",
+    "glossaryTerms": [
+      "check",
+      "call",
+      "bet",
+      "raise",
+      "fold",
+      "all-in",
+      "min-raise",
+      "pot-odds",
+      "open",
+      "limp",
+      "three-bet",
+      "spr"
+    ]
+  },
+  {
+    "id": "all-ins-and-side-pots",
+    "title": "All-Ins and Side Pots",
+    "summary": "Why a short stack can never win more than it risked, how pot layers are built from each player's commitment, and the all-in that does not reopen the betting.",
+    "topic": "rules-and-flow",
+    "difficulty": "core",
+    "estimatedMinutes": 10,
+    "prerequisites": ["hand-flow", "betting-actions"],
+    "blocks": [
+      {
+        "kind": "prose",
+        "text": "Poker is played under table stakes: you play a hand with the units in front of you and cannot add to them mid-hand. That single rule has two consequences that are really the same consequence read from both ends. Nobody can bet you off a hand by wagering more than you can cover. And you cannot win more from an opponent than you yourself put at risk."
+      },
+      { "kind": "heading", "text": "Why a short stack cannot win more than it risks" },
+      {
+        "kind": "prose",
+        "text": "Imagine you are all-in for a small amount and two opponents keep betting each other. Those units are going into a contest you are no longer part of. They form a separate pot that only the players who matched it can win. You cannot lose it, and you cannot win it. If that feels unfair in the moment, notice that the alternative would be strictly worse: to be able to win those units you would have to have been able to lose them."
+      },
+      { "kind": "heading", "text": "Building the layers" },
+      {
+        "kind": "prose",
+        "text": "A live dealer does this with their hands, pushing chips into separate piles. The app does the same thing with arithmetic. Take every player's total commitment for the hand — including players who folded, whose units stay in the middle — and sort those amounts smallest first. Each distinct amount is a cap, and the units between one cap and the next form one layer of the pot."
+      },
+      {
+        "kind": "formula",
+        "expression": "layer amount = sum over all contributors of ( min(their total commitment, this cap) - min(their total commitment, previous cap) )",
+        "explanation": "Read it as: everybody pays into a layer up to that layer's cap and no further. The lowest layer is the main pot; each layer above it is a side pot. Nothing is created or destroyed — the layers add back up to exactly what was committed."
+      },
+      {
+        "kind": "formula",
+        "expression": "eligible for a layer  <=>  still holding cards  AND  total commitment >= that layer's cap",
+        "explanation": "Both conditions are needed. Folded players fill the layers but can win nothing, which is the precise sense in which a fold is a donation to whoever remains eligible. And a player who is all-in for less than a cap is not eligible for that layer no matter how good their hand is."
+      },
+      { "kind": "heading", "text": "A worked structure" },
+      {
+        "kind": "prose",
+        "text": "Three players get all-in on the same hand. Call them Short, Middle and Deep, with Short having the fewest units and Deep the most. The first cap is Short's commitment: all three reached it, so all three can win that layer — the main pot. The second cap is Middle's commitment: only Middle and Deep reached it, so only they can win the layer between the first cap and the second, and Short has contributed nothing to it. Finally, whatever Deep committed above Middle's cap was matched by nobody still holding cards, so it comes straight back to Deep. A dealer calls that returning the uncalled bet."
+      },
+      {
+        "kind": "prose",
+        "text": "Notice what the structure did not need: the pot totals. The layers are determined entirely by who committed how much, and each layer's eligibility list follows from the caps. Once you can see the caps, you can read any multi-way all-in — including tables where four or five players are in for different amounts, which is just the same rule applied more times."
+      },
+      {
+        "kind": "callout",
+        "tone": "insight",
+        "title": "The best hand does not win \"the pot\" — it wins each pot it is eligible for",
+        "text": "If Short holds the best hand, Short takes the main pot and nothing else; the side pot goes to whichever of Middle and Deep has the better hand. One showdown, two winners. That is not a quirk: each player won exactly the units they had at risk."
+      },
+      {
+        "kind": "callout",
+        "tone": "misconception",
+        "title": "\"I was all-in and I had the best hand, so I should get everything\"",
+        "text": "A familiar frustration: you commit your last units, two bigger stacks call, you show the winner, and units still go elsewhere. Nothing went wrong. You were never able to win units you could not have lost — the same rule that protects a short stack from being bet off a hand also caps what it can collect."
+      },
+      { "kind": "heading", "text": "The all-in that does not reopen the betting" },
+      {
+        "kind": "prose",
+        "text": "One rule surprises almost everyone the first time. If a player goes all-in for more than the current bet but for less than a legal minimum raise, that is a legal raise but an incomplete one. Players who had already acted at the old bet level may call the extra or fold — but they may not raise. Players who have not yet acted are unaffected and may still raise. If someone does make a complete raise, the action reopens for everyone again."
+      },
+      {
+        "kind": "callout",
+        "tone": "warning",
+        "title": "If \"raise\" is missing from your options, this is usually why",
+        "text": "The app recomputes what is legal for you every single turn rather than trusting your memory of the street. When an action you expected is absent, read the note next to your options: the incomplete-raise rule accounts for most such cases."
+      },
+      { "kind": "heading", "text": "Why this changes decisions, not just bookkeeping" },
+      {
+        "kind": "prose",
+        "text": "Once a side pot exists there are two contests running at once, and they can pull in different directions. Two players with units behind, facing a third who is already all-in, contest the side pot only between themselves, while all three contest the main pot. That has a consequence worth seeing: if one of them bets the other out of the hand, only one hand is left to beat the all-in player, whereas if both take their hands to a showdown, either one could. It is why you will see players check a hand down when someone is all-in. Be careful with the conclusion, though — that benefit is shared rather than personal, so it does not follow that checking down is best for either of them individually. In a tournament it can be, because busting a player changes everyone's share of the payout structure, which is what the independent chip model is for."
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": { "kind": "equity", "heroCards": "AhAd", "opponents": ["KsKh", "7c7d"] },
+        "caption": "Three players all-in preflop with these exact hands. Ask the app how often each one wins. Then notice what the answer cannot tell you: who wins which layer. Equity comes from the cards; the layers come from the stacks. You need both to know how the units actually move."
+      }
+    ],
+    "keyTakeaways": [
+      "Table stakes means you can win from each opponent only as much as you had in front of you, so an all-in short stack caps what it can collect.",
+      "Pot layers come from sorting every player's total commitment: each distinct commitment is a cap, and the units between caps form one layer.",
+      "You are eligible for a layer only if you still hold cards and your commitment reached that layer's cap; folded units fill layers but win nothing.",
+      "Units nobody still in the hand matched are returned to whoever bet them, because there was no one who could have won them.",
+      "One showdown can pay two different winners, and that is the rule working correctly rather than luck being unjust.",
+      "An all-in that raises by less than a legal minimum does not reopen the betting for players who have already acted."
+    ],
+    "quizId": "quiz-all-ins-and-side-pots",
+    "glossaryTerms": [
+      "all-in",
+      "main-pot",
+      "side-pot",
+      "table-stakes",
+      "uncalled-bet",
+      "min-raise",
+      "effective-stack",
+      "split-pot",
+      "icm"
+    ]
+  },
+  {
+    "id": "position-basics",
+    "title": "Position: The Value of Acting Last",
+    "summary": "Position is a count of how many players act after you — and it changes what a hand is worth without changing what the cards are worth.",
+    "topic": "positions-and-blinds",
+    "difficulty": "intro",
+    "estimatedMinutes": 9,
+    "prerequisites": ["hand-flow"],
+    "blocks": [
+      {
+        "kind": "prose",
+        "text": "Position is usually taught as a set of seat names. It is better understood as a count: how many players still get to act after me on this street? The lower the count, the better your position, and the best possible answer is zero. Everything else about position follows from that one number."
+      },
+      { "kind": "heading", "text": "Why acting last is worth units" },
+      {
+        "kind": "list",
+        "items": [
+          "You decide with more information. Every player before you has already checked, bet, raised or folded, and each of those is evidence about what they hold.",
+          "You control the size of the pot. Acting last means you have the final say on whether a street stays cheap or gets expensive.",
+          "You can end the hand. When everybody checks to you, a bet takes the pot immediately and nobody gets to respond.",
+          "You fold more cheaply. Deciding after you have already put units in this street costs more than deciding before you commit them, and out of position you keep being the one who has to commit first."
+        ]
+      },
+      { "kind": "heading", "text": "The button" },
+      {
+        "kind": "prose",
+        "text": "The button is the last seat to act on the flop, the turn and the river. Preflop it is third from last, because both blinds act after it — but from the flop onwards, no seat acts after the button. In a hand where the blinds have folded, the button therefore acts last on every remaining street, which is the concrete reason the same two cards are worth more there than anywhere else at the table."
+      },
+      {
+        "kind": "callout",
+        "tone": "insight",
+        "title": "The cards do not know where you are sitting",
+        "text": "Position does not change your equity. Two specific hands run out exactly the same way whichever seats hold them. What changes is how much of that equity you get to keep — with information and pot control, you fold more of your losing hands cheaply and get paid on more of your winning ones. The name for that gap is equity realisation, and it is where the value of position actually lives."
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": { "kind": "equity", "heroCards": "AdQc", "opponents": ["KsJh"] },
+        "caption": "Ask the app for this matchup's equity. Now imagine the same two hands with the seats swapped — one on the button, one under the gun. The number the app gives you does not move at all. Every argument for position is an argument about which fraction of that number you actually collect."
+      },
+      { "kind": "heading", "text": "Out of position you are guessing more often" },
+      {
+        "kind": "prose",
+        "text": "When you must act first, both of your options leak. Check, and you invite a bet you may not want to face, with no idea whether your opponent would have bet anyway. Bet, and you learn nothing before committing. Either way you choose before finding out, which is the actual cost. It bites hardest on the hands that most need a cheap look at the next card — middling pairs, weak draws, anything whose plan is \"see a showdown without paying much\". Those hands lose the most value out of position, and the hands that want a big pot with a clear edge lose the least."
+      },
+      {
+        "kind": "callout",
+        "tone": "misconception",
+        "title": "\"Position means I can play any two cards\"",
+        "text": "Acting last improves what a hand is worth; it does not repair a hand that is dominated. Position multiplies an edge rather than manufacturing one. It is a real reason the button plays more hands than the earliest seat — a difference of degree, based on realisation, not a licence to play everything."
+      },
+      { "kind": "heading", "text": "Relative position" },
+      {
+        "kind": "prose",
+        "text": "There is a subtler version worth knowing: two players in nominally the same seat can be in very different spots depending on who is sitting around them. If the most aggressive player at the table is on your right, you get to see what they have done before you choose, on every street. If they are on your left, they act after you all hand, so you commit first and can be raised whenever you look weak. Neither fact shows up in your seat's name. So when you decide whether to enter a pot, look at who acts after you and how they play, not only at the label."
+      },
+      { "kind": "heading", "text": "Order changes after the flop" },
+      {
+        "kind": "prose",
+        "text": "Preflop and postflop order are not the same, and the difference matters. Preflop, action starts to the left of the big blind, so the blinds act last. From the flop onwards, action starts to the left of the button, so the blinds act first. The two hardest seats at the table are hard precisely because that reversal puts them at the front of every street that matters. Heads-up, the whole arrangement inverts again — which is the next lesson."
+      },
+      {
+        "kind": "prose",
+        "text": "A practical way to build the habit: before you act, count how many players are still to act after you on this street. It is one number, it is always available, and it is the honest version of what a seat name is trying to tell you."
+      }
+    ],
+    "keyTakeaways": [
+      "Position is the number of players who still act after you on this street; zero is best, and the button gets zero from the flop onwards.",
+      "Acting last gives you information, control over the size of the pot, and the option to take the pot when everyone shows weakness.",
+      "Position does not change your equity — it changes how much of that equity you realise.",
+      "Play more hands in late position because of realisation, not because acting last turns weak cards into strong ones.",
+      "Preflop order starts left of the big blind; every later street starts left of the button, so the blinds go from acting last to acting first.",
+      "Who is sitting to your left and right can matter as much as your seat's name."
+    ],
+    "quizId": "quiz-position-basics",
+    "glossaryTerms": [
+      "position",
+      "button",
+      "under-the-gun",
+      "cutoff",
+      "equity-realisation",
+      "equity",
+      "blinds",
+      "dominated-hand",
+      "street"
+    ]
+  },
+  {
+    "id": "blinds-and-the-option",
+    "title": "Blinds, the Option, and the Heads-Up Reversal",
+    "summary": "What the blinds actually buy, why the big blind still has an action left, and the rule inversion that catches almost everybody heads-up.",
+    "topic": "positions-and-blinds",
+    "difficulty": "core",
+    "estimatedMinutes": 9,
+    "prerequisites": ["hand-flow", "position-basics"],
+    "blocks": [
+      {
+        "kind": "prose",
+        "text": "Blinds exist to make the game happen. With no forced bet, folding every hand would cost nothing, and there would be no reason to play anything but the very best starting hands — a game with no action and no decisions. The blinds put units in the middle that belong to nobody yet, and competing for that dead money is what makes entering a pot worth anything."
+      },
+      { "kind": "heading", "text": "Live bets, not entry fees" },
+      {
+        "kind": "prose",
+        "text": "The small blind and the big blind are live bets: they count towards the current bet level. So if nobody raises, the big blind has already matched the bet, and the small blind needs only to add the difference to call. An ante behaves differently. An ante is dead money — it goes straight to the pot and buys no part of the current bet, so it never reduces what you must call. It only makes the pot bigger relative to the bets, which is why antes make pots more worth fighting for."
+      },
+      {
+        "kind": "callout",
+        "tone": "misconception",
+        "title": "\"The big blind has already called\"",
+        "text": "The big blind has matched the bet but has not yet acted, and a betting round is not over until everyone has acted. That remaining right is the option: with no raise in front of it, the big blind may check and see the flop, or may raise."
+      },
+      { "kind": "heading", "text": "The option in practice" },
+      {
+        "kind": "list",
+        "items": [
+          "Nobody raised: the action reaches the big blind, who may check — ending the preflop round — or raise, even though nothing is owed.",
+          "Somebody raised: the option disappears into an ordinary decision. Fold, call the difference, or re-raise.",
+          "Everyone folded to the blinds: the small blind and big blind play a two-handed pot in which the small blind acts first on every street, including preflop.",
+          "A player who cannot cover a blind posts what they have and is all-in, not folded. They still hold cards and can win the layer of the pot they paid into."
+        ]
+      },
+      {
+        "kind": "callout",
+        "tone": "insight",
+        "title": "Posting a blind does not buy you a flop",
+        "text": "It buys you a live hand and nothing more. Once the price to continue rises, the units you posted are in the pot whatever you do — so they are not part of the decision. The only live question is whether the next units are worth their price, and that question is the same for the big blind as for anyone else."
+      },
+      {
+        "kind": "prose",
+        "text": "There is a second, less obvious effect. Because a blind is a live bet, it counts towards what you owe: facing a raise, the big blind pays only the difference. That does not make the posted units come back — they are still sunk — but it does mean the price the big blind is quoted is better than the price a player entering from a later seat would face. Being in the blinds is positionally awful and priced favourably at the same time, and both halves are real."
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": { "kind": "potOdds", "pot": 80, "toCall": 30 },
+        "caption": "Blinds of 10 and 20. The button raises to 50 and the small blind folds, so the pot stands at 80 and the big blind — who already has 20 in — needs 30 more to continue. Ask the app what share of the final pot that call is buying. The favourable-looking price is not permission to call, because what matters is whether your hand can win that share; it is only the first half of a comparison the pot-odds topic completes."
+      },
+      { "kind": "heading", "text": "The heads-up reversal" },
+      {
+        "kind": "prose",
+        "text": "With exactly two players, the blind and position rules invert. This is worth learning as a separate rule set rather than as an exception, because half-remembering it produces confident mistakes:"
+      },
+      {
+        "kind": "list",
+        "ordered": true,
+        "items": [
+          "The button posts the small blind. The other player posts the big blind.",
+          "Preflop, the button — that is, the small blind — acts first.",
+          "On the flop, the turn and the river, the big blind acts first and the button acts last."
+        ]
+      },
+      {
+        "kind": "callout",
+        "tone": "warning",
+        "title": "The most common rules mistake in Hold'em",
+        "text": "Players who learn six-handed first expect the small blind to act first preflop, so heads-up they expect the non-button player to open the action. It is the other way round: the button posts the small blind and acts first preflop. If you are ever surprised about whose turn it is heads-up, this is almost always the reason."
+      },
+      {
+        "kind": "prose",
+        "text": "One distinction to keep straight: a pot that becomes two-handed because everyone folded is not the heads-up rule set. The small blind does not turn into the button, and the small blind still acts first on every street. The inverted rules apply only when the hand was dealt to two players in the first place, which is what a genuinely heads-up game is."
+      },
+      {
+        "kind": "prose",
+        "text": "Add up what the heads-up button gets: it pays the smaller forced bet, acts first for one betting round, and acts last for the three rounds after it. That combination — a cheaper price and last action on every street where the board is known — is why the set of hands the button can profitably play heads-up is so much wider than the big blind's. That follows from the structure alone; it is not a statement about courage, and it is not a claim that any particular hand is playable, which would depend on stack depth and on how your opponent actually plays."
+      },
+      { "kind": "heading", "text": "Rotation makes it even" },
+      {
+        "kind": "prose",
+        "text": "The button moves one seat clockwise every hand, so over a full orbit everyone pays each blind exactly once and everyone gets the button once. A losing stretch while you were in the blinds is not a rigged seat; it is a handful of hands played from the two hardest positions at the table, which is what those positions cost."
+      },
+      {
+        "kind": "callout",
+        "tone": "misconception",
+        "title": "\"It's my blind, I have to defend it\"",
+        "text": "There is a real idea underneath this phrase — minimum defence frequency, later in the syllabus — but it describes how often a strategy must continue for a bettor's bluffs to stop being free money. It is not a duty attached to a specific hand, and it assumes the person betting is bluffing sometimes. Against someone who only ever raises with strong hands, defending because it is 'your' blind loses units. Nobody stole anything from you: the blind was posted, and the only live question is the price of the next decision."
+      }
+    ],
+    "keyTakeaways": [
+      "Blinds are forced live bets that create the dead money worth competing for; an ante is dead money that never reduces what you must call.",
+      "The big blind's option is a real action — having matched the bet is not the same as having acted.",
+      "Units already posted are sunk, so every decision is about the next units only.",
+      "Heads-up the rules invert: the button posts the small blind, acts first preflop, and acts last on the flop, turn and river.",
+      "The heads-up button's wider playable range follows from paying less and acting last on three of four streets, not from aggression for its own sake.",
+      "The button rotates every hand, so blind costs are shared; a bad run in the blinds is position, not injustice."
+    ],
+    "quizId": "quiz-blinds-and-the-option",
+    "glossaryTerms": [
+      "blinds",
+      "big-blind-option",
+      "ante",
+      "dead-money",
+      "heads-up",
+      "button",
+      "position",
+      "all-in",
+      "orbit",
+      "minimum-defence-frequency",
+      "range"
+    ]
+  },
+  {
+    "id": "reading-the-board",
+    "title": "Reading the Board",
+    "summary": "How to find your actual best five cards, what beats what, and the traps that make a strong-looking hand worth nothing.",
+    "topic": "hand-reading-and-outs",
+    "difficulty": "intro",
+    "estimatedMinutes": 11,
+    "prerequisites": ["hand-flow"],
+    "blocks": [
+      {
+        "kind": "prose",
+        "text": "Your hand is the best five cards you can assemble from your two plus the five on the board. You may use both of your cards, one of them, or neither. Nothing else counts — there is no extra credit for holding a big card you did not use, and no penalty for winning with a hand the board mostly built."
+      },
+      { "kind": "heading", "text": "What beats what" },
+      {
+        "kind": "list",
+        "ordered": true,
+        "items": [
+          "Straight flush — five consecutive ranks, all one suit.",
+          "Four of a kind — all four cards of one rank.",
+          "Full house — three of one rank plus a pair of another.",
+          "Flush — five cards of one suit, not consecutive.",
+          "Straight — five consecutive ranks; the ace plays high (ten to ace) or low (ace to five), but never wraps around.",
+          "Three of a kind.",
+          "Two pair.",
+          "One pair.",
+          "High card — no pair, no straight, no flush."
+        ]
+      },
+      {
+        "kind": "prose",
+        "text": "Within a category the ranks decide, in order of importance: the higher trips beat the lower trips, the higher of two pairs is compared first, and any cards left over — the kickers — settle what remains. Two hands can come out exactly equal, in which case the pot is split. That happens more often than beginners expect, because so much of a hand is shared."
+      },
+      { "kind": "heading", "text": "Find the best five, not the story" },
+      {
+        "kind": "prose",
+        "text": "The reliable way to read a board is to do it in three passes, in this order. Doing it in this order matters, because starting from your own cards is what makes people miss what the board is holding."
+      },
+      {
+        "kind": "list",
+        "ordered": true,
+        "items": [
+          "The board alone. What is the best hand the five community cards make by themselves?",
+          "The board plus any two cards. Is a straight possible? A flush? A full house? What is the best hand anybody could be holding right now?",
+          "Your two cards. Do they actually improve on the board's hand, and where does the result sit relative to what is possible?"
+        ]
+      },
+      {
+        "kind": "callout",
+        "tone": "insight",
+        "title": "If your two cards change nothing, you are playing the board",
+        "text": "Then every opponent still in the hand has at least the hand you have. The best outcome available to you is a split pot, and anyone holding a single relevant card beats you outright. Recognising this before you put more units in is worth more than any bit of strategy in this lesson."
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": {
+          "kind": "equity",
+          "heroCards": "AcKd",
+          "board": "Th9d8c7s6h",
+          "opponents": ["5c4d"]
+        },
+        "caption": "The board here makes a straight all by itself. Ask the app how ace-king does against five-four on this complete board. The strongest-looking starting hand at the table contributes nothing at all, and neither does the weakest."
+      },
+      { "kind": "heading", "text": "The traps" },
+      {
+        "kind": "list",
+        "items": [
+          "The board made the hand. Five consecutive ranks on the board means everyone still in holds at least that straight, and four of them means somebody very likely does; four cards of one suit on the board makes anyone with a fifth a flush, and your pair close to irrelevant.",
+          "A paired board means a full house is possible. That is what turns a flopped straight or flush from 'the nuts' into 'probably still ahead'.",
+          "Your flush may not be the best flush. Holding two cards of the suit gets you a flush; holding the highest card of the suit is what gets you the best one.",
+          "One card can outrank both of yours. When you and your opponent share the board's hand, the kicker decides, and a weak kicker is how a strong-looking hand loses a big pot.",
+          "A later card can make your own card redundant. That is counterfeiting, and it is worth a section of its own."
+        ]
+      },
+      { "kind": "heading", "text": "Counterfeiting, concretely" },
+      {
+        "kind": "prose",
+        "text": "Suppose you hold an ace and a deuce, and the flop brings an ace, a seven and a deuce. You have two pair — aces and deuces — and you are ahead of anyone holding a lone ace. Now a second seven arrives. Your best five cards are now the two aces, the two sevens and the best remaining card. So are theirs. Your deuce, which was doing all the work a moment ago, does nothing whatsoever: the board's pair of sevens replaced your pair of deuces, and every opponent with an ace shares your entire hand. Your deuces were counterfeited."
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": {
+          "kind": "equity",
+          "heroCards": "Ac2d",
+          "board": "As7h2s7cKs",
+          "opponents": ["AdJh"]
+        },
+        "caption": "The finished board from that example, against a plain ace. Ask the app how the showdown resolves. Then mentally remove the second seven and ask what the same two hands looked like before it landed — the difference is the whole lesson."
+      },
+      {
+        "kind": "callout",
+        "tone": "misconception",
+        "title": "\"I have two pair\" is not a hand",
+        "text": "Two pair is a category. Which two pair, with which fifth card, against what is possible on this board — that is a hand. Most expensive board-reading errors are exactly one level too coarse: 'I have a flush', 'I have a straight', 'I have trips'. Always ask which one, and what beats it."
+      },
+      { "kind": "heading", "text": "The habit worth building" },
+      {
+        "kind": "prose",
+        "text": "On every street, say three things to yourself: the board's own best hand, the best hand anyone could be holding, and your hand. Three sentences. It is slow for a week and then it is free, and it prevents the most expensive category of mistake in poker — being certain you are ahead. Notice that none of it required a single probability. Board reading comes before odds, because an odds calculation built on a misread board is confidently wrong."
+      }
+    ],
+    "keyTakeaways": [
+      "Your hand is the best five cards from your two plus the board, and using neither of your own cards is allowed — it means you are playing the board.",
+      "Learn the category order, then remember that within a category ranks and kickers decide, and exact ties split the pot.",
+      "Read in three passes: the board's own hand, the best hand anyone could hold, then yours.",
+      "A paired board threatens a full house, and a run or four of a suit on the board can make your hand irrelevant.",
+      "A later card can counterfeit your two pair, turning a clear lead into a split pot or worse.",
+      "Board reading comes before any probability, because an equity figure computed from a misread board is confidently wrong."
+    ],
+    "quizId": "quiz-reading-the-board",
+    "glossaryTerms": [
+      "hand-ranking",
+      "kicker",
+      "nuts",
+      "counterfeit",
+      "playing-the-board",
+      "split-pot",
+      "board-texture",
+      "showdown",
+      "overcard"
+    ]
+  },
+  {
+    "id": "counting-outs",
+    "title": "Outs: Clean, Dirty and Imaginary",
+    "summary": "Counting the cards that improve you, and the difference between an out that wins the pot and one that merely improves your hand.",
+    "topic": "hand-reading-and-outs",
+    "difficulty": "core",
+    "estimatedMinutes": 12,
+    "prerequisites": ["reading-the-board"],
+    "blocks": [
+      {
+        "kind": "prose",
+        "text": "An out is an unseen card that gives you the winning hand. Counting outs is the first real piece of arithmetic in poker, and it is also where many players quietly learn something false: they count the cards that improve their hand, and then treat that count as their chance of winning the pot. Those are different quantities, and the gap between them is where units disappear."
+      },
+      { "kind": "heading", "text": "Counting, carefully" },
+      {
+        "kind": "prose",
+        "text": "Start from what you cannot see. After the flop you know your own two cards and the three on the board; every other card is unseen from your seat — including the cards in your opponents' hands. That is why the arithmetic talks about unseen cards rather than cards in the deck: a card in someone's hand is just as invisible to you, and treating it as available is the right assumption when you do not know what they hold. Now list the cards that would change the hand you show down, and be strict about it."
+      },
+      {
+        "kind": "callout",
+        "tone": "misconception",
+        "title": "\"Four to a flush, so every remaining card of my suit is an out\"",
+        "text": "Sometimes. An out only counts if the card makes you the winner. Cards that improve you into a hand that is still second best are not outs at all — they are the most expensive cards in the deck, because they are the ones you will pay off with."
+      },
+      { "kind": "heading", "text": "Clean, dirty and imaginary" },
+      {
+        "kind": "list",
+        "items": [
+          "A clean out makes you the winner. When it lands you are ahead of what your opponent actually holds, and a price comparison built on clean outs is honest.",
+          "A dirty out improves your hand but can still lose: it improves your opponent more, or the hand it makes is second best, or there is still another card to come for them to draw out on you.",
+          "An imaginary out improves nothing that matters. It makes you a pair that still loses, or a straight beaten by the flush the very same card completed."
+        ]
+      },
+      { "kind": "heading", "text": "The extreme case: an out that cannot win" },
+      {
+        "kind": "prose",
+        "text": "You hold the ten of hearts and the nine of clubs. The flop comes the queen, the seven and the deuce of hearts — all one suit. You have four hearts, so one more makes a flush, and that looks like a draw worth paying for. Now suppose your opponent holds the ace of hearts and the king of clubs. They have four hearts as well. Every heart that completes your flush completes a higher one for them, so those cards are not outs in any sense: when one arrives you have made a hand and lost with it. The cards that can actually win are the ones you were not counting — the tens and nines that pair you — and not even all of those, because the nine of hearts brings the flush disaster along with the pair. Even the outs that do work leave your opponent drawing at the same flush behind you."
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": { "kind": "outs", "heroCards": "Th9c", "board": "Qh7h2h", "opponentCards": "AhKc" },
+        "caption": "Ask the app to split that draw into clean and dirty outs against that exact holding. The cards you would have counted first are the ones that cannot win, and the ones that can win are not part of the draw at all."
+      },
+      { "kind": "heading", "text": "The subtler case, which is the common one" },
+      {
+        "kind": "prose",
+        "text": "Most spots are less brutal than that, and much easier to get wrong. You hold the ten and nine of hearts. The flop is the king of spades, the queen of hearts and the four of hearts: four to a flush, and a jack would give you a straight. Counted naively that is a lot of cards, and it feels like a big draw. Now suppose your opponent holds the ace of hearts and a jack. Three things change at once and none of them is visible in the count. Their ace of hearts is one of the hearts you counted, so there is one fewer. Their jack is one of the jacks you counted, so there is one fewer of those too. And your flush can no longer be the best one available: once a third heart is on the board, a fourth on the river gives them the ace-high flush over yours, so even hitting is not the end of the story. Then there is a card that is worse than a blank — a ten pairs you, which is a genuine improvement, and hands them the highest straight there is."
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": { "kind": "outs", "heroCards": "Th9h", "board": "KsQh4h", "opponentCards": "AhJc" },
+        "caption": "Ask the app to sort this draw into clean and dirty outs against that exact holding. What matters is not either figure on its own but the gap between them — and how much of that gap comes from one single card sitting in their hand."
+      },
+      {
+        "kind": "prose",
+        "text": "Now change only who holds the top card of the suit, and keep the shape of the draw the same."
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": { "kind": "outs", "heroCards": "AhKh", "board": "Qh7h2c", "opponentCards": "QsJd" },
+        "caption": "Four to a flush again, plus two cards higher than anything on the board — but this time you hold the highest card of the suit, so no opponent can make a better flush and nobody can be drawing to one. Ask the app for the clean and dirty split here and compare it with the two above."
+      },
+      {
+        "kind": "callout",
+        "tone": "insight",
+        "title": "Holding the top card of your draw is worth more than an extra out",
+        "text": "It removes a whole category of disaster: hitting your hand and losing anyway. It also removes those hands from what your opponent can hold, since they cannot have the card you have. That is the plainest example of a blocker, and it is why two draws with the same number of cards can be worth very different amounts."
+      },
+      { "kind": "heading", "text": "The cards you should count against yourself" },
+      {
+        "kind": "prose",
+        "text": "Some cards help your opponent and not you, and they matter just as much when you decide whether to invest. A card that completes a flush for them while your pair remains a pair is not a neutral card. Once you stop assuming one specific holding and start assuming a range of hands, every card becomes partly an out and partly a disaster, weighted by how often they hold each hand. That weighted sum is exactly what an equity calculation does, and it is why equity is the better tool once a situation gets complicated. Out counting is the fast approximation you can do in your head; equity is what it is approximating."
+      },
+      {
+        "kind": "callout",
+        "tone": "warning",
+        "title": "Every out count hides an assumption — say it out loud",
+        "text": "\"I have this many outs\" is short for \"against the hand I am assuming, these cards would win\". Change the assumed hand and the count changes, sometimes to nothing. An out count without a stated assumption is not a fact; it is a guess wearing a number."
+      },
+      { "kind": "heading", "text": "Two streets, one at a time" },
+      {
+        "kind": "prose",
+        "text": "On the flop there are two cards still to come, and it is tempting to combine both chances into one comfortable figure and stop thinking. Two things make that dangerous: you may have to pay again on the turn before you ever see the river, and your opponent's hand can improve on exactly the same cards. The next lesson is about the shortcut that turns outs into a percentage, and about both of those caveats."
+      }
+    ],
+    "keyTakeaways": [
+      "An out is an unseen card that makes you the winner, not merely one that improves your hand.",
+      "Clean outs win the pot; dirty outs improve you and can still lose; imaginary outs were never outs at all.",
+      "Count from unseen cards, which includes the cards in your opponents' hands, because those are invisible to you too.",
+      "Every out count is relative to an assumed holding or range — state the assumption or the count means nothing.",
+      "Holding the top card of your draw removes the hit-and-lose outcomes and removes combinations from your opponent's range: that is a blocker.",
+      "Count the cards that help your opponent as well, and switch from counting outs to computing equity once the situation stops being simple."
+    ],
+    "quizId": "quiz-counting-outs",
+    "glossaryTerms": [
+      "outs",
+      "clean-out",
+      "dirty-out",
+      "drawing-dead",
+      "flush-draw",
+      "open-ended-straight-draw",
+      "gutshot",
+      "backdoor-draw",
+      "overcard",
+      "blocker",
+      "equity",
+      "range",
+      "reverse-implied-odds"
+    ]
+  },
+  {
+    "id": "rule-of-2-and-4",
+    "title": "The Rule of 2 and 4",
+    "summary": "The table-friendly shortcut from outs to a percentage: what it approximates, why it works, and where it drifts.",
+    "topic": "probability-and-equity",
+    "difficulty": "core",
+    "estimatedMinutes": 10,
+    "prerequisites": ["counting-outs"],
+    "blocks": [
+      {
+        "kind": "prose",
+        "text": "The rule of 2 and 4 turns an out count into a rough chance of hitting, fast enough to use while it is your turn. It is the most useful approximation in poker and also the one most often used past the point where it is honest. So learn it in two halves: what it estimates, and which way it is wrong."
+      },
+      { "kind": "heading", "text": "The shortcut" },
+      {
+        "kind": "formula",
+        "expression": "chance of hitting (as a percentage) ~= 2 x outs, with one card to come;  ~= 4 x outs, with two cards to come",
+        "explanation": "Two versions of a single idea. Each unseen card is roughly one in fifty, so each out is worth roughly two percentage points per card to come, and two cards give roughly twice the chance of one. The word 'roughly' is doing real work in all three places."
+      },
+      { "kind": "heading", "text": "Why it works" },
+      {
+        "kind": "prose",
+        "text": "After the flop you have seen five cards — your two and the three on the board — so forty-seven are unseen from your seat. One out is therefore one chance in forty-seven, which is a little more than two percent. The shortcut rounds the unseen deck to fifty, because dividing by fifty is something a human can do at a table while three people wait. Then, because two cards to come give you two shots at the same thing instead of one, the multiplier doubles — which overstates it a little, because the two shots overlap: you can hit on both cards, and that outcome gets counted twice. Both approximations are deliberate, and both have a known direction."
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": { "kind": "ruleOf24", "outs": 9, "cardsToCome": 1 },
+        "caption": "A flush draw with one card left to come. Ask the app for the shortcut's estimate and the exact figure side by side, and note which way the error points."
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": { "kind": "ruleOf24", "outs": 9, "cardsToCome": 2 },
+        "caption": "The same draw with two cards to come. Compare this gap with the one above and note that the two errors point in opposite directions: with one card the shortcut sits a little below the exact figure, and with two it sits a little above. Rounding the deck to fifty pulls one way; counting the times you hit on both cards pulls the other."
+      },
+      { "kind": "heading", "text": "Where it is least accurate" },
+      {
+        "kind": "list",
+        "items": [
+          "With many outs. Doubling the one-card chance counts the times you hit on both cards twice over, so with a big combined draw the four-times estimate runs well ahead of the truth. The more outs, the worse it gets.",
+          "With one card to come it errs the other way, slightly low, because there are fewer than fifty unseen cards and each out is therefore worth a bit more than two points.",
+          "When the two cards are not free. The four-times figure is the chance of hitting by the river — which you only collect if you actually get to see the river. Facing a bet on the flop with more betting to come, the one-card figure is the honest one to compare against the price.",
+          "When your outs are dirty. The shortcut converts outs into a chance of a card arriving. Arriving is not winning.",
+          "When your opponent can improve too. Hitting your draw on the turn does not settle the hand if they still have a card to draw out on you."
+        ]
+      },
+      {
+        "kind": "liveCalculation",
+        "calculation": { "kind": "ruleOf24", "outs": 15, "cardsToCome": 2 },
+        "caption": "A large combined draw — the case where the shortcut is at its worst. Compare the estimate with the exact figure and note the size of the error, because this is the situation in which the rule of 4 will most flatter a bad call."
+      },
+      {
+        "kind": "callout",
+        "tone": "misconception",
+        "title": "\"Four times my outs is my equity\"",
+        "text": "Three separate errors are packed into that sentence: that all the outs are clean, that both cards are free, and that hitting means winning. The shortcut estimates the chance of a card arriving. Equity is the chance of winning the pot, which also depends on what your opponent holds and on what happens after your card lands."
+      },
+      { "kind": "heading", "text": "Holding it next to the real thing" },
+      {
+        "kind": "liveCalculation",
+        "calculation": { "kind": "equity", "heroCards": "9h8h", "board": "Kh4h2c", "opponents": ["KsQd"] },
+        "caption": "A flush draw against top pair, on a board where pairing just one of your own cards would not be enough. Ask the app for the exact equity and hold it next to what the rule of 4 would have told you from a flush draw's out count. Then work out why the two differ in the direction they do — part of the answer is that the hand has small chances the out count never mentioned, such as two running cards making it two pair or trips."
+      },
+      {
+        "kind": "prose",
+        "text": "That comparison is the honest way to learn an approximation: use it, then check it, and build an instinct for the size and direction of its error. Do that a dozen times and the shortcut becomes genuinely reliable — not because it got more accurate, but because you now know when not to trust it."
+      },
+      { "kind": "heading", "text": "What a rough number is for" },
+      {
+        "kind": "prose",
+        "text": "A rough number is enough when the decision is not close, and most decisions are not close. The shortcut's real job is to tell you quickly which of three regions you are in: the price is comfortable, the price is clearly wrong, or the answer depends on details. Only the third region needs care, and knowing which one you are in is most of the skill. The next topic supplies the other half of the comparison, by turning the price of a call into the equity you would need for it to break even."
+      },
+      {
+        "kind": "callout",
+        "tone": "insight",
+        "title": "An approximation is a decision, not a failure",
+        "text": "Every number in this lab is a model of something. The honest way to use one is to know which way it is wrong: the rule of 4 runs high with many outs and when more betting is coming, and the rule of 2 runs slightly low. Knowing that is worth more than a decimal place you could never compute at the table anyway."
+      }
+    ],
+    "keyTakeaways": [
+      "Multiply your outs by two for one card to come and by four for two, as a fast estimate of the chance of hitting.",
+      "It works because each unseen card is roughly one in fifty, and two cards to come are roughly twice the chance of one.",
+      "With one card to come the estimate is slightly low; with many outs and two cards it runs high, because it double-counts hitting on both cards.",
+      "The four-times figure assumes you see both cards for free, so compare a flop bet against the one-card figure when more betting is coming.",
+      "Hitting is not winning: the shortcut says nothing about dirty outs or about your opponent's chance to draw out on you.",
+      "Use the shortcut to tell whether a decision is close, and compute properly only when it is."
+    ],
+    "quizId": "quiz-rule-of-2-and-4",
+    "glossaryTerms": [
+      "rule-of-2-and-4",
+      "outs",
+      "clean-out",
+      "dirty-out",
+      "equity",
+      "pot-odds",
+      "break-even-equity",
+      "flush-draw",
+      "open-ended-straight-draw",
+      "gutshot",
+      "implied-odds"
+    ]
+  }
+]

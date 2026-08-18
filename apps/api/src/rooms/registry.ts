@@ -1,0 +1,890 @@
+/**
+ * `roomId -> live table`, plus the lifecycle around it.
+ *
+ * ## Why the live table is in memory and the room is in Postgres
+ *
+ * A room, its members and its finished hands are durable — they are what a learner comes back to.
+ * A *hand in progress* is not, and cannot be: the deck and the commitment salts have no column
+ * and never will (`db/migrations/0001_initial.sql` is emphatic about it), so a hand cannot be
+ * resumed from the database after a restart. That is a deliberate trade — losing an in-flight hand
+ * is far cheaper than a schema that can leak the cards nobody was entitled to see — and it means
+ * the authoritative live state is this process's memory.
+ *
+ * The consequence, stated plainly: this design assumes one API process per room. That is what
+ * `docs/adr/0001-modular-monolith.md` chose, and the day a second process is introduced, rooms
+ * have to be pinned to one of them (or the whole live-table model has to move), because two
+ * processes each holding "the" `HandState` for one room would deal two different hands.
+ *
+ * ## The room record is a cache, and the cache is the live copy
+ *
+ * `RoomRecord` and the member list are held here so that a state frame — which goes out on every
+ * change, to every socket — costs no query. The database row is the durable record; this is the
+ * one being played on. Every write goes to both, in that order: persist, then update memory, so a
+ * refused write never produces a live table that disagrees with the row behind it.
+ *
+ * ## The archive is a port, and a failing archive must not stop a hand
+ *
+ * `HandArchive` is the whole of what this module writes about hands. `postgresArchive` binds it to
+ * `src/repositories/hands.ts` (owned by the hand-history work) and `noopArchive` is what the tests
+ * and a database-less development run use. Writes are serialised per room on their own promise
+ * chain, because `hands.start` must land before the first `appendAction` can reference it.
+ *
+ * When an archive write fails, play continues and the failure is logged. The hand in memory is the
+ * authority, the players are mid-hand, and stopping a hand because a history row could not be
+ * written would turn a reporting problem into a gameplay one. The cost is honest and worth naming:
+ * a hand can be played that never appears in the history.
+ */
+
+import type { RoomMember, RoomSummary } from '@prl/contracts';
+import type { LoggedAction, RandomSource, TableConfig } from '@prl/poker-engine';
+import { createSecureRandom } from '@prl/poker-engine';
+import { getSql } from '../db.ts';
+import { AppError } from '../errors.ts';
+import * as handsRepository from '../repositories/hands.ts';
+import { newHandId } from '../repositories/ids.ts';
+import * as roomsRepository from '../repositories/rooms.ts';
+import type { Db } from '../repositories/sql.ts';
+import * as usersRepository from '../repositories/users.ts';
+import { BotRunner, type BotSeatSpec, persistableProfile } from './bots.ts';
+import {
+  type ArchivedDeal,
+  type ArchivedResult,
+  LiveTable,
+  type TableListener,
+  type TableNotice,
+} from './table.ts';
+import { type Clock, systemClock } from './timers.ts';
+
+// ---------------------------------------------------------------------------
+// Records
+// ---------------------------------------------------------------------------
+
+/** The durable facts about a room, as this process holds them. */
+export interface RoomRecord {
+  readonly id: string;
+  readonly name: string;
+  readonly ownerUserId: string;
+  readonly config: TableConfig;
+  /** Chips a seat starts with. Also the buy-in checked against a learner's units. */
+  readonly startingStack: number;
+  readonly createdAt: string;
+  closed: boolean;
+}
+
+/** A member of a room: seated or waiting, human or bot. */
+export interface RoomMemberRecord {
+  readonly userId: string;
+  readonly displayName: string;
+  readonly isBot: boolean;
+  /**
+   * The strategy profile id for a bot, else null. This is the *real* profile id, which may be one
+   * `room_members.bot_profile` cannot store — that CHECK predates the Legends profile set, so the
+   * database holds `unknown` and the live record holds the truth. See `persistableProfile`.
+   */
+  readonly botProfile: string | null;
+  /** Open sockets this member holds. Zero means "not connected", not "not a member". */
+  sockets: number;
+}
+
+// ---------------------------------------------------------------------------
+// The archive port
+// ---------------------------------------------------------------------------
+
+export interface ArchivedStacks {
+  readonly roomId: string;
+  readonly stacks: readonly { readonly userId: string; readonly stack: number }[];
+}
+
+/**
+ * Everything this module writes about hands and stacks.
+ *
+ * Deliberately narrow and deliberately a port: the SQL belongs to `src/repositories/*`, and the
+ * live table must be usable — and testable — with no database at all.
+ */
+export interface HandArchive {
+  /** The next `hand_number` for a room, so a restart does not collide with played hands. */
+  readonly nextHandNumber: (roomId: string) => Promise<number>;
+  readonly handStarted: (deal: ArchivedDeal) => Promise<void>;
+  readonly actionsApplied: (handId: string, actions: readonly LoggedAction[]) => Promise<void>;
+  readonly streetAdvanced: (
+    handId: string,
+    street: 'preflop' | 'flop' | 'turn' | 'river' | 'showdown',
+    board: readonly number[],
+  ) => Promise<void>;
+  readonly handCompleted: (result: ArchivedResult) => Promise<void>;
+  readonly stacksSettled: (stacks: ArchivedStacks) => Promise<void>;
+  readonly roomStatusChanged: (roomId: string, status: 'open' | 'playing') => Promise<void>;
+}
+
+/** Writes nothing. The default for tests and for a development run with no database. */
+export const noopArchive: HandArchive = {
+  nextHandNumber: async () => 1,
+  handStarted: async () => undefined,
+  actionsApplied: async () => undefined,
+  streetAdvanced: async () => undefined,
+  handCompleted: async () => undefined,
+  stacksSettled: async () => undefined,
+  roomStatusChanged: async () => undefined,
+};
+
+/**
+ * Binds the archive to `src/repositories/hands.ts` and `src/repositories/rooms.ts`.
+ *
+ * `sql` is a getter rather than a handle so that registering the routes never touches the
+ * database: a missing pool surfaces as a failed write on a live table, logged, rather than as a
+ * boot crash in a process that was only ever going to serve content.
+ */
+export function postgresArchive(sql: () => Db): HandArchive {
+  return {
+    nextHandNumber: (roomId) => handsRepository.nextHandNumber(sql(), roomId),
+    handStarted: async (deal) => {
+      await handsRepository.start(sql(), {
+        handId: deal.handId,
+        roomId: deal.roomId,
+        handNumber: deal.handNumber,
+        buttonSeat: deal.buttonSeat,
+        config: deal.config,
+        commitmentRoot: deal.commitmentRoot,
+        commitmentContext: deal.commitmentContext,
+        randomSourceKind: deal.randomSourceKind,
+        seats: deal.seats.map((seat) => ({
+          seat: seat.seat,
+          userId: seat.userId,
+          isBot: seat.isBot,
+          startingStack: seat.startingStack,
+          holeCards: seat.holeCards,
+          status: seat.status,
+        })),
+      });
+    },
+    actionsApplied: async (handId, actions) => {
+      for (const action of actions) {
+        const sized = action.action.type === 'bet' || action.action.type === 'raise';
+        await handsRepository.appendAction(sql(), {
+          handId,
+          sequence: action.sequence,
+          street: action.street,
+          seat: action.seat,
+          actionType: action.action.type,
+          actionTo: sized && 'to' in action.action ? action.action.to : null,
+          amountPaid: action.amountPaid,
+          betLevelAfter: action.betLevelAfter,
+          potAfter: action.potAfter,
+          wasAutomatic: action.wasAutomatic,
+          actionId: action.actionId,
+        });
+      }
+    },
+    streetAdvanced: async (handId, street, board) => {
+      await handsRepository.advanceStreet(sql(), handId, street, board);
+    },
+    handCompleted: async (result) => {
+      await handsRepository.complete(sql(), {
+        handId: result.handId,
+        board: result.board,
+        result: result.result,
+        seats: result.seats.map((seat) => ({
+          seat: seat.seat,
+          netResult: seat.netResult,
+          status: seat.status,
+          showedDown: seat.showedDown,
+        })),
+      });
+    },
+    stacksSettled: async ({ roomId, stacks }) => {
+      for (const entry of stacks) {
+        await roomsRepository.updateMemberStack(sql(), roomId, entry.userId, entry.stack);
+      }
+    },
+    roomStatusChanged: async (roomId, status) => {
+      await roomsRepository.setStatus(sql(), roomId, status);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The room store port
+// ---------------------------------------------------------------------------
+
+/** What creating a room needs. Mirrors `createRoomBodySchema` plus the owner. */
+export interface CreateRoomSpec {
+  readonly name: string;
+  readonly ownerUserId: string;
+  readonly maxSeats: number;
+  readonly smallBlind: number;
+  readonly bigBlind: number;
+  readonly ante?: number;
+  readonly startingStack: number;
+  readonly actionTimeoutSeconds?: number;
+}
+
+/**
+ * Room and member persistence, plus the two user-level facts a table needs.
+ *
+ * A port rather than a direct dependency for one reason that matters: every test in
+ * `test/rooms.test.ts` and `test/ws-router.test.ts` runs against a `Map`-backed fake, so the whole
+ * of rooms, seating, the socket protocol and the bots is exercised with no database anywhere. The
+ * SQL itself is not duplicated — `postgresRoomStore` is a thin binding over
+ * `src/repositories/rooms.ts` and `src/repositories/users.ts`, which own it.
+ */
+export interface RoomStore {
+  readonly create: (spec: CreateRoomSpec) => Promise<{
+    readonly room: roomsRepository.RoomRow;
+    /** Returned exactly once. Only `sha256(code)` is stored. */
+    readonly inviteCode: string;
+  }>;
+  readonly byId: (roomId: string) => Promise<roomsRepository.RoomRow | null>;
+  readonly byInviteCode: (code: string) => Promise<roomsRepository.RoomRow | null>;
+  readonly listForUser: (userId: string) => Promise<readonly roomsRepository.RoomRow[]>;
+  readonly membersOfRooms: (roomIds: readonly string[]) => Promise<readonly roomsRepository.RoomMemberRow[]>;
+  readonly memberOf: (roomId: string, userId: string) => Promise<roomsRepository.RoomMemberRow | null>;
+  readonly addMember: (input: {
+    readonly roomId: string;
+    readonly userId: string;
+    readonly stack?: number;
+    readonly isBot?: boolean;
+    readonly botProfile?: PersistedBotProfile | null;
+  }) => Promise<roomsRepository.RoomMemberRow>;
+  readonly seatMember: (roomId: string, userId: string, seat: number) => Promise<void>;
+  readonly unseatMember: (roomId: string, userId: string) => Promise<void>;
+  readonly removeMember: (roomId: string, userId: string) => Promise<void>;
+  readonly close: (roomId: string, ownerUserId: string) => Promise<boolean>;
+  /** Bots get real user rows, so a seat is a seat whoever occupies it. */
+  readonly createBotUser: (
+    displayName: string,
+  ) => Promise<{ readonly id: string; readonly displayName: string }>;
+  /** The learner's spendable units, for the buy-in check. */
+  readonly readUnits: (userId: string) => Promise<number>;
+}
+
+/** The five names `room_members.bot_profile` accepts, plus the fallback for a Legends profile. */
+export type PersistedBotProfile = ReturnType<typeof persistableProfile>;
+
+/** Binds the store to the repositories. `sql` is a getter for the reason `postgresArchive` says. */
+export function postgresRoomStore(sql: () => Db): RoomStore {
+  return {
+    create: async (spec) => {
+      const created = await roomsRepository.create(sql(), spec);
+      return { room: created.room, inviteCode: created.inviteCode };
+    },
+    byId: (roomId) => roomsRepository.byId(sql(), roomId),
+    byInviteCode: (code) => roomsRepository.byInviteCode(sql(), code),
+    listForUser: (userId) => roomsRepository.listForUser(sql(), userId),
+    membersOfRooms: (roomIds) => roomsRepository.membersOfRooms(sql(), roomIds),
+    memberOf: (roomId, userId) => roomsRepository.memberOf(sql(), roomId, userId),
+    addMember: (input) => roomsRepository.addMember(sql(), input),
+    seatMember: async (roomId, userId, seat) => {
+      await roomsRepository.seatMember(sql(), roomId, userId, seat);
+    },
+    unseatMember: async (roomId, userId) => {
+      await roomsRepository.unseatMember(sql(), roomId, userId);
+    },
+    removeMember: async (roomId, userId) => {
+      await roomsRepository.removeMember(sql(), roomId, userId);
+    },
+    close: (roomId, ownerUserId) => roomsRepository.close(sql(), roomId, { ownerUserId }),
+    createBotUser: async (displayName) => {
+      const row = await usersRepository.createGuest(sql(), { displayName });
+      return { id: row.id, displayName: row.display_name };
+    },
+    readUnits: async (userId) => (await usersRepository.readUnits(sql(), userId)).units,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// A live room
+// ---------------------------------------------------------------------------
+
+/** One room, live: its record, its members, its table and its bots. */
+export class LiveRoom {
+  readonly record: RoomRecord;
+  readonly table: LiveTable;
+  readonly bots: BotRunner;
+  private readonly members = new Map<string, RoomMemberRecord>();
+  /** Serialises archive writes, so `hands.start` lands before the first action row. */
+  private archiveQueue: Promise<void> = Promise.resolve();
+  private unsubscribe: (() => void) | null = null;
+
+  constructor(options: {
+    readonly record: RoomRecord;
+    readonly table: LiveTable;
+    readonly bots: BotRunner;
+    readonly archive: HandArchive;
+    readonly onProblem: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+  }) {
+    this.record = options.record;
+    this.table = options.table;
+    this.bots = options.bots;
+    this.unsubscribe = this.table.subscribe((notice) => {
+      this.archiveNotice(notice, options.archive, options.onProblem);
+    });
+  }
+
+  memberList(): readonly RoomMemberRecord[] {
+    return [...this.members.values()];
+  }
+
+  member(userId: string): RoomMemberRecord | null {
+    return this.members.get(userId) ?? null;
+  }
+
+  addMember(member: Omit<RoomMemberRecord, 'sockets'>): RoomMemberRecord {
+    const existing = this.members.get(member.userId);
+    if (existing !== undefined) return existing;
+    const record: RoomMemberRecord = { ...member, sockets: 0 };
+    this.members.set(member.userId, record);
+    return record;
+  }
+
+  removeMember(userId: string): void {
+    this.members.delete(userId);
+  }
+
+  /** Tracks open sockets so `RoomMember.connected` is a fact rather than a guess. */
+  noteSocket(userId: string, delta: number): void {
+    const member = this.members.get(userId);
+    if (member === undefined) return;
+    member.sockets = Math.max(0, member.sockets + delta);
+  }
+
+  close(): void {
+    this.record.closed = true;
+    this.bots.stop();
+    this.table.close();
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+  }
+
+  /**
+   * Turns one table change into archive writes, in order, without ever blocking play.
+   *
+   * Each notice's writes are appended to this room's chain and awaited by nobody: the table has
+   * already moved on and the players are already looking at the new state. A rejected write is
+   * logged and the chain continues — see the file comment for why that is the right direction.
+   */
+  private archiveNotice(
+    notice: TableNotice,
+    archive: HandArchive,
+    onProblem: (message: string, detail?: Readonly<Record<string, unknown>>) => void,
+  ): void {
+    const handId = notice.handId;
+    const deal = notice.reason === 'handStarted' ? this.table.archivedDeal() : null;
+    const street = notice.events.some((event) => event.kind === 'street') ? notice.street : null;
+    const board = notice.board;
+    const actions = notice.loggedActions;
+    const result = notice.handCompleted ? this.table.archivedResult() : null;
+    const settled = notice.handCompleted ? this.table.snapshot().seats : null;
+    const roomStatus = notice.reason === 'handStarted' ? 'playing' : notice.handCompleted ? 'open' : null;
+
+    this.archiveQueue = this.archiveQueue
+      .then(async () => {
+        if (deal !== null) await archive.handStarted(deal);
+        if (handId !== null && actions.length > 0) await archive.actionsApplied(handId, actions);
+        if (handId !== null && street !== null && street !== 'complete') {
+          await archive.streetAdvanced(handId, street, board);
+        }
+        if (result !== null) await archive.handCompleted(result);
+        if (settled !== null) {
+          await archive.stacksSettled({
+            roomId: this.record.id,
+            stacks: settled.map((seat) => ({ userId: seat.userId, stack: seat.stack })),
+          });
+        }
+        // `rooms.status` follows play, so a lobby read from the database agrees with the table.
+        if (roomStatus !== null) await archive.roomStatusChanged(this.record.id, roomStatus);
+      })
+      .catch((error: unknown) => {
+        onProblem('a hand could not be archived', { roomId: this.record.id, error: String(error) });
+      });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The registry
+// ---------------------------------------------------------------------------
+
+export interface RoomRegistryOptions {
+  readonly clock?: Clock;
+  /** The dealing source. `createSecureRandom()` unless a test needs otherwise. */
+  readonly random?: RandomSource;
+  readonly archive?: HandArchive;
+  /** Room and member persistence. Defaults to the repositories, bound lazily. */
+  readonly store?: RoomStore;
+  /** Bots' thinking delay. Legibility only; see `bots.ts`. */
+  readonly botThinkingDelayMs?: number;
+  readonly nextHandId?: () => string;
+  readonly onProblem?: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+}
+
+/** Who is asking. The subset of `ResolvedSession['user']` every room operation needs. */
+export interface RoomPrincipal {
+  readonly userId: string;
+  readonly displayName: string;
+}
+
+export interface OpenRoomRequest {
+  readonly record: RoomRecord;
+  /** Members already known from the database, for a room being re-opened after a restart. */
+  readonly members?: readonly Omit<RoomMemberRecord, 'sockets'>[];
+}
+
+/**
+ * Every live room in this process.
+ *
+ * One instance, created by the route module and shared with the WebSocket hub, so that both see
+ * the same tables. Two registries would be two sets of tables for the same room ids.
+ */
+export class RoomRegistry {
+  private readonly rooms = new Map<string, LiveRoom>();
+  private readonly clock: Clock;
+  private readonly random: RandomSource;
+  private readonly archive: HandArchive;
+  private readonly botThinkingDelayMs: number | undefined;
+  private readonly nextHandId: () => string;
+  private readonly onProblem: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+  readonly store: RoomStore;
+
+  constructor(options: RoomRegistryOptions = {}) {
+    this.clock = options.clock ?? systemClock;
+    this.random = options.random ?? createSecureRandom();
+    this.archive = options.archive ?? noopArchive;
+    this.store = options.store ?? postgresRoomStore(getSql);
+    this.botThinkingDelayMs = options.botThinkingDelayMs;
+    this.nextHandId = options.nextHandId ?? newHandId;
+    this.onProblem = options.onProblem ?? ((): void => undefined);
+  }
+
+  /** Opens a live table for a room, or returns the one already open. */
+  async open(request: OpenRoomRequest): Promise<LiveRoom> {
+    const existing = this.rooms.get(request.record.id);
+    if (existing !== undefined) return existing;
+
+    // Seeded from the database so a room re-opened after a restart cannot collide with a hand
+    // number that has already been played (`hands_room_hand_number_key`).
+    let played = 0;
+    try {
+      played = Math.max(0, (await this.archive.nextHandNumber(request.record.id)) - 1);
+    } catch (error) {
+      this.onProblem('could not read the played hand count', {
+        roomId: request.record.id,
+        error: String(error),
+      });
+    }
+
+    const table = new LiveTable({
+      roomId: request.record.id,
+      config: request.record.config,
+      clock: this.clock,
+      random: this.random,
+      nextHandId: this.nextHandId,
+      initialHandNumber: played,
+      onProblem: this.onProblem,
+    });
+    const bots = new BotRunner({
+      table,
+      clock: this.clock,
+      ...(this.botThinkingDelayMs === undefined ? {} : { thinkingDelayMs: this.botThinkingDelayMs }),
+      onProblem: this.onProblem,
+    });
+    const room = new LiveRoom({
+      record: request.record,
+      table,
+      bots,
+      archive: this.archive,
+      onProblem: this.onProblem,
+    });
+    for (const member of request.members ?? []) room.addMember(member);
+    this.rooms.set(request.record.id, room);
+    return room;
+  }
+
+  get(roomId: string): LiveRoom | null {
+    return this.rooms.get(roomId) ?? null;
+  }
+
+  /**
+   * The room, or the one answer a stranger and a non-member both get.
+   *
+   * `room_not_found_or_not_permitted` for both cases, deliberately: a distinguishable "that room
+   * exists but is not yours" is a free way to confirm a room id.
+   */
+  require(roomId: string, userId: string): LiveRoom {
+    const room = this.rooms.get(roomId);
+    if (room === undefined || room.record.closed) {
+      throw new AppError('room_not_found_or_not_permitted', { logDetail: `no live room ${roomId}` });
+    }
+    if (room.member(userId) === null && room.record.ownerUserId !== userId) {
+      throw new AppError('room_not_found_or_not_permitted', {
+        logDetail: `caller is not a member of ${roomId}`,
+      });
+    }
+    return room;
+  }
+
+  /**
+   * Opens the live table for a persisted room, loading it if this process has not seen it.
+   *
+   * Returns null when there is no such room, which every caller turns into
+   * `room_not_found_or_not_permitted` — the same answer a non-member gets.
+   */
+  async ensureOpen(roomId: string): Promise<LiveRoom | null> {
+    const live = this.rooms.get(roomId);
+    if (live !== undefined) return live;
+    const row = await this.store.byId(roomId);
+    if (row === null || row.status === 'closed') return null;
+    const members = await this.store.membersOfRooms([roomId]);
+    const room = await this.open({
+      record: recordFromRow(row),
+      members: members.map((member) => ({
+        userId: member.user_id,
+        displayName: member.display_name,
+        isBot: member.is_bot,
+        botProfile: member.bot_profile,
+      })),
+    });
+    // Seats recorded in the database are re-taken at the live table, so a room re-opened after a
+    // restart looks the way the roster says it does. Bots are NOT re-registered with the runner
+    // here: a bot's decision stream and its opponent model died with the process, and a seat that
+    // cannot act is more honest than one that silently plays a different style with a fresh model.
+    // The turn timer resolves the consequence — an inert seat checks or folds when its clock runs
+    // out — so the table is never stuck, it is only slower until somebody stands the bot up.
+    for (const member of members) {
+      if (member.seat === null) continue;
+      try {
+        await room.table.sit({
+          userId: member.user_id,
+          displayName: member.display_name,
+          seat: member.seat,
+          stack: member.stack,
+          isBot: member.is_bot,
+          botProfile: member.bot_profile,
+        });
+      } catch (error) {
+        this.onProblem('a recorded seat could not be re-taken', {
+          roomId,
+          seat: member.seat,
+          error: String(error),
+        });
+      }
+    }
+    return room;
+  }
+
+  /**
+   * Creates a room: the durable row first, then the live table.
+   *
+   * That order matters. If the row fails to write there is no table to clean up, whereas a table
+   * created first would be a room the owner can play at and nobody can ever find again. The
+   * invite code comes back from the store exactly once and is returned to the caller unchanged —
+   * it is not stored here, not logged (`logging.ts` censors `/invite/i`), and unrecoverable
+   * afterwards.
+   */
+  async createRoom(
+    principal: RoomPrincipal,
+    spec: Omit<CreateRoomSpec, 'ownerUserId'>,
+  ): Promise<{ readonly room: LiveRoom; readonly inviteCode: string }> {
+    const created = await this.store.create({ ...spec, ownerUserId: principal.userId });
+    const record = recordFromRow(created.room);
+    const room = await this.open({ record });
+    // The owner is a member from the start, so the room appears in their list and the membership
+    // check that guards every other endpoint has something to find.
+    await this.store.addMember({ roomId: record.id, userId: principal.userId });
+    room.addMember({
+      userId: principal.userId,
+      displayName: principal.displayName,
+      isBot: false,
+      botProfile: null,
+    });
+    return { room, inviteCode: created.inviteCode };
+  }
+
+  /**
+   * Joins a room by invite code.
+   *
+   * Joining twice is not an error: the second call finds the existing membership and answers with
+   * the same room. A client that retries a dropped response must not be told `already_seated` for
+   * a room it is in.
+   */
+  async joinByInviteCode(principal: RoomPrincipal, code: string): Promise<LiveRoom> {
+    const row = await this.store.byInviteCode(code);
+    // One answer for "no such code" and "malformed code". Distinguishing them tells somebody
+    // probing codes that they had the format right, which is the only feedback a brute force needs.
+    if (row === null) throw new AppError('invite_code_invalid', { logDetail: 'no room for that code' });
+    if (row.status === 'closed') throw new AppError('room_closed', { logDetail: `room ${row.id} is closed` });
+
+    const existing = await this.store.memberOf(row.id, principal.userId);
+    if (existing === null) {
+      await this.store.addMember({ roomId: row.id, userId: principal.userId });
+    }
+    const room = await this.ensureOpen(row.id);
+    if (room === null) {
+      throw new AppError('room_not_found_or_not_permitted', { logDetail: `room ${row.id} would not open` });
+    }
+    room.addMember({
+      userId: principal.userId,
+      displayName: principal.displayName,
+      isBot: false,
+      botProfile: null,
+    });
+    return room;
+  }
+
+  /**
+   * Takes a seat: units checked, database first, then the live table.
+   *
+   * The database is the arbiter of "is that seat free", because `room_members_live_seat_key` is
+   * the only check that holds when two players tap the same seat in the same instant. The live
+   * table is then told, and if *it* refuses — which means the two copies had drifted — the
+   * database seat is given back, so a refused sit never leaves a seat allocated to somebody who is
+   * not at the table.
+   */
+  async sitAtTable(roomId: string, principal: RoomPrincipal, seat: number): Promise<void> {
+    const room = this.require(roomId, principal.userId);
+    const member = await this.store.memberOf(roomId, principal.userId);
+    if (member === null) {
+      throw new AppError('not_room_member', { logDetail: `not a live member of ${roomId}` });
+    }
+    const units = await this.store.readUnits(principal.userId);
+    if (units < room.record.startingStack) {
+      throw new AppError('insufficient_units', {
+        logDetail: `buy-in ${room.record.startingStack} exceeds available units`,
+      });
+    }
+
+    await this.store.seatMember(roomId, principal.userId, seat);
+    try {
+      await room.table.sit({
+        userId: principal.userId,
+        displayName: principal.displayName,
+        seat,
+        stack: room.record.startingStack,
+      });
+    } catch (error) {
+      await this.store.unseatMember(roomId, principal.userId).catch(() => undefined);
+      throw error;
+    }
+    room.addMember({
+      userId: principal.userId,
+      displayName: principal.displayName,
+      isBot: false,
+      botProfile: null,
+    });
+  }
+
+  /**
+   * Stands up, keeping the membership.
+   *
+   * The table goes first here, and that is the opposite order to `sitAtTable` for a reason: a
+   * player holding a live hand does not leave immediately — they are flagged, they fold at their
+   * turn, and the seat is released when the hand completes. Freeing the database seat first would
+   * let somebody else take a seat that is still holding cards.
+   */
+  async standFromTable(roomId: string, userId: string): Promise<void> {
+    const room = this.require(roomId, userId);
+    await room.table.stand(userId);
+    if (room.table.seatOf(userId) === null) await this.store.unseatMember(roomId, userId);
+  }
+
+  /** Leaves the room altogether: stand up if seated, then drop the membership. */
+  async leaveRoom(roomId: string, userId: string): Promise<void> {
+    const room = this.require(roomId, userId);
+    if (room.table.seatOf(userId) !== null) await room.table.stand(userId);
+    await this.store.unseatMember(roomId, userId);
+    await this.store.removeMember(roomId, userId);
+    if (room.table.seatOf(userId) === null) room.removeMember(userId);
+  }
+
+  /** Seats a bot and registers it with the runner. Both, or neither. */
+  async seatBot(
+    roomId: string,
+    spec: BotSeatSpec & { readonly displayName: string },
+  ): Promise<RoomMemberRecord> {
+    const room = this.rooms.get(roomId);
+    if (room === undefined) {
+      throw new AppError('room_not_found_or_not_permitted', { logDetail: `no live room ${roomId}` });
+    }
+    await room.table.sit({
+      userId: spec.userId,
+      displayName: spec.displayName,
+      seat: spec.seat,
+      stack: room.record.startingStack,
+      isBot: true,
+      botProfile: spec.profileId,
+    });
+    room.bots.add(spec);
+    return room.addMember({
+      userId: spec.userId,
+      displayName: spec.displayName,
+      isBot: true,
+      botProfile: spec.profileId,
+    });
+  }
+
+  subscribe(roomId: string, listener: TableListener): () => void {
+    const room = this.rooms.get(roomId);
+    if (room === undefined) return () => undefined;
+    return room.table.subscribe(listener);
+  }
+
+  /** Builds the wire summary from memory, with no query. */
+  summary(roomId: string): RoomSummary {
+    const room = this.rooms.get(roomId);
+    if (room === undefined) {
+      throw new AppError('room_not_found_or_not_permitted', { logDetail: `no live room ${roomId}` });
+    }
+    return toRoomSummary(room);
+  }
+
+  /** Closes one room: its bots, its table, its timers. */
+  close(roomId: string): void {
+    const room = this.rooms.get(roomId);
+    if (room === undefined) return;
+    room.close();
+    this.rooms.delete(roomId);
+  }
+
+  /**
+   * Closes every room. Called from the server's shutdown path.
+   *
+   * A closed room must not be able to keep a turn timer or a bot's scheduled decision alive: both
+   * hold a reference to the table, so a room that is merely forgotten would keep running.
+   */
+  closeAll(): void {
+    for (const roomId of [...this.rooms.keys()]) this.close(roomId);
+  }
+
+  get size(): number {
+    return this.rooms.size;
+  }
+
+  /** Records that a member's socket opened or closed, for `RoomMember.connected`. */
+  noteSocket(roomId: string, userId: string, delta: number): void {
+    this.rooms.get(roomId)?.noteSocket(userId, delta);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The process-wide registry
+// ---------------------------------------------------------------------------
+
+/**
+ * One registry per process, so the room routes and the WebSocket hub see the same tables.
+ *
+ * They are separate route modules registered into separate encapsulated scopes, so a Fastify
+ * decorator would not reach both without escaping encapsulation. Module scope is the same
+ * mechanism `plugins/security.ts` uses for the origin allowlist, with the same caveat, stated
+ * plainly: a process that built two apps with different configurations would share one registry.
+ * A server builds one. A test that needs its own passes it explicitly — every entry point here
+ * takes the registry as an option — and `resetRoomRegistryForTests` drops the shared one.
+ */
+let shared: RoomRegistry | null = null;
+
+export function roomRegistry(options: RoomRegistryOptions = {}): RoomRegistry {
+  shared ??= new RoomRegistry(options);
+  return shared;
+}
+
+/** Drops the shared registry, closing every live room first. */
+export function resetRoomRegistryForTests(): void {
+  shared?.closeAll();
+  shared = null;
+}
+
+/**
+ * The wire summary for a live room.
+ *
+ * Seat, stack and connection state come from the table and the member records rather than from a
+ * query, because this is built on every state frame. A member who is not seated reports
+ * `seat: null` and the stack the record holds, which is what a lobby renders.
+ */
+export function toRoomSummary(room: LiveRoom): RoomSummary {
+  const snapshot = room.table.snapshot();
+  const seatByUser = new Map(snapshot.seats.map((seat) => [seat.userId, seat]));
+  const members: RoomMember[] = room.memberList().map((member) => {
+    const seat = seatByUser.get(member.userId);
+    return {
+      userId: member.userId,
+      displayName: member.displayName,
+      seat: seat?.seat ?? null,
+      stack: seat?.stack ?? 0,
+      isBot: member.isBot,
+      botProfile: member.botProfile,
+      connected: member.isBot || member.sockets > 0,
+    };
+  });
+  return {
+    id: room.record.id,
+    name: room.record.name,
+    ownerUserId: room.record.ownerUserId,
+    maxSeats: room.record.config.maxSeats,
+    smallBlind: room.record.config.smallBlind,
+    bigBlind: room.record.config.bigBlind,
+    ante: room.record.config.ante,
+    startingStack: room.record.startingStack,
+    actionTimeoutSeconds: room.record.config.actionTimeoutSeconds,
+    status: room.record.closed ? 'closed' : snapshot.handInProgress ? 'playing' : 'open',
+    // Not a variable, and not configurable: `rooms_visibility_invite_only` allows one value, and
+    // changing that is a migration and a review (ADR 0010).
+    visibility: 'invite_only',
+    members,
+    createdAt: room.record.createdAt,
+  };
+}
+
+/** A summary for a room that has no live table — a closed one, or one from another process. */
+export function summaryFromRows(
+  room: roomsRepository.RoomRow,
+  members: readonly roomsRepository.RoomMemberRow[],
+): RoomSummary {
+  return {
+    id: room.id,
+    name: room.name,
+    ownerUserId: room.owner_user_id,
+    maxSeats: room.max_seats,
+    smallBlind: room.small_blind,
+    bigBlind: room.big_blind,
+    ante: room.ante,
+    startingStack: room.starting_stack,
+    actionTimeoutSeconds: room.action_timeout_seconds,
+    status: room.status,
+    visibility: 'invite_only',
+    members: members.map((member) => ({
+      userId: member.user_id,
+      displayName: member.display_name,
+      seat: member.seat,
+      stack: member.stack,
+      isBot: member.is_bot,
+      botProfile: member.bot_profile,
+      // A room with no live table in this process has nobody connected to it, by definition.
+      connected: member.is_bot,
+    })),
+    createdAt: room.created_at.toISOString(),
+  };
+}
+
+/** The `TableConfig` for a persisted room row. */
+export function configFromRow(room: roomsRepository.RoomRow): TableConfig {
+  return {
+    smallBlind: room.small_blind,
+    bigBlind: room.big_blind,
+    ante: room.ante,
+    maxSeats: room.max_seats,
+    actionTimeoutSeconds: room.action_timeout_seconds,
+  };
+}
+
+/** The record for a persisted room row. */
+export function recordFromRow(room: roomsRepository.RoomRow): RoomRecord {
+  return {
+    id: room.id,
+    name: room.name,
+    ownerUserId: room.owner_user_id,
+    config: configFromRow(room),
+    startingStack: room.starting_stack,
+    createdAt: room.created_at.toISOString(),
+    closed: room.status === 'closed',
+  };
+}
+
+/** The persistable profile name for a bot seat. Re-exported so routes need one import. */
+export { persistableProfile };

@@ -1,0 +1,446 @@
+/**
+ * The home page's own stylesheet, imported by `app/page.tsx`.
+ *
+ * Separate from `globals.css` for the reason that file states: the shell is shared and a route's
+ * patterns are not, so two people editing two features are never editing one file. Everything here
+ * is prefixed `.prl-home*` and is used by exactly one route.
+ *
+ * Every value is a `--prl-*` token. The three exceptions `components.css` documents apply and no
+ * others: `1px` as a hairline, structural geometry (`100%`, `1fr`, `minmax(0, 1fr)`), and media
+ * feature lengths — `var()` is invalid in a media query, so the 600/900px breakpoints from design
+ * system section 10 appear as literals.
+ */
+
+/* ==========================================================================================
+   1. SECTION RHYTHM
+   ==========================================================================================
+   The rhythm is deliberately large. The reference this system came from gets much of its
+   confidence from how much empty space it is willing to spend between sections, and adopting the
+   palette without the rhythm would miss the point entirely — so `--prl-section-y` is used as it is
+   rather than trimmed to fit more above the fold.
+   ========================================================================================== */
+
+/**
+ * THE READING MEASURE, NARROWED.
+ *
+ * `--prl-measure` is `60ch`, and `ch` is the advance of "0" — far wider than the average letter —
+ * so `60ch` has never meant 60 characters. Measured by walking a Range down a rendered paragraph at
+ * 1440px, the lines broke at 80, 80 and 88 characters; past about 75 the eye starts losing the line
+ * beginning on the return sweep. `52ch` lands at 69-72, and since the ratio between `ch` and the
+ * average character belongs to the typeface rather than to the size, the one value holds for the
+ * 20px lede and the 15px caption as well as for the 17px body.
+ *
+ * It is the token, given a tighter value on this route, so every rule that reads it — including
+ * `base.css`'s bare `<p>` — narrows together. It belongs in `tokens.css`; it is scoped here only
+ * because that file is `packages/ui` and outside this change.
+ */
+.prl-home__hero,
+.prl-home__section {
+  --prl-measure: 52ch;
+}
+
+.prl-home__section {
+  padding-block: var(--prl-section-y);
+  border-block-start: var(--prl-hairline);
+}
+
+/**
+ * A section opener.
+ *
+ * The asymmetry is the point: `--prl-space-5` between the heading and the sentence that belongs to
+ * it, `--prl-space-10` before the content it introduces. A heading with equal space on both sides
+ * floats between two blocks and belongs to neither, which is what makes a long page feel unsorted.
+ */
+.prl-home__section-head {
+  display: grid;
+  gap: var(--prl-space-5);
+  margin-block-end: var(--prl-space-10);
+}
+
+/**
+ * `ch` is the advance of "0" — 0.60em in this stack — so a cap written in `ch` scales with whatever
+ * size the element ends up at, which is the only way a fluid `clamp()` heading can be capped at all.
+ * The cap lives on the two children rather than on the head, because the head's `ch` would resolve
+ * against the head's own 17px and hand the 20px lede a 51-character line.
+ */
+.prl-home__section-title {
+  margin: 0;
+  max-width: 20ch;
+  text-wrap: balance;
+}
+
+/** `--prl-type-body-lg` is the token for a lead paragraph, and this is one on every section. */
+.prl-home__section-lede {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-lg);
+  line-height: var(--prl-leading-body);
+}
+
+/* ==========================================================================================
+   2. HERO
+   ========================================================================================== */
+
+.prl-home__hero {
+  display: grid;
+  gap: var(--prl-space-8);
+  padding-block: var(--prl-space-12) var(--prl-section-y);
+}
+
+.prl-home__eyebrow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--prl-space-4);
+  color: var(--prl-text-faint);
+}
+
+.prl-home__eyebrow-index {
+  color: var(--prl-accent-text);
+}
+
+/**
+ * The one display-1 on the page.
+ *
+ * Tight tracking at this size is what makes a grotesk read as engineered rather than merely big,
+ * and the `ch` cap is what stops a 5.25rem line running to 20 words on a wide screen — a headline
+ * the reader has to track sideways is a headline they skip.
+ */
+.prl-home__title {
+  margin: 0;
+  max-width: 24ch;
+  font-size: var(--prl-type-display-1);
+  font-weight: var(--prl-weight-bold);
+  letter-spacing: var(--prl-tracking-display-1);
+  line-height: var(--prl-leading-tight);
+}
+
+/**
+ * The lede.
+ *
+ * Two changes measured in a browser rather than reasoned about. It was `--prl-type-heading` at
+ * `--prl-weight-light`: a 300 weight is a display weight, and set in `--prl-text-secondary` across
+ * three long lines it is the thinnest, lowest-contrast-looking text on the first screen — exactly
+ * the "hard to read" complaint. `--prl-type-body-lg` is the token that exists for a lead paragraph,
+ * and regular weight is what makes it hold up at 20px.
+ */
+.prl-home__lede {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-lg);
+  font-weight: var(--prl-weight-regular);
+  line-height: var(--prl-leading-body);
+}
+
+/**
+ * One primary action, one secondary. The accent appears once on this page and this is where — an
+ * accent that turns up on six buttons stops meaning "this matters".
+ */
+.prl-home__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-5);
+  align-items: center;
+}
+
+/**
+ * The product statement, in the hero rather than in the footer.
+ *
+ * A disclosure that only exists at the bottom of a page is a disclosure written to be missed. This
+ * one is at full body size, above the fold, with a hairline and a label — it is information, not
+ * fine print. `--prl-caution` on the label plus the words themselves, so the marking is never
+ * carried by colour alone.
+ */
+.prl-home__guardrail {
+  display: grid;
+  gap: var(--prl-space-3);
+  max-width: var(--prl-measure);
+  margin: 0;
+  padding: var(--prl-space-6);
+  border: 1px solid var(--prl-line-strong);
+  /* `--prl-space-1` is 2px and means "a small length"; `--prl-focus-width` is also 2px and means
+     "the focus ring". Borrowing the focus token here is how a later change to the ring's weight
+     silently thickens this marker. */
+  border-inline-start: var(--prl-space-1) solid var(--prl-caution);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-raised);
+}
+
+.prl-home__guardrail-label {
+  color: var(--prl-caution);
+}
+
+/**
+ * The paragraph above says this notice is "at full body size". It was not — it was
+ * `--prl-type-body-sm`, which is the size this file uses for captions. A disclosure set one step
+ * smaller than the page's reading size is fine print however it is worded, so it is now
+ * `--prl-type-body`, the same size as the prose it sits beside.
+ */
+.prl-home__guardrail-text {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+/* ==========================================================================================
+   3. THE METRICS BAND
+   ==========================================================================================
+   Four figures, each with its provenance. A metric block is label, then value and unit, then a
+   note — and the note is not optional here: a number without its source is a marketing claim.
+   ========================================================================================== */
+
+.prl-metrics {
+  display: grid;
+  gap: var(--prl-space-9);
+}
+
+.prl-metrics .prl-metric__note {
+  max-width: var(--prl-measure);
+}
+
+/* ==========================================================================================
+   4. CAPABILITY MODULES
+   ==========================================================================================
+   Three hairlined panels. Depth is one step on the surface ramp plus a hairline; there is no
+   shadow anywhere in this system, and `Panel` already carries both.
+   ========================================================================================== */
+
+.prl-home__modules {
+  display: grid;
+  gap: var(--prl-space-8);
+  align-items: stretch;
+}
+
+/** `Reveal` wraps each panel, so the reveal wrapper — not the panel — is the grid item. */
+.prl-home__modules > * {
+  display: flex;
+  min-width: 0;
+}
+
+.prl-home__module {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.prl-home__module-body {
+  display: grid;
+  gap: var(--prl-space-6);
+  align-content: start;
+  height: 100%;
+}
+
+.prl-home__module-text {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-home__module-points {
+  display: grid;
+  gap: var(--prl-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-home__module-point {
+  display: grid;
+  gap: var(--prl-space-4);
+  grid-template-columns: auto 1fr;
+  margin-block-end: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-body);
+}
+
+/** A hairline dash rather than a bullet glyph: no icon, no font dependency, and it survives
+    forced-colors because it is a border rather than a character. */
+.prl-home__module-point::before {
+  content: "";
+  align-self: center;
+  width: var(--prl-space-5);
+  border-block-start: 1px solid var(--prl-accent-edge);
+}
+
+.prl-home__module-link {
+  margin-block-start: auto;
+  padding-block-start: var(--prl-space-6);
+}
+
+/* ==========================================================================================
+   5. HOW CORRECTNESS IS ESTABLISHED
+   ==========================================================================================
+   A description list, because that is what it is: four claims and what backs each one. `<dl>`
+   gives the pairing to a screen reader without a table's row-and-column overhead, and the `01…04`
+   numerals are `aria-hidden` because the list already conveys the ordering.
+   ========================================================================================== */
+
+.prl-home__proof {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+/**
+ * The `<div>` the spec allows inside a `<dl>` to group one `dt` with its `dd`.
+ *
+ * It has to be `display: contents`, and the reason is a layout that was silently broken: the
+ * two-column rule at the foot of this file places `dt` in column 1 and `dd` in column 2, but a grid
+ * only positions its OWN children — and the grid's children were these wrappers, not the terms
+ * inside them. Measured at 1460px the whole list rendered inside a 531px column with the 797px
+ * second column empty, which is a large part of why this page reads as unfinished on a wide screen.
+ * `display: contents` promotes the `dt`/`dd` pairs to grid items, which is what the rule always
+ * assumed. The wrapper is presentational, so dropping its box costs nothing: the `dl` keeps the
+ * term-and-definition pairing either way.
+ */
+.prl-home__proof-row {
+  display: contents;
+}
+
+.prl-home__proof-term {
+  display: grid;
+  gap: var(--prl-space-4);
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  padding-block-start: var(--prl-space-8);
+  border-block-start: var(--prl-hairline);
+  color: var(--prl-text);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-home__proof-index {
+  color: var(--prl-accent-text);
+}
+
+.prl-home__proof-detail {
+  margin: 0;
+  padding-block: var(--prl-space-4) var(--prl-space-8);
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+/** The verifying command, so the claim above it is checkable rather than merely stated. */
+.prl-home__proof-check {
+  display: block;
+  margin-block-start: var(--prl-space-3);
+  color: var(--prl-text-muted);
+  font-family: var(--prl-font-mono);
+  font-size: var(--prl-type-body-sm);
+}
+
+/* ==========================================================================================
+   6. RESPONSIVE
+   ==========================================================================================
+   Two columns at 600px and three at 900px, matching design system section 10. The metrics band
+   goes to two columns before the modules do: a metric is a short block and four of them in one
+   column is a lot of scrolling, whereas a module carries a paragraph and a list and needs the
+   width.
+
+   The hero gains its second column at 1280 and not before, and that number was measured rather
+   than picked: the guardrail notice is a five-line paragraph, and at 900px the narrower column
+   works out at about 30 characters a line — a column that narrow is harder to read than the same
+   text stacked. At 1280 it lands near 46, and at 1440 near 53.
+   ========================================================================================== */
+
+@media (min-width: 600px) {
+  .prl-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .prl-home__proof-term {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 900px) {
+  .prl-metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .prl-home__hero {
+    padding-block: var(--prl-space-13) var(--prl-section-y);
+  }
+
+  .prl-home__modules {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  /**
+   * The list becomes two columns — the term in the first, its detail in the second — so the four
+   * claims read as a table of evidence rather than as four paragraphs. `dt` and `dd` are placed
+   * explicitly, because `grid-auto-flow: row` would put each `dd` under its `dt` instead of beside
+   * it.
+   */
+  /**
+   * The second column is the measure, not a share of the row.
+   *
+   * With `2fr 3fr` the detail column came out 797px wide while the paragraph inside it was capped at
+   * the measure, so the hairline under each claim stopped 200px short of the container edge and the
+   * table looked like it had lost its last column. Sizing the track to `--prl-measure` makes the
+   * rule and the text end together, and hands the slack to the claim column where there is nothing
+   * to misalign.
+   */
+  .prl-home__proof {
+    grid-template-columns: minmax(0, 1fr) minmax(0, var(--prl-measure));
+    column-gap: var(--prl-space-9);
+  }
+
+  .prl-home__proof-term {
+    grid-column: 1;
+  }
+
+  .prl-home__proof-detail {
+    grid-column: 2;
+    padding-block: var(--prl-space-8);
+    border-block-start: var(--prl-hairline);
+  }
+}
+
+/**
+ * THE HERO'S SECOND COLUMN.
+ *
+ * Measured at 1460px before this rule existed: the title, the lede, the two actions and the
+ * guardrail all stacked in a column about 840px wide, and the right half of the viewport was empty
+ * from the header to the first section rule. That is not spaciousness — a hero that uses 58% of the
+ * screen and leaves the rest blank reads as a page that has not finished loading.
+ *
+ * The fix is to give the right half something that belongs there rather than to stretch the
+ * headline across it. The guardrail notice is the natural occupant: it is the one thing on this
+ * page that must not be scrolled past, and beside the headline it is level with the first screen
+ * instead of below it. Nothing moves in the DOM, so the reading and tab order are unchanged — the
+ * notice is still announced after the two actions.
+ *
+ * The rows are explicit because the guardrail has to span the three of them. `grid-row: 2 / -1`
+ * would depend on how many rows the auto-placement happens to create.
+ */
+@media (min-width: 1280px) {
+  .prl-home__hero {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 3fr);
+    column-gap: var(--prl-space-12);
+    align-items: start;
+  }
+
+  .prl-home__eyebrow,
+  .prl-home__title,
+  .prl-home__lede,
+  .prl-home__actions {
+    grid-column: 1;
+  }
+
+  /** Level with the title rather than with the eyebrow: the eyebrow is a caption, not a first line. */
+  .prl-home__guardrail {
+    grid-column: 2;
+    grid-row: 2 / span 3;
+    align-self: start;
+    max-width: none;
+  }
+}

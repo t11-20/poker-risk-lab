@@ -1,0 +1,206 @@
+/**
+ * A small modern reset.
+ *
+ * Small on purpose. A heavy reset (the kind that strips every margin, every list marker
+ * and every heading size) hands you a blank slate and then quietly removes the semantics
+ * people rely on: a `<ul>` with `list-style: none` and no `role="list"` stops being
+ * announced as a list in Safari + VoiceOver, and headings that all look identical stop
+ * being scannable. So this file only repairs things that are genuinely broken in browser
+ * defaults, and leaves every *choice* to base.css where it is visible and explainable.
+ *
+ * Margin zeroing is targeted rather than universal. `* { margin: 0 }` is fast to write and
+ * then every element's rhythm has to be reintroduced somewhere else; here the elements that
+ * carry a UA margin nobody wants are zeroed by name, and base.css sets the rhythm back one
+ * element at a time. The list of names is the documentation.
+ *
+ * Deliberately NOT here:
+ *   - `list-style: none` globally. Applied per component, always with the list semantics
+ *     preserved (see the note above).
+ *   - Anything that touches `outline`. Removing a focus outline is how keyboard users lose
+ *     the ability to see where they are; base.css *strengthens* it instead.
+ *   - Any colour, size, or spacing value. Those are tokens, and they live in base.css and
+ *     components.css so that a reader can find them.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/**
+ * `text-size-adjust: 100%` stops iOS Safari inflating text after a rotation to landscape.
+ * It is NOT `none`: `none` blocks the user's own text inflation, which is an accessibility
+ * regression rather than a layout fix.
+ */
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+/**
+ * Smooth scrolling is opt-IN via `no-preference`, not opt-out via a later override.
+ *
+ * Written this way round because "no stated preference" is the only case where animating
+ * the viewport is safe. `scroll-behavior: smooth` plus a `reduce` override elsewhere gives
+ * the same result only as long as the override survives every future edit; this version
+ * cannot regress, because the declaration is never made in the first place for anyone who
+ * asked for less motion.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/**
+ * Elements whose UA margin is never the margin anyone wants. base.css puts a deliberate
+ * rhythm back on the ones that need it.
+ */
+body,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+figure,
+blockquote,
+dl,
+dd,
+fieldset,
+pre {
+  margin: 0;
+}
+
+/**
+ * Form controls opt out of the page font in every browser, which is how a bet-sizing number
+ * input ends up rendering in 13px Arial beside 15px system-ui. Inheriting is almost always
+ * what was wanted, and it is the reason the number in a bet sizer lines up with the number
+ * on the button beside it.
+ */
+button,
+input,
+optgroup,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+button {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  /* Safari centres button text and refuses to inherit alignment otherwise. */
+  text-align: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/**
+ * Replaced-element defaults. `display: block` kills the phantom descender gap under an
+ * inline image; `max-width: 100%` with `height: auto` is what stops a wide asset forcing the
+ * whole page to scroll sideways.
+ */
+img,
+svg,
+video,
+canvas,
+audio,
+iframe,
+embed,
+object {
+  display: block;
+  max-width: 100%;
+}
+
+img,
+video,
+canvas {
+  height: auto;
+}
+
+/**
+ * `text-wrap: balance` on headings and `pretty` on prose. Both degrade to normal wrapping
+ * where unsupported, so there is no fallback to write.
+ */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  text-wrap: balance;
+}
+
+p,
+li,
+figcaption,
+dd {
+  text-wrap: pretty;
+}
+
+/**
+ * Long unbroken tokens - a hand id, a range string, a serialised board - must not force a
+ * horizontal scrollbar on the whole page. `overflow-wrap` breaks them; wide *layout*
+ * (tables, bars, the table surface) gets its own scroll container instead.
+ */
+p,
+li,
+dd,
+td,
+th,
+figcaption {
+  overflow-wrap: break-word;
+}
+
+table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+/**
+ * Anchors get their colour in base.css. Here only the underline geometry is repaired: the
+ * default `text-underline-offset` puts the rule through the descenders, which at the small
+ * sizes the Coach panel uses reads as a dotted underline rather than a link.
+ */
+a {
+  color: inherit;
+  text-underline-offset: 0.18em;
+}
+
+/** Removes the pointless top margin browsers give a nested list. */
+ul ul,
+ul ol,
+ol ul,
+ol ol {
+  margin-block: 0;
+}
+
+/**
+ * An anchor target must not land under the sticky header (WCAG 2.4.11, Focus Not Obscured).
+ * `scroll-padding-block-start` on the scroll container in base.css does the work for
+ * scrolling; `scroll-margin` on the target itself covers the case where the element is
+ * scrolled into view by script rather than by fragment navigation.
+ */
+:target {
+  scroll-margin-block-start: var(--prl-space-12);
+}
+
+/**
+ * `hidden` must win over any `display` a component sets.
+ *
+ * The attribute is repeated deliberately. `[hidden]` alone has specificity (0,1,0) and loses
+ * to any single class rule that sets `display` - so a `<span class="prl-metric__note"
+ * hidden>` would stay on screen if that class ever gained a `display`. `[hidden][hidden]` is
+ * (0,2,0), which beats one class without reaching for `!important` and without inventing a
+ * wrapper element. It looks like a typo; it is not.
+ */
+[hidden][hidden] {
+  display: none;
+}

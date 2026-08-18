@@ -1,0 +1,474 @@
+[
+  {
+    "id": "rk-low-spr-commit-top-pair",
+    "title": "Top pair, barely one pot behind",
+    "topic": "bet-sizing-and-spr",
+    "difficulty": "core",
+    "question": "Should hero call, fold, or raise all in?",
+    "smallBlind": 10,
+    "bigBlind": 20,
+    "buttonSeat": 3,
+    "seats": [
+      { "seat": 3, "label": "BTN", "stack": 440, "isHero": true, "holeCards": "AhKd" },
+      { "seat": 5, "label": "BB", "stack": 440, "profile": "tight-aggressive" }
+    ],
+    "board": "Kc 8d 3s",
+    "street": "flop",
+    "potBeforeStreet": 350,
+    "committedThisStreet": { "5": 175 },
+    "facingAction": "Hero opened the button, the big blind three-bet to 170 and hero called. On the flop the big blind bets 175 into a pot of 350.",
+    "toCall": 175,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "AA, KK, QQ, JJ, AKs, AKo",
+      "label": "a tight three-betting range of big pairs and ace-king"
+    },
+    "assumptions": [
+      "The big blind three-bet before the flop with only big pairs and ace-king, and continues betting this flop with all of them.",
+      "Stacks shown are what each player had at the start of this betting round; the chips listed as committed on this street have already come out of them.",
+      "Read the board back: Kc 8d 3s is rainbow and disconnected. It makes no pair, no straight and no flush, and no flush draw is possible.",
+      "The computed figures are raw equity to the river with no further betting. At this depth that is close to what actually happens, because the money left behind is only about one pot."
+    ],
+    "reasoning": "Start with the stack-to-pot ratio rather than with your hand. Each player has only a little more than one pot behind, which means one more bet from either player puts the rest of the money in, and there is no later street on which a fold could save you anything. At that depth top pair with the best kicker is not a fragile holding to be protected, it is near the top of what you can credibly have, and playing the whole stack with it is the plan rather than the accident. Against the range assumed here you are behind aces, kings are close to impossible because one king is on the board and you are holding another, the ace-king combinations simply split the pot with you, and you are well ahead of the queens and jacks. That leaves your share of the pot comfortably larger than the share this price asks for, so calling is clearly better than folding. Whether calling or raising all in is better depends on something the cards cannot tell you: whether this opponent would fold an overpair to a raise, and whether they would only put more money in when they have you beaten. Against someone who never folds queens or jacks and never continues without them, raising gains nothing from the hands you beat and loses more to the hands that beat you. Notice what is really doing the work here. It is not the strength of ace-king; it is the shallow stack, and the next scenario keeps the hand and the board identical while changing only the depth.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Treating top pair as a hand to protect rather than a hand to commit with. At this depth the decision is made now, because there is no later street to save money on.",
+      "Folding on the grounds that a three-bet means aces. The assumed range contains far more combinations you beat than combinations that beat you.",
+      "Raising to find out where you stand. A raise here buys information you have no way to act on, because there is no meaningful fold left behind it."
+    ],
+    "glossaryTerms": ["spr", "effective-stack", "pot-odds", "break-even-equity", "three-bet"]
+  },
+  {
+    "id": "rk-high-spr-same-top-pair",
+    "title": "The same top pair, seventy blinds deep",
+    "topic": "bet-sizing-and-spr",
+    "difficulty": "advanced",
+    "question": "Should hero call, fold, or raise?",
+    "smallBlind": 10,
+    "bigBlind": 20,
+    "buttonSeat": 3,
+    "seats": [
+      { "seat": 3, "label": "BTN", "stack": 1400, "isHero": true, "holeCards": "AhKd" },
+      { "seat": 5, "label": "BB", "stack": 1400, "profile": "tight-aggressive" }
+    ],
+    "board": "Kc 8d 3s",
+    "street": "flop",
+    "potBeforeStreet": 110,
+    "committedThisStreet": { "3": 55, "5": 190 },
+    "facingAction": "Hero opened the button to 50 and the big blind called. On the flop hero bet 55 into 110 and the big blind raised to 190.",
+    "toCall": 135,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "AA, KK, 88, 33, AKs, AKo, KQs, K8s, A5s, A4s, 76s, 65s",
+      "label": "a flop check-raising range of sets, top pair and a few semi-bluffs"
+    },
+    "assumptions": [
+      "The big blind called a button open with a wide range, then check-raises this flop with sets, top pair and a small number of hands with backdoor equity.",
+      "Stacks shown are what each player had at the start of this betting round, before the chips listed as committed on this street.",
+      "Read the board back: Kc 8d 3s is the same rainbow, disconnected flop as the shallow version of this spot. Nothing about the cards has changed, only the depth.",
+      "The computed equity assumes the hand runs to the river with no further betting, which at this depth is a much rougher approximation than it is in a shallow pot."
+    ],
+    "reasoning": "Your hand and the board are identical to the shallow version of this spot; what has changed is that there are many pots left behind this one, and that changes which hands want to build a big one. Against the assumed check-raising range your share of the pot is still larger than the price of continuing, so folding is worse than calling. On a board with no flush draw and no straight draw a raise skews toward made hands rather than away from them, but the range still contains enough top pair and semi-bluff combinations that one pair with the best kicker is not in trouble against it. What you should not do is read the raise as an invitation to play for the whole stack. Depth is asymmetric against one pair: the hands that beat you have room to win an enormous pot from you, and the hands you beat have room to fold cheaply, which is exactly what reverse implied odds describes. Calling keeps the pot at a size your hand can defend and leaves you a decision on the turn instead of a commitment made on the flop. This would change if you believed this opponent check-raises this texture mostly with draws and air, in which case raising becomes attractive, but that is a read about a person rather than something the cards imply. It would also change if the stacks were short, which is the point worth carrying away: the same two cards on the same flop call for a different plan at a different depth.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Playing the hand and ignoring the stack. Ace-king on this flop is the same hand at both depths; only the money behind it differs.",
+      "Assuming a check-raise on a dry board must be a bluff. With no draws available, a raise skews toward made hands rather than away from them.",
+      "Calling now and then calling every later bet because you already called once. A call keeps the pot small only if you are genuinely willing to fold later."
+    ],
+    "glossaryTerms": ["spr", "effective-stack", "reverse-implied-odds", "pot-odds", "board-texture"]
+  },
+  {
+    "id": "rk-raise-size-sets-up-the-turn",
+    "title": "Choosing a flop raise size for the turn",
+    "topic": "bet-sizing-and-spr",
+    "difficulty": "advanced",
+    "question": "Should hero call, raise small, or raise large?",
+    "smallBlind": 10,
+    "bigBlind": 20,
+    "buttonSeat": 3,
+    "seats": [
+      { "seat": 3, "label": "BTN", "stack": 400, "isHero": true, "holeCards": "QcQd" },
+      { "seat": 5, "label": "BB", "stack": 400, "profile": "loose-aggressive" }
+    ],
+    "board": "Jd Ts 3s",
+    "street": "flop",
+    "potBeforeStreet": 110,
+    "committedThisStreet": { "5": 25 },
+    "facingAction": "Hero opened the button to 50 and the big blind called. On the flop the big blind leads out for 25 into a pot of 110.",
+    "toCall": 25,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "JJ, TT, 33, AJs, AJo, KJs, QJs, JTs, T9s, 98s, 87s, KQs, KQo, A5s, 65s",
+      "label": "a small-bet leading range of top pair, sets, draws and give-ups"
+    },
+    "assumptions": [
+      "The big blind leads small on this flop with a mixture of top pair, sets, straight and flush draws, and hands that have given up.",
+      "Stacks shown are what each player had at the start of the flop, before the 25 the big blind has already put in.",
+      "Read the board back: Jd Ts 3s has two spades and two connected high cards, so both flush draws and straight draws are live. It makes no pair, no straight and no flush on its own.",
+      "Any pot and stack figures quoted for a future street follow arithmetically from the sizes shown; they are not predictions about what will happen."
+    ],
+    "reasoning": "The price of continuing is small enough that folding is the one clearly bad choice, since a pair of queens is ahead of most of the range described. The interesting question is the size of the raise, and the way to answer it is to look forward rather than at this street. Jd Ts 3s has two spades and two connected high cards, so a large share of turn cards either complete a draw against you or scare off the hands you are currently beating, which argues for putting money in now rather than later. If you raise to about a hundred and get called, the turn arrives with a pot near three hundred and about three hundred behind, which means any turn bet is effectively a bet for the rest of the stack. That is what choosing a size to set up a street means: you have arranged the geometry so the next decision is simple rather than delicate. Raise much smaller and you keep a stack-to-pot ratio in the awkward middle, where you have too much behind to commit comfortably and too little to manoeuvre. Raise much larger and you fold out the parts of the range you most wanted to keep in, which costs you the value that made raising attractive in the first place. Calling is defensible too, and it is the better choice if you think this opponent leads small only with the hands that beat you, because then building a pot builds it for them. Say which of those you believe about the lead before you pick a size, because the size follows from the read rather than the other way round.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Choosing a raise size to look strong instead of choosing it to arrange how big the next decision will be.",
+      "Raising so large that every hand you were ahead of folds and only the hands that beat you continue.",
+      "Treating this as a dry flop. Two spades and two connected high cards mean a lot of turn cards change who is in front."
+    ],
+    "glossaryTerms": ["spr", "effective-stack", "value-bet", "board-texture", "flush-draw"]
+  },
+  {
+    "id": "rk-semi-bluff-raise-on-the-turn",
+    "title": "A flush draw that cannot call",
+    "topic": "fold-equity-and-bluffing",
+    "difficulty": "core",
+    "question": "Should hero fold, call, or raise as a semi-bluff?",
+    "smallBlind": 10,
+    "bigBlind": 20,
+    "buttonSeat": 3,
+    "seats": [
+      { "seat": 3, "label": "BTN", "stack": 520, "profile": "tight-aggressive" },
+      { "seat": 5, "label": "BB", "stack": 520, "isHero": true, "holeCards": "QhJh" }
+    ],
+    "board": "Kh 8h 5s 2c",
+    "street": "turn",
+    "potBeforeStreet": 220,
+    "committedThisStreet": { "3": 150 },
+    "facingAction": "The button opened, hero defended the big blind, and the button bet the flop and was called. On the turn the button bets 150 into a pot of 220.",
+    "toCall": 150,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "AA, KK, QQ, KQs, KQo, KJs, KJo, 88, 55, K8s",
+      "label": "a value-heavy second-barrel range of overpairs and top pair"
+    },
+    "assumptions": [
+      "The button fires a second barrel on this turn only with overpairs, top pair and the two sets, and never with a hand that has given up.",
+      "Stacks shown are what each player had at the start of the turn, before the 150 the button has already bet.",
+      "Read the board back: Kh 8h 5s 2c has two hearts, so a flush draw is live. It makes no pair and no straight, and hero has no pair.",
+      "The equity figure is hero's share of the pot if the hand simply runs out, so it measures the flat call and not the raise."
+    ],
+    "reasoning": "There is one card left, which is the first thing to register: a draw on the turn is worth far less than the same draw on the flop, because it gets one attempt rather than two. Against the range assumed here you are behind every hand in it, and against almost all of it a heart is your only route to the best hand, so a flat call is asking one card to deliver more than this price allows. The break-even the app shows you for calling is higher than the share your hand actually has, which means calling loses chips on average even though the draw feels strong. So folding beats calling, and that alone is worth pausing on, because many players call here on the grounds that a flush draw is a draw and never ask what one card is worth at this price. But folding is not the only alternative. Raising adds a second way to win the pot, namely the times the button gives up, and those two ways compound rather than merely adding: the hearts are still behind the raise on the occasions it gets called, which is precisely what makes a semi-bluff worth more than either a bluff or a call. Whether the raise beats folding depends entirely on how often this particular opponent folds a second barrel to a raise, and the cards say nothing about that. Against a range of made hands that never folds you have simply bought a more expensive call, while against a player who barrels this texture often and gives up under pressure the raise is the best of the three options. Decide which of those you believe first, then act; a semi-bluff without a reason to expect folds is just a bluff with extra steps.",
+    "expectedInsight": [{ "kind": "breakEvenExceedsEquity" }, { "kind": "callEvSign", "expect": "negative" }],
+    "commonMistakes": [
+      "Calling because there is a flush draw. On the turn there is one card to come, and this price asks for more than one card can deliver.",
+      "Raising while ignoring the outs, or folding while ignoring the fold equity. A semi-bluff is worth more than either piece taken alone.",
+      "Assuming a raise must work because the board looks threatening. Fold equity is a claim about the opponent and it has to be justified on its own."
+    ],
+    "glossaryTerms": ["semi-bluff", "fold-equity", "flush-draw", "outs", "break-even-equity"]
+  },
+  {
+    "id": "rk-pricing-a-river-bluff-raise",
+    "title": "Pricing a river bluff-raise",
+    "topic": "fold-equity-and-bluffing",
+    "difficulty": "advanced",
+    "question": "Should hero fold, call, or raise as a bluff?",
+    "smallBlind": 10,
+    "bigBlind": 20,
+    "buttonSeat": 3,
+    "seats": [
+      { "seat": 3, "label": "BTN", "stack": 640, "profile": "tight-aggressive" },
+      { "seat": 5, "label": "BB", "stack": 640, "isHero": true, "holeCards": "6s5s" }
+    ],
+    "board": "Qs 9s 4d 7c 2h",
+    "street": "river",
+    "potBeforeStreet": 480,
+    "committedThisStreet": { "3": 120 },
+    "facingAction": "Hero called a flop bet with a flush draw and a turn bet with a flush draw and an open-ender. The river bricks and the button bets 120 into a pot of 480.",
+    "toCall": 120,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "JJ, TT, 99, 77, 44, AQs, AQo, KQs, KQo, QJs",
+      "label": "made pairs betting small for thin value on the river"
+    },
+    "assumptions": [
+      "The button bets this size on the river only with a made pair, and never with a hand that missed. That assumption is what makes hero unable to win at showdown.",
+      "Stacks shown are what each player had at the start of the river, before the 120 the button has already bet.",
+      "Read the board back: Qs 9s 4d 7c 2h has only two spades and no five cards in sequence, so no flush and no straight is possible for anyone. Any pair wins.",
+      "Fold equity is not computed for you. How often a raise would succeed is a judgement about this opponent that the maths cannot supply."
+    ],
+    "reasoning": "You have no pair, and because no flush and no straight is possible on this board, a range made entirely of pairs beats you every single time. Calling is therefore throwing chips at a hand that cannot win at showdown, and the fact that the bet is small does not change that at all. So the live options are folding and raising, and raising is where the arithmetic is worth doing carefully. A bluff does not have to work every time; it has to work often enough that the pots it picks up outweigh the chips it loses when it is called, and the size you choose is what sets that threshold. A small raise needs to succeed less often but wins less when it does, while a large raise needs to succeed more often, and the app will show you the frequency each size requires. The discipline is to look at that frequency before choosing, not to pick a size and then rationalise it. Then ask the honest question the number cannot answer: does an opponent who has just chosen to bet small with a made pair ever fold it to a raise? If the answer is no, then no size works and the raise is a donation no matter how reasonable the threshold looks. Folding is the default conclusion here, and it costs nothing except the chips that are already in the middle and no longer yours. The reason to work through the raise anyway is that this is exactly the arithmetic that makes a bluff correct in the spots where the opponent's range really is full of hands that can be folded.",
+    "expectedInsight": [{ "kind": "breakEvenExceedsEquity" }, { "kind": "callEvSign", "expect": "negative" }],
+    "commonMistakes": [
+      "Calling a small bet because it is cheap. A hand with no way to win at showdown does not become playable because the price came down.",
+      "Bluffing because the story sounds good, without ever checking how often the raise has to work at the size chosen.",
+      "Reading a small bet as weakness. A small bet is often a made hand asking for a cheap call, which is the worst possible target for a bluff-raise."
+    ],
+    "glossaryTerms": ["bluff", "fold-equity", "alpha", "minimum-defence-frequency", "showdown-value"]
+  },
+  {
+    "id": "rk-narrowing-a-range-across-streets",
+    "title": "Reading three streets into one call",
+    "topic": "ranges",
+    "difficulty": "advanced",
+    "question": "Should hero call or fold on the river?",
+    "smallBlind": 10,
+    "bigBlind": 20,
+    "buttonSeat": 3,
+    "seats": [
+      { "seat": 3, "label": "BTN", "stack": 430, "profile": "tight-aggressive" },
+      { "seat": 5, "label": "BB", "stack": 430, "isHero": true, "holeCards": "AcTd" }
+    ],
+    "board": "Th 7c 2d Ks 4h",
+    "street": "river",
+    "potBeforeStreet": 370,
+    "committedThisStreet": { "3": 220 },
+    "facingAction": "The button bet 40 on the flop and 90 on the turn king, and hero called both. On the river the button bets 220 into a pot of 370.",
+    "toCall": 220,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "KTs, KTo, KQs, KQo, KJs, KJo, TT, 77, 22, QJs, QJo, JTs, T9s, T8s, 98s, 86s, A5s, A3s",
+      "label": "the hands consistent with a small flop bet, a turn bet on the king, and a river bet"
+    },
+    "assumptions": [
+      "The button opened a wide button range, bets small on this dry flop with most of it, and bets the turn king with both the hands it improved and the hands that missed.",
+      "The button does turn missed hands into river bluffs at least some of the time. If they never do, the range collapses and so does the conclusion.",
+      "Read the board back: Th 7c 2d Ks 4h has at most two cards of a suit and no five ranks in sequence, so no flush and no straight is possible. Hero holds a pair of tens with an ace kicker.",
+      "Stacks shown are what each player had at the start of the river, before the 220 the button has already bet."
+    ],
+    "reasoning": "The hand to read here is not yours, it is theirs, and the way to read it is to ask what survived each street. A small bet on Th 7c 2d keeps almost everything in, so the flop narrows very little and it would be a mistake to treat it as information. The king on the turn is the street that matters, because it improved every king in a button opening range and left the hands that were drawing to nothing still drawing to nothing, and betting again is consistent with both groups. By the river the range has split into two parts that behave completely differently against you: the hands that got there, meaning every king plus the three pocket pairs that made a set, and everything else, which cannot beat a pair of tens with an ace kicker. Your job is to count how many combinations sit in each part, and this is where your own cards earn their keep, because holding a ten and an ace removes combinations from both groups at once. Do that count against the range described and the second group is numerous enough that your share of the pot is larger than the price of the call, so calling is better than folding here. What would change it is a narrower assumption about the line: if you believe this opponent bets three streets only with a king or better and never turns a missed hand into a bluff, the second group shrinks toward nothing and calling becomes a mistake. That is the honest shape of most river decisions. The arithmetic is easy once the range is chosen, and choosing the range is the entire difficulty.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Judging the river bet on its own instead of asking which hands could plausibly have taken all three of the earlier actions.",
+      "Forgetting that your own two cards remove combinations from the range you are counting, from the strong part as well as the weak part.",
+      "Deciding first and then choosing a range that agrees with the decision. Build the range from the line, then let the arithmetic answer."
+    ],
+    "glossaryTerms": ["range", "capped-range", "combos", "polarised-range", "break-even-equity"]
+  },
+  {
+    "id": "rk-counting-the-combos-that-beat-you",
+    "title": "Counting the flushes that are possible",
+    "topic": "ranges",
+    "difficulty": "core",
+    "question": "Should hero call or fold the pot-sized river bet?",
+    "smallBlind": 10,
+    "bigBlind": 20,
+    "buttonSeat": 3,
+    "seats": [
+      { "seat": 3, "label": "BTN", "stack": 560, "isHero": true, "holeCards": "AhQs" },
+      { "seat": 5, "label": "BB", "stack": 560, "profile": "loose-aggressive" }
+    ],
+    "board": "Qh Th 5h 8s 3c",
+    "street": "river",
+    "potBeforeStreet": 480,
+    "committedThisStreet": { "5": 480 },
+    "facingAction": "Hero bet the flop and the turn and was called both times. On the river hero checks and the big blind bets 480 into a pot of 480.",
+    "toCall": 480,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "QQ, TT, 55, KQs, KQo, QJs, JTs, T9s, 98s, 87s, 76s, 65s, J9s, KJs, A5s, 43s",
+      "label": "a river betting range of made hands, the odd straight, and missed draws"
+    },
+    "assumptions": [
+      "The big blind bets this river with missed draws as well as with the hands that got there. Against an opponent who only ever bets a completed flush, the count collapses and so does the call.",
+      "The range is written as hand classes, so only the heart combination of each suited class is actually a flush. That is the arithmetic this scenario is about.",
+      "Read the board back: Qh Th 5h 8s 3c has three hearts, so a flush is possible for two hearts, and a jack together with a nine makes a straight. The board itself makes no pair.",
+      "Stacks shown are what each player had at the start of the river, before the 480 the big blind has already bet."
+    ],
+    "reasoning": "Three hearts on the board and a pot-sized bet make this feel like a flush every single time, and the feeling is doing most of the work. Start by noticing that a class such as queen-jack suited is four combinations and only one of them is hearts, so a range written as a list of suited hands contains far fewer flushes than the list appears to promise. Then remove the ones that cannot exist. You are holding the ace of hearts, so the best possible flush is not in their range at all, and the queen and five of hearts are on the board, which takes out more of the candidates. Read the board back for the other danger too: a jack together with a nine makes a straight here, so that hand belongs in the count alongside the flushes and the three sets. Once you have counted what actually remains rather than what the texture suggests, your pair of queens with an ace kicker is ahead of a clear majority of the range described, and calling a pot-sized bet is better than folding. The assumption carrying the whole thing is that this opponent bets missed draws as well as made hands; if they only ever bet a flush, there is nothing to count and folding is right. Counting like this is not optimism, it is a refusal to let a frightening board texture stand in for arithmetic you can actually do.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Seeing three hearts and treating a flush as likely, without counting how many heart combinations the range can actually contain.",
+      "Forgetting that holding the ace of hearts removes the best flush from the opponent's range entirely, which is what a blocker does.",
+      "Reading the board for flushes only. A jack together with a nine makes a straight here, and that hand has to go into the count too."
+    ],
+    "glossaryTerms": ["combos", "blocker", "range", "nuts", "pot-odds"]
+  },
+  {
+    "id": "rk-a-right-call-that-usually-loses",
+    "title": "The call you will usually lose",
+    "topic": "variance-and-bankroll",
+    "difficulty": "core",
+    "question": "Should hero call or fold the small flop bet?",
+    "smallBlind": 10,
+    "bigBlind": 20,
+    "buttonSeat": 3,
+    "seats": [
+      { "seat": 3, "label": "BTN", "stack": 900, "profile": "tight-aggressive" },
+      { "seat": 5, "label": "BB", "stack": 900, "isHero": true, "holeCards": "JcTd" }
+    ],
+    "board": "9h 8d 2c",
+    "street": "flop",
+    "potBeforeStreet": 110,
+    "committedThisStreet": { "3": 35 },
+    "facingAction": "The button opened to 50, hero defended the big blind, and on the flop the button bets 35 into a pot of 110.",
+    "toCall": 35,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "TT+, AKs, AKo, AQs, AQo, 99, 88, KQs, T9s, 98s",
+      "label": "a continuation-betting range of big pairs, big cards and made hands"
+    },
+    "assumptions": [
+      "The button continuation-bets this flop with the big pairs, big unpaired cards and made hands listed, and gives up with the rest of their opening range.",
+      "Read the board back: 9h 8d 2c is rainbow, so no flush draw exists. It makes no pair and no straight, and hero has an open-ended straight draw with no pair.",
+      "The computed equity assumes the hand runs to the river with no further betting, so it captures neither the money you win when you hit nor the money you lose when you chase.",
+      "Stacks shown are what each player had at the start of the flop, before the 35 the button has already bet."
+    ],
+    "reasoning": "You have an open-ended straight draw and no pair, and the bet is small relative to the pot. Against the range assumed here your share of the pot is larger than the share this price asks for, so calling makes money on average and folding gives up something real. Now look at what the phrase on average is hiding. Most of the time you will call this bet, miss, and either fold a later street or lose at showdown, which means you will finish this hand with less than you started far more often than you finish it with more. That is not a defect in the decision, it is the shape of a profitable draw: the money arrives in the minority of hands where you make the straight and win a pot much larger than the 35 you put in, and it arrives in a lumpy and unpredictable order. If you judge the call by how the next handful of them feel, you will conclude it was wrong, because a handful of hands is nowhere near enough to see an average. This is why a decision and a result are worth tracking as two separate things, and why the only honest review of a spot like this re-examines the reasoning rather than the outcome. Two assumptions carry the analysis. The range has to be roughly this wide, and you have to actually get paid when you hit; against an opponent who shuts down the moment a straight card lands, the profitable half of the distribution shrinks and the call gets thinner.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Concluding that a call was wrong because it lost. The result of one hand carries almost no information about the quality of the decision.",
+      "Calling with a draw and then having no plan for the streets where it hits. The profit in a draw lives in the pots you win, so later streets are part of this decision.",
+      "Reading positive expected value as usually wins. Most profitable draws lose the pot more often than they win it."
+    ],
+    "glossaryTerms": ["variance", "sample-size", "downswing", "open-ended-straight-draw", "expected-value"]
+  },
+  {
+    "id": "rk-an-all-in-that-is-nearly-even",
+    "title": "An all-in that is nearly even",
+    "topic": "variance-and-bankroll",
+    "difficulty": "advanced",
+    "question": "Should hero call the all-in or fold?",
+    "smallBlind": 10,
+    "bigBlind": 20,
+    "buttonSeat": 3,
+    "seats": [
+      { "seat": 2, "label": "CO", "stack": 220, "profile": "loose-aggressive" },
+      { "seat": 3, "label": "BTN", "stack": 220, "isHero": true, "holeCards": "KhQh" }
+    ],
+    "board": "Th 9h 4c",
+    "street": "flop",
+    "potBeforeStreet": 130,
+    "committedThisStreet": { "2": 220 },
+    "facingAction": "The cutoff opened to 50, hero called on the button and both blinds folded. On the flop the cutoff moves all in for 220 into a pot of 130.",
+    "toCall": 220,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "AA, KK, QQ, JJ, TT, 99, 44, ATs, ATo, KTs, QTs, JTs, T9s, 98s",
+      "label": "a short-stacked shoving range of overpairs, top pair and sets"
+    },
+    "assumptions": [
+      "The cutoff shoves this flop with the overpairs, top-pair hands and sets listed, and folds or checks everything else.",
+      "Read the board back: Th 9h 4c has two hearts and two connected cards, so hero holds a flush draw, two overcards and a gutshot to king-queen-jack-ten-nine.",
+      "This is an all-in, so there are no further decisions. The computed equity is the whole story rather than an approximation of it.",
+      "Chips here are valueless practice units. Nothing in this scenario transfers, cashes out or has worth of any kind."
+    ],
+    "reasoning": "Your hand draws to three different things at once, and against the shoving range assumed here those routes add up to roughly an even race. Notice that an even race is more than you actually need. There are already chips in the middle from before the flop, so the share this price asks for is smaller than half, and the gap between those two figures is where the profit sits. That makes calling better than folding, and because this is an all-in there is no later street on which to give the edge back. What makes the spot worth sitting with is not the answer but the distribution behind it. You will win this hand roughly half the times it comes up, which means calling correctly and losing your entire stack is close to the single most likely outcome. Nothing about that result is evidence you were wrong, and nothing about winning would have been evidence you were right, which is the uncomfortable fact underneath every variance discussion. Small edges only turn into results across a large number of repetitions, which is why this app deals in valueless units and asks you to review your reasoning rather than your stack. Two assumptions do the heavy lifting: the shoving range has to be roughly this wide, and all the money has to go in now. Shift the range toward more sets and fewer one-pair hands and the edge narrows, so treat the conclusion as a call against that range rather than as a general rule about big draws.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Reading nearly an even race as not worth calling. The chips already in the pot mean you need less than an even race for the call to profit.",
+      "Taking the outcome as feedback on the decision. Losing a near-even all-in is the expected experience about half the time it happens.",
+      "Assuming a big draw is always ahead of the price. Against a range weighted to sets rather than one pair, the same draw can fall short."
+    ],
+    "glossaryTerms": ["variance", "standard-deviation", "all-in", "expected-value", "equity"]
+  },
+  {
+    "id": "rk-nine-big-blinds-call-or-fold",
+    "title": "Nine big blinds, call or fold",
+    "topic": "tournaments",
+    "difficulty": "core",
+    "question": "Should hero call the all-in or fold?",
+    "smallBlind": 400,
+    "bigBlind": 800,
+    "buttonSeat": 3,
+    "seats": [
+      { "seat": 3, "label": "BTN", "stack": 18000, "profile": "unknown" },
+      { "seat": 4, "label": "SB", "stack": 7200, "profile": "loose-aggressive" },
+      { "seat": 5, "label": "BB", "stack": 10000, "isHero": true, "holeCards": "KdTs" }
+    ],
+    "board": "",
+    "street": "preflop",
+    "potBeforeStreet": 0,
+    "committedThisStreet": { "4": 7200, "5": 800 },
+    "facingAction": "The button folds and the small blind moves all in for 7,200, which is their whole stack. Hero has 800 already posted as the big blind.",
+    "toCall": 6400,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "22+, A2s+, A2o+, K2s+, K2o+, Q2s+, Q6o+, J5s+, J8o+, T6s+, T8o, 96s, 97s, 98s, 86s, 87s, 75s, 76s, 65s, 64s, 54s, 53s, 43s",
+      "label": "a wide small-blind shoving range at nine big blinds"
+    },
+    "assumptions": [
+      "The small blind shoves roughly half of all hands from this position at this depth. Narrow that assumption toward big cards and pairs only and the conclusion reverses.",
+      "Stacks shown are what each player had before posting; the chips listed as committed on this street have already come out of them.",
+      "The figures are chip expected value. This scenario is early enough in a tournament that chips are treated as linearly valuable, which is not always true near the end.",
+      "There is no post-flop play to consider: at this depth the shove is all in and hero either calls or folds."
+    ],
+    "reasoning": "At nine big blinds there is no post-flop poker left in the hand, so the small blind's only sensible options are all in or fold and yours are call or fold. That collapses the entire decision into one comparison: your two cards against their range, at the price the pot is offering. Two things make that price better than instinct suggests. Your big blind is already in the middle and no longer belongs to you, so the pot you are buying a share of includes chips you cannot get back by folding; and a player shoving nine big blinds from the small blind does it with a very wide range, because at that depth folding hand after hand is its own slow loss. Against a range that wide, king-ten offsuit is ahead of the share this price asks for, so calling is better than folding, even though it is a hand most players release on reflex. The thing deciding this is not your hand's strength in the abstract, it is your hand against their range at this price, and all three pieces have to be named for the answer to mean anything at all. Narrow the shoving range toward pairs and big cards and the same call turns into a mistake, which is why what do they shove here is the question to answer before you look at your own cards. Note also what this scenario deliberately does not model: it treats every chip as equally valuable, which is a reasonable approximation early in a tournament and a poor one when finishing positions are close.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Judging the hand instead of the matchup. King-ten offsuit is weak on its own and can still be a call against a wide enough shove at this price.",
+      "Treating the posted big blind as money a fold would save. It is already in the pot, and its presence is part of what makes calling attractive.",
+      "Carrying a calling threshold from one stack depth to another. Both the price and the shoving range move with the stack, and the answer moves with them."
+    ],
+    "glossaryTerms": ["push-fold", "break-even-equity", "range", "effective-stack", "expected-value"]
+  },
+  {
+    "id": "rk-when-survival-outweighs-chip-ev",
+    "title": "A profitable call worth declining",
+    "topic": "tournaments",
+    "difficulty": "advanced",
+    "question": "Should hero call the all-in or fold with four players left?",
+    "smallBlind": 1000,
+    "bigBlind": 2000,
+    "buttonSeat": 3,
+    "seats": [
+      { "seat": 2, "label": "CO", "stack": 5000, "profile": "nit" },
+      { "seat": 3, "label": "BTN", "stack": 7000, "profile": "unknown" },
+      { "seat": 4, "label": "SB", "stack": 24000, "profile": "loose-aggressive" },
+      { "seat": 5, "label": "BB", "stack": 24000, "isHero": true, "holeCards": "KhQh" }
+    ],
+    "board": "",
+    "street": "preflop",
+    "potBeforeStreet": 0,
+    "committedThisStreet": { "4": 24000, "5": 2000 },
+    "facingAction": "Four players are left. The cutoff and the button fold, and the small blind moves all in for 24,000, which is exactly what hero has. Calling puts hero all in.",
+    "toCall": 22000,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "22+, A2s+, A2o+, K2s+, K7o+, Q5s+, Q9o+, J7s+, JTo, T7s, T9s, 98s, 87s, 76s, 65s, 54s",
+      "label": "a wide small-blind shoving range at twelve big blinds"
+    },
+    "assumptions": [
+      "The small blind shoves this wide from the small blind at twelve big blinds four-handed. A tighter assumption removes the chip edge entirely.",
+      "Every figure the app computes here is chip expected value. It does not model the value of a finishing position, so it answers only half of the question this spot asks.",
+      "Assume a structure where finishing higher is worth more than the chips it costs to get there. That is a property of the tournament, not of the cards, and it is the assumption the fold rests on.",
+      "The two other players have under four big blinds each and will be all in within an orbit or two whether hero acts or not.",
+      "Chips are valueless practice units. There is nothing to win or lose here beyond the exercise."
+    ],
+    "reasoning": "In chips this is a profitable call: king-queen suited is ahead of the share the price asks for against a shoving range this wide, and the computed figures will say so plainly. Tournaments are the one setting where profitable in chips and the better decision can come apart, and this is a clean example of why. Two players at this table have under four big blinds and will be all in within an orbit or two regardless of what you do. If you call and lose you are eliminated, and eliminated before either of them; if you fold you keep a stack that still covers both of them several times over and you let them go first. Whether that trade is worth more than the chip edge you are declining depends on how much the structure rewards outlasting people, which is a fact about the tournament rather than about the cards, and this app computes chip expected value rather than the value of a finishing position. So read the number as one input and not as the answer. The honest form of this is uncomfortable in both directions: the maths is not wrong and the fold is not free. You are giving up an edge you have measured in exchange for avoiding a risk you have not measured, and how large that second quantity is remains a judgement about the structure. In a cash game, where a chip is a chip and you can always sit back down, the same call is straightforwardly correct. Whenever anyone tells you survival matters more than chips, ask for the two conditions that make it true: a non-linear reward for finishing higher, and shorter stacks who are likely to go out before you.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Treating a positive chip expected value as the end of the argument. In a tournament it is one input to the decision rather than the decision itself.",
+      "Using survival as a blanket reason to fold. It outweighs chips only when the structure rewards finishing higher and there are shorter stacks likely to go out first.",
+      "Forgetting the reverse case. If those two short stacks were instead deep, most of the argument for declining a measured edge would disappear."
+    ],
+    "glossaryTerms": ["icm", "expected-value", "push-fold", "variance", "m-ratio"]
+  },
+  {
+    "id": "rk-the-fold-that-feels-wrong",
+    "title": "Folding top pair, top kicker",
+    "topic": "risk-psychology",
+    "difficulty": "advanced",
+    "question": "Should hero call or fold the big river bet?",
+    "smallBlind": 10,
+    "bigBlind": 20,
+    "buttonSeat": 3,
+    "seats": [
+      { "seat": 3, "label": "BTN", "stack": 560, "isHero": true, "holeCards": "AhKc" },
+      { "seat": 5, "label": "BB", "stack": 560, "profile": "nit" }
+    ],
+    "board": "Kd 8s 3h 8c 2d",
+    "street": "river",
+    "potBeforeStreet": 500,
+    "committedThisStreet": { "5": 400 },
+    "facingAction": "Hero bet the flop and the turn and was called both times. On the river hero checks and the big blind bets 400 into a pot of 500.",
+    "toCall": 400,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "AA, KK, 88, 33, 22, K8s, K8o, A5s",
+      "label": "full houses, aces up, and a few ace-high hands turned into a bluff"
+    },
+    "assumptions": [
+      "This quiet opponent has called two bets and then led the river for a large size only with a full house, better two pair, or the small number of ace-high hands listed.",
+      "That bluffing frequency is the assumption everything rests on. If you genuinely believe this player bluffs here far more often, widen the range out loud and let the arithmetic answer again.",
+      "Read the board back: Kd 8s 3h 8c 2d has a pair of eights, only two diamonds so no flush is possible, and no five ranks in sequence so no straight is possible. Hero holds two pair, kings and eights.",
+      "Stacks shown are what each player had at the start of the river, before the 400 the big blind has already bet."
+    ],
+    "reasoning": "Read the board back before you read your hand. Kd 8s 3h 8c 2d has a pair of eights on it, no flush is possible because only two diamonds are showing, and no straight is possible either. Your hand is top pair with the best kicker, now two pair with the board's eights, and it is exactly the hand you were right to bet twice, which is what makes this decision hard rather than complicated. The question is not how strong your hand is; it is which hands would bet 400 into 500 on this river after calling two bets. A paired board is what makes this dangerous: any pocket pair matching a board rank makes at least a full house, king-eight makes one as well, and even aces make a two pair better than yours, so a quiet player who calls along and then leads big is describing that group rather than describing a bluff. Count the combinations that beat you against the combinations of missed hands that do not, and against the range described the price asks for more than your share of the pot, so folding is better than calling. Two feelings will pull the other way. The first is that you built this pot so it feels like yours, but chips in the middle have no owner and the only comparison that matters is the next 400 against what it buys. The second is that folding the best kicker feels like being pushed off a hand, and that feeling is worth noticing precisely because it is not information. If you truly think this opponent bluffs more than the assumed range allows, widen the range explicitly and re-run the arithmetic, rather than widening it silently because folding is uncomfortable.",
+    "expectedInsight": [{ "kind": "breakEvenExceedsEquity" }, { "kind": "callEvSign", "expect": "negative" }],
+    "commonMistakes": [
+      "Calling because of the chips already invested. Money in the pot has no owner and cannot improve the price of the next 400.",
+      "Valuing the hand in the abstract rather than against the hands that would take this exact line on this exact board.",
+      "Quietly widening the opponent's bluffing range in your head because folding feels bad. Change the assumption out loud, then look at what the arithmetic says."
+    ],
+    "glossaryTerms": ["tilt", "range", "combos", "break-even-equity", "showdown-value"]
+  }
+]

@@ -1,0 +1,485 @@
+[
+  {
+    "id": "fl-board-plays-itself-river",
+    "title": "The board is the straight",
+    "topic": "rules-and-flow",
+    "difficulty": "core",
+    "question": "Facing a small river bet on a board that already makes a straight by itself, should hero call or fold?",
+    "smallBlind": 5,
+    "bigBlind": 10,
+    "buttonSeat": 0,
+    "seats": [
+      { "seat": 0, "label": "BTN", "stack": 960, "isHero": true, "holeCards": "Ac2d" },
+      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 2, "label": "BB", "stack": 940, "profile": "tight-aggressive" }
+    ],
+    "board": "8h 9c Td Jd Qs",
+    "street": "river",
+    "potBeforeStreet": 85,
+    "committedThisStreet": { "2": 20 },
+    "facingAction": "The big blind bets 20 into a pot of 85 on the river.",
+    "toCall": 20,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "AA-TT",
+      "label": "a big-pair value-betting range"
+    },
+    "assumptions": [
+      "The big blind only bets this river with one of the big pairs listed; a wider betting range changes the answer completely.",
+      "The stacks and the pot are exactly as shown, and neither player can put in more money after hero's decision.",
+      "Hero is choosing between calling and folding only; raising is not being evaluated here.",
+      "Split pots are settled the normal way, with the chips divided evenly between the tied hands."
+    ],
+    "reasoning": "Read the board out loud before you read your hand: eight, nine, ten, jack, queen. Those five cards are already a straight, so every player in the hand holds at least a queen-high straight without using either hole card. Hero's ace and deuce contribute nothing at all, which means hero cannot win this pot outright and cannot be bluffed off anything either. Now ask what the opponent's assumed range does with the same board: the big pairs all end up playing the identical straight and splitting, except for kings, which use one hole card to make the bigger king-high straight. So hero's realistic outcomes are 'chop' or 'lose', never 'win'. That sounds like an automatic fold, and it is the reason this spot is worth studying: when hero calls and chops, hero takes back half of a pot that now contains the opponent's bet as well, so the chop is not a neutral outcome, it is a win of chips relative to folding. Compare hero's share of the pot against the price being charged and the call follows from the stated range. Widen that range to include hands that hold a king more often, or make the bet large instead of small, and the fold becomes correct instead.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Reading your own two cards first and never noticing that the five community cards are a straight on their own.",
+      "Treating a chop as though it were the same as folding, when a chop hands back a share of the opponent's bet as well as your own money.",
+      "Assuming that holding an ace matters on this board; an ace only helps if it can be part of a five-card straight, and here it cannot.",
+      "Calling because 'I have a straight' without asking whether the opponent's range contains the one card that makes a bigger one."
+    ],
+    "glossaryTerms": ["playing-the-board", "split-pot", "pot-odds", "break-even-equity", "range"]
+  },
+  {
+    "id": "fl-small-straight-beats-trips",
+    "title": "A small straight against three aces",
+    "topic": "rules-and-flow",
+    "difficulty": "intro",
+    "question": "The opponent's hand is face up for teaching: hero's straight against their three aces, so should hero call the river bet?",
+    "smallBlind": 5,
+    "bigBlind": 10,
+    "buttonSeat": 0,
+    "seats": [
+      { "seat": 0, "label": "BTN", "stack": 890, "profile": "tight-aggressive", "holeCards": "AsAd" },
+      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 2, "label": "BB", "stack": 950, "isHero": true, "holeCards": "5h4h" }
+    ],
+    "board": "8h 7c 6d 2s Ah",
+    "street": "river",
+    "potBeforeStreet": 105,
+    "committedThisStreet": { "0": 60 },
+    "facingAction": "The button bets 60 into a pot of 105 on the river.",
+    "toCall": 60,
+    "opponentRange": { "kind": "exact", "cards": "AsAd" },
+    "assumptions": [
+      "This is a known-hand teaching case: the opponent's exact holding is shown so the comparison can be checked, which is not information hero would have at the table.",
+      "The board is complete, so no further card can change either hand.",
+      "The stacks and the pot are exactly as shown and hero's only choices are call or fold.",
+      "Ranking follows standard Hold'em hand rankings, best five cards out of seven."
+    ],
+    "reasoning": "Start by naming what hero actually holds rather than what the cards look like. The board shows an eight, a seven and a six; hero's five and four extend that run downwards, so hero's best five cards are eight-seven-six-five-four, a straight. Learners miss this constantly, because the board does not look sequential once an ace and a deuce land in the middle of it, and because both of hero's cards are small. The opponent's aces pair the ace on the board for three of a kind, which is a strong hand and looks stronger than two low cards. But hand rankings are fixed and not negotiable: a straight is above three of a kind, so hero's hand wins this showdown outright, not partially. Because the river is the last card, nothing can improve or reverse that, and the size of the bet is irrelevant to who wins; it only affects how much hero collects. Given the assumptions, calling follows and folding would be throwing away a pot hero already owns. The lesson to carry forward is procedural: read the board, then read your seven cards as a single set, and only then compare.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Missing your own straight because the board is not in obvious sequence once unrelated cards land on it.",
+      "Assuming that low hole cards cannot make a strong hand, and folding a made straight to a big bet.",
+      "Ranking three of a kind above a straight because trips 'feels' stronger than five unmatched-looking cards.",
+      "Deciding based on the size of the bet rather than on which five-card hand is better once the board is complete."
+    ],
+    "glossaryTerms": ["hand-rankings", "straight", "showdown", "board", "pot-odds"]
+  },
+  {
+    "id": "fl-top-pair-weak-kicker-river",
+    "title": "Top pair, fifth card decides",
+    "topic": "rules-and-flow",
+    "difficulty": "core",
+    "question": "Hero and the opponent both hold an ace and the opponent's hand is face up for teaching: should hero call the river bet?",
+    "smallBlind": 5,
+    "bigBlind": 10,
+    "buttonSeat": 0,
+    "seats": [
+      { "seat": 0, "label": "BTN", "stack": 910, "profile": "tight-aggressive", "holeCards": "AdJs" },
+      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 2, "label": "BB", "stack": 955, "isHero": true, "holeCards": "Ah9d" }
+    ],
+    "board": "Ac Kd 7s 3h 2c",
+    "street": "river",
+    "potBeforeStreet": 95,
+    "committedThisStreet": { "0": 45 },
+    "facingAction": "The button bets 45 into a pot of 95 on the river.",
+    "toCall": 45,
+    "opponentRange": { "kind": "exact", "cards": "AdJs" },
+    "assumptions": [
+      "This is a known-hand teaching case: the opponent's exact cards are shown so the five-card comparison can be verified, which hero would not see at the table.",
+      "The board is complete, so neither hand can change.",
+      "The stacks and the pot are exactly as shown and hero's only choices are call or fold.",
+      "Standard rules apply: each player makes the best five cards out of their two plus the five on the board, and unused cards are simply discarded."
+    ],
+    "reasoning": "Both players hold an ace, so both have a pair of aces, and it is tempting to stop reading there and call. The rule that decides this hand is that a poker hand is exactly five cards, no more: hero's aces plus the king on the board plus the two best remaining cards, which are hero's nine and the board's seven. The opponent builds the same start, aces and the king, but their fifth card is a jack instead of hero's nine. A jack outranks a nine, so the opponent's five cards beat hero's five cards, and hero holds no share of this pot at all. The uncomfortable part is that hero's hand is genuinely strong in the abstract, and that is exactly why kicker problems cost so much money: the hand feels like a call while the fifth card quietly decides everything. Because a losing hand has no chance of improving on a completed board, no price is low enough to make this call profitable, and folding follows from the stated assumptions. What would change the conclusion is a different assumed range: against an opponent who bets this river with worse aces or with missed draws, a call can be correct even though it loses to this particular holding.",
+    "expectedInsight": [{ "kind": "breakEvenExceedsEquity" }, { "kind": "callEvSign", "expect": "negative" }],
+    "commonMistakes": [
+      "Stopping at 'I have top pair' and calling without asking which fifth card each player brings.",
+      "Believing both hole cards must be used, and so ignoring that hero's weak second card is doing the deciding.",
+      "Thinking a cheap price can rescue a call against a hand you cannot beat; when the board is complete, a hand that is behind cannot improve.",
+      "Concluding from this hand that top pair is always a fold, rather than that this specific kicker loses to this specific holding."
+    ],
+    "glossaryTerms": ["kicker", "top-pair", "hand-rankings", "showdown", "break-even-equity"]
+  },
+  {
+    "id": "fl-same-cards-under-the-gun",
+    "title": "Ace-jack from under the gun",
+    "topic": "positions-and-blinds",
+    "difficulty": "intro",
+    "question": "First to act at a six-handed table with five opponents behind, should hero put in a big blind with ace-jack offsuit or fold?",
+    "smallBlind": 5,
+    "bigBlind": 10,
+    "buttonSeat": 0,
+    "seats": [
+      { "seat": 0, "label": "BTN", "stack": 1000, "profile": "unknown" },
+      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 2, "label": "BB", "stack": 990, "profile": "unknown" },
+      { "seat": 3, "label": "UTG", "stack": 1000, "isHero": true, "holeCards": "AhJc" },
+      { "seat": 4, "label": "HJ", "stack": 1000, "profile": "tight-aggressive" },
+      { "seat": 5, "label": "CO", "stack": 1000, "profile": "tight-aggressive" }
+    ],
+    "board": "",
+    "street": "preflop",
+    "potBeforeStreet": 0,
+    "committedThisStreet": { "1": 5, "2": 10 },
+    "facingAction": "The blinds are posted and hero is first to act, with five players still to act behind.",
+    "toCall": 10,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "AA-TT, AKs, AQs, AKo",
+      "label": "the tight range that keeps playing once an early-position entry gets action"
+    },
+    "assumptions": [
+      "Entering the pot is modelled as putting in one big blind, and the hand is then taken to showdown with no further betting; this is a deliberate simplification that ignores hero's later chances to bet or fold.",
+      "Exactly one of the five opponents behind continues, and their range is the tight one listed; the analysis is hero against that single range.",
+      "Stacks are as shown, deep enough that nobody is committed before the flop.",
+      "The seats behind hero are competent enough to keep playing mostly with the hands listed rather than with random holdings."
+    ],
+    "reasoning": "This scenario exists to be compared with the button version of the same hand, so hold the cards fixed and change only the seat. Ace-jack offsuit is a real hand: it makes top pair often and it dominates weaker ace-x holdings. The problem from the first seat is not the cards, it is the queue. Five players get to look at hero's decision before hero sees another card, and the ones who choose to keep playing are not choosing at random; they are the ones holding something they like. Against that filtered set, ace-jack is on the wrong side of the domination arithmetic: it runs into bigger aces and into pairs far more often than it runs into the weaker aces it beats. So hero's share of a pot taken to showdown against the assumed continuing range falls short of the price of entering, and the discipline that follows is to fold from this seat rather than to hope the hand plays itself well later. Two things would change that: opponents behind who continue with far weaker holdings, or hero's own skill advantage after the flop, which this simplified no-further-betting model deliberately gives no credit for. Note also what has not been claimed, which is that ace-jack is a bad hand. The claim is narrower and worth stating precisely: from this seat, against this assumed range, at this price, entering loses chips.",
+    "expectedInsight": [{ "kind": "breakEvenExceedsEquity" }, { "kind": "callEvSign", "expect": "negative" }],
+    "commonMistakes": [
+      "Judging a starting hand only by its own strength and never by the number of players who act after you.",
+      "Comparing ace-jack to a random hand instead of to the range that actually keeps playing once someone reacts to your entry.",
+      "Assuming an ace is a reason to play from any seat, when a dominated ace is exactly the hand that loses large pots rather than small ones.",
+      "Reading this as 'ace-jack is a fold', rather than 'from this seat, against this range, at this price, entering does not pay'."
+    ],
+    "glossaryTerms": ["position", "under-the-gun", "domination", "range", "break-even-equity"]
+  },
+  {
+    "id": "fl-same-cards-on-the-button",
+    "title": "The same ace-jack on the button",
+    "topic": "positions-and-blinds",
+    "difficulty": "intro",
+    "question": "Holding the identical ace-jack offsuit with everyone folded and only the two blinds left, should hero enter the pot or fold?",
+    "smallBlind": 5,
+    "bigBlind": 10,
+    "buttonSeat": 0,
+    "seats": [
+      { "seat": 0, "label": "BTN", "stack": 1000, "isHero": true, "holeCards": "AhJc" },
+      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 2, "label": "BB", "stack": 990, "profile": "calling-station" },
+      { "seat": 3, "label": "UTG", "stack": 1000, "profile": "tight-aggressive" },
+      { "seat": 4, "label": "HJ", "stack": 1000, "profile": "tight-aggressive" },
+      { "seat": 5, "label": "CO", "stack": 1000, "profile": "unknown" }
+    ],
+    "board": "",
+    "street": "preflop",
+    "potBeforeStreet": 0,
+    "committedThisStreet": { "1": 5, "2": 10 },
+    "facingAction": "Under the gun, the hijack and the cutoff all fold. Hero is on the button with only the small blind and the big blind left to act.",
+    "toCall": 10,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "22-99, A2s-A9s, KTs, QTs, JTs, T9s, 98s, 87s, 76s, 65s, A9o, KTo, QTo, JTo, KJo, QJo",
+      "label": "the wide range a blind defends with when the button enters"
+    },
+    "assumptions": [
+      "Entering the pot is modelled as putting in one big blind and taking the hand to showdown with no further betting, the same simplification used in the under-the-gun version so the two are comparable.",
+      "One blind defends, with the wide range listed; the analysis is hero against that single range.",
+      "Stacks are as shown and nobody is committed before the flop.",
+      "The three players in front have genuinely folded, so their cards are unknown and are not removed from the deck in this model."
+    ],
+    "reasoning": "Nothing about hero's cards has changed from the under-the-gun version: the same ace, the same jack, the same two suits. Two things have changed, and both live outside hero's hand. First, only two players can still act, so there are far fewer chances for someone behind to wake up with a better holding. Second, and more important, the players who remain are the blinds, and a blind that keeps playing is not choosing from a premium set; it is defending money it already posted, so its range stretches down into small pairs, suited connectors and weak aces. Against that wider range the domination runs the other way, and ace-jack is comfortably the favourite rather than the underdog. Hero's share of a pot taken to showdown therefore clears the price of entering with room to spare, and entering follows from the stated assumptions. It is worth being precise about the cause: the hand did not get better, the range hero is measured against got worse. That is what people mean when they say position is worth chips, and it is why the same two cards can be a fold in one seat and an easy entry two seats later.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Treating a starting hand as having one fixed value regardless of seat, so the same cards get played the same way everywhere.",
+      "Forgetting that a blind's defending range is far wider than an opening range, and assuming you are up against strong hands.",
+      "Believing position only matters after the flop, when most of its value is already in the shape of the range you face before the flop.",
+      "Concluding that any two cards can be played from the button because 'position fixes everything'; the range advantage here is measurable and finite."
+    ],
+    "glossaryTerms": ["position", "button", "blind-defence", "range", "domination", "break-even-equity"]
+  },
+  {
+    "id": "fl-big-blind-option-limped-pot",
+    "title": "The big blind's option",
+    "topic": "positions-and-blinds",
+    "difficulty": "intro",
+    "question": "One player has limped and hero closes the action from the big blind with nothing to call, so should hero check or raise?",
+    "smallBlind": 5,
+    "bigBlind": 10,
+    "buttonSeat": 0,
+    "seats": [
+      { "seat": 0, "label": "BTN", "stack": 1000, "profile": "unknown" },
+      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 2, "label": "BB", "stack": 990, "isHero": true, "holeCards": "Kh9h" },
+      { "seat": 3, "label": "UTG", "stack": 1000, "profile": "unknown" },
+      { "seat": 4, "label": "HJ", "stack": 1000, "profile": "unknown" },
+      { "seat": 5, "label": "CO", "stack": 990, "profile": "calling-station" }
+    ],
+    "board": "",
+    "street": "preflop",
+    "potBeforeStreet": 0,
+    "committedThisStreet": { "1": 5, "2": 10, "5": 10 },
+    "facingAction": "Under the gun and the hijack fold, the cutoff limps for 10, the button folds and the small blind folds. Hero has the option to check or raise.",
+    "toCall": 0,
+    "opponentRange": {
+      "kind": "notation",
+      "notation": "22-99, A2s-A9s, KTs, QTs, JTs, T9s, 98s, 87s, KTo, QTo, JTo, T9o, A8o, A9o",
+      "label": "a loose-passive limping range"
+    },
+    "assumptions": [
+      "The cutoff limps with the loose-passive range listed and will not fold before the flop if hero raises.",
+      "If hero checks, the hand is taken to showdown against that range with no further betting; this simplification is why the number attached to checking should be read as a floor, not a forecast.",
+      "The small blind has folded, so the five chips it posted stay in the pot and belong to nobody.",
+      "Stacks are as shown and the option is exercised under normal rules: hero may check or raise, but there is nothing left to call."
+    ],
+    "reasoning": "The mechanical point comes first, because the option is a rule and not a judgement. Hero already posted a full big blind, the limper matched exactly that amount, and so nothing is owed; hero may end the betting by checking or reopen it by raising. That is what 'the option' means, and it is the one moment before the flop when the big blind acts last. Because the price of continuing is nothing, the pot-odds question that governs most decisions is silent here: no share of the pot, however small, can be too small to justify a free look at three more cards. So folding is never the answer, and a learner who folds the option has misread the rules rather than the hand. The real decision is between checking and raising, and that turns on things pot odds cannot capture: king-nine suited flops well enough to play, but hero will act first on the flop, the turn and the river, which is the position penalty that comes with the seat. Raising takes the initiative and can win the pot immediately against a passive limper; checking keeps the pot small in a hand hero has to play out of position. Both are defensible, and the honest statement is that the rule makes folding wrong while the choice between the two remaining lines depends on assumptions about the limper that this scenario does not pin down.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }],
+    "commonMistakes": [
+      "Folding the option, which gives up a free look at the flop and cannot be right at any hand strength.",
+      "Thinking the chips already posted as the big blind are 'hero's money' still to be protected, when they belong to the pot and are gone either way.",
+      "Assuming the big blind is a good seat because it acts last before the flop, and forgetting it acts first on every street after it.",
+      "Raising purely because the hand looks pretty, without a reason tied to how the limper is expected to respond."
+    ],
+    "glossaryTerms": ["big-blind", "option", "limp", "position", "pot-odds"]
+  },
+  {
+    "id": "fl-heads-up-blind-reversal",
+    "title": "Heads-up, the button posts the small blind",
+    "topic": "positions-and-blinds",
+    "difficulty": "core",
+    "question": "Heads-up on the button, acting first before the flop, should hero put in the extra chips to see a flop or fold?",
+    "smallBlind": 5,
+    "bigBlind": 10,
+    "buttonSeat": 0,
+    "seats": [
+      { "seat": 0, "label": "BTN", "stack": 995, "isHero": true, "holeCards": "Qd7c" },
+      { "seat": 1, "label": "BB", "stack": 990, "profile": "unknown" }
+    ],
+    "board": "",
+    "street": "preflop",
+    "potBeforeStreet": 0,
+    "committedThisStreet": { "0": 5, "1": 10 },
+    "facingAction": "Two players only. Hero is on the button and has posted the small blind, so hero acts first before the flop and must add 5 to see a flop.",
+    "toCall": 5,
+    "opponentRange": { "kind": "notation", "notation": "random", "label": "any two cards" },
+    "assumptions": [
+      "The big blind is treated as holding any two cards, because heads-up a big blind can defend with almost anything.",
+      "If hero puts in the extra chips, the hand runs to showdown with no further betting; a real big blind can raise, and that possibility is what this simplification leaves out.",
+      "Stacks are as shown and both players are deep.",
+      "Standard heads-up rules apply: the button posts the small blind, acts first before the flop and last on every street after it."
+    ],
+    "reasoning": "The rule to internalise here has nothing to do with the cards. In a two-player hand the blinds reverse: the button posts the small blind, not the player to its left, so the button acts first before the flop and last on the flop, the turn and the river. That reversal trips up almost everyone who learns Hold'em at a full table first, because at a full table the button is the one seat that never posts a blind and always acts last. Once the structure is clear, the price becomes obvious: hero has already posted half of what the big blind posted, so continuing costs only the difference, which is the cheapest entry price anywhere in the game. Against a hand that could genuinely be anything, a queen-high offsuit holding is not strong, but it does not have to be strong; it only has to be worth more than that small difference. Hero's share of the pot clears that price comfortably, so putting the chips in follows from the assumptions, and hero also gets to act last on every remaining street. The important caveat is the simplification: this model assumes no further betting, and a big blind who raises often can make cheap entries with weak hands expensive, which is exactly why heads-up players raise rather than complete far more often than the price alone would suggest.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Applying full-table position rules heads-up and expecting the button to act last before the flop.",
+      "Believing the button never posts a blind, which is only true when three or more players are dealt in.",
+      "Comparing a weak-looking hand against strong hands rather than against the very wide range a heads-up big blind actually holds.",
+      "Reading 'the price is cheap' as 'any hand plays', while ignoring that the big blind can raise and make the entry cost far more than the difference shown here."
+    ],
+    "glossaryTerms": ["heads-up", "button", "small-blind", "big-blind", "position", "pot-odds"]
+  },
+  {
+    "id": "fl-flush-draw-counting-outs",
+    "title": "Counting outs for a flush draw",
+    "topic": "hand-reading-and-outs",
+    "difficulty": "intro",
+    "question": "With four cards to a flush on the flop against a known top pair, should hero call the bet or fold?",
+    "smallBlind": 5,
+    "bigBlind": 10,
+    "buttonSeat": 0,
+    "seats": [
+      { "seat": 0, "label": "BTN", "stack": 975, "isHero": true, "holeCards": "9h8h" },
+      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 2, "label": "BB", "stack": 950, "profile": "calling-station", "holeCards": "KdQs" }
+    ],
+    "board": "Kh 5h 2c",
+    "street": "flop",
+    "potBeforeStreet": 55,
+    "committedThisStreet": { "2": 25 },
+    "facingAction": "The big blind bets 25 into a pot of 55 on the flop.",
+    "toCall": 25,
+    "opponentRange": { "kind": "exact", "cards": "KdQs" },
+    "assumptions": [
+      "This is a known-hand teaching case: the opponent's exact cards are shown so the out count can be verified, which hero would not see at the table.",
+      "Both the turn and the river are dealt with no further betting after hero's call; this is the standard simplification behind flop equity and it flatters a draw, because in a real hand the opponent can bet again.",
+      "The opponent does not fold, so hero cannot win this pot without improving.",
+      "Stacks are as shown and neither player is close to being all in."
+    ],
+    "reasoning": "Read the board first: king, five, deuce, unpaired, with two of them hearts. Hero holds two more hearts, so hero has four of the five cards needed for a flush and no pair, no straight draw and nothing else going on. Counting outs here is a deck-arithmetic exercise, not a memory exercise: each suit contains thirteen cards, hero can see some of them between hand and board, and what remains is the set of cards that completes the flush. The discipline worth learning is the second half of the count, which is asking whether each of those cards actually wins. Against the shown top pair every heart makes a flush that beats a pair of kings, and none of them gives the opponent something better, so the count is clean with nothing to subtract. Just as important is what is not an out: pairing hero's nine or eight makes a pair that still loses to kings, so those cards improve hero's hand without winning the pot. Compare the resulting share of the pot with the price of a bet that is a little under half the pot and the call follows from the stated assumptions. Change the assumption that both remaining cards come for free, and the case for continuing gets weaker, because hero then has to pay again to see the second card.",
+    "expectedInsight": [{ "kind": "cleanOutsEquals", "outs": 9 }, { "kind": "equityExceedsBreakEven" }],
+    "commonMistakes": [
+      "Counting thirteen cards of the suit as outs and forgetting the ones already visible in the hand and on the board.",
+      "Adding the cards that pair your own hole cards to the out count, when those make a pair that still loses to top pair.",
+      "Paying a flop price as though both the turn and the river are guaranteed, when the opponent can bet again on the turn.",
+      "Assuming any flush wins; on a board where a bigger flush or a full house is possible, some of those cards need subtracting."
+    ],
+    "glossaryTerms": ["outs", "flush-draw", "pot-odds", "break-even-equity", "rule-of-2-and-4"]
+  },
+  {
+    "id": "fl-open-ended-straight-draw-outs",
+    "title": "Counting outs for an open-ended draw",
+    "topic": "hand-reading-and-outs",
+    "difficulty": "intro",
+    "question": "Holding two cards that connect with the flop at both ends against a known top pair, should hero call the bet or fold?",
+    "smallBlind": 5,
+    "bigBlind": 10,
+    "buttonSeat": 0,
+    "seats": [
+      { "seat": 0, "label": "BTN", "stack": 955, "profile": "tight-aggressive", "holeCards": "KsQh" },
+      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 2, "label": "BB", "stack": 975, "isHero": true, "holeCards": "9c8d" }
+    ],
+    "board": "Kd 7h 6s",
+    "street": "flop",
+    "potBeforeStreet": 55,
+    "committedThisStreet": { "0": 20 },
+    "facingAction": "The button bets 20 into a pot of 55 on the flop.",
+    "toCall": 20,
+    "opponentRange": { "kind": "exact", "cards": "KsQh" },
+    "assumptions": [
+      "This is a known-hand teaching case: the opponent's exact cards are shown so the out count can be verified, which hero would not see at the table.",
+      "Both the turn and the river are dealt with no further betting after hero's call, which is the usual flop simplification and is generous to the draw.",
+      "The opponent does not fold, so hero has to improve to win.",
+      "Stacks are as shown and the board is rainbow, so no flush is possible for either player."
+    ],
+    "reasoning": "Read the board: king, seven, six, unpaired, three different suits, so nobody has a flush draw and nothing here is hidden. Hero's nine and eight sit directly above the seven and six, which means hero has four cards in a row and can complete the straight from either end. That two-ended shape is the whole reason this draw is stronger than the one-ended kind, and the way to count it is to name the ranks that fill it, then count how many cards of each of those ranks hero has not yet seen. Then run the same clean-or-dirty test as always. The opponent has a pair of kings with a queen, and either straight-completing rank beats that pair while giving the opponent nothing, so every one of those cards is a genuine winner. Pairing hero's own nine or eight is not: that makes a pair beneath top pair, which improves hero's hand and still loses the pot, and confusing the two is how out counts get inflated. Set hero's resulting share of the pot against a price of well under half the pot and calling follows from the stated assumptions. The result would tighten considerably if the opponent bets again on the turn, since the free river this model assumes is exactly the card the draw needs most.",
+    "expectedInsight": [{ "kind": "cleanOutsEquals", "outs": 8 }, { "kind": "equityExceedsBreakEven" }],
+    "commonMistakes": [
+      "Counting only one end of the draw, and treating a two-ended straight draw as though it were a one-card gutshot.",
+      "Including the cards that pair your own hole cards, which improve your hand without beating top pair.",
+      "Assuming the straight-completing card always wins; if it also completes a flush or a bigger straight for the opponent, it is not clean.",
+      "Paying the flop price as if the turn and the river both come free, when in a real hand the opponent can bet again."
+    ],
+    "glossaryTerms": ["outs", "open-ended-straight-draw", "pot-odds", "break-even-equity", "rule-of-2-and-4"]
+  },
+  {
+    "id": "fl-gutshot-facing-turn-bet",
+    "title": "A gutshot at a bad price",
+    "topic": "hand-reading-and-outs",
+    "difficulty": "core",
+    "question": "One rank fills hero's straight with only the river to come and a large bet to pay, so should hero call or fold?",
+    "smallBlind": 5,
+    "bigBlind": 10,
+    "buttonSeat": 0,
+    "seats": [
+      { "seat": 0, "label": "BTN", "stack": 955, "isHero": true, "holeCards": "JcTd" },
+      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 2, "label": "BB", "stack": 895, "profile": "tight-aggressive", "holeCards": "KdQs" }
+    ],
+    "board": "Kh 8s 2c 7d",
+    "street": "turn",
+    "potBeforeStreet": 95,
+    "committedThisStreet": { "2": 60 },
+    "facingAction": "The big blind bets 60 into a pot of 95 on the turn.",
+    "toCall": 60,
+    "opponentRange": { "kind": "exact", "cards": "KdQs" },
+    "assumptions": [
+      "This is a known-hand teaching case: the opponent's exact cards are shown so the out count can be verified.",
+      "Only the river is still to come, and there is no further betting after hero's call, so hero either fills the straight on one card or loses.",
+      "The opponent does not fold, so hero cannot win without improving.",
+      "Stacks are as shown, and no implied-odds argument is available here because no money can go in after the river card."
+    ],
+    "reasoning": "Read the board: king, eight, deuce, seven, unpaired and every suit different, so no flush exists or is coming. Hero's jack and ten reach towards the eight and seven but leave a hole in the middle, so exactly one rank completes the straight, and only the four cards of that rank do anything for hero. That is the defining feature of a gutshot and the reason it is a much weaker holding than a two-ended draw that looks superficially similar. The clean-out test passes, in that the filling card beats a pair of kings and gives the opponent nothing, so there is nothing to subtract. The problem is not the quality of the outs, it is their quantity against the price: one street remains rather than two, and the bet is a large fraction of the pot, which pushes the share of the pot hero needs far above what one rank on one card can deliver. So folding follows from the assumptions, and it follows by a wide margin rather than narrowly. Two things could change it: a smaller bet, or a real prospect of winning more money on the river when the card arrives, which this scenario's no-further-betting assumption explicitly rules out. Notice also that hero's jack and ten pairing up is not an out at all, since a pair below top pair still loses.",
+    "expectedInsight": [
+      { "kind": "cleanOutsEquals", "outs": 4 },
+      { "kind": "breakEvenExceedsEquity" },
+      { "kind": "callEvSign", "expect": "negative" }
+    ],
+    "commonMistakes": [
+      "Treating a gutshot like an open-ended draw because both are 'a straight draw', when one has half the number of cards that fill it.",
+      "Using flop-style two-card odds on the turn, when only one card remains to come.",
+      "Calling a large bet because the draw would win a big pot, without checking whether any more money can go in afterwards.",
+      "Counting the cards that pair your own hole cards as outs, when a pair below top pair still loses at showdown."
+    ],
+    "glossaryTerms": ["outs", "gutshot", "pot-odds", "break-even-equity", "implied-odds"]
+  },
+  {
+    "id": "fl-overcards-dirty-outs",
+    "title": "Two overcards, only one of them clean",
+    "topic": "hand-reading-and-outs",
+    "difficulty": "core",
+    "question": "Hero holds two cards above the board against a known pair, but only some of them win, so should hero call the bet or fold?",
+    "smallBlind": 5,
+    "bigBlind": 10,
+    "buttonSeat": 0,
+    "seats": [
+      { "seat": 0, "label": "BTN", "stack": 975, "isHero": true, "holeCards": "AhKs" },
+      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 2, "label": "BB", "stack": 935, "profile": "tight-aggressive", "holeCards": "AdQc" }
+    ],
+    "board": "Qd 8c 3h",
+    "street": "flop",
+    "potBeforeStreet": 55,
+    "committedThisStreet": { "2": 40 },
+    "facingAction": "The big blind bets 40 into a pot of 55 on the flop.",
+    "toCall": 40,
+    "opponentRange": { "kind": "exact", "cards": "AdQc" },
+    "assumptions": [
+      "This is a known-hand teaching case: the opponent's exact cards are shown, which is the only way the clean and dirty outs can be separated with certainty.",
+      "Both the turn and the river are dealt with no further betting after hero's call, which is generous to hero.",
+      "The opponent does not fold, so hero has to make the best hand to win.",
+      "Stacks are as shown and no flush is available to either player on this board."
+    ],
+    "reasoning": "Read the board: queen, eight, three, unpaired, three suits, nothing coordinated. Hero holds an ace and a king, both above every board card, and the instinctive count is to treat every remaining ace and king as an out, which is where the money leaks. The opponent holds top pair with an ace kicker, and that changes what each card does. A king pairs hero and beats a pair of queens, so those cards are genuine outs. An ace also pairs hero, and it feels like the best possible card, but it simultaneously gives the opponent two pair, aces and queens, which beats hero's single pair of aces. So the ace is not an out at all; it is a card that improves hero's hand while losing the pot, and that distinction is the entire lesson of this spot. Once the dirty cards are removed, hero's real chance of getting there is much smaller than the raw overcard count suggests, and the bet being close to three quarters of the pot demands a share hero cannot supply, so folding follows from the assumptions. What would change it is a different opponent holding: against a queen with a weak kicker, or against a pair below the top card, the ace becomes clean again and the same two cards are worth continuing with. That is why an out count is a statement about a matchup, not a property of hero's hand.",
+    "expectedInsight": [
+      { "kind": "cleanOutsEquals", "outs": 3 },
+      { "kind": "breakEvenExceedsEquity" },
+      { "kind": "callEvSign", "expect": "negative" }
+    ],
+    "commonMistakes": [
+      "Counting every remaining ace and king as an out without asking what each of those cards does for the opponent.",
+      "Treating the ace as the best card in the deck, when here it improves hero and improves the opponent more.",
+      "Forgetting that the opponent's own cards are already removed from the deck, which shrinks the number of each rank still available.",
+      "Concluding that overcards are always worthless, rather than that their value depends entirely on what the opponent holds."
+    ],
+    "glossaryTerms": ["outs", "dirty-outs", "overcard", "kicker", "break-even-equity"]
+  },
+  {
+    "id": "fl-combo-draw-already-ahead",
+    "title": "The draw that is already the best hand",
+    "topic": "hand-reading-and-outs",
+    "difficulty": "advanced",
+    "question": "Hero has a flush draw and a straight draw and is also already ahead of a known holding, so should hero call the bet or fold?",
+    "smallBlind": 5,
+    "bigBlind": 10,
+    "buttonSeat": 0,
+    "seats": [
+      { "seat": 0, "label": "BTN", "stack": 935, "profile": "loose-aggressive", "holeCards": "AdKs" },
+      { "seat": 1, "label": "SB", "stack": 995, "profile": "unknown" },
+      { "seat": 2, "label": "BB", "stack": 975, "isHero": true, "holeCards": "Jh9h" }
+    ],
+    "board": "Th 9c 8h",
+    "street": "flop",
+    "potBeforeStreet": 55,
+    "committedThisStreet": { "0": 40 },
+    "facingAction": "The button bets 40 into a pot of 55 on the flop.",
+    "toCall": 40,
+    "opponentRange": { "kind": "exact", "cards": "AdKs" },
+    "assumptions": [
+      "This is a known-hand teaching case: the opponent's exact cards are shown so the comparison of current hands can be verified.",
+      "Both the turn and the river are dealt with no further betting after hero's call; in a real hand more money would usually go in, and that would favour hero here rather than the opponent.",
+      "The opponent does not fold, and hero is only being asked to choose between calling and folding.",
+      "Stacks are as shown, so a call now leaves plenty behind for the turn and the river."
+    ],
+    "reasoning": "Say out loud everything this hand is before deciding what to call it. The board is ten, nine, eight, unpaired, with two hearts. Hero's nine pairs the board, so hero has a made pair. Hero's two hearts plus the board's two hearts make four to a flush. Hero's jack and nine sit alongside the ten, nine and eight, so hero has four cards in a row and can complete a straight from either end. That is three separate things at once, and the habit worth building is to notice the made hand first, because the label a player puts on a hand drives how they play it. Against the shown ace-king, which holds no pair, no heart and no straight draw, hero's pair is already the better hand right now; the flush draw and the straight draw are redraws on top, not the only route to winning. Someone who reads this hand as 'just a draw' will treat folding as a live option and will talk about the bet as a semi-bluffing spot, when in fact hero is far ahead and folding would surrender the best hand along with two ways to improve it. Given the assumptions, calling follows easily, and putting in more money also follows if hero's aim is to build the pot while holding the advantage. The honest caveat is that all of this rests on seeing the opponent's cards: against a range containing overpairs, sets or a made straight, the same holding is a draw again and the reasoning inverts.",
+    "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
+    "commonMistakes": [
+      "Labelling a hand 'a draw' as soon as it contains a draw, and overlooking the pair that is already the best hand.",
+      "Folding a big combination holding to a single flop bet because it has not made its flush or straight yet.",
+      "Adding the flush outs and the straight outs together without noticing that the cards which do both are counted twice.",
+      "Generalising from a shown hand to every opponent; against a stronger range this same holding is behind and the plan changes."
+    ],
+    "glossaryTerms": [
+      "combo-draw",
+      "outs",
+      "redraw",
+      "flush-draw",
+      "open-ended-straight-draw",
+      "break-even-equity"
+    ]
+  }
+]

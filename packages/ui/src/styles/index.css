@@ -1,0 +1,28 @@
+/**
+ * The one stylesheet the app imports: `import '@prl/ui/styles.css'`.
+ *
+ * Order is load-bearing, and it is the reason this file exists rather than four imports in the
+ * Next.js root layout where a future edit could reorder them without anyone noticing:
+ *
+ *   1. tokens      custom properties. Nothing can reference a token before it is declared, so
+ *                  this is unconditionally first. It is the single source of every value.
+ *   2. reset       repairs browser defaults. Must precede base, or base's element rules get
+ *                  flattened by the reset that follows them.
+ *   3. base        element defaults, the focus ring, selection, the visually-hidden utilities -
+ *                  and, at the top of the file, the three derived accent pairings
+ *                  (`--prl-accent-fill` / `-edge` / `-text`) that components.css builds on.
+ *   4. components  everything class-based. Last, so a component rule wins against an element
+ *                  rule at equal specificity.
+ *
+ * Plain `@import` and no bundler-specific syntax: these are four static files in a fixed order,
+ * which is exactly what `@import` is for. The Next.js CSS pipeline inlines them at build time, so
+ * there is no extra request in production and no flash of unstyled content.
+ *
+ * `@import` must come before any other rule in a stylesheet (CSS requires it), which is why there
+ * is nothing else in here.
+ */
+
+@import "./tokens.css";
+@import "./reset.css";
+@import "./base.css";
+@import "./components.css";

@@ -1,0 +1,30 @@
+{
+  "name": "@prl/poker-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Educational opponent strategy profiles: configurable, deterministic, testable policies that play through @prl/poker-engine. Not celebrity simulation — modelled strategic tendencies only.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "test": "node --test 'test/*.test.ts'",
+    "test:simulation": "node --test --test-timeout=1800000 'test/simulation/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@prl/contracts": "workspace:*",
+    "@prl/poker-engine": "workspace:*",
+    "@prl/poker-math": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3"
+  }
+}

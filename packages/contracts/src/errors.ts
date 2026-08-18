@@ -1,0 +1,171 @@
+/**
+ * Error codes shared by the API and the web client.
+ *
+ * Codes are stable strings, not HTTP statuses and not free-text messages, so the
+ * client can branch on them and the UI can say something useful. Messages are for
+ * humans and may change; codes are the contract.
+ *
+ * What a client is told is deliberately narrower than what the server knows. An
+ * authentication failure never says whether the account existed; a room join
+ * failure never says whether the room exists. Anything more would let an
+ * unauthenticated caller enumerate accounts or private rooms one request at a time.
+ */
+
+export const ERROR_CODES = [
+  // --- request shape ---
+  'invalid_request',
+  'unsupported_protocol_version',
+  'payload_too_large',
+
+  // --- authentication and session ---
+  'not_authenticated',
+  'session_expired',
+  'csrf_failed',
+  'oidc_state_mismatch',
+  'oidc_exchange_failed',
+  'oidc_not_configured',
+
+  // --- authorisation ---
+  'forbidden',
+  'not_room_member',
+  'not_your_turn',
+  'not_seated',
+
+  // --- rooms ---
+  'room_not_found_or_not_permitted',
+  'room_full',
+  'room_closed',
+  'seat_taken',
+  'invite_code_invalid',
+  'already_seated',
+  'insufficient_units',
+
+  // --- gameplay ---
+  'illegal_action',
+  'stale_action_sequence',
+  'hand_not_active',
+  'hand_not_found',
+
+  // --- content ---
+  'content_not_found',
+
+  // --- computation ---
+  'computation_rejected',
+  'computation_timeout',
+
+  // --- infrastructure ---
+  'rate_limited',
+  'service_unavailable',
+  'internal_error',
+] as const;
+
+export type ErrorCode = (typeof ERROR_CODES)[number];
+
+/** The single error shape every failing endpoint and socket message returns. */
+export interface ApiError {
+  readonly error: {
+    readonly code: ErrorCode;
+    /** Human-readable, safe to display. Never contains internal detail. */
+    readonly message: string;
+    /**
+     * Field-level detail for `invalid_request` only. Keys are dotted paths into
+     * the request body.
+     */
+    readonly fields?: Readonly<Record<string, string>>;
+    /**
+     * Correlates a client-visible failure with a server log line, without
+     * exposing anything about the failure itself.
+     */
+    readonly requestId: string;
+    /** Present on `rate_limited`: seconds until the caller may retry. */
+    readonly retryAfterSeconds?: number;
+  };
+}
+
+/** Default HTTP status for each code, so routes cannot drift from one another. */
+export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
+  invalid_request: 400,
+  unsupported_protocol_version: 400,
+  payload_too_large: 413,
+
+  not_authenticated: 401,
+  session_expired: 401,
+  csrf_failed: 403,
+  oidc_state_mismatch: 400,
+  oidc_exchange_failed: 502,
+  oidc_not_configured: 501,
+
+  forbidden: 403,
+  not_room_member: 403,
+  not_your_turn: 409,
+  not_seated: 409,
+
+  // 404 on purpose, even when the room exists: a distinguishable "exists but you
+  // may not see it" response would let anyone enumerate private rooms.
+  room_not_found_or_not_permitted: 404,
+  room_full: 409,
+  room_closed: 409,
+  seat_taken: 409,
+  invite_code_invalid: 404,
+  already_seated: 409,
+  insufficient_units: 409,
+
+  illegal_action: 422,
+  stale_action_sequence: 409,
+  hand_not_active: 409,
+  hand_not_found: 404,
+
+  content_not_found: 404,
+
+  computation_rejected: 422,
+  computation_timeout: 504,
+
+  rate_limited: 429,
+  service_unavailable: 503,
+  internal_error: 500,
+};
+
+/** Messages safe to show a user. Kept here so wording is consistent everywhere. */
+export const ERROR_MESSAGES: Readonly<Record<ErrorCode, string>> = {
+  invalid_request: 'That request was not in a shape we understand.',
+  unsupported_protocol_version: 'This client is too old for the server. Reload the page.',
+  payload_too_large: 'That request was too large.',
+
+  not_authenticated: 'You need to be signed in — even as a guest — to do that.',
+  session_expired: 'Your session has expired. Start a new one to continue.',
+  csrf_failed: 'That request could not be verified. Reload the page and try again.',
+  oidc_state_mismatch: 'The sign-in attempt could not be verified. Please start again.',
+  oidc_exchange_failed: 'The identity provider could not complete sign-in. Please try again.',
+  oidc_not_configured: 'Sign-in with an external account is not enabled on this server.',
+
+  forbidden: 'You do not have access to that.',
+  not_room_member: 'You are not a member of that table.',
+  not_your_turn: 'It is not your turn to act.',
+  not_seated: 'You need to take a seat first.',
+
+  room_not_found_or_not_permitted: 'No table was found for that link.',
+  room_full: 'That table has no free seats.',
+  room_closed: 'That table has closed.',
+  seat_taken: 'Someone just took that seat.',
+  invite_code_invalid: 'That invite code is not valid.',
+  already_seated: 'You are already seated at that table.',
+  insufficient_units: 'You do not have enough units for that table. Reset your units and try again.',
+
+  illegal_action: 'That is not a legal action in this spot.',
+  stale_action_sequence: 'The hand moved on while you were deciding. Have another look.',
+  hand_not_active: 'That hand is no longer in progress.',
+  hand_not_found: 'That hand could not be found.',
+
+  content_not_found: 'That lesson, quiz or scenario does not exist.',
+
+  computation_rejected: 'That calculation was outside the limits we can run.',
+  computation_timeout: 'That calculation took too long and was stopped.',
+
+  rate_limited: 'You are doing that too quickly. Give it a moment.',
+  service_unavailable: 'The service is temporarily unavailable. Try again shortly.',
+  internal_error: 'Something went wrong on our side.',
+};
+
+export function isErrorCode(value: unknown): value is ErrorCode {
+  return typeof value === 'string' && (ERROR_CODES as readonly string[]).includes(value);
+}

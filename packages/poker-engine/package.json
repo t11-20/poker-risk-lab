@@ -1,0 +1,25 @@
+{
+  "name": "@prl/poker-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure, deterministic No-Limit Hold'em rules engine: cards, CSPRNG shuffle, deck commitment, 7-card evaluation, betting state machine, side pots. Zero runtime dependencies.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "test": "node --test 'test/*.test.ts'",
+    "test:exhaustive": "node --test --test-timeout=1800000 'test/exhaustive/**/*.test.ts'"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3"
+  }
+}

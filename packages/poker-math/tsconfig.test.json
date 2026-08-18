@@ -1,0 +1,25 @@
+{
+  // Typechecks the tests, which `tsconfig.json` cannot.
+  //
+  // `tsconfig.json` sets `rootDir: "src"` because it emits `dist/`, and TypeScript refuses to
+  // compile a file outside `rootDir` (TS6059). So adding `test/**/*.ts` there is not an option,
+  // and the consequence is that `test/` was checked by nothing: Node 24 runs the tests by
+  // *stripping* types, never checking them, so a broken assertion or a stale helper signature in
+  // a test file would pass CI silently until someone opened an editor on it.
+  //
+  // This config exists only to close that hole. It emits nothing, widens `rootDir` to the package
+  // so both trees are legal inputs, and runs from the package's `typecheck` script alongside the
+  // build config. Every strict flag is inherited unchanged from `tsconfig.base.json` — a second,
+  // wider pass, not a laxer one.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    // Declarations and build info belong to the emitting config; asking for them under `noEmit`
+    // is contradictory, and `incremental` would fight over the same `.tsbuildinfo` path.
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

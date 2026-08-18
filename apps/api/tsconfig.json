@@ -1,0 +1,27 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "types": ["node"],
+
+    // `ws` ships no types of its own, and `@types/ws` is a devDependency of this package. That is
+    // enough for our own code and not enough for `@fastify/websocket`: its `.d.ts` does
+    // `import * as WebSocket from 'ws'`, and TypeScript resolves that from *its* directory inside
+    // the isolated pnpm store, where `ws` is present but `@types/ws` is not. The result is a
+    // TS7016 raised inside a dependency's own declaration file, which `skipLibCheck: false` (set
+    // deliberately in the base config) will not hide and no amount of care in our source can route
+    // around.
+    //
+    // Mapping the specifier here points every resolution of `ws` — ours and the plugin's — at the
+    // types this package already depends on. It is not a path alias for our own imports: nothing
+    // under `src/` imports `ws` at all (`src/ws/hub.ts` adapts the socket behind an interface of
+    // two methods so that `src/ws/router.ts` never sees the library), and this entry exists purely
+    // to satisfy that one declaration file.
+    "paths": {
+      "ws": ["./node_modules/@types/ws/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@prl/content",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed lesson, quiz, glossary and scenario content. Situations only — every number is computed at runtime by @prl/poker-math, never hard-coded.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "test": "node --test 'test/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@prl/contracts": "workspace:*",
+    "@prl/poker-engine": "workspace:*",
+    "@prl/poker-math": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3"
+  }
+}

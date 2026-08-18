@@ -1,0 +1,578 @@
+# ---------------------------------------------------------------------------
+# Continuous integration for Poker Risk Lab.
+#
+# ## Why this file looks paranoid
+#
+# The repo's whole dependency policy is "mutable references are how supply-chain
+# attacks land" (see pnpm-workspace.yaml and docs/security/). A workflow that
+# writes `uses: actions/checkout@v7` throws that away: the tag is a moving
+# pointer that the action's owner — or anyone who compromises them — can
+# repoint at new code, which then runs inside this repo's CI with whatever
+# permissions the job has. So every `uses:` here is a full 40-character commit
+# SHA, with a comment naming the version it resolves to. Refreshing one is a
+# reviewed diff, not a silent upgrade.
+#
+# How the SHAs below were obtained (repeat this to refresh them):
+#
+#     git ls-remote --tags https://github.com/actions/checkout | grep 'refs/tags/v7'
+#     # cross-check the tag is the current stable release and the SHA is a commit:
+#     curl -s https://api.github.com/repos/actions/checkout/releases?per_page=5
+#     curl -s https://api.github.com/repos/actions/checkout/commits/<sha> | head
+#
+# For an annotated tag, `git ls-remote` prints two lines — take the one ending
+# `^{}`, which is the commit the tag dereferences to. That is what `uses:`
+# needs; the other line is the tag object and will not resolve.
+#
+# ## Secrets
+#
+# No job in this workflow needs a secret, and none is referenced. There is
+# nothing to publish, no registry to push to, no deployment, and no bot
+# account. `permissions: contents: read` at the top level is therefore the
+# complete set of privileges CI requires; nothing below widens it. If a future
+# job genuinely needs a token, give it to that job alone and say why.
+#
+# ## Why `supply-chain` gates everything
+#
+# Running lint, tests and builds against a dependency graph that has not been
+# audited means executing unaudited third-party code before deciding whether it
+# is safe. The audit runs first and every other job `needs:` it, so a
+# compromised or newly-vulnerable dependency stops the run at step one.
+#
+# ## Why there is no dependency cache
+#
+# Deliberate. A restored `actions/cache` entry is a mutable artifact that is
+# trusted by path, and cache scoping across refs is a well-known route into a
+# build. This project's dependency tree installs in roughly fifteen seconds, so
+# the cache would buy very little and cost one more action and one more trust
+# boundary. If install time ever becomes the bottleneck, pin the cache action by
+# SHA and say here what changed.
+# ---------------------------------------------------------------------------
+
+name: CI
+
+# Both events, unfiltered, exactly as the contract says. A push to a branch with
+# an open pull request therefore produces two runs; the concurrency group below
+# means only the newest of each survives, and the duplication is cheap next to
+# the risk of a filter that silently skips a branch.
+on:
+  push:
+  pull_request:
+
+# Least privilege. Read-only on the repository contents and nothing else — no
+# packages, no id-token, no issues, no pull-requests write.
+permissions:
+  contents: read
+
+# One in-flight run per workflow per ref. Pushing again cancels the run it
+# superseded instead of queueing behind it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # corepack must never stop to ask a human whether to download the pnpm version
+  # named in `packageManager`. It still verifies that version's integrity hash.
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+  # Keeps "update available" banners out of the logs; has no effect on resolution.
+  NPM_CONFIG_UPDATE_NOTIFIER: 'false'
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1. The gate. Everything else needs this.
+  # -------------------------------------------------------------------------
+  supply-chain:
+    name: Supply-chain audit (gate)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The default is to leave a credential in .git/config for later steps.
+          # Nothing here pushes, so leaving one behind is pure downside.
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # .node-version is the single source of truth shared with local dev and
+          # the Dockerfiles. `engineStrict: true` makes a mismatch a hard failure,
+          # which is what we want — silently testing on a different Node than we
+          # ship is worse than a red build.
+          node-version-file: .node-version
+
+      - name: Enable corepack (pins pnpm via the packageManager integrity hash)
+        run: corepack enable
+
+      - name: Report the resolved toolchain
+        run: |
+          node --version
+          pnpm --version
+
+      - name: Install
+        # --frozen-lockfile, never --no-frozen-lockfile: CI must fail when the
+        # lockfile and the manifests disagree, not quietly resolve a new graph.
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit
+        run: pnpm run security:audit
+
+      - name: Repo hygiene
+        # `security:audit` already runs this gate as one of its eight, so this step is normally a
+        # second pass over the same files — about a second. It is named separately anyway because
+        # the gate now carries the repo-wide `Math.random` ban (previously enforced over 2 of 8
+        # source trees), and a rule that release-blocks deserves to be visible by name in the run
+        # rather than buried inside an aggregate.
+        run: pnpm run security:hygiene
+
+      - name: Upload SBOM and supply-chain reports
+        # `always()` so a failing audit still publishes the evidence of what
+        # failed. `if-no-files-found: warn` rather than `error` because a gate
+        # that crashes before writing its report should surface as the audit
+        # failure it is, not as a confusing artifact-upload failure on top.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: supply-chain-reports
+          path: |
+            docs/sbom/poker-risk-lab.cdx.json
+            docs/sbom/osv-report.json
+            docs/sbom/provenance-report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  # -------------------------------------------------------------------------
+  # 2. Lint. No build needed: Biome reads source, not types.
+  # -------------------------------------------------------------------------
+  lint:
+    name: Lint
+    needs: supply-chain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Contrast budget
+        # Static: it parses the CSS token layer and recomputes every claimed ratio, so it needs no
+        # build and no browser. It was runnable and run by nothing — a documented accessibility
+        # guarantee with no gate behind it is a guarantee nobody is holding.
+        run: pnpm run design:contrast
+
+  # -------------------------------------------------------------------------
+  # 3. Typecheck.
+  # -------------------------------------------------------------------------
+  typecheck:
+    name: Typecheck
+    needs: supply-chain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        # Not optional. Each `packages/*` publishes its public surface as
+        # `dist/*.d.ts` through its `exports.types`, so `apps/*` cannot be
+        # typechecked until those declaration files exist. Without this step the
+        # job fails with "cannot find module @prl/poker-engine" and looks like a
+        # broken import rather than a missing build.
+        run: pnpm run build:packages
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+  # -------------------------------------------------------------------------
+  # 4. Unit + integration tests. The integration suite needs a real database.
+  # -------------------------------------------------------------------------
+  test:
+    name: Tests
+    needs: supply-chain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        # Pinned by digest for the same reason the actions are. Refresh with the
+        # command in the Dockerfile header.
+        # postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:60f4761b9035e0b8d5218f701a8c3382f641bf12b1604822574cf5be3baeb537
+        env:
+          # Throwaway credentials for an ephemeral container on a private network
+          # that is destroyed with the job. Not a secret, and deliberately not
+          # stored as one: a fake secret teaches people to look for secrets that
+          # are not there.
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: poker_risk_lab_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username postgres --dbname poker_risk_lab_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_test
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm run build:packages
+
+      - name: Wait for PostgreSQL
+        # The service container's own healthcheck already gates the job, but this
+        # also proves the connection string this job will use actually works,
+        # which is a far more useful failure than a timeout inside a test.
+        run: pnpm run db:wait
+
+      - name: Migrate
+        run: pnpm run db:migrate
+
+      - name: Verify the live schema's security properties
+        # `db:verify` checks things no unit test can see: that `prl_app` has no privileges it should
+        # not, that the deck and salt columns do not exist, that every documented constraint is
+        # actually on the table. It passed and was run by no job.
+        run: pnpm run db:verify
+
+      - name: Test
+        # `DATABASE_URL` is set for this job, so the 57 database-backed tests RUN. They can no
+        # longer skip in silence either way: with no reachable database,
+        # `apps/api/test/database-availability.test.ts` fails the run, and the waiver that lets a
+        # developer past that is refused whenever `CI` is set.
+        run: pnpm run test
+
+  # -------------------------------------------------------------------------
+  # 5. The 133,784,560-hand enumeration.
+  # -------------------------------------------------------------------------
+  exhaustive:
+    name: Exhaustive enumeration
+    needs: supply-chain
+    runs-on: ubuntu-24.04
+    # The suite sets its own `--test-timeout=1800000` (30 minutes per test). The
+    # job bound has to sit comfortably above that plus checkout and install, or
+    # the job kill would race the test's own timeout and report the wrong thing.
+    # It normally finishes in well under a minute on a warm runner.
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Enumerate every seven-card hand
+        # No build step: the exhaustive suite imports `../../src/*.ts` directly
+        # and Node 24 strips the types, so it tests the source rather than an
+        # artefact of it.
+        run: pnpm run test:exhaustive
+
+  # -------------------------------------------------------------------------
+  # 5b. End-to-end against a running server: smoke test and load harness.
+  #
+  # Both of these existed and neither was run by anything. `test:smoke` asserts the
+  # no-currency-framing and no-endorsement guardrails on live payloads, plus the
+  # hidden-information property over a real WebSocket; `test:load` is the only
+  # place a real socket is driven under concurrency outside the test suite, and it
+  # had never completed a single hand because three of its route constants named
+  # endpoints that do not exist.
+  #
+  # They run in one job because they need the same thing: a migrated database and a
+  # started API. `--strict` on the smoke test promotes its warnings to failures —
+  # two of them are security properties (rate limiting present, an unknown hand
+  # answering 404 rather than 500) and neither could fail a run before.
+  # -------------------------------------------------------------------------
+  end-to-end:
+    name: Smoke + load (running server)
+    needs: supply-chain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        # postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:60f4761b9035e0b8d5218f701a8c3382f641bf12b1604822574cf5be3baeb537
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: poker_risk_lab_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username postgres --dbname poker_risk_lab_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_e2e
+      NODE_ENV: development
+      PORT: '3001'
+      HOST: 127.0.0.1
+      PUBLIC_WEB_ORIGIN: http://localhost:3000
+      SESSION_COOKIE_SECRET: ci-only-not-a-secret-32-chars-xx
+      # A multi-table load run opens one guest session per seat, so the shipped limits
+      # refuse it — correctly. Raised here for the harness rather than lowered in the
+      # server, and the harness now prints the figure it needs when it sees a 429.
+      RATE_LIMIT_MAX: '5000'
+      LOG_LEVEL: warn
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        run: pnpm run build:packages
+
+      - name: Wait for PostgreSQL
+        run: pnpm run db:wait
+
+      - name: Migrate and seed
+        run: |
+          pnpm run db:migrate
+          pnpm run db:seed
+
+      - name: Start the API
+        # Backgrounded, then polled: a fixed sleep either wastes time or races the boot.
+        # The log is kept so a failure below can be attributed.
+        run: |
+          node apps/api/src/server.ts > /tmp/api.log 2>&1 &
+          echo $! > /tmp/api.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3001/api/v1/health > /dev/null; then
+              echo "api is up after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the API never became healthy"
+          cat /tmp/api.log
+          exit 1
+
+      - name: Smoke test (strict)
+        run: pnpm run test:smoke -- --strict
+
+      - name: Load harness
+        # A deliberately tiny shape. The point is that it runs at all and completes real
+        # hands over real sockets, not the numbers — see the header of scripts/load-test.mjs,
+        # which is explicit that this is a loopback regression check and NOT a capacity
+        # measurement.
+        run: pnpm run test:load -- --tables 1 --seats 3 --hands 3
+
+      - name: API log
+        if: always()
+        run: cat /tmp/api.log || true
+
+      - name: Stop the API
+        if: always()
+        run: kill "$(cat /tmp/api.pid)" || true
+
+  # -------------------------------------------------------------------------
+  # 5c. The statistical evidence that the opponent profiles actually differ.
+  #
+  # 8,000 hands per profile, two-proportion z-tests at alpha = 0.001, Spearman rho
+  # of declared against observed VPIP, cross-seed agreement, and byte-identical
+  # reproduction under a fixed seed. It is the only thing in the repository that
+  # substantiates "the profiles differ measurably", it takes about two minutes, and
+  # before this job the only way to run it was to construct the pnpm --filter
+  # invocation by hand. Its own job rather than a step in `test`, so a two-minute
+  # statistical suite never becomes the reason nobody runs the fast tests.
+  # -------------------------------------------------------------------------
+  simulation:
+    name: Opponent-profile simulation
+    needs: supply-chain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Simulate
+        run: pnpm run test:simulation
+
+  # -------------------------------------------------------------------------
+  # 6. Build everything the way a release would.
+  # -------------------------------------------------------------------------
+  build:
+    name: Build
+    needs: supply-chain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+  # -------------------------------------------------------------------------
+  # 7. Accessibility audit of the built web app.
+  #
+  # The audit is static (it parses server-rendered HTML — see the file header of
+  # scripts/a11y-audit.mjs for exactly what that does and does not cover), but it
+  # still wants pages that rendered with a working API behind them: a route that
+  # fell back to an error state is not the markup we ship, and auditing it
+  # produces both false alarms and false confidence. So this job brings up
+  # PostgreSQL, migrates, seeds the content, and asks the audit to start the API
+  # alongside the web server.
+  # -------------------------------------------------------------------------
+  a11y:
+    name: Accessibility (static)
+    needs: supply-chain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        # postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:60f4761b9035e0b8d5218f701a8c3382f641bf12b1604822574cf5be3baeb537
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: poker_risk_lab_a11y
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username postgres --dbname poker_risk_lab_a11y"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_a11y
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Wait for PostgreSQL
+        run: pnpm run db:wait
+
+      - name: Migrate and seed
+        run: |
+          pnpm run db:migrate
+          pnpm run db:seed
+
+      - name: Accessibility audit
+        # `--out` is opt-in so a local run does not leave an untracked report file
+        # behind; CI wants the file so the next step can publish it.
+        run: pnpm run test:a11y -- --with-api --out a11y-report.json
+
+      - name: Upload accessibility report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: a11y-report
+          path: a11y-report.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,29 @@
+{
+  "name": "@prl/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Next.js web client for Poker Risk Lab: lessons, quizzes, Scenario Lab, bot tables, private rooms, hand review.",
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p test/tsconfig.json && node --test 'test/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@prl/content": "workspace:*",
+    "@prl/contracts": "workspace:*",
+    "@prl/poker-engine": "workspace:*",
+    "@prl/poker-math": "workspace:*",
+    "@prl/ui": "workspace:*",
+    "@swc/helpers": "0.5.15",
+    "next": "16.3.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4"
+  }
+}

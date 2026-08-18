@@ -1,0 +1,26 @@
+{
+  // Typechecks `apps/web/test/**`, which the app's `tsconfig.json` cannot.
+  //
+  // That config sets `include` to `next-env.d.ts`, `src/**` and `.next/types/**` — the program
+  // Next needs — and its `.next/types/**` member requires a completed `next build`. Widening it to
+  // cover `test/**` would therefore couple running the tests to running a build, and would put the
+  // generated route types in the same program as the tests for no benefit.
+  //
+  // So this is a second, narrower pass over the same strict flags: everything is inherited from
+  // `../tsconfig.json` (and through it from `tsconfig.base.json`), nothing is relaxed. It is run by
+  // the package's `test` script BEFORE `node --test`, because Node 24 executes these files by
+  // stripping types rather than checking them — without this pass a broken assertion or a stale
+  // import would run green.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // `incremental` belongs to the app's config, which owns the build-info path. A second program
+    // writing its own alongside it buys nothing for a two-file pass.
+    "incremental": false,
+    // The tests are Node programs, not React ones. Narrowing `types` keeps the program honest
+    // about what it actually needs; DOM lib still comes from `../tsconfig.json`, because the module
+    // under test reads `window` and `document`.
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}

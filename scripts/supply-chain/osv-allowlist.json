@@ -1,0 +1,11 @@
+{
+  "$comment": [
+    "Exceptions to the OSV gate. Empty by design — the project currently has zero",
+    "accepted advisories. Every entry MUST carry a reason and an expiry date; the",
+    "gate fails on an entry with no valid `expires`, and fails again once it lapses,",
+    "so an exception cannot quietly become permanent.",
+    "",
+    "Schema: { id, package?, reason, expires (ISO date), approvedBy }"
+  ],
+  "allow": []
+}

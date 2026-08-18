@@ -1,0 +1,804 @@
+/**
+ * The play screen: the table stage, the persistent decision band, and the Coach rail-or-sheet.
+ *
+ * ## Why this file exists rather than rules in `globals.css`
+ *
+ * `globals.css` is the app shell, edited by whoever owns the header and the frame. A feature that put
+ * its own layout there would be a merge conflict waiting to happen, and a rule deleted by a shell
+ * refactor is a screen that quietly loses its layout. Everything here is namespaced `.prl-play-*` and
+ * imported by `app/play/page.tsx`, so the blast radius of an edit is one route. `styles/legends.css`
+ * is the precedent.
+ *
+ * The table, the seats, the pot, the turn ring, the action bar and the Coach panel are all in
+ * `@prl/ui` and styled by `components.css`. Nothing below restyles any of them; this file only
+ * arranges them.
+ *
+ * ## The rules this file is written against
+ *
+ *  - **Every value is a `--prl-*` token.** No hex, no ms, no bezier. Four length literals survive and
+ *    each is called out where it appears: `1px` as a hairline, `100%` and `0px` as structural
+ *    geometry inside a `clamp()`, `100dvh` as the viewport, and the three breakpoints (600 / 900 /
+ *    1280) which are literals because `var()` is invalid inside a media feature. Those three
+ *    breakpoints are the ones the design system names in section 10.
+ *  - **No shadows.** Depth is one step on the surface ramp plus a hairline. The sheet separates from
+ *    the content behind it, and the decision band from the table above it, with a `--prl-line-strong`
+ *    hairline and an opaque surface, never a blur.
+ *  - **Only `transform` and `opacity` animate.** The sheet slides on `translateY`; nothing here
+ *    transitions a height, a width or an inset.
+ *  - **Mobile-first, so there is no gap between breakpoints.** The sheet is the DEFAULT and the rail
+ *    is the override. Writing it the other way round (`max-width: 599px`) leaves a fractional
+ *    viewport at 599.5px matching neither query, which is exactly the bug that produces a screen
+ *    with no layout at one particular window size.
+ */
+
+/* ==========================================================================================
+   0. FEATURE-LOCAL VALUES
+   ==========================================================================================
+   Four custom properties scoped to this route rather than added to `tokens.css`. None of them is
+   systemic — nothing else in the app has a Coach rail or a bottom sheet — and the design system says
+   to add a token only when it genuinely is one.
+
+   The spacing ramp tops out at 10rem, so a width larger than that is composed from two ramp steps in
+   a `calc()` with its total in the comment, which is the convention `components.css` already uses.
+   ========================================================================================== */
+
+.prl-play {
+  /* 22rem: the Coach rail's width, from design system section 10. */
+  --prl-play-rail: calc(var(--prl-space-16) * 2 + var(--prl-space-9));
+  /* How much of the sheet stays on screen when it is closed: the handle row plus its caveat line. */
+  --prl-play-sheet-peek: var(--prl-space-12);
+  /* How far a drag may pull the sheet before CSS stops following the finger. The component
+     publishes the raw pointer delta as `--prl-play-sheet-drag`; the clamp below owns the bounds. */
+  --prl-play-sheet-travel: var(--prl-space-11);
+  --prl-play-sheet-drag: 0px;
+  /* The sticky offset for the rail: the shell header's height plus air. The same value `base.css`
+     uses for `scroll-padding-block-start`, for the same reason — a focused element must never be
+     delivered underneath the header (WCAG 2.4.11). */
+  --prl-play-sticky-top: var(--prl-space-13);
+
+  width: var(--prl-container);
+  margin-inline: auto;
+  padding-block: var(--prl-space-9);
+  display: grid;
+  gap: var(--prl-space-8);
+  /* Room for the closed sheet's peek, so the last thing on the page is never behind it. */
+  padding-block-end: calc(var(--prl-play-sheet-peek) + var(--prl-space-8));
+}
+
+/**
+ * WCAG 2.4.11 at the BOTTOM edge of the viewport.
+ *
+ * `base.css` sets `scroll-padding-block-start` on the root so a focused element is never delivered
+ * under the sticky header. The same failure exists at the other edge on this route and nothing was
+ * covering it: below 600px the Coach is `position: fixed` with `--prl-play-sheet-peek` (4rem) of itself
+ * permanently on screen, and the browser scrolls a newly focused control to the NEAREST edge — so
+ * tabbing down the action bar delivered Fold, Check, Call or the bet field underneath the sheet, on
+ * exactly the viewport where those buttons are the whole screen. Measured: `scroll-padding-block-end`
+ * computed to `auto`.
+ *
+ * The padding is on `:root` because scroll padding belongs to the SCROLLPORT, and the scrollport here
+ * is the document — `.prl-play` is only a box inside it. `:has()` keeps the rule off every other route
+ * rather than making one route's furniture a global offset.
+ *
+ * The value is the peek plus one step of air, written from the ramp rather than as
+ * `var(--prl-play-sheet-peek)`: that property is declared on `.prl-play`, and a descendant's custom
+ * property is not visible to its ancestor. So this and `--prl-play-sheet-peek` in section 0 are a pair
+ * — change one and change the other, in both places it is set.
+ */
+:root:has(.prl-play) {
+  /* 4rem + 1rem, matching `--prl-play-sheet-peek` + one gap. */
+  scroll-padding-block-end: calc(var(--prl-space-12) + var(--prl-space-6));
+}
+
+/* ==========================================================================================
+   1. PAGE HEAD
+   ==========================================================================================
+   Eyebrow, `h1`, lede. Stacked on a phone; two columns from 900px up (section 8.2).
+
+   ## Why the lede moves beside the title rather than under it
+
+   Measured at 1440x900 before the change: the head was 175px tall and 1360px wide, and the lede —
+   capped at the measure, as prose must be — ran three lines in the leftmost 642px with 718px of the
+   row empty. Every block on the page did the same thing, so the whole right half of the screen was
+   blank while the table it exists to show sat 755px down, below the fold.
+
+   Both facts are the same fact. A one-column page whose text is capped at a reading measure cannot
+   use a 1360px row, and the cost is not the empty pixels — it is the 175px of height that pushes the
+   table down. Putting the lede in a second column spends the width that was already there and gives
+   the height back to the thing this screen is for.
+
+   The cap stays: column two is `--prl-measure` wide, so the line length is unchanged. What changed
+   is where the column sits.
+   ========================================================================================== */
+
+.prl-play__head {
+  display: grid;
+  gap: var(--prl-space-3);
+}
+
+.prl-play__eyebrow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--prl-space-4);
+  color: var(--prl-text-faint);
+}
+
+.prl-play__title {
+  margin: 0;
+}
+
+.prl-play__lede {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-lg);
+  line-height: var(--prl-leading-body);
+}
+
+/* ==========================================================================================
+   1.1  THE CONNECTION PANEL
+   ==========================================================================================
+   The setup half of the screen: which transport state it is in, what to do next, the controls, and
+   the room's three facts. It is furniture in front of the table, so its job is to be complete and
+   short — a reader who has already opened the table should not have to scroll past it to see one.
+
+   Measured at 1440x900 before these rules: 436px tall, with the three facts stacked as six full-width
+   rows in the leftmost 300px of a 1360px panel. Three of those rows were a 13px label on a line of
+   its own. The facts are a stat row, so they are laid out as one from 600px up: label over value,
+   three columns, `grid-auto-flow: column` filling down each pair in turn.
+
+   `grid-template-rows: auto auto` is what makes the flow correct — without it, `column` flow puts
+   every `dt` and `dd` on a single row and the pairing is lost. The two are a unit; do not set one
+   without the other.
+   ========================================================================================== */
+
+.prl-play__connection-lines {
+  display: grid;
+  gap: var(--prl-space-4);
+}
+
+@media (min-width: 900px) {
+  .prl-play__connection-lines {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--prl-space-4) var(--prl-space-9);
+    align-items: start;
+  }
+}
+
+@media (min-width: 600px) {
+  .prl-play__facts {
+    grid-auto-flow: column;
+    grid-template-rows: auto auto;
+    justify-content: start;
+    column-gap: var(--prl-space-11);
+  }
+}
+
+/* ==========================================================================================
+   2. THE STAGE
+   ==========================================================================================
+   One column by default. `align-items: start` matters at the rail breakpoint: without it the rail
+   stretches to the table's height and `position: sticky` has nothing to move against.
+   ========================================================================================== */
+
+.prl-play__stage {
+  display: grid;
+  align-items: start;
+  gap: var(--prl-space-8);
+}
+
+/**
+ * The table column, and the container every rule below measures against.
+ *
+ * `container-type: inline-size` makes this column — not the viewport — the thing the decision band
+ * asks about before it goes side-by-side. That matters because the column is NOT the viewport: at a
+ * 900px viewport it is about 29rem wide (the Coach rail takes 22rem of it), and at 1280px it is
+ * about 50rem. A viewport query would compact the band at 900px, where there is no room for it, and
+ * the same 46rem threshold the table uses for its oval is the honest one here too: when the column
+ * can hold an oval it can hold your plate beside the controls, and when it cannot, neither.
+ */
+.prl-play__main {
+  container-type: inline-size;
+  container-name: prl-play-column;
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-7);
+  min-width: 0;
+}
+
+.prl-play__table {
+  display: grid;
+  gap: var(--prl-space-6);
+  min-width: 0;
+}
+
+.prl-play__summary {
+  display: grid;
+  gap: var(--prl-space-2);
+  margin: 0;
+  padding-inline-start: var(--prl-space-7);
+  font-variant-numeric: tabular-nums;
+}
+
+.prl-play__summary-note {
+  margin-block: var(--prl-space-4) 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+/* ==========================================================================================
+   3. THE DECISION BAND
+   ==========================================================================================
+   Your figures, the controls, and the price — the last block in the table column, IN FLOW at every
+   width.
+
+   ## Why it is not pinned, when it used to be
+
+   This band was `position: sticky; inset-block-end: 0` from 900px up, and that rule hid the whole
+   table. Measured, dark theme, `/play`, scroll 0: at 1440x900 the band was 566px tall and pinned
+   across `y 334..900` while the table field sat at `y 375..895`, so `elementFromPoint` at the pot,
+   the board, the dealer button and all six seat centres returned the bet slider and the presets
+   instead. Same at 1280x800, 1600x900 and 1920x1080. The comment that used to live here named the
+   pot as the thing the rule protected; the rule was what covered it.
+
+   That is not a tuning problem, it is arithmetic, and it is worth writing down so nobody re-adds the
+   rule: a bottom-pinned element sits across `viewport-bottom - H .. viewport-bottom` for as long as
+   its own flow position is below the fold, and the block immediately ABOVE it in flow therefore ends
+   inside that strip by definition. Any sticky-bottom band in this column occludes the table for the
+   whole of its pinned range, at every height, whatever H is. The only pinned band that could not
+   occlude the table is one in a column that does not scroll at all — which would mean giving the
+   table its own scroll box, and a scroll box with no focusable content in it cannot be scrolled from
+   a keyboard (WCAG 2.1.1; `.prl-table__opponents` in `components.css` rejects the same pattern for
+   the same reason).
+
+   ## What replaced it
+
+   Height, not stickiness. The band is arranged so that it and the whole table fit in one viewport:
+   your plate moves BESIDE the controls once the column is wide enough for it (section 8.1), and
+   `components.css` reflows the ActionBar's own sizer the same way. Nothing is removed at any width —
+   same cards, same stack, same commitment, same buttons, same slider, number field, presets, bounds
+   and readout. Measured in Chrome after the change, dark theme, `/play`:
+
+     1440x900   band 342px (was 566px)   table field 486 of 520px visible with the whole band
+     1920x1080  band 342px               table field 520 of 520px visible with the whole band
+     1280x800   band 419px               table field 337 of 520px visible with the whole band
+
+   The 1280x800 line is the honest one: 63px of sticky header plus a 520px field plus a 419px band is
+   1002px of content for 800px of screen, so at that height the top of the field is above the fold
+   while the whole band is on screen. That is a small viewport, not an occlusion — nothing is behind
+   anything, and 90px of scroll brings the top seats back. The figure that mattered before was 0 of
+   520px, at every desktop size.
+
+   The hairline and the opaque page-coloured background stay. They are what separates the band from
+   the field above it now that the two are neighbours rather than layers, and they are also what the
+   forced-colors block in section 11 repairs.
+   ========================================================================================== */
+
+.prl-play__decision {
+  display: grid;
+  gap: var(--prl-space-4);
+  padding-block: var(--prl-space-4);
+  border-block-start: var(--prl-hairline-strong);
+  background-color: var(--prl-surface-page);
+}
+
+.prl-play__decision-idle {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+/**
+ * Your cards, your stack and your street commitment, beside the controls that change them.
+ *
+ * Hidden below 900px, where the stacked table already pins the viewer's own plate directly above this
+ * band and a second copy a centimetre away would be noise. From 900px up the plate can be anywhere
+ * inside a 32rem field, so this is what makes the guarantee structural rather than lucky.
+ */
+.prl-play__hud {
+  display: none;
+  align-items: center;
+  gap: var(--prl-space-6) var(--prl-space-9);
+}
+
+.prl-play__hud-stats {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  gap: var(--prl-space-2) var(--prl-space-4);
+  margin: 0;
+}
+
+.prl-play__hud-value {
+  margin: 0;
+  font-size: var(--prl-type-metric-sm);
+  font-weight: var(--prl-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
+}
+
+/* ==========================================================================================
+   4. THE COACH: A BOTTOM SHEET BY DEFAULT
+   ==========================================================================================
+   Under 600px a 22rem rail does not exist and a panel below the table would put the equity figure a
+   whole screen away from the buttons, so the Coach is pinned to the bottom edge with a grab handle.
+
+   `translateY` only. A `max-height` transition would animate layout, and a sheet that reflows the
+   page sixty times a second while it opens is exactly the paint-heavy scene the design system's
+   performance rules exist to prevent. The closed position is `100% - peek`, so the handle row and its
+   caveat line stay on screen while the panel itself is off it.
+   ========================================================================================== */
+
+.prl-play__coach {
+  position: fixed;
+  z-index: var(--prl-z-sheet);
+  inset-block-end: 0;
+  inset-inline: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  /* The viewport minus enough air to see what is behind the sheet when it is open. */
+  max-block-size: calc(100dvh - var(--prl-space-12));
+  padding-inline: var(--prl-gutter);
+  padding-block-end: var(--prl-space-6);
+  overflow-y: auto;
+  overscroll-behavior-block: contain;
+  border-block-start: var(--prl-hairline-strong);
+  background-color: var(--prl-surface-page);
+  transition: transform var(--prl-dur-in) var(--prl-ease-standard);
+}
+
+/**
+ * The two resting positions, each following the finger within the clamp.
+ *
+ * `--prl-play-sheet-drag` is the raw pointer delta the component publishes; the `clamp()` is where
+ * the travel is decided, from tokens. Negative deltas pull a closed sheet up, positive ones push an
+ * open one down. `0px` rather than `0` because a unitless zero inside a `clamp()` of lengths is
+ * needlessly ambiguous.
+ */
+.prl-play__coach[data-open="false"] {
+  transform: translateY(
+    calc(
+      100% -
+      var(--prl-play-sheet-peek) +
+      clamp(calc(var(--prl-play-sheet-travel) * -1), var(--prl-play-sheet-drag), 0px)
+    )
+  );
+}
+
+.prl-play__coach[data-open="true"] {
+  transform: translateY(clamp(0px, var(--prl-play-sheet-drag), var(--prl-play-sheet-travel)));
+}
+
+/**
+ * Under the navigation sheet, whenever the navigation sheet is open.
+ *
+ * The shell's sheet and this one are both `position: fixed` at `--prl-z-sheet`, and a tie in
+ * `z-index` is broken by document order — the Coach lives in `main`, the navigation sheet in the
+ * header, so the Coach's 4rem peek painted OVER an "opaque, `aria-modal`" navigation sheet, exactly
+ * across the strip where its theme control sits. Measured at 390x844 on `/play`: sheet `0,0 390x844`
+ * z 300, Coach `0,780 390x64` z 300, theme control at `y 783..827`.
+ *
+ * `data-nav-open` is already published on the root element by `globals.css` for the scroll lock, so
+ * the fix is to read it rather than to invent a signal: while a modal surface is open, everything
+ * this route pins is furniture behind it. `--prl-z-sticky` rather than a raw number, and rather than
+ * raising the shell's sheet — the shell is not this route's to edit, and the route that added a
+ * second fixed surface is the one that should give way.
+ */
+:root[data-nav-open="true"] .prl-play__coach {
+  z-index: var(--prl-z-sticky);
+}
+
+.prl-play__handle-row {
+  display: grid;
+  gap: var(--prl-space-2);
+  padding-block: var(--prl-space-4);
+}
+
+/**
+ * The handle is a real `<button>` with `aria-expanded`, not a `div` with a pointer listener. The
+ * swipe is an enhancement layered on top of it; the tap and the Enter key are the contract. A drag
+ * handle that only responds to a drag is a control a keyboard cannot reach.
+ *
+ * Full width and at least the 44px target floor, because it is the only way into the analysis on a
+ * phone.
+ */
+.prl-play__handle {
+  display: flex;
+  align-items: center;
+  gap: var(--prl-space-5);
+  width: 100%;
+  min-height: var(--prl-target-min);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.prl-play__handle:hover {
+  color: var(--prl-accent-text);
+}
+
+/** The grab bar: the affordance that says "this thing moves". Decorative, hence `aria-hidden`. */
+.prl-play__handle-grip {
+  flex: 0 0 auto;
+  width: var(--prl-space-10);
+  height: var(--prl-space-2);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-line-strong);
+}
+
+.prl-play__handle-word {
+  flex: 1 1 auto;
+  text-align: start;
+}
+
+/**
+ * The caveat that stays on screen in BOTH sheet states.
+ *
+ * The Coach panel's own rule is that the assumptions are never collapsible, and that rule is about
+ * the panel's internals. This is a viewport container, and the honest way to run one is to keep the
+ * warning visible even when the detail is not — so a reader can never see a number here without
+ * knowing it has caveats attached.
+ */
+.prl-play__handle-note {
+  margin: 0;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-play__coach-body {
+  display: grid;
+  min-height: 0;
+}
+
+/* ==========================================================================================
+   5. LOADING
+   ==========================================================================================
+   Skeletons at the REAL content's dimensions, so nothing reflows when the data arrives. A layout
+   that jumps on arrival is worse than one that was briefly empty, because the reader has already
+   started reading.
+
+   The field skeleton is `5 x --prl-space-14`, which is literally the expression
+   `components.css` uses for the oval layout's `min-height`. If that changes, this has to change with
+   it, and the comment on both sides says so.
+   ========================================================================================== */
+
+.prl-play__skeletons {
+  display: grid;
+  gap: var(--prl-space-5);
+}
+
+.prl-play__skeleton-note {
+  margin: 0;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-play__skeleton--header {
+  --prl-skeleton-h: var(--prl-space-11);
+}
+
+.prl-play__skeleton--field {
+  --prl-skeleton-h: calc(var(--prl-space-14) * 5);
+}
+
+.prl-play__skeleton--metric {
+  --prl-skeleton-h: var(--prl-space-12);
+}
+
+.prl-play__skeleton--panel {
+  --prl-skeleton-h: calc(var(--prl-space-16) * 3);
+}
+
+/* ==========================================================================================
+   6. FIXTURE STATES
+   ==========================================================================================
+   A disclosure listing the states this screen can be rendered in while there is no server behind it.
+   It is not a product feature and it does not pretend to be one: it is labelled as a fixture, it is
+   collapsed, and the moment a live view arrives the page stops rendering it.
+   ========================================================================================== */
+
+.prl-play__states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-play__states li {
+  margin: 0;
+}
+
+/* ==========================================================================================
+   7. 600px — THE SHEET BECOMES A PANEL
+   ==========================================================================================
+   Above the phone the Coach is simply the next thing on the page: no fixed position, no transform,
+   no handle. The handle row goes with it, caveat line included, because at this width the
+   assumptions are on screen without anybody having to open anything.
+   ========================================================================================== */
+
+@media (min-width: 600px) {
+  .prl-play {
+    --prl-play-sheet-peek: var(--prl-space-0);
+
+    padding-block-end: var(--prl-space-9);
+  }
+
+  /* The sheet is gone from here up, so nothing is pinned over the bottom edge and the scroll padding
+     goes with it. Reset beside the peek it mirrors, so the two cannot drift. Above 600px nothing on
+     this route is pinned to the bottom edge at all — the decision band is in flow at every width
+     (section 3) — so there is no second element for a focused control to be delivered underneath. */
+  :root:has(.prl-play) {
+    scroll-padding-block-end: var(--prl-space-0);
+  }
+
+  .prl-play__coach {
+    position: static;
+    max-block-size: none;
+    padding-inline: 0;
+    padding-block-end: 0;
+    overflow: visible;
+    border-block-start: 0;
+    background-color: transparent;
+    grid-template-rows: auto;
+  }
+
+  /* Both attribute selectors, because they outrank the class above on specificity. */
+  .prl-play__coach[data-open="false"],
+  .prl-play__coach[data-open="true"] {
+    transform: none;
+  }
+
+  .prl-play__handle-row {
+    display: none;
+  }
+}
+
+/* ==========================================================================================
+   8. 900px — THE RAIL
+   ==========================================================================================
+   Two columns, with the Coach in a 22rem rail that sticks to the top of the viewport and scrolls
+   inside itself. The panel's first block is the equity figure, so the top of the rail is the equity
+   figure — which is the second structural guarantee behind the section 10 requirement.
+
+   The rail is a scroll container with focusable content inside it (every `<summary>`), so it is
+   scrollable from the keyboard without needing a `tabindex` of its own.
+
+   The table itself switches to its oval form on a CONTAINER query at 46rem, not here. That is
+   stricter than the viewport rule in section 10 and it is deliberate: at a 900px viewport this column
+   is about 29rem wide, and a six-max oval needs roughly 43rem before the seat plates stop
+   overlapping each other. Forcing the oval at 900px would produce a table with seats on top of each
+   other, so the table stays stacked until the column can actually hold an oval. Nothing is removed
+   at any width — the same seats, positions, stacks, commitments and cards are on screen either way.
+   ========================================================================================== */
+
+@media (min-width: 900px) {
+  /**
+   * Section 1: the lede takes a column of its own beside the title, capped at the same measure it had
+   * when it was underneath.
+   *
+   * `span 6` and the margin-instead-of-row-gap are not stylistic — see the long note in
+   * `legends.css` section 1, which is the same layout and the same trap. Short version: `grid-row:
+   * 1 / -1` resolves to a single row when a grid declares no explicit rows, so the lede stretched the
+   * eyebrow's row to its own height; spanning past the end of the content spans everything and
+   * stretches nothing, and a row gap would then pay for the empty rows.
+   */
+  .prl-play__head {
+    /* Two equal halves rather than `1fr` plus a `--prl-measure` track. A fixed second track claims
+       the same 642px at every viewport, which at a 900px one leaves 138px for the title; halves
+       scale, and the lede's own `max-width` still caps the line length once the half is wider than
+       the measure. Every rendering of this head has a lede, so it needs no `:has()` guard — see
+       `legends.css`, where one opener does not. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--prl-space-11);
+    row-gap: var(--prl-space-0);
+  }
+
+  .prl-play__eyebrow,
+  .prl-play__title {
+    grid-column: 1;
+    margin-block-end: var(--prl-space-3);
+  }
+
+  .prl-play__title {
+    margin-block-end: var(--prl-space-0);
+  }
+
+  .prl-play__lede {
+    grid-column: 2;
+    grid-row: 1 / span 6;
+    align-self: start;
+  }
+
+  .prl-play__stage {
+    grid-template-columns: minmax(0, 1fr) var(--prl-play-rail);
+  }
+
+  .prl-play__coach {
+    position: sticky;
+    inset-block-start: var(--prl-play-sticky-top);
+    max-block-size: calc(100dvh - var(--prl-play-sticky-top) - var(--prl-space-8));
+    overflow-y: auto;
+    overscroll-behavior-block: contain;
+  }
+
+  .prl-play__hud {
+    display: flex;
+  }
+}
+
+/* ==========================================================================================
+   8.1  46rem OF COLUMN — YOUR PLATE MOVES BESIDE THE CONTROLS
+   ==========================================================================================
+   The band's own reflow, and the reason it is a CONTAINER query rather than a viewport one is in the
+   comment on `.prl-play__main`: the column is not the viewport.
+
+   Stacked, the band is your plate, then the price, then the sizer, then the buttons — four rows of
+   full-column width, and its height is what pushed the table off the screen. Side by side it is two
+   columns: the plate (cards over stack over street commitment, the order a player reads them in) and
+   the controls that change those numbers. Nothing is dropped and nothing is collapsed behind a
+   toggle; the same nodes are on screen in a shorter box.
+
+   `display` is deliberately NOT set here. The HUD is `display: none` under 900px because the stacked
+   table already pins the viewer's own plate directly above this band, and a column between 860 and
+   899px is wide enough to match this query — so setting `display: flex` here would resurrect the
+   duplicate plate at exactly those widths. `flex-direction` is inert while the element is not
+   displayed, which is what makes it the safe half of the pair to write.
+   ========================================================================================== */
+
+@container prl-play-column (min-width: 46rem) {
+  .prl-play__decision {
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: var(--prl-space-8);
+    align-items: start;
+  }
+
+  .prl-play__hud {
+    flex-direction: column;
+    align-items: start;
+    gap: var(--prl-space-5);
+  }
+
+  /* Label over figure, the metric-block order from design system section 6.5. Side by side it made
+     the plate column 195px wide; stacked it is about 120px, and every one of those 75px goes to the
+     controls beside it — which is what lets the sizer put its presets on the same line as its slider
+     instead of on a line of their own. A column of labelled figures is also simply how a stack is
+     read. */
+  .prl-play__hud-stats {
+    grid-template-columns: auto;
+  }
+
+  /* Arrangement, not restyling: the two blocks that can occupy the controls column are the bar and
+     the sentence that stands in for it, and each has to be told which column it is in so an absent
+     plate does not slide them into the plate's. */
+  .prl-play__decision > .prl-action-bar,
+  .prl-play__decision > .prl-play__decision-idle {
+    grid-column: 2;
+  }
+
+  /* The confirmation callout is prose about the whole decision, so it spans the band. */
+  .prl-play__decision > .prl-callout {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ==========================================================================================
+   9. 1280px — NOTHING NEW, ON PURPOSE
+   ==========================================================================================
+   The section 10 requirement at this width — pot, cards, price and equity all visible without
+   scrolling — is met by the band's height plus the sticky Coach rail, so there is no rule here that
+   enforces it. What is asserted is a MAXIMUM: no rule in this file gives the table or the band a
+   height, so a taller seat plate or a longer suggestion can only ever cost the reader some of the
+   page furniture above the field, never put one block behind another.
+
+   Measured in Chrome by `elementFromPoint` at nine sample points per element, dark AND light, with
+   the page scrolled so the band's bottom edge meets the viewport's — the position a player acts
+   from. "covered" counts only sample points whose hit-test lands inside `.prl-play__decision`:
+
+     viewport    band   pot     board   dealer  seats covered   seats fully in view
+     1280x800    419    0/9     0/9     0/9     0/6              3/6
+     1440x900    342    0/9     0/9     0/9     0/6              6/6
+     1600x900    342    0/9     0/9     0/9     0/6              6/6
+     1920x1080   342    0/9     0/9     0/9     0/6              6/6
+     768x1024    390    0/9     0/9     0/9     0/6              3/6
+     390x844     661    0/9     0/9     0/9     0/6              2/6
+
+   At the landing state (scroll 0) the whole field is on screen at 1440x900 and above, six seats of
+   six, with the band below the fold: the first screen is the table, the second is the decision.
+
+   ## Re-checked after sections 1 and 1.1 shortened the page above the stage
+
+   Compacting the head and the connection panel moved `.prl-play__stage` from 755px down the document
+   to 550px. That cannot occlude anything — it only changes how far a reader scrolls to reach the
+   operating position — but the guarantee was re-measured rather than assumed, in a live hand with the
+   reader to act and the page scrolled so the band's bottom edge meets the viewport's. Chrome, dark
+   theme, `/play`, "covered" counted by `elementFromPoint` at nine points per seat:
+
+     viewport     band   seat points covered by the band   field visible   seats fully in view
+     1280x800     481    0 of 54                           298 of 520      3/6
+     1440x900     425    0 of 54                           454 of 520      5/6
+     1920x1080    425    0 of 54                           520 of 520      6/6
+
+   The whole band is on screen in all three. The band's height varies with the decision rather than
+   with the viewport — a raise with five presets is taller than a call — which is why 1280 reads 481
+   here and 419 in the table above; those are two different hands, not a regression.
+
+   The only change at this width is more air between the two columns, because at this width there is
+   some to spend.
+   ========================================================================================== */
+
+/**
+ * A NOTE ON THE RAIL WIDTH, so nobody re-tries what was measured and reverted.
+ *
+ * The Coach's prose is narrow at 22rem — its stack-to-pot paragraph runs about 34 characters a line —
+ * and widening the rail to 24rem here is the obvious fix. It was tried and measured: at 1440x900 the
+ * table column went 968px -> 936px, and the ActionBar, which reflows against its own container, took
+ * one more line. The decision band went 401px -> 425px.
+ *
+ * That trade is the wrong way round on this screen. The band's height is subtracted directly from how
+ * much of the table is on screen while the controls are — `viewport - band` is the whole arithmetic of
+ * section 3 — so 32px of Coach measure costs 24px of poker table. Information beats comfort here, and
+ * the rail stays at 22rem.
+ */
+@media (min-width: 1280px) {
+  .prl-play__stage {
+    gap: var(--prl-space-10);
+  }
+}
+
+/* ==========================================================================================
+   10. NO SCRIPTING
+   ==========================================================================================
+   Without JavaScript nothing will ever set `data-open="true"`, so the phone sheet would be stuck at
+   its 4rem peek forever and the analysis would be unreachable. It resolves to a plain panel instead —
+   the same failure direction `.prl-reveal` takes in `components.css`: content is shown.
+   ========================================================================================== */
+
+@media (scripting: none) {
+  .prl-play__coach,
+  .prl-play__coach[data-open="false"] {
+    position: static;
+    max-block-size: none;
+    overflow: visible;
+    transform: none;
+  }
+
+  .prl-play__handle {
+    display: none;
+  }
+}
+
+/* ==========================================================================================
+   11. FORCED COLORS
+   ==========================================================================================
+   `background-color` is discarded and every border is forced to CanvasText, so the two things that
+   separate one surface from its neighbour both disappear. The band and the sheet get a real border
+   back, and the grab bar — which is a background block and would vanish outright — gets one too.
+   ========================================================================================== */
+
+@media (forced-colors: active) {
+  .prl-play__decision,
+  .prl-play__coach {
+    border-color: CanvasText;
+  }
+
+  .prl-play__handle-grip {
+    border: 1px solid CanvasText;
+  }
+
+  .prl-play__skeleton--header,
+  .prl-play__skeleton--field,
+  .prl-play__skeleton--metric,
+  .prl-play__skeleton--panel {
+    border: 1px solid GrayText;
+  }
+}

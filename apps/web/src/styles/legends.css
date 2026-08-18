@@ -1,0 +1,1162 @@
+/**
+ * The AI Legends screens: every class the four legends routes and their seven components use.
+ *
+ * ## Why this file exists rather than rules in `globals.css`
+ *
+ * `globals.css` is the app shell, edited by whoever owns the header and the frame. A feature that
+ * put its own patterns there would be a merge conflict waiting to happen, and a rule deleted by
+ * a shell refactor is a screen that quietly loses its layout. Everything here is namespaced
+ * `.prl-legend-*` and imported by `app/legends/layout.tsx`, so the blast radius of an edit is one
+ * feature.
+ *
+ * ## The rules this file is written against
+ *
+ *  - **Every value is a `--prl-*` token.** There is no hex, no ms and no bezier literal below. The
+ *    exceptions are the same ones `components.css` and `globals.css` already document — geometry
+ *    with no design content (`100%`, `1fr`, `minmax(0, 1fr)`), `1px` exclusively as a hairline,
+ *    unitless SVG stroke widths (following `.prl-radar__ring`), and media-query lengths, since
+ *    `var()` is invalid in a media feature. The one addition is `--prl-legend-sigil-turn`, a
+ *    component-local rotation defined in section 0.
+ *  - **No shadows.** Depth is one step on the surface ramp plus a hairline. There is no
+ *    `box-shadow` anywhere in the app — the focus ring is an `outline` (`base.css`).
+ *  - **A border that carries meaning uses `--prl-line-strong` or the accent.** `--prl-line-subtle`
+ *    measures 1.44:1 and is decoration only, so it never marks a state or bounds a chart.
+ *  - **Only `transform` and `opacity` animate.** The hover state changes a border colour
+ *    instantly and rotates the sigil over `--prl-dur-quick`; nothing transitions a colour, a
+ *    width or a height.
+ */
+
+/* ==========================================================================================
+   0. COMPONENT-LOCAL VALUES
+   ==========================================================================================
+   Custom properties scoped to this feature rather than added to `tokens.css`. A sigil's hover
+   rotation and a card grid's minimum column are not systemic values — nothing else in the app needs
+   them — and the design system says to add a real token only when it genuinely is one.
+
+   `--prl-legend-sigil-turn` is the one angle literal in this file. `components.css` sets the same
+   kind of value for its disclosure marker (`rotate(90deg)`), which is the precedent: an angle in
+   a graphic transform is geometry, and geometry is not on the token ramp.
+   ========================================================================================== */
+
+.prl-legend-card,
+.prl-legend-identity {
+  --prl-legend-sigil-turn: 6deg;
+}
+
+/**
+ * Three grid floors, derived from the spacing ramp rather than invented.
+ *
+ * `--prl-space-16` is 10rem, the largest step on the ramp, and it is the floor an `auto-fit` grid
+ * needs — below it the browser packs in more columns than the content can live in. Measured at a
+ * 600px viewport, a floor of one step produced three 170px cards, each holding a sixteen-axis radar
+ * and five lines of disclaimer: technically responsive and actually unreadable.
+ *
+ * Multiplying a token is how `tokens.css` already builds `--prl-container`
+ * (`min(100% - 2 * var(--prl-gutter), 88rem)`), so the value still traces back to the ramp instead
+ * of being a number somebody measured off a screenshot.
+ *
+ *   --prl-legend-card-min     a portrait card: sigil, three metrics, a radar, prose
+ *   --prl-legend-column-min   a comparison column, or a block of metrics
+ *   --prl-legend-option-min   one radio option with a description
+ *
+ * ## Why the card floor went from 20rem to 24rem
+ *
+ * Because a card is not a tile. Measured on this page at 1440x900 with the 20rem floor, the grid
+ * packed four 310px columns and every one of them was too narrow for what a card actually holds:
+ *
+ *   - "High-Variance Tournament Aggressor" broke over three lines, so did two other archetypes, and
+ *     the cards in a row stopped starting at the same place;
+ *   - the sixteen-axis radar was capped at 240px, which is where its numbered axis markers stop
+ *     being labels and start being marks;
+ *   - the disclaimers — the block that carries the legal and educational framing, and the one thing
+ *     on the card that must be read rather than glanced at — ran 13 lines at roughly 35 characters
+ *     each. That is half the measure a reader can hold a line at.
+ *
+ * At 24rem the same 1440px page lays out three ~437px columns: two-line titles, a 24rem radar, and a
+ * disclaimer at about 50 characters a line. Nothing was removed to get there — the same twelve cards
+ * carry the same content, in a grid that reflows one column earlier.
+ *
+ * The value is still built from the ramp (`2 x --prl-space-16 + --prl-space-12` = 20rem + 4rem)
+ * rather than typed as `24rem`, which is the convention `--prl-container` already follows.
+ */
+:root {
+  --prl-legend-card-min: calc(2 * var(--prl-space-16) + var(--prl-space-12));
+  --prl-legend-column-min: calc(1.5 * var(--prl-space-16));
+  --prl-legend-option-min: calc(1.5 * var(--prl-space-16));
+}
+
+/**
+ * Under a reduced-motion preference the rotation is removed rather than shortened.
+ *
+ * `tokens.css` already collapses every duration to 1ms, which would make this rotation *instant*
+ * rather than absent — a mark that snaps six degrees the moment a pointer crosses it is exactly
+ * the kind of movement the preference is asking not to see. So the angle itself goes to zero.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .prl-legend-card,
+  .prl-legend-identity {
+    --prl-legend-sigil-turn: 0deg;
+  }
+}
+
+/* ==========================================================================================
+   1. PAGE FRAME
+   ========================================================================================== */
+
+.prl-legend-page {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-11);
+  width: var(--prl-container);
+  margin-inline: auto;
+  padding-block-end: var(--prl-space-12);
+}
+
+.prl-legend-head {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-5);
+  padding-block: var(--prl-space-11) var(--prl-space-8);
+  border-block-end: var(--prl-hairline);
+}
+
+.prl-legend-head__title {
+  margin: 0;
+}
+
+/** The standfirst. Capped at the measure: past about 75 characters the eye loses the line start. */
+.prl-legend-head__standfirst {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-lg);
+  line-height: var(--prl-leading-body);
+}
+
+/**
+ * From 900px up the standfirst sits BESIDE the title rather than under it.
+ *
+ * Same reasoning as `play.css` section 1, and it is the same rule on purpose — three routes that
+ * each invent their own opening rhythm is how a product stops looking like one product. Measured
+ * here at 1440x900 before the change: the head was 285px tall and 1360px wide, with every line of it
+ * inside the leftmost 642px. The standfirst is still capped at `--prl-measure`, so the line length is
+ * unchanged; what changed is that the column it is capped to sits in the empty half of the row.
+ *
+ * The chips and the sibling-route links stay in column one under the title, because they belong to
+ * the title: they say what this page holds and where else to go, and reading them means reading down
+ * the left column rather than tracking across a 1360px row.
+ */
+/**
+ * ## The row trap, written down because it cost a rebuild
+ *
+ * The obvious spelling of "put this one child in the other column" is `grid-column: 2` plus
+ * `grid-row: 1 / -1`. It is wrong here, and it fails silently.
+ *
+ * `-1` counts back from the last line of the EXPLICIT grid. This head declares columns and no rows,
+ * so its explicit grid has exactly one row line and `1 / -1` resolves to `1 / 2`: a single row. The
+ * standfirst then landed in row one — the row holding the `04` index — and stretched it to the
+ * standfirst's own height. Measured on `/legends` at 1440x900: 160px of nothing between the index and
+ * the `h1`. `1 / 3` was the second attempt and has the same shape of bug, just smaller: two rows
+ * cannot hold a five-line paragraph without growing, and on `/legends/hand-review` they grew 78px.
+ *
+ * So the standfirst spans more rows than the head can ever have (`span 6`; the longest of these heads
+ * has four children in column one), which makes it span ALL of them and stretch none of them. The
+ * rows past the content are implicit and empty.
+ *
+ * That is why the row gap becomes a margin here. `row-gap` applies between adjacent tracks whether or
+ * not they hold anything, so six declared rows with a gap would add trailing space for the empty
+ * ones; a margin on the items that actually exist cannot. `--prl-space-5` is the same value
+ * `.prl-legend-head` uses as its gap in one column — change one and change the other.
+ *
+ * ## Two more things that are not arbitrary
+ *
+ * **`:has(> …)`, with the child combinator, so the rule only fires when the standfirst is a grid
+ * ITEM of this head.** `/legends/[profileId]` opens with a sigil beside a names block, and its
+ * standfirst is nested two levels down inside `.prl-legend-identity__names`. A descendant `:has()`
+ * matched it, so the head split into two columns — but `grid-column: 2` cannot place an element that
+ * is not a grid item, so column two stayed empty and claimed its width anyway. Measured on that page
+ * at 1440x900: an empty 656px column, the whole identity block crushed into what was left, a
+ * three-line `h1` and a tagline four words wide. The child combinator is what makes the condition
+ * "there is something here to put in column two" rather than "the word appears somewhere below".
+ *
+ * **Two equal `1fr` tracks rather than `1fr` plus the measure.** A fixed second track takes the same
+ * 642px at every viewport, so at a 900px viewport it left 138px for the title. Halves scale: the
+ * standfirst is capped by its own `max-width` when the half is wider than the measure, and simply
+ * fills it when it is not.
+ */
+@media (min-width: 900px) {
+  .prl-legend-head:has(> .prl-legend-head__standfirst) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--prl-space-11);
+    row-gap: var(--prl-space-0);
+  }
+
+  .prl-legend-head:has(> .prl-legend-head__standfirst) > :not(.prl-legend-head__standfirst) {
+    grid-column: 1;
+    margin-block-end: var(--prl-space-5);
+  }
+
+  .prl-legend-head:has(> .prl-legend-head__standfirst) > :last-child:not(.prl-legend-head__standfirst) {
+    margin-block-end: var(--prl-space-0);
+  }
+
+  /**
+   * Scoped to the same `:has(> …)` as the three rules above it, and for the same reason they are.
+   *
+   * Unscoped, this selector placed EVERY standfirst in column two — including the one on
+   * `/legends/[profileId]`, which is not a child of `.prl-legend-head` at all but of
+   * `.prl-legend-identity__names`, a single-column grid whose gap is `--prl-space-2`. Asking for
+   * `grid-column: 2` there does not fail: it opens an implicit second track and drops the tagline
+   * into it, 4px from the end of the `h1`. Measured in Chrome at 900, 1024, 1280 and 1440: the page
+   * read `Adaptive Exploitative ProReads what you do and attacks it`, a 44px display line and a 20px
+   * paragraph sharing a baseline with four pixels between them.
+   *
+   * The guard has to be on the placement as well as on the container, because the container rule not
+   * matching is exactly what leaves the placement with a grid that has no column two to place into.
+   */
+  .prl-legend-head:has(> .prl-legend-head__standfirst) > .prl-legend-head__standfirst {
+    grid-column: 2;
+    grid-row: 1 / span 6;
+    align-self: start;
+  }
+}
+
+.prl-legend-head__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4);
+}
+
+/** Sibling-route links. Never the only way out of a page — the nav in the shell is the other. */
+.prl-legend-nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4) var(--prl-space-7);
+}
+
+/**
+ * Standalone links get a real target.
+ *
+ * WCAG 2.2's 2.5.8 exempts a link inline in a sentence, and these are not that: they are a row of
+ * destinations and a card's own title, which is exactly the case the exception does not cover.
+ * Measured at 24px and 18px tall before this rule. `inline-flex` with a `min-height` grows the hit
+ * area without changing where the text sits or how the row wraps.
+ */
+.prl-legend-nav a,
+.prl-legend-identity__archetype a,
+.prl-legend-contrast__title a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--prl-target-min);
+}
+
+.prl-legend-section {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-7);
+}
+
+/* ==========================================================================================
+   2. THE DISCLAIMERS
+   ==========================================================================================
+   Rendered inline, in the body, at `--prl-type-body-sm`, never collapsed and never behind an
+   icon. The panel is INSET rather than transparent so the block reads as part of the card's
+   content rather than as a footnote under it, and it takes `--prl-line-strong` on its leading
+   edge because that edge is carrying meaning: it marks where the framing starts.
+
+   There is no `max-height`, no line clamp and no `overflow: hidden` anywhere in this block. A
+   clamp would be a way to hide most of a disclaimer while appearing to render it.
+   ========================================================================================== */
+
+.prl-legend-disclaimers {
+  display: grid;
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-5) var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-inline-start: var(--prl-space-1) solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-legend-disclaimers__title {
+  color: var(--prl-text-muted);
+}
+
+.prl-legend-disclaimers__list {
+  display: grid;
+  gap: var(--prl-space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-legend-disclaimers__item {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  /* One step up from `body-sm`. The design system's own note on the reading scale says it plainly:
+     nothing in this product is fine print, and the framing on an opponent profile is the sentence a
+     reader most needs to actually read. It sits one step below the surrounding body text because it
+     is an aside, not because it is less important — and it is never smaller than that. */
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+/**
+ * The page-level copy of the block, above the grid, in a container the full width of the page.
+ *
+ * `--prl-measure` caps a paragraph at about 75 characters, which is right, and inside a 1360px inset
+ * panel it left 775px of that panel empty — a box four fifths as wide as the screen with text in the
+ * left fifth reads as a layout that failed rather than as a considered aside. Two columns of capped
+ * prose fill it honestly. This is a layout change and nothing else: the same entries, in full, in the
+ * same order, at the same size.
+ *
+ * Only above 900px. `auto-fit` was rejected here — with the column floor this file already defines it
+ * would split into two 270px columns at a 600px viewport, which is the same mistake in the other
+ * direction.
+ */
+@media (min-width: 900px) {
+  .prl-legend-disclaimers--wide .prl-legend-disclaimers__list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--prl-space-5) var(--prl-space-10);
+  }
+}
+
+/* ==========================================================================================
+   3. THE SIGIL
+   ==========================================================================================
+   A deterministic geometric mark derived from the profile id. There is no portrait, no likeness
+   and no photograph anywhere in this feature, and this is what stands in for one — which is also
+   the honest representation, because a profile IS a set of numbers.
+
+   Stroke widths are unitless SVG geometry, matching `.prl-radar__ring` and `.prl-radar__shape`
+   in `components.css`. `vector-effect="non-scaling-stroke"` in the component keeps a hairline one
+   hairline wide at any rendered size.
+   ========================================================================================== */
+
+.prl-legend-sigil {
+  flex: 0 0 auto;
+  inline-size: var(--prl-space-11);
+  block-size: var(--prl-space-11);
+  transition: transform var(--prl-dur-quick) var(--prl-ease-hover);
+}
+
+.prl-legend-sigil--lg {
+  inline-size: var(--prl-space-13);
+  block-size: var(--prl-space-13);
+}
+
+.prl-legend-card:hover .prl-legend-sigil,
+.prl-legend-card:focus-within .prl-legend-sigil {
+  transform: rotate(var(--prl-legend-sigil-turn));
+}
+
+/** The frame is decoration, so `--prl-line` is allowed. The layers carry the identity. */
+.prl-legend-sigil__frame {
+  fill: none;
+  stroke: var(--prl-line);
+  stroke-width: 1;
+}
+
+.prl-legend-sigil__layer {
+  fill: none;
+  stroke: var(--prl-accent-edge);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+/** Each nested layer sits back a step, so the mark reads as depth without a shadow. */
+.prl-legend-sigil__layer[data-layer="1"] {
+  stroke: var(--prl-text-muted);
+  stroke-width: 1;
+}
+
+.prl-legend-sigil__layer[data-layer="2"] {
+  stroke: var(--prl-line-strong);
+  stroke-width: 1;
+}
+
+.prl-legend-sigil__core {
+  fill: var(--prl-accent-edge);
+  stroke: none;
+}
+
+/* ==========================================================================================
+   4. IDENTITY BLOCK
+   ==========================================================================================
+   The archetype name is the heading. The attributed name sits BENEATH it at label size, always
+   suffixed as a modelled style. That ordering is the guardrail, so it is expressed as document
+   order and not as a visual trick: there is no `order`, no `flex-direction: column-reverse` and
+   no absolute positioning in this block that could put the person's name on top.
+   ========================================================================================== */
+
+.prl-legend-identity {
+  display: flex;
+  align-items: start;
+  gap: var(--prl-space-6);
+}
+
+.prl-legend-identity__names {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-2);
+  min-width: 0;
+}
+
+.prl-legend-identity__archetype {
+  margin: 0;
+}
+
+.prl-legend-identity__attributed {
+  color: var(--prl-text-muted);
+}
+
+.prl-legend-identity__tagline {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+/* ==========================================================================================
+   5. THE CARD GRID
+   ==========================================================================================
+   Portrait panels. `auto-fit` with a `minmax` floor rather than a breakpoint, so the grid reflows
+   at whatever width the content stops fitting — and `min-width: 0` on the cell, because a grid
+   item defaults to `min-content` width and a card containing a nowrap figure would otherwise push
+   the page sideways.
+   ========================================================================================== */
+
+.prl-legend-grid {
+  display: grid;
+  gap: var(--prl-space-8);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-card-min)), 1fr));
+}
+
+.prl-legend-grid > * {
+  min-width: 0;
+}
+
+.prl-legend-card {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-6);
+  padding: var(--prl-space-7);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+/**
+ * The hover state: the hairline goes accent.
+ *
+ * No transition on the colour — the design system permits `transform` and `opacity` only, and a
+ * border that fades is also a border whose state is ambiguous for 180ms. `:focus-within` is
+ * paired with `:hover` so a keyboard reader arriving at the card's link gets the same cue.
+ */
+.prl-legend-card:hover,
+.prl-legend-card:focus-within {
+  border-color: var(--prl-accent-edge);
+}
+
+.prl-legend-card__metrics {
+  display: grid;
+  gap: var(--prl-space-6);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-column-min)), 1fr));
+  padding-block: var(--prl-space-5);
+  border-block: var(--prl-hairline);
+}
+
+/**
+ * The radar is square and sized by its container; the component sets geometry and nothing else.
+ *
+ * The cap matters more than it looks: sixteen numbered axis markers are drawn inside a 240-unit
+ * viewBox, so the rendered size IS the label size. Measured at 128px the markers came out at 5px and
+ * the polygon was a smudge — information removed to fit, which is the one thing the layout rules
+ * forbid. `--lg` is for a page that has the profile to itself.
+ */
+.prl-legend-radar {
+  max-inline-size: var(--prl-legend-column-min);
+  margin-inline: auto;
+}
+
+/**
+ * The one place a radar has a whole page to itself, rather than a card column.
+ *
+ * `margin-inline: auto` is right in a card — the chart is the card's centrepiece and the column is
+ * barely wider than it. On `/legends/[profileId]` the same rule floated a 384px chart in the middle
+ * of a 1360px page while every heading, figure and paragraph around it started at the left edge, so
+ * it read as an image that had lost its caption. Aligned to the same edge as the prose it belongs to,
+ * it reads as part of the page.
+ */
+.prl-legend-radar--lg {
+  max-inline-size: var(--prl-legend-card-min);
+  margin-inline: 0;
+}
+
+.prl-legend-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4);
+}
+
+/* ==========================================================================================
+   6. TRAIT BARS
+   ==========================================================================================
+   Sixteen labelled rows. Three things make this readable rather than decorative:
+
+     1. **The value is printed as text beside every bar.** A length is not an accessible encoding
+        on its own, and a bar with no number is a shape.
+     2. **The plain-language description is always visible**, because it is what stops a high
+        value reading as "better". There is no ranking, no star and no score in this component,
+        and adding one would undo the property the wire text was written to have.
+     3. **The bar itself is `aria-hidden`.** It repeats the number next to it, and announcing both
+        would read every axis twice.
+
+   The share arrives as a percentage on `--prl-legend-trait-share`. It is a static width, not an
+   animated one: nothing here transitions a `width`.
+   ========================================================================================== */
+
+.prl-legend-traits {
+  display: grid;
+  gap: var(--prl-space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-legend-traits__row {
+  display: grid;
+  gap: var(--prl-space-3);
+  margin: 0;
+  padding-block-end: var(--prl-space-6);
+  border-block-end: var(--prl-hairline);
+}
+
+.prl-legend-traits__row:last-child {
+  padding-block-end: 0;
+  border-block-end: 0;
+}
+
+.prl-legend-traits__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--prl-space-3) var(--prl-space-4);
+}
+
+.prl-legend-traits__label {
+  flex: 1 1 auto;
+  color: var(--prl-text);
+  font-size: var(--prl-type-body);
+  font-weight: var(--prl-weight-medium);
+}
+
+.prl-legend-traits__value {
+  flex: 0 0 auto;
+  color: var(--prl-text);
+  font-size: var(--prl-type-metric-sm);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  letter-spacing: var(--prl-tracking-metric);
+}
+
+/**
+ * The track. A meaningful border, because the track's edge is what tells a reader where 1.0 is —
+ * `--prl-line-subtle` would put the scale's boundary below 1.5:1 and effectively remove it.
+ */
+.prl-legend-traits__track {
+  display: flex;
+  overflow: hidden;
+  block-size: var(--prl-space-4);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-legend-traits__fill {
+  flex: 0 0 var(--prl-legend-trait-share, 0%);
+  min-inline-size: var(--prl-space-1);
+}
+
+.prl-legend-traits__meaning {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+/* ==========================================================================================
+   7. ACTION DISTRIBUTION
+   ==========================================================================================
+   The probability the policy assigned to each action BEFORE sampling. It is here because these
+   styles are probabilistic rather than scripted, and a learner should be able to see that
+   directly instead of being told it.
+
+   The bar reuses `.prl-bar` / `.prl-bar__segment` and the `[data-series]` colour-plus-pattern
+   pairs from `components.css`, so each action keeps the same colour AND the same fill pattern in
+   every column of the compare page. Every segment's probability is also printed in the legend
+   beneath: the bar is the secondary encoding, never the only one.
+   ========================================================================================== */
+
+.prl-legend-dist {
+  display: grid;
+  gap: var(--prl-space-4);
+}
+
+.prl-legend-dist .prl-bar {
+  min-height: var(--prl-space-5);
+}
+
+.prl-legend-dist__legend {
+  display: grid;
+  gap: var(--prl-space-3);
+  margin: 0;
+}
+
+.prl-legend-dist__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--prl-space-4);
+}
+
+.prl-legend-dist__swatch {
+  flex: 0 0 auto;
+  align-self: center;
+  inline-size: var(--prl-space-5);
+  block-size: var(--prl-space-5);
+  border: 1px solid var(--prl-text);
+  border-radius: var(--prl-radius-1);
+}
+
+.prl-legend-dist__action {
+  flex: 1 1 auto;
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-legend-dist__probability {
+  flex: 0 0 auto;
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.prl-legend-dist__size {
+  flex: 0 0 100%;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+}
+
+/** The modal action, marked with a word as well as a position in the list. */
+.prl-legend-dist__row[data-modal="true"] .prl-legend-dist__action {
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-legend-dist__most-likely {
+  color: var(--prl-text-muted);
+  font-weight: var(--prl-weight-regular);
+}
+
+/* ==========================================================================================
+   8. DIFFICULTY PICKER
+   ==========================================================================================
+   A plain GET form with radio inputs and a visible submit. It works with JavaScript disabled and
+   it does not navigate on change: a control that moves the page the instant a keyboard user
+   arrow-keys past an option is WCAG 3.2.2, and it also makes the third option unreachable by
+   keyboard without visiting the first two.
+
+   Each option states whether the Coach is available at that setting, because that is the part of
+   the choice a learner actually feels.
+   ========================================================================================== */
+
+.prl-legend-difficulty {
+  display: grid;
+  gap: var(--prl-space-6);
+  padding: var(--prl-space-7);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-raised);
+}
+
+.prl-legend-difficulty__legend {
+  padding: 0;
+  color: var(--prl-text-muted);
+}
+
+.prl-legend-difficulty__options {
+  display: grid;
+  gap: var(--prl-space-5);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-option-min)), 1fr));
+  margin-block-start: var(--prl-space-5);
+}
+
+/**
+ * One option. The whole block is the label, so the target is the block rather than the 16px dot —
+ * comfortably past the 44px floor `--prl-target-min` sets.
+ */
+.prl-legend-difficulty__option {
+  display: grid;
+  gap: var(--prl-space-3);
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  min-height: var(--prl-target-min);
+  padding: var(--prl-space-5);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-panel);
+  cursor: pointer;
+}
+
+/** The selected state is an accent border AND the radio's own checked dot AND the word in the
+    label. Never the border alone: a tint or an edge disappears entirely in forced-colors mode. */
+.prl-legend-difficulty__option:has(input:checked) {
+  border-color: var(--prl-accent-edge);
+}
+
+/**
+ * The dot itself is small, and that is correct.
+ *
+ * `base.css` gives every `input` a 44px `min-height`, which is right for a text field and wrong for
+ * a radio: it would stretch the dot's box and pull it out of line with the label beside it. The
+ * TARGET is the `<label>`, which wraps the whole option block — measured at 252x222 here, and 44px
+ * high for the checkbox variant. That is the pattern WCAG 2.5.8 is satisfied by: a native control's
+ * label extends its activation area, so the label is the thing that has to be big.
+ */
+.prl-legend-difficulty__control {
+  grid-row: 1 / span 2;
+  align-self: center;
+  min-height: 0;
+  margin: 0;
+}
+
+/**
+ * `min-width: 0` on all three text cells, and a wrapping chip.
+ *
+ * Both are the same bug, found by measuring: a grid item's `min-width` is `auto`, so a track cannot
+ * shrink below its content's min-content width — and `.prl-chip` is `white-space: nowrap`, which
+ * makes "Coach available while you play" a 210px indivisible word. In a 164px option that pushed the
+ * option out of its own track and gave the whole page a horizontal scrollbar, which is the one
+ * layout failure the design system treats as non-negotiable.
+ */
+.prl-legend-difficulty__label,
+.prl-legend-difficulty__description,
+.prl-legend-difficulty__coach {
+  min-width: 0;
+}
+
+.prl-legend-difficulty__coach .prl-chip {
+  white-space: normal;
+}
+
+.prl-legend-difficulty__label {
+  color: var(--prl-text);
+  font-size: var(--prl-type-body);
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-legend-difficulty__description {
+  grid-column: 2;
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-legend-difficulty__coach {
+  grid-column: 2;
+}
+
+.prl-legend-difficulty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-5);
+}
+
+.prl-legend-difficulty__note {
+  margin: 0;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+}
+
+/* ==========================================================================================
+   9. THE PROFILE PICKER ON THE COMPARE PAGE
+   ========================================================================================== */
+
+.prl-legend-picker {
+  display: grid;
+  gap: var(--prl-space-5);
+}
+
+.prl-legend-picker__options {
+  display: grid;
+  gap: var(--prl-space-4);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-option-min)), 1fr));
+}
+
+.prl-legend-picker__option {
+  display: flex;
+  align-items: center;
+  gap: var(--prl-space-4);
+  min-height: var(--prl-target-min);
+  padding-inline: var(--prl-space-5);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-panel);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  cursor: pointer;
+}
+
+.prl-legend-picker__option:has(input:checked) {
+  border-color: var(--prl-accent-edge);
+}
+
+.prl-legend-picker__control {
+  min-height: 0;
+  margin: 0;
+}
+
+/* ==========================================================================================
+   10. THE POST-HAND COMPARISON
+   ==========================================================================================
+   THE ONE RULE THIS SECTION EXISTS FOR: the chip result and the decision quality are two
+   separate panels, in separate grid areas, with a full-width statement between them saying that
+   neither explains the other. They are never in one panel, never in one metric row, and never
+   adjacent figures a reader could take as a cause and an effect.
+
+   `grid-template-areas` is used rather than source order alone so the separation survives a
+   narrow viewport: at every width the note sits BETWEEN the two panels rather than under both.
+   ========================================================================================== */
+
+.prl-legend-outcome {
+  display: grid;
+  gap: var(--prl-space-7);
+  grid-template-areas:
+    "result"
+    "wall"
+    "quality";
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 900px) {
+  .prl-legend-outcome {
+    grid-template-areas: "result wall quality";
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+}
+
+.prl-legend-outcome__result {
+  grid-area: result;
+}
+
+.prl-legend-outcome__quality {
+  grid-area: quality;
+}
+
+/**
+ * The wall between them.
+ *
+ * A hairline plus a sentence, not a gap. A gap is a layout accident; a labelled divider is a
+ * claim, and the claim is the teaching point: one of these figures is not evidence about the
+ * other. On a narrow viewport it becomes a horizontal rule with the same sentence beside it.
+ */
+.prl-legend-outcome__wall {
+  display: grid;
+  align-content: center;
+  gap: var(--prl-space-4);
+  grid-area: wall;
+  max-inline-size: var(--prl-legend-column-min);
+  padding-block: var(--prl-space-5);
+  border-block-start: var(--prl-hairline-strong);
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+}
+
+@media (min-width: 900px) {
+  .prl-legend-outcome__wall {
+    padding-block: 0;
+    padding-inline: var(--prl-space-7);
+    border-block-start: 0;
+    border-inline-start: var(--prl-hairline-strong);
+  }
+}
+
+.prl-legend-outcome__wall p {
+  margin: 0;
+  max-width: none;
+}
+
+/**
+ * The review's own column.
+ *
+ * A stack rather than `.prl-legend-page`, because the route that hosts it already owns the page
+ * width and the section rhythm. Nesting two page grids would double every gap.
+ */
+.prl-legend-review {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-9);
+}
+
+.prl-legend-decisions {
+  display: grid;
+  gap: var(--prl-space-9);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-legend-decision {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-6);
+  padding: var(--prl-space-7);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+/** A decision that was the learner's own is marked with an accent leading edge and a word. */
+.prl-legend-decision[data-actor="you"] {
+  border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
+}
+
+.prl-legend-decision[data-actor="model"] {
+  border-inline-start: var(--prl-space-1) solid var(--prl-line-strong);
+}
+
+.prl-legend-decision__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--prl-space-4) var(--prl-space-6);
+  padding-block-end: var(--prl-space-5);
+  border-block-end: var(--prl-hairline);
+}
+
+.prl-legend-decision__title {
+  margin: 0;
+  flex: 1 1 auto;
+}
+
+/** Two actions, side by side: what the learner did and what the model did. */
+.prl-legend-actions {
+  display: grid;
+  gap: var(--prl-space-6);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-column-min)), 1fr));
+}
+
+.prl-legend-action {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-5);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-legend-action__value {
+  color: var(--prl-text);
+  font-size: var(--prl-type-metric-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-legend-maths {
+  display: grid;
+  gap: var(--prl-space-7);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-column-min)), 1fr));
+}
+
+.prl-legend-table-wrap {
+  overflow-x: auto;
+}
+
+.prl-legend-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-legend-table caption {
+  margin-block-end: var(--prl-space-4);
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  letter-spacing: var(--prl-tracking-label);
+  text-align: start;
+  text-transform: uppercase;
+}
+
+/** The header rule is a chart axis in table form: it separates data from labels, so it is
+    `--prl-line-strong` rather than a decorative hairline. */
+.prl-legend-table th,
+.prl-legend-table td {
+  padding: var(--prl-space-3) var(--prl-space-5);
+  border-block-end: var(--prl-hairline);
+  text-align: start;
+  vertical-align: top;
+}
+
+.prl-legend-table thead th {
+  border-block-end: 1px solid var(--prl-line-strong);
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.prl-legend-table__figure {
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+  white-space: nowrap;
+}
+
+/* ==========================================================================================
+   11. THE COMPARE COLUMNS
+   ==========================================================================================
+   One shared maths panel, then a column per profile. The columns are a grid rather than a
+   horizontal scroller: information is re-flowed to fit, never removed to fit.
+   ========================================================================================== */
+
+.prl-legend-columns {
+  display: grid;
+  gap: var(--prl-space-8);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-card-min)), 1fr));
+}
+
+.prl-legend-columns > * {
+  min-width: 0;
+}
+
+.prl-legend-column {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-6);
+  padding: var(--prl-space-7);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+/* ==========================================================================================
+   12. OBSERVED VERSUS DECLARED, AND THE CONTRAST SECTION
+   ========================================================================================== */
+
+.prl-legend-observed__note {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-legend-contrast {
+  display: grid;
+  gap: var(--prl-space-8);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-column-min)), 1fr));
+}
+
+.prl-legend-contrast__group {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-legend-contrast__title {
+  margin: 0;
+  font-size: var(--prl-type-body);
+}
+
+/**
+ * A two-column description list: axis on the left, signed difference on the right.
+ *
+ * `dt` and `dd` are direct children — no wrapper `div`s. A `div` inside a `dl` is legal HTML, but
+ * the pairing is what carries the meaning here, and putting it in the grid rather than in an extra
+ * element keeps the markup exactly one list of terms and definitions.
+ */
+.prl-legend-contrast__list {
+  display: grid;
+  align-items: baseline;
+  gap: var(--prl-space-4) var(--prl-space-5);
+  grid-template-columns: 1fr auto;
+  margin: 0;
+}
+
+.prl-legend-contrast__label {
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+/**
+ * The delta. Its sign is in the text and a direction word is in the accessible name, so the
+ * colour is the third cue rather than the only one.
+ */
+.prl-legend-contrast__delta {
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-legend-contrast__delta[data-direction="higher"] {
+  color: var(--prl-accent-text);
+}
+
+.prl-legend-contrast__delta[data-direction="lower"] {
+  color: var(--prl-text-muted);
+}
+
+/* ==========================================================================================
+   13. THE RADAR'S SHIM, NOW DELETED
+   ==========================================================================================
+
+   This section used to carry four rules — `.prl-radar` clipping, `.prl-radar__svg`,
+   `.prl-radar__shape`, `.prl-radar__empty` — because `RadarChart` emitted those class names and
+   `components.css` styled `.prl-radar__polygon`, which matched nothing. With no `fill` declared the
+   value polygon painted the SVG default of opaque black, and the visually-hidden data `<table>` gave
+   the document a horizontal scrollbar.
+
+   Both are now fixed at the source, in `packages/ui/src/styles/components.css` section 10, where they
+   belong: a `@prl/ui` component must not depend on one route's stylesheet to draw itself. The rules
+   are gone from here rather than left as a harmless duplicate, because a second copy of a declaration
+   is a second thing to keep in step.
+   ========================================================================================== */
+
+/* ==========================================================================================
+   14. FORCED COLORS
+   ==========================================================================================
+   Background tints are thrown away in forced-colors mode, so every state above that could be
+   read as a tint is restated as a border. The accent edges become `Highlight`, which is the one
+   colour the mode guarantees is distinguishable from `CanvasText`.
+   ========================================================================================== */
+
+@media (forced-colors: active) {
+  .prl-legend-card:hover,
+  .prl-legend-card:focus-within,
+  .prl-legend-difficulty__option:has(input:checked),
+  .prl-legend-picker__option:has(input:checked),
+  .prl-legend-decision[data-actor="you"] {
+    border-color: Highlight;
+  }
+
+  .prl-legend-sigil__layer,
+  .prl-legend-sigil__frame {
+    stroke: CanvasText;
+  }
+
+  .prl-legend-sigil__core {
+    fill: CanvasText;
+  }
+}

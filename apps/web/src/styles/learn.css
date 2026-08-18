@@ -1,0 +1,1306 @@
+/**
+ * The Learn section: every class the three learn routes and their seven components use.
+ *
+ * ## Why this file rather than rules in `globals.css`
+ *
+ * `globals.css` is the app shell, edited by whoever owns the header and the frame. A feature that
+ * put its patterns there would be a merge conflict waiting to happen. Everything below is
+ * namespaced `.prl-learn-*` (or `.prl-term-*`, for the glossary popover that appears inside lesson
+ * prose) and imported by `app/learn/layout.tsx`, so an edit here cannot reach another feature.
+ *
+ * ## The rules this file is written against
+ *
+ *  - **Every value is a `--prl-*` token.** No hex, no px, no ms, no bezier literal. The three
+ *    exceptions are called out where they appear: `1px` on hairlines drawn as borders, the four
+ *    media-query breakpoints (see below), and two feature-local custom properties in section 0.
+ *  - **No shadows.** Depth is one step on the surface ramp plus a hairline. There is no
+ *    `box-shadow` anywhere in the app — the focus ring is an `outline` (`base.css`).
+ *  - **A border that carries meaning uses `--prl-line-strong` or the accent.** `--prl-line-subtle`
+ *    measures 1.44:1 and is decoration only, so it never marks a state.
+ *  - **Only `transform` and `opacity` animate.** Nothing here transitions a width, a height or a
+ *    colour, and there is no blur anywhere.
+ *  - **Nothing is distinguished by colour alone.** The active contents link takes an accent bar
+ *    AND `aria-current`; a term's open state takes an underline AND `aria-expanded`; the outs
+ *    swatches take a fill pattern AND a word (those live in `components.css`).
+ *
+ * ## The breakpoint literals
+ *
+ * `600px`, `900px` and `1280px` are written as numbers because `var()` is invalid inside a media
+ * feature — there is no way to express a breakpoint as a token. These are the design system's own
+ * three content breakpoints (§10), the same ones `components.css`, `home.css` and `legends.css`
+ * use; no new breakpoint is introduced here.
+ */
+
+/* ==========================================================================================
+   0. FEATURE-LOCAL VALUES
+   ==========================================================================================
+   Two custom properties scoped to this feature rather than added to `tokens.css`. Neither is
+   systemic — nothing else in the app needs a contents-rail width — and the design system says to
+   add a token only when it genuinely is one. Both are composed from existing spacing steps rather
+   than being new numbers, which is the same thing `.prl-candidates__derivation` does in
+   `components.css`.
+   ========================================================================================== */
+
+.prl-learn-lesson {
+  /* 14rem: the narrowest a contents rail can be and still fit two words of a heading per line. */
+  --prl-learn-rail: calc(var(--prl-space-16) + var(--prl-space-12));
+}
+
+.prl-learn-page,
+.prl-learn-lesson {
+  /* The offset a sticky element and a scrolled-to heading share. Matches
+     `scroll-padding-block-start` in base.css, which is what `LessonContents` reads at runtime. */
+  --prl-learn-sticky-top: var(--prl-space-13);
+
+  /* ------------------------------------------------------------------------------------
+     THE READING MEASURE, NARROWED FOR THIS SECTION.
+     `--prl-measure` is the design token and this is the token, given a tighter value on the two
+     routes in the app that are actually long-form reading. Every consumer of it — `base.css`'s
+     bare `<p>`, `.prl-panel__lede`, `.prl-note`, and the dozen rules in `components.css` — uses it
+     as a `max-width` on a text column and nothing else, so narrowing it here narrows exactly the
+     columns it should and cannot reach layout.
+
+     WHY, measured rather than assumed. `--prl-measure` is `60ch`, and `ch` is the advance of "0",
+     which in this stack is much wider than the average letter — so `60ch` has never meant 60
+     characters. Walking a Range character by character down a rendered lesson paragraph at 1440px
+     and recording where each line actually broke gave 80, 80 and 88 characters. Past roughly 75 the
+     eye starts losing its place on the return sweep, which is the whole reason the rule exists.
+
+     `52ch` measures out at 69-72 characters, and because the ratio between `ch` and the average
+     character is a property of the typeface rather than of the size, one value holds at the 17px
+     body, the 20px lede and the 15px caption alike.
+
+     This belongs in `tokens.css` — the same arithmetic applies to every reading column in the app.
+     It is scoped here because that file is `packages/ui`, which this change does not own.
+     ------------------------------------------------------------------------------------ */
+  --prl-measure: 52ch;
+}
+
+/* ==========================================================================================
+   0a. REPAIRS TO `@prl/ui`
+   ==========================================================================================
+   `Panel` publishes its header as `.prl-panel__header` / `__heading` / `__index` / `__eyebrow` /
+   `__actions`, and `components.css` styles `.prl-panel__head` instead — so a panel with a title
+   currently renders its header unstyled everywhere in the app. `Panel.tsx` also publishes its
+   surface tone as `data-tone`, while the stylesheet selects `.prl-panel--inset`.
+
+   REPAIR: the rules below restate the header treatment `.prl-panel__head` already defines, against
+   the class the component actually emits. Delete this whole section once `packages/ui` reconciles
+   the two — the fix belongs there, in one place, and it is not made here because that file is being
+   edited by several people at once. Call sites in this feature pass `prl-panel--inset` as a
+   `className` for the same reason.
+
+   No new values: every declaration below is the same token `.prl-panel__head` uses.
+   ========================================================================================== */
+
+.prl-panel__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--prl-space-3) var(--prl-space-6);
+  padding-block-end: var(--prl-space-5);
+  border-block-end: var(--prl-hairline);
+}
+
+.prl-panel__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--prl-space-3) var(--prl-space-5);
+  min-width: 0;
+}
+
+.prl-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4);
+}
+
+/**
+ * REPAIR: `AssumptionList` draws its own `01 02 03` index inside each `<li>`, and
+ * `.prl-assumptions__list` in `components.css` leaves the list's default marker on — so every
+ * assumption currently renders with a bullet AND a number, which is the same information twice
+ * and reads as a mistake. The list stays a `<ul>` deliberately (an `<ol>` would claim these have
+ * an order that matters), so the marker is what goes.
+ *
+ * Delete once `components.css` sets `list-style: none` on `.prl-assumptions__list`.
+ */
+.prl-assumptions__list {
+  padding-inline-start: 0;
+  list-style: none;
+}
+
+.prl-assumptions__item {
+  display: grid;
+  gap: var(--prl-space-4);
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+}
+
+/* ==========================================================================================
+   1. PAGE FRAME
+   ==========================================================================================
+   Shared by the curriculum index and the glossary. The lesson has its own frame in section 4
+   because it carries a rail.
+   ========================================================================================== */
+
+.prl-learn-page,
+.prl-learn-lesson {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-11);
+  width: var(--prl-container);
+  margin-inline: auto;
+  padding-block: var(--prl-space-11) var(--prl-space-13);
+}
+
+.prl-learn-page__head,
+.prl-learn-lesson__head {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-5);
+}
+
+.prl-learn-page__eyebrow,
+.prl-learn-lesson__eyebrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4);
+  margin: 0;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+}
+
+/**
+ * The page's opening paragraph, at the token that exists for one: `--prl-type-body-lg`.
+ *
+ * `max-width` is the measure, and because `ch` resolves against this element's own 20px rather than
+ * the 17px it used to inherit, the column grows with the type instead of squeezing the same 60
+ * characters into a taller block.
+ */
+.prl-learn-page__lead,
+.prl-learn-lesson__summary {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-lg);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-learn-page__figures {
+  margin-block-start: var(--prl-space-5);
+}
+
+/* ==========================================================================================
+   2. CURRICULUM INDEX
+   ========================================================================================== */
+
+.prl-learn-start__summary {
+  margin: 0;
+  max-width: var(--prl-measure);
+}
+
+/**
+ * A panel body is a grid, so a lone button stretches to the full column.
+ *
+ * `justify-items: start` on the body rather than a width on the button: the button should be as
+ * wide as its label, and a full-bleed accent bar is exactly the "one CTA per view" restraint the
+ * design system asks for being spent on emphasis it does not need.
+ */
+.prl-learn-start .prl-panel__body,
+.prl-learn-glossary-cta .prl-panel__body,
+.prl-learn-terms .prl-panel__body {
+  justify-items: start;
+}
+
+.prl-learn-group {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-7);
+}
+
+.prl-learn-group__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--prl-space-3) var(--prl-space-6);
+  padding-block-end: var(--prl-space-4);
+  border-block-end: 1px solid var(--prl-line);
+}
+
+.prl-learn-group__title {
+  margin: 0;
+  font-size: var(--prl-type-display-3);
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-learn-group__meta {
+  margin: 0;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-learn-group__entries {
+  display: grid;
+  gap: var(--prl-space-5);
+}
+
+/**
+ * A lesson card.
+ *
+ * The number sits in its own column at every width, because a number that reflows above the title
+ * on a phone stops reading as an index and starts reading as a stray digit.
+ */
+.prl-learn-entry {
+  display: grid;
+  gap: var(--prl-space-4) var(--prl-space-6);
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+/**
+ * The suggested next lesson.
+ *
+ * An accent border on the inline start edge, and the card also carries a "start here" chip in the
+ * markup — the border is the second cue, never the only one.
+ */
+.prl-learn-entry[data-start="true"] {
+  border-color: var(--prl-accent-edge);
+  border-inline-start-width: var(--prl-space-1);
+}
+
+.prl-learn-entry__index {
+  padding-block-start: var(--prl-space-1);
+  color: var(--prl-text-faint);
+}
+
+.prl-learn-entry[data-start="true"] .prl-learn-entry__index {
+  color: var(--prl-accent-text);
+}
+
+.prl-learn-entry__body {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-4);
+  min-width: 0;
+}
+
+.prl-learn-entry__title {
+  margin: 0;
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-snug);
+}
+
+/**
+ * The whole title is the link, and it is underlined.
+ *
+ * `base.css` already underlines links; this only removes the underline offset default so a
+ * two-line title's rules do not collide with the descenders above them.
+ */
+.prl-learn-entry__link {
+  color: var(--prl-text);
+  text-underline-offset: var(--prl-space-1);
+}
+
+.prl-learn-entry__link:hover {
+  color: var(--prl-accent-text);
+}
+
+/**
+ * The sentence a reader actually chooses a lesson from, so it is set at the reading size rather
+ * than at the caption size. Seventeen of these are the substance of the curriculum page; there is
+ * nothing secondary about them.
+ */
+.prl-learn-entry__summary {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-learn-entry__prereq,
+.prl-learn-entry__pending {
+  display: block;
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-learn-entry__prereq .prl-label {
+  margin-inline-end: var(--prl-space-3);
+}
+
+.prl-learn-entry__prereq-note {
+  color: var(--prl-text-faint);
+}
+
+.prl-learn-entry__pending {
+  padding: var(--prl-space-4) var(--prl-space-5);
+  border: 1px solid var(--prl-caution);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+  color: var(--prl-text);
+}
+
+.prl-learn-terms__list,
+.prl-learn-glossary-cta ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-3) var(--prl-space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ==========================================================================================
+   3. ONBOARDING
+   ==========================================================================================
+   A panel, not an overlay. Nothing here dims the page, traps focus, or has to be cleared before
+   the curriculum can be read.
+   ========================================================================================== */
+
+.prl-learn-onboarding {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-8);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-raised);
+}
+
+.prl-learn-onboarding__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--prl-space-4);
+  padding-block-end: var(--prl-space-4);
+  border-block-end: var(--prl-hairline);
+}
+
+.prl-learn-onboarding__steps {
+  display: flex;
+  gap: var(--prl-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-learn-onboarding__step {
+  margin: 0;
+}
+
+/**
+ * A step dot that is a number, not a dot.
+ *
+ * 44px minimum target, because it is a real control. The current step is marked by an accent
+ * border and `aria-current="step"`; the number itself is always readable, so the marker is the
+ * second cue.
+ */
+.prl-learn-onboarding__step-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--prl-target-min);
+  min-height: var(--prl-target-min);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: transparent;
+  color: var(--prl-text-muted);
+  cursor: pointer;
+}
+
+.prl-learn-onboarding__step-btn:hover {
+  border-color: var(--prl-accent-edge);
+  color: var(--prl-accent-text);
+}
+
+.prl-learn-onboarding__step-btn[aria-current="step"] {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-active);
+  color: var(--prl-text);
+}
+
+.prl-learn-onboarding__title {
+  margin: 0;
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-learn-onboarding__body {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-learn-onboarding__start {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--prl-space-4);
+  font-weight: var(--prl-weight-semibold);
+}
+
+/* ==========================================================================================
+   4. THE LESSON
+   ==========================================================================================
+   Two columns from 1280px: the contents rail, then the reading column. DOM order matches visual
+   order — rail first — so nothing has to be re-ordered with `order`, which would put the focus
+   sequence out of step with the page (WCAG 1.3.2).
+   ========================================================================================== */
+
+.prl-learn-lesson__prereq {
+  display: block;
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-learn-lesson__prereq .prl-label {
+  margin-inline-end: var(--prl-space-3);
+}
+
+.prl-learn-lesson__back {
+  color: var(--prl-text-muted);
+}
+
+.prl-learn-lesson__layout {
+  display: grid;
+  align-items: start;
+  gap: var(--prl-space-9);
+}
+
+.prl-learn-lesson__body {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-9);
+  min-width: 0;
+}
+
+.prl-learn-lesson__blocks {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-7);
+  min-width: 0;
+}
+
+/**
+ * A section heading, with its index in the gutter at wide widths.
+ *
+ * `--prl-space-11` of space above it and `--prl-space-2` below: a heading belongs to the text that
+ * follows it, and the asymmetry is what makes a twelve-minute read scannable.
+ */
+.prl-learn-lesson__heading {
+  display: grid;
+  gap: var(--prl-space-3);
+  margin: 0;
+  padding-block-start: var(--prl-space-11);
+  max-width: var(--prl-measure);
+  font-size: var(--prl-type-display-3);
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-snug);
+  scroll-margin-block-start: var(--prl-learn-sticky-top);
+}
+
+.prl-learn-lesson__heading:first-child {
+  padding-block-start: 0;
+}
+
+.prl-learn-lesson__heading-index {
+  color: var(--prl-text-faint);
+}
+
+/**
+ * Lesson prose.
+ *
+ * `position: relative` is load-bearing rather than cosmetic: it makes the paragraph the containing
+ * block for a glossary popover, which is how the popover spans the reading column instead of being
+ * pinned to a word near the right edge and clipped. See `GlossaryTerm.tsx`.
+ */
+.prl-learn-prose {
+  position: relative;
+  margin: 0;
+  max-width: var(--prl-measure);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-learn-lesson__list {
+  display: grid;
+  gap: var(--prl-space-4);
+  margin: 0;
+  padding-inline-start: var(--prl-space-8);
+  max-width: var(--prl-measure);
+}
+
+.prl-learn-lesson__list .prl-learn-prose {
+  margin: 0;
+}
+
+.prl-learn-lesson__foot {
+  padding-block-start: var(--prl-space-8);
+  border-block-start: var(--prl-hairline);
+}
+
+/* ---- contents rail ---------------------------------------------------------------------- */
+
+.prl-learn-contents {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-raised);
+}
+
+.prl-learn-contents__list {
+  display: grid;
+  gap: var(--prl-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-learn-contents__item {
+  margin: 0;
+}
+
+/**
+ * A contents link.
+ *
+ * The 44px target comes from the padding rather than a fixed height, so a heading that wraps to
+ * three lines still has one hit area. The inline-start border is transparent in the resting state
+ * rather than absent, so nothing shifts sideways when it becomes current.
+ */
+.prl-learn-contents__link {
+  display: grid;
+  gap: var(--prl-space-2);
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  min-height: var(--prl-target-min);
+  padding: var(--prl-space-3) var(--prl-space-4);
+  border-inline-start: var(--prl-space-1) solid transparent;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
+  text-decoration: none;
+}
+
+.prl-learn-contents__link:hover {
+  background-color: var(--prl-surface-hover);
+  color: var(--prl-text);
+  text-decoration: underline;
+}
+
+/**
+ * The section being read.
+ *
+ * An accent bar, an accent index and a heavier weight — three cues, and `aria-current="true"` in
+ * the markup carries the same fact to assistive technology. In forced-colors mode the bar becomes
+ * a `Highlight` border (section 9), because a background tint is thrown away there.
+ */
+.prl-learn-contents__link[aria-current="true"] {
+  border-inline-start-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-active);
+  color: var(--prl-text);
+  font-weight: var(--prl-weight-medium);
+}
+
+.prl-learn-contents__link[aria-current="true"] .prl-learn-contents__index {
+  color: var(--prl-accent-text);
+}
+
+/* ---- takeaways -------------------------------------------------------------------------- */
+
+.prl-learn-takeaways__list {
+  display: grid;
+  gap: var(--prl-space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-learn-takeaways__item {
+  display: grid;
+  gap: var(--prl-space-2) var(--prl-space-5);
+  grid-template-columns: auto minmax(0, 1fr);
+  margin: 0;
+  max-width: var(--prl-measure);
+}
+
+.prl-learn-takeaways__index {
+  color: var(--prl-text-faint);
+}
+
+/* ---- scenario link ---------------------------------------------------------------------- */
+
+.prl-learn-scenario {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-7);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-learn-scenario__prompt {
+  margin: 0;
+  max-width: var(--prl-measure);
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-learn-scenario__note {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-learn-scenario__id {
+  margin-inline-start: var(--prl-space-4);
+}
+
+/* ==========================================================================================
+   5. THE LIVE CALCULATION
+   ==========================================================================================
+   An instrument inset into the prose. Everything a reader needs in order to judge the figure —
+   method, interval, formula, caveat, assumptions — is visible; only the derivation string, the EV
+   term table and the card-by-card notes sit behind a `<details>`, which is exactly the set §6.2
+   permits to be collapsed.
+   ========================================================================================== */
+
+.prl-learn-calc {
+  margin-block: var(--prl-space-4);
+}
+
+.prl-learn-calc__caption {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+}
+
+/** The stored situation. A grid of label/value pairs, tabular so the numbers align. */
+.prl-learn-calc__inputs {
+  display: grid;
+  gap: var(--prl-space-4) var(--prl-space-8);
+  grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-15), 1fr));
+  margin: 0;
+  padding: var(--prl-space-5);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-learn-calc__input {
+  display: grid;
+  gap: var(--prl-space-2);
+  min-width: 0;
+}
+
+.prl-learn-calc__input dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-learn-calc__method {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4);
+  margin: 0;
+}
+
+.prl-learn-calc__derivation {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-learn-calc__skeleton {
+  display: grid;
+  gap: var(--prl-space-6);
+}
+
+.prl-learn-calc__cards {
+  display: grid;
+  gap: var(--prl-space-4);
+  margin: 0;
+}
+
+.prl-learn-calc__card {
+  display: grid;
+  gap: var(--prl-space-2);
+  min-width: 0;
+}
+
+.prl-learn-calc__card dt {
+  font-family: var(--prl-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.prl-learn-calc__card dd {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+/**
+ * A data table that scrolls rather than reflowing to blocks.
+ *
+ * `display: block` on `tr`/`td` at narrow widths strips the table role from the accessibility tree
+ * in every current browser, which trades the row and column relationships for a prettier phone
+ * layout. So it scrolls, and the wrapper is focusable in the markup so the scroll is reachable
+ * from a keyboard (WCAG 2.1.1). This mirrors `.prl-candidates` in `components.css`.
+ */
+.prl-learn-table {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.prl-learn-table__table {
+  width: 100%;
+  /* 20rem: below this the outcome column collapses to one word per line. */
+  min-width: calc(var(--prl-space-16) * 2);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-learn-table__table th,
+.prl-learn-table__table td {
+  padding: var(--prl-space-3) var(--prl-space-5);
+  border-block-end: var(--prl-hairline);
+  text-align: start;
+  vertical-align: top;
+}
+
+.prl-learn-table__table thead th {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.prl-learn-table__table td {
+  white-space: nowrap;
+}
+
+/* ==========================================================================================
+   6. THE GLOSSARY POPOVER
+   ==========================================================================================
+   The panel spans its paragraph rather than being anchored to the word. That is what makes it
+   impossible to clip at the right edge of a line without a single `getBoundingClientRect` — the
+   containing block is `.prl-learn-prose`, which section 4 marks `position: relative`.
+   ========================================================================================== */
+
+/**
+ * The trigger.
+ *
+ * A dotted underline in the resting state — the same convention `abbr[title]` uses in `base.css`,
+ * so it reads as "there is more here" without looking like a link. Open, it becomes a solid accent
+ * underline and accent ink, which is the visual tie to the panel below. `aria-expanded` carries
+ * the same state, so neither cue is alone.
+ */
+.prl-term__trigger {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  text-decoration: underline dotted;
+  text-decoration-thickness: from-font;
+  text-underline-offset: var(--prl-space-1);
+  cursor: help;
+}
+
+.prl-term__trigger:hover {
+  color: var(--prl-accent-text);
+  text-decoration-style: solid;
+}
+
+.prl-term__trigger[aria-expanded="true"] {
+  color: var(--prl-accent-text);
+  font-weight: var(--prl-weight-medium);
+  text-decoration: underline solid var(--prl-accent-edge);
+  text-decoration-thickness: var(--prl-focus-width);
+}
+
+.prl-term__panel {
+  position: absolute;
+  z-index: var(--prl-z-raised);
+  inset-inline: 0;
+  inset-block-start: calc(100% + var(--prl-space-2));
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-6);
+  border: 1px solid var(--prl-line-strong);
+  border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-raised);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-term__head {
+  display: grid;
+  gap: var(--prl-space-2);
+}
+
+.prl-term__name {
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+}
+
+.prl-term__definition {
+  display: block;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+}
+
+.prl-term__formula,
+.prl-learn-glossary__formula {
+  display: block;
+  padding: var(--prl-space-3) var(--prl-space-5);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+  color: var(--prl-text);
+  font-variant-numeric: tabular-nums;
+  white-space: pre-wrap;
+}
+
+.prl-term__topics,
+.prl-term__related,
+.prl-term__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-3) var(--prl-space-4);
+}
+
+.prl-term__related-link {
+  font-size: var(--prl-type-body-sm);
+}
+
+/* ==========================================================================================
+   7. THE QUIZ
+   ==========================================================================================
+   There is no score anywhere in this section, and therefore nothing here styles one. No progress
+   bar, no tally, no colour for "right" and "wrong": the verdict is a sentence, and each option is
+   labelled with a chip that carries a word.
+   ========================================================================================== */
+
+.prl-learn-quiz__heading {
+  margin: 0;
+  max-width: var(--prl-measure);
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-learn-quiz__position {
+  color: var(--prl-text-muted);
+}
+
+.prl-learn-quiz__options {
+  display: grid;
+  gap: var(--prl-space-4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.prl-learn-quiz__option {
+  display: grid;
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-4) var(--prl-space-5);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-learn-quiz__option-feedback {
+  display: grid;
+  gap: var(--prl-space-3);
+  padding-inline-start: var(--prl-space-11);
+}
+
+/**
+ * The verdict.
+ *
+ * Present in the DOM from the first render, empty, so the `aria-live` region is established before
+ * its content changes — a region inserted together with its text is missed by several screen
+ * readers. Empty, it takes no vertical space.
+ */
+/** The answer to the question just asked. There is no version of this that is secondary text. */
+.prl-learn-quiz__verdict {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-learn-quiz__verdict:empty {
+  margin: 0;
+}
+
+/**
+ * The number input is narrow; its label and hint are not.
+ *
+ * Capping the whole `.prl-field` would cap the hint with it, turning a two-line sentence into a
+ * six-line column beside an empty half of the panel. So the cap goes on the control, which is the
+ * only part of the field that has a natural size.
+ */
+.prl-learn-quiz__numeric {
+  max-width: var(--prl-measure);
+}
+
+.prl-learn-quiz__numeric .prl-input {
+  max-width: var(--prl-space-15);
+}
+
+.prl-learn-quiz__working {
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-inset);
+}
+
+/** Assumptions are one of the two things a learner most needs to read, so they are not fine print. */
+.prl-learn-quiz__assumptions {
+  display: grid;
+  gap: var(--prl-space-3);
+  margin: 0;
+  padding-inline-start: var(--prl-space-7);
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-learn-quiz__explanation {
+  display: grid;
+  gap: var(--prl-space-3);
+  justify-items: start;
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-inline-start: var(--prl-space-1) solid var(--prl-info);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-learn-quiz__explanation p {
+  margin: 0;
+  max-width: var(--prl-measure);
+}
+
+.prl-learn-quiz__advice {
+  margin: 0;
+  max-width: var(--prl-measure);
+  font-size: var(--prl-type-heading);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-learn-quiz__nav {
+  align-items: center;
+  padding-block-start: var(--prl-space-5);
+  border-block-start: var(--prl-hairline);
+}
+
+.prl-learn-quiz__skip {
+  flex: 1 1 var(--prl-space-15);
+}
+
+/* ==========================================================================================
+   8. THE GLOSSARY PAGE
+   ========================================================================================== */
+
+.prl-learn-glossary {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-8);
+}
+
+.prl-learn-glossary__controls {
+  display: grid;
+  gap: var(--prl-space-6);
+  grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-16), 1fr));
+  align-items: start;
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+/** The A–Z jump list. Each letter is a 44px target, because it is a link on a phone. */
+.prl-learn-glossary__jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-2);
+  padding-block-end: var(--prl-space-5);
+  border-block-end: 1px solid var(--prl-line);
+}
+
+.prl-learn-glossary__jump-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--prl-target-min);
+  min-height: var(--prl-target-min);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  color: var(--prl-text-secondary);
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+}
+
+.prl-learn-glossary__jump-link:hover {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-hover);
+  color: var(--prl-accent-text);
+  text-decoration: none;
+}
+
+.prl-learn-glossary__group {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-6);
+}
+
+.prl-learn-glossary__letter {
+  margin: 0;
+  padding-block-end: var(--prl-space-3);
+  border-block-end: var(--prl-hairline);
+  color: var(--prl-text-faint);
+  font-size: var(--prl-type-display-3);
+  letter-spacing: var(--prl-tracking-display-3);
+  scroll-margin-block-start: var(--prl-learn-sticky-top);
+}
+
+.prl-learn-glossary__entries {
+  display: grid;
+  gap: var(--prl-space-5);
+}
+
+.prl-learn-glossary__entry {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+  scroll-margin-block-start: var(--prl-learn-sticky-top);
+}
+
+.prl-learn-glossary__term {
+  margin: 0;
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-learn-glossary__definition {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+}
+
+.prl-learn-glossary__topics,
+.prl-learn-glossary__related {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-3) var(--prl-space-4);
+  margin: 0;
+}
+
+/**
+ * A cross-reference.
+ *
+ * A `<button>`, because following it may first have to clear a filter so the target exists to
+ * scroll to. Styled as a link so it reads as one, with a real 44px target from the padding.
+ */
+.prl-learn-glossary__related-btn {
+  min-height: var(--prl-target-min);
+  padding: var(--prl-space-2) var(--prl-space-3);
+  border: 0;
+  background: none;
+  color: var(--prl-accent-text);
+  font: inherit;
+  font-size: var(--prl-type-body-sm);
+  text-decoration: underline;
+  text-underline-offset: var(--prl-space-1);
+  cursor: pointer;
+}
+
+.prl-learn-glossary__related-btn:hover {
+  background-color: var(--prl-surface-hover);
+}
+
+/* ==========================================================================================
+   9. RESPONSIVE
+   ==========================================================================================
+   See the header comment on why these three numbers are literals. Information is re-flowed, never
+   removed: the contents rail becomes an inline block above the prose rather than disappearing, and
+   nothing is hidden at any width.
+   ========================================================================================== */
+
+@media (min-width: 600px) {
+  .prl-learn-entry {
+    padding: var(--prl-space-7);
+  }
+
+  .prl-learn-group__entries {
+    gap: var(--prl-space-6);
+  }
+}
+
+@media (min-width: 900px) {
+  .prl-learn-lesson__heading {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    gap: var(--prl-space-5);
+    /* The index moves into the gutter, so the heading text lines up with the prose below it. */
+    margin-inline-start: calc(-1 * var(--prl-space-9));
+  }
+}
+
+@media (min-width: 1280px) {
+  /**
+   * THE TWO LONG LISTS GO TO TWO COLUMNS.
+   *
+   * Measured at 1460px: a lesson card was 1360px wide with its title, its sentence and its chips
+   * all inside the first 650px of it, seventeen times over — and the glossary did the same thing
+   * ninety times. The empty half was not restraint, it was a single-column list that had never been
+   * asked what to do with a wide screen.
+   *
+   * Two columns is the honest answer for both, because both are LOOKUP surfaces rather than prose:
+   * a reader is picking one lesson out of seventeen or one term out of ninety, and halving the
+   * scroll is the single biggest thing that helps. The cap on the text inside each card is
+   * untouched, so a column is still a comfortable measure — what changed is that there are two of
+   * them instead of one and a void.
+   *
+   * The curriculum keeps its numbering, its topic groups and its reading order, so the sequence is
+   * still legible; row-major flow means 01 and 02 sit side by side, not 01 above 09.
+   */
+  .prl-learn-group__entries,
+  .prl-learn-glossary__entries {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--prl-space-6);
+  }
+
+  /**
+   * The reading page narrows rather than stretching.
+   *
+   * A lesson is prose capped at `--prl-measure`, so on a 1440px viewport a full-width container
+   * would leave the text hugging the left edge with half the screen empty beside it. The page is
+   * therefore capped at exactly what it needs — rail, gutter, reading column, gutter — and centred,
+   * which keeps the contents rail beside the prose it indexes instead of drifting away from it.
+   *
+   * Composed from tokens rather than being a new number: nothing here is a value the design system
+   * does not already name.
+   */
+  .prl-learn-lesson {
+    width: min(
+      var(--prl-container),
+      calc(var(--prl-learn-rail) + var(--prl-space-11) + var(--prl-measure) + var(--prl-space-11))
+    );
+  }
+
+  .prl-learn-lesson__layout {
+    gap: var(--prl-space-11);
+    grid-template-columns: var(--prl-learn-rail) minmax(0, 1fr);
+  }
+
+  /**
+   * The rail sticks below the header band.
+   *
+   * `max-height` plus `overflow-y` so a lesson with fifteen sections scrolls its own contents
+   * rather than running off the bottom of the viewport. `dvh` rather than `vh` because a mobile
+   * browser's toolbar makes `vh` taller than the visible area.
+   */
+  .prl-learn-contents {
+    position: sticky;
+    inset-block-start: var(--prl-learn-sticky-top);
+    overflow-y: auto;
+    max-height: calc(100dvh - var(--prl-learn-sticky-top) - var(--prl-space-9));
+  }
+}
+
+/* ==========================================================================================
+   10. FORCED COLORS
+   ==========================================================================================
+   Windows High Contrast throws away every background colour and forces borders to `CanvasText`,
+   which takes out both cues this feature leans on: a surface step and an accent edge. Everything
+   below restates a state that would otherwise be lost.
+
+   The test that matters: with the palette replaced, can you still tell which section you are in,
+   which lesson is suggested, and which term is open?
+   ========================================================================================== */
+
+@media (forced-colors: active) {
+  .prl-learn-contents__link[aria-current="true"] {
+    border-inline-start-color: Highlight;
+    outline: var(--prl-focus-width) solid Highlight;
+    outline-offset: calc(-1 * var(--prl-focus-width));
+  }
+
+  .prl-learn-entry[data-start="true"] {
+    border-color: Highlight;
+    outline: var(--prl-focus-width) solid Highlight;
+  }
+
+  .prl-learn-onboarding__step-btn[aria-current="step"] {
+    border-color: Highlight;
+  }
+
+  .prl-term__trigger[aria-expanded="true"] {
+    text-decoration-color: Highlight;
+  }
+
+  .prl-term__panel {
+    border-color: CanvasText;
+    border-inline-start-color: Highlight;
+  }
+
+  /* The explanation's info-coloured edge is `CanvasText` here like every other border, so the
+     style change is what keeps it distinguishable from the panel it sits inside. */
+  .prl-learn-quiz__explanation {
+    border-inline-start-style: double;
+  }
+}

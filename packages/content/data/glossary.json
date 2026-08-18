@@ -1,0 +1,651 @@
+[
+  {
+    "id": "all-in",
+    "term": "All-in",
+    "definition": "Committing your entire remaining stack. It is not a separate action but a bet, raise or call that happens to use your last units, and it caps what you can win from each opponent at what you put in.",
+    "topics": ["rules-and-flow", "tournaments"],
+    "seeAlso": ["table-stakes", "side-pot", "main-pot", "push-fold"]
+  },
+  {
+    "id": "alpha",
+    "term": "Alpha (break-even bluff frequency)",
+    "definition": "The share of the time a bluff must succeed to break even: what you risk, divided by what you end up with when it works. The complement of minimum defence frequency, and the reason larger bluffs need to work more often.",
+    "formula": "alpha = bet / (pot + bet)",
+    "topics": ["fold-equity-and-bluffing", "pot-odds-and-ev"],
+    "seeAlso": ["minimum-defence-frequency", "bluff", "fold-equity", "break-even-equity"]
+  },
+  {
+    "id": "ante",
+    "term": "Ante",
+    "definition": "A forced payment collected from players before the deal that goes straight to the pot as dead money. Unlike a blind it buys no part of the current bet, so it never reduces what you must call — it only makes the pot larger relative to the bets.",
+    "topics": ["positions-and-blinds", "tournaments"],
+    "seeAlso": ["blinds", "dead-money", "m-ratio", "push-fold"]
+  },
+  {
+    "id": "backdoor-draw",
+    "term": "Backdoor draw (runner-runner)",
+    "definition": "A draw that needs both remaining cards to arrive, such as three cards of a suit on the flop. It is worth much less than a real draw and is never a reason on its own to continue, but it adds a little to a hand that already has other merit.",
+    "topics": ["hand-reading-and-outs", "probability-and-equity"],
+    "seeAlso": ["flush-draw", "outs", "implied-odds"]
+  },
+  {
+    "id": "bankroll",
+    "term": "Bankroll",
+    "definition": "The total set aside for playing, measured in big blinds so it can be compared with a win rate and a standard deviation. In this lab it is a free, resettable pool of units and functions purely as a measuring stick for how much variance a strategy can absorb.",
+    "topics": ["variance-and-bankroll"],
+    "seeAlso": ["risk-of-ruin", "standard-deviation", "units", "downswing"]
+  },
+  {
+    "id": "bet",
+    "term": "Bet",
+    "definition": "The first voluntary units put in on a street. A bet sets a price: everyone after you must match it, raise it, or fold.",
+    "topics": ["rules-and-flow", "bet-sizing-and-spr"],
+    "seeAlso": ["raise", "check", "value-bet", "bluff"]
+  },
+  {
+    "id": "big-blind",
+    "term": "Big blind",
+    "definition": "The larger of the two forced bets posted before any cards are dealt, by the player two seats left of the button. It also sets the size of the smallest legal opening bet, and is the unit stack depths are usually quoted in.",
+    "topics": ["positions-and-blinds", "rules-and-flow"],
+    "seeAlso": ["small-blind", "option", "blinds"]
+  },
+  {
+    "id": "big-blind-option",
+    "term": "The option (big blind's)",
+    "definition": "The big blind's right to act at the end of the preflop round even when nobody has raised. Having matched the bet is not the same as having acted: the big blind may check and see the flop, or raise.",
+    "topics": ["positions-and-blinds", "rules-and-flow"],
+    "seeAlso": ["blinds", "check", "raise", "heads-up"]
+  },
+  {
+    "id": "blind-defence",
+    "term": "Blind defence",
+    "definition": "Continuing with a hand from the small or big blind against someone who has opened. The blind already has money in the pot, so it is being offered a better price than usual to call — but it will also be acting first on every later street, which cuts the other way.",
+    "topics": ["positions-and-blinds", "pot-odds-and-ev"],
+    "seeAlso": ["big-blind", "position", "pot-odds"]
+  },
+  {
+    "id": "blinds",
+    "term": "Blinds",
+    "definition": "Two forced bets posted before the cards are dealt by the players immediately left of the button: the small blind and the larger big blind. They are live bets, meaning they count towards the current bet level, and they create the units in the middle that make entering a pot worth anything at all.",
+    "topics": ["positions-and-blinds", "rules-and-flow"],
+    "seeAlso": ["big-blind-option", "ante", "dead-money", "button", "orbit"]
+  },
+  {
+    "id": "blocker",
+    "term": "Blocker",
+    "definition": "A card in your hand that removes combinations from your opponent's range, because they cannot hold what you are holding. Holding the top card of a suit both stops them having the best flush and removes your own worst outcome: making your hand and losing.",
+    "topics": ["ranges", "fold-equity-and-bluffing"],
+    "seeAlso": ["combos", "clean-out", "nuts", "range"]
+  },
+  {
+    "id": "bluff",
+    "term": "Bluff",
+    "definition": "A bet with a hand that is unlikely to win a showdown, made so that opponents fold. Its value comes entirely from fold equity and from the dead money in the pot, so its price is set by how much you risk relative to what you can win.",
+    "topics": ["fold-equity-and-bluffing"],
+    "seeAlso": ["semi-bluff", "fold-equity", "alpha", "polarised-range"]
+  },
+  {
+    "id": "board",
+    "term": "Board",
+    "definition": "The community cards dealt face up and shared by everyone: three on the flop, one on the turn, one on the river. Every player makes their best five cards from their own two plus the board, so the board is public information that changes what every range is capable of.",
+    "topics": ["rules-and-flow", "hand-reading-and-outs"],
+    "seeAlso": ["board-texture", "hand-rankings"]
+  },
+  {
+    "id": "board-texture",
+    "term": "Board texture",
+    "definition": "The character of the community cards: connected or disconnected, one suit heavy or rainbow, paired or unpaired, high or low. Texture decides which hands are possible and therefore how much each player's range is worth — it is the bridge between the cards on the table and any range assumption.",
+    "topics": ["ranges", "hand-reading-and-outs", "bet-sizing-and-spr"],
+    "seeAlso": ["range", "nuts", "polarised-range", "continuation-bet"]
+  },
+  {
+    "id": "break-even-equity",
+    "term": "Break-even equity",
+    "definition": "The share of the time you must win to make a call neither profitable nor unprofitable. It is the same arithmetic as pot odds, converted from a price into a required win frequency so it can be compared directly with your equity.",
+    "formula": "break-even equity = call / (pot including the bet + call)",
+    "topics": ["pot-odds-and-ev", "probability-and-equity"],
+    "seeAlso": ["pot-odds", "equity", "expected-value", "alpha"]
+  },
+  {
+    "id": "button",
+    "term": "The button",
+    "definition": "The seat marking the nominal dealer, which acts last on the flop, turn and river. It moves one seat clockwise after every hand so that position and blind costs rotate evenly. Heads-up the button also posts the small blind.",
+    "topics": ["positions-and-blinds"],
+    "seeAlso": ["position", "blinds", "heads-up", "cutoff"]
+  },
+  {
+    "id": "call",
+    "term": "Call",
+    "definition": "Matching the current bet level. You pay only the difference between what you have already committed on this street and that level, and you buy the right to see the next card — nothing more.",
+    "topics": ["rules-and-flow", "pot-odds-and-ev"],
+    "seeAlso": ["pot-odds", "break-even-equity", "bet"]
+  },
+  {
+    "id": "capped-range",
+    "term": "Capped range",
+    "definition": "A range that, by the actions taken so far, can no longer contain the strongest hands. A player who checked a street where they would surely have bet the nuts has capped themselves, and the pressure that invites is a consequence of the actions, not of the cards.",
+    "topics": ["ranges", "fold-equity-and-bluffing"],
+    "seeAlso": ["polarised-range", "range", "nuts", "minimum-defence-frequency"]
+  },
+  {
+    "id": "check",
+    "term": "Check",
+    "definition": "Declining to bet when nothing is owed. It keeps your hand at no cost and passes the decision to the next player. Checking is only available when no bet has been made on the current street.",
+    "topics": ["rules-and-flow"],
+    "seeAlso": ["bet", "call", "continuation-bet"]
+  },
+  {
+    "id": "clean-out",
+    "term": "Clean out",
+    "definition": "An out that makes you the winner against the hand you are assuming: when it lands, you are ahead. Clean outs are the only ones a price comparison can safely be built on.",
+    "topics": ["hand-reading-and-outs"],
+    "seeAlso": ["outs", "dirty-out", "blocker", "nuts"]
+  },
+  {
+    "id": "combo-draw",
+    "term": "Combo draw",
+    "definition": "A hand drawing to two different better hands at once — for example a flush draw that is also an open-ended straight draw. The out counts overlap rather than simply adding, so a combo draw needs its equity computed rather than estimated by summing.",
+    "topics": ["hand-reading-and-outs", "probability-and-equity"],
+    "seeAlso": ["outs", "open-ended-straight-draw", "semi-bluff"]
+  },
+  {
+    "id": "combos",
+    "term": "Combos (combinatorics)",
+    "definition": "The individual two-card holdings inside a hand class, and the arithmetic of counting them. Counting combos is how you compare 'they could have a flush' with 'how many ways can they actually have one', which is usually fewer than it feels.",
+    "formula": "two-card combinations in a full deck = C(52,2) = 1326; per class: pair 6, suited 4, offsuit 12; a known card removes the combos containing it",
+    "topics": ["ranges", "probability-and-equity"],
+    "seeAlso": ["range", "blocker", "capped-range", "equity"]
+  },
+  {
+    "id": "continuation-bet",
+    "term": "Continuation bet (c-bet)",
+    "definition": "A bet on the flop by the player who raised preflop, continuing the story of a strong hand. Its value comes from the preflop initiative and from the dead money already in the pot, not from the flop having to fit your hand.",
+    "topics": ["fold-equity-and-bluffing", "bet-sizing-and-spr"],
+    "seeAlso": ["fold-equity", "bluff", "board-texture", "range"]
+  },
+  {
+    "id": "counterfeit",
+    "term": "Counterfeit",
+    "definition": "When a later board card makes one of your cards redundant — most often a board pair higher than your bottom pair, turning your two pair into a hand every opponent shares. Nothing about your cards changed; their contribution did.",
+    "topics": ["hand-reading-and-outs"],
+    "seeAlso": ["kicker", "split-pot", "playing-the-board", "reverse-implied-odds"]
+  },
+  {
+    "id": "cutoff",
+    "term": "Cutoff",
+    "definition": "The seat immediately right of the button, so named because opening from there can cut the button out of the hand. It acts last whenever the button folds.",
+    "topics": ["positions-and-blinds"],
+    "seeAlso": ["button", "position", "open", "under-the-gun"]
+  },
+  {
+    "id": "dead-money",
+    "term": "Dead money",
+    "definition": "Units in the pot that belong to nobody's current bet: antes, blinds from players who have folded, and everything committed on earlier streets. It is the reward for winning the pot and therefore the reason aggression can be profitable without a good hand.",
+    "topics": ["pot-odds-and-ev", "fold-equity-and-bluffing"],
+    "seeAlso": ["fold-equity", "pot", "ante", "alpha"]
+  },
+  {
+    "id": "dirty-out",
+    "term": "Dirty out",
+    "definition": "A card that improves your hand but can still lose — because it improves your opponent more, because the hand it makes is second best, or because there is another card to come for them to draw out. Counting dirty outs as though they were clean is the most common way an outs count becomes optimistic.",
+    "topics": ["hand-reading-and-outs"],
+    "seeAlso": ["outs", "clean-out", "dominated-hand", "reverse-implied-odds"]
+  },
+  {
+    "id": "dirty-outs",
+    "term": "Dirty outs",
+    "definition": "Cards that improve your hand but still leave you able to lose — because the same card completes something better for an opponent, or because they can still draw out on you afterwards. Counting a dirty out as a clean one is one of the most common ways players talk themselves into a call the price does not justify.",
+    "formula": "total outs = clean outs + dirty outs",
+    "topics": ["hand-reading-and-outs", "probability-and-equity"],
+    "seeAlso": ["outs", "redraw", "combo-draw"]
+  },
+  {
+    "id": "dominated-hand",
+    "term": "Dominated hand",
+    "definition": "A hand that shares a card's rank with a stronger version of itself, so the cards that improve it usually improve the other hand more — a weaker kicker alongside the same high card is the standard case. Domination is about which hands you beat when you both connect, not about raw equity.",
+    "topics": ["ranges", "hand-reading-and-outs"],
+    "seeAlso": ["kicker", "dirty-out", "reverse-implied-odds", "range"]
+  },
+  {
+    "id": "domination",
+    "term": "Domination",
+    "definition": "Holding a hand that shares a card with a better one, so the shared card cannot help you win. A-9 is dominated by A-K: pairing the ace improves both hands and leaves you behind, which is why the gap between two hands is often much wider than their raw card ranks suggest.",
+    "topics": ["ranges", "probability-and-equity"],
+    "seeAlso": ["dominated-hand", "kicker", "top-pair"]
+  },
+  {
+    "id": "downswing",
+    "term": "Downswing",
+    "definition": "An extended stretch of losing results. Downswings are an expected feature of any high-variance process, not evidence that something has changed and not a signal to play differently or longer — nothing is ever 'due'.",
+    "topics": ["variance-and-bankroll", "risk-psychology"],
+    "seeAlso": ["variance", "risk-of-ruin", "tilt", "sample-size"]
+  },
+  {
+    "id": "drawing-dead",
+    "term": "Drawing dead",
+    "definition": "Having no card left that can win the hand, whether or not you know it. A draw can also be dead in a narrower sense: every card that completes your hand completes a better one for your opponent.",
+    "topics": ["hand-reading-and-outs"],
+    "seeAlso": ["outs", "dirty-out", "nuts", "blocker"]
+  },
+  {
+    "id": "effective-stack",
+    "term": "Effective stack",
+    "definition": "The largest amount that can actually change hands between you and an opponent: the smaller of the two stacks. Deeper units behind an opponent who cannot cover you do not affect the hand.",
+    "formula": "effective stack (against one opponent) = min(your stack, their stack)",
+    "topics": ["bet-sizing-and-spr", "rules-and-flow"],
+    "seeAlso": ["spr", "table-stakes", "all-in", "units"]
+  },
+  {
+    "id": "equity",
+    "term": "Equity",
+    "definition": "Your share of the pot if the remaining cards were dealt out with no further betting — in other words, how often you win, plus your share of the ties. Equity is always equity against something: change the hand or range you assume for your opponent and the number changes.",
+    "topics": ["probability-and-equity"],
+    "seeAlso": ["range", "equity-realisation", "outs", "break-even-equity"]
+  },
+  {
+    "id": "equity-realisation",
+    "term": "Equity realisation",
+    "definition": "The gap between the share of the pot your cards are worth and the share you actually collect once betting is involved. Position, initiative and stack depth move it; the cards do not know where you are sitting, but the units end up somewhere.",
+    "topics": ["probability-and-equity", "positions-and-blinds"],
+    "seeAlso": ["equity", "position", "spr", "showdown-value"]
+  },
+  {
+    "id": "expected-value",
+    "term": "Expected value (EV)",
+    "definition": "The average result of a decision if you could repeat the same situation for ever, counting each outcome by how often it happens. A decision can be right and still lose: EV is a property of the choice, not of the hand you just played.",
+    "formula": "EV = sum over outcomes of (probability of the outcome x units won or lost in that outcome)",
+    "topics": ["pot-odds-and-ev", "risk-psychology"],
+    "seeAlso": ["variance", "break-even-equity", "sample-size", "fold-equity"]
+  },
+  {
+    "id": "flush-draw",
+    "term": "Flush draw",
+    "definition": "Holding four cards of one suit with more cards to come, so that one more card of that suit completes a flush. Which flush matters: four to a suit without the top card of it can complete and still lose.",
+    "topics": ["hand-reading-and-outs"],
+    "seeAlso": ["outs", "backdoor-draw", "blocker", "nuts"]
+  },
+  {
+    "id": "fold",
+    "term": "Fold",
+    "definition": "Giving up the hand. Units already committed stay in the pot; folding costs nothing further and risks nothing further. It is the only action that caps your loss in a hand at what you have already paid.",
+    "topics": ["rules-and-flow", "risk-psychology"],
+    "seeAlso": ["minimum-defence-frequency", "fold-equity", "tilt"]
+  },
+  {
+    "id": "fold-equity",
+    "term": "Fold equity",
+    "definition": "The value a bet gets from the chance your opponent folds and you win the pot uncontested, separate from the value of winning at showdown. It is why a hand with little equity can still be worth betting, and why the estimate is only as good as your guess at how often they fold.",
+    "formula": "EV(bet) = f x pot + (1 - f) x [e x (pot + bet) - (1 - e) x bet], where f = probability they fold, e = your equity when called, assuming no further betting",
+    "topics": ["fold-equity-and-bluffing", "pot-odds-and-ev"],
+    "seeAlso": ["semi-bluff", "bluff", "alpha", "dead-money"]
+  },
+  {
+    "id": "gutshot",
+    "term": "Gutshot (inside straight draw)",
+    "definition": "A straight draw missing one middle rank, so only one rank completes it — roughly half the outs of an open-ended draw. A gutshot is often not enough on its own but matters as a piece of a combined draw.",
+    "topics": ["hand-reading-and-outs"],
+    "seeAlso": ["open-ended-straight-draw", "outs", "semi-bluff"]
+  },
+  {
+    "id": "hand-ranking",
+    "term": "Hand ranking",
+    "definition": "The fixed order of five-card hand categories, strongest to weakest: straight flush, four of a kind, full house, flush, straight, three of a kind, two pair, one pair, high card. Within a category the ranks decide, and kickers break what is left.",
+    "topics": ["hand-reading-and-outs", "rules-and-flow"],
+    "seeAlso": ["kicker", "nuts", "playing-the-board", "split-pot"]
+  },
+  {
+    "id": "hand-rankings",
+    "term": "Hand rankings",
+    "definition": "The fixed order of five-card hand categories, from high card up through pair, two pair, three of a kind, straight, flush, full house, four of a kind, to straight flush. Category always decides first; only within the same category do individual card ranks and kickers matter.",
+    "topics": ["rules-and-flow", "hand-reading-and-outs"],
+    "seeAlso": ["kicker", "straight", "board"]
+  },
+  {
+    "id": "heads-up",
+    "term": "Heads-up",
+    "definition": "A hand or a game with exactly two players. The blind and position rules invert: the button posts the small blind and acts first preflop, then acts last on the flop, turn and river.",
+    "topics": ["positions-and-blinds", "tournaments"],
+    "seeAlso": ["button", "blinds", "big-blind-option", "push-fold"]
+  },
+  {
+    "id": "icm",
+    "term": "ICM (independent chip model)",
+    "definition": "A tournament model that converts a chip stack into a share of the payout structure, capturing the fact that tournament chips are not worth a fixed amount: doubling your stack does not double your share. In this lab those payouts are notional unit counts with no value of any kind, so ICM is arithmetic about a payout structure and nothing more. It also ignores skill, position and blind level, which makes it a useful first approximation rather than the truth.",
+    "formula": "chip-chance model: P(finish first) = your chips / all chips in play, with later places obtained by conditioning on each earlier finisher in turn",
+    "topics": ["tournaments"],
+    "seeAlso": ["m-ratio", "push-fold", "expected-value", "all-in"]
+  },
+  {
+    "id": "implied-odds",
+    "term": "Implied odds",
+    "definition": "The extra units you expect to win on later streets when your draw arrives, which can justify a call the immediate price alone does not. They are an estimate resting on assumptions about stack depth and how much your opponent will pay, so they should be stated as an assumption rather than assumed generously.",
+    "formula": "effective price = call / (pot including the bet + call + units you expect to win later when you hit)",
+    "topics": ["pot-odds-and-ev", "bet-sizing-and-spr"],
+    "seeAlso": ["pot-odds", "reverse-implied-odds", "spr", "outs"]
+  },
+  {
+    "id": "kicker",
+    "term": "Kicker",
+    "definition": "A card that does not form part of your pair, straight or flush but still decides the hand when two players hold the same made hand. Sharing a hand with the board makes kickers decisive, and a weak kicker is how a strong-looking hand loses a big pot.",
+    "topics": ["hand-reading-and-outs"],
+    "seeAlso": ["hand-ranking", "dominated-hand", "counterfeit", "split-pot"]
+  },
+  {
+    "id": "limp",
+    "term": "Limp",
+    "definition": "Entering a preflop pot by calling the big blind rather than raising. It gives up the chance to win the blinds immediately and invites more players in, so it needs a specific reason rather than being a default.",
+    "topics": ["positions-and-blinds", "ranges"],
+    "seeAlso": ["open", "three-bet", "call", "fold-equity"]
+  },
+  {
+    "id": "m-ratio",
+    "term": "M-ratio",
+    "definition": "How many orbits a tournament stack could survive if it never played a hand: the stack divided by the forced bets collected each orbit. It measures time pressure, which is why it falls as the blinds rise even when your stack does not change.",
+    "formula": "M = stack / (small blind + big blind + total antes per orbit)",
+    "topics": ["tournaments", "bet-sizing-and-spr"],
+    "seeAlso": ["orbit", "push-fold", "ante", "icm"]
+  },
+  {
+    "id": "main-pot",
+    "term": "Main pot",
+    "definition": "The lowest layer of the pot, capped at the smallest total commitment among the players still holding cards. Everyone still in is eligible for it, including the shortest all-in stack.",
+    "topics": ["rules-and-flow"],
+    "seeAlso": ["side-pot", "all-in", "table-stakes", "pot"]
+  },
+  {
+    "id": "min-raise",
+    "term": "Minimum raise",
+    "definition": "The smallest legal raise. The increment must at least match the largest complete bet or raise made so far on the current street, and never be smaller than one big blind — so preflop the first raise must at least double the big blind.",
+    "formula": "minimum raise-to = current bet level + max(largest complete bet or raise so far this street, one big blind)",
+    "topics": ["rules-and-flow", "bet-sizing-and-spr"],
+    "seeAlso": ["raise", "all-in", "three-bet", "blinds"]
+  },
+  {
+    "id": "minimum-defence-frequency",
+    "term": "Minimum defence frequency (MDF)",
+    "definition": "The share of the time a player facing a bet must continue for the bettor's bluffs not to be automatically profitable. It is a property of a strategy against a size, not an instruction to call with a particular hand, and it assumes the bettor is choosing bluffs freely — against a player who never bluffs, defending to it is a leak.",
+    "formula": "MDF = pot / (pot + bet) = 1 - alpha",
+    "topics": ["fold-equity-and-bluffing", "pot-odds-and-ev"],
+    "seeAlso": ["alpha", "fold-equity", "capped-range", "fold"]
+  },
+  {
+    "id": "nuts",
+    "term": "The nuts",
+    "definition": "The best hand possible on a given board. It is a property of the board, not of your cards, so it changes with every street — and 'the nuts on the flop' is often no longer the nuts by the river.",
+    "topics": ["hand-reading-and-outs"],
+    "seeAlso": ["hand-ranking", "blocker", "board-texture", "polarised-range"]
+  },
+  {
+    "id": "open",
+    "term": "Open (open-raise)",
+    "definition": "The first voluntary raise of a preflop round, made before anyone else has put units in beyond the blinds. Which hands are worth opening depends heavily on how many players are still to act behind you.",
+    "topics": ["positions-and-blinds", "ranges"],
+    "seeAlso": ["limp", "three-bet", "raise", "position"]
+  },
+  {
+    "id": "open-ended-straight-draw",
+    "term": "Open-ended straight draw",
+    "definition": "Four consecutive ranks that can be completed at either end, so two different ranks make the straight. Compare a gutshot, which is missing a middle rank and can only be completed one way.",
+    "topics": ["hand-reading-and-outs"],
+    "seeAlso": ["gutshot", "outs", "semi-bluff", "board-texture"]
+  },
+  {
+    "id": "option",
+    "term": "Option",
+    "definition": "The big blind’s right to raise even when everyone has merely called, because posting the blind was forced rather than chosen. If nobody raised, the big blind may check to end the betting or raise as if opening.",
+    "topics": ["positions-and-blinds", "rules-and-flow"],
+    "seeAlso": ["big-blind", "limp"]
+  },
+  {
+    "id": "orbit",
+    "term": "Orbit",
+    "definition": "One full rotation of the button, so that every player has paid each blind exactly once. Costs and positional disadvantages are only fair when measured over whole orbits, which is also the unit the M-ratio uses.",
+    "topics": ["positions-and-blinds", "tournaments"],
+    "seeAlso": ["blinds", "button", "m-ratio"]
+  },
+  {
+    "id": "outs",
+    "term": "Outs",
+    "definition": "The unseen cards that would give you the winning hand. Counted from your seat, so 'unseen' includes cards in opponents' hands, and counted against an assumed opponent holding — the count is meaningless without that assumption.",
+    "topics": ["hand-reading-and-outs", "probability-and-equity"],
+    "seeAlso": ["clean-out", "dirty-out", "rule-of-2-and-4", "drawing-dead"]
+  },
+  {
+    "id": "overcard",
+    "term": "Overcard",
+    "definition": "A card higher than the highest card of the relevant reference point — a card in your hand above every board card, or a board card above your pair. The word only means something once you say what it is over.",
+    "topics": ["hand-reading-and-outs", "ranges"],
+    "seeAlso": ["kicker", "board-texture", "dominated-hand", "outs"]
+  },
+  {
+    "id": "playing-the-board",
+    "term": "Playing the board",
+    "definition": "When your best five cards are the five community cards, so your own two add nothing. Everyone still in has at least your hand, which means the best you can do is chop and any single relevant card beats you.",
+    "topics": ["hand-reading-and-outs"],
+    "seeAlso": ["hand-ranking", "split-pot", "counterfeit", "board-texture"]
+  },
+  {
+    "id": "polarised-range",
+    "term": "Polarised range",
+    "definition": "A range made of strong hands and bluffs with little in between. Polarised betting ranges support larger bet sizes, because the hands that want to build a big pot and the hands that want opponents to fold both benefit from one.",
+    "topics": ["ranges", "bet-sizing-and-spr", "fold-equity-and-bluffing"],
+    "seeAlso": ["capped-range", "range", "bluff", "value-bet"]
+  },
+  {
+    "id": "position",
+    "term": "Position",
+    "definition": "How late you act on a street — concretely, how many players still get to act after you, where zero is best. Acting later means deciding with more information and more control over the size of the pot.",
+    "topics": ["positions-and-blinds"],
+    "seeAlso": ["button", "under-the-gun", "cutoff", "equity-realisation"]
+  },
+  {
+    "id": "pot",
+    "term": "Pot",
+    "definition": "All the units wagered so far in the current hand, sitting in the middle where nobody owns them. Once units are in the pot they are no longer yours, which is why a decision is always about the next units rather than the ones already committed.",
+    "topics": ["rules-and-flow", "pot-odds-and-ev"],
+    "seeAlso": ["main-pot", "side-pot", "pot-odds", "dead-money"]
+  },
+  {
+    "id": "pot-odds",
+    "term": "Pot odds",
+    "definition": "The price a bet is quoting you: what you must call, compared with what the pot will hold once you call. Expressed as a ratio ('the pot is laying you three to one') or as the share of the final pot you are paying for.",
+    "formula": "pot odds = call / (pot including the bet + call)",
+    "topics": ["pot-odds-and-ev"],
+    "seeAlso": ["break-even-equity", "equity", "implied-odds", "call"]
+  },
+  {
+    "id": "push-fold",
+    "term": "Push/fold",
+    "definition": "A simplified short-stack strategy with only two choices preflop: all-in or fold. It becomes reasonable when the stack is small relative to the blinds, because raising smaller leaves no room to play later streets — a consequence of stack depth, not a display of aggression.",
+    "topics": ["tournaments", "bet-sizing-and-spr"],
+    "seeAlso": ["m-ratio", "icm", "all-in", "spr"]
+  },
+  {
+    "id": "raise",
+    "term": "Raise",
+    "definition": "Increasing the bet level so that opponents must pay more to continue. Always stated as a total ('raise to 100'), never as an increment, because 'raise 60' can mean two different amounts.",
+    "topics": ["rules-and-flow", "bet-sizing-and-spr"],
+    "seeAlso": ["min-raise", "three-bet", "open", "bet"]
+  },
+  {
+    "id": "range",
+    "term": "Range",
+    "definition": "The set of hands a player could hold in a situation, ideally with a weight on each. Thinking in ranges rather than guessing one hand is what makes equity computable at all, and every equity figure is only as honest as the range assumed for it.",
+    "topics": ["ranges", "probability-and-equity"],
+    "seeAlso": ["combos", "polarised-range", "capped-range", "equity"]
+  },
+  {
+    "id": "redraw",
+    "term": "Redraw",
+    "definition": "The chance that an opponent who is currently behind improves again on a later street. A redraw is why being ahead on the turn is not the same as winning, and it is the reason an out that puts you in front is not automatically a clean one.",
+    "topics": ["hand-reading-and-outs", "probability-and-equity", "variance-and-bankroll"],
+    "seeAlso": ["dirty-outs", "reverse-implied-odds"]
+  },
+  {
+    "id": "reverse-implied-odds",
+    "term": "Reverse implied odds",
+    "definition": "The units you expect to lose on later streets when you improve into a second-best hand, or keep paying with a hand that is already beaten. They are the mirror of implied odds and are systematically underestimated, because the hands that create them feel strong.",
+    "topics": ["pot-odds-and-ev", "hand-reading-and-outs"],
+    "seeAlso": ["implied-odds", "dirty-out", "dominated-hand", "counterfeit"]
+  },
+  {
+    "id": "risk-of-ruin",
+    "term": "Risk of ruin",
+    "definition": "The chance of losing a whole bankroll before variance resolves in your favour, given a win rate and a standard deviation. The usual formula is an approximation that assumes a constant edge, normally distributed results and no adjustment along the way, so treat it as a shape rather than a prediction.",
+    "formula": "risk of ruin ~= exp(-2 x win rate x bankroll / standard deviation^2), with win rate, bankroll and standard deviation in consistent units (e.g. bb/100, bb, bb/100)",
+    "topics": ["variance-and-bankroll", "risk-psychology"],
+    "seeAlso": ["bankroll", "standard-deviation", "downswing", "variance"]
+  },
+  {
+    "id": "rule-of-2-and-4",
+    "term": "Rule of 2 and 4",
+    "definition": "A table-friendly approximation: multiply your outs by two for the chance of hitting with one card to come, or by four with two cards to come. It is deliberately rough — it treats the unseen deck as fifty cards, and the four-times version assumes you see both cards without paying again.",
+    "formula": "chance of hitting (percent) ~= 2 x outs with one card to come; ~= 4 x outs with two cards to come",
+    "topics": ["probability-and-equity", "hand-reading-and-outs"],
+    "seeAlso": ["outs", "clean-out", "equity", "pot-odds"]
+  },
+  {
+    "id": "sample-size",
+    "term": "Sample size",
+    "definition": "How many hands a result is based on. A small sample tells you almost nothing about a win rate, and the honest response to 'am I good at this' is usually 'not enough hands yet' — which is a statement about statistics, not about you.",
+    "topics": ["variance-and-bankroll", "risk-psychology"],
+    "seeAlso": ["variance", "standard-deviation", "expected-value", "downswing"]
+  },
+  {
+    "id": "semi-bluff",
+    "term": "Semi-bluff",
+    "definition": "A bet with a hand that is probably behind now but can improve, so it wins in two ways: opponents fold, or the draw arrives. Combining fold equity with real outs is why a draw is usually worth more as a bet than as a call.",
+    "topics": ["fold-equity-and-bluffing", "hand-reading-and-outs"],
+    "seeAlso": ["bluff", "fold-equity", "outs", "open-ended-straight-draw"]
+  },
+  {
+    "id": "showdown",
+    "term": "Showdown",
+    "definition": "The comparison of hands after the final betting round, when two or more players are still in. Most pots never get there, because the hand ends as soon as everyone but one player has folded.",
+    "topics": ["rules-and-flow", "hand-reading-and-outs"],
+    "seeAlso": ["hand-ranking", "showdown-value", "split-pot"]
+  },
+  {
+    "id": "showdown-value",
+    "term": "Showdown value",
+    "definition": "The worth of a hand that is too weak to bet but strong enough to win sometimes if the hand is checked down. Recognising it is what stops a marginal pair being turned into a bluff that nobody folds to.",
+    "topics": ["hand-reading-and-outs", "pot-odds-and-ev"],
+    "seeAlso": ["showdown", "value-bet", "bluff", "equity-realisation"]
+  },
+  {
+    "id": "side-pot",
+    "term": "Side pot",
+    "definition": "A layer of the pot above the main pot, made of the units committed beyond a short all-in player's cap. Only players who reached that cap can win it, which is how one showdown can pay two different winners.",
+    "formula": "layer amount = sum over contributors of (min(their total commitment, this cap) - min(their total commitment, previous cap))",
+    "topics": ["rules-and-flow"],
+    "seeAlso": ["main-pot", "all-in", "table-stakes", "uncalled-bet"]
+  },
+  {
+    "id": "small-blind",
+    "term": "Small blind",
+    "definition": "The smaller forced bet, posted by the player immediately left of the button — except heads-up, where the button posts it. Because it is a partial bet, the small blind has already put money in without having seen any action, which is what makes the position awkward.",
+    "topics": ["positions-and-blinds", "rules-and-flow"],
+    "seeAlso": ["big-blind", "blinds", "position"]
+  },
+  {
+    "id": "split-pot",
+    "term": "Split pot (chop)",
+    "definition": "What happens when two or more players hold hands of exactly equal value: the pot is divided between them. Any odd unit that does not divide evenly is awarded by a fixed table rule rather than at random, so a hand always settles the same way twice.",
+    "topics": ["rules-and-flow", "hand-reading-and-outs"],
+    "seeAlso": ["showdown", "hand-ranking", "counterfeit", "playing-the-board"]
+  },
+  {
+    "id": "spr",
+    "term": "SPR (stack-to-pot ratio)",
+    "definition": "The effective stack divided by the current pot, usually measured at the start of a street. It says how much room is left to manoeuvre: a low SPR means commitment decisions arrive immediately, a high one means several streets of choices are still ahead.",
+    "formula": "SPR = effective stack / pot",
+    "topics": ["bet-sizing-and-spr"],
+    "seeAlso": ["effective-stack", "pot", "implied-odds", "all-in"]
+  },
+  {
+    "id": "standard-deviation",
+    "term": "Standard deviation",
+    "definition": "Variance in the same units as the results themselves, so it can be compared directly with a win rate. Because it grows with the square root of the number of hands while expectation grows linearly, the signal eventually overtakes the noise — slowly.",
+    "formula": "standard deviation over n hands = (standard deviation per 100 hands) x sqrt(n / 100)",
+    "topics": ["variance-and-bankroll"],
+    "seeAlso": ["variance", "sample-size", "risk-of-ruin", "expected-value"]
+  },
+  {
+    "id": "straight",
+    "term": "Straight",
+    "definition": "Five cards of consecutive rank, not all the same suit. The ace plays at either end, so A-2-3-4-5 (the wheel) is a legal straight and is the weakest one; the ace does not wrap around, so K-A-2-3-4 is not a straight.",
+    "topics": ["rules-and-flow", "hand-reading-and-outs"],
+    "seeAlso": ["hand-rankings", "open-ended-straight-draw", "gutshot"]
+  },
+  {
+    "id": "street",
+    "term": "Street",
+    "definition": "One stage of a hand together with its betting round: preflop, flop, turn and river. Four streets, four betting rounds, and each one starts with the current pot already built by the ones before it.",
+    "topics": ["rules-and-flow"],
+    "seeAlso": ["showdown", "board-texture", "position"]
+  },
+  {
+    "id": "table-stakes",
+    "term": "Table stakes",
+    "definition": "The rule that you play a hand with the stack in front of you and may not add to it mid-hand. Its two consequences are inseparable: nobody can bet you off a hand by wagering more than you can cover, and you cannot win more from an opponent than you yourself risked.",
+    "topics": ["rules-and-flow"],
+    "seeAlso": ["all-in", "side-pot", "effective-stack", "uncalled-bet"]
+  },
+  {
+    "id": "three-bet",
+    "term": "3-bet",
+    "definition": "The second raise of a betting round. Preflop the big blind counts as the first bet, so an open is the 2-bet and the re-raise over it is the 3-bet; a raise over that is a 4-bet.",
+    "topics": ["ranges", "positions-and-blinds"],
+    "seeAlso": ["open", "raise", "min-raise", "polarised-range"]
+  },
+  {
+    "id": "tilt",
+    "term": "Tilt",
+    "definition": "Playing worse because of how you feel — usually after losing, but winning does it too. The reliable response is to stop the session, not to play bigger or longer to 'get it back'; no run of cards owes you anything, and chasing losses is the single most expensive habit in the game.",
+    "topics": ["risk-psychology"],
+    "seeAlso": ["downswing", "variance", "expected-value", "sample-size"]
+  },
+  {
+    "id": "top-pair",
+    "term": "Top pair",
+    "definition": "A pair made by combining one of your hole cards with the highest card on the board. It is often a strong hand and often a fragile one at the same time, because the hands that beat it are exactly the hands an opponent keeps betting with.",
+    "topics": ["hand-reading-and-outs", "ranges"],
+    "seeAlso": ["kicker", "dominated-hand", "showdown-value"]
+  },
+  {
+    "id": "uncalled-bet",
+    "term": "Uncalled bet",
+    "definition": "The portion of a bet that no player still holding cards matched. It is returned to whoever put it in, because there is nobody who could have won it from them.",
+    "topics": ["rules-and-flow"],
+    "seeAlso": ["side-pot", "table-stakes", "all-in"]
+  },
+  {
+    "id": "under-the-gun",
+    "term": "Under the gun (UTG)",
+    "definition": "The first seat to act preflop, immediately left of the big blind. It is the worst position at the table: every opponent still gets to react to what you do, on this street and on every street after it.",
+    "topics": ["positions-and-blinds"],
+    "seeAlso": ["position", "cutoff", "button", "open"]
+  },
+  {
+    "id": "units",
+    "term": "Units (chips)",
+    "definition": "The counters used in this lab. They are free, resettable and have no value of any kind: they cannot be bought, transferred, redeemed or cashed out. They exist so that risk can be measured, in the same way a physics problem uses metres.",
+    "topics": ["rules-and-flow", "variance-and-bankroll"],
+    "seeAlso": ["bankroll", "pot", "effective-stack"]
+  },
+  {
+    "id": "value-bet",
+    "term": "Value bet",
+    "definition": "A bet made expecting to be called by worse hands often enough that the call is what you want. The test is not whether your hand is strong but whether the hands that will call are worse than yours, which depends on the range you assume.",
+    "topics": ["bet-sizing-and-spr", "pot-odds-and-ev"],
+    "seeAlso": ["bluff", "polarised-range", "showdown-value", "range"]
+  },
+  {
+    "id": "variance",
+    "term": "Variance",
+    "definition": "The spread of results around their average — how far a real run of hands can sit from its expectation. High variance does not mean an edge is absent; it means the edge takes longer to become visible.",
+    "formula": "variance = (standard deviation)^2; over n hands, variance scales with n while expectation also scales with n",
+    "topics": ["variance-and-bankroll", "risk-psychology"],
+    "seeAlso": ["standard-deviation", "sample-size", "downswing", "expected-value"]
+  }
+]

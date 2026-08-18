@@ -1,0 +1,567 @@
+/**
+ * The Scenario Lab's own rules: the filter bar, the card grid, and the staged scenario.
+ *
+ * ## Why this file exists rather than adding to globals.css or components.css
+ *
+ * `globals.css` is the app shell — the frame every route sits in. `packages/ui/.../components.css`
+ * belongs to the shared components. Neither is the right home for "how a scenario card is laid out",
+ * and putting screen rules in a global stylesheet is how two screens end up sharing a selector by
+ * accident. Every class here is prefixed `prl-lab-` or `prl-stage-`, so nothing in it can collide
+ * with a `@prl/ui` block.
+ *
+ * It is imported from the two Lab routes rather than from the root layout, so a reader who never
+ * opens the Lab never downloads it. The route chrome both this section and Review use — the page
+ * opener, the breadcrumb, the fixture notice, the sibling links — lives in `page.css`, because a
+ * rule two route groups share has to live where both of them import it.
+ *
+ * ## The rules this file obeys, all of them from docs/frontend-design-system.md
+ *
+ *  - **No one-off values.** There is no hex, no px, no ms and no bezier literal below. Every value is
+ *    a `--prl-*` token. Search this file for `#` or `px` and you will find neither.
+ *  - **No shadows.** Depth is one step on the surface ramp plus a 1px hairline (§4.1). There is
+ *    no `box-shadow` anywhere in the app — the focus ring is an `outline` (base.css).
+ *  - **Meaningful borders are `--prl-line-strong` or the accent.** `--prl-line-subtle` measures
+ *    1.44:1 and is decoration only, so a card's outline — which is the only thing telling a reader
+ *    where one card ends and the next begins — never uses it (§2.4 rule B).
+ *  - **Transform and opacity only.** The two animated properties below are `transform` and
+ *    `opacity`. Nothing animates width, height, top or left, and there is no blur anywhere.
+ */
+
+/* ==========================================================================================
+   0. THE READING MEASURE, NARROWED FOR THIS ROUTE GROUP
+   ==========================================================================================
+   `--prl-measure` is `60ch`, and `ch` is the advance of "0" — much wider than the average letter —
+   so `60ch` never meant 60 characters. Walking a Range character by character down a rendered
+   paragraph at 1440px and recording where each line actually broke gave 80, 80 and 88 characters.
+   Past roughly 75 the eye starts losing the line beginning on the return sweep, which is the whole
+   reason a measure is capped at all. `52ch` lands at 69-72, and because the ratio between `ch` and
+   the average character is a property of the typeface rather than of the size, one value holds at
+   the 17px body, the 20px standfirst and the 15px caption alike.
+
+   This is the design token, given a tighter value on the two Lab routes rather than a new name:
+   every consumer of `--prl-measure` — `base.css`'s bare `<p>`, `.prl-page-head__standfirst`, the
+   scenario panels — uses it as a `max-width` on a text column and nothing else, so they all narrow
+   together and none of them can be caught out by it. `.prl-lab-page` is on the container in both
+   route files for exactly this purpose.
+
+   It belongs in `tokens.css`, where the same arithmetic applies to every reading column in the app.
+   It is scoped here because that file is `packages/ui` and outside what this change owns.
+   ========================================================================================== */
+
+.prl-lab-page {
+  --prl-measure: 52ch;
+}
+
+/**
+ * The standfirst, at the lead-paragraph token.
+ *
+ * `page.css` sets it at the body size because it is shared with Review, and at a correct 52ch
+ * measure that is a four-line column of 17px text under a 44px heading — the opener ends up quieter
+ * than the filter panel below it. `--prl-type-body-lg` is the token that exists for a lead
+ * paragraph; it takes the same 52ch to three lines and gives the block the weight an opener needs.
+ * Scoped to `.prl-lab-page` so Review is untouched.
+ */
+.prl-lab-page .prl-page-head__standfirst {
+  font-size: var(--prl-type-body-lg);
+}
+
+/* ==========================================================================================
+   0a. A REPAIR TO `@prl/ui`, RESTATED FOR THIS ROUTE GROUP
+   ==========================================================================================
+   `AssumptionList` draws its own `01 02 03` index inside each `<li>`, and `.prl-assumptions__list`
+   in `components.css` leaves the list's default marker on. On a staged scenario that renders as a
+   bullet AND a number for every assumption, and — because nothing lays the item out — the number
+   collides with the first word: the flush-draw scenario reads "01The button bets this turn".
+
+   `learn.css` already carries this repair, which is why the same component looks correct inside a
+   lesson and wrong inside a scenario: the Lab routes import `lab.css` and never `learn.css`, so a
+   fix written once in the wrong file is a fix that only covers half the app. The right home is
+   `packages/ui`; until it lands there this file states it too, with the same tokens and no new
+   values. Delete both copies together.
+
+   The list stays a `<ul>` deliberately — an `<ol>` would claim these assumptions have an order that
+   matters — so the marker is what goes, not the element.
+   ========================================================================================== */
+
+.prl-assumptions__list {
+  padding-inline-start: 0;
+  list-style: none;
+}
+
+.prl-assumptions__item {
+  display: grid;
+  gap: var(--prl-space-4);
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+}
+
+/* ==========================================================================================
+   1. FILTERS
+   ==========================================================================================
+   A real `<form method="get">`. The fieldset carries the group name for a screen reader; the
+   selects keep every platform behaviour (type-ahead, arrows, the mobile picker) because they are
+   native.
+
+   These three controls are the only way to get from thirty-six cards to the two you wanted, and
+   the panel used to be drawn in `--prl-hairline` — the decorative 1.44:1 line — which made the one
+   piece of machinery on the screen the quietest thing on it. It is now a `--prl-line-strong`
+   boundary, which is what §2.4 rule B asks of a border that carries meaning anyway: this one tells
+   a reader where the controls begin.
+   ========================================================================================== */
+
+.prl-lab-filters {
+  display: grid;
+  gap: var(--prl-space-5);
+  margin-block: var(--prl-space-9);
+}
+
+.prl-lab-filters__set {
+  display: grid;
+  gap: var(--prl-space-7);
+  margin: 0;
+  padding: var(--prl-space-8);
+  border: var(--prl-hairline-strong);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-raised);
+}
+
+.prl-lab-filters__legend {
+  padding-inline: var(--prl-space-3);
+  color: var(--prl-text);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+/**
+ * Three fields, on the design system's own breakpoints rather than on an `auto-fit` track.
+ *
+ * It was `repeat(auto-fit, minmax(var(--prl-space-15), 1fr))`, and the comment above it claimed
+ * 8rem was "the narrowest a select showing 'Fold equity and bluffing (1)' can be without truncating
+ * the count". Rendered at 390px that is simply not true: an 8rem minimum fits two tracks into the
+ * panel, each about 147px, and the widest option is clipped mid-word — on the control whose entire
+ * job is to tell a reader what they are about to choose. The counts are the reason the options are
+ * long, and the counts are the most useful thing on them, so truncation is not a cosmetic loss.
+ *
+ * Explicit columns cannot do that. One field per row on a phone, two from 600 and three from 1280,
+ * where the panel is wide enough that a track is 370px and nothing is close to clipping.
+ */
+.prl-lab-filters__row {
+  display: grid;
+  gap: var(--prl-space-6);
+}
+
+.prl-lab-filters__field {
+  margin: 0;
+}
+
+/**
+ * The action row, with the result count in it.
+ *
+ * The count used to sit on its own line below the form in muted 11px, which put the answer to
+ * "did that do anything?" further from the button than the button was from the selects. It is now
+ * on the same row, pushed to the far end, at the page's reading size — so pressing Apply and
+ * reading the result is one glance rather than two.
+ */
+.prl-lab-filters__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4) var(--prl-space-6);
+  padding-block-start: var(--prl-space-6);
+  border-block-start: var(--prl-hairline);
+}
+
+.prl-lab-filters__summary {
+  margin: 0;
+  color: var(--prl-text);
+  font-size: var(--prl-type-body);
+  font-variant-numeric: tabular-nums;
+}
+
+/** The figure inside the sentence, so "6 of 36" is findable without reading the words around it. */
+.prl-lab-filters__count {
+  font-weight: var(--prl-weight-semibold);
+}
+
+/* ==========================================================================================
+   2. THE CARD GRID
+   ==========================================================================================
+   The design system's own 12-column grid, with each card on `.prl-span-4` — so three across at
+   1280px and up, two between 600 and 899, one below. That is section 10's responsive table
+   applied rather than reinterpreted.
+
+   An `auto-fill` track with a token minimum was tried first and was wrong: the largest space token
+   is 10rem, so `minmax(10rem, 1fr)` packed seven 162px columns into a 1280px container and every
+   card became a tall thin strip. Reaching for a bigger number would have meant inventing a value
+   the token set does not have, which is the signal to use the grid that already exists.
+
+   This rule therefore adds only what `<ul>` needs; the columns come from `.prl-grid`.
+   ========================================================================================== */
+
+.prl-lab-grid {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/**
+ * The cell and the reveal wrapper both stretch, so cards in a row share a height and their
+ * bottom-aligned state line sits on one baseline across the row. Without this the reveal's `<div>`
+ * would shrink to its content and every card in the row would be a different height.
+ */
+.prl-lab-grid__cell,
+.prl-lab-card-wrap {
+  display: flex;
+  min-width: 0;
+}
+
+.prl-lab-card-wrap {
+  flex: 1 1 auto;
+}
+
+.prl-lab-card {
+  display: grid;
+  flex: 1 1 auto;
+  align-content: start;
+  /* Index, title, question, chips and state are five stacked blocks; at `--prl-space-4` they read
+     as one paragraph of mixed sizes rather than as a card with parts. */
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-8);
+  /* A meaningful border: it is the only thing separating one card from the next, so it clears the
+     3:1 WCAG 1.4.11 asks of a component boundary rather than using the decorative hairline. */
+  border: var(--prl-hairline-strong);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+  transition:
+    border-color var(--prl-dur-instant) var(--prl-ease-hover),
+    background-color var(--prl-dur-instant) var(--prl-ease-hover);
+}
+
+/** `:focus-within` as well as `:hover`, so arriving by keyboard lights the same card. */
+.prl-lab-card:hover,
+.prl-lab-card:focus-within {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-hover);
+}
+
+.prl-lab-card__index {
+  margin: 0;
+}
+
+.prl-lab-card__title {
+  margin: 0;
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-snug);
+  text-wrap: balance;
+}
+
+/**
+ * The whole card is the target, via a stretched pseudo-element on the title's link.
+ *
+ * `::after` with `position: absolute; inset: 0` rather than wrapping the card in an anchor: an
+ * anchor around a heading, three chips and a status line produces one enormous accessible name
+ * read out in full on every arrow-key pass. This way the link's name is the title, and the click
+ * area is the card. The chips stay non-interactive, so nothing is nested inside the link.
+ */
+.prl-lab-card__link {
+  color: var(--prl-text);
+  text-decoration: none;
+}
+
+.prl-lab-card__link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--prl-radius-2);
+}
+
+.prl-lab-card {
+  position: relative;
+}
+
+.prl-lab-card__link:hover {
+  color: var(--prl-accent-text);
+}
+
+/** The ring belongs on the card, not on the text: the card is what the pseudo-element covers. */
+.prl-lab-card:has(.prl-lab-card__link:focus-visible) {
+  outline: var(--prl-focus-width) solid var(--prl-focus-color);
+  outline-offset: var(--prl-focus-offset);
+}
+
+.prl-lab-card__link:focus-visible {
+  outline: none;
+}
+
+/**
+ * The question is the card. It is what a reader scans thirty-six of, so it is set at the reading
+ * size rather than one step under it.
+ */
+.prl-lab-card__question {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-lab-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/**
+ * The attempted line, pinned to the bottom of the card so a row of cards agrees on where it is.
+ * The state is a glyph plus words; `data-attempted` only changes the ink, so throwing the
+ * stylesheet away leaves the sentence intact.
+ */
+.prl-lab-card__state {
+  margin: 0;
+  align-self: end;
+  padding-block-start: var(--prl-space-4);
+  border-block-start: var(--prl-hairline);
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-lab-card__state[data-attempted="true"] {
+  color: var(--prl-accent-text);
+}
+
+/* ==========================================================================================
+   3. THE STAGED SCENARIO
+   ==========================================================================================
+   A single column at prose measure for the panels, because the reading order IS the pedagogy:
+   assumptions, then question, then decision, then analysis. A two-column layout would let a
+   reader meet the analysis before the assumptions, which is the one arrangement this screen must
+   not allow.
+   ========================================================================================== */
+
+.prl-stage {
+  display: grid;
+  gap: var(--prl-space-9);
+  margin-block: var(--prl-space-9);
+}
+
+.prl-stage__question {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text);
+  font-size: var(--prl-type-display-3);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-snug);
+  text-wrap: balance;
+}
+
+.prl-stage__chosen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-stage__chosen-line {
+  display: grid;
+  gap: var(--prl-space-2);
+  margin: 0;
+}
+
+.prl-stage__chosen-action {
+  color: var(--prl-text);
+  font-size: var(--prl-type-metric-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-metric);
+}
+
+/**
+ * The reveal.
+ *
+ * It arrives with a `transform`/`opacity` keyframe, which answers "is this new information?" — the
+ * fourth of the four questions section 5.1 allows an animation to answer. `--prl-dur-in` and
+ * `--prl-ease-enter` collapse under reduced motion, leaving the content simply present.
+ */
+.prl-stage__reveal {
+  display: grid;
+  gap: var(--prl-space-9);
+  animation: prl-stage-reveal var(--prl-dur-in) var(--prl-ease-enter) both;
+}
+
+@keyframes prl-stage-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(var(--prl-space-5));
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/**
+ * The focus target for the post-commit focus move.
+ *
+ * `:focus:not(:focus-visible)`, not bare `:focus`. The bare form was (0,2,0) and therefore beat
+ * `:focus-visible` in `base.css` at (0,1,0), which removed the ring for a KEYBOARD arrival too — and
+ * this element is only ever focused straight after the reader pressed a button, so a keyboard reader
+ * was the one who lost it. With no ring anywhere on screen they cannot tell where the caret went, and
+ * the next Tab appears to come from nowhere.
+ *
+ * The three other scripted focus targets in this app — the glossary term heading, the quiz question
+ * heading, the onboarding step heading — all keep their ring. This one now matches them, and the rule
+ * still suppresses the UA outline for a pointer-driven focus, which is the only case it was for.
+ */
+.prl-stage__reveal:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.prl-stage__verdict {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-4);
+}
+
+.prl-stage__ev {
+  display: grid;
+  gap: var(--prl-space-5);
+  margin: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
+}
+
+.prl-stage__ev-row {
+  display: grid;
+  gap: var(--prl-space-2);
+  padding: var(--prl-space-5);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-stage__ev-value {
+  margin: 0;
+  color: var(--prl-text);
+  font-size: var(--prl-type-metric-sm);
+  /* Tabular, because these two figures are read against each other and a jittering digit is a
+     digit misread. */
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-metric);
+}
+
+.prl-stage__mistakes,
+.prl-stage__glossary {
+  display: grid;
+  gap: var(--prl-space-5);
+  margin: 0;
+  padding: 0;
+  max-width: var(--prl-measure);
+}
+
+.prl-stage__mistakes {
+  padding-inline-start: var(--prl-space-7);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-stage__glossary {
+  list-style: none;
+}
+
+.prl-stage__glossary-row {
+  display: grid;
+  gap: var(--prl-space-2);
+  padding-block-end: var(--prl-space-5);
+  border-block-end: var(--prl-hairline);
+}
+
+.prl-stage__glossary-row dt {
+  color: var(--prl-text);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-stage__glossary-row dd {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-stage__glossary-formula {
+  display: block;
+  margin-block-start: var(--prl-space-3);
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-stage__onward {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-5);
+  padding-block-start: var(--prl-space-7);
+  border-block-start: var(--prl-hairline);
+}
+
+/* ==========================================================================================
+   4. RESPONSIVE
+   ==========================================================================================
+   The two content breakpoints this file needs, both of them the design system's own (§10). See the
+   note on `.prl-lab-filters__row` for why the fields are placed rather than auto-fitted.
+   ========================================================================================== */
+
+@media (min-width: 600px) {
+  .prl-lab-filters__row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Pushed to the far end of the action row only once the row is wide enough to hold the buttons
+     and the count together. Below 600 the count wraps to its own line, and a lone right-aligned
+     sentence under two left-aligned buttons reads as a mistake rather than as alignment. */
+  .prl-lab-filters__summary {
+    margin-inline-start: auto;
+  }
+}
+
+@media (min-width: 1280px) {
+  .prl-lab-filters__row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ==========================================================================================
+   5. FORCED COLORS
+   ==========================================================================================
+   Windows High Contrast throws away background-color and repaints every border as CanvasText, so
+   the two cues this screen leans on — a surface step for a card and an accent border for its hover
+   state — both disappear. Restated as a border width change, which forced-colors keeps.
+   ========================================================================================== */
+
+@media (forced-colors: active) {
+  .prl-lab-card:hover,
+  .prl-lab-card:focus-within {
+    border-width: var(--prl-focus-width);
+  }
+
+  .prl-lab-card__state[data-attempted="true"] {
+    text-decoration: underline;
+  }
+}

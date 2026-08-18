@@ -1,0 +1,826 @@
+/**
+ * The Review section's own rules: the history table, the decision timeline, the replay stage and
+ * the commitment verifier.
+ *
+ * Same boundaries and the same rules as `lab.css` — every value is a `--prl-*` token, no shadows,
+ * meaningful borders use `--prl-line-strong` or the accent, and only `transform` and `opacity` are
+ * animated. Every class is prefixed `prl-review-`, `prl-timeline-`, `prl-replay-` or
+ * `prl-verifier-`, so nothing here can collide with a `@prl/ui` block.
+ *
+ * The two interesting problems in this file are both about the timeline, so they are worth naming
+ * up front:
+ *
+ *  1. **The spine has to be a line behind the markers, drawn without a wrapper element.** It is a
+ *     `::before` on the marker row with a token hairline, positioned at the markers' vertical
+ *     centre. A separate element would need the same width as the row and would sit in the
+ *     accessibility tree for no reason.
+ *  2. **A marker's state must survive the stylesheet being thrown away.** `data-viewer`,
+ *     `data-analysis` and `aria-current` change the fill, the border and the ink — but each state
+ *     also has a glyph and a sentence in the markup, so forced-colors mode and a text browser both
+ *     still read correctly.
+ */
+
+/* ==========================================================================================
+   0. THE PAGE OPENER, ON THIS ROUTE ONLY
+   ==========================================================================================
+   `.prl-page-head` lives in `page.css` because the Lab and Review screens share it, and a route that
+   edited a shared file to change its own rhythm is how a shared file stops being shareable. So both
+   Review pages carry `.prl-review-page` and the layout below is scoped to it.
+
+   ## What it fixes
+
+   `base.css` caps every `<p>` at `--prl-measure`, which is right — past about 75 characters the eye
+   loses the start of the next line on the return sweep. The consequence in a one-column page is a
+   1360px row holding a 642px paragraph and 718px of nothing, on every screen in the app. Measured on
+   `/review` at 1440x900: the opener was 1360px wide and every word in it sat inside the leftmost
+   690px.
+
+   The measure is not the problem and it does not change here. What changes is that the capped column
+   is put where the space already was — which also takes about 90px off the height above the table, on
+   a screen whose whole purpose is the table below it.
+
+   Same rule, same breakpoint and the same reasoning as `play.css` section 1 and `legends.css`
+   section 1, deliberately: three routes inventing three opening rhythms is how one product starts
+   looking like three.
+   ========================================================================================== */
+
+.prl-review-page .prl-page-head__standfirst {
+  font-size: var(--prl-type-body-lg);
+}
+
+/**
+ * `span 6` and the margin standing in for the row gap are both deliberate, and the reasoning is
+ * written out once in `legends.css` section 1 rather than three times. Short version: a grid that
+ * declares no explicit rows has one explicit row line, so `grid-row: 1 / -1` means `1 / 2` and the
+ * standfirst stretches the eyebrow's row instead of sitting beside the whole block. Spanning past the
+ * end of the content spans all of it and stretches none of it; the row gap then has to become a
+ * margin, because a gap is charged for the empty rows and a margin is not.
+ *
+ * `--prl-space-5` is `.prl-page-head`'s own gap in `page.css`. The two are a pair.
+ */
+@media (min-width: 900px) {
+  /* `:has()` because `/review/[handId]` has no standfirst — its opener is a crumb, the hand number
+     and four figures — and an empty second track would still claim its width and crush the first.
+     Two equal halves rather than a fixed measure track, so the split scales with the viewport instead
+     of leaving 138px for the title at 900px. Both points are worked through in `legends.css`. */
+  .prl-review-page .prl-page-head:has(> .prl-page-head__standfirst) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--prl-space-11);
+    row-gap: var(--prl-space-0);
+  }
+
+  .prl-review-page .prl-page-head:has(> .prl-page-head__standfirst) > :not(.prl-page-head__standfirst) {
+    grid-column: 1;
+    margin-block-end: var(--prl-space-5);
+  }
+
+  .prl-review-page
+    .prl-page-head:has(> .prl-page-head__standfirst)
+    > :last-child:not(.prl-page-head__standfirst) {
+    margin-block-end: var(--prl-space-0);
+  }
+
+  .prl-review-page .prl-page-head__standfirst {
+    grid-column: 2;
+    grid-row: 1 / span 6;
+    align-self: start;
+  }
+}
+
+/* ==========================================================================================
+   1. THE HISTORY TABLE
+   ==========================================================================================
+   Dense on purpose: a hand history is a list you scan for an outlier, and generous row padding
+   makes that scan longer. Tabular numerals in every numeric column, so a column of pots and nets
+   aligns without manual padding.
+   ========================================================================================== */
+
+.prl-review-sorts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4) var(--prl-space-6);
+  margin-block: var(--prl-space-9) var(--prl-space-6);
+}
+
+.prl-review-sorts__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-review-sorts__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--prl-target-min);
+  padding-inline: var(--prl-space-5);
+  border: var(--prl-hairline-strong);
+  border-radius: var(--prl-radius-1);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-decoration: none;
+  text-transform: uppercase;
+  transition: color var(--prl-dur-instant) var(--prl-ease-hover);
+}
+
+.prl-review-sorts__link:hover {
+  border-color: var(--prl-accent-edge);
+  color: var(--prl-accent-text);
+}
+
+/**
+ * The active ordering: an accent fill with `--prl-text-on-accent`, never white.
+ * ink-900 on accent-500 measures 9.39:1; white on it measures 2.07:1 and is a hard fail. The token
+ * flips with the theme, which is the whole reason it exists.
+ *
+ * `aria-current` is also on the element, so the state is in the accessibility tree and not only in
+ * the paint.
+ */
+.prl-review-sorts__link[aria-current] {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-accent-fill);
+  color: var(--prl-text-on-accent);
+}
+
+/**
+ * The scroll container. A table's columns cannot wrap, so on a phone this scrolls sideways, and
+ * axe's `scrollable-region-focusable` (WCAG 2.1.1) requires a scrollable region with no focusable
+ * content to be reachable by keyboard — hence the `tabindex` in the markup. The alternative,
+ * `display: block` on the rows at narrow widths, strips the table role from the accessibility tree
+ * in every current browser and was rejected for that reason.
+ */
+.prl-review-scroll {
+  overflow-x: auto;
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-review-table caption {
+  padding: var(--prl-space-5) var(--prl-space-6);
+  border-block-end: var(--prl-hairline);
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+  text-align: start;
+}
+
+.prl-review-table th,
+.prl-review-table td {
+  padding: var(--prl-space-4) var(--prl-space-6);
+  border-block-end: var(--prl-hairline);
+  text-align: start;
+  vertical-align: middle;
+}
+
+/* The header row's rule is the axis of the table, so it carries meaning and takes the strong line. */
+.prl-review-table thead th {
+  border-block-end: var(--prl-hairline-strong);
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.prl-review-table tbody tr:last-child th,
+.prl-review-table tbody tr:last-child td {
+  border-block-end: 0;
+}
+
+.prl-review-table tbody tr:hover {
+  background-color: var(--prl-surface-hover);
+}
+
+.prl-review-table__hand {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-review-table__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--prl-target-min);
+  color: var(--prl-accent-text);
+  font-size: var(--prl-type-metric-sm);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--prl-tracking-metric);
+  text-decoration: none;
+}
+
+.prl-review-table__link:hover {
+  text-decoration: underline;
+}
+
+.prl-review-table__when {
+  color: var(--prl-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.prl-review-table__pot {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.prl-review-board {
+  display: flex;
+  align-items: center;
+  gap: var(--prl-space-2);
+}
+
+.prl-review-board--empty {
+  color: var(--prl-text-muted);
+}
+
+/**
+ * The net cell. Four independent signals, and the colour is the fourth: the digits carry an
+ * explicit `+`/`-`, the unit word is in the string, the word "gained"/"lost"/"level" sits beside it,
+ * and only then does `data-sign` change the ink. Remove the stylesheet and the column still reads.
+ */
+.prl-review-net {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--prl-space-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.prl-review-net__value {
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-review-net__word {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-review-net[data-sign="positive"] .prl-review-net__value {
+  color: var(--prl-favourable);
+}
+
+.prl-review-net[data-sign="negative"] .prl-review-net__value {
+  color: var(--prl-adverse);
+}
+
+.prl-review-net[data-sign="unknown"] {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-review-paging {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--prl-space-5);
+  margin-block: var(--prl-space-7) var(--prl-space-11);
+}
+
+.prl-review-paging__inert {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+/* ==========================================================================================
+   2. THE REPLAY HEADER
+   ========================================================================================== */
+
+.prl-review-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-6) var(--prl-space-10);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-review-summary > li {
+  display: grid;
+  gap: var(--prl-space-2);
+  align-content: start;
+}
+
+/**
+ * The four figures under the `h1`: the pot, the net, how it ended, how many decisions.
+ *
+ * `metric-md` rather than `metric-sm`. These are the headline of the hand — the first thing a reader
+ * came to this page to know — and at 18px they were two points larger than the body text beside them,
+ * which is not a hierarchy anybody can see. The replay's own step metrics further down the page are
+ * already `md`, and it read as though the summary were the smaller fact. It is not.
+ */
+.prl-review-summary__value {
+  color: var(--prl-text);
+  font-size: var(--prl-type-metric-md);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
+}
+
+/* ==========================================================================================
+   3. THE DECISION TIMELINE
+   ==========================================================================================
+   A horizontal spine of street blocks, each holding its own markers. It wraps to a vertical stack
+   on a narrow screen, which is why both arrow axes are bound in the component: a reader whose key
+   depends on the viewport width is a reader who has to look before they press.
+   ========================================================================================== */
+
+/**
+ * The timeline is a `<fieldset>`, which brings two UA defaults that have to go: a non-zero inline
+ * margin, and `min-inline-size: min-content`. The second is the one that bites — it stops the panel
+ * shrinking below its widest row, so a long hand would push the page sideways on a phone instead of
+ * scrolling inside its own container.
+ */
+.prl-timeline {
+  overflow-x: auto;
+  min-inline-size: 0;
+  margin-block: var(--prl-space-7);
+  margin-inline: 0;
+  padding: var(--prl-space-7);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-timeline__streets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  /* Row gap larger than the column gap. When the streets wrap onto a second line — which is what a
+     long hand does at any width below about 1100px — an even gap left two rows of markers close
+     enough that the eye read them as one continuous spine. */
+  gap: var(--prl-space-9) var(--prl-space-8);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-timeline__street {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: var(--prl-space-5);
+  /* The street separator is the accent, because a street boundary is the most load-bearing division
+     in a hand and a decorative hairline would not clear 3:1 against the panel behind it. */
+  padding-inline-start: var(--prl-space-6);
+  border-inline-start: var(--prl-focus-width) solid var(--prl-line-accent);
+}
+
+.prl-timeline__street-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--prl-space-4);
+  margin: 0;
+}
+
+.prl-timeline__street-index {
+  color: var(--prl-accent-text);
+}
+
+/**
+ * The street name is the heading of a group a reader scans BY, so it is read at a glance rather than
+ * inspected: "which street am I looking at" is answered by this word and by nothing else on the row.
+ *
+ * `body-sm` rather than `label`. It keeps the uppercase technical voice, but 13px was the same size
+ * as the markers underneath it, and a group heading that is exactly as loud as its contents is not a
+ * heading. Tracking comes down a step at the same time, for the reason `tokens.css` gives: wide
+ * tracking is a legibility aid at small sizes and a legibility cost once the letterforms are big
+ * enough to read on their own.
+ */
+.prl-timeline__street-name {
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+/**
+ * The markers row, with the spine drawn behind it.
+ *
+ * `::before` at 50% of the row height with a token hairline, `inset-inline: 0`, and `z-index: 0`
+ * against the markers' own stacking. A separate element would duplicate the row's width and sit in
+ * the accessibility tree for nothing.
+ */
+/**
+ * `width: fit-content` is what stops the spine dangling.
+ *
+ * The row is a grid item of the street, so it stretched to the street's width — and the street is as
+ * wide as its widest child, which is often the HEAD rather than the markers. On the last street of a
+ * folded-out hand ("04 FOLDED OUT", one `■ END` marker) that left the spine running 60px past the
+ * last marker into empty panel, which reads as a connector to something that is not there.
+ *
+ * `fit-content` resolves to the markers' own width when they fit and to the available width when
+ * they wrap, so the axis is exactly as long as the row of steps it is the axis of — at every width,
+ * without a media query.
+ */
+.prl-timeline__markers {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-3);
+  width: fit-content;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-timeline__markers::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset-block-start: 50%;
+  inset-inline: 0;
+  /* A border rather than `height: 1px` plus a background: the hairline's width and colour then both
+     come from `--prl-hairline-strong` instead of a literal, and this file keeps its promise that
+     every value in it is a token. Strong, not subtle: the spine is the axis of the control, and an
+     axis carries meaning. */
+  border-block-start: var(--prl-hairline-strong);
+}
+
+.prl-timeline__slot {
+  position: relative;
+  z-index: var(--prl-z-raised);
+  display: flex;
+}
+
+.prl-timeline__marker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--prl-space-2);
+  /* 44px, exceeding WCAG 2.2's 24px floor: a scrub marker is small and consequential, and often
+     used one-handed on a phone. */
+  min-width: var(--prl-target-min);
+  min-height: var(--prl-target-min);
+  padding-inline: var(--prl-space-5);
+  border: var(--prl-hairline-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+  color: var(--prl-text-secondary);
+  font-family: var(--prl-font-sans);
+  /* A marker's text is CONTENT — "raise 159", "call 33" — not a label, and it is the only place in
+     the hand where that figure is scannable in sequence. At 13px with label tracking it was set in
+     the app's quietest voice, which is the opposite of what a scrub control wants. `body-sm` with no
+     extra tracking is the same treatment a table cell gets, and a timeline is a table of decisions
+     laid on its side. */
+  font-size: var(--prl-type-body-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--prl-weight-medium);
+  cursor: pointer;
+  /* Transform and colour only. Nothing here animates a layout property. */
+  transition:
+    transform var(--prl-dur-instant) var(--prl-ease-hover),
+    border-color var(--prl-dur-instant) var(--prl-ease-hover),
+    color var(--prl-dur-instant) var(--prl-ease-hover);
+}
+
+.prl-timeline__marker:hover {
+  border-color: var(--prl-accent-edge);
+  color: var(--prl-text);
+  transform: translateY(calc(-1 * var(--prl-space-1)));
+}
+
+/** The reader's own decisions: a heavier weight and brighter ink, plus the `▸` glyph in the markup. */
+.prl-timeline__marker[data-viewer="true"] {
+  color: var(--prl-text);
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-timeline__marker[data-terminal="true"] {
+  border-style: dashed;
+}
+
+/**
+ * The scrub position. An accent fill with `--prl-text-on-accent` — never white, see the sort link
+ * above — plus `aria-current="step"` in the markup, plus the `▸`/`·`/`■` glyph. Three signals.
+ */
+.prl-timeline__marker[aria-current="step"] {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-accent-fill);
+  color: var(--prl-text-on-accent);
+  transform: translateY(calc(-1 * var(--prl-space-1)));
+}
+
+.prl-timeline__glyph {
+  color: inherit;
+}
+
+.prl-timeline__short {
+  white-space: nowrap;
+}
+
+/** The `+` that marks a decision carrying an analysis. Ink only; the sentence says it too. */
+.prl-timeline__analysis-mark {
+  color: var(--prl-accent-text);
+  font-weight: var(--prl-weight-bold);
+}
+
+.prl-timeline__marker[aria-current="step"] .prl-timeline__analysis-mark {
+  color: var(--prl-text-on-accent);
+}
+
+/* ==========================================================================================
+   4. THE REPLAY STAGE
+   ========================================================================================== */
+
+.prl-replay {
+  display: grid;
+  gap: var(--prl-space-8);
+  margin-block: var(--prl-space-8);
+}
+
+.prl-replay__transport {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--prl-space-5);
+}
+
+.prl-replay__position {
+  display: flex;
+  align-items: baseline;
+  gap: var(--prl-space-4);
+  margin: 0;
+}
+
+.prl-replay__position-value {
+  color: var(--prl-text);
+  font-size: var(--prl-type-metric-sm);
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-metric);
+}
+
+/**
+ * The scrubbed panel.
+ *
+ * Keyed on the step index in the component, so a scrub remounts it and replays this keyframe. It is
+ * `transform` and `opacity` only — the two properties that get a compositor ride — which is what
+ * makes stepping through a ten-decision hand cheap. `--prl-dur-quick` rather than `--prl-dur-in`
+ * because a scrub is a small state change, not new information arriving, and 420ms of travel on
+ * every arrow press would make holding the key feel like wading.
+ */
+.prl-replay__stage {
+  display: grid;
+  gap: var(--prl-space-7);
+  animation: prl-replay-step var(--prl-dur-quick) var(--prl-ease-standard) both;
+}
+
+@keyframes prl-replay-step {
+  from {
+    opacity: 0;
+    transform: translateY(var(--prl-space-2));
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.prl-replay__metrics {
+  display: grid;
+  gap: var(--prl-space-7);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
+}
+
+.prl-replay__caption {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-replay__result {
+  display: grid;
+  gap: var(--prl-space-4);
+  margin: 0;
+}
+
+.prl-replay__result-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--prl-space-5);
+  padding-block-end: var(--prl-space-4);
+  border-block-end: var(--prl-hairline);
+}
+
+.prl-replay__result-row dt {
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-replay__result-row dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-replay__result-row dd[data-sign="positive"] {
+  color: var(--prl-favourable);
+}
+
+.prl-replay__result-row dd[data-sign="negative"] {
+  color: var(--prl-adverse);
+}
+
+.prl-replay__result-word {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+/* ==========================================================================================
+   5. THE COMMITMENT VERIFIER
+   ==========================================================================================
+   A 64-character hex hash has no word boundaries, so it needs `overflow-wrap: anywhere` or it
+   pushes the panel sideways on a phone. It is shown in full rather than truncated: a root a reader
+   cannot copy is a root they cannot check anywhere else, which defeats the purpose of publishing it.
+   ========================================================================================== */
+
+.prl-verifier {
+  display: grid;
+  gap: var(--prl-space-6);
+  padding: var(--prl-space-7);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-verifier__head {
+  display: grid;
+  justify-items: start;
+  gap: var(--prl-space-3);
+  padding-block-end: var(--prl-space-5);
+  border-block-end: var(--prl-hairline);
+}
+
+.prl-verifier__title {
+  margin: 0;
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+}
+
+.prl-verifier__facts {
+  display: grid;
+  gap: var(--prl-space-2) var(--prl-space-6);
+  margin: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+}
+
+.prl-verifier__hash {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-verifier__count {
+  margin: 0;
+  color: var(--prl-text);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-medium);
+}
+
+.prl-verifier__status {
+  margin: 0;
+}
+
+/* At the height of one line of body text, so the panel does not resize when the result lands. */
+.prl-verifier__skeleton {
+  display: block;
+  --prl-skeleton-h: var(--prl-space-6);
+}
+
+.prl-verifier__cards {
+  display: grid;
+  gap: var(--prl-space-4);
+}
+
+.prl-verifier__card-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-verifier__card {
+  display: grid;
+  justify-items: center;
+  gap: var(--prl-space-2);
+}
+
+/* ==========================================================================================
+   6. LOADING SKELETONS AT THE REAL DIMENSIONS
+   ==========================================================================================
+   Each block below is the height of the thing it stands in for, so nothing reflows on arrival. The
+   table block matches the `min-height: 36rem` that `@prl/ui`'s `@container prl-table` block reserves
+   for the six-max oval layout; the metric blocks reuse the shared `--prl-skeleton--metric` height.
+   ========================================================================================== */
+
+.prl-review-skeleton {
+  display: grid;
+  gap: var(--prl-space-8);
+  margin-block: var(--prl-space-8);
+}
+
+.prl-review-skeleton__eyebrow {
+  display: block;
+  --prl-skeleton-h: var(--prl-space-6);
+
+  max-width: var(--prl-space-15);
+}
+
+.prl-review-skeleton__title {
+  display: block;
+  --prl-skeleton-h: var(--prl-space-11);
+
+  max-width: var(--prl-space-16);
+}
+
+.prl-review-skeleton__summary {
+  display: block;
+  --prl-skeleton-h: var(--prl-space-9);
+}
+
+.prl-review-skeleton__timeline {
+  display: block;
+  --prl-skeleton-h: var(--prl-space-15);
+}
+
+.prl-review-skeleton__metrics {
+  display: grid;
+  gap: var(--prl-space-7);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
+}
+
+/* 36rem is what the table reserves for the oval layout: `--prl-space-15` (8rem) x 4.5. */
+.prl-review-skeleton__table {
+  display: block;
+  --prl-skeleton-h: calc(4.5 * var(--prl-space-15));
+}
+
+.prl-review-skeleton__panel {
+  display: block;
+  --prl-skeleton-h: calc(2 * var(--prl-space-15));
+}
+
+.prl-review-skeleton__verifier {
+  display: block;
+  --prl-skeleton-h: var(--prl-space-16);
+}
+
+/* ==========================================================================================
+   7. FORCED COLORS
+   ==========================================================================================
+   The accent fill on the active marker and the active sort link is a background-color, and
+   forced-colors discards those. Both states are restated as a border width plus an underline, which
+   it keeps. The spine is `CanvasText` via the token override in tokens.css and needs nothing here.
+   ========================================================================================== */
+
+@media (forced-colors: active) {
+  .prl-timeline__marker[aria-current="step"],
+  .prl-review-sorts__link[aria-current] {
+    border-width: var(--prl-focus-width);
+    text-decoration: underline;
+  }
+
+  .prl-review-net[data-sign="positive"] .prl-review-net__value,
+  .prl-review-net[data-sign="negative"] .prl-review-net__value,
+  .prl-replay__result-row dd[data-sign="positive"],
+  .prl-replay__result-row dd[data-sign="negative"] {
+    color: CanvasText;
+  }
+}

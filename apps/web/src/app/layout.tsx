@@ -1,0 +1,126 @@
+/**
+ * The root layout: the document, the stylesheet order, the shell, and the one inline script.
+ *
+ * ## Why the stylesheet is imported here, first
+ *
+ * `@prl/ui/styles.css` is one file that `@import`s tokens, reset, base and components in a fixed
+ * order (see that file's comment — the order is load-bearing). Importing it from the root layout
+ * puts it above every route's CSS in the cascade, so a route can never be styled before the tokens
+ * exist. `globals.css` follows it and holds app-shell rules only.
+ *
+ * Both are JS imports rather than an `@import` inside `globals.css`. Both work; this is the one
+ * that cannot go wrong, because it does not depend on how the CSS pipeline resolves a bare package
+ * specifier through an `exports` map, and because the order is then visible on two adjacent lines
+ * rather than inferred.
+ *
+ * ## The inline script, and why there is exactly one
+ *
+ * `THEME_BOOT_SCRIPT` is the only inline script in the app. It resolves two things that CSS cannot
+ * see and React cannot see early enough:
+ *
+ *  - the reader's stored theme choice, from `localStorage`, applied to `<html data-theme>`;
+ *  - whether the boot sequence has already played this session, from `sessionStorage`, applied as
+ *    `<html data-boot="skip">`.
+ *
+ * Both have to be settled BEFORE first paint. Anything React-based — a provider, an effect, a
+ * store — runs after hydration, which is after paint, so a reader whose system is dark and whose
+ * choice is light would watch the page flash from one to the other. That is not polish: it is a
+ * full-screen luminance change fired at somebody who explicitly asked for the other one.
+ *
+ * It is the FIRST child of `<body>`, where a synchronous script blocks parsing before any
+ * renderable content exists — so there is nothing on screen to flash. It is written as `<script>`
+ * with a string child rather than `dangerouslySetInnerHTML`: React does not escape script children,
+ * so the two emit identical bytes, and only one of them trips the security lint rule that exists to
+ * catch actual HTML injection.
+ *
+ * `suppressHydrationWarning` on `<html>` is required and is not a shortcut: the script mutates
+ * that element's attributes before React arrives, so the server's markup and the live DOM
+ * legitimately differ. The warning is suppressed on the one element where the difference is the
+ * intended behaviour, and nowhere else.
+ *
+ * CSP: the script needs `script-src` to allow it, as either a hash of its exact bytes or a
+ * per-response nonce on the tag. The hash is exported as `THEME_BOOT_SCRIPT_CSP_HASH` from
+ * `src/lib/theme.ts` — import that constant rather than copying digits — and
+ * `test/theme-csp-hash.test.ts` recomputes it over `THEME_BOOT_SCRIPT`, so it cannot go stale
+ * without a test failing. The nonce route stays open for anyone who prefers it.
+ *
+ * ## The shell, the skip link, and the one `main`
+ *
+ * The skip link is the first focusable node in the document, invisible until focused
+ * (`.prl-skip-link` in base.css), and it points at the `<main>` this layout owns. One `main` for the
+ * whole app means `landmark-one-main` cannot be broken by a route, and routes own their single `h1`.
+ *
+ * `BootSequence` sits outside the shell because it is a fixed overlay above it, and it is rendered
+ * on the server on purpose: an overlay that mounts on the client fades IN over a shell the reader
+ * can already read, which is worse than no overlay at all.
+ *
+ * ## Why `data-theme` is not written here
+ *
+ * `tokens.css` has three theme states and the third is the default: an explicit `data-theme` wins,
+ * and *absence* means "follow the system", which `@media (prefers-color-scheme)` resolves. Hard-
+ * coding `data-theme="dark"` would make the light theme unreachable — including for the reviewer
+ * who has to check all four dark/light × motion-on/off combinations. Dark is still the designed
+ * default, because the tokens declare the dark palette on bare `:root`.
+ *
+ * No font link, no preconnect, no analytics: the CSP has no host for any of them and the design
+ * system forbids remote assets outright.
+ */
+
+import '@prl/ui/styles.css';
+import './globals.css';
+// The floating pill bar. After `globals.css` because it reshapes the shell that file frames; every
+// rule in it wins on specificity rather than on this order, so the order is a convenience.
+import '@/styles/nav.css';
+
+import type { Metadata, Viewport } from 'next';
+import type { ReactElement, ReactNode } from 'react';
+import { BootSequence } from '@/components/BootSequence.tsx';
+import { SiteFooter } from '@/components/SiteFooter.tsx';
+import { SiteHeader } from '@/components/SiteHeader.tsx';
+import { STARTING_UNITS } from '@/fixtures/session.ts';
+import { THEME_BOOT_SCRIPT } from '@/lib/theme.ts';
+
+/** The id the skip link targets. Exported so a route can never guess it wrong. */
+export const MAIN_ID = 'prl-main';
+
+export const metadata: Metadata = {
+  title: {
+    default: 'Poker Risk Lab',
+    template: '%s — Poker Risk Lab',
+  },
+  description:
+    'An educational play-money No-Limit Hold’em lab for probability, expected value, risk and ' +
+    'variance. Chips are free, resettable units with no value. There is no real money in this app.',
+  applicationName: 'Poker Risk Lab',
+  robots: { index: false, follow: false },
+};
+
+/**
+ * `maximum-scale` and `user-scalable` are left alone on purpose: pinning either of them is the
+ * WCAG 1.4.4 failure that `meta-viewport` exists to catch.
+ */
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+};
+
+export default function RootLayout({ children }: { readonly children: ReactNode }): ReactElement {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <body>
+        <script>{THEME_BOOT_SCRIPT}</script>
+        <a className="prl-skip-link" href={`#${MAIN_ID}`}>
+          Skip to main content
+        </a>
+        <BootSequence />
+        <div className="prl-app">
+          <SiteHeader fallbackUnits={STARTING_UNITS} />
+          <main className="prl-app__main" id={MAIN_ID}>
+            {children}
+          </main>
+          <SiteFooter />
+        </div>
+      </body>
+    </html>
+  );
+}

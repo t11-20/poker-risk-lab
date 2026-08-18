@@ -1,0 +1,129 @@
+packages:
+  - packages/*
+  - apps/*
+
+# ---------------------------------------------------------------------------
+# Supply-chain policy.
+#
+# IMPORTANT: pnpm 11 reads ONLY auth + registry settings from .npmrc. Every
+# other setting must live here or in ~/.config/pnpm/config.yaml, otherwise it
+# is silently ignored. Putting these in .npmrc would make them inert.
+# Verify with: pnpm run security:policy
+# ---------------------------------------------------------------------------
+
+# Lifecycle scripts are the delivery mechanism for the Mini Shai-Hulud worm
+# (preinstall / postinstall / prepare). Disabled globally, with an empty
+# allowlist so that no package can opt back in without a human editing this
+# file. See docs/security/shai-hulud-snapshot-2026-08-17.md §2.
+ignoreScripts: true
+onlyBuiltDependencies: []
+dangerouslyAllowAllBuilds: false
+
+# Registry cooldown: refuse any version published less than 7 days ago, so a
+# freshly-published malicious version cannot be pulled in before the ecosystem
+# has had a reporting window. 10080 minutes = 7 days.
+minimumReleaseAge: 10080
+minimumReleaseAgeExclude: []
+
+# Reproducibility + tamper detection.
+verifyStoreIntegrity: true
+verifyDepsBeforeRun: error
+preferFrozenLockfile: true
+resolutionMode: highest
+
+# Exact versions only. Ranges would let `pnpm install` drift onto a compromised
+# patch release without a lockfile change being reviewed.
+saveExact: true
+savePrefix: ''
+
+# Fail loudly instead of silently inventing a dependency graph.
+strictPeerDependencies: true
+autoInstallPeers: false
+engineStrict: true
+packageManagerStrict: true
+
+# No implicit access to undeclared dependencies.
+#
+# Both hoist patterns stay empty. The two things that broke under them are fixed
+# where they belong, not by widening these:
+#
+#   - `fastify` inside the `@fastify/*` plugins — see `packageExtensions` below.
+#   - `@swc/helpers` under `next dev`. Turbopack's dev-externals chunk requires
+#     next's runtime through the WORKSPACE path (apps/web/node_modules/next/…)
+#     rather than the store realpath, and resolution from there walks
+#     apps/web/node_modules, not next's own isolated directory — where
+#     @swc/helpers is present. Result: every route 500s with "Cannot find module
+#     '@swc/helpers/_/_interop_require_default'". So @swc/helpers is declared in
+#     apps/web/package.json (JSON cannot carry this comment, hence it is here),
+#     which puts it on exactly the one resolution path that needs it.
+#     `publicHoistPattern` would have worked by putting it in the root
+#     node_modules, visible to all nine workspace projects; `hoistPattern` would
+#     NOT have worked at all, because it hoists to node_modules/.pnpm/node_modules
+#     which is not on that walk. `next build` and `next start` were never
+#     affected — they resolve through the realpath.
+hoistPattern: []
+publicHoistPattern: []
+nodeLinker: isolated
+
+# ---------------------------------------------------------------------------
+# Corrections to third-party manifests.
+#
+# The three settings directly above mean a package can only see what it
+# DECLARES. That is the point, and it is worth keeping — but it turns an
+# upstream manifest bug into a build failure here, and the honest fix is to
+# correct the manifest rather than to widen the hoist patterns.
+#
+# Every `@fastify/*` plugin below declares `fastify` in `devDependencies` and
+# has no `peerDependencies` at all. That is wrong on its face: a Fastify plugin
+# does not *develop against* Fastify, it *runs inside* it, and the version has
+# to match the host application's. pnpm installs no third-party devDependencies,
+# so under `nodeLinker: isolated` `fastify` is absent from each plugin's
+# directory. Their `.d.ts` files then cannot resolve `import … from 'fastify'`,
+# and `skipLibCheck: false` (deliberate, tsconfig.base.json) makes that fatal:
+# 7 x TS2307 inside node_modules plus ~25 knock-on errors in apps/api/src,
+# because the type augmentations the plugins install — `setCookie`, `cookies`,
+# `csrfProtection`, `rateLimit`, the `websocket` route option — all disappear
+# with them. `pnpm run build`, `pnpm run typecheck` and `docker build
+# -f Dockerfile.api .` all fail from a clean checkout.
+#
+# `packageExtensions` states the peer relationship upstream omitted, so pnpm
+# links the workspace's single `fastify` 5.11.3 into each plugin. Why this and
+# not the alternatives:
+#
+#   - It records the edges in pnpm-lock.yaml, so the result is reproducible from
+#     `--frozen-lockfile` and reviewable in a diff. The previous state of this
+#     tree was six symlinks somebody created BY HAND: invisible to git, to the
+#     lockfile and to verifyDepsBeforeRun, and absent from every clean install.
+#   - It grants exactly one extra edge per plugin. `hoistPattern` would expose
+#     `fastify` to every package in the store, declared or not, which is the
+#     isolation this file chose to pay for.
+#   - `strictPeerDependencies: true` now VERIFIES the match: bump `fastify` to a
+#     major these ranges exclude and the install fails loudly instead of leaving
+#     a plugin compiled against the wrong host.
+#   - It fixes the runtime resolution too, not only the type resolution — a
+#     tsconfig `paths` mapping would have made tsc pass while leaving
+#     `require('fastify')` from inside a plugin unresolvable.
+#
+# Ranges are copied verbatim from each upstream `devDependencies` entry, so this
+# asserts nothing upstream does not already assert. Re-check on any plugin
+# upgrade: if a release adds a real `peerDependencies`, delete its entry here.
+# ---------------------------------------------------------------------------
+packageExtensions:
+  '@fastify/cookie':
+    peerDependencies:
+      fastify: ^5.0.0
+  '@fastify/csrf-protection':
+    peerDependencies:
+      fastify: ^5.0.0
+      # Its `.d.ts` imports `@fastify/cookie` for the cookie-backed CSRF mode,
+      # and it is declared upstream as a devDependency for the same reason.
+      '@fastify/cookie': ^11.0.1
+  '@fastify/helmet':
+    peerDependencies:
+      fastify: ^5.0.0
+  '@fastify/rate-limit':
+    peerDependencies:
+      fastify: ^5.0.0
+  '@fastify/websocket':
+    peerDependencies:
+      fastify: ^5.0.0

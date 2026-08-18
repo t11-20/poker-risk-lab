@@ -1,0 +1,466 @@
+# ---------------------------------------------------------------------------
+# Local development and local end-to-end stack for Poker Risk Lab.
+#
+# This file is for a developer's machine. It is not a deployment manifest: the
+# credentials below are dev defaults in plain sight, the ports bind to localhost,
+# and nothing here is hardened against a hostile network because there is not one.
+#
+# ## First run, exactly
+#
+#   1. Start the database on its own and prepare the schema. `db:setup` is
+#      `db:up && db:wait && db:migrate && db:seed`, so this one command brings
+#      PostgreSQL up, blocks until it actually accepts connections, applies the
+#      migrations in db/migrations, and loads the lesson/glossary content:
+#
+#          pnpm install --frozen-lockfile
+#          pnpm run db:setup
+#
+#   2. Put a session secret in .env. There is no default and there is not going to
+#      be one: `api` below reads `${SESSION_COOKIE_SECRET:?...}`, so a missing value
+#      stops `docker compose up` with a message instead of booting a stack whose
+#      sessions are signed with a value from a public repository.
+#
+#          cp .env.example .env      # if you have not already
+#          node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
+#          # paste that into SESSION_COOKIE_SECRET in .env
+#
+#      compose reads .env from this directory for interpolation. It is gitignored
+#      and dockerignored, so the value reaches the container's environment and never
+#      an image layer.
+#
+#   3. Then either run the app from source, which is what you want while
+#      developing (hot reload, no image rebuild):
+#
+#          pnpm run dev                     # api on :3001, web on :3000
+#
+#      or run it the way it ships, in containers:
+#
+#          docker compose up -d --build     # app on http://localhost:3000
+#
+#   4. Useful afterwards:
+#
+#          docker compose ps                # service states, with health
+#          pnpm run db:migrate:status       # what has been applied
+#          pnpm run db:reset                # drop, migrate, seed again
+#          pnpm run db:down                 # stop postgres (volume survives)
+#          docker compose down -v           # stop everything AND delete the data
+#
+# Migrations are run from the host, not from inside the api container: the image
+# deliberately does not ship apps/api/scripts (see Dockerfile.api). The database
+# port is published to 127.0.0.1 precisely so those host-side commands work.
+#
+# ## The topology: ONE origin the browser can see
+#
+#   browser ──▶ 127.0.0.1:3000 ──▶ proxy ──▶ /api/*  ──▶ api:3001
+#                                        └─▶ anything else ──▶ web:3000
+#
+# `/api/*` is every REST route (API_PREFIX is /api/v1) and the WebSocket upgrade, which
+# is at /api/v1/ws because ws/hub.ts registers under the same prefix as everything else.
+#
+# This is the load-bearing shape of the stack, not a convenience, and it replaces a
+# design that could not work. The web client used to read the API's address from
+# `NEXT_PUBLIC_API_ORIGIN`, and `NEXT_PUBLIC_*` is inlined into the JavaScript bundle
+# by `next build` — so a built image carried whatever address the build machine saw and
+# no deployment could retarget it. Meanwhile this file set `PRL_API_ORIGIN` and claimed
+# "the web app proxies /api/* to this origin", which nothing implemented.
+#
+# So the proxy is real now. Three consequences worth knowing:
+#
+#   * The browser sends every API request to its own origin as a relative path, so
+#     there is nothing about the API's location in the bundle, and retargeting is a
+#     proxy setting (`PRL_PROXY_API_UPSTREAM`), applied when the proxy container is
+#     created — a container replacement, never an image build. Prove it:
+#
+#         PRL_PROXY_API_UPSTREAM=api:3001 docker compose up -d proxy   # normal
+#         PRL_PROXY_API_UPSTREAM=nowhere:3001 docker compose up -d proxy
+#         curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/api/v1/health
+#
+#   * The session and CSRF cookies are `__Host-` prefixed with no `Domain`
+#     (apps/api/src/plugins/security.ts), which only means anything when the page and
+#     the API share a host. Now they do.
+#   * `web` is NOT published. Two published origins for one app is how a reader ends up
+#     on the one whose relative /api/* leads nowhere. `api` IS published, on loopback,
+#     because host-side tooling and `curl` need it — see the note on TRUST_PROXY there.
+#
+# `pnpm run dev` gets the same single-origin shape from a rewrite in
+# apps/web/next.config.ts, which is why the dev loop needs no proxy container.
+#
+# ## Why `init: true` on every service
+#
+# The Node process is PID 1 in its container. PID 1 has no default signal
+# handlers, so a plain `node server.js` ignores SIGTERM unless the app installs a
+# handler, and `docker compose down` then waits ten seconds and SIGKILLs it —
+# dropping in-flight WebSocket closes and leaving Postgres connections to time
+# out. PID 1 also has to reap orphaned children or they accumulate as zombies.
+# `init: true` asks Docker to insert its own tiny init (docker-init) as PID 1,
+# which reaps children and forwards signals to the real process. That is why
+# there is no tini or dumb-init package in the images: adding a dependency to
+# solve a problem the runtime already solves is a dependency for nothing.
+#
+# ## Why read_only with explicit tmpfs mounts
+#
+# A container whose root filesystem cannot be written to cannot have its code
+# rewritten by anything that gets a foothold in it, and cannot accumulate state
+# that quietly becomes load-bearing. Everything that legitimately needs to write
+# gets a named volume (Postgres data) or an explicit tmpfs, listed below with the
+# reason. If a service starts failing with EROFS after a dependency upgrade, the
+# fix is to find out what it wants to write and add it here on purpose — not to
+# drop read_only.
+# ---------------------------------------------------------------------------
+
+name: poker-risk-lab
+
+services:
+  postgres:
+    # Pinned by digest for the same reason the Dockerfiles are. postgres:16-bookworm,
+    # multi-arch index, captured 2026-08-17. Refresh with the registry command in
+    # the Dockerfile.api header, substituting library/postgres and 16-bookworm.
+    image: postgres:16-bookworm@sha256:60f4761b9035e0b8d5218f701a8c3382f641bf12b1604822574cf5be3baeb537
+    # A container that dies at 3am should come back; one that cannot start should
+    # not spin forever. `unless-stopped` respects a deliberate `docker compose stop`.
+    restart: unless-stopped
+    init: true
+    environment:
+      # Dev defaults, overridable from the environment or a .env file that is
+      # gitignored and dockerignored. These are not secrets and are not pretending
+      # to be: a placeholder in a vault teaches people to trust placeholders.
+      POSTGRES_USER: ${POSTGRES_USER:-poker}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-poker-dev-only}
+      POSTGRES_DB: ${POSTGRES_DB:-poker_risk_lab}
+      # Scrypt over the default. The password never leaves this machine, but the
+      # setting is one line and there is no reason to hash it weakly.
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=scram-sha-256
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    ports:
+      # Bound to the loopback interface, not 0.0.0.0. The unqualified form
+      # "5432:5432" publishes the database to every interface on the machine,
+      # which on a laptop on a café network means exactly what it sounds like.
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    read_only: true
+    tmpfs:
+      # The postmaster writes its unix socket and lock file here...
+      - /var/run/postgresql:mode=1777
+      # ...and temporary sort/hash spill files here.
+      - /tmp:mode=1777
+    healthcheck:
+      # `pg_isready` against the real user and database, not just the port. During
+      # initdb the server briefly listens while rejecting connections, and a
+      # port-only check declares that healthy — after which the api starts,
+      # fails to connect, and the actual cause is three services away.
+      test:
+        ['CMD-SHELL', 'pg_isready --quiet --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      # 30 x 2s covers a cold initdb on a slow disk without making a genuinely
+      # broken database look like a hang.
+      start_period: 60s
+      retries: 30
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    init: true
+    depends_on:
+      postgres:
+        # `service_healthy`, not `service_started`. Started means the container
+        # exists; healthy means the healthcheck above passed.
+        condition: service_healthy
+    # ONE replica, and this is not a formality. apps/api/src/rooms/registry.ts:
+    # "the authoritative live state is this process's memory … this design assumes
+    # one API process per room". Two processes each holding "the" HandState for one
+    # room deal two different hands and misresolve the pot. ADR 0001 chose that
+    # trade deliberately. Scaling this service therefore requires either staying at
+    # one process or a router with room affinity — see docs/RUNBOOK.md §11.
+    deploy:
+      replicas: 1
+    environment:
+      # Every variable here is one `loadConfig` (apps/api/src/config.ts) actually
+      # reads. The previous version set PRL_ALLOWED_ORIGINS, which nothing in the
+      # repository read, and omitted two the server requires — so the container
+      # exited 78 with "2 configuration problems" on every boot.
+      #
+      # NODE_ENV: the image ships production (Dockerfile.api) and this overrides it to
+      # development, on purpose and not to silence anything. The production profile
+      # refuses a plaintext `http://` entry in PUBLIC_WEB_ORIGIN and refuses
+      # COOKIE_SECURE=false (config.ts), both correctly: a Secure cookie is never sent
+      # over http, so sign-in could not work. This stack is plaintext on loopback,
+      # which makes it a development stack — as the header of this file has always
+      # said. Nothing in config.ts was relaxed to make that true: set NODE_ENV
+      # explicitly and you get the refusal, verbatim, which is the point. The
+      # production profile (TLS terminated at a proxy, https origins, Secure cookies)
+      # is written out in docs/RUNBOOK.md §11.
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: '3001'
+      # HOST is set to 0.0.0.0 in Dockerfile.api's runtime ENV, deliberately in the
+      # image rather than here, so `docker run` of that image is also reachable.
+      # config.ts defaults it to 127.0.0.1, which for a container means "healthy and
+      # unreachable". Do not set it here without reading that comment.
+      #
+      # Host is the compose service name, resolved on the project's private
+      # network. This is the one place the connection string is assembled for
+      # containers; the host-side scripts read DATABASE_URL from .env instead.
+      DATABASE_URL: postgres://${POSTGRES_USER:-poker}:${POSTGRES_PASSWORD:-poker-dev-only}@postgres:5432/${POSTGRES_DB:-poker_risk_lab}
+      # The origin the BROWSER uses, which is the proxy's published address — not
+      # web's and not api's, neither of which the browser ever sees. Enforced on
+      # WebSocket upgrades (WS_CLOSE.badOrigin) and on CSRF checks, so a wrong value
+      # here presents as "every socket closes 4406" rather than as a config error.
+      # Both spellings are listed because a reader who types 127.0.0.1 is not a
+      # different user from one who types localhost.
+      PUBLIC_WEB_ORIGIN: ${PUBLIC_WEB_ORIGIN:-http://localhost:3000,http://127.0.0.1:3000}
+      # No default, deliberately. `:?` makes compose refuse to start and name the
+      # variable; a dev-only fallback here would be a signing key in a public
+      # repository, and the server would accept it in development and boot happily.
+      # Quoted because the message contains a colon-space, which YAML would otherwise
+      # read as a nested mapping.
+      SESSION_COOKIE_SECRET: '${SESSION_COOKIE_SECRET:?missing. Put a generated value in .env — step 2 of First run at the top of this file}'
+      # TRUST_PROXY is deliberately NOT enabled, even though there is now a proxy in
+      # front. The port below publishes api on loopback for host-side tooling, so the
+      # proxy is not the only route to it, and TRUST_PROXY's own warning is exactly
+      # about that: a reachable process that believes X-Forwarded-For lets a client
+      # choose its own rate-limit bucket. The cost is that rate limits key on the
+      # proxy's address in this stack. A deployment that does not publish the API
+      # sets TRUST_PROXY=true — see docs/RUNBOOK.md §11.
+    ports:
+      # Loopback only, and NOT the browser's path to the API: the browser goes through
+      # the proxy on ${WEB_PORT:-3000}. This exists for `curl`, for scripts/*.mjs and
+      # for reading /api/v1/health without a proxy hop in the way.
+      - '127.0.0.1:${API_PORT:-3001}:3001'
+    read_only: true
+    tmpfs:
+      # Node writes here for diagnostic reports, heap snapshots and any use of
+      # os.tmpdir(). noexec/nosuid because nothing in here should ever be run.
+      - /tmp:mode=1777,noexec,nosuid,size=64m
+    # Defence in depth on top of the non-root USER in the image: no process in
+    # this container can acquire a capability it did not start with.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    init: true
+    depends_on:
+      # The contract says api and web both wait for a healthy database. web does
+      # not talk to PostgreSQL itself, but it renders pages that call the api,
+      # and starting it before the database is ready just means the first
+      # requests render error states.
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      HOSTNAME: 0.0.0.0
+      # Server-side origin for the api, on the private compose network. Read by
+      # apps/web/src/lib/api.ts during a server render, at runtime — it is NOT
+      # `NEXT_PUBLIC_`, and that is the whole point: a `NEXT_PUBLIC_` variable is
+      # inlined into the client bundle by `next build`, which froze the API's address
+      # into the image and is the defect this replaces.
+      #
+      # The browser does not use this value and must not: it sends relative /api/*
+      # requests to its own origin, and the proxy below routes them. See the topology
+      # note in this file's header.
+      PRL_API_ORIGIN: ${PRL_API_ORIGIN:-http://api:3001}
+    # No `ports`. web is reached through the proxy, which is the only published origin
+    # for the app. Publishing it as well would give the browser a second origin on
+    # which relative /api/* requests go nowhere — the failure this topology exists to
+    # remove. For a direct look at the page server, `docker compose exec proxy wget
+    # -qO- http://web:3000/` or add a `ports:` entry locally and expect the API calls
+    # from that origin to fail.
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,noexec,nosuid,size=64m
+      # `next start` writes ISR revalidation output and optimised images to
+      # .next/cache. The image ships without that directory on purpose (it is
+      # build state), so it comes back as a tmpfs: cache, therefore losing it on
+      # restart is correct rather than merely tolerable.
+      - /app/apps/web/.next/cache:mode=0700,uid=1000,gid=1000,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # -------------------------------------------------------------------------
+  # proxy: the single origin the browser sees.
+  #
+  # See this file's header for why it exists. In short: the web client sends relative
+  # /api/* requests, so *something* has to route them, and the alternative — a public
+  # API origin compiled into the JavaScript bundle by `next build` — cannot be
+  # retargeted after the image exists.
+  #
+  # ## Why THIS image
+  #
+  # `nginxinc/nginx-unprivileged` rather than the official `nginx` or `caddy`, and the
+  # reason is a real constraint rather than a preference. Both of those ship a binary
+  # with the file capability `cap_net_bind_service=ep`, and `cap_drop: ALL` makes
+  # exec'ing such a binary fail outright:
+  #
+  #   $ docker run --cap-drop ALL --user 1000:1000 caddy:2.11.4-alpine caddy version
+  #   sh: caddy: Operation not permitted
+  #
+  # The two ways to run those images here are `cap_add: [NET_BIND_SERVICE]` — handing
+  # back a capability to bind privileged ports that a proxy listening on 8080 does not
+  # need — or dropping `cap_drop: ALL`. Neither is a trade worth making when an image
+  # built for exactly this constraint exists: this one runs as uid 101, listens on 8080,
+  # and carries no file capabilities at all, so it starts with the capability set
+  # genuinely empty.
+  #
+  # ## Why the config arrives in an environment variable
+  #
+  # The obvious spelling is a top-level `configs:` block with inline `content:`, and it
+  # was written that way first. Compose refuses it:
+  #
+  #   cannot create config "poker-risk-lab_proxy_nginx" in read-only service proxy:
+  #   `file` is the sole supported option
+  #
+  # An inline config has to be materialised inside the container, and this container's
+  # root filesystem is read-only. The ways out were to drop `read_only`, or to add an
+  # nginx.conf to the repository and mount it with `file:`. Dropping `read_only` to make
+  # a container start is not a trade this project makes, and a second file would put the
+  # routing somewhere other than the topology diagram that explains it. So the config
+  # travels as an environment variable and is written to the tmpfs at start, which keeps
+  # the read-only root, keeps the non-root user, keeps every capability dropped, and
+  # keeps the routing in the file that documents it.
+  #
+  # `exec` in the command matters: it replaces the shell, so nginx is the process that
+  # receives SIGTERM rather than a shell that ignores it. The image's own entrypoint is
+  # bypassed for the same read-only reason — it templates files into /etc/nginx.
+  #
+  # ## The `$$`
+  #
+  # Compose interpolates `$VAR` in this file, and nginx configuration is made of `$vars`.
+  # `$$` is compose's escape for a literal `$`, so `$$http_upgrade` reaches nginx as
+  # `$http_upgrade`. The two upstreams are the deliberate exception: they are written as
+  # `${...}` so compose DOES substitute them, which is what makes them configurable
+  # without touching an image. Check what actually reaches the container with:
+  #
+  #     docker compose config | grep -A2 'location /api/'
+  # -------------------------------------------------------------------------
+  proxy:
+    # Pinned by digest like every other image here. nginxinc/nginx-unprivileged
+    # 1.29.8-alpine, captured 2026-08-18. Refresh with the registry command in the
+    # Dockerfile.api header, substituting nginxinc/nginx-unprivileged and 1.29.8-alpine.
+    image: nginxinc/nginx-unprivileged:1.29.8-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
+    restart: unless-stopped
+    init: true
+    depends_on:
+      # Both, and both healthy. A proxy that starts first answers 502 for the whole
+      # start-up window, and a reader cannot tell that from a broken deployment.
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    environment:
+      # The whole routing table. Substituted by compose at `up`, so changing an upstream
+      # is `docker compose up -d proxy` — a container replacement, never an image build.
+      PRL_PROXY_NGINX_CONF: |
+        # Everything nginx writes goes to the tmpfs. With a read-only root there is no
+        # other choice, and there is nothing here worth surviving a restart.
+        pid /tmp/nginx.pid;
+        error_log /dev/stderr warn;
+        events { worker_connections 1024; }
+        http {
+          access_log /dev/stdout combined;
+          client_body_temp_path /tmp/nginx-body;
+          proxy_temp_path /tmp/nginx-proxy;
+          fastcgi_temp_path /tmp/nginx-fastcgi;
+          uwsgi_temp_path /tmp/nginx-uwsgi;
+          scgi_temp_path /tmp/nginx-scgi;
+
+          # Docker's embedded DNS, with a short TTL. Without an explicit resolver nginx
+          # resolves each upstream once at start and caches it forever, so a restarted
+          # api container keeps getting traffic sent to an address nothing answers on.
+          # In a deployment this is whatever that platform's resolver is.
+          resolver 127.0.0.11 valid=10s ipv6=off;
+
+          # The WebSocket dance: Connection: upgrade only when the client asked for it,
+          # Connection: close otherwise. A blanket `Connection: upgrade` breaks keep-alive
+          # for every ordinary request.
+          map $$http_upgrade $$connection_upgrade { default upgrade; '' close; }
+
+          server {
+            listen 8080;
+            server_name _;
+
+            proxy_http_version 1.1;
+            proxy_set_header Host $$http_host;
+            proxy_set_header X-Real-IP $$remote_addr;
+            # SET, not append. $$proxy_add_x_forwarded_for would preserve whatever the
+            # client sent, which is the header a client must never be able to choose.
+            proxy_set_header X-Forwarded-For $$remote_addr;
+            proxy_set_header X-Forwarded-Proto $$scheme;
+            proxy_set_header X-Forwarded-Host $$http_host;
+            proxy_set_header Upgrade $$http_upgrade;
+            proxy_set_header Connection $$connection_upgrade;
+            # A WebSocket is idle most of the time; the default 60s would close every
+            # table between hands.
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+
+            # Origin is passed through untouched — nginx does not strip it — and that
+            # matters: the API checks Origin against PUBLIC_WEB_ORIGIN on CSRF and on
+            # every socket upgrade, and the value it must see is this proxy's published
+            # origin.
+            #
+            # /api/ is every REST route (API_PREFIX = /api/v1) and the WebSocket upgrade,
+            # which today is at /api/v1/ws because ws/hub.ts registers under the same
+            # prefix as every other route module.
+            location /api/ {
+              set $$upstream "${PRL_PROXY_API_UPSTREAM:-api:3001}";
+              proxy_pass http://$$upstream$$request_uri;
+            }
+            # /ws is not a route the API serves today. It is here because WS_PATH is the
+            # string '/ws' and the prefix comes from the registration, so moving the hub
+            # to the root instance would move the socket to /ws with no other visible
+            # change — and the symptom would be a 404 from the page server, which is a
+            # confusing way to learn that. One location block.
+            location /ws {
+              set $$upstream "${PRL_PROXY_API_UPSTREAM:-api:3001}";
+              proxy_pass http://$$upstream$$request_uri;
+            }
+            # Everything else is the page server.
+            location / {
+              set $$upstream "${PRL_PROXY_WEB_UPSTREAM:-web:3000}";
+              proxy_pass http://$$upstream$$request_uri;
+            }
+          }
+        }
+    # `printf %s` rather than `echo`, so a backslash in the config is never interpreted,
+    # and the variable is double-quoted so the shell does not expand the `$` nginx needs.
+    entrypoint:
+      - sh
+      - -c
+      - printf '%s' "$$PRL_PROXY_NGINX_CONF" > /tmp/nginx.conf && exec nginx -c /tmp/nginx.conf -g 'daemon off;'
+    ports:
+      # THE published port for the app: the browser's one origin. Loopback only, for
+      # the reason given on the postgres service.
+      - '127.0.0.1:${WEB_PORT:-3000}:8080'
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      # Through itself, to the web upstream, at its own address on the container
+      # network — an end-to-end statement ("a browser would get a page") rather than
+      # "a listener exists". `hostname` for the same reason the images' probes use it:
+      # a probe on 127.0.0.1 passes for a process bound to loopback only.
+      test: ['CMD-SHELL', 'wget --quiet --tries=1 --timeout=4 -O /dev/null "http://$$(hostname):8080/" || exit 1']
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  # Named, so `docker compose down` keeps the data and `docker compose down -v`
+  # is the explicit act that destroys it.
+  postgres-data:

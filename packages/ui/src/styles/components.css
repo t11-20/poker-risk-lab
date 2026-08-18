@@ -1,0 +1,3950 @@
+/**
+ * The class layer: every shared primitive and every component in `@prl/ui`.
+ *
+ * BEM-ish, all prefixed `prl-`: `.prl-block`, `.prl-block__element`, `.prl-block--modifier`.
+ * Flat single-class selectors wherever possible, because this stylesheet is loaded globally by
+ * the Next app and a descendant selector like `.prl-coach p` would reach into anything a page
+ * happens to nest inside a Coach panel.
+ *
+ * ==========================================================================================
+ * WHAT COUNTS AS A VALUE HERE
+ * ==========================================================================================
+ * Every colour, size, duration, easing and radius comes from a `--prl-*` token. Three classes
+ * of literal survive, and they are the only three:
+ *
+ *   1. `1px`, exclusively as the hairline. The hairline IS one device-independent pixel; it is
+ *      already baked into `--prl-hairline` in tokens.css, but there is no bare-length token for
+ *      it, and tokens.css is out of scope for this change. Every occurrence is a hairline or a
+ *      gradient stop that draws one. (A `--prl-hairline-width` token would remove them all.)
+ *   2. Structural geometry with no design content: `100%`, `50%`, `1fr`, `minmax(0, 1fr)`,
+ *      `aspect-ratio: 5 / 7`, gradient angles, SVG user units, and the `em` proportions inside a
+ *      playing card (whose whole box is one token, so everything in it is a ratio of that).
+ *      These describe shape, not style, and there is nothing to tokenise.
+ *
+ * The spacing ramp tops out at 10rem, so a component wider than that composes its width from two
+ * ramp steps in a `calc()` - `calc(var(--prl-space-16) + var(--prl-space-11))` is 13rem - rather
+ * than introducing a loose value. The comment beside each one gives the total.
+ *   3. Media-query lengths. `var()` is invalid in a media feature, so the four breakpoints from
+ *      the design doc section 10 (600 / 900 / 1280, plus 860 for the nav sheet) appear as
+ *      literals. Container queries are preferred wherever a component's layout depends on its
+ *      own width rather than the viewport's, and the table surface uses one.
+ *
+ * Local custom properties (`--prl-card-w`, `--prl-seat-x`, `--prl-segment-share`, ...) are
+ * component plumbing rather than design tokens: they carry per-instance DATA, often set inline
+ * by a component, and they always resolve to a token or to a number the component computed.
+ *
+ * ==========================================================================================
+ * FOUR RULES THIS FILE FOLLOWS THROUGHOUT
+ * ==========================================================================================
+ *   1. Nothing means anything by colour alone. Every coloured state also has a border, a fill
+ *      pattern, a glyph, a sign or a word. Suits carry a letter, clean and dirty outs carry a
+ *      hatch and a label, bar segments carry a pattern and a numeric readout, deltas carry a
+ *      sign and a word, the active seat carries a chip and a ring.
+ *   2. No shadow is used for elevation. Depth is one step on the surface ramp plus a hairline.
+ *      There is no `box-shadow` in this package at all: the focus ring is an `outline`, which
+ *      is the primitive that survives `overflow: hidden` and `forced-colors`.
+ *   3. Nothing interactive is smaller than `--prl-target-min` (44px). Where a control looks
+ *      smaller than that, it is smaller only in its ink.
+ *   4. Only `transform` and `opacity` are animated - never a layout property, never a blur.
+ *      Colour transitions are permitted because they neither lay out nor composite badly.
+ */
+
+/* ==========================================================================================
+   1. LAYOUT
+   ==========================================================================================
+   The container is a token, so a page cannot invent its own width. The section rhythm is
+   deliberately large: the reference's confidence comes substantially from how much empty space
+   it spends between sections, and adopting the palette without the rhythm would miss the point.
+   ========================================================================================== */
+
+.prl-container {
+  width: var(--prl-container);
+  margin-inline: auto;
+}
+
+.prl-container--narrow {
+  width: var(--prl-container-narrow);
+}
+
+.prl-section {
+  padding-block: var(--prl-section-y);
+}
+
+/** The first section on a page sits under a sticky header, so it opens tighter. */
+.prl-section--tight {
+  padding-block: var(--prl-space-11);
+}
+
+/**
+ * The 12-column grid.
+ *
+ * Cells are full width until 900px and then take their `.prl-span-*`. Spans are declared only
+ * inside the wide query on purpose: a `span 8` in a six-column grid does not clamp, it grows
+ * the implicit grid and pushes the layout sideways off the page.
+ */
+.prl-grid {
+  display: grid;
+  gap: var(--prl-grid-gap, var(--prl-space-8));
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+}
+
+.prl-grid > * {
+  grid-column: 1 / -1;
+  /* Grid items default to `min-width: auto`, so they refuse to shrink below their content's
+     min-content width and overflow the track instead. Anything with a `nowrap` descendant - a
+     grouped figure, an equity readout - makes that min-content large. */
+  min-width: 0;
+}
+
+/**
+ * 600 to 899px: two columns, per the design doc section 10. A cell asking for half the grid or
+ * less becomes a half; a cell asking for more than half stays full width, because a 7-of-12 cell
+ * has no sensible tablet form other than the whole row.
+ */
+@media (min-width: 600px) {
+  .prl-span-1,
+  .prl-span-2,
+  .prl-span-3,
+  .prl-span-4,
+  .prl-span-5,
+  .prl-span-6 {
+    grid-column: span 6;
+  }
+}
+
+/** 900px and up: cells take their real span. */
+@media (min-width: 900px) {
+  .prl-span-1 {
+    grid-column: span 1;
+  }
+
+  .prl-span-2 {
+    grid-column: span 2;
+  }
+
+  .prl-span-3 {
+    grid-column: span 3;
+  }
+
+  .prl-span-4 {
+    grid-column: span 4;
+  }
+
+  .prl-span-5 {
+    grid-column: span 5;
+  }
+
+  .prl-span-6 {
+    grid-column: span 6;
+  }
+
+  .prl-span-7 {
+    grid-column: span 7;
+  }
+
+  .prl-span-8 {
+    grid-column: span 8;
+  }
+
+  .prl-span-9 {
+    grid-column: span 9;
+  }
+
+  .prl-span-10 {
+    grid-column: span 10;
+  }
+
+  .prl-span-11 {
+    grid-column: span 11;
+  }
+
+  .prl-span-12 {
+    grid-column: span 12;
+  }
+}
+
+/** A vertical rhythm stack. One gap, no margins, so nothing collapses unpredictably. */
+.prl-stack {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-stack-gap, var(--prl-space-6));
+}
+
+.prl-stack--tight {
+  --prl-stack-gap: var(--prl-space-3);
+}
+
+.prl-stack--loose {
+  --prl-stack-gap: var(--prl-space-9);
+}
+
+/** A horizontal run that wraps. Never a nowrap row: a row that cannot wrap is a row that
+    scrolls the page sideways on a phone. */
+.prl-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-row-gap, var(--prl-space-4));
+}
+
+.prl-row--between {
+  justify-content: space-between;
+}
+
+.prl-row--baseline {
+  align-items: baseline;
+}
+
+/** For a row of `.prl-field`s: centring them makes labels of different heights sit at different
+    heights, so a two-line hint drags its own label out of line with the ones beside it. */
+.prl-row--start {
+  align-items: start;
+}
+
+/** Prose, capped at the measure. Long lines are a reading-comprehension problem, not a taste
+    one: the eye loses the line start on the return sweep past roughly 75 characters. */
+.prl-prose {
+  max-width: var(--prl-measure);
+}
+
+.prl-prose :where(p, ul, ol, dl, blockquote) {
+  max-width: var(--prl-measure);
+}
+
+/* ==========================================================================================
+   2. TYPE UTILITIES
+   ==========================================================================================
+   Display type is tight-tracked: negative tracking at large sizes is what makes a grotesk read
+   as engineered rather than merely big. Labels are the opposite - small, wide-tracked, quiet -
+   because a technical label should sit above loud data without competing with it.
+   ========================================================================================== */
+
+.prl-display-1 {
+  margin: 0;
+  font-size: var(--prl-type-display-1);
+  font-weight: var(--prl-weight-bold);
+  letter-spacing: var(--prl-tracking-display-1);
+  line-height: var(--prl-leading-tight);
+  text-wrap: balance;
+}
+
+.prl-display-2 {
+  margin: 0;
+  font-size: var(--prl-type-display-2);
+  font-weight: var(--prl-weight-bold);
+  letter-spacing: var(--prl-tracking-display-2);
+  line-height: var(--prl-leading-tight);
+  text-wrap: balance;
+}
+
+.prl-display-3 {
+  margin: 0;
+  font-size: var(--prl-type-display-3);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-snug);
+  text-wrap: balance;
+}
+
+/**
+ * THE LEAD PARAGRAPH — the one sentence under a heading that says what the section is for.
+ *
+ * `--prl-type-body-lg` exists so that this voice has a size of its own. Without it there were
+ * only two places to go: body, which makes the lead indistinguishable from the paragraphs it
+ * introduces, or `--prl-type-heading`, which is a HEADING size and gives a paragraph the weight
+ * of a subtitle it is not. One step above body, regular weight, secondary colour and capped at
+ * the measure is the whole treatment — it reads as an opening, not as a second title.
+ *
+ * This is also the voice for a conclusion the reader must not miss: `.prl-coach__summary` is the
+ * same size, because the Coach's one-sentence verdict is the paragraph on that panel that has to
+ * survive being skimmed.
+ */
+.prl-lede {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-lg);
+  font-weight: var(--prl-weight-regular);
+  line-height: var(--prl-leading-body);
+}
+
+/**
+ * The technical label. `--prl-text-muted`, not the `--prl-ink-300` the design doc names for it:
+ * ink-300 measures 3.57:1 on `--prl-surface-active` and 3.92:1 on the table surface in the
+ * light theme, and a label is body-size text that has to clear 4.5:1. Muted is the next step up
+ * and clears every surface in both themes (4.94:1 worst). Measured by
+ * `node scripts/check-contrast.mjs`; see the report in that script's output.
+ */
+.prl-label {
+  display: inline-block;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  line-height: var(--prl-leading-snug);
+  text-transform: uppercase;
+}
+
+.prl-label--sm {
+  font-size: var(--prl-type-label-sm);
+  letter-spacing: var(--prl-tracking-label-sm);
+}
+
+.prl-label--strong {
+  color: var(--prl-text);
+}
+
+.prl-label--accent {
+  color: var(--prl-accent-text);
+}
+
+/**
+ * The `01 02 03` index motif. Numbering turns a list into a system, which is why lesson steps,
+ * hand phases and side pots all carry one.
+ *
+ * There is no `--prl-type-index` size token even though the design doc names one; it specifies
+ * the same 0.6875rem as `--prl-type-label`, so the label token is used and the index-specific
+ * tracking token does the rest.
+ */
+.prl-index {
+  display: inline-block;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-regular);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--prl-tracking-index);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-mono {
+  font-family: var(--prl-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==========================================================================================
+   3. THE METRIC BLOCK
+   ==========================================================================================
+   The workhorse, and the reason the type scale has a second half. A metric is always
+   label / value + unit / delta / note, in that order:
+
+     EQUITY                      <- __label,  quiet, above the data
+     41.2 %                      <- __value + __unit, sharing one baseline
+     +7.9 pts over break-even    <- __delta,  explicit sign AND a word
+     exact enumeration, 1,081 runouts  <- __note
+
+   A bare number is never shown. A number with a unit and a comparison is an argument; a number
+   on its own is a score, and this product is not keeping score.
+   ========================================================================================== */
+
+.prl-metric {
+  --prl-metric-size: var(--prl-type-metric-md);
+
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-2);
+  min-width: 0;
+}
+
+.prl-metric--hero {
+  --prl-metric-size: var(--prl-type-metric-hero);
+}
+
+.prl-metric--lg {
+  --prl-metric-size: var(--prl-type-metric-lg);
+}
+
+.prl-metric--md {
+  --prl-metric-size: var(--prl-type-metric-md);
+}
+
+.prl-metric--sm {
+  --prl-metric-size: var(--prl-type-metric-sm);
+}
+
+.prl-metric__label {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  line-height: var(--prl-leading-snug);
+  text-transform: uppercase;
+}
+
+/** The baseline row. Wraps, because at `--hero` on a narrow column the unit has to be allowed
+    to fall under the figure rather than force the figure to shrink or overflow. */
+.prl-metric__figure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--prl-space-3);
+  min-width: 0;
+}
+
+/**
+ * Tabular figures, restated locally even though body sets them.
+ *
+ * This is the single most important declaration in the file. A count-up equity figure or a live
+ * pot rendered with proportional digits changes width as it changes value, so the number moves
+ * sideways while it is being read. At a poker table that is not a polish issue: a number that
+ * moves while you read it is a number you misread.
+ */
+.prl-metric__value {
+  color: var(--prl-text);
+  font-size: var(--prl-metric-size);
+  font-weight: var(--prl-weight-bold);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
+}
+
+.prl-metric__unit {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+/**
+ * The delta. Carries an explicit `+` or `-` AND a word ("over break-even", "behind"), because
+ * a delta whose direction is only a colour is unreadable to roughly one reader in twelve, and
+ * unreadable to everyone in forced-colors mode.
+ */
+/**
+ * A delta: glyph, signed figure, and the thing it is measured against.
+ *
+ * `display: flex` with a gap rather than spaces in the strings. `Metric` renders the three parts as
+ * three separate elements — the glyph is `aria-hidden` and a visually-hidden direction word sits
+ * between them — so relying on whitespace would mean putting a padding space inside a translatable
+ * string, and it renders as `+28.2 pointsover break-even` the moment one of the spans is empty.
+ * `align-items: baseline` keeps the glyph sitting on the text's baseline rather than centred against
+ * a taller line box.
+ */
+.prl-metric__delta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--prl-space-2);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-metric__delta[data-direction="up"] {
+  color: var(--prl-favourable);
+}
+
+.prl-metric__delta[data-direction="down"] {
+  color: var(--prl-adverse);
+}
+
+.prl-metric__note {
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
+  max-width: var(--prl-measure);
+}
+
+/** A row of metrics that stays aligned: same track widths, so the values line up as a column
+    even when the labels are different lengths. */
+.prl-metric-row {
+  display: grid;
+  gap: var(--prl-space-8);
+  grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-15), 1fr));
+}
+
+/* ==========================================================================================
+   4. PANEL
+   ==========================================================================================
+   One step up the surface ramp plus a hairline. That is the entire elevation system: no blur,
+   no shadow, no glow. Beyond taste it is a performance decision - a six-seat table with a live
+   Coach panel is exactly the scene where large blurred layers cost frames on a mid-range
+   laptop.
+   ========================================================================================== */
+
+.prl-panel {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-6);
+  padding: var(--prl-space-7);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-panel--inset {
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-panel--quiet {
+  background-color: transparent;
+}
+
+/**
+ * The header is separated by a hairline rather than by a colour change, so the panel reads as one
+ * machined part rather than as two stacked boxes.
+ *
+ * The selectors below are `__header` / `__heading` / `__index` / `__eyebrow` / `__actions`, which is
+ * what `Panel.tsx` actually emits. They were previously written as a single `.prl-panel__head`,
+ * which matched nothing: every panel header in the app rendered unstyled - no hairline, no
+ * baseline alignment, and an index and eyebrow stacked as three block-level lines above the title.
+ *
+ * The five parts are a header SLOT rather than five components, and they are always in this order,
+ * because the numbered-system motif only reads as a system when `01` is always in the same place.
+ */
+.prl-panel__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--prl-space-3) var(--prl-space-6);
+  padding-block-end: var(--prl-space-5);
+  border-block-end: var(--prl-hairline);
+}
+
+/** Index, eyebrow and title on one baseline: `01  COACH  Pot odds`. */
+.prl-panel__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--prl-space-2) var(--prl-space-5);
+  min-width: 0;
+}
+
+.prl-panel__index {
+  color: var(--prl-text-faint);
+}
+
+.prl-panel__eyebrow {
+  color: var(--prl-accent-text);
+}
+
+/** The panel's own controls. Pushed to the end of the header by the `space-between` above. */
+.prl-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4);
+}
+
+.prl-panel__title {
+  margin: 0;
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-panel__body {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-6);
+  min-width: 0;
+}
+
+.prl-panel__foot {
+  padding-block-start: var(--prl-space-5);
+  border-block-start: var(--prl-hairline);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+/* ==========================================================================================
+   5. BUTTONS
+   ==========================================================================================
+   Four families and no more. Primary carries the signature chamfer and there is roughly one
+   per view: an accent that appears everywhere stops meaning "this matters".
+
+   THE CHAMFER IS DRAWN ON A PSEUDO-ELEMENT, NOT ON THE BUTTON. `clip-path` clips everything the
+   element paints, including its `outline` - so chamfering the button itself would cut a bite out
+   of the focus ring, which is the one thing in this package that may never be degraded. The fill
+   lives on a `::before` at `z-index: -1` inside an isolated stacking context; the button's own
+   box stays unclipped, so the ring is whole.
+   ========================================================================================== */
+
+.prl-btn {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--prl-space-3);
+  min-height: var(--prl-target-min);
+  min-width: var(--prl-target-min);
+  padding-inline: var(--prl-space-7);
+  border: 1px solid transparent;
+  border-radius: var(--prl-radius-1);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body);
+  font-weight: var(--prl-weight-medium);
+  line-height: var(--prl-leading-snug);
+  text-align: center;
+  text-decoration: none;
+  transition:
+    background-color var(--prl-dur-instant) var(--prl-ease-hover),
+    border-color var(--prl-dur-instant) var(--prl-ease-hover),
+    color var(--prl-dur-instant) var(--prl-ease-hover);
+}
+
+/**
+ * `--sm` narrows the ink, not the target.
+ *
+ * A "small" button that is genuinely 32px tall fails the 44px floor this product sets, and the
+ * places that want a small button - a preset row, a panel head action - are exactly the places
+ * where a mis-tap is most annoying. So the size modifiers change padding and type size and
+ * leave `min-height` alone.
+ */
+.prl-btn--sm {
+  padding-inline: var(--prl-space-5);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-btn--lg {
+  min-height: var(--prl-space-12);
+  padding-inline: var(--prl-space-9);
+  font-size: var(--prl-type-heading);
+}
+
+.prl-btn--block {
+  width: 100%;
+}
+
+/* ---- primary ---------------------------------------------------------------------------- */
+
+.prl-btn--primary {
+  color: var(--prl-text-on-accent);
+  font-weight: var(--prl-weight-semibold);
+}
+
+/**
+ * The fill plate.
+ *
+ * This used to carry a chamfer — a diagonal cut across the top-right corner — as a signature
+ * mark. It is gone, and the reason is worth recording so it is not reinstated on taste.
+ *
+ * Judged at 100% on a 1440px viewport it did not read as a signature; it read as a corner that
+ * had failed to render. Zoomed to 400% it looks entirely deliberate, which is exactly the trap:
+ * the size a design is evaluated at must be the size it is used at. It was also applied to the
+ * primary button and not the secondary, so a side-by-side pair showed one notched rectangle
+ * beside one plain one, which reads as an inconsistency rather than as emphasis.
+ *
+ * It is also redundant now. The floating navigation carries an accent CTA pill, so the product
+ * has a mark; and this system's own argument for near-square radii is that they read as
+ * instrument rather than consumer — a decorative cut works against that.
+ *
+ * The plate itself stays: it holds the fill behind the label at z-index -1 so the focus outline
+ * is never painted over, and it gives the hover transition something to animate that is not the
+ * element's own background.
+ */
+.prl-btn--primary::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-accent-fill);
+  transition: background-color var(--prl-dur-instant) var(--prl-ease-hover);
+}
+
+.prl-btn--primary:hover:not(:disabled)::before {
+  background-color: var(--prl-accent-400);
+}
+
+.prl-btn--primary:active:not(:disabled)::before {
+  background-color: var(--prl-accent-600);
+}
+
+/* ---- secondary and ghost ---------------------------------------------------------------- */
+
+/** A hairline that carries meaning, so `--prl-line-strong` (4.34:1 dark / 4.17:1 light) rather
+    than the decorative `--prl-line`. On hover the border moves to the accent, which is also the
+    combination that stays over 3:1 on the hover and active surfaces. */
+.prl-btn--secondary {
+  border-color: var(--prl-line-strong);
+  background-color: transparent;
+}
+
+.prl-btn--secondary:hover:not(:disabled) {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-hover);
+  color: var(--prl-accent-text);
+}
+
+.prl-btn--secondary:active:not(:disabled) {
+  background-color: var(--prl-surface-active);
+}
+
+.prl-btn--ghost {
+  padding-inline: var(--prl-space-5);
+  background-color: transparent;
+  color: var(--prl-text-secondary);
+}
+
+.prl-btn--ghost:hover:not(:disabled) {
+  background-color: var(--prl-surface-hover);
+  color: var(--prl-accent-text);
+}
+
+/**
+ * Destructive, and outline-only in both themes on purpose. A filled `--prl-adverse` button
+ * cannot carry legible text: ink-900 on the dark-theme rose is fine, but the light theme's rose
+ * is dark and neither ink-900 nor white clears 4.5:1 on it. An outline plus the word in the
+ * label is honest and measurable; a fill would be neither.
+ */
+.prl-btn--danger {
+  border-color: var(--prl-adverse);
+  background-color: transparent;
+  color: var(--prl-adverse);
+}
+
+.prl-btn--danger:hover:not(:disabled) {
+  border-color: var(--prl-adverse);
+  background-color: var(--prl-surface-hover);
+}
+
+/* ---- states ----------------------------------------------------------------------------- */
+
+.prl-btn:disabled {
+  border-color: var(--prl-line-subtle);
+  background-color: transparent;
+  color: var(--prl-text-disabled);
+  cursor: not-allowed;
+}
+
+.prl-btn:disabled::before {
+  background-color: var(--prl-surface-inset);
+}
+
+/**
+ * Busy. The button stays focusable and stays in the tab order - removing a control from the
+ * keyboard because it is mid-request is how a keyboard user loses their place - and the state
+ * is announced by `aria-busy` as well as drawn. The bar is a scaleX transform on a
+ * pseudo-element, so it composites and never lays out.
+ */
+.prl-btn[aria-busy="true"] {
+  cursor: progress;
+}
+
+.prl-btn[aria-busy="true"]::after {
+  content: "";
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline: 0;
+  height: 1px;
+  background-color: var(--prl-accent-edge);
+  transform-origin: left center;
+  animation: prl-btn-busy var(--prl-dur-count) var(--prl-ease-standard) infinite;
+}
+
+@keyframes prl-btn-busy {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/**
+ * A row of buttons. `--block` fills the row; the action bar has its own, larger family.
+ *
+ * `align-items` is left at `stretch` deliberately: a row of buttons of visibly different heights
+ * looks broken, so mixing `--sm` and `--lg` in one row levels them all to the tallest. `--sm`
+ * therefore means "narrower and quieter", which is what it means everywhere else in this file.
+ */
+.prl-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-4);
+}
+
+/* ==========================================================================================
+   6. FORM CONTROLS
+   ==========================================================================================
+   Every outline here is `--prl-line-strong` or the accent, never `--prl-line`: an input's
+   border is not decoration, it is the only thing telling a reader where the field is, so it has
+   to clear the 3:1 that WCAG 1.4.11 asks of a control boundary.
+   ========================================================================================== */
+
+.prl-field {
+  display: grid;
+  gap: var(--prl-space-3);
+  min-width: 0;
+}
+
+.prl-field__label {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+/** A hint, not a label: it may be omitted without the control becoming ambiguous. Anything the
+    reader NEEDS goes in the label. */
+.prl-field__hint {
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
+}
+
+/** An error message is text, referenced by `aria-describedby`, never a colour on the border
+    alone. The glyph is in the markup for the same reason. */
+.prl-field__error {
+  color: var(--prl-adverse);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-medium);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-input,
+.prl-select,
+.prl-textarea {
+  width: 100%;
+  min-height: var(--prl-target-min);
+  padding: var(--prl-space-3) var(--prl-space-5);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body);
+}
+
+.prl-input:hover:not(:disabled),
+.prl-select:hover:not(:disabled),
+.prl-textarea:hover:not(:disabled) {
+  border-color: var(--prl-accent-edge);
+}
+
+.prl-input[aria-invalid="true"],
+.prl-select[aria-invalid="true"],
+.prl-textarea[aria-invalid="true"] {
+  border-color: var(--prl-adverse);
+}
+
+/**
+ * The number input keeps its native spinners.
+ *
+ * `appearance: textfield` and a pair of custom buttons is the usual instinct and it is a net
+ * loss here: the native spinner already responds to arrow keys, respects `step`, and is
+ * announced correctly, and a bet sizer is the last place to reimplement stepping from scratch.
+ * Tabular figures and end-alignment are what actually matter, because this number is compared
+ * against the one on the button beside it.
+ */
+.prl-number {
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+/**
+ * The select keeps the platform's own arrow, too. `appearance: none` means drawing an arrow,
+ * and then the control no longer looks like the thing the platform taught the reader to
+ * recognise, on a form element that has to work in every browser this ships to.
+ */
+.prl-select {
+  padding-inline-end: var(--prl-space-4);
+}
+
+/* ---- range ------------------------------------------------------------------------------- */
+
+/**
+ * The slider, always paired with a number input and never alone: a slider cannot express an
+ * exact amount, and an exact amount is the entire job of a bet sizer.
+ *
+ * Track and thumb are styled per engine because there is no cross-browser pseudo-element for
+ * them. The thumb is a full `--prl-target-min` square - a 44px block sliding in a groove, which
+ * is both the accessible target size and, as it happens, exactly what a fader on an instrument
+ * looks like.
+ */
+.prl-range {
+  width: 100%;
+  min-height: var(--prl-target-min);
+  padding: 0;
+  border: 0;
+  background: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.prl-range::-webkit-slider-runnable-track {
+  height: var(--prl-space-3);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-range::-webkit-slider-thumb {
+  width: var(--prl-target-min);
+  height: var(--prl-target-min);
+  /* Pulls the 44px thumb back onto the centre line of a 6px track. */
+  margin-block-start: calc((var(--prl-space-3) - var(--prl-target-min)) / 2);
+  border: 1px solid var(--prl-accent-edge);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-accent-fill);
+  appearance: none;
+}
+
+.prl-range::-moz-range-track {
+  height: var(--prl-space-3);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-range::-moz-range-thumb {
+  width: var(--prl-target-min);
+  height: var(--prl-target-min);
+  border: 1px solid var(--prl-accent-edge);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-accent-fill);
+}
+
+.prl-range:disabled {
+  cursor: not-allowed;
+}
+
+/* ---- checkbox and radio ------------------------------------------------------------------ */
+
+/**
+ * Checkbox and radio: NATIVE controls, sized up, with `accent-color`.
+ *
+ * `appearance: none` plus a redrawn box is the usual instinct and it was tried first. Drawing
+ * the tick is where it falls apart: an `<input>` cannot reliably carry a pseudo-element, so the
+ * tick has to be an image (a data URI, which the CSP has no reason to allow), or a `clip-path`
+ * on the box itself (which clips the box's own border away with it), or an extra element inside
+ * a label this stylesheet does not control. Every version trades a real accessibility guarantee
+ * for a cosmetic one.
+ *
+ * `accent-color` gets the accent onto the native control in every current engine, keeps the
+ * platform's own checked glyph - which the engine already pairs with a contrasting tick colour,
+ * and which forced-colors mode already knows how to repaint - and costs nothing. The one thing
+ * it cannot do is colour the unchecked border, and the platform's own is adequate.
+ *
+ * The 44px target lives on the wrapping `.prl-choice`, not on the box: inflating a checkbox to
+ * 44px makes something that reads as a button.
+ */
+.prl-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--prl-space-4);
+  min-height: var(--prl-target-min);
+  cursor: pointer;
+}
+
+.prl-choice__control {
+  flex: 0 0 auto;
+  width: var(--prl-space-7);
+  height: var(--prl-space-7);
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--prl-accent-fill);
+  cursor: pointer;
+}
+
+.prl-choice__control:disabled {
+  cursor: not-allowed;
+}
+
+.prl-choice__label {
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-snug);
+}
+
+/* ==========================================================================================
+   7. CHIPS AND BADGES
+   ==========================================================================================
+   The only place `--prl-radius-pill` is permitted. A chip is a status, and a status is the one
+   thing in this system that earns a pill; everything else is near-square because near-square
+   reads as instrument and rounded reads as consumer.
+
+   Tones are a border and ink, never a coloured fill. Two reasons: a tinted fill behind coloured
+   text is the pairing that fails contrast first when a theme flips, and a fill is exactly what
+   forced-colors mode throws away. Every tone also expects a glyph or a word in the markup.
+
+   TWO SPELLINGS OF THE SAME TONE, and it is not a duplication to remove. `Chip` publishes its tone
+   as `data-tone`, because a tone is a piece of component STATE and an attribute is what a
+   state-based selector wants; `.prl-badge--*` is the class spelling used by markup that predates
+   the component and by the two badges (dealer, method) that are not `Chip` instances. Both are
+   listed on every tone rule so that neither spelling silently renders an untoned chip - which is
+   what happened while only the class spelling existed and `Chip` emitted only the attribute.
+   ========================================================================================== */
+
+.prl-chip,
+.prl-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--prl-space-2);
+  min-height: var(--prl-space-7);
+  padding-inline: var(--prl-space-4);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-surface-inset);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  line-height: var(--prl-leading-snug);
+  white-space: nowrap;
+}
+
+.prl-chip--accent,
+.prl-chip[data-tone="accent"],
+.prl-badge--accent {
+  border-color: var(--prl-accent-edge);
+  color: var(--prl-accent-text);
+}
+
+.prl-chip--favourable,
+.prl-chip[data-tone="favourable"],
+.prl-badge--positive {
+  border-color: var(--prl-favourable);
+  color: var(--prl-favourable);
+}
+
+.prl-chip--adverse,
+.prl-chip[data-tone="adverse"] {
+  border-color: var(--prl-adverse);
+  color: var(--prl-adverse);
+}
+
+.prl-chip--caution,
+.prl-chip[data-tone="caution"],
+.prl-badge--caution {
+  border-color: var(--prl-caution);
+  color: var(--prl-caution);
+}
+
+.prl-chip--info,
+.prl-chip[data-tone="info"] {
+  border-color: var(--prl-info);
+  color: var(--prl-info);
+}
+
+.prl-chip--neutral,
+.prl-chip[data-tone="neutral"] {
+  border-color: var(--prl-line-strong);
+  color: var(--prl-text-secondary);
+}
+
+/** A method chip: `EXACT`, `MONTE CARLO`. Monospaced because it labels a computation. */
+.prl-chip--method,
+.prl-chip--mono {
+  font-family: var(--prl-font-mono);
+  letter-spacing: normal;
+}
+
+.prl-chip--method {
+  border-color: var(--prl-info);
+  color: var(--prl-info);
+}
+
+/** The dealer button. A circle with a literal "D" in it - the shape is not the information,
+    the letter is. */
+.prl-badge--dealer {
+  justify-content: center;
+  min-width: var(--prl-space-7);
+  padding: 0;
+  aspect-ratio: 1;
+  border-color: var(--prl-text);
+  background-color: var(--prl-surface-raised);
+  color: var(--prl-text);
+  font-weight: var(--prl-weight-bold);
+}
+
+/* ==========================================================================================
+   8. TABLE PRIMITIVES
+   ==========================================================================================
+   The table is the highest-priority surface in the app and the one with the most opportunity to
+   look like a casino. It does not: no felt, no baize, no wood, no rail highlight. It is graph
+   paper, because that is the honest description of what is happening on it.
+   ========================================================================================== */
+
+/**
+ * The table surface: one colour and one pair of repeating gradients.
+ *
+ * Two `repeating-linear-gradient`s on a single element rather than a grid of divs or an SVG
+ * pattern - one element, one paint, nothing to lay out, and the grid pitch stays a token
+ * (`--prl-table-grid-size`, 32px) so it cannot drift from the design doc. The gradients are the
+ * cheapest correct way to draw this: a tiled background-image would need an asset (forbidden by
+ * the CSP), and nested elements would put six seats' worth of extra boxes in the layout.
+ */
+.prl-table-surface,
+.prl-table__field {
+  position: relative;
+  container-type: inline-size;
+  container-name: prl-table-surface;
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-table);
+  background-image:
+    repeating-linear-gradient(
+      to right,
+      var(--prl-table-grid-color) 0 1px,
+      transparent 1px var(--prl-table-grid-size)
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      var(--prl-table-grid-color) 0 1px,
+      transparent 1px var(--prl-table-grid-size)
+    );
+}
+
+/**
+ * A seat plate: a hairlined rectangle with one chamfered corner, not an oval.
+ *
+ * Drawn as two stacked pseudo-elements because a `clip-path` on the seat itself would clip the
+ * focus ring of anything focusable inside it, and because a chamfered HAIRLINE needs two
+ * shapes: `::before` is the border colour clipped to the outer polygon, `::after` is the fill
+ * clipped to the same polygon and inset by one pixel, leaving a 1px chamfered outline between
+ * them. Both sit at `z-index: -1` inside an isolated stacking context, so they paint behind the
+ * seat's content and in front of nothing else.
+ */
+.prl-seat {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-5);
+  color: var(--prl-text);
+}
+
+.prl-seat::before,
+.prl-seat::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  border-radius: var(--prl-radius-1);
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% calc(100% - var(--prl-chamfer)),
+    calc(100% - var(--prl-chamfer)) 100%,
+    0 100%
+  );
+}
+
+.prl-seat::before {
+  inset: 0;
+  background-color: var(--prl-line-subtle);
+}
+
+.prl-seat::after {
+  inset: 1px;
+  background-color: var(--prl-surface-panel);
+}
+
+/** Your own seat. Paired with the word "you" in the markup. */
+.prl-seat--self::before {
+  background-color: var(--prl-line-strong);
+}
+
+/**
+ * The seat to act, marked three ways at once - accent edge, a "TO ACT" chip with real text, and
+ * the turn ring - because whose turn it is is the single most important fact on the screen and
+ * it must not depend on noticing a colour.
+ */
+.prl-seat--active::before,
+.prl-seat--to-act::before {
+  background-color: var(--prl-accent-edge);
+}
+
+/** Folded and sitting-out swap the SURFACE, never the opacity: an `opacity` on the whole plate
+    dims the text with it and silently takes a 4.5:1 label under the floor. */
+.prl-seat--folded::after,
+.prl-seat--sitting-out::after {
+  background-color: var(--prl-surface-page);
+}
+
+.prl-seat--folded,
+.prl-seat--sitting-out {
+  color: var(--prl-text-secondary);
+}
+
+.prl-seat--all-in::before {
+  background-color: var(--prl-caution);
+}
+
+.prl-seat__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--prl-space-3);
+}
+
+.prl-seat__name {
+  margin: 0;
+  font-size: var(--prl-type-body);
+  font-weight: var(--prl-weight-semibold);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-seat__position {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-seat__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-2);
+}
+
+.prl-seat__stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--prl-space-2) var(--prl-space-5);
+  margin: 0;
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-seat__stat-label {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label-sm);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label-sm);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/** `nowrap`, because a grouped figure that wraps mid-number reads as two numbers: `1,000`
+    broken across lines looks like "1,00" and "0". */
+.prl-seat__stat-value {
+  margin: 0;
+  font-weight: var(--prl-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.prl-seat__status {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+/** "(you)". Quiet, because the accent edge and the plate's position in the layout already say it -
+    but present in WORDS, because neither of those is available to a screen reader. */
+.prl-seat__you {
+  color: var(--prl-text-muted);
+  font-weight: var(--prl-weight-regular);
+}
+
+/** The seat's own hole cards. `margin: 0` because `CardRow` is a `<figure>`. */
+.prl-seat__cards {
+  margin: 0;
+}
+
+/** The pot. A metric block, plus side pots as indexed rows so `01` and `02` are visibly one
+    system with the lesson steps and the process spine. */
+.prl-pot {
+  display: grid;
+  justify-items: center;
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-6) var(--prl-space-7);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-raised);
+  text-align: center;
+}
+
+.prl-pot__sides {
+  display: grid;
+  gap: var(--prl-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-block-start: var(--prl-hairline);
+  padding-block-start: var(--prl-space-4);
+}
+
+/**
+ * A side pot row: index, amount, eligibility. Three columns rather than a sentence, so several rows
+ * form a table the eye can scan down - `auto auto 1fr` keeps the two figures from being squeezed by
+ * a long list of names.
+ */
+.prl-pot__side {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--prl-space-2) var(--prl-space-4);
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: start;
+}
+
+.prl-pot__side-index {
+  color: var(--prl-text-faint);
+}
+
+.prl-pot__side-amount {
+  color: var(--prl-text);
+  font-weight: var(--prl-weight-semibold);
+  white-space: nowrap;
+}
+
+.prl-pot__side-seats {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+/* ---- the turn ring ---------------------------------------------------------------------- */
+
+/**
+ * The turn timer: one registered custom property driving one conic gradient.
+ *
+ * `@property` is what makes this possible. An unregistered custom property has no type, so the
+ * browser cannot interpolate it and `@keyframes` would jump from 100% to 0% in one step.
+ * Registered as a `<percentage>`, it interpolates smoothly, which means the whole timer is one
+ * element with one animated property and no JavaScript, no `requestAnimationFrame`, and no SVG
+ * being re-rendered every frame.
+ *
+ * Honest about the cost: interpolating a gradient stop is a PAINT, not a compositor transform -
+ * only `transform` and `opacity` get the free ride. That is why the ring is small, why it is
+ * the only continuously animated thing on the table, and why it is drawn as a mask rather than
+ * as two stacked elements.
+ *
+ * `--prl-turn-duration` and `--prl-turn-offset` are DATA, not design values: `TurnTimer` sets both
+ * from the turn clock the server sent. The duration is the whole turn budget; the offset is a
+ * NEGATIVE `animation-delay` equal to the time already elapsed, which is what makes a frame that
+ * arrives mid-turn paint a partly-drained ring on its very first frame. One pair of keyframes
+ * serves every instance, and the component never has to touch the element again.
+ *
+ * Both fall back to something inert rather than something plausible: a missing duration collapses
+ * to the count-up duration, and a missing offset to zero.
+ */
+@property --prl-turn-progress {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
+
+.prl-turn-ring {
+  --prl-turn-progress: 100%;
+
+  inline-size: var(--prl-turn-size, var(--prl-space-9));
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background-image: conic-gradient(var(--prl-accent-edge) var(--prl-turn-progress), transparent 0);
+  /* Only the mask's ALPHA matters, so `currentcolor` is simply "opaque here" and introduces no
+     colour value; `transparent` punches the middle out to leave a ring. */
+  mask-image: radial-gradient(
+    farthest-side,
+    transparent calc(100% - var(--prl-space-2)),
+    currentcolor calc(100% - var(--prl-space-2))
+  );
+  animation: prl-turn-drain var(--prl-turn-duration, var(--prl-dur-count)) linear forwards;
+  /* After the shorthand, which would otherwise reset the delay to zero. */
+  animation-delay: var(--prl-turn-offset, 0ms);
+}
+
+@keyframes prl-turn-drain {
+  from {
+    --prl-turn-progress: 100%;
+  }
+
+  to {
+    --prl-turn-progress: 0%;
+  }
+}
+
+/**
+ * With motion off the ring stops being a clock and becomes a state: a full accent ring meaning
+ * "it is this seat's turn". The remaining time is still available - it is text in the seat's
+ * status line - because a timer that only exists as an animation is a timer that does not exist
+ * for a reader who turned animation off.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .prl-turn-ring {
+    --prl-turn-progress: 100%;
+
+    animation-name: none;
+  }
+}
+
+/**
+ * The whole timer: the ring, with the seconds left printed inside it.
+ *
+ * One grid cell shared by two children, rather than absolute positioning, so the digits are centred
+ * by the layout instead of by a translate that would need un-doing at every size. The size is one
+ * token (`--prl-turn-size`, which the ring inherits), so the ring and the digits cannot drift
+ * apart.
+ *
+ * The digits exist because the ring alone is not the information. Under `prefers-reduced-motion`
+ * the ring stops draining and becomes a state, and a timer that exists only as an animation is a
+ * timer that does not exist for a reader who turned animation off.
+ */
+.prl-turn-timer {
+  --prl-turn-size: var(--prl-space-10);
+
+  display: inline-grid;
+  grid-template-areas: "clock";
+  place-items: center;
+  flex: 0 0 auto;
+  inline-size: var(--prl-turn-size);
+  aspect-ratio: 1;
+}
+
+.prl-turn-timer__ring,
+.prl-turn-timer__value {
+  grid-area: clock;
+}
+
+.prl-turn-timer__value {
+  color: var(--prl-text);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: normal;
+  line-height: 1;
+}
+
+.prl-turn-timer__unit {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label-sm);
+  font-weight: var(--prl-weight-regular);
+}
+
+/* ==========================================================================================
+   9. REVEAL AND COUNT-UP
+   ==========================================================================================
+   The only two motion primitives in the app, and each answers one of the four questions the
+   design system allows an animation to answer: "is this new information?" and "what changed?".
+   ========================================================================================== */
+
+/**
+ * A section reveal, driven by an `IntersectionObserver` that unobserves after firing. No scroll
+ * listener and no `getBoundingClientRect` in a scroll handler - both of those turn a scroll into
+ * a layout-thrash loop on exactly the machines that can least afford it.
+ *
+ * ## The hidden state is keyed on the ATTRIBUTE, never on the bare class
+ *
+ * `Reveal` and `useReveal` publish `data-revealed="true" | "false"` and nothing else (design system
+ * section 5.6). This file previously hid `.prl-reveal` bare and revealed on a `.is-revealed` class
+ * that no component has ever emitted, which had two consequences: every revealed section stayed at
+ * `opacity: 0` forever, and the hidden state applied even when no observer was running.
+ *
+ * Keying the hidden state on `[data-revealed='false']` is what the design system asks for, and the
+ * reason it asks is this: content is then visible by DEFAULT and only ever hidden by an element
+ * that is actively tracking a live observer. Every failure mode - no JavaScript, no observer, an
+ * observer that never fires, a hydration that never happens - lands on "the content is there".
+ *
+ * Three of those four are covered by the two media queries below. The fourth - the observer that
+ * never fires, for whatever reason - is not a media query at all, and is covered by the DEADLINE
+ * that is part of the hidden rule itself.
+ */
+.prl-reveal {
+  transition:
+    opacity var(--prl-dur-reveal) var(--prl-ease-enter),
+    transform var(--prl-dur-reveal) var(--prl-ease-enter);
+  /* The stagger, as documented in section 5.6: `Reveal` publishes `--prl-reveal-index` as a
+     unitless position and the DELAY is a token multiplied by it, so the value lives in the token
+     system and collapses to nothing under reduced motion along with every other duration. */
+  transition-delay: calc(var(--prl-reveal-index, 0) * var(--prl-dur-deal-stagger));
+}
+
+/**
+ * THE HIDDEN STATE, AND ITS DEADLINE. They are one rule on purpose - read the whole comment
+ * before splitting them, because the safety argument is that they live and die together.
+ *
+ * The rule this file now enforces: **content is never allowed to depend on JavaScript succeeding
+ * in order to be legible.** A reveal is an enhancement on top of visible content, not a gate in
+ * front of it. So the hidden state carries its own expiry: at `--prl-dur-count` (900ms, the same
+ * single budget the boot overlay spends) plus this element's stagger, whatever has or has not
+ * happened, the element resolves to fully visible and stays there.
+ *
+ * Why this is not merely belt-and-braces - three ways it was measured to trap content:
+ *
+ *   1. Hydration never happens (a chunk 404s, a CSP blocks the bundle, the network dies after the
+ *      document). Nothing ever flips the attribute. `scripting: none` is FALSE in this case, so no
+ *      media query below rescues it.
+ *   2. The document is hidden. `IntersectionObserver` entries are delivered from the "update the
+ *      rendering" step, which a background tab does not run; in Chrome an element sitting fully
+ *      inside the viewport got no entry in 1.5s. (`useReveal` now also resolves for this case
+ *      directly, which is the proper fix - this is the failsafe under it.)
+ *   3. Any future call site that mounts a reveal inside a container the observer cannot see.
+ *
+ * ## The trap this codebase has already fallen into once
+ *
+ * An actively-filling animation on `opacity` OUTRANKS a later declaration of `opacity`, so a
+ * deadline animation that kept matching after the reveal resolved would take ownership of the
+ * property and the `.prl-reveal` transition above could never run - the arrival would snap instead
+ * of easing, permanently. That is avoided by keying the deadline on `[data-revealed='false']`
+ * rather than on the bare class:
+ *
+ *   - happy path: JS flips the attribute to `true`, this rule stops matching, the animation is
+ *     removed WITH it, and the element transitions from the before-change style (opacity 0,
+ *     translated) to the base state. The deadline costs exactly nothing.
+ *   - failure path: the attribute stays `false`, the rule keeps matching, the delay elapses and
+ *     the animation resolves the element to visible and holds it there with `forwards`.
+ *
+ * `animation-fill-mode` is `forwards` and NOT `both`: with no backwards fill the animation has no
+ * effect during its delay, so `opacity: 0` below is what paints for the first 900ms. Adding
+ * `backwards` would make the animation own the property from time zero and would defeat the point.
+ *
+ * Verified in Chrome on both paths - a reveal that resolves normally still eases in over
+ * `--prl-dur-reveal`, and one whose observer is deleted before hydration lands at opacity 1.
+ */
+.prl-reveal[data-revealed="false"] {
+  opacity: 0;
+  transform: translateY(var(--prl-space-5));
+  animation: prl-reveal-deadline var(--prl-dur-out) var(--prl-ease-enter)
+    calc(var(--prl-dur-count) + var(--prl-reveal-index, 0) * var(--prl-dur-deal-stagger)) forwards;
+}
+
+@keyframes prl-reveal-deadline {
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/**
+ * Two more ways the reveal can never trap content, both of which resolve the element outright and
+ * therefore have no use for the deadline - hence `animation: none`, so no clock runs for an
+ * element that is already at its final state.
+ *
+ * `scripting: none` covers the case that matters most: with JavaScript off nothing will ever change
+ * the attribute, and the server renders `data-revealed="false"` (the observer has not run), so an
+ * unguarded reveal would leave the page permanently blank. Reduced motion resolves to the final
+ * state for the same reason the JS does - the content arrives, it just does not travel.
+ */
+@media (scripting: none) {
+  .prl-reveal[data-revealed="false"] {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prl-reveal[data-revealed="false"] {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+}
+
+/**
+ * A counting figure. The class exists to guarantee tabular figures and to mark the node the
+ * count-up writes into; the rules that matter are in the component:
+ *
+ *   - the FINAL value is written to the DOM immediately, and the animated element is
+ *     `aria-hidden`, so a screen reader never reads a mid-count number;
+ *   - the real value sits in a visually-hidden node inside an `aria-live="polite"` region;
+ *   - the count is skipped entirely under reduced motion and for changes under one point.
+ */
+.prl-count {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* ==========================================================================================
+   10. DATA VISUALISATION
+   ==========================================================================================
+   Six series, six DIFFERENT fill patterns. The pattern is what makes a stacked bar readable
+   with any form of colour-vision deficiency, in a greyscale print, and in forced-colors mode -
+   and it is why the series are not interchangeable: swapping two colours without swapping their
+   patterns breaks the legend.
+
+   The hatch is drawn in the TRACK's colour rather than in ink, so each stripe is a hole punched
+   in the fill. That keeps the hatch's contrast against its own fill identical to the contrast
+   the gate already measures (series against surface, minimum 3:1), instead of introducing a
+   second pairing nobody checks.
+   ========================================================================================== */
+
+.prl-fill {
+  --prl-pattern-gap: var(--prl-surface-inset);
+
+  background-color: var(--prl-fill-colour, var(--prl-line-strong));
+  background-image: var(--prl-fill-pattern, none);
+}
+
+/* Series identity comes in as `data-series`. Letters match the `--prl-series-*` tokens; the
+   digits are the same six in the order the existing components emit them, kept so a component
+   and this stylesheet can be updated independently. */
+[data-series="a"],
+[data-series="1"] {
+  --prl-fill-colour: var(--prl-series-a);
+  --prl-fill-pattern: none;
+}
+
+[data-series="b"],
+[data-series="2"] {
+  --prl-fill-colour: var(--prl-series-b);
+  --prl-fill-pattern: repeating-linear-gradient(
+    45deg,
+    var(--prl-pattern-gap) 0 var(--prl-space-1),
+    transparent var(--prl-space-1) var(--prl-space-3)
+  );
+}
+
+[data-series="c"],
+[data-series="3"] {
+  --prl-fill-colour: var(--prl-series-c);
+  --prl-fill-pattern: repeating-linear-gradient(
+    90deg,
+    var(--prl-pattern-gap) 0 var(--prl-space-1),
+    transparent var(--prl-space-1) var(--prl-space-4)
+  );
+}
+
+[data-series="d"],
+[data-series="4"] {
+  --prl-fill-colour: var(--prl-series-d);
+  --prl-fill-pattern: radial-gradient(var(--prl-pattern-gap) 30%, transparent 32%);
+
+  background-size: var(--prl-space-4) var(--prl-space-4);
+}
+
+[data-series="e"],
+[data-series="5"] {
+  --prl-fill-colour: var(--prl-series-e);
+  --prl-fill-pattern: repeating-linear-gradient(
+    -45deg,
+    var(--prl-pattern-gap) 0 var(--prl-space-1),
+    transparent var(--prl-space-1) var(--prl-space-3)
+  );
+}
+
+[data-series="f"],
+[data-series="6"] {
+  --prl-fill-colour: var(--prl-series-f);
+  --prl-fill-pattern: repeating-linear-gradient(
+    0deg,
+    var(--prl-pattern-gap) 0 var(--prl-space-1),
+    transparent var(--prl-space-1) var(--prl-space-4)
+  );
+}
+
+/**
+ * The stacked bar. A SECONDARY encoding: every segment's value is also printed as text beside
+ * the bar, which is the only way a stacked bar can satisfy "never convey a value by length or
+ * colour alone". If the readout is dropped to make room, the layout is wrong.
+ */
+.prl-bar {
+  display: flex;
+  overflow: hidden;
+  min-height: var(--prl-space-8);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-bar__segment {
+  /* Share arrives as a percentage on `--prl-segment-share`. `min-width` keeps a 1% slice
+     visible rather than letting it collapse to nothing. */
+  flex: 0 0 var(--prl-segment-share, 0%);
+  min-width: var(--prl-space-1);
+  border-inline-end: 1px solid var(--prl-surface-inset);
+}
+
+.prl-bar__segment:last-child {
+  border-inline-end: 0;
+}
+
+/** A legend row: swatch, name, value. The swatch repeats the pattern, not just the colour. */
+.prl-bar-legend {
+  display: grid;
+  gap: var(--prl-space-3);
+  margin: 0;
+}
+
+.prl-swatch {
+  flex: 0 0 auto;
+  display: inline-block;
+  width: var(--prl-space-6);
+  height: var(--prl-space-6);
+  border: 1px solid var(--prl-text);
+  border-radius: var(--prl-radius-1);
+}
+
+/**
+ * The 16-axis radar on a Legend card, drawn as inline SVG - no chart library, and none needed:
+ * a polygon, sixteen spokes and three reference rings is a `<polygon>` and two `<g>`s.
+ *
+ * The wash is `--prl-veil-8` rather than the 12%-alpha accent the design doc describes. There is
+ * no accent-with-alpha token, tokens.css is out of scope here, and inventing `rgb(... / 12%)`
+ * inline would be exactly the one-off value the system forbids. The veil is theme-aware, and the
+ * accent still carries the shape - it is the stroke.
+ *
+ * ## `position: relative; overflow: hidden` is a RESPONSIVE fix, not a layout preference
+ *
+ * `RadarChart` renders its data a second time as a `.prl-visually-hidden` `<table>`, which is exactly
+ * right - the numbers are the content and a chart is nothing to a screen reader. But a `<table>` floors
+ * its used width at min-content whatever `width: 1px` says, so the invisible table measures a few
+ * hundred pixels wide, and being absolutely positioned it contributed that width as scrollable overflow
+ * to the PAGE: a horizontal scrollbar on every screen showing a radar. Making `.prl-radar` the
+ * containing block and clipping there confines it. Nothing visible is clipped - the SVG fills the same
+ * box - and clipping is not `display: none`, so the table stays in the accessibility tree, which is the
+ * whole basis of the visually-hidden pattern.
+ */
+.prl-radar {
+  position: relative;
+  inline-size: 100%;
+  overflow: hidden;
+  aspect-ratio: 1;
+}
+
+.prl-radar--compact {
+  max-inline-size: var(--prl-space-15);
+}
+
+/** An `<svg>` with a `viewBox` and no width/height would size to its viewBox rather than to the box
+    above it. Both axes, so the square `.prl-radar` decides the chart's size. */
+.prl-radar__svg {
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+/** The reference rings are decoration, so `--prl-line` is allowed. The spokes are the AXES, and
+    an axis carries meaning, so it gets `--prl-line-strong` (over 3:1 on every surface). */
+.prl-radar__ring {
+  fill: none;
+  stroke: var(--prl-line);
+  stroke-width: 1;
+}
+
+.prl-radar__spoke {
+  fill: none;
+  stroke: var(--prl-line-strong);
+  stroke-width: 1;
+}
+
+/**
+ * The value polygon. `__shape`, which is what `RadarChart` emits.
+ *
+ * This rule was `.prl-radar__polygon` and matched nothing, and the consequence was not cosmetic: with
+ * no `fill` declared the polygon painted with the SVG default of opaque black, so the radar was a black
+ * blob with no stroke - invisible against the dark theme's panel and a solid black slab on the light
+ * one. `apps/web/src/styles/legends.css` carried a shim for it, which meant a `@prl/ui` component only
+ * drew correctly on the one route that happened to import that route's stylesheet.
+ */
+.prl-radar__shape {
+  fill: var(--prl-veil-8);
+  stroke: var(--prl-accent-edge);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+/** No axes is a missing profile rather than an empty chart, so the component says so in words. */
+.prl-radar__empty {
+  margin: 0;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-radar__label {
+  fill: var(--prl-text-muted);
+  font-size: var(--prl-type-label-sm);
+  letter-spacing: var(--prl-tracking-label-sm);
+  text-transform: uppercase;
+}
+
+/** A sparkline. Also a secondary encoding: the figure it summarises is always printed too. */
+.prl-sparkline {
+  inline-size: 100%;
+  block-size: var(--prl-space-10);
+}
+
+.prl-sparkline__baseline {
+  stroke: var(--prl-line-strong);
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+}
+
+.prl-sparkline__area {
+  fill: var(--prl-veil-8);
+  stroke: none;
+}
+
+.prl-sparkline__line {
+  fill: none;
+  stroke: var(--prl-accent-edge);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ==========================================================================================
+   11. PROGRESSIVE DISCLOSURE
+   ==========================================================================================
+   `<details>` and `<summary>`, not a custom toggle: free keyboard support, free screen-reader
+   semantics, and it works with JavaScript disabled. Used by the Coach panel, where WHAT may be
+   collapsed is a product rule rather than a layout choice - the equity figure, the pot odds, the
+   suggestion and THE ASSUMPTIONS are never collapsible, because hiding the assumptions would let
+   a learner read a number without its caveats, which is the exact failure the product exists to
+   prevent.
+   ========================================================================================== */
+
+.prl-disclose {
+  border-block-start: var(--prl-hairline);
+}
+
+.prl-disclose__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--prl-space-4);
+  min-height: var(--prl-target-min);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+  list-style: none;
+  cursor: pointer;
+}
+
+/** Safari draws its own triangle from a pseudo-element that `list-style` does not reach. */
+.prl-disclose__summary::-webkit-details-marker {
+  display: none;
+}
+
+/** The marker: a triangle cut out of a square with `clip-path`, so there is no icon font, no
+    SVG file and nothing to load. It rotates a quarter turn on open, over `--prl-dur-quick`. */
+.prl-disclose__summary::after {
+  content: "";
+  flex: 0 0 auto;
+  width: var(--prl-space-4);
+  height: var(--prl-space-4);
+  margin-inline-start: auto;
+  background-color: currentcolor;
+  clip-path: polygon(25% 0, 100% 50%, 25% 100%);
+  transition: transform var(--prl-dur-quick) var(--prl-ease-standard);
+}
+
+.prl-disclose__summary:hover {
+  color: var(--prl-accent-text);
+}
+
+.prl-disclose[open] .prl-disclose__summary::after {
+  transform: rotate(90deg);
+}
+
+.prl-disclose__body {
+  display: grid;
+  gap: var(--prl-space-5);
+  padding-block: var(--prl-space-5) var(--prl-space-6);
+}
+
+/* ==========================================================================================
+   12. LOADING, EMPTY AND ERROR STATES
+   ========================================================================================== */
+
+/**
+ * A skeleton block, sized by the caller to the REAL content's dimensions so that nothing
+ * reflows when the data lands. A layout that jumps on arrival is worse than one that was
+ * briefly empty, because the reader has already started reading.
+ *
+ * The sweep is a `translateX` on a pseudo-element - transform only, no blur, and under reduced
+ * motion the global guard collapses it to a single 1ms pass that ends off-screen, leaving a
+ * static block.
+ */
+.prl-skeleton {
+  position: relative;
+  overflow: hidden;
+  min-height: var(--prl-skeleton-h, var(--prl-space-6));
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(90deg, transparent, var(--prl-veil-8), transparent);
+  animation: prl-skeleton-sweep var(--prl-dur-count) var(--prl-ease-standard) infinite;
+}
+
+@keyframes prl-skeleton-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prl-skeleton::after {
+    display: none;
+  }
+}
+
+.prl-skeleton--line {
+  --prl-skeleton-h: var(--prl-space-6);
+}
+
+.prl-skeleton--metric {
+  --prl-skeleton-h: var(--prl-space-11);
+}
+
+.prl-skeleton--panel {
+  --prl-skeleton-h: var(--prl-space-15);
+}
+
+/** Empty is not an error and must not look like one: a hairline box, a sentence, and where
+    there is something to do about it, one action. */
+.prl-empty {
+  display: grid;
+  justify-items: start;
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-9);
+  border: 1px dashed var(--prl-line-strong);
+  border-radius: var(--prl-radius-2);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+}
+
+/** An error carries the word "error" and a glyph in the markup as well as the colour, so it is
+    still an error with the stylesheet's colours thrown away. */
+.prl-error {
+  display: grid;
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-6);
+  border: 1px solid var(--prl-adverse);
+  border-inline-start-width: var(--prl-space-1);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-inset);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body);
+}
+
+.prl-error__title {
+  margin: 0;
+  color: var(--prl-adverse);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+/* ==========================================================================================
+   13. THE BOOT SEQUENCE
+   ==========================================================================================
+   Once, on first paint of the app shell. Not between routes, and never as a spinner on a data
+   fetch.
+
+   Hard limits, all of them in the CSS rather than in a comment somewhere: the counter and the
+   wipe run for `--prl-dur-count` (900ms) and no longer, the overlay is removed the instant the
+   shell is ready, and under reduced motion every duration collapses to 1ms so the whole thing
+   is over before it is seen. A loading animation that makes a fast app slower is a net loss.
+   ========================================================================================== */
+
+/**
+ * The overlay, and the deadline that gets rid of it even when nothing is running.
+ *
+ * `data-state="done"` is set by `BootSequence`, which is JavaScript, so every rule that depends on
+ * it depends on hydration happening. Section 8 caps the sequence at 900ms; that cap used to live
+ * only in the component, which meant the ONE failure the overlay must survive - the bundle not
+ * arriving - left an opaque, page-coloured, `z-index: 900` sheet over a perfectly good
+ * server-rendered document, permanently. Observed twice for real: a stale chunk manifest after a
+ * rebuild (`ChunkLoadError: Failed to load chunk .../0p6a7v9geabnq.js`, overlay still `pending`
+ * minutes later) and a backgrounded tab whose `requestAnimationFrame` never fires.
+ *
+ * So the cap is a CSS animation as well, on a delay of exactly the budget it enforces. CSS applies
+ * before first paint and needs no bundle, which is the same argument `globals.css` makes for
+ * resolving the theme in CSS rather than in an effect.
+ *
+ * It animates `visibility` rather than `opacity`, and that is the whole reason this is safe to add:
+ *
+ *   - a filling animation on `opacity` would out-rank the `data-state="done"` declaration, so the
+ *     opacity transition would never start, `transitionend` would never fire, and the component's
+ *     own unmount - the thing that keeps a fixed full-viewport element from outliving its purpose -
+ *     would silently stop happening;
+ *   - `visibility: hidden` is not painted, is not hit-tested, and is not in the accessibility tree,
+ *     which is the whole job. `pointer-events` goes with it for the interval before it flips.
+ *
+ * A slow-but-alive page therefore still fades and still unmounts, and a dead one is uncovered at
+ * 900ms. `visibility` interpolates as a step whose final value is `hidden`, so nothing here dims
+ * the overlay early - it is present, then it is out of the way.
+ */
+.prl-boot {
+  position: fixed;
+  z-index: var(--prl-z-boot);
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: var(--prl-space-5);
+  padding: var(--prl-gutter);
+  background-color: var(--prl-surface-page);
+  /* `--prl-dur-out`, not `--prl-dur-in`: this overlay only ever LEAVES, and leaving is the fast
+     half of the system's asymmetry. Things arrive with weight and go without ceremony. */
+  transition: opacity var(--prl-dur-out) var(--prl-ease-exit);
+  animation: prl-boot-deadline var(--prl-dur-out) var(--prl-ease-exit) var(--prl-dur-count) forwards;
+}
+
+@keyframes prl-boot-deadline {
+  from {
+    pointer-events: none;
+  }
+
+  to {
+    pointer-events: none;
+    visibility: hidden;
+  }
+}
+
+/** `data-state="done"` fades the overlay out and stops it swallowing clicks. The node is then
+    removed by the component - a permanently present fixed overlay is a permanent hazard. */
+.prl-boot[data-state="done"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.prl-boot__label {
+  color: var(--prl-text-muted);
+  font-family: var(--prl-font-mono);
+  font-size: var(--prl-type-label);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+/** The 0 to 100 counter. Monospace and tabular so the three digits do not shuffle the layout
+    as they climb, which is the same reason every other figure in this app is tabular. */
+.prl-boot__count {
+  color: var(--prl-text);
+  font-family: var(--prl-font-mono);
+  font-size: var(--prl-type-display-3);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-tight);
+}
+
+/** A 1px accent rule wiping left to right. `scaleX` on a hairline: one composited transform,
+    no layout, and it reads as an instrument calibrating rather than as a progress bar. */
+.prl-boot__rule {
+  width: min(100%, var(--prl-space-16));
+  height: 1px;
+  background-color: var(--prl-accent-edge);
+  transform-origin: left center;
+  animation: prl-boot-wipe var(--prl-dur-count) var(--prl-ease-standard) forwards;
+}
+
+@keyframes prl-boot-wipe {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/** Route changes get this instead: a 2px accent bar at the top of the viewport. Never the boot
+    sequence, which would make every navigation feel like a cold start. */
+.prl-route-progress {
+  position: fixed;
+  z-index: var(--prl-z-toast);
+  inset-block-start: 0;
+  inset-inline: 0;
+  height: var(--prl-focus-width);
+  background-color: var(--prl-accent-edge);
+  transform-origin: left center;
+  animation: prl-boot-wipe var(--prl-dur-count) var(--prl-ease-standard) forwards;
+}
+
+/* ==========================================================================================
+   14. COMPONENTS
+   ==========================================================================================
+   The blocks below belong to the components in `packages/ui/src/components`. They are built
+   from the primitives above and add only what is specific to one component.
+   ========================================================================================== */
+
+/* ---- 14.1 PlayingCard -------------------------------------------------------------------- */
+
+/**
+ * A card is a `<span>`, not an image: it scales with the reader's font size, can be selected and
+ * searched, and needs no asset pipeline (which the CSP would block anyway). The size steps set a
+ * single `--prl-card-w` off the spacing ramp and everything inside is `em`-relative to it, so
+ * `sm`/`md`/`lg` are one number each rather than three sets of rules.
+ *
+ * Card faces stay light in both themes. A dark playing card is unreadable at the sizes a six-max
+ * table needs, and inverting one is a novelty that costs legibility.
+ */
+.prl-card {
+  --prl-card-w: var(--prl-space-11);
+
+  position: relative;
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: var(--prl-card-w);
+  aspect-ratio: 5 / 7;
+  border: 1px solid var(--prl-card-edge);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-card-face);
+  color: var(--prl-suit-spade);
+  font-size: calc(var(--prl-card-w) / 3);
+  line-height: 1;
+  user-select: none;
+}
+
+.prl-card--sm {
+  --prl-card-w: var(--prl-space-9);
+}
+
+.prl-card--md {
+  --prl-card-w: var(--prl-space-11);
+}
+
+.prl-card--lg {
+  --prl-card-w: var(--prl-space-12);
+}
+
+.prl-card__face {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  justify-items: center;
+  padding: 0.28em 0.2em;
+  overflow: hidden;
+}
+
+.prl-card__rank {
+  font-size: 1.05em;
+  font-weight: var(--prl-weight-bold);
+  letter-spacing: var(--prl-tracking-display-1);
+}
+
+/** The large suit mark in the middle. */
+.prl-card__pip {
+  align-self: center;
+  font-size: 1.3em;
+  line-height: 1;
+}
+
+/**
+ * The suit LETTER: the redundant, non-colour cue that makes four suits distinguishable with any
+ * colour-vision deficiency and in a greyscale print. The symbols alone are not enough - at 34px
+ * a club and a spade are similar silhouettes, and that is also the pair protanopia cannot
+ * separate by hue.
+ */
+.prl-card__suit-letter {
+  font-family: var(--prl-font-mono);
+  font-size: 0.62em;
+  font-weight: var(--prl-weight-bold);
+  letter-spacing: var(--prl-tracking-label);
+}
+
+.prl-card[data-suit="spade"] {
+  --prl-card-suit-colour: var(--prl-suit-spade);
+}
+
+.prl-card[data-suit="heart"] {
+  --prl-card-suit-colour: var(--prl-suit-heart);
+}
+
+.prl-card[data-suit="diamond"] {
+  --prl-card-suit-colour: var(--prl-suit-diamond);
+}
+
+.prl-card[data-suit="club"] {
+  --prl-card-suit-colour: var(--prl-suit-club);
+}
+
+.prl-card__rank,
+.prl-card__pip,
+.prl-card__suit-letter {
+  color: var(--prl-card-suit-colour, var(--prl-suit-spade));
+}
+
+/** Face down: a flat diagonal rule pattern. No logo, no crest, nothing that reads as casino
+    livery. A visually-hidden string in the markup supplies the accessible name. */
+.prl-card--face-down {
+  border-color: var(--prl-card-back);
+  background-color: var(--prl-card-back);
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--prl-card-back-pattern) 0 var(--prl-space-1),
+    transparent var(--prl-space-1) var(--prl-space-3)
+  );
+  color: var(--prl-ink-000);
+}
+
+/** Highlighted - the five cards that made a hand, or the cards a new street just added. An
+    accent border AND a corner notch, because the notch is what survives greyscale. */
+.prl-card--highlighted {
+  border-color: var(--prl-accent-edge);
+}
+
+.prl-card--highlighted::after {
+  content: "";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+  /* A seventh of the card's width, so the notch keeps its proportion at every size step. */
+  border-block-start: calc(var(--prl-card-w) / 7) solid var(--prl-accent-edge);
+  border-inline-start: calc(var(--prl-card-w) / 7) solid transparent;
+}
+
+/** Dimmed, for a card that is out of the hand or shown for reference. The face steps down to
+    the dim token, which keeps every suit over 4.5:1 (worst case: heart at 4.90:1). */
+.prl-card--dimmed {
+  background-color: var(--prl-card-face-dim);
+}
+
+/* ---- 14.2 CardRow ----------------------------------------------------------------------- */
+
+.prl-card-row {
+  /* `<figure>` carries a 1em UA margin. This is a row of cards, not a plate. */
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-2) var(--prl-space-5);
+}
+
+.prl-card-row__label {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+/**
+ * Cards WRAP rather than scroll.
+ *
+ * Seven large cards are wider than a 360px phone, so something has to give. An `overflow-x:
+ * auto` strip was the first attempt and is the wrong answer: a scroll container with no
+ * focusable content cannot be scrolled by keyboard at all, so part of the board becomes
+ * unreachable without a pointer (WCAG 2.1.1), and making it focusable adds an unnamed tab stop
+ * for every card row on the page. Wrapping has neither problem, and nothing is ever clipped.
+ */
+.prl-card-row__cards {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-2);
+  max-width: 100%;
+}
+
+.prl-card-row__empty {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+}
+
+/**
+ * Community cards deal in: `translateY(-8px) -> 0` plus opacity, staggered by
+ * `--prl-dur-deal-stagger`. Transform and opacity only, so it composites; `backwards` fill so a
+ * card waiting out its delay is invisible rather than flashing at full opacity first.
+ *
+ * ## Why the stagger is `nth-child` rather than a prop, and why only the first three
+ *
+ * The delay has to be a FIXED property of each card, not of the render it happened to arrive in.
+ * `CardRow` keys its cards by content, so the flop's three DOM nodes survive the turn and the river
+ * being appended - and changing `animation-delay` on an element whose animation has already
+ * finished can re-trigger it, which would make the whole board twitch every time a street lands.
+ *
+ * `nth-child` gives each position a delay it keeps forever: `0`, `1`, `2` for the flop. The turn and
+ * the river are positions 4 and 5 and get NO delay, because they arrive alone - there is nothing to
+ * stagger them against, and a 360ms wait before a single card is just latency. The result needs no
+ * state, no props, and no knowledge of which cards are new.
+ *
+ * Under reduced motion tokens.css collapses `--prl-dur-in` and `--prl-dur-deal-stagger`, so the
+ * cards are simply present.
+ */
+.prl-card-row--dealing .prl-card {
+  animation: prl-card-deal var(--prl-dur-in) var(--prl-ease-enter) backwards;
+  animation-delay: calc(var(--prl-deal-index, 0) * var(--prl-dur-deal-stagger));
+}
+
+.prl-card-row--dealing .prl-card:nth-child(2) {
+  --prl-deal-index: 1;
+}
+
+.prl-card-row--dealing .prl-card:nth-child(3) {
+  --prl-deal-index: 2;
+}
+
+@keyframes prl-card-deal {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--prl-space-4) * -1));
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- 14.3 PokerTable -------------------------------------------------------------------- */
+
+/**
+ * Two layouts, one DOM.
+ *
+ * The DOM order is pot and board, then the opponents, then the viewer's own plate - the order that
+ * makes sense read aloud ("pot 420 units, community cards queen of hearts, seven of hearts, two of
+ * clubs, seat 2..., your seat..."). The STACKED layout re-orders those three regions visually, so
+ * the opponents sit above the board and the viewer's own cards are pinned at the bottom where a
+ * player expects them.
+ *
+ * A visual order that differs from the DOM order is normally a bug. It is safe here because nothing
+ * inside the field is focusable - cards are `role="img"` spans, seats are plain elements, and every
+ * control on the play screen is in the ActionBar outside this component - so there is no tab
+ * sequence to desynchronise. Add a focusable control to a seat and these `order` declarations have
+ * to go.
+ *
+ * The switch is a CONTAINER query, not a viewport query, so the table also lays out correctly inside
+ * a 22rem rail or a lesson column. Above 46rem of container the seats take absolute positions from
+ * the `--prl-seat-x` / `--prl-seat-y` pair `Seat` computes. Information is never removed to fit,
+ * only re-flowed.
+ */
+.prl-table {
+  container-type: inline-size;
+  container-name: prl-table;
+  display: grid;
+  gap: var(--prl-space-6);
+}
+
+.prl-table__header {
+  display: grid;
+  gap: var(--prl-space-4);
+}
+
+.prl-table__heading {
+  margin: 0;
+  font-size: var(--prl-type-display-3);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+}
+
+.prl-table__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/**
+ * The phase spine: `01 PREFLOP  02 FLOP  03 TURN  04 RIVER  05 SHOWDOWN`.
+ *
+ * The same numbered motif as the lesson steps and the process outline, which is what makes those
+ * three read as one system rather than three lists that happen to have numbers.
+ *
+ * The current phase is marked THREE ways - accent ink, heavier weight, and an accent underline -
+ * plus `aria-current="step"` and a visually-hidden "(current phase)" in the markup. The underline is
+ * the cue that survives greyscale and forced colors; the weight is the cue that survives a reader
+ * who cannot separate cyan from grey.
+ */
+.prl-table__spine {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-2) var(--prl-space-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-table__step {
+  display: flex;
+  align-items: baseline;
+  gap: var(--prl-space-2);
+  margin: 0;
+  color: var(--prl-text-faint);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-table__step-index {
+  color: var(--prl-text-faint);
+  font-size: var(--prl-type-label-sm);
+  letter-spacing: var(--prl-tracking-index);
+}
+
+.prl-table__step[data-state="done"] {
+  color: var(--prl-text-muted);
+}
+
+.prl-table__step[data-state="current"] {
+  color: var(--prl-accent-text);
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-table__step[data-state="current"] .prl-table__step-name {
+  padding-block-end: var(--prl-space-1);
+  border-block-end: var(--prl-focus-width) solid var(--prl-accent-edge);
+}
+
+/**
+ * The field. Stacked by default: opponents, then the board and pot, then the viewer's plate.
+ *
+ * `--prl-surface-table` and the 32px hairline grid come from `.prl-table-surface`, which this class
+ * shares (section 8). Graph paper, not felt.
+ */
+.prl-table__field {
+  display: grid;
+  gap: var(--prl-space-6);
+  padding: var(--prl-space-6);
+}
+
+/** The decorative ellipse: an anchor for the eye in the wide layout, `aria-hidden` in the
+    markup, and absent entirely in the stacked one. */
+.prl-table__oval {
+  display: none;
+}
+
+.prl-table__centre {
+  order: 2;
+  display: grid;
+  justify-items: center;
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-5);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-raised);
+  text-align: center;
+}
+
+.prl-table__board {
+  display: grid;
+  justify-items: center;
+  gap: var(--prl-space-3);
+}
+
+.prl-table__board-label {
+  color: var(--prl-text-muted);
+}
+
+/**
+ * The opponents. A wrapping grid, NOT a horizontal scroller.
+ *
+ * A sideways-scrolling row of seats is the obvious phone layout and it is unreachable from a
+ * keyboard: a scroll container with no focusable content inside it cannot be scrolled by keyboard at
+ * all (WCAG 2.1.1), and giving it `tabindex="0"` to fix that adds an unnamed tab stop for every
+ * table on the page. Wrapping has neither problem and clips nothing.
+ *
+ * 13rem is the plate's width in both layouts, so a seat is the same object whichever one is active.
+ */
+.prl-table__opponents {
+  order: 1;
+  display: grid;
+  gap: var(--prl-space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  grid-template-columns: repeat(auto-fit, minmax(calc(var(--prl-space-16) + var(--prl-space-11)), 1fr));
+}
+
+/** The viewer's own plate: last in the stack, which is where a player expects to be sitting. */
+.prl-table__hero {
+  order: 3;
+  display: grid;
+}
+
+/**
+ * The oval layout, and the arithmetic that keeps it from overlapping.
+ *
+ * The geometry is tied to the ring radii in `Seat.seatRingPosition` (38% horizontal, 36% vertical).
+ * A seat is placed by its CENTRE, so with `h` for the plate's height, `W` and `H` for the field's, and
+ * a 13rem plate, four constraints have to hold at once:
+ *
+ *   1. Two seats at the same x are `0.36 x H` apart vertically (the y=32% and y=68% pair at
+ *      six-handed), so `0.36 H >= h`.
+ *   2. The top seat must not hang out of the field: its top edge is `0.14 H - h/2`, so
+ *      `0.14 H >= h/2`, i.e. `H >= 3.6 h`.
+ *   3. The bottom seat must not collide with the centre block: `0.36 H >= (centre + h) / 2`.
+ *   4. Horizontally, the outermost seats span `0.658 W + 13rem <= W`, and the bottom seat must clear
+ *      the seats beside it by `0.329 W >= 13rem`. Both give `W >= 39.5rem`, and with `2 x 2rem` of
+ *      field padding that is a 43.5rem CONTAINER - hence the 46rem threshold, which leaves 1.4rem of
+ *      slack rather than sitting on the boundary. Below it the stack is not a fallback, it is the
+ *      correct layout: an oval forced into a narrower column has seats on top of each other.
+ *
+ * `--prl-seat-h` is the compacted plate's nominal height, and `H = 5 x --prl-seat-h` is what makes 1
+ * to 3 hold. It was 6.5rem, and the figures the comment quoted for it - plates of 121-146px and a
+ * centre block of about 13rem - were both short of what the components actually render:
+ *
+ *   - the plate that is TO ACT carries a turn timer and a `to act` chip, which takes the viewer's
+ *     own plate to 177px, not 146px. Constraint 2 then wants `H >= 3.6 x 177 = 632px`, and `H` was
+ *     520px, so the viewer's plate hung 15px out of the bottom of the field.
+ *   - at showdown the centre block is a pot plus a FIVE-card board plus the result, 315-334px rather
+ *     than 208px. Constraint 3 then wants `0.36 H >= (334 + 142) / 2 = 238`, i.e. `H >= 661px`.
+ *
+ * Both were violated at 520px, and the visible consequence was the one thing this layout may never
+ * do: the viewer's plate was drawn OVER the bottom of every community card, cutting off the suit
+ * letter that carries the suit without colour. Measured in Chrome at 1280, 1440 and 1920 on both the
+ * decision and the showdown fixture.
+ *
+ * At 9rem the field is 45rem and every constraint clears with real slack: 12px of top clearance for
+ * a 177px plate (constraint 2), 20px between the showdown centre block and the plate below it
+ * (constraint 3), and 259px of separation between the seats that share an x (constraint 1). Re-hit
+ * -tested at all three widths in both states: nothing overlaps and nothing leaves the field.
+ *
+ * If the plate grows again, raise `--prl-seat-h` with it. That is the point of writing the height as
+ * a multiple of the plate rather than as a number - and re-measure the plate rather than trusting
+ * the number in this comment, which is how it drifted the first time.
+ *
+ * The plate is COMPACTED here, not stripped: the cards move BESIDE the text instead of under it and
+ * the padding tightens. Same position label, name, badges, stack, street commitment, status and
+ * cards as the stacked layout - a plate around a table rather than a card in a list.
+ */
+@container prl-table (min-width: 46rem) {
+  .prl-table__field {
+    --prl-seat-h: calc(var(--prl-space-15) + var(--prl-space-6));
+
+    min-height: calc(var(--prl-seat-h) * 5);
+    padding: var(--prl-space-9);
+  }
+
+  .prl-table__oval {
+    display: block;
+    position: absolute;
+    inset: 17% 7%;
+    border: 1px solid var(--prl-line-subtle);
+    border-radius: 50%;
+  }
+
+  .prl-table__centre {
+    position: absolute;
+    inset-inline-start: 50%;
+    inset-block-start: 50%;
+    min-width: var(--prl-space-16);
+    translate: -50% -50%;
+  }
+
+  /* Both wrappers collapse to nothing: every seat inside them is absolutely positioned against
+     `.prl-table__field`, which is the only positioned ancestor. */
+  .prl-table__opponents,
+  .prl-table__hero {
+    display: block;
+  }
+
+  .prl-seat {
+    position: absolute;
+    /* Set inline by `Seat` from its place on the ellipse. */
+    inset-inline-start: var(--prl-seat-x, 50%);
+    inset-block-start: var(--prl-seat-y, 50%);
+    /* 13rem, matching the stacked layout's track. */
+    width: calc(var(--prl-space-16) + var(--prl-space-11));
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "head cards"
+      "name cards"
+      "stats cards"
+      "status cards";
+    gap: var(--prl-space-1) var(--prl-space-4);
+    padding: var(--prl-space-4);
+    translate: -50% -50%;
+  }
+
+  .prl-seat__top {
+    grid-area: head;
+  }
+
+  .prl-seat__name {
+    grid-area: name;
+  }
+
+  /**
+   * The stats pair, sized to the LABEL rather than split down the middle.
+   *
+   * The compacted plate gives this list 116-125px, and two equal `1fr` tracks therefore handed the
+   * label 52-56px. `IN FRONT` measures 65px at `--prl-type-label-sm` with `--prl-tracking-label-sm`,
+   * and the label is `nowrap` with visible overflow, so it painted straight through the gap and into
+   * the figure beside it: the plate read `IN FRONT35`, with no space between the words and the
+   * number they belong to. Measured in Chrome, six seats out of six, at every desktop width.
+   *
+   * Sizing the first track to its content is what fixes it, and the column gap tightens to pay for
+   * the room: 65px of label plus 4px of gap leaves 47-56px for the figure, which is 4-13px more than
+   * the widest value a six-max table of 1,000-unit stacks can print (`1,000`, 43px). The row gap is
+   * untouched, and so is the stacked layout, where the plate is full width and neither is a problem.
+   */
+  .prl-seat__stats {
+    grid-area: stats;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: var(--prl-space-2);
+  }
+
+  .prl-seat__status {
+    grid-area: status;
+  }
+
+  .prl-seat__cards {
+    grid-area: cards;
+    align-self: center;
+  }
+
+  /* A smaller ring in the compacted plate: the seconds still fit, and every 0.5rem of plate height
+     costs 2.5rem of field height through the `H = 5 h` relation above. */
+  .prl-turn-timer {
+    --prl-turn-size: var(--prl-space-9);
+  }
+}
+
+/* ---- 14.4 ActionBar --------------------------------------------------------------------- */
+
+/**
+ * The bar's height is a layout constraint, not a detail.
+ *
+ * This block used to be a single-column grid: price, sizer, buttons and note, each a full-width row,
+ * 462px tall at a desktop table. `styles/play.css` then pinned the band containing it to the bottom
+ * of the viewport, and 462px of pinned bar covers a 520px table field completely - the defect that
+ * comment now documents. The band is no longer pinned, so the bar's height is what decides whether a
+ * player can see the pot and the price at the same time (design system section 10), and every rule
+ * below exists to spend that height carefully.
+ *
+ * `flex-wrap` rather than a grid or a media query: each block declares the width it needs and the bar
+ * fits as many as fit. That is what lets the same markup be a stacked column on a phone and a short
+ * block on a desktop with no breakpoint to keep in step with the layout around it - the bar does not
+ * know whether it is in the play column, a 22rem rail or a lesson, and it should not have to. The
+ * sizer inside it reflows the same way (section 14.5), so there is no threshold anywhere in this
+ * component that a future change of width could fall the wrong side of.
+ *
+ * Nothing is hidden or collapsed at any width. Every figure, control and caveat in this component is
+ * on screen in every layout it takes; what changes is how many of them share a line.
+ */
+.prl-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  /* Tighter down the block axis than across it, and tighter than the panel rhythm elsewhere: every
+     8px between these rows is 8px of poker table, and a control surface is the one place in this app
+     where density is the honest choice. The inline gap stays at the panel step so the blocks that
+     share a line still read as separate. */
+  gap: var(--prl-space-4) var(--prl-space-6);
+  padding: var(--prl-space-4) var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+/**
+ * Four blocks, four widths.
+ *
+ * The buttons and the sizer take a full line each: the action row is the one place in this app where
+ * a target is deliberately oversized (section 6.4 of the design system), and a bet sizer squeezed
+ * beside something else is a slider with no travel. The price strip and the note take a line each
+ * too, but they are one line of text tall rather than a block, so the cost is small and the reading
+ * order - what is in the pot, what it costs, how much, which button, what folding means - survives
+ * intact.
+ */
+.prl-action-bar__idle,
+.prl-action-bar__price,
+.prl-action-bar__actions,
+.prl-action-bar__note {
+  flex: 1 1 100%;
+}
+
+.prl-action-bar__idle {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+/**
+ * The price strip: what is in the middle, and what it costs to continue.
+ *
+ * It repeats figures the buttons also carry, deliberately. The pot appears nowhere else in this
+ * component, and a player weighing the price against the pot should not have to read two different
+ * parts of the screen to do the arithmetic. Both figures are tabular, so they line up under each
+ * other as the hand goes on.
+ */
+.prl-action-bar__price {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-4) var(--prl-space-9);
+  margin: 0;
+  max-width: none;
+}
+
+.prl-action-bar__price-item {
+  display: grid;
+  gap: var(--prl-space-1);
+}
+
+.prl-action-bar__price-value {
+  font-size: var(--prl-type-metric-sm);
+  font-weight: var(--prl-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
+}
+
+.prl-action-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-4);
+}
+
+/**
+ * The action buttons are their own family: full width in a row, a larger target than a general
+ * button, and each one prints its COST in tabular figures. A player should never have to work
+ * out what a button will cost them, and they should never have to read a different button to
+ * find out.
+ *
+ * Nothing here endorses a decision. `--primary` marks the aggressive action so the row has a
+ * visual anchor; it never means "recommended", and no styling in this package does.
+ */
+.prl-action-btn {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  gap: var(--prl-space-1);
+  flex: 1 1 var(--prl-space-15);
+  min-height: var(--prl-space-12);
+  padding: var(--prl-space-4) var(--prl-space-6);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: transparent;
+  color: var(--prl-text);
+  text-align: center;
+  transition:
+    background-color var(--prl-dur-instant) var(--prl-ease-hover),
+    border-color var(--prl-dur-instant) var(--prl-ease-hover);
+}
+
+.prl-action-btn:hover:not(:disabled) {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-hover);
+}
+
+.prl-action-btn:disabled {
+  border-color: var(--prl-line-subtle);
+  color: var(--prl-text-disabled);
+  cursor: not-allowed;
+}
+
+.prl-action-btn__label {
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-action-btn__cost {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-action-btn--primary {
+  border-color: transparent;
+  color: var(--prl-text-on-accent);
+}
+
+/** Same chamfer plate as `.prl-btn--primary`, for the same reason: the clip must not reach the
+    focus ring. */
+/* Chamfer removed here for the same reason as `.prl-btn--primary::before` above — and with more
+   force at the table, where this is the button a player presses under a turn clock. */
+.prl-action-btn--primary::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-accent-fill);
+  transition: background-color var(--prl-dur-instant) var(--prl-ease-hover);
+}
+
+.prl-action-btn--primary:hover:not(:disabled)::before {
+  background-color: var(--prl-accent-400);
+}
+
+.prl-action-btn--primary .prl-action-btn__cost {
+  color: var(--prl-text-on-accent);
+}
+
+/* ---- 14.5 the bet sizer ----------------------------------------------------------------- */
+
+/**
+ * The sizer wraps the same way the bar around it does, and for the same reason: its height is table.
+ *
+ * Four blocks - presets, the slider-plus-number row, the bounds line and the readout - which used to
+ * be four full-width rows and 237px. Each now declares the width below which it would rather have a
+ * line to itself, so a wide bar puts the presets beside the controls and the bounds beside the
+ * readout (137px measured, all four blocks intact), a mid-width bar pairs whichever two fit, and a
+ * phone gets the original stack. Written as flex bases rather than a container query because the
+ * numbers ARE the layout rule here: the controls row cannot go below the slider's own floor plus the
+ * number field, and a threshold expressed anywhere else would be a second place to keep that in step.
+ *
+ * The two interactive blocks ask for `max-content` and the two text blocks ask for a stated width,
+ * and the difference is the whole trick. A preset row or a slider row that is given LESS than its
+ * unwrapped width does not get narrower, it gets taller - and a pair of half-width blocks that have
+ * both wrapped internally is worse than the same two blocks stacked. `max-content` is exactly the
+ * "only share a line if we both fit on it" rule, stated once, with no number to keep in step with the
+ * pill labels. The two prose lines have no such cliff, so they take a stated basis:
+ *
+ *   bounds   14rem  - "min 20, max 970" and its longest plural
+ *
+ * The readout is the exception that proves it: it asks for `max-content` too, because paired with
+ * the bounds line at half a sizer each of them wrapped and the row was taller than the two of them
+ * on lines of their own.
+ *
+ * A fifth or sixth preset, or a longer legend, therefore costs one wrapped line rather than a broken
+ * layout - and nothing is ever removed to fit.
+ */
+.prl-sizer {
+  /* A line of the bar to itself, like the buttons: a squeezed slider is a slider with no travel. */
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-4) var(--prl-space-6);
+  padding: var(--prl-space-4) var(--prl-space-5);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-sizer__legend {
+  padding: 0;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-sizer__controls {
+  /* Unwrapped or not at all: the slider's floor, the number field and its label on one line. */
+  flex: 1 1 max-content;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-5);
+}
+
+.prl-sizer__field {
+  display: flex;
+  align-items: center;
+  gap: var(--prl-space-3);
+}
+
+.prl-sizer__field-label {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/**
+ * The slider is `.prl-range` with one extra job: to grow. It is never on its own - the number input
+ * beside it is what makes an exact amount possible.
+ *
+ * The basis is the 8rem FLOOR rather than a larger preferred width, and that distinction is load-
+ * bearing in a wrapping flex row: wrapping is decided on the basis, not on `min-width`, so a 12rem
+ * basis pushed the number field onto a second line inside a 20rem row that both of them fit in. It
+ * still fills whatever the row has spare, because `flex-grow` is 1 - the preferred width was only
+ * ever expressing "take the space", and grow says that better. Below 8rem the 44px thumb has no
+ * travel left to speak of, which is why the floor is also `min-width`.
+ */
+.prl-sizer__slider {
+  flex: 1 1 var(--prl-space-15);
+  min-width: var(--prl-space-15);
+}
+
+.prl-sizer__number {
+  width: var(--prl-space-14);
+  font-variant-numeric: tabular-nums;
+  text-align: end;
+}
+
+.prl-sizer__presets {
+  /* Unwrapped or not at all: five pills on one line, or a line of their own. */
+  flex: 1 1 max-content;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-3);
+}
+
+.prl-preset {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--prl-space-2);
+  min-height: var(--prl-target-min);
+  padding-inline: var(--prl-space-4);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-pill);
+  background-color: transparent;
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-medium);
+  transition:
+    background-color var(--prl-dur-instant) var(--prl-ease-hover),
+    border-color var(--prl-dur-instant) var(--prl-ease-hover);
+}
+
+.prl-preset:hover:not(:disabled) {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-hover);
+}
+
+/**
+ * The pressed preset's check mark. `visibility: hidden` rather than `display: none`, so the
+ * glyph always occupies its space - otherwise every preset shifts sideways as the selection
+ * moves, which is both ugly and a moving target for a pointer.
+ */
+.prl-preset__mark {
+  visibility: hidden;
+}
+
+.prl-preset[aria-pressed="true"] {
+  border-color: var(--prl-accent-edge);
+  color: var(--prl-accent-text);
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-preset[aria-pressed="true"] .prl-preset__mark {
+  visibility: visible;
+}
+
+/**
+ * "Raise to 220" and "Costs 180" — one beside the other when the line has room for both, one above
+ * the other when it does not. `flex-wrap` rather than a grid with two columns, because at a phone
+ * width two columns would squeeze a figure onto a second line inside its own cell, which reads as
+ * two facts where there is one.
+ */
+.prl-sizer__readout {
+  /* Both lines or neither: paired with the bounds line each of them wrapped internally and the row
+     came out taller than the two blocks stacked. Measured 66px paired against 50px stacked. */
+  flex: 1 1 max-content;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-2) var(--prl-space-8);
+  margin: 0;
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-sizer__readout-line {
+  margin: 0;
+  max-width: none;
+}
+
+.prl-sizer__readout-value {
+  font-weight: var(--prl-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.prl-sizer__bounds {
+  /* 14rem = 10rem + 4rem: "min 20, max 970" and its longest plural. */
+  flex: 1 1 calc(var(--prl-space-16) + var(--prl-space-12));
+  margin: 0;
+  max-width: none;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/**
+ * The caveat under the buttons. `max-width: none` for the same reason `.prl-action-bar__price` has
+ * it: the prose measure (`--prl-measure`) is for reading columns, and holding this one sentence to
+ * it wrapped it onto a second line inside a block whose height decides whether the table is visible.
+ * One line of full-bar width is both easier to read here and 20px of table.
+ */
+.prl-action-bar__note {
+  margin: 0;
+  max-width: none;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+/* ---- 14.6 CoachPanel -------------------------------------------------------------------- */
+
+/**
+ * The most information-dense surface in the app. Progressive disclosure, with hard limits on
+ * what may be hidden: equity with its method and interval, pot odds and break-even, the
+ * suggestion with its confidence, and the assumptions are always visible. The per-action EV
+ * table, the card-by-card outs, the derivations and the teaching notes may collapse.
+ */
+.prl-coach {
+  display: grid;
+  gap: var(--prl-space-7);
+  padding: var(--prl-space-7);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-coach__header {
+  display: grid;
+  gap: var(--prl-space-2);
+}
+
+.prl-coach__title {
+  margin: 0;
+  font-size: var(--prl-type-display-3);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
+}
+
+.prl-coach__summary {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-lg);
+}
+
+/**
+ * `--prl-space-16`, not something smaller.
+ *
+ * `auto-fit` fits as many tracks as the minimum allows, so a SMALLER minimum produces MORE and
+ * NARROWER columns. A 15rem minimum gave four 251px tracks on a 1054px panel, which is too
+ * narrow for a figure like `62.4% +/- 0.8 points (95% interval)`. 10rem-scale columns would be
+ * worse still; this yields three comfortable tracks at that width and two on a tablet.
+ */
+.prl-coach__grid {
+  display: grid;
+  gap: var(--prl-space-6);
+  /* 19rem. */
+  grid-template-columns: repeat(auto-fit, minmax(calc(var(--prl-space-16) * 2 - var(--prl-space-6)), 1fr));
+}
+
+.prl-coach__section {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-5);
+  min-width: 0;
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-coach__section--wide {
+  grid-column: 1 / -1;
+}
+
+.prl-coach__section-heading {
+  margin: 0;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+/** A section heading with something beside it - the method chip on the equity block. */
+.prl-coach__section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--prl-space-3);
+}
+
+/**
+ * The method chip: `EXACT` or `MONTE CARLO`, never absent.
+ *
+ * A bare percentage with no method is a bug, not a style choice, so this is unconditional in the
+ * markup rather than a variant the layout can drop. Monospaced because it labels a computation.
+ */
+.prl-coach__method {
+  font-family: var(--prl-font-mono);
+  letter-spacing: normal;
+}
+
+/** The equity block is the panel's subject, so it gets the full width of a two-track grid. */
+.prl-coach__section--equity {
+  grid-column: 1 / -1;
+}
+
+/**
+ * The collapsible half of the panel.
+ *
+ * WHAT may collapse is a product rule, and the rule is in CoachPanel.tsx: the EV table, the
+ * card-by-card outs, the derivations and the teaching notes may; the equity figure with its method
+ * and interval, the price, the suggestion, the assumptions and the uncertainty may not. There is
+ * deliberately no `.prl-coach__always` styling hook - the always-visible content is simply the
+ * panel, and adding a class that could be given `display: none` in a future stylesheet is exactly
+ * the door this design keeps shut.
+ */
+.prl-coach__disclosures {
+  display: grid;
+  border-block-end: var(--prl-hairline);
+}
+
+/**
+ * The headline figure, sized for the HONEST version of the number.
+ *
+ * For a sampled result this string is the whole interval - `62.4% +/- 0.8 points (95% interval)`
+ * - and the interval is not optional, so the type size has to fit that rather than the short
+ * form. A bare percentage with no method is a bug, not a style choice.
+ */
+.prl-coach__figure {
+  margin: 0;
+  font-size: var(--prl-type-metric-md);
+  font-weight: var(--prl-weight-bold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
+  overflow-wrap: break-word;
+  text-wrap: balance;
+}
+
+.prl-coach__figure-note {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-coach__prose {
+  margin: 0;
+  max-width: var(--prl-measure);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-coach__list {
+  display: grid;
+  gap: var(--prl-space-3);
+  margin: 0;
+  padding-inline-start: var(--prl-space-7);
+  font-size: var(--prl-type-body);
+}
+
+/* ---- 14.7 outs -------------------------------------------------------------------------- */
+
+.prl-outs {
+  display: grid;
+  gap: var(--prl-space-5);
+}
+
+.prl-outs__buckets {
+  display: grid;
+  gap: var(--prl-space-5);
+  margin: 0;
+  grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-15), 1fr));
+}
+
+.prl-outs__bucket {
+  display: grid;
+  gap: var(--prl-space-2);
+  padding: var(--prl-space-5);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-outs__bucket-head {
+  display: flex;
+  align-items: center;
+  gap: var(--prl-space-3);
+}
+
+/**
+ * Clean versus dirty outs.
+ *
+ * Clean is a SOLID swatch, dirty is a HATCHED swatch, both are labelled in words ("clean - wins
+ * if it comes", "dirty - improves but can still lose"), and both carry a numeric count. Three
+ * redundant cues, because this is the distinction a learner most needs to get right and hue is
+ * the one channel that cannot be relied on.
+ */
+.prl-outs__swatch {
+  flex: 0 0 auto;
+  width: var(--prl-space-6);
+  height: var(--prl-space-6);
+  border: 1px solid var(--prl-text);
+  border-radius: var(--prl-radius-1);
+}
+
+.prl-outs__bucket--clean .prl-outs__swatch {
+  background-color: var(--prl-accent-fill);
+}
+
+.prl-outs__bucket--dirty .prl-outs__swatch {
+  background-color: var(--prl-caution);
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--prl-surface-panel) 0 var(--prl-space-1),
+    transparent var(--prl-space-1) var(--prl-space-3)
+  );
+}
+
+.prl-outs__bucket-label {
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-outs__count {
+  margin: 0;
+  font-size: var(--prl-type-metric-md);
+  font-weight: var(--prl-weight-bold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
+}
+
+.prl-outs__meaning {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+}
+
+.prl-outs__cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prl-outs__cards li {
+  margin: 0;
+}
+
+/** The card-by-card breakdown, inside the disclosure. Two labelled groups so a reader can see at a
+    glance which pile is which, with the count repeated in the label rather than inferred. */
+.prl-outs__lists {
+  display: grid;
+  gap: var(--prl-space-6);
+  grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-15), 1fr));
+}
+
+.prl-outs__list {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-3);
+}
+
+/* ---- 14.8 candidate actions ------------------------------------------------------------- */
+
+/**
+ * The one legitimate scroll container in this package.
+ *
+ * A table's columns cannot wrap, and rewriting rows as blocks at narrow widths (`display: block`
+ * on `tr`/`td`) is the classic trap: it strips the table role from the accessibility tree in
+ * every current browser, so screen-reader users lose the row and column relationships in
+ * exchange for a prettier phone layout.
+ *
+ * So it scrolls, and the wrapper carries `tabindex="0"` in the markup so the scroll can be
+ * driven from the keyboard, which is what axe's `scrollable-region-focusable` requires.
+ */
+.prl-candidates {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.prl-candidates__table {
+  width: 100%;
+  /* 20rem: below this the derivation column collapses to one word per line. */
+  min-width: calc(var(--prl-space-16) * 2);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-candidates__table caption {
+  margin-block-end: var(--prl-space-3);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  text-align: start;
+}
+
+.prl-candidates__table th,
+.prl-candidates__table td {
+  padding: var(--prl-space-3) var(--prl-space-5);
+  border-block-end: var(--prl-hairline);
+  text-align: start;
+  vertical-align: top;
+}
+
+.prl-candidates__table th {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.prl-candidates__action {
+  font-weight: var(--prl-weight-semibold);
+}
+
+/** A grouped amount that wraps reads as two numbers, so the money columns never wrap. */
+.prl-candidates__cost {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.prl-candidates__ev {
+  font-weight: var(--prl-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/** The SIGN is the information; the colour is a second, redundant cue. The string itself always
+    carries `+` or `-` (see `formatSignedUnits`). */
+.prl-candidates__ev[data-sign="positive"] {
+  color: var(--prl-favourable);
+}
+
+.prl-candidates__ev[data-sign="negative"] {
+  color: var(--prl-adverse);
+}
+
+.prl-candidates__derivation {
+  /* 14rem. */
+  min-width: calc(var(--prl-space-16) + var(--prl-space-12));
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+}
+
+/* ---- 14.9 suggestion -------------------------------------------------------------------- */
+
+/**
+ * The suggestion. An accent LEADING EDGE and an accent label, not an accent wash: a tinted
+ * panel behind coloured text is the pairing that fails first when the theme flips, and it is
+ * also what forced-colors mode discards. The word "suggestion" is in the markup, and it is
+ * never called correct or optimal.
+ */
+.prl-suggestion {
+  display: grid;
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-6);
+  border: 1px solid var(--prl-line-strong);
+  border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-suggestion__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--prl-space-3) var(--prl-space-5);
+}
+
+.prl-suggestion__label {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-suggestion__action {
+  margin: 0;
+  font-size: var(--prl-type-metric-sm);
+  font-weight: var(--prl-weight-bold);
+  letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-suggestion__confidence {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--prl-space-2);
+  padding-inline: var(--prl-space-4);
+  border: 1px solid currentcolor;
+  border-radius: var(--prl-radius-pill);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-suggestion__confidence[data-confidence="low"] {
+  color: var(--prl-caution);
+}
+
+.prl-suggestion__confidence[data-confidence="moderate"] {
+  color: var(--prl-info);
+}
+
+.prl-suggestion__confidence[data-confidence="reasonable"] {
+  color: var(--prl-favourable);
+}
+
+/** The EV of the suggested line, beside the suggestion rather than only in the collapsed table:
+    a reading of a spot with no number attached is an opinion. */
+.prl-suggestion__ev {
+  padding-block: var(--prl-space-2);
+}
+
+.prl-suggestion__reason {
+  margin: 0;
+  max-width: var(--prl-measure);
+  font-size: var(--prl-type-body);
+}
+
+.prl-suggestion__changes {
+  display: grid;
+  gap: var(--prl-space-2);
+  margin: 0;
+  padding-inline-start: var(--prl-space-7);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-suggestion__disclaimer {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+}
+
+/* ---- 14.10 EquityBar -------------------------------------------------------------------- */
+
+.prl-equity-bar {
+  display: grid;
+  gap: var(--prl-space-3);
+  min-width: 0;
+}
+
+.prl-equity-bar__label {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-equity-bar__track {
+  display: flex;
+  overflow: hidden;
+  min-height: var(--prl-space-8);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-equity-bar__segment {
+  flex: 0 0 var(--prl-segment-share, 0%);
+  min-width: var(--prl-space-1);
+  border-inline-end: 1px solid var(--prl-surface-inset);
+}
+
+.prl-equity-bar__segment:last-child {
+  border-inline-end: 0;
+}
+
+/** The text readout is not optional and not a tooltip. The bar is a secondary encoding of
+    numbers that are always present as text. */
+.prl-equity-bar__readout {
+  display: grid;
+  gap: var(--prl-space-2);
+  margin: 0;
+  font-size: var(--prl-type-body-sm);
+}
+
+/** Wraps, because the value and the detail are both `nowrap`: without wrapping they make the row
+    unshrinkable and it overflows a narrow column instead of stacking. */
+.prl-equity-bar__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-2) var(--prl-space-3);
+  margin: 0;
+}
+
+.prl-equity-bar__swatch {
+  flex: 0 0 auto;
+  width: var(--prl-space-5);
+  height: var(--prl-space-5);
+  border: 1px solid var(--prl-text);
+  border-radius: var(--prl-radius-1);
+}
+
+.prl-equity-bar__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.prl-equity-bar__value {
+  font-weight: var(--prl-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.prl-equity-bar__detail {
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  white-space: nowrap;
+}
+
+/* ---- 14.11 StatTile --------------------------------------------------------------------- */
+
+/** A StatTile is a metric block in a panel. The classes are kept because the component emits
+    them; the treatment is the metric block's. */
+.prl-stat {
+  display: grid;
+  align-content: start;
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-5) var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+/** One `<dl>` per tile: the label and value pairing is in the markup rather than implied by
+    position, so it is announced as one item. */
+.prl-stat__pair {
+  display: grid;
+  gap: var(--prl-space-2);
+  margin: 0;
+}
+
+.prl-stat__label {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-stat__value {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--prl-space-3);
+  font-size: var(--prl-type-metric-sm);
+  font-weight: var(--prl-weight-bold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
+}
+
+.prl-stat__unit {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-stat__note {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-stat[data-tone="positive"] .prl-stat__value {
+  color: var(--prl-favourable);
+}
+
+.prl-stat[data-tone="negative"] .prl-stat__value {
+  color: var(--prl-adverse);
+}
+
+/* ---- 14.12 Callout ---------------------------------------------------------------------- */
+
+/** Tone is carried by a WORD in the marker ("Insight", "Watch out", "Common misconception") as
+    well as by the leading edge. Remove the colour and the callout is still understandable. */
+.prl-callout {
+  display: grid;
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-inline-start: var(--prl-space-1) solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-callout__marker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--prl-space-3);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-callout__title {
+  margin: 0;
+  font-size: var(--prl-type-body);
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-callout__body {
+  margin: 0;
+  max-width: var(--prl-measure);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-callout--insight {
+  border-inline-start-color: var(--prl-info);
+}
+
+.prl-callout--insight .prl-callout__marker {
+  color: var(--prl-info);
+}
+
+.prl-callout--warning {
+  border-inline-start-color: var(--prl-caution);
+}
+
+.prl-callout--warning .prl-callout__marker {
+  color: var(--prl-caution);
+}
+
+.prl-callout--misconception {
+  border-inline-start-color: var(--prl-adverse);
+}
+
+.prl-callout--misconception .prl-callout__marker {
+  color: var(--prl-adverse);
+}
+
+/* ---- 14.13 Formula --------------------------------------------------------------------- */
+
+.prl-formula {
+  display: grid;
+  gap: var(--prl-space-3);
+  margin: 0;
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-formula__expression {
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  border: 0;
+  background: none;
+  font-family: var(--prl-font-mono);
+  font-size: var(--prl-type-body-sm);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--prl-leading-snug);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.prl-formula__explanation {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+/* ---- 14.14 AssumptionList and UncertaintyNote -------------------------------------------- */
+
+/**
+ * Neither of these is ever a `<details>` and neither has a collapse control. That is a product
+ * requirement, not a layout preference: a number whose assumptions are one click away is a
+ * number presented as fact. They are styled to be READABLE rather than dismissible - the dashed
+ * border says "annotation", not "aside you can skip".
+ */
+.prl-assumptions {
+  display: grid;
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-6);
+  border: 1px dashed var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: transparent;
+}
+
+.prl-assumptions__title {
+  margin: 0;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-assumptions__intro {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body);
+}
+
+.prl-assumptions__list {
+  display: grid;
+  gap: var(--prl-space-3);
+  margin: 0;
+  padding-inline-start: var(--prl-space-7);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-assumptions__item {
+  margin: 0;
+  max-width: var(--prl-measure);
+}
+
+.prl-uncertainty {
+  display: grid;
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-6);
+  border: 1px solid var(--prl-line-strong);
+  border-inline-start: var(--prl-space-1) solid var(--prl-info);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-uncertainty__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--prl-space-3);
+  margin: 0;
+  font-size: var(--prl-type-body);
+  font-weight: var(--prl-weight-semibold);
+}
+
+/** The method is never implied. `EXACT` or `MONTE CARLO`, on the figure, always. */
+.prl-uncertainty__method {
+  display: inline-block;
+  padding-inline: var(--prl-space-4);
+  border: 1px solid var(--prl-info);
+  border-radius: var(--prl-radius-pill);
+  color: var(--prl-info);
+  font-family: var(--prl-font-mono);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+}
+
+.prl-uncertainty__summary {
+  margin: 0;
+  max-width: var(--prl-measure);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-uncertainty__interval {
+  margin: 0;
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.prl-uncertainty__limitations {
+  display: grid;
+  gap: var(--prl-space-2);
+  margin: 0;
+  padding-inline-start: var(--prl-space-7);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-snug);
+}
+
+/* ---- 14.15 UnitsBadge ------------------------------------------------------------------- */
+
+/**
+ * Units, never currency. No symbol, no comma-grouped "balance", no purchase affordance. The
+ * word "units" stays visible beside the number because the product guardrails require it, and
+ * the accessible description says they are free and valueless.
+ */
+.prl-units {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-3);
+  max-width: 100%;
+}
+
+.prl-units__value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--prl-space-2);
+  min-height: var(--prl-space-9);
+  padding-inline: var(--prl-space-4);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-surface-inset);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--prl-leading-snug);
+}
+
+.prl-units__word {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-units__toggle {
+  display: inline-grid;
+  place-items: center;
+  width: var(--prl-target-min);
+  height: var(--prl-target-min);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: 50%;
+  background-color: transparent;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-semibold);
+  transition:
+    background-color var(--prl-dur-instant) var(--prl-ease-hover),
+    border-color var(--prl-dur-instant) var(--prl-ease-hover);
+}
+
+.prl-units__toggle:hover {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-hover);
+  color: var(--prl-accent-text);
+}
+
+.prl-units__note {
+  flex: 1 1 var(--prl-space-16);
+  margin: 0;
+  padding: var(--prl-space-4) var(--prl-space-5);
+  border: 1px solid var(--prl-info);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-snug);
+}
+
+/* ---- 14.16 legacy aliases --------------------------------------------------------------- */
+
+/** Kept because components still emit them. `.prl-eyebrow` is `.prl-label`, `.prl-note` is a
+    secondary paragraph, `.prl-section-title` is a label used as a heading. */
+.prl-eyebrow,
+.prl-section-title {
+  display: block;
+  margin: 0;
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-transform: uppercase;
+}
+
+.prl-note {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
+}
+
+/* ==========================================================================================
+   15. FORCED COLORS
+   ==========================================================================================
+   Windows High Contrast throws away background-COLOR and forces every border to CanvasText,
+   which means the two cues this design leans on hardest - a surface step and an accent border -
+   both disappear. Everything below restates a state that would otherwise have been lost.
+
+   The test that matters: with the palette replaced, can you still tell whose turn it is, which
+   preset is selected, and which out is clean?
+   ========================================================================================== */
+
+@media (forced-colors: active) {
+  /* A button's shape has to come from a real border, since its fill is gone. */
+  .prl-btn,
+  .prl-action-btn,
+  .prl-preset {
+    border-color: ButtonBorder;
+  }
+
+  .prl-btn--primary,
+  .prl-action-btn--primary {
+    border-color: Highlight;
+    color: ButtonText;
+  }
+
+  /* The chamfer plate and the busy bar are decoration once colours are forced; the border above
+     is doing the work. */
+  .prl-btn--primary::before,
+  .prl-action-btn--primary::before {
+    display: none;
+  }
+
+  /* The pressed preset keeps its check glyph (in the markup) and gains a Highlight border. */
+  .prl-preset[aria-pressed="true"] {
+    border-color: Highlight;
+  }
+
+  /**
+   * The seat plates. The two-pseudo-element hairline is background-coloured, so in forced colors
+   * it vanishes entirely - the plate has to get a real border instead, and the ACTIVE seat has
+   * to get a different one or every seat looks identical and the single most important fact on
+   * the table is lost.
+   */
+  .prl-seat {
+    border: 1px solid CanvasText;
+    border-radius: var(--prl-radius-1);
+  }
+
+  .prl-seat::before,
+  .prl-seat::after {
+    display: none;
+  }
+
+  .prl-seat--active,
+  .prl-seat--to-act {
+    border-color: Highlight;
+    outline: var(--prl-focus-width) solid Highlight;
+    outline-offset: var(--prl-focus-offset);
+  }
+
+  .prl-seat--folded,
+  .prl-seat--sitting-out {
+    border-style: dashed;
+    color: GrayText;
+  }
+
+  /* The ring is a gradient, which is NOT forced, so it survives if it is given a system colour
+     explicitly. */
+  .prl-turn-ring {
+    background-image: conic-gradient(Highlight var(--prl-turn-progress), transparent 0);
+  }
+
+  /* The digits inside the ring are the timer's real content once the gradient is a system colour. */
+  .prl-turn-timer__value,
+  .prl-turn-timer__unit {
+    color: CanvasText;
+  }
+
+  /**
+   * The phase spine. Accent ink and muted ink both become CanvasText, so the underline is the only
+   * cue left for which phase is current - which is why it was there in the first place.
+   */
+  .prl-table__step[data-state="current"] .prl-table__step-name {
+    border-block-end-color: Highlight;
+  }
+
+  .prl-table__step[data-state="pending"] {
+    color: GrayText;
+  }
+
+  /* Series fills are gone, so the PATTERN is all that is left to tell two segments apart -
+     which is the reason every series has one. Borders keep the segments separated. */
+  .prl-bar__segment,
+  .prl-equity-bar__segment {
+    border-inline-end-color: CanvasText;
+  }
+
+  .prl-swatch,
+  .prl-outs__swatch,
+  .prl-equity-bar__swatch {
+    border-color: CanvasText;
+  }
+
+  /* Both of these carry their meaning in a border colour, which is now CanvasText for both. A
+     style change restores the distinction. */
+  .prl-callout,
+  .prl-suggestion,
+  .prl-uncertainty {
+    border-inline-start-style: double;
+  }
+
+  .prl-card {
+    border-color: CanvasText;
+  }
+
+  .prl-card--highlighted {
+    outline: 1px dashed CanvasText;
+    outline-offset: 1px;
+  }
+
+  .prl-skeleton {
+    border: 1px solid GrayText;
+  }
+}

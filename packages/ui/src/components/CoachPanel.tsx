@@ -1,0 +1,679 @@
+/**
+ * The Coach panel — the centrepiece of the app, and the most information-dense surface in it.
+ *
+ * It renders a `CoachReport`: equity, pot odds, outs, the candidate actions with their EVs, a
+ * suggestion, the stack context, the teaching notes, the assumptions and the uncertainty. Every
+ * number the app shows a learner comes through here, which is why this component has hard rules
+ * rather than styling preferences.
+ *
+ * ============================================================================================
+ * WHAT MAY BE COLLAPSED, AND WHAT MAY NEVER BE
+ * ============================================================================================
+ *
+ * Progressive disclosure with a hard boundary, and the boundary is a product rule rather than a
+ * layout choice.
+ *
+ * **Always visible, never collapsible:**
+ *   - the equity figure *with its method and its interval*
+ *   - the pot odds and the break-even equity
+ *   - the suggestion with its confidence
+ *   - **the assumptions** (`AssumptionList`, which has no toggle by design)
+ *   - the uncertainty note (`UncertaintyNote`, likewise)
+ *
+ * Hiding the assumptions behind a control would let a learner read a number without its caveats,
+ * which is the exact failure this product exists to prevent. An assumption one click away is an
+ * assumption nobody reads.
+ *
+ * **Collapsible**, in `<details>`/`<summary>`:
+ *   - the per-action EV table
+ *   - the card-by-card outs breakdown (the *counts* stay visible)
+ *   - the derivations — the formulas and the rule-of-2-and-4 comparison
+ *   - the teaching notes
+ *
+ * `<details>` rather than a custom toggle: free keyboard support, free screen-reader semantics, and
+ * it works with JavaScript disabled. Nothing in this panel needs JS to be readable.
+ *
+ * ============================================================================================
+ * THE OTHER FOUR RULES. Do not "improve" these away.
+ * ============================================================================================
+ *
+ * 1. **A bare percentage with no method is a bug, not a style choice.** The method chip is
+ *    unconditional: `EXACT` for an enumeration, `MONTE CARLO` for a sample, each with a glyph
+ *    (`=` / `≈`) so the distinction survives without colour.
+ *
+ * 2. **A Monte Carlo figure always carries its interval**, at `--prl-type-label` beside the value,
+ *    via `Metric`'s `interval` slot: `41.2 % ± 0.35 points`. If the report arrives without a
+ *    half-width, the panel says so *in a warning* and tells the reader to treat the figure as
+ *    approximate — it never prints a bare sampled number as though it were exact.
+ *
+ * 3. **The suggestion is never called "correct", "optimal", "best", "GTO" or "solved".** It is a
+ *    reading of the spot, with a confidence, a size range, a reason, and a list of what would
+ *    change it. `CoachSuggestion.confidence` may be `'low'`, and low confidence is displayed as
+ *    prominently as high. The disclaimer under it is part of the component, not decoration a page
+ *    can drop.
+ *
+ * 4. **Clean and dirty outs are distinguished by shape, pattern AND words**, never by colour: a
+ *    solid accent swatch against a 45-degree hatch, each with its own numeric count and a sentence
+ *    spelling out the consequence. "Dirty" is a term of art hiding a real trap — a card that
+ *    improves your hand and still loses — so the label says so rather than assuming the reader
+ *    knows the jargon.
+ *
+ * ============================================================================================
+ * Structure and reading order
+ * ============================================================================================
+ *
+ * The panel emits an `h2` for its own title and `h3` for its sections. It never emits an `h1`: a
+ * page owns its single `h1`, and this panel does not know whether it is the page's subject.
+ *
+ * Reading order is: what the situation is -> what the numbers are -> what follows from them -> what
+ * they assumed. The suggestion deliberately comes *after* the equity and the price rather than at
+ * the top. A learner who reads top to bottom meets the reasoning before the conclusion; a learner
+ * who scrolls to the conclusion has passed the reasoning on the way.
+ *
+ * Two figures here count up on change — the equity and the EV of the suggested line — because "what
+ * changed?" is one of the four questions the design system allows an animation to answer. The count-up's
+ * accessibility contract lives in `Metric`: the true value is in the DOM from the first render, the
+ * interpolating copy is `aria-hidden`, and the count is skipped entirely under
+ * `prefers-reduced-motion`. Each counting figure also owns a small atomic live region, which is why
+ * only the figures worth announcing get one — see the note above the break-even metric.
+ *
+ * Server-render safe: no state, no effects, no `window`. `Metric` marks its own client boundary.
+ */
+
+import type {
+  ActionCandidate,
+  CoachReport,
+  CoachSuggestion,
+  EquitySummary,
+  OutsBreakdown,
+  PotOddsSummary,
+  StackContext,
+} from '@prl/contracts';
+import type { ReactElement } from 'react';
+import { parseCardText } from '../cards.ts';
+import { cx } from '../cx.ts';
+import {
+  describeSpr,
+  formatOdds,
+  formatPercent,
+  formatPoints,
+  formatSignedUnits,
+  formatUnits,
+  pluralise,
+} from '../format.ts';
+import { withKeys } from '../keys.ts';
+import { AssumptionList } from './AssumptionList.tsx';
+import { Callout } from './Callout.tsx';
+import { Chip } from './Chip.tsx';
+import { EquityBar } from './EquityBar.tsx';
+import { Formula } from './Formula.tsx';
+import { Metric } from './Metric.tsx';
+import { PlayingCard } from './PlayingCard.tsx';
+import { StatTile } from './StatTile.tsx';
+import { UncertaintyNote } from './UncertaintyNote.tsx';
+
+export interface CoachPanelProps {
+  readonly report: CoachReport;
+  readonly title?: string;
+  readonly className?: string;
+}
+
+const ACTION_WORD: Readonly<Record<ActionCandidate['action'], string>> = {
+  fold: 'Fold',
+  check: 'Check',
+  call: 'Call',
+  bet: 'Bet',
+  raise: 'Raise',
+};
+
+const CONFIDENCE_WORD: Readonly<Record<CoachSuggestion['confidence'], string>> = {
+  low: 'low confidence',
+  moderate: 'moderate confidence',
+  reasonable: 'reasonable confidence',
+};
+
+/**
+ * The method chip. Rule 1: this is never conditional.
+ *
+ * The glyphs carry the distinction in shape alone — `=` for a figure that *is* this, `≈` for one
+ * that is approximately this — so a reader who cannot separate the accent chip from the info chip
+ * can still separate an enumeration from a sample.
+ */
+const METHOD_CHIP: Readonly<
+  Record<EquitySummary['method'], { readonly label: string; readonly glyph: string }>
+> = {
+  'exact-enumeration': { label: 'exact', glyph: '=' },
+  'monte-carlo': { label: 'monte carlo', glyph: '≈' },
+};
+
+/**
+ * What the trial count is counting: an enumeration counts boards, a sample counts trials.
+ *
+ * Both forms are spelled out rather than left to `pluralise`'s append-an-s rule, because the noun here
+ * is a PHRASE and the plural belongs on its head word: `pluralise` given "trial sampled" produces
+ * "80,000 trial sampleds".
+ */
+const TRIAL_NOUN: Readonly<Record<EquitySummary['method'], { readonly one: string; readonly many: string }>> =
+  {
+    'exact-enumeration': { one: 'board enumerated', many: 'boards enumerated' },
+    'monte-carlo': { one: 'trial sampled', many: 'trials sampled' },
+  };
+
+/** Sign class for an EV. Near-zero is its own case: `+0.0` reads as a win. */
+function evSign(ev: number): 'positive' | 'negative' | 'neutral' {
+  if (!Number.isFinite(ev) || Math.abs(ev) < 0.005) return 'neutral';
+  return ev > 0 ? 'positive' : 'negative';
+}
+
+/** `Metric`'s tone from an EV's sign. Redundant with the sign in the text, which is the point. */
+function evTone(ev: number): 'favourable' | 'adverse' | 'neutral' {
+  const sign = evSign(ev);
+  if (sign === 'positive') return 'favourable';
+  if (sign === 'negative') return 'adverse';
+  return 'neutral';
+}
+
+/**
+ * The candidate the suggestion is talking about, so its EV can be shown beside it.
+ *
+ * Matched on the action, then narrowed by the size range when the suggestion has one — a report may
+ * carry three different raise sizes as separate candidates. Returns `null` rather than guessing
+ * when nothing matches: an EV attributed to the wrong line is worse than no EV at all.
+ */
+function candidateForSuggestion(
+  candidates: readonly ActionCandidate[],
+  suggestion: CoachSuggestion,
+): ActionCandidate | null {
+  const matches = candidates.filter((candidate) => candidate.action === suggestion.action);
+  const range = suggestion.sizeRange;
+  if (range !== undefined) {
+    const inRange = matches.find(
+      (candidate) => candidate.to !== undefined && candidate.to >= range.min && candidate.to <= range.max,
+    );
+    if (inRange !== undefined) return inRange;
+  }
+  return matches[0] ?? null;
+}
+
+/** Renders an out card as a real card where the string parses, a text chip where it does not. */
+function OutCard({ text }: { readonly text: string }): ReactElement {
+  const card = parseCardText(text);
+  if (card === null) return <Chip mono>{text}</Chip>;
+  return <PlayingCard card={card} size="sm" />;
+}
+
+interface OutsBucketProps {
+  readonly kind: 'clean' | 'dirty';
+  readonly count: number;
+}
+
+/**
+ * One bucket's headline: swatch, word, count, consequence. Rule 4.
+ *
+ * The card faces are NOT here — they are in the collapsible breakdown. The count is the part a
+ * decision needs; the identity of each card is the part a review wants.
+ */
+function OutsBucket({ kind, count }: OutsBucketProps): ReactElement {
+  return (
+    <div className={cx('prl-outs__bucket', `prl-outs__bucket--${kind}`)}>
+      <div className="prl-outs__bucket-head">
+        {/* Solid swatch for clean, 45-degree hatch for dirty. The swatch is the redundant cue; the
+            label and the count are the information. */}
+        <span className="prl-outs__swatch" aria-hidden="true" />
+        <span className="prl-outs__bucket-label">{kind === 'clean' ? 'Clean' : 'Dirty'}</span>
+      </div>
+      <p className="prl-outs__count">{pluralise(count, 'card')}</p>
+      <p className="prl-outs__meaning">
+        {kind === 'clean'
+          ? 'These win the pot against the range assumed below if they arrive.'
+          : 'These improve your hand but can still lose — the same card can complete a better hand for an opponent.'}
+      </p>
+    </div>
+  );
+}
+
+function OutsSection({ outs }: { readonly outs: OutsBreakdown | null }): ReactElement {
+  if (outs === null) {
+    return (
+      <section className="prl-coach__section">
+        <h3 className="prl-coach__section-heading">Outs</h3>
+        <p className="prl-coach__prose">
+          No outs breakdown for this spot. Outs are counted when there are cards still to come and the hand
+          needs one of them to improve; with the board complete, or before any board is dealt, the count has
+          nothing to enumerate.
+        </p>
+      </section>
+    );
+  }
+  return (
+    <section className="prl-coach__section">
+      <h3 className="prl-coach__section-heading">{`Outs — ${pluralise(outs.total, 'card')} in total`}</h3>
+      <div className="prl-outs__buckets">
+        <OutsBucket kind="clean" count={outs.clean} />
+        <OutsBucket kind="dirty" count={outs.dirty} />
+      </div>
+      <p className="prl-coach__prose">{outs.explanation}</p>
+    </section>
+  );
+}
+
+interface EquitySectionProps {
+  readonly equity: EquitySummary;
+  /** Pre-formatted `± 0.35 points`, or `null` when the report carried no half-width. */
+  readonly interval: string | null;
+  /** Equity minus break-even, as a fraction. Rendered as the metric's delta (§6.5). */
+  readonly surplus: number;
+}
+
+function EquitySection({ equity, interval, surplus }: EquitySectionProps): ReactElement {
+  const method = METHOD_CHIP[equity.method];
+  // `exactOptionalPropertyTypes`: an absent `interval` and `interval: undefined` are different
+  // types, so the property is added only when there is one.
+  const intervalProps = interval === null ? {} : { interval };
+
+  return (
+    <section className="prl-coach__section prl-coach__section--equity">
+      <div className="prl-coach__section-head">
+        <h3 className="prl-coach__section-heading">Equity</h3>
+        {/* Rule 1: unconditional. */}
+        <Chip
+          className="prl-coach__method"
+          tone={equity.method === 'exact-enumeration' ? 'accent' : 'info'}
+          glyph={method.glyph}
+        >
+          {method.label}
+        </Chip>
+      </div>
+
+      <Metric
+        label="Your share of the pot"
+        value={equity.heroEquity}
+        format="percent"
+        size="lg"
+        countUp
+        {...intervalProps}
+        delta={{ value: surplus, label: 'over the break-even equity' }}
+        note={`${pluralise(equity.trials, TRIAL_NOUN[equity.method].one, TRIAL_NOUN[equity.method].many)}.`}
+      />
+
+      <EquityBar players={equity.perPlayer} label="Equity by player" />
+    </section>
+  );
+}
+
+function PriceSection({ potOdds }: { readonly potOdds: PotOddsSummary }): ReactElement {
+  return (
+    <section className="prl-coach__section">
+      <h3 className="prl-coach__section-heading">The price</h3>
+
+      {/*
+        No `countUp` here, and that is a decision rather than an omission. Three figures on this screen
+        count up — the pot, the equity, and the EV of the suggested line — and each one owns a small
+        atomic live region so that its SETTLED value is announced exactly once and a mid-count value
+        never is. Break-even moves whenever the price moves, so counting it too would announce the same
+        event a fourth time. Four polite announcements for one change is not more accessible than one.
+      */}
+      <Metric
+        label="Break-even equity"
+        value={potOdds.breakEvenEquity}
+        format="percent"
+        size="md"
+        note="The share of the pot a call has to win, on average, just to break even."
+      />
+
+      {/*
+        Two shapes for one member, because `oddsRatio` is `number | null` and the two cases are
+        different *kinds* of thing rather than two values of one kind.
+
+        With a price, it is a figure: `Metric` with `format="odds"` and no `unit`, because
+        `formatOdds` already renders "2.9 to 1" and a unit of "to 1" would print it twice.
+
+        With nothing to call there is no figure at all — no "X to 1" exists — so it is a
+        sentence, in a `StatTile`, which takes text. Passing "no cost to continue" to `Metric`
+        is not possible: its `value` is a number, and that is the type doing its job. What must
+        never appear here is "0 to 1" (a real price, and the worst one) or "null".
+      */}
+      {potOdds.oddsRatio === null ? (
+        <StatTile
+          label="Price offered"
+          value={formatOdds(potOdds.oddsRatio)}
+          note="There is nothing to call, so no price is being laid. Any chance of winning is enough to see the next card."
+        />
+      ) : (
+        <Metric label="Price offered" value={potOdds.oddsRatio} format="odds" size="sm" />
+      )}
+
+      <StatTile
+        label="Pot and price"
+        value={`${formatUnits(potOdds.pot)} in the middle, ${formatUnits(potOdds.toCall)} to call`}
+      />
+
+      <p className="prl-coach__prose">{potOdds.explanation}</p>
+    </section>
+  );
+}
+
+function StackSection({ stack }: { readonly stack: StackContext }): ReactElement {
+  const spr = describeSpr(stack.spr);
+  return (
+    <section className="prl-coach__section">
+      <h3 className="prl-coach__section-heading">Stack context</h3>
+      <Metric label="Effective stack" value={stack.effectiveStack} format="units" size="md" />
+      <StatTile label="Stack-to-pot ratio" value={spr.label} note={spr.meaning} />
+      <StatTile
+        label="Price a pot-sized bet would offer"
+        value={formatPercent(stack.potOddsOfferedByPotSizedBet)}
+        note="The equity a caller would need if the next bet were the size of the pot."
+      />
+      <p className="prl-coach__prose">{stack.explanation}</p>
+    </section>
+  );
+}
+
+/**
+ * The EV table, in a focusable scroll container.
+ *
+ * That container is two accessibility rules disagreeing, and this is the resolution.
+ *
+ * A table's columns cannot wrap, so on a narrow screen this scrolls sideways. axe's
+ * `scrollable-region-focusable` (WCAG 2.1.1 Keyboard) requires a scrollable region to be reachable
+ * by keyboard, and for a region with no focusable content inside, that means `tabindex="0"` on the
+ * container — without it a keyboard user simply cannot bring the right-hand columns into view.
+ *
+ * Biome's `noNoninteractiveTabindex` objects to tab stops on non-interactive elements. That is a
+ * good general heuristic with a documented exception for exactly this case, so the WCAG-mapped rule
+ * wins and the suppression is annotated at the line. The container is a `<section>` with an
+ * `aria-label` so the tab stop announces what it is instead of being a silent one.
+ *
+ * The alternative — `display: block` on the rows at narrow widths, the usual "responsive table"
+ * trick — was rejected: it strips the table role from the accessibility tree in every current
+ * browser, trading a sighted-user layout problem for a screen-reader comprehension problem.
+ */
+const EV_TABLE_LABEL = 'Expected value of each action. Scrolls sideways on a narrow screen.';
+
+function CandidateTable({ candidates }: { readonly candidates: readonly ActionCandidate[] }): ReactElement {
+  const keyed = withKeys(
+    candidates.map((candidate) => `${candidate.action}-${candidate.to ?? 'na'}`),
+    'candidate',
+  );
+
+  if (candidates.length === 0) {
+    return <p className="prl-coach__prose">No candidate actions were reported for this spot.</p>;
+  }
+
+  return (
+    // biome-ignore lint/a11y/noNoninteractiveTabindex: axe scrollable-region-focusable (WCAG 2.1.1) requires it; see this function's comment
+    <section className="prl-candidates" tabIndex={0} aria-label={EV_TABLE_LABEL}>
+      <table className="prl-candidates__table">
+        <caption>
+          Expected value in units, measured against folding. Every figure depends on the assumptions listed at
+          the bottom of this panel.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Action</th>
+            <th scope="col">Costs</th>
+            <th scope="col">EV</th>
+            <th scope="col">How that number was reached</th>
+          </tr>
+        </thead>
+        <tbody>
+          {candidates.map((candidate, position) => {
+            const key = keyed[position]?.key ?? candidate.action;
+            const extras: string[] = [];
+            if (candidate.foldEquityAssumed !== undefined) {
+              extras.push(`assumes opponents fold ${formatPercent(candidate.foldEquityAssumed)} of the time`);
+            }
+            if (candidate.potShareIfCalled !== undefined) {
+              extras.push(`wins ${formatPercent(candidate.potShareIfCalled)} of the pot when called`);
+            }
+            return (
+              <tr key={key}>
+                <th className="prl-candidates__action" scope="row">
+                  {ACTION_WORD[candidate.action]}
+                  {candidate.to === undefined ? '' : ` to ${formatUnits(candidate.to)}`}
+                </th>
+                <td className="prl-candidates__cost">{formatUnits(candidate.cost)}</td>
+                <td className="prl-candidates__ev" data-sign={evSign(candidate.ev)}>
+                  {formatSignedUnits(candidate.ev, { decimals: 1 })}
+                </td>
+                <td className="prl-candidates__derivation">
+                  {candidate.derivation}
+                  {extras.length === 0 ? '' : ` (${extras.join('; ')})`}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+interface SuggestionBlockProps {
+  readonly suggestion: CoachSuggestion;
+  /** The candidate the suggestion refers to, when one could be matched to it. */
+  readonly candidate: ActionCandidate | null;
+}
+
+function SuggestionBlock({ suggestion, candidate }: SuggestionBlockProps): ReactElement {
+  const changes = withKeys(suggestion.whatWouldChangeIt, 'change');
+  const range = suggestion.sizeRange;
+
+  return (
+    <div className="prl-suggestion">
+      <div className="prl-suggestion__head">
+        {/* Never "the correct play". This wording is a product requirement, not a preference. */}
+        <span className="prl-suggestion__label">One reading of this spot</span>
+        <p className="prl-suggestion__action">
+          {ACTION_WORD[suggestion.action]}
+          {/* A RANGE, not a single number: sizing is not that precise, and printing one figure
+              would claim a precision the analysis does not have. */}
+          {range === undefined ? '' : ` — ${formatUnits(range.min)} to ${formatUnits(range.max)}`}
+        </p>
+        <span className="prl-suggestion__confidence" data-confidence={suggestion.confidence}>
+          {CONFIDENCE_WORD[suggestion.confidence]}
+        </span>
+      </div>
+
+      {candidate === null ? null : (
+        <Metric
+          className="prl-suggestion__ev"
+          label="Expected value of that line"
+          value={candidate.ev}
+          format="units"
+          decimals={1}
+          size="md"
+          tone={evTone(candidate.ev)}
+          countUp
+          note={`${formatSignedUnits(candidate.ev, { decimals: 1 })} compared with folding, and ${formatUnits(candidate.cost)} to take it.`}
+        />
+      )}
+
+      <p className="prl-suggestion__reason">{suggestion.reason}</p>
+
+      {changes.length === 0 ? null : (
+        <>
+          <p className="prl-suggestion__reason">What would change this:</p>
+          <ul className="prl-suggestion__changes">
+            {changes.map((entry) => (
+              <li key={entry.key}>{entry.value}</li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <p className="prl-suggestion__disclaimer">
+        A suggestion that follows from the assumptions listed below — not a claim about the best play. Poker
+        has no single correct action in a spot like this, and different assumptions about the opponent give
+        different answers.
+      </p>
+    </div>
+  );
+}
+
+interface DiscloseProps {
+  readonly summary: string;
+  readonly children: ReactElement | readonly ReactElement[];
+}
+
+/** One collapsible block. `<details>` gives the keyboard and screen-reader behaviour for free. */
+function Disclose({ summary, children }: DiscloseProps): ReactElement {
+  return (
+    <details className="prl-disclose">
+      <summary className="prl-disclose__summary">{summary}</summary>
+      <div className="prl-disclose__body">{children}</div>
+    </details>
+  );
+}
+
+export function CoachPanel(props: CoachPanelProps): ReactElement {
+  const { report, title = 'Coach analysis', className } = props;
+  const equity = report.equity;
+  const interval = report.uncertainty.confidenceInterval;
+  const halfWidth = equity.confidenceHalfWidthPoints ?? interval?.halfWidthPoints ?? null;
+  const isSampled = equity.method === 'monte-carlo';
+
+  /**
+   * Rule 2. Two decimals rather than one: the interval is often a fraction of a point, and rounding
+   * `± 0.35` to `± 0.4` overstates the uncertainty of a long run and understates a short one.
+   */
+  const intervalText = halfWidth === null ? null : `± ${formatPoints(Math.abs(halfWidth), { decimals: 2 })}`;
+
+  const outs = report.outs;
+  const notes = withKeys(report.teachingNotes, 'teaching-note');
+  const rule = equity.ruleOfThumb;
+  const suggested = candidateForSuggestion(report.candidates, report.suggestion);
+
+  return (
+    <div className={cx('prl-coach', className)}>
+      {/*
+        A `<div>`, not a `<header>`. This panel's root is a `<div>`, and HTML-AAM maps a `<header>`
+        that is not inside `article`, `aside`, `main`, `nav` or `section` to the `banner` role — so a
+        `<header>` here would put a SECOND unnamed banner landmark on every page that renders the
+        Coach, next to the site header (axe `landmark-unique`). Pages own landmarks in this codebase;
+        components do not create them. The heading below is what carries the outline.
+      */}
+      <div className="prl-coach__header">
+        <span className="prl-eyebrow">Coach</span>
+        <h2 className="prl-coach__title">{title}</h2>
+        <p className="prl-coach__summary">
+          {`${report.street} · ${formatUnits(report.potTotal)} in the pot · ${
+            report.toCall > 0 ? `${formatUnits(report.toCall)} to call` : 'nothing to call'
+          }`}
+        </p>
+      </div>
+
+      {isSampled && halfWidth === null ? (
+        <Callout tone="warning" title="This equity was sampled without an error bar">
+          The figure below came from Monte Carlo sampling, but no confidence interval was reported with it.
+          Read it as approximate: a sampled number without an interval cannot tell you how far from the truth
+          it might be.
+        </Callout>
+      ) : null}
+
+      {/* ---- always visible ------------------------------------------------------------- */}
+      <div className="prl-coach__grid">
+        <EquitySection equity={equity} interval={intervalText} surplus={report.potOdds.equitySurplus} />
+        <PriceSection potOdds={report.potOdds} />
+        <OutsSection outs={outs} />
+        <StackSection stack={report.stackContext} />
+      </div>
+
+      <SuggestionBlock suggestion={report.suggestion} candidate={suggested} />
+
+      {/* ---- collapsible: detail, never caveats ----------------------------------------- */}
+      <div className="prl-coach__disclosures">
+        <Disclose summary={`What each action is worth (${pluralise(report.candidates.length, 'line')})`}>
+          <CandidateTable candidates={report.candidates} />
+        </Disclose>
+
+        {outs === null ? null : (
+          <Disclose summary={`Outs, card by card (${pluralise(outs.total, 'card')})`}>
+            <div className="prl-outs__lists">
+              <div className="prl-outs__list">
+                <span className="prl-label">{`Clean — ${pluralise(outs.clean, 'card')}`}</span>
+                <ul className="prl-outs__cards">
+                  {withKeys(outs.cleanCards, 'outs-clean').map((entry) => (
+                    <li key={entry.key}>
+                      <OutCard text={entry.value} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="prl-outs__list">
+                <span className="prl-label">{`Dirty — ${pluralise(outs.dirty, 'card')}`}</span>
+                <ul className="prl-outs__cards">
+                  {withKeys(outs.dirtyCards, 'outs-dirty').map((entry) => (
+                    <li key={entry.key}>
+                      <OutCard text={entry.value} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </Disclose>
+        )}
+
+        <Disclose summary="How these figures are derived">
+          <Formula
+            expression="break-even equity = call / (pot + call)"
+            explanation="Calling costs the call and wins the pot plus the call. Break even is where those balance, which is why a bigger bet demands more equity."
+          />
+          <Formula
+            expression="stack-to-pot ratio = effective stack / pot"
+            explanation="How much room is left relative to what is already in the middle. It is the number that decides whether a commitment decision arrives on this street or a later one."
+          />
+          {/*
+            `rule.estimate` is a FRACTION, like every other probability on this contract, so
+            `formatPercent` is the right renderer and the multiplication happens exactly once.
+            `@prl/poker-math` used to publish it in percentage points instead — 36 rather than 0.36 —
+            and this line rendered a nine-out flush draw as "3,600.0%". `errorPoints` beside it is
+            already scaled, which is what its name says, so it goes through `formatPoints` and is
+            NOT multiplied. Swapping the two formatters is the whole bug, in both directions.
+
+            `null` is now a real answer rather than an absence: the Coach withholds the shortcut
+            where it cannot mean anything — a made hand, no clean outs, or an out count whose
+            multiple would exceed 100% — and puts the reason in the teaching notes below.
+          */}
+          {rule === null ? (
+            <p className="prl-coach__prose">
+              No rule-of-thumb comparison for this spot. The rule of 2 and 4 is a shortcut for a draw with
+              clean outs still to come, and it is only shown where all three of those hold — the notes below
+              say which one does not.
+            </p>
+          ) : (
+            <p className="prl-coach__prose">
+              {`The rule of 2 and 4 estimates ${formatPercent(rule.estimate)}, which is off by ${formatPoints(
+                Math.abs(rule.errorPoints),
+              )}. ${rule.note}`}
+            </p>
+          )}
+          <p className="prl-coach__prose">
+            {`Equity came from ${
+              isSampled ? 'Monte Carlo sampling' : 'exact enumeration'
+            } over ${pluralise(equity.trials, 'run')}. ${
+              intervalText === null
+                ? 'No interval was reported with it.'
+                : `The interval beside the figure, ${intervalText}, is the sampling error at the level stated below.`
+            }`}
+          </p>
+        </Disclose>
+
+        {notes.length === 0 ? null : (
+          <Disclose summary={`Worth noticing here (${pluralise(notes.length, 'note')})`}>
+            <ul className="prl-coach__list">
+              {notes.map((entry) => (
+                <li key={entry.key}>{entry.value}</li>
+              ))}
+            </ul>
+          </Disclose>
+        )}
+      </div>
+
+      {/* Neither of these can be collapsed. See the boundary at the top of this file. */}
+      <AssumptionList items={report.assumptions} headingLevel={3} />
+      <UncertaintyNote note={report.uncertainty} headingLevel={3} />
+    </div>
+  );
+}

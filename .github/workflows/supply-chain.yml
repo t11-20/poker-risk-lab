@@ -1,0 +1,109 @@
+# ---------------------------------------------------------------------------
+# Daily supply-chain audit of the committed lockfile.
+#
+# ## Why this exists separately from ci.yml
+#
+# CI audits the dependency graph when the graph changes. That catches a bad
+# dependency being *added*. It does not catch the far more common case: a
+# dependency that was already pinned, already reviewed, already installed, and
+# is then disclosed as malicious or vulnerable three weeks later. Nothing about
+# this repo changes on that day, so nothing triggers CI, and the finding sits
+# undiscovered until somebody happens to push.
+#
+# This workflow removes the "happens to push" from that sentence. It re-runs the
+# same `pnpm run security:audit` gate every day against the lockfile exactly as
+# committed, so a newly-published advisory against an already-pinned version
+# turns into a red run within 24 hours.
+#
+# It is genuinely the same gate — the network-backed gates inside it
+# (scripts/supply-chain/osv-scan.mjs and provenance.mjs) query OSV and the npm
+# registry live, so their answer legitimately changes over time even when the
+# lockfile does not. The offline gates re-run too and are expected to be stable;
+# if one of those starts failing without a commit, something has tampered with
+# the checkout or the toolchain, which is also worth knowing.
+#
+# ## Pinning and permissions
+#
+# Identical rules to ci.yml: every action pinned to a full commit SHA with the
+# version in a comment, `permissions: contents: read` and nothing more, and no
+# secret referenced by any step. See the ci.yml header for how the SHAs were
+# obtained and how to refresh them.
+#
+# ## Operational note
+#
+# GitHub disables scheduled workflows in repositories with no activity for 60
+# days, and emails the owners when it does. `workflow_dispatch` is here so the
+# audit can also be run on demand — after re-enabling it, or when an advisory
+# lands and you do not want to wait for the next tick.
+# ---------------------------------------------------------------------------
+
+name: Supply-chain (scheduled)
+
+on:
+  schedule:
+    # 06:17 UTC daily. Deliberately not on the hour: every scheduled workflow on
+    # GitHub that asks for :00 is queued together, and runs get delayed or
+    # dropped under that load. The exact minute does not matter, only that it is
+    # an unpopular one.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A manual run started while the nightly one is still going should replace it
+# rather than audit the same commit twice.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+  NPM_CONFIG_UPDATE_NOTIFIER: 'false'
+
+jobs:
+  audit:
+    name: Audit the committed lockfile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack (pins pnpm via the packageManager integrity hash)
+        run: corepack enable
+
+      - name: Report the resolved toolchain
+        run: |
+          node --version
+          pnpm --version
+
+      - name: Install
+        # The point of this workflow is to audit the lockfile as committed, so a
+        # lockfile that no longer matches the manifests must fail here rather
+        # than be resolved into something new and then audited.
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit
+        run: pnpm run security:audit
+
+      - name: Upload SBOM and supply-chain reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # Dated, so a run of this workflow can be compared against the one
+          # before it to see what changed in the world rather than in the repo.
+          name: supply-chain-reports-${{ github.run_id }}
+          path: |
+            docs/sbom/poker-risk-lab.cdx.json
+            docs/sbom/osv-report.json
+            docs/sbom/provenance-report.json
+          if-no-files-found: warn
+          retention-days: 90

@@ -1,0 +1,1437 @@
+[
+  {
+    "id": "quiz-hand-flow",
+    "title": "How a hand unfolds",
+    "topic": "rules-and-flow",
+    "lessonId": "hand-flow",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "hand-flow-q1",
+        "prompt": "A hand of no-limit hold'em has reached the river with two players still in. How many cards has each player been dealt face down, and how many community cards are showing?",
+        "options": [
+          "Two face down, five community cards",
+          "Two face down, four community cards",
+          "Three face down, five community cards",
+          "Two face down, three community cards"
+        ],
+        "correctIndex": 0,
+        "explanation": "Each player is dealt two private cards at the start, and the community cards arrive in three instalments: three at once on the flop, one on the turn, one on the river. By the river there are five community cards on the table, and each player makes their best five-card hand from the seven cards available to them.",
+        "optionNotes": [
+          "Correct: two private cards plus five community cards, which is seven cards to choose five from.",
+          "Four community cards is the turn, one street earlier. This is a natural slip because the turn and river are both single cards.",
+          "Three face down is a different game entirely. Hold'em always deals exactly two private cards.",
+          "Three community cards is the flop. Tempting if you are counting the cards that arrive together and forgetting the two single cards that follow."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "hand-flow-q2",
+        "prompt": "How many betting rounds are there in a hand that runs all the way to showdown?",
+        "options": ["Three", "Four", "Five", "Two"],
+        "correctIndex": 1,
+        "explanation": "There is a betting round before the flop, one after the flop, one after the turn and one after the river: four in total. The pattern is that every time new information arrives, the players get to act on it.",
+        "optionNotes": [
+          "Three counts the postflop streets and forgets that the preflop round is a betting round too.",
+          "Correct: preflop, flop, turn and river.",
+          "Five would require a fifth street. There are only three community-card deals and one preflop round.",
+          "Two undercounts badly; each of the three community-card deals is followed by its own round of betting."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "hand-flow-q3",
+        "prompt": "Preflop, the action starts to the left of the big blind. Who acts first on the flop?",
+        "options": [
+          "The player who bet last on the previous street",
+          "The first player still in the hand to the left of the button",
+          "The player on the button",
+          "Whoever was dealt in first"
+        ],
+        "correctIndex": 1,
+        "explanation": "From the flop onwards, action begins with the first remaining player to the left of the button and ends with the button, which is why the button acts last on every postflop street. Preflop is the exception, because the blinds have already put money in and act at the end of that round instead.",
+        "optionNotes": [
+          "Who bet last does not set the order. Order is fixed by seat relative to the button, not by what happened before.",
+          "Correct: the button always acts last after the flop, so action starts with the nearest active player on its left.",
+          "The button acts last postflop, not first. This is worth remembering precisely because it is the seat everyone wants.",
+          "Deal order has no effect on betting order at all."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "hand-flow-q4",
+        "prompt": "On the turn, one player bets and everybody else folds. What happens next?",
+        "options": [
+          "The bettor wins the pot immediately and does not have to show their cards",
+          "The bettor wins the pot but must show their cards",
+          "The river is dealt anyway to settle the hand",
+          "The pot is split between everyone who was still in on the flop"
+        ],
+        "correctIndex": 0,
+        "explanation": "A hand ends the moment only one player remains. That player takes the pot, and because there was no showdown, nobody is entitled to see their cards. This is the reason a bet has two ways to win: at showdown, or by everyone else giving up.",
+        "optionNotes": [
+          "Correct: no showdown means no obligation to reveal anything.",
+          "Showing is only required when two or more players reach a showdown and the pot is contested.",
+          "There is nothing left to settle once one player remains, so no further cards are dealt.",
+          "Folding forfeits any claim on the pot, whatever street it happened on."
+        ]
+      }
+    ],
+    "reviewAdvice": "If any of these felt uncertain, reread the order of streets and the acting order. It is worth being able to say out loud, without hesitation, how many cards arrive on each street and who acts first, because every later idea in this course is built on that sequence. There is no score here: the point is to notice which parts you had to think twice about."
+  },
+  {
+    "id": "quiz-betting-actions",
+    "title": "The five actions",
+    "topic": "rules-and-flow",
+    "lessonId": "betting-actions",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "betting-actions-q1",
+        "prompt": "Your opponent has bet. Which set of actions is available to you?",
+        "options": [
+          "Check, call or raise",
+          "Fold, call or raise",
+          "Fold or call only",
+          "Any of check, fold, call or raise"
+        ],
+        "correctIndex": 1,
+        "explanation": "Checking means passing the action along without putting chips in, which is only possible when nothing is owed. Once a bet is in front of you, you owe chips to continue, so the three ways forward are giving up, matching, or increasing.",
+        "optionNotes": [
+          "Checking is unavailable when you owe chips; that is the whole difference between checking and calling.",
+          "Correct: facing a bet, you can fold, call or raise.",
+          "Raising is always available too, up to your remaining stack in no-limit.",
+          "This adds checking, which is exactly the action a bet takes away from you."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "betting-actions-q2",
+        "prompt": "The pot is 30 and your opponent bets 20. Ignoring any all-in situation, what is the smallest legal raise you can make?",
+        "options": ["A total of 30", "A total of 40", "A total of 50", "Any amount above 20"],
+        "correctIndex": 1,
+        "explanation": "A raise has to increase the bet by at least as much as the last increment. The last increment was 20 (from nothing to 20), so the smallest raise adds another 20, making your total 40. Note that this rule refers to the size of the previous bet, not to the size of the pot.",
+        "optionNotes": [
+          "A total of 30 raises by only 10, which is less than the previous increment.",
+          "Correct: match the 20 and increase by at least another 20.",
+          "A total of 50 is legal but not the smallest legal raise; it increases by 30.",
+          "Any amount above 20 would allow a raise of a single chip, which the minimum-raise rule exists to prevent."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "betting-actions-q3",
+        "prompt": "In no-limit hold'em, what is the largest bet you can make?",
+        "options": [
+          "The size of the current pot",
+          "Whatever chips you have in front of you",
+          "The size of your opponent's stack",
+          "Twice the size of the last bet"
+        ],
+        "correctIndex": 1,
+        "explanation": "No-limit means the ceiling is your own stack: you can always move all in. Anything above what your opponent can match is simply returned to you, since they cannot lose more than they have, so the effective ceiling in practice is the smaller of the two stacks.",
+        "optionNotes": [
+          "A pot ceiling is a different betting structure, not no-limit.",
+          "Correct: your stack is the limit, which is what 'no limit' refers to.",
+          "Their stack limits what can be won, not what you may legally push forward.",
+          "Doubling the last bet is a minimum-raise idea, not a maximum."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "betting-actions-q4",
+        "prompt": "You face a bet on the turn. Counting your opponent's bet, the pot now stands at 60, and calling costs you 20. Expressed as 'how many to one', what price is the pot laying you?",
+        "calculation": { "kind": "potOdds", "pot": 60, "toCall": 20 },
+        "field": "oddsRatio",
+        "unit": "ratio",
+        "tolerance": 0.2,
+        "explanation": "The ratio form compares what is already in the middle with what you must put in to keep playing: pot against call. Answer it as a single number - a price of two and a half to one would be entered as 2.5. Notice that your cards never enter this calculation - it is a statement about chips, and it is the same for everyone at the table. The pot-odds lesson turns this ratio into a required share of the time you need to win."
+      }
+    ],
+    "reviewAdvice": "The two things worth checking here are the minimum-raise rule and the fact that a bet removes checking from your options. If the ratio question was awkward, that is normal on a first pass: it is the arithmetic the pot-odds lesson is built around, so it will come back with more support. Nothing here is scored or unlocked - it is only a way to see which ideas have landed."
+  },
+  {
+    "id": "quiz-all-ins-and-side-pots",
+    "title": "All-ins and side pots",
+    "topic": "rules-and-flow",
+    "lessonId": "all-ins-and-side-pots",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "all-ins-q1",
+        "prompt": "Three players go all in on the same hand. Their stacks were 20, 100 and 100. How are the chips organised before the showdown?",
+        "options": [
+          "One pot of 220 that all three can win",
+          "A main pot of 60 that all three can win, plus a side pot of 160 that only the two larger stacks can win",
+          "A main pot of 20 for the short stack and a side pot of 200 for the others",
+          "Three separate pots, one for each player's contribution"
+        ],
+        "correctIndex": 1,
+        "explanation": "Each player can only win as much as they risked, from each opponent. The short stack put in 20, so 20 from each of the three forms a main pot of 60 that all three are eligible for. The extra 80 from each of the larger stacks forms a side pot of 160, contested only by them. The two pots add back to the total that went in.",
+        "optionNotes": [
+          "A single pot would let the short stack win chips they never risked, which table stakes does not allow.",
+          "Correct: a main pot capped at the short stack's contribution from every player, plus a side pot between the players who put in more.",
+          "The main pot collects the matched amount from everyone, not just the short stack's own chips.",
+          "Pots are formed by matched contribution levels, not one per player; three all-ins at two distinct levels make two pots."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "all-ins-q2",
+        "prompt": "A player is all in on the flop, and two other players keep betting on the turn and river. Can the all-in player win those later bets?",
+        "options": [
+          "Yes, if they have the best hand at showdown",
+          "No, those chips form a side pot the all-in player is not eligible for",
+          "Yes, but only half of them",
+          "Only if they announced they wanted to be included"
+        ],
+        "correctIndex": 1,
+        "explanation": "You can win only what you were able to match. Chips wagered after you were all in were never matched by you, so they go into a side pot decided among the players who put them in. This is why a short stack can win the main pot while the side pot goes elsewhere.",
+        "optionNotes": [
+          "Having the best hand wins every pot you are eligible for, and eligibility is the part that is limited here.",
+          "Correct: unmatched chips form a side pot with its own set of eligible players.",
+          "There is no half share; eligibility is all or nothing for a given pot.",
+          "There is nothing to announce. Eligibility follows from the chips, not from intent."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "all-ins-q3",
+        "prompt": "At showdown, the all-in short stack has the best hand of the three players. Who wins what?",
+        "options": [
+          "The short stack wins everything, because they have the best hand",
+          "The short stack wins the main pot, and the better of the remaining two hands wins the side pot",
+          "The side pot is split between the two larger stacks",
+          "The short stack wins the main pot and the side pot is returned to whoever bet it"
+        ],
+        "correctIndex": 1,
+        "explanation": "Each pot is awarded to the best hand among the players eligible for that pot. The short stack is eligible only for the main pot and wins it. The side pot is contested between the two larger stacks, and the better of their two hands takes it, whether or not that hand would have beaten the short stack.",
+        "optionNotes": [
+          "Best hand does not override eligibility; you cannot win chips you never risked.",
+          "Correct: each pot goes to the best eligible hand, evaluated pot by pot.",
+          "Splitting only happens when eligible hands actually tie.",
+          "Returning chips happens for a genuinely uncalled bet, not for a side pot that two players both contested."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "all-ins-q4",
+        "prompt": "You bet 200 all in and your opponent, who has only 120 left, calls with all of it. What happens to the difference?",
+        "options": [
+          "The extra 80 is returned to you before the showdown",
+          "The extra 80 stays in the pot and the winner takes it",
+          "The hand is void because the bets do not match",
+          "Your opponent must find the rest from outside their stack"
+        ],
+        "correctIndex": 0,
+        "explanation": "Only matched chips can be won. The uncalled portion of a bet comes straight back to the bettor, before any cards are revealed. Under table stakes, a player can only ever be asked for the chips already in front of them at the start of the hand.",
+        "optionNotes": [
+          "Correct: an uncalled bet is returned, because nobody covered it.",
+          "Leaving it in would mean you could lose chips your opponent never risked against you.",
+          "Mismatched stacks are ordinary; that is exactly what side pots and returned bets exist to handle.",
+          "Adding chips mid-hand is what table stakes forbids."
+        ]
+      }
+    ],
+    "reviewAdvice": "The single idea underneath all four questions is that you can win only what you were able to match. If you can restate that in your own words and then rebuild the main-pot and side-pot arithmetic from it, the details will not need memorising. Come back to this one after playing a few hands with mismatched stacks, where the structure becomes obvious rather than abstract."
+  },
+  {
+    "id": "quiz-position-basics",
+    "title": "Acting last",
+    "topic": "positions-and-blinds",
+    "lessonId": "position-basics",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "position-q1",
+        "prompt": "What does acting last actually give you?",
+        "options": [
+          "Better cards over the course of a session",
+          "Information: you see what everyone else does before you have to decide",
+          "A discount on the amount you have to call",
+          "The right to see your opponent's cards at showdown"
+        ],
+        "correctIndex": 1,
+        "explanation": "Position is an information advantage, and that is its whole basis. When you act last you have seen their action before choosing yours; when you act first you must commit to a decision that they get to respond to. The cards are dealt at random regardless of where you sit.",
+        "optionNotes": [
+          "Card distribution is independent of seat. What changes with position is what you know when you decide.",
+          "Correct: you decide with more information than anyone else in the hand.",
+          "The big blind does get a discount preflop, but that comes from having already posted, not from position.",
+          "Showdown order follows the last aggressor and the betting, and it is a minor effect compared with acting last on every street."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "position-q2",
+        "prompt": "In a hand that reaches the flop, which of these seats has the worst position for the rest of the hand?",
+        "options": ["The button", "The cutoff", "The small blind", "Under the gun"],
+        "correctIndex": 2,
+        "explanation": "From the flop onwards the order is fixed by distance to the left of the button, so the small blind acts first on every remaining street. Under the gun is the worst seat preflop, but once the flop comes the blinds are the first to act, and the small blind is first of all.",
+        "optionNotes": [
+          "The button is the best postflop seat, acting last on every street.",
+          "The cutoff acts second-to-last when the button folds, which makes it one of the better seats.",
+          "Correct: the small blind acts first on the flop, turn and river.",
+          "Under the gun is worst preflop, but postflop the blinds act before it."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "position-q3",
+        "prompt": "Which statement about position is stated carefully enough to be defensible?",
+        "options": [
+          "Position means you win the hand more often",
+          "Position lets you make the same decisions with more information, which tends to convert more of your equity into chips",
+          "Position means you should always bet when checked to",
+          "Position matters only when you have a strong hand"
+        ],
+        "correctIndex": 1,
+        "explanation": "The defensible claim is about information and equity realisation, not about outcomes. Sitting in position does not change your cards or guarantee a result; it changes how much of what your cards are worth you actually collect, because you are choosing between options later than everyone else.",
+        "optionNotes": [
+          "Winning more often is an outcome claim, and position does not touch the deal.",
+          "Correct: it is an information advantage that improves how much equity you realise.",
+          "Always is the problem. A default of betting when checked to is a habit, and habits are exploitable.",
+          "Position helps most with marginal and drawing hands, because those are the ones where extra information changes your decision."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "position-q4",
+        "prompt": "You are out of position with a marginal hand on the flop. Which consequence of that follows directly from the acting order?",
+        "options": [
+          "Your equity is lower than it would be in position",
+          "You must decide whether to bet before knowing whether they wanted to bet",
+          "You will be dealt worse cards next hand",
+          "You can no longer bluff"
+        ],
+        "correctIndex": 1,
+        "explanation": "The acting order is the mechanism, so the consequence has to be about what you know when you act. Out of position, every decision is made first and can be responded to. Your raw equity, the number your two cards are worth against their range, is unchanged; what changes is how easily you turn it into chips.",
+        "optionNotes": [
+          "Equity comes from the cards. Position affects how much of it you keep, which is a different quantity.",
+          "Correct: you act without their action, and they act knowing yours.",
+          "Future deals are unrelated to this hand in every way.",
+          "Bluffing out of position is harder to get right but perfectly possible, and sometimes better because it is unexpected."
+        ]
+      }
+    ],
+    "reviewAdvice": "Position is one idea used in many places, so the useful check is whether you can explain it without using the word 'position': you act after them, so you know more than they did. If the third question gave you pause, that is the most valuable one here, because it is about stating an advantage precisely rather than overselling it."
+  },
+  {
+    "id": "quiz-blinds-and-the-option",
+    "title": "Blinds, antes and the option",
+    "topic": "positions-and-blinds",
+    "lessonId": "blinds-and-the-option",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "blinds-q1",
+        "prompt": "Why does hold'em use forced blind bets at all?",
+        "options": [
+          "To make the game faster to deal",
+          "To put something in the pot worth competing for, so that folding every hand is not free",
+          "To decide who acts first",
+          "To make sure the best hand wins more often"
+        ],
+        "correctIndex": 1,
+        "explanation": "Without money in the middle, the correct strategy would be to wait for a perfect hand for ever, and nobody would ever have a reason to enter a pot. Blinds create a small prize that makes contesting pots worthwhile, which is what generates the whole game.",
+        "optionNotes": [
+          "Dealing speed is unaffected by whether blinds are posted.",
+          "Correct: forced bets create something to play for and give waiting a cost.",
+          "Acting order comes from the button's position, not from the blinds themselves, though the two rotate together.",
+          "Blinds have no effect on which hand wins; they change what is at stake."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "blinds-q2",
+        "prompt": "Preflop, several players just call the big blind and nobody raises. The action reaches the big blind. What is 'the option'?",
+        "options": [
+          "The big blind may raise, or check and see the flop, because their posted blind already covers the call",
+          "The big blind may take their blind back and fold for free",
+          "The big blind must either raise or fold",
+          "The big blind may look at one community card before deciding"
+        ],
+        "correctIndex": 0,
+        "explanation": "The big blind has already put in the amount everyone else called, so nothing is owed. That leaves two sensible actions: check and take the flop, or raise. The name simply refers to the choice being theirs.",
+        "optionNotes": [
+          "Correct: the blind already counts as the call, so checking is available.",
+          "A posted blind is in the pot and cannot be taken back.",
+          "Folding when nothing is owed would be giving up a free flop, and checking is always available.",
+          "No player ever sees a community card ahead of the others."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "blinds-q3",
+        "prompt": "Facing a preflop raise, why is the price to continue better for the big blind than for anyone else?",
+        "options": [
+          "The big blind is allowed to call for less than the raise",
+          "Part of what the big blind owes is already in the pot, so the extra amount needed is smaller",
+          "The big blind acts last preflop",
+          "The big blind can raise more cheaply than others"
+        ],
+        "correctIndex": 1,
+        "explanation": "The blind is already posted, so continuing costs only the difference between the raise and what is already in front of them. That smaller cost against a pot that also contains their own blind and the small blind is a better price than a player from another seat is getting. Acting last preflop is a separate, real advantage that arrives at the same time.",
+        "optionNotes": [
+          "There is no discount on the amount required; the total is the same, and part of it is simply already paid.",
+          "Correct: the posted blind reduces what is left to pay, which improves the price.",
+          "Acting last preflop is true and useful, but the question is about price, and the price comes from the posted blind.",
+          "Raise sizes are identical for every seat."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "blinds-q4",
+        "prompt": "Blinds are 1 and 2. One player raises to 6 and everyone folds to you in the big blind. Your 2 is already posted, so calling costs 4 more, and the pot contains 9: your 2, the small blind's 1, and the raiser's 6. What share of the time do you need to end up with the pot for calling to break even?",
+        "calculation": { "kind": "potOdds", "pot": 9, "toCall": 4 },
+        "field": "breakEvenEquity",
+        "unit": "percent",
+        "tolerance": 2,
+        "explanation": "Break-even equity is what you must put in divided by what the pot holds once you have put it in, so the denominator includes your own call. Work it out from the four numbers in the question rather than from a remembered figure, and note how much the already-posted blind improves the fraction: a player in another seat facing the same raise would be paying the full amount into a smaller pot. This is only the immediate price, and it says nothing about how well your hand will play out of position afterwards."
+      }
+    ],
+    "reviewAdvice": "The theme is that a posted blind is money already spent, which improves the price but does not improve the hand. If the last question was fiddly, redo it slowly writing down what the pot contains before your call - that habit is worth more than the answer. Consider also what the numeric price leaves out: you would be playing the hand out of position, which the fraction knows nothing about."
+  },
+  {
+    "id": "quiz-reading-the-board",
+    "title": "Reading a board",
+    "topic": "hand-reading-and-outs",
+    "lessonId": "reading-the-board",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "reading-board-q1",
+        "prompt": "You hold Ah Kh and the flop is Qh 7h 2c. What do you have right now?",
+        "options": [
+          "A pair of aces",
+          "Ace high, with a flush draw",
+          "A flush",
+          "An open-ended straight draw"
+        ],
+        "correctIndex": 1,
+        "explanation": "Nothing in your hand matches anything on the board, so you have no pair: your hand is ace high. Two of your suit are on the board alongside your two, giving four hearts in total, which is a draw and not yet a made flush.",
+        "optionNotes": [
+          "An ace in your hand is not a pair unless another ace appears. Holding the highest card is easy to confuse with holding a pair of them.",
+          "Correct: ace high plus a four-card flush draw, with two overcards to the queen as well.",
+          "A flush needs five cards of one suit. Four is a draw, and the difference between four and five is the whole lesson.",
+          "A straight draw would need four cards to a run; ace-king with a lone queen is two cards short."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "reading-board-q2",
+        "prompt": "The flop is 9s 9d 4c. What is the best possible hand anyone could hold at this moment?",
+        "options": [
+          "Two nines, for four of a kind",
+          "A nine and a four, for a full house",
+          "A flush",
+          "One nine, for three of a kind"
+        ],
+        "correctIndex": 0,
+        "explanation": "With a pair already on the board, the two remaining nines make four of a kind, which is the ceiling here. A nine with a four is a full house and second best. Work out the ceiling of a board before you decide how much you like your hand on it.",
+        "optionNotes": [
+          "Correct: the two nines still in the deck are the strongest possible holding on this board.",
+          "A full house is very strong and still loses to quads, which are available here.",
+          "A flush is impossible: the three board cards are three different suits, so no five cards of one suit exist yet.",
+          "Trips with one nine is beaten by both quads and a full house."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "reading-board-q3",
+        "prompt": "You hold Ah Ad and the flop is 6c 7c 8d. What should you notice about this board?",
+        "options": [
+          "Nothing yet: a pair of aces is the best possible hand here",
+          "Straights are already possible, and both straight and flush draws can arrive",
+          "Only a flush is a threat, because two clubs are showing",
+          "Only a set is a threat, because the board is low"
+        ],
+        "correctIndex": 1,
+        "explanation": "Three connected cards mean several two-card combinations already make a straight, and plenty more are one card away. Two clubs also mean a flush draw exists. Your pair is strong in isolation and this is one of the worst possible textures for it, which is a fact about the board rather than about your cards.",
+        "optionNotes": [
+          "Aces are not the best possible hand: made straights beat them, and they exist on this board already.",
+          "Correct: made straights, straight draws and a flush draw are all live here.",
+          "The flush is only one of the threats, and on this texture it is not even the most immediate one.",
+          "Sets are a threat on every board. What makes this one dangerous is the connectedness."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "reading-board-q4",
+        "prompt": "Back to the first question's board: you hold Ah Kh, the flop is Qh 7h 2c, and this time you know your opponent holds exactly Qs Jc. With two cards still to come, what share of the pot is your hand worth?",
+        "calculation": {
+          "kind": "equity",
+          "heroCards": "AhKh",
+          "board": "Qh7h2c",
+          "opponents": ["QsJc"]
+        },
+        "field": "heroEquity",
+        "unit": "percent",
+        "tolerance": 5,
+        "explanation": "Before you compute it, try estimating: count the cards that would give you the better hand, remember that two cards are still coming, and remember that your opponent can improve as well. Then compare your estimate with the exact figure. Two things are worth taking away regardless of how close you were. First, being behind right now and being worth a large share of the pot are entirely compatible. Second, this figure is only exact because we told you their two cards; against a range of holdings the answer would be different, and in a real hand you never get that information."
+      },
+      {
+        "kind": "decision",
+        "id": "reading-board-q5",
+        "prompt": "Read this river board back to yourself before you decide anything: what hands does it allow, and which of them would have to be holding two specific cards? Then work out how many of the holdings your opponent could be betting actually got there, and decide whether hero should call or fold.",
+        "scenarioId": "rk-counting-the-combos-that-beat-you",
+        "explanation": "This is board reading and counting in sequence, which is the order they are useful in. First establish what the board makes possible, because a threat you have not noticed cannot be counted. Then count how many of the holdings in their betting range actually make it - and notice that a suited hand class only completes a flush in one of its suits, which is where an unexamined fear of 'they could have a flush' usually falls apart. The app computes the count and the price against the stated range; the assumption that they also bet with hands that missed is doing real work, and the scenario says so. Change that assumption and the answer can change with it."
+      }
+    ],
+    "reviewAdvice": "The habit this quiz is training is asking two questions in order: what do I have, and what is the best hand this board allows? Most board-reading errors come from answering only the first. If the numeric question surprised you, note whether your estimate was too high or too low, and see whether the same bias shows up when you try the next one."
+  },
+  {
+    "id": "quiz-counting-outs",
+    "title": "Counting and discounting outs",
+    "topic": "hand-reading-and-outs",
+    "lessonId": "counting-outs",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "counting-outs-q1",
+        "prompt": "You hold two hearts and exactly two hearts are on the flop. How many cards in the deck complete your flush?",
+        "options": ["Nine", "Eleven", "Thirteen", "Four"],
+        "correctIndex": 0,
+        "explanation": "There are thirteen cards of each suit. You can see four of them: two in your hand and two on the board. That leaves the rest of the suit unaccounted for, and every one of them makes five hearts. This subtraction is the whole method for counting outs, and it is worth doing rather than remembering.",
+        "optionNotes": [
+          "Correct: thirteen in the suit, minus the four you can see.",
+          "Eleven would mean only two hearts were accounted for. All four visible hearts have to come out of the count.",
+          "Thirteen is the number in the suit before removing the ones you can already see.",
+          "Four is how many hearts you can see, not how many are left."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "counting-outs-q2",
+        "prompt": "You have both a flush draw and a straight draw, and one particular card would complete both at once. How should that card be counted?",
+        "options": [
+          "As two outs, since it makes two different hands",
+          "As one out, because one card can only arrive once",
+          "As half an out, since you cannot use both hands",
+          "It should not be counted at all"
+        ],
+        "correctIndex": 1,
+        "explanation": "Outs are cards, not hands. You are counting how many of the unseen cards help you, and a single card is a single card however many ways it improves you. Double counting overlapping outs is one of the most common ways a count comes out too high.",
+        "optionNotes": [
+          "Two outs would mean two cards can arrive, and there is only one of that card left in the deck.",
+          "Correct: one card is one out, no matter how many draws it completes.",
+          "There is nothing fractional about it; the card either arrives or it does not.",
+          "It is certainly an out, and often one of your best ones, since it makes the stronger of the two hands."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "counting-outs-q3",
+        "prompt": "Some of the cards that improve your hand would leave you with the second-best hand against the holdings your opponent is most likely to have. What should you do with those cards?",
+        "options": [
+          "Count them fully; an improvement is an improvement",
+          "Discount them, and be explicit that you are doing so and why",
+          "Ignore all outs unless they make the best possible hand",
+          "Count them twice, because they also make your opponent's hand less likely"
+        ],
+        "correctIndex": 1,
+        "explanation": "An out is only useful if it wins. A card that improves you into second place costs you money rather than saving you, because you will happily pay off the rest of the hand with it. Discounting is unavoidably a judgement call, which is exactly why you should say the judgement out loud: 'I am counting these as half, because I think a third of their range has me beaten even when this card comes'.",
+        "optionNotes": [
+          "Counting every improvement is how a drawing hand ends up looking far better than it is.",
+          "Correct: discount them, and state the assumption you are discounting on.",
+          "Requiring the best possible hand is too strict and throws away plenty of genuine outs.",
+          "Cards that help you do not make their hand less likely; that is a different idea called blockers, and it applies to cards you already hold."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "counting-outs-q4",
+        "prompt": "You hold Th 9h, the board is Ah 7h 2c 4d, and your opponent has turned over As Ks - so only the river is left. How many of the remaining cards give you the winning hand?",
+        "calculation": {
+          "kind": "outs",
+          "heroCards": "Th9h",
+          "board": "Ah7h2c4d",
+          "opponentCards": "AsKs"
+        },
+        "field": "cleanCount",
+        "unit": "count",
+        "tolerance": 0.5,
+        "explanation": "Work it out in two steps. First, what do you need to beat a pair of aces? Second, how many cards deliver it, once you have removed every card you can already see. Be careful with the near misses: pairing one of your own cards does not get you there, so those cards are not outs at all, whatever they may feel like. Because there is exactly one card to come, an out here is simply a card that wins - there is no later street for the picture to change on."
+      },
+      {
+        "kind": "decision",
+        "id": "counting-outs-q5",
+        "prompt": "Hero holds two of a suit and two more of that suit are on the board, which looks like a routine flush draw - except the opponent's cards are face up and they hold two higher cards of the same suit. Decide whether hero should call or fold, and then ask where hero's genuine chances are actually coming from.",
+        "scenarioId": "eq-dominated-flush-draw-turn",
+        "explanation": "This spot is built to punish the reflex 'I have a flush draw, so I have nine outs'. The cards that complete hero's flush hand the opponent a better one, so they are not outs at all - they are the most expensive cards in the deck for hero, because hero will happily pay off with a hand that cannot win. Hero's real chances come from somewhere else entirely, and the app counts them for you once you look. Two habits to take from it. Count outs against what your opponent can hold rather than against your own hand in isolation. And notice that being face up is a teaching convenience: away from a lesson you would be estimating how often their range contains two of your suit, and that estimate is exactly what makes drawing to a second-best flush so costly."
+      }
+    ],
+    "reviewAdvice": "Counting outs is subtraction and honesty in equal parts: the subtraction is easy, and deciding which cards actually win is where the work is. If your instinct was to count everything that improved your hand, that is the habit worth attacking, and the discounting question is the one to reread. Try recounting the last question as though your opponent held two black aces instead, and notice how the count moves."
+  },
+  {
+    "id": "quiz-rule-of-2-and-4",
+    "title": "The rule of 2 and 4",
+    "topic": "probability-and-equity",
+    "lessonId": "rule-of-2-and-4",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "rule24-q1",
+        "prompt": "Why does multiplying your outs by 2 approximate your chance of hitting on the next card?",
+        "options": [
+          "Because roughly fifty cards are unseen, so each single out is worth about two percent of them",
+          "Because probabilities double on each street",
+          "Because half of your outs will already be in another player's hand",
+          "Because two cards are dealt on every street"
+        ],
+        "correctIndex": 0,
+        "explanation": "After a flop there are around fifty cards you cannot see, so any one specific card is close to one in fifty, which is about two percent. Multiply by how many cards help you and you have a workable estimate. The rule is arithmetic on the size of the deck, which is why it is stable and easy to remember.",
+        "optionNotes": [
+          "Correct: one unseen card out of roughly fifty is about two percent, so outs times two is a chance.",
+          "Nothing doubles between streets. Doubling appears in the rule because there are two cards to come, not because probability grows.",
+          "Cards in other players' hands are unknown to you and are correctly treated as part of the unseen deck.",
+          "One card is dealt on the turn and one on the river; the flop is three at once."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "rule24-q2",
+        "prompt": "You have nine cards that would win you the hand, and both the turn and the river are still to come. What percentage does the rule of 2 and 4 estimate?",
+        "calculation": { "kind": "ruleOf24", "outs": 9, "cardsToCome": 2 },
+        "field": "estimatePercent",
+        "unit": "percent",
+        "tolerance": 1,
+        "explanation": "Apply the rule as stated: with two cards to come, multiply the outs by four. This is deliberately an estimate you can do at a table in a second, and the next question is about where it goes wrong. Enter the estimate the rule gives, not a more exact figure you may know from elsewhere."
+      },
+      {
+        "kind": "numeric",
+        "id": "rule24-q3",
+        "prompt": "Same hand one street later: you still have nine winning cards, but only the river is to come. What does the rule estimate now?",
+        "calculation": { "kind": "ruleOf24", "outs": 9, "cardsToCome": 1 },
+        "field": "estimatePercent",
+        "unit": "percent",
+        "tolerance": 1,
+        "explanation": "With one card to come the multiplier is two rather than four. Compare this with your previous answer and notice that seeing one card instead of two costs you about half your chances, which is why the price you are willing to pay on the flop and on the turn are not the same. Nothing about your hand changed between the two questions."
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "rule24-q4",
+        "prompt": "When is the times-four version of the rule most likely to mislead you?",
+        "options": [
+          "When you have very few outs",
+          "When you have many outs, or when you will probably face another bet on the turn",
+          "When your opponent is bluffing",
+          "When the pot is small"
+        ],
+        "correctIndex": 1,
+        "explanation": "Two separate problems appear together. Arithmetically, multiplying by four drifts upwards as the out count rises, so with a large draw the estimate is too generous. Strategically, times four assumes you get to see both cards, which is only true if you are all in or the betting stops - and if another bet is coming on the turn, you are paying now for one card, not two.",
+        "optionNotes": [
+          "With few outs the estimate is quite close, which is where the rule is at its most reliable.",
+          "Correct: large out counts overstate, and unpaid streets are not guaranteed.",
+          "Whether they are bluffing changes what you are drawing against, not the accuracy of an arithmetic shortcut.",
+          "Pot size changes the price you are comparing against, not the estimate itself."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "rule24-q5",
+        "prompt": "You hold Th 9h, the flop is Ah 7h 2c, and your opponent shows you As Ks. Estimate your equity with the rule of 4 first, then compute it exactly: what share of the pot is your hand worth?",
+        "calculation": {
+          "kind": "equity",
+          "heroCards": "Th9h",
+          "board": "Ah7h2c",
+          "opponents": ["AsKs"]
+        },
+        "field": "heroEquity",
+        "unit": "percent",
+        "tolerance": 5,
+        "explanation": "Count your winning cards first, apply the rule, write your estimate down, and only then look at the computed figure. The gap between them, in whichever direction it falls, is the useful part of this question, so pay attention to the sign of your error rather than just its size. The estimate can come out too high, because some cards that look like outs do not actually win and because your opponent can improve too. It can also come out too low, because a simple out count misses the runouts where you get there in a way you were not counting - pairing up twice, or two cards arriving that make a hand you never listed. The rule is a tool for one second of thinking at the table, not a claim about the deck."
+      }
+    ],
+    "reviewAdvice": "The rule is worth trusting for what it is: a fast estimate whose error you should be able to describe. If you can say in one sentence why the times-four version drifts high with big draws, and why it assumes a street you may have to pay for, you have got everything from this quiz that matters. The exact figures are the app's job; the estimate and its known biases are yours."
+  },
+  {
+    "id": "quiz-pot-odds",
+    "title": "Reading the price",
+    "topic": "pot-odds-and-ev",
+    "lessonId": "pot-odds",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "pot-odds-q1",
+        "prompt": "Which of these describes break-even equity correctly?",
+        "options": [
+          "The chance that you currently hold the best hand",
+          "The share of the time you must end up with the pot for calling to be no better or worse than folding",
+          "The share of the pot that already belongs to you",
+          "The chance that your opponent is bluffing"
+        ],
+        "correctIndex": 1,
+        "explanation": "Break-even equity is the price translated into a required frequency. It comes entirely from the chips - what you must call, against what the pot will hold once you have called - and it makes no reference to your cards, their cards, or their intentions.",
+        "optionNotes": [
+          "Whether you are ahead now is a separate question, and you can be behind while comfortably clearing the price.",
+          "Correct: it is the frequency at which calling and folding come out level.",
+          "None of the pot belongs to you until you win it, which is why folding is worth exactly zero.",
+          "Their bluffing frequency affects your equity, but break-even equity is computed from chips alone."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "pot-odds-q2",
+        "prompt": "There was 50 in the middle on the river and your opponent bet 50, so the pot now stands at 100 and calling costs you 50. What share of the time do you need to end up with the pot for calling to break even?",
+        "calculation": { "kind": "potOdds", "pot": 100, "toCall": 50 },
+        "field": "breakEvenEquity",
+        "unit": "percent",
+        "tolerance": 1.5,
+        "explanation": "Take what you must put in and divide it by what the pot contains once you have put it in - which means your own call belongs in the denominator, because your call comes back to you out of the pot you take down. Deriving it beats remembering it, since the same derivation handles every size."
+      },
+      {
+        "kind": "numeric",
+        "id": "pot-odds-q3",
+        "prompt": "Same river, different size: there was 60 in the middle and your opponent bet 120, so the pot stands at 180 and calling costs 120. What share of the time do you now need to end up with the pot?",
+        "calculation": { "kind": "potOdds", "pot": 180, "toCall": 120 },
+        "field": "breakEvenEquity",
+        "unit": "percent",
+        "tolerance": 1.5,
+        "explanation": "Use the same fraction as the previous question, with the new numbers. Then compare the two answers: your cards and the board did not change between them, only their choice of size did. That comparison is the entire reason bet sizing is a lever, and it is worth feeling it as a single moving quantity rather than two separate sums."
+      },
+      {
+        "kind": "numeric",
+        "id": "pot-odds-q4",
+        "prompt": "On the turn the pot stands at 90 including your opponent's bet, and calling costs 30. Expressed as 'how many to one', what price is the pot laying you?",
+        "calculation": { "kind": "potOdds", "pot": 90, "toCall": 30 },
+        "field": "oddsRatio",
+        "unit": "ratio",
+        "tolerance": 0.2,
+        "explanation": "The ratio compares what is in the middle with what you must put in. Enter it as a single number - a price of two and a half to one would be entered as 2.5. Both forms of the price carry the same information, and being able to move between them quickly is worth more than preferring one."
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "pot-odds-q5",
+        "prompt": "You work out that the price is asking for about a quarter, and you estimate your equity against their range at about a third. What follows?",
+        "options": [
+          "Calling is the optimal play",
+          "Under your range assumption, calling gains chips compared with folding - though raising might do better still, and the assumption could be wrong",
+          "Your hand is a favourite to win the pot",
+          "You should call every time you are in this spot"
+        ],
+        "correctIndex": 1,
+        "explanation": "Clearing the price means calling beats folding, and that is genuinely all it means. Two limits come with it. Your equity estimate rests on an assumed range, so a wrong assumption makes the comparison wrong. And the comparison was call against fold: it says nothing at all about raising, which sometimes beats both.",
+        "optionNotes": [
+          "Optimal is a claim about every available action. You have compared two of them.",
+          "Correct: it beats folding under the stated assumption, with raising uncompared and the assumption still open to challenge.",
+          "A third of the time is not a favourite; you will lose this pot far more often than you win it, and the call still gains chips.",
+          "Always is too strong. Change their range or their sizing and the comparison changes with it."
+        ]
+      }
+    ],
+    "reviewAdvice": "Watch which half of the comparison you are least comfortable with. The price is exact arithmetic and should become automatic; the equity is an estimate that depends on a range you chose, and that is where the real thinking lives. If you found yourself wanting a table of numbers to memorise, resist it - the fraction is faster than the table and works at every size."
+  },
+  {
+    "id": "quiz-expected-value",
+    "title": "What a decision is worth",
+    "topic": "pot-odds-and-ev",
+    "lessonId": "expected-value",
+    "questions": [
+      {
+        "kind": "numeric",
+        "id": "ev-q1",
+        "prompt": "The pot stands at 120 including your opponent's bet, and calling costs 40. Assume that against the range you have put them on, you end up with the pot 40 times in 100. In chips, what is the expected value of calling rather than folding?",
+        "calculation": { "kind": "callEv", "pot": 120, "toCall": 40, "equity": 0.4 },
+        "field": "ev",
+        "unit": "chips",
+        "tolerance": 3,
+        "explanation": "Two outcomes, each with a weight. When you win, you collect the middle plus your own call coming back; when you lose, you are out the call. Weight each by how often it happens and add them. Folding is the zero point, so the answer is how many chips calling gains or loses relative to giving up. Remember that the equity here was assumed rather than measured, and the answer is only as good as that assumption."
+      },
+      {
+        "kind": "numeric",
+        "id": "ev-q2",
+        "prompt": "A different spot: the pot stands at 80 including their bet, calling costs 40, and this time your hand only gets there 20 times in 100. In chips, what is the expected value of calling? The answer may be negative.",
+        "calculation": { "kind": "callEv", "pot": 80, "toCall": 40, "equity": 0.2 },
+        "field": "ev",
+        "unit": "chips",
+        "tolerance": 3,
+        "explanation": "Same two outcomes, same weighting, worse numbers on both sides: a bigger bet relative to the pot and less equity. A negative result means folding is the better of those two options by that many chips on average. Note that it does not mean the call loses every time - it means the wins are not large or frequent enough to pay for the losses."
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "ev-q3",
+        "prompt": "Why is folding treated as expected value of zero?",
+        "options": [
+          "Because folding costs you the pot",
+          "Because the chips already in the pot are not yours, so folding neither wins nor loses them",
+          "Because folding costs you the chips you put in earlier in the hand",
+          "Because folding is always the safest option"
+        ],
+        "correctIndex": 1,
+        "explanation": "The pot is not yours until you win it. Folding declines a chance at it without paying anything further, so it is the natural baseline every other option is measured against. Chips you committed earlier are already in the pot and cannot be recovered by any decision except winning it.",
+        "optionNotes": [
+          "You cannot lose something you never owned; declining a chance at the pot is not the same as paying for it.",
+          "Correct: folding is the do-nothing option, so it is the zero that other actions are compared with.",
+          "Those chips are already spent whatever you do next, which is why they should not enter this decision at all.",
+          "Safety is not the measure. Folding can be the worst available option in chips terms and still feel safest."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "ev-q4",
+        "prompt": "You made a call your arithmetic said gained chips, and you lost the pot. What does that tell you about the call?",
+        "options": [
+          "It was a mistake, since it lost",
+          "Almost nothing on its own; a call that gains chips on average can lose most of the individual times you make it",
+          "It was correct, because you did the arithmetic",
+          "That your equity estimate was too high"
+        ],
+        "correctIndex": 1,
+        "explanation": "One result carries almost no information about a decision. A call needing a quarter and delivering a third loses two times in three and still gains chips every time it is made. What can be reviewed is the input: was the price computed correctly, and was the range you assumed defensible? Those you can check. The outcome you cannot.",
+        "optionNotes": [
+          "This is the single most expensive habit of thought in poker: grading decisions by their results.",
+          "Correct: the result is nearly uninformative, and the inputs are what can be reviewed.",
+          "Doing arithmetic is not the same as doing correct arithmetic on defensible assumptions, so this is too comfortable a conclusion.",
+          "It might have been, but a single loss is no evidence either way. Test the estimate against the range, not against the river card."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "ev-q5",
+        "prompt": "Your calculation shows that calling gains chips. Which further step is worth taking before you act?",
+        "options": [
+          "Compute the alternatives too, since call versus fold says nothing about raising",
+          "Nothing; a positive result settles the decision",
+          "Increase your estimate of your equity to be sure",
+          "Check whether you have lost with this hand before"
+        ],
+        "correctIndex": 0,
+        "explanation": "EV ranks the options you actually compute. A profitable call can be the second-best action, and raising is a genuinely different decision with different mechanics - it can win the pot immediately, which calling never does. Comparing two options and announcing a best one is the most common gap between arithmetic and decision-making.",
+        "optionNotes": [
+          "Correct: you have compared two options out of three, so you know less than the conclusion suggests.",
+          "It settles the comparison you performed, not the decision in front of you.",
+          "Adjusting an estimate to support a conclusion inverts the whole method.",
+          "Previous hands with these cards are irrelevant; the deck has no memory and neither should your reasoning."
+        ]
+      }
+    ],
+    "reviewAdvice": "Two ideas here do most of the work: folding is zero, and a decision is graded on its inputs rather than its result. If the negative answer in the second question felt strange, sit with it - being able to say 'on average this call loses chips, even though it sometimes wins the pot' is exactly the fluency you are building. Nothing here is scored, so the questions you hesitated on are the useful output."
+  },
+  {
+    "id": "quiz-fold-equity",
+    "title": "Betting for two reasons",
+    "topic": "fold-equity-and-bluffing",
+    "lessonId": "fold-equity",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "fold-equity-q1",
+        "prompt": "What makes betting a semi-bluff different from calling with the same drawing hand?",
+        "options": [
+          "The bet builds a bigger pot for when you hit",
+          "The bet can win immediately when they fold, and can still win at showdown when they call",
+          "The bet tells you where you stand",
+          "The bet gives you better odds on your draw"
+        ],
+        "correctIndex": 1,
+        "explanation": "Calling has one way to win: the better hand at the end. Betting has two, and they add together. That is why the same hand at the same price can be a poor call and a good bet.",
+        "optionNotes": [
+          "A bigger pot is a real consequence and it cuts both ways, since you have put more in to build it.",
+          "Correct: folds now plus equity later, which is a sum that calling can never collect.",
+          "Information from a bet is expensive and often false, so it is a weak justification on its own.",
+          "Betting does not improve the odds on your draw; the deck is unaffected by what you wager."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "fold-equity-q2",
+        "prompt": "The pot is 100 and you bet 50. Assume your opponent folds 50 times in 100, and that when they call, you end up with the pot 30 times in 100. Counting only chips won or lost from this point on, what is the expected value of the bet in chips?",
+        "calculation": {
+          "kind": "foldEquity",
+          "pot": 100,
+          "betSize": 50,
+          "foldProbability": 0.5,
+          "equityWhenCalled": 0.3
+        },
+        "field": "ev",
+        "unit": "chips",
+        "tolerance": 6,
+        "explanation": "Split it into the two branches and weight them. When they fold, you collect the pot as it stands. When they call, you are playing a showdown for the pot plus their call, and losing your bet when you miss. Add the two branches in proportion to how often each happens. Treat the assumption that the hand ends here as part of the model: in a real hand there is another street, and it can cut either way."
+      },
+      {
+        "kind": "numeric",
+        "id": "fold-equity-q3",
+        "prompt": "Identical spot and identical cards, but your opponent is far more stubborn: assume they now fold only 20 times in 100, with your equity when called unchanged. What is the expected value of the same bet in chips?",
+        "calculation": {
+          "kind": "foldEquity",
+          "pot": 100,
+          "betSize": 50,
+          "foldProbability": 0.2,
+          "equityWhenCalled": 0.3
+        },
+        "field": "ev",
+        "unit": "chips",
+        "tolerance": 6,
+        "explanation": "The only input that changed is a claim about a person. Compute it and compare with your previous answer, then ask which of the two fold frequencies you could actually defend at a table - because that, and not the arithmetic, is where the uncertainty in this decision lives. Running the numbers twice like this is the honest way to handle an input you are guessing at."
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "fold-equity-q4",
+        "prompt": "You increase your bet size with a pure bluff. What happens to how often the bluff needs to work?",
+        "options": [
+          "It needs to work less often, because the bet is scarier",
+          "It needs to work more often, because you are risking more to win the same pot",
+          "It is unchanged, because the pot is unchanged",
+          "It depends only on your opponent"
+        ],
+        "correctIndex": 1,
+        "explanation": "The break-even fold frequency is your bet divided by the pot plus your bet. Increasing the bet increases the numerator faster than it increases the pot you stand to win, so the required success rate rises. A bigger bluff may well get more folds in practice, but it also has to.",
+        "optionNotes": [
+          "Larger bets may get more folds, but the question is how many folds are needed, and that requirement goes up.",
+          "Correct: risking more for the same prize raises the frequency at which the bluff breaks even.",
+          "The pot is unchanged, which is precisely why risking more changes the requirement.",
+          "Your opponent determines how often they actually fold; the arithmetic determines how often they need to."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "fold-equity-q5",
+        "prompt": "Which input in a fold-equity calculation deserves the most scepticism?",
+        "options": [
+          "The size of the pot",
+          "The size of your bet",
+          "How often your opponent folds",
+          "The arithmetic of the formula"
+        ],
+        "correctIndex": 2,
+        "explanation": "The pot is a fact and your bet is your own choice. Your equity when called is an estimate, but at least it is an estimate about cards. The fold frequency is a claim about how a particular person will respond to a particular bet, and there is no way to look it up. That is why the useful habit is to compute the decision twice, with a pessimistic and an optimistic figure, and see whether your conclusion survives both.",
+        "optionNotes": [
+          "The pot is countable and not in dispute.",
+          "Your bet is whatever you decide to make it.",
+          "Correct: it is a guess about a human being, and it usually carries the whole conclusion.",
+          "The arithmetic is the most reliable part; the inputs are where the risk is."
+        ]
+      }
+    ],
+    "reviewAdvice": "The pair of numeric questions is the point of this quiz: same cards, same size, different assumption about a person, and possibly a different conclusion. If that lands, you have the habit worth having - state the fold frequency you are assuming, out loud, and check whether your play still makes sense if you are wrong about it. Betting because a bet feels strong is the alternative, and it is much more expensive."
+  },
+  {
+    "id": "quiz-bet-sizing",
+    "title": "Choosing a size",
+    "topic": "bet-sizing-and-spr",
+    "lessonId": "bet-sizing",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "bet-sizing-q1",
+        "prompt": "What is a value bet trying to achieve?",
+        "options": [
+          "To get called by hands worse than yours",
+          "To fold out hands worse than yours",
+          "To find out whether you are ahead",
+          "To make the pot as large as possible"
+        ],
+        "correctIndex": 0,
+        "explanation": "A value bet wants a call from a worse hand, which makes the best size the largest one that worse hands will still pay. That is a question about your opponent and the board rather than about how strong your hand feels to you.",
+        "optionNotes": [
+          "Correct: value comes from calls by hands you beat.",
+          "Folding out worse hands wins you nothing you were not already going to win.",
+          "Information is a by-product, and a costly one to buy on purpose.",
+          "Pot size is a means, not a goal; a size nobody calls builds no pot at all."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "bet-sizing-q2",
+        "prompt": "The pot is 100 and you bet 50, so your opponent must call 50 into a pot of 150. What share of the time does your size require them to win for calling to break even?",
+        "calculation": { "kind": "potOdds", "pot": 150, "toCall": 50 },
+        "field": "breakEvenEquity",
+        "unit": "percent",
+        "tolerance": 1.5,
+        "explanation": "This is the same fraction as the pot-odds lesson, computed from the other side of the table: their call, over the pot once their call is in. The point of doing it as the bettor is that the answer is something you chose. Work out what your size demands before you make it, rather than afterwards."
+      },
+      {
+        "kind": "numeric",
+        "id": "bet-sizing-q3",
+        "prompt": "Same pot of 100, but this time you overbet to 200, so they must call 200 into a pot of 300. What share of the time does this size require them to win?",
+        "calculation": { "kind": "potOdds", "pot": 300, "toCall": 200 },
+        "field": "breakEvenEquity",
+        "unit": "percent",
+        "tolerance": 1.5,
+        "explanation": "Compare with your previous answer. Same board, same hand, same opponent: the only difference is the number you chose, and it changed what their draw has to be worth. That is the lever. Remember the other edge of it - the larger size also means that if you were bluffing, the bluff has to work more often."
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "bet-sizing-q4",
+        "prompt": "What is the problem with betting large when you are strong and small when you are weak?",
+        "options": [
+          "Nothing; it maximises value and minimises losses",
+          "Your size announces your hand, so your opponent can play close to perfectly without seeing your cards",
+          "Large bets are against the rules on some streets",
+          "It makes the pot too big to control"
+        ],
+        "correctIndex": 1,
+        "explanation": "The scheme works right up until someone notices. Once a size reliably reveals your holding, your opponent gets to make correct decisions every time without any information about your cards, which costs you more than the sizing could ever earn. The fix is to choose sizes from the situation, so that one size covers several different holdings.",
+        "optionNotes": [
+          "It does maximise value against opponents who are not paying attention, which is why it survives so long as a habit.",
+          "Correct: a readable size hands over the information your cards were supposed to be hiding.",
+          "There is no rule limiting size beyond your own stack.",
+          "Pot control is a real consideration and not the main flaw in this scheme."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "bet-sizing-q5",
+        "prompt": "You intend to have your whole stack in by the river. How should that affect your flop size?",
+        "options": [
+          "It should not; each street is a separate decision",
+          "Work backwards from the river, since flop and turn sizes determine whether the stacks arrive smoothly or awkwardly",
+          "Always bet the maximum on the flop to get it over with",
+          "Bet small on the flop so that you have more chips left later"
+        ],
+        "correctIndex": 1,
+        "explanation": "Bets are measured against the pot, so they compound: today's size sets tomorrow's pot. If you know where you want to end up, you can pick sizes that get there without a final bet that is either a fraction of the pot or more than anyone has left. Planning this on the flop is far easier than discovering it on the river.",
+        "optionNotes": [
+          "Streets are connected by the pot, which carries your last decision into the next one.",
+          "Correct: plan the sizes as a sequence, because the pot compounds.",
+          "Betting the maximum immediately throws away the streets on which they could have called more in total.",
+          "Chips left over are not the goal; arriving at the river with a workable relationship between pot and stack is."
+        ]
+      }
+    ],
+    "reviewAdvice": "The two numeric questions are worth redoing until the fraction is instant, because a size you have not priced is a size you have not chosen. The deeper habit is asking what a bet is for before asking how big it should be. If your answer to 'what is this bet trying to do' is ever 'I have a good hand', that is the gap this lesson is aimed at."
+  },
+  {
+    "id": "quiz-stack-to-pot-ratio",
+    "title": "Depth changes the hand",
+    "topic": "bet-sizing-and-spr",
+    "lessonId": "stack-to-pot-ratio",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "spr-q1",
+        "prompt": "You have 500 behind and your opponent has 120 behind. Which figure belongs in the stack-to-pot ratio?",
+        "options": ["500", "120", "620", "The average of the two"],
+        "correctIndex": 1,
+        "explanation": "The effective stack is the smaller of the two, because neither player can win or lose more than the shorter stack holds. Your extra chips are not in play in this hand, however comforting they look.",
+        "optionNotes": [
+          "Your own stack only matters up to what your opponent can match.",
+          "Correct: the smaller stack is the effective one and the only one that can change hands.",
+          "The total of both stacks is never at risk; each of you can only lose what you have.",
+          "Averaging has no basis. The binding constraint is the smaller number."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "spr-q2",
+        "prompt": "You reach the flop with a pot of 20, and the shorter of the two stacks has 60 behind. What is the stack-to-pot ratio?",
+        "calculation": { "kind": "spr", "effectiveStack": 60, "pot": 20 },
+        "field": "spr",
+        "unit": "ratio",
+        "tolerance": 0.2,
+        "explanation": "Divide what is left behind by what is already in the middle. Then translate the answer into bets: roughly how many pot-sized bets fit into what remains? That translation is what makes the number useful, because it tells you how many real decisions are still ahead."
+      },
+      {
+        "kind": "numeric",
+        "id": "spr-q3",
+        "prompt": "Same flop and the same pot of 20, but this time the shorter stack has 260 behind. What is the stack-to-pot ratio now?",
+        "calculation": { "kind": "spr", "effectiveStack": 260, "pot": 20 },
+        "field": "spr",
+        "unit": "ratio",
+        "tolerance": 0.5,
+        "explanation": "Compare with the previous answer, then ask what changes about a hand like top pair between the two. Nothing about the cards or the board differs; what differs is how many streets of pressure the hand has to survive and how large the eventual mistake can be. That is why stack depth belongs in any sentence about how strong a hand is."
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "spr-q4",
+        "prompt": "Assuming the stacks can realistically all go in, which type of hand gains the most as the stack-to-pot ratio rises?",
+        "options": [
+          "Top pair with a weak kicker",
+          "A hand that rarely makes something, but makes something enormous when it does",
+          "Any two high cards",
+          "Hands that are already the best hand on the flop"
+        ],
+        "correctIndex": 1,
+        "explanation": "Deeper stacks mean a larger payoff when a hand does arrive, which is exactly what a hand with big implied odds needs: it must lose small most of the time and win large occasionally, and only a deep stack makes the large win possible. The stated assumption matters, though - if the money will never actually go in, the implied odds are imaginary.",
+        "optionNotes": [
+          "Top pair with a weak kicker gets worse as depth rises, since it must survive more streets against a range that includes better versions of itself.",
+          "Correct: a big payoff needs chips behind to be paid from.",
+          "High cards without connectivity often make second-best hands, which is what deep stacks punish.",
+          "Being best on the flop is worth most when the hand is nearly over, which is a low ratio, not a high one."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "spr-q5",
+        "prompt": "What mainly determines the stack-to-pot ratio you will play the flop with?",
+        "options": [
+          "The board texture",
+          "How large the preflop pot became relative to the stacks, which comes from raise sizes and the number of callers",
+          "Who has position",
+          "Whether anyone has a made hand"
+        ],
+        "correctIndex": 1,
+        "explanation": "The ratio is arithmetic on the preflop pot and the remaining stacks, so it is decided by preflop raise sizing and by how many players came along. That makes it a choice rather than an accident: raise more and you are choosing a simpler, more committed postflop game, and keep the pot small and you are choosing one with more decisions left in it.",
+        "optionNotes": [
+          "Texture changes how much your hand is worth on the flop, not how much money is behind.",
+          "Correct: preflop pot size against stack size, which you influence directly.",
+          "Position changes how you use the ratio, not what the ratio is.",
+          "Made hands are unrelated to the arithmetic of chips behind versus chips in the middle."
+        ]
+      }
+    ],
+    "reviewAdvice": "The habit worth building is translating the ratio into bets: about one pot-sized bet left, or about four, or about twelve. That translation tells you what the hand is going to feel like before it happens. If the fourth question required a guess, revisit the deep-stack section of the lesson and pay attention to how the stated assumption - that the money can actually go in - carries the whole argument."
+  },
+  {
+    "id": "quiz-ranges-and-combos",
+    "title": "Counting what they can have",
+    "topic": "ranges",
+    "lessonId": "ranges-and-combos",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "ranges-q1",
+        "prompt": "How many two-card combinations of ace-king exist in a full deck, counting both suited and offsuit?",
+        "options": ["Sixteen", "Twelve", "Eight", "Four"],
+        "correctIndex": 0,
+        "explanation": "There are four ways to hold it suited, one for each suit. Offsuit, there are four suits for the ace and three remaining suits for the king. Add those together for the total. The same method gives six for any specific pair and twelve for any specific offsuit class.",
+        "optionNotes": [
+          "Correct: four suited plus twelve offsuit.",
+          "Twelve is the offsuit count on its own, which forgets the suited combinations.",
+          "Eight has no natural derivation here; it is the sort of number that appears when the suits are counted once instead of in pairs.",
+          "Four is the suited count on its own."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "ranges-q2",
+        "prompt": "You hold the ace of clubs. Your opponent's range includes ace-king. How many combinations of ace-king can they now have?",
+        "options": ["Sixteen", "Fifteen", "Twelve", "Four"],
+        "correctIndex": 2,
+        "explanation": "They cannot hold a card you are holding. Removing the four combinations that used the ace of clubs - one with each king - leaves the rest. This is what a blocker does: it removes combinations from their range without changing anything about how they play.",
+        "optionNotes": [
+          "Sixteen is the count before your own cards are taken into account.",
+          "Fifteen removes only one combination, which is the natural slip: your single ace blocks four holdings, not one.",
+          "Correct: four of the sixteen used your exact card.",
+          "Four is what would remain if you somehow blocked three-quarters of them, which one card cannot do."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "ranges-q3",
+        "prompt": "The board is Qh 7h 2c and you hold Qs. If your opponent's range includes a pair of queens, how many combinations of it are left?",
+        "options": ["Six", "Three", "One", "Zero"],
+        "correctIndex": 2,
+        "explanation": "Six combinations exist in the abstract. The queen on the board removes every combination containing it, leaving three. Your own queen removes the combinations containing that one too, and only a single pairing of the two unseen queens survives. The hand you were most worried about has become close to impossible, and only counting could tell you so.",
+        "optionNotes": [
+          "Six is the count before removing any visible cards, and two queens are visible here.",
+          "Three is the count after removing the board queen but before removing your own - a very common place to stop.",
+          "Correct: two queens are visible, so one combination of the remaining two is left.",
+          "Zero would require three queens to be accounted for; only two are."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "ranges-q4",
+        "prompt": "Why is deciding against a range better than deciding against your best guess at their exact hand?",
+        "options": [
+          "Because you can then be certain what they have",
+          "Because you make one decision that has to work against everything consistent with their action, weighted by how often each turns up",
+          "Because ranges are always narrow enough to be precise",
+          "Because it removes the need to estimate anything"
+        ],
+        "correctIndex": 1,
+        "explanation": "You only get one decision, and it has to face their whole range. Planning against a single holding makes you occasionally right and confidently wrong the rest of the time, whereas a decision made against the set is approximately right against all of it. Range thinking does not remove uncertainty; it puts the uncertainty in the right place, where you can reason about it.",
+        "optionNotes": [
+          "Certainty is not available and range thinking does not claim to provide it.",
+          "Correct: one decision, made against the whole set of holdings their action is consistent with.",
+          "Ranges are often wide, and pretending otherwise is the error the technique is designed to prevent.",
+          "Estimation is still required: which holdings belong in the set, and how often each is played."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "ranges-q5",
+        "prompt": "You hold 8h 8d, the flop is Kc 7h 2s, and your opponent turns over As Qd. With two cards to come, what share of the pot is your hand worth against that exact holding?",
+        "calculation": {
+          "kind": "equity",
+          "heroCards": "8h8d",
+          "board": "Kc7h2s",
+          "opponents": ["AsQd"]
+        },
+        "field": "heroEquity",
+        "unit": "percent",
+        "tolerance": 5,
+        "explanation": "Count what could beat you and how many cards deliver it, remembering that two cards are still coming and that some runouts help them in ways a quick count misses. Then note what this question quietly assumes: one exact holding. Against a range containing that hand alongside stronger and weaker ones, the answer would be different, and in a real hand you would be estimating rather than computing. Treat a single-hand equity as a reference point, not as the answer to the decision."
+      }
+    ],
+    "reviewAdvice": "The counting questions are the ones to redo until they are automatic, because the arithmetic is small and the intuition is unreliable - six, four, twelve and sixteen do most of the work. The last question is a reminder of the limitation: everything here is exact against one holding and only an estimate against a range, which is the honest state of the art rather than a shortcoming of this app."
+  },
+  {
+    "id": "quiz-variance",
+    "title": "When correct decisions lose",
+    "topic": "variance-and-bankroll",
+    "lessonId": "variance",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "variance-q1",
+        "prompt": "You have lost with the same profitable call nine times out of ten. What follows?",
+        "options": [
+          "The call was wrong",
+          "Nothing about the call; a call needing a quarter and delivering a third loses most of the time by design",
+          "You are due for it to hold up soon",
+          "You should stop making that call"
+        ],
+        "correctIndex": 1,
+        "explanation": "Most profitable calls lose more often than they win. They only have to win more often than the price demands, and ten repetitions is far too few to tell those two things apart. What can be reviewed is whether the price and the range assumption were right, and nine losses tell you nothing about either.",
+        "optionNotes": [
+          "This grades a decision by its results, which is the habit variance exists to break.",
+          "Correct: losing most of the time is compatible with gaining chips every time you call.",
+          "Being 'due' is false. The deck keeps no account of what it has dealt you.",
+          "Stopping would mean abandoning a decision because of noise, which is how a small sample turns into a permanent leak."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "variance-q2",
+        "prompt": "Assume a genuine win rate of 5 big blinds per 100 hands and a standard deviation of 100 big blinds per 100 hands. Over 10,000 hands, what share of samples does the model say finish below break-even - that is, show a loss for a player whose every decision was profitable?",
+        "calculation": {
+          "kind": "variance",
+          "winRateBbPer100": 5,
+          "standardDeviationBbPer100": 100,
+          "hands": 10000
+        },
+        "field": "probabilityOfLoss",
+        "unit": "percent",
+        "tolerance": 5,
+        "explanation": "Two scaling laws decide this. The expected result adds up block by block, so it grows with the number of hundred-hand blocks in the sample; the spread grows only with the square root of that number, because variances add and deviations do not. Compare the two at this sample length before you compute, and you will already know whether the answer is going to be small or uncomfortably large. Then read the result as a statement about samples rather than about players: the same real edge produces winning and losing stretches this long. Note also that the win rate and the standard deviation are both assumptions here - in real life you would be estimating those too, which widens the uncertainty rather than narrowing it."
+      },
+      {
+        "kind": "numeric",
+        "id": "variance-q3",
+        "prompt": "Now assume a win rate of 3 big blinds per 100 hands with a standard deviation of 90 big blinds per 100 hands, over 100,000 hands. In big blinds, how far from its expectation does the model say a sample that long typically lands - that is, the standard deviation of the total result?",
+        "calculation": {
+          "kind": "variance",
+          "winRateBbPer100": 3,
+          "standardDeviationBbPer100": 90,
+          "hands": 100000
+        },
+        "field": "standardDeviationBb",
+        "unit": "chips",
+        "tolerance": 60,
+        "explanation": "The sample is a thousand blocks of 100 hands, and the deviation per block is given. Deviations do not add across blocks - variances do - so the total spread grows with the square root of the number of blocks rather than with the number itself. Work that multiplier out before you compute anything. Then hold the answer next to the expected result over the same stretch and notice which of the two is larger: that comparison, and not either figure on its own, is why a graph covering this many hands can still be read several different ways. An ordinary upswing flatters a modest edge just as thoroughly as a downswing buries it."
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "variance-q4",
+        "prompt": "Which of these is the most reliable way to tell a broken process from bad luck?",
+        "options": [
+          "Look at the graph over your most recent few thousand hands",
+          "Review a sample of your decisions against the price and the range you assumed at the time, looking for repeated categories of error",
+          "Count how many times your draws came in compared with what you expected",
+          "Ask whether you feel like you are playing well"
+        ],
+        "correctIndex": 1,
+        "explanation": "Results are the noisiest evidence available, so audit the inputs instead. Take a sample of decisions that is not selected by outcome, reconstruct the price and the assumption behind each, and look for patterns rather than disasters. Three calls that all ignored reverse implied odds is a finding; one brutal river is not.",
+        "optionNotes": [
+          "A few thousand hands is well inside the range where the graph could show almost anything.",
+          "Correct: sample decisions, not outcomes, and look for repeated categories.",
+          "Draw frequencies do converge faster than money, but they say nothing about whether your decisions were right.",
+          "Feeling is worth noticing and is not evidence; it is also strongly influenced by the recent results you are trying to see past."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "variance-q5",
+        "prompt": "You have just had an excellent week. What is the appropriate response?",
+        "options": [
+          "Conclude that your recent adjustments are working",
+          "Review your decisions with the same scepticism you would use after a bad week, since variance flatters as easily as it punishes",
+          "Increase your stakes to take advantage of the run",
+          "Nothing: good results need no explanation"
+        ],
+        "correctIndex": 1,
+        "explanation": "Variance is symmetric, and an upswing is exactly as uninformative as a downswing of the same length. Reviewing after good results is rarer and more valuable precisely because nothing is prompting you to do it, and it is when a genuine leak is most likely to be mistaken for a strength.",
+        "optionNotes": [
+          "A week is far too short to attribute to an adjustment, however satisfying the story is.",
+          "Correct: review with the same scepticism in both directions.",
+          "Treating a short run as evidence of an edge is the same error as treating a bad run as evidence of a leak, in the direction that costs more.",
+          "Good results need explanation just as much as bad ones, and are far less likely to receive it."
+        ]
+      }
+    ],
+    "reviewAdvice": "The numeric questions are here to be surprising rather than difficult: the noise at these sample sizes is large enough to contain almost any story you might want to tell. If you take one habit away, make it auditing decisions rather than results, in both directions. And if a question about being 'due' still felt tempting, that instinct is worth naming clearly - it is the most reliably expensive thought in the game."
+  },
+  {
+    "id": "quiz-sample-size-and-risk-of-ruin",
+    "title": "Samples, bankrolls and buffers",
+    "topic": "variance-and-bankroll",
+    "lessonId": "sample-size-and-risk-of-ruin",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "ror-q1",
+        "prompt": "You want to halve the uncertainty around your measured win rate. Roughly how many more hands does that take?",
+        "options": ["Twice as many", "Four times as many", "Ten times as many", "It cannot be reduced"],
+        "correctIndex": 1,
+        "explanation": "Uncertainty shrinks with the square root of the sample, so cutting it in half requires four times the hands, and dividing it by ten requires a hundred times as many. This is the arithmetic behind every honest statement about sample size, and it is why the answer to 'am I a winning player' is so often 'not enough hands yet'.",
+        "optionNotes": [
+          "Twice the hands reduces uncertainty by a factor of about 1.4, not 2.",
+          "Correct: the square root means halving the uncertainty costs a fourfold sample.",
+          "Ten times the hands divides uncertainty by a bit over three, which is much better than halving and much more expensive.",
+          "It does reduce, just slowly, which is a different and more frustrating problem than being impossible."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "ror-q2",
+        "prompt": "Using the standard risk-of-ruin model with a fixed win rate of 3 big blinds per 100 hands, a standard deviation of 90 big blinds per 100 hands, and a bankroll of 1000 big blinds played without ever changing stakes: what is the probability of losing the entire bankroll? Use the lesson's calculator if the exponential is awkward by hand.",
+        "calculation": {
+          "kind": "riskOfRuin",
+          "bankrollBb": 1000,
+          "winRateBbPer100": 3,
+          "standardDeviationBbPer100": 90
+        },
+        "field": "probability",
+        "unit": "percent",
+        "tolerance": 5,
+        "explanation": "The model puts twice the win rate times the bankroll over the squared standard deviation into a negative exponential, so the whole answer turns on how the edge compares with the square of the swings. Before reading the result, guess whether a bankroll of that size sounds safe to you, then see what the model says. The gap between the two is the lesson. Remember that every assumption behind the formula - fixed edge, normal results, no stake changes, no tilt - pushes the real risk higher than the figure shown."
+      },
+      {
+        "kind": "numeric",
+        "id": "ror-q3",
+        "prompt": "Same edge and same standard deviation, but with three times the bankroll: 3000 big blinds. What is the probability of ruin now?",
+        "calculation": {
+          "kind": "riskOfRuin",
+          "bankrollBb": 3000,
+          "winRateBbPer100": 3,
+          "standardDeviationBbPer100": 90
+        },
+        "field": "probability",
+        "unit": "percent",
+        "tolerance": 3,
+        "explanation": "Bankroll sits in the exponent, so tripling it does not divide the risk by three - it does something considerably more dramatic. Compare with your previous answer, and note that tripling the win rate instead would have produced exactly the same figure, because bankroll and win rate enter the exponent in precisely the same way. One of those two is usually much easier to arrange than the other."
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "ror-q4",
+        "prompt": "In the risk-of-ruin formula, doubling which quantity has the largest effect on the answer, with the other two held fixed?",
+        "options": ["The bankroll", "The win rate", "The standard deviation", "All three have equal effect"],
+        "correctIndex": 2,
+        "explanation": "Bankroll and win rate both appear linearly in the exponent, so doubling either has the same effect and both reduce risk. The standard deviation appears squared, so doubling it changes the exponent by a factor of four - and in the harmful direction. That is why choosing a lower-variance game can do more for survival than improving your edge, which is an unglamorous conclusion that most players would rather not reach.",
+        "optionNotes": [
+          "Doubling the bankroll doubles the exponent's magnitude in the helpful direction, which is powerful but not the largest effect here.",
+          "Doubling the win rate does exactly what doubling the bankroll does, no more.",
+          "Correct: the standard deviation is squared, so it moves the exponent by a factor of four.",
+          "They are not equal, and the inequality is the most useful fact in the formula."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "ror-q5",
+        "prompt": "Which statement about the risk-of-ruin model is honest?",
+        "options": [
+          "It gives the probability that you will go broke",
+          "It gives a probability under strong assumptions - fixed edge, normally distributed results, no change of stakes, no tilt, and playing for ever - each of which makes the real risk higher",
+          "It proves that bankroll management is unnecessary with a big enough edge",
+          "It applies only to tournaments"
+        ],
+        "correctIndex": 1,
+        "explanation": "The model's value is in its shape rather than its decimals: risk falls exponentially with bankroll and edge, and rises with the square of the variance. Its assumptions are all optimistic ones, so treat the output as a lower bound on risk and a way of comparing scenarios, not as a forecast about you.",
+        "optionNotes": [
+          "It gives a probability inside a model, which is a narrower and more useful claim.",
+          "Correct: strong assumptions, all of them flattering.",
+          "The formula says the opposite - the buffer is one of only two levers, and the more available one.",
+          "The same arithmetic applies to any repeated wager with an edge and a spread, cards or otherwise."
+        ]
+      }
+    ],
+    "reviewAdvice": "The two numeric questions are meant to be run as a pair, because the interesting thing is not either figure but how much the second differs from the first. If the square-root rule for sample size and the squared standard deviation in the exponent both feel solid, you have the two facts that matter. And keep the framing in view: nothing here involves money, so this is a model of how edges and swings interact, which happens to describe a great many decisions that have nothing to do with cards."
+  },
+  {
+    "id": "quiz-tournament-chips-and-icm",
+    "title": "When chips stop being units",
+    "topic": "tournaments",
+    "lessonId": "tournament-chips-and-icm",
+    "questions": [
+      {
+        "kind": "multipleChoice",
+        "id": "icm-q1",
+        "prompt": "Why do tournament chips stop converting to value at a fixed rate once a payout schedule exists?",
+        "options": [
+          "Because chips are worth less when there are fewer players left",
+          "Because your stack converts to an expected share of a fixed prize pool, and that conversion flattens as the stack grows",
+          "Because the blinds go up",
+          "Because tournament chips cannot be won back once lost"
+        ],
+        "correctIndex": 1,
+        "explanation": "Doubling a very short stack helps a great deal, because being nearly out is very bad. Doubling an already large stack helps much less, because you cannot finish better than first and first place does not pay more when you have more chips. That downward-bending curve is the origin of every other tournament adjustment.",
+        "optionNotes": [
+          "The number of players left changes the shape of the curve but is not why the curve is curved.",
+          "Correct: a fixed prize pool means the value of extra chips flattens as the stack grows.",
+          "Rising blinds make stacks shallower, which is a separate effect and would happen even in a winner-take-all format.",
+          "Chips can be won back; what cannot be recovered is elimination, which is a consequence of the curve rather than the cause."
+        ]
+      },
+      {
+        "kind": "numeric",
+        "id": "icm-q2",
+        "prompt": "Blinds are 1 and 2. A player with exactly 10 big blinds moves all in, everyone folds, and you are in the big blind with 2 already posted, so calling costs 8 more. The pot contains 13: their 10, your 2 and the small blind's 1. In pure chip terms, what share of the time do you need to win for calling to break even?",
+        "calculation": { "kind": "potOdds", "pot": 13, "toCall": 8 },
+        "field": "breakEvenEquity",
+        "unit": "percent",
+        "tolerance": 2,
+        "explanation": "This is ordinary pot-odds arithmetic: what you must add, over what the pot holds once you have added it. Compute it, then hold on to it for the next question - because in a tournament this figure is a floor rather than the requirement. Chips and prize equity are different currencies, and this calculation is done entirely in the first one."
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "icm-q3",
+        "prompt": "In a tournament that pays several places, how does the equity you actually need to call an all-in compare with the chip break-even figure you just computed?",
+        "options": [
+          "It is the same, because chips are chips",
+          "You need more, because losing eliminates you and elimination costs more in prize terms than the chips you stand to win are worth",
+          "You need less, because winning the pot is worth extra",
+          "It cannot be compared at all"
+        ],
+        "correctIndex": 1,
+        "explanation": "The chips you can win are worth less each than the chips you can lose, so a call that is exactly break-even in chips loses prize equity when your tournament life is at stake. How much more you need depends on the payout schedule and on the other stacks, which is why it is a shape rather than a fixed markup you can memorise. In the special case of a winner-take-all structure, the two figures coincide, because then chips really are linear.",
+        "optionNotes": [
+          "Chips are chips in a cash game. A payout schedule is exactly what breaks that.",
+          "Correct: you need more than the chip figure, by an amount the schedule and stacks decide.",
+          "Winning is worth less per chip than losing costs, not more, which is the whole asymmetry.",
+          "They compare perfectly well; the chip figure is the floor and the prize requirement sits above it."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "icm-q4",
+        "prompt": "Why does a very short stack's preflop strategy collapse into all-in or fold?",
+        "options": [
+          "Because aggression is rewarded in tournaments",
+          "Because a stack that small cannot support later decisions: a small raise leaves nothing to play with and folding to a re-raise wastes chips it cannot spare",
+          "Because the rules restrict short stacks",
+          "Because all-in is always the highest-equity play"
+        ],
+        "correctIndex": 1,
+        "explanation": "It is a consequence of stack depth rather than a style. Raising a quarter of your stack and folding to a re-raise throws away chips you need; raising a quarter and calling the rest is moving all in with extra steps and less fold equity. The decision tree loses its branches, which incidentally makes short-stack play the most analysable part of tournaments.",
+        "optionNotes": [
+          "Aggression is a description of the resulting strategy, not the reason for it.",
+          "Correct: the stack is too small to hold branches, so two options remain.",
+          "No rule treats short stacks differently; only the arithmetic does.",
+          "All-in is not always best - folding is frequently better, and which is which depends on assumptions about how often opponents call."
+        ]
+      },
+      {
+        "kind": "multipleChoice",
+        "id": "icm-q5",
+        "prompt": "What does the independent chip model leave out?",
+        "options": [
+          "The size of the prize pool",
+          "Position, blind levels, skill differences and how the next few hands will actually be played",
+          "The number of players remaining",
+          "The stack sizes"
+        ],
+        "correctIndex": 1,
+        "explanation": "ICM estimates finishing chances from stack sizes and the prize schedule alone. Everything about how the chips will actually be contested is absent: who has position on whom, how large the blinds are relative to the stacks, and the fact that some players are better than others. That makes it a useful first approximation whose direction you can trust further than its decimals.",
+        "optionNotes": [
+          "The prize pool is a direct input; the model cannot function without it.",
+          "Correct: it uses stacks and prizes, and nothing about how the game is played.",
+          "The number of players left is part of the calculation.",
+          "Stack sizes are the model's main input."
+        ]
+      }
+    ],
+    "reviewAdvice": "The pair to hold together is the second and third questions: the chip arithmetic is exact and it is only the floor. If you can explain why a coin flip for your tournament life loses prize equity in a structure that pays more than one place, and also say what ICM does not know, you have the honest version of this topic. Keep the framing in mind too - this lab awards nothing of value, so the payout schedule here is arithmetic to reason about rather than anything at stake."
+  }
+]

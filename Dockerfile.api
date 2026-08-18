@@ -1,0 +1,244 @@
+# ---------------------------------------------------------------------------
+# Container image for apps/api (the Fastify server).
+#
+# ## The base image is pinned by digest
+#
+# `node:24.18.0-bookworm-slim` is a tag, and a tag is repointed every time the
+# upstream image is rebuilt for a base-OS patch. That is usually a good thing and
+# occasionally the delivery mechanism for something else, and either way it means
+# two builds of this file at different times are not the same build. The digest
+# below is the multi-arch OCI index for that tag (linux/amd64, linux/arm64/v8,
+# linux/ppc64le), captured 2026-08-17.
+#
+# To refresh it (no Docker daemon required, and it does not pull the image):
+#
+#     TOKEN=$(curl -s 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/node:pull' \
+#       | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>process.stdout.write(JSON.parse(d).token))")
+#     curl -sI -H "Authorization: Bearer $TOKEN" \
+#       -H 'Accept: application/vnd.oci.image.index.v1+json' \
+#       -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
+#       https://registry-1.docker.io/v2/library/node/manifests/24.18.0-bookworm-slim \
+#       | grep -i docker-content-digest
+#
+# With the daemon: `docker buildx imagetools inspect node:24.18.0-bookworm-slim`.
+# Keep the human-readable tag in the reference as well as the digest, so a reader
+# can see which version they are looking at without resolving the hash.
+#
+# ## No `# syntax=` directive
+#
+# Adding one would make every build download a Dockerfile frontend image from a
+# mutable tag before it does anything else. Nothing here needs a feature outside
+# the built-in frontend, so the trade is easy: no directive, no extra mutable
+# dependency in the build path.
+#
+# ## Stage layout, and why it is not "install, build, prune"
+#
+#   base       bare pinned image. The runtime stage descends from this, so pnpm
+#              and corepack shims never reach the shipped image.
+#   toolchain  base + corepack. Every build stage descends from this.
+#   source     toolchain + the whole build context.
+#   prod-deps  a `--prod` install, then the sources pruned away. Runtime
+#              dependencies and manifests only.
+#   build      a full install (typescript and @types are devDependencies), then
+#              `tsc`.
+#   runtime    prod-deps' /app, with the compiled dist directories laid over it.
+#
+# Two alternatives were tried and rejected, both for reasons worth knowing:
+#
+#   1. **One install, build, then `pnpm install --prod` to prune.** pnpm 11
+#      responds to a mode change by wanting to purge and rebuild node_modules
+#      wholesale: without a TTY it aborts with
+#      ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY, and with `CI=true` set instead
+#      it silently re-downloads the entire tree. Two independent installs from the
+#      same lockfile are cheaper — BuildKit runs them in parallel — and far easier
+#      to reason about.
+#
+#   2. **Copying each workspace package.json by name before the sources**, the
+#      usual trick for keeping the dependency layer cached across source edits.
+#      It does not survive here. pnpm-workspace.yaml sets
+#      `verifyDepsBeforeRun: error`, so pnpm compares the workspace structure
+#      against the last install before running any script — and the moment
+#      somebody adds a `packages/*`, the hand-written COPY list is one project
+#      short and every build fails with ERR_PNPM_VERIFY_DEPS_BEFORE_RUN
+#      ("the workspace structure has changed since last install"). That happened
+#      during the writing of this file, which is how it is worded so confidently.
+#      The list is a latent build break waiting on somebody else's commit, so
+#      there is no list: `COPY . .` and pay ~12 seconds of install on every source
+#      change. Correctness first; the cache was worth less than the trap.
+#
+# ## Why the runtime stage copies prod-deps' whole /app
+#
+# `nodeLinker: isolated` (pnpm-workspace.yaml) means node_modules is a farm of
+# relative symlinks into `node_modules/.pnpm`. Those links only resolve if the
+# directory structure is reproduced at the same path, which is why every stage
+# uses /app and why the runtime copies the tree in one piece rather than
+# cherry-picking package directories. Cherry-picking also fails open: the day
+# somebody adds a runtime dependency to `packages/poker-engine`, a hand-written
+# list of COPY lines quietly ships an image that cannot resolve it. Copying
+# prod-deps' /app wholesale means new dependencies are included automatically.
+#
+# What that tree contains besides node_modules: the workspace package.json files
+# (Node needs them for `"type": "module"` and the `exports` maps), the lockfile,
+# pnpm-workspace.yaml and .npmrc. No secrets — .npmrc holds only registry URLs,
+# and .dockerignore excludes `.env` and `.env.*` from the build context entirely
+# (verified against the committed .dockerignore).
+#
+# ## What is deliberately NOT in the image
+#
+# TypeScript sources, tests, tsconfigs, the web app's source, and
+# `apps/api/scripts/` — all removed by the prune in the prod-deps stage. Because
+# that prune is a deny list rather than an allow list, its worst failure is an
+# image slightly larger than necessary, never a broken one.
+#
+# Migrations are therefore run from the host (`pnpm run db:migrate`) rather than
+# from this container. If you want them run in-cluster instead, add
+# `COPY --from=build /app/apps/api/scripts /app/apps/api/scripts` to the runtime
+# stage — and expect a review conversation about giving the serving container
+# schema-change rights.
+#
+# ## Signals
+#
+# There is no dumb-init or tini in here, and no package was added for one.
+# `docker run --init` / `init: true` in docker-compose.yml supplies Docker's own
+# PID 1, which reaps zombies and forwards SIGTERM. See the comment in
+# docker-compose.yml.
+# ---------------------------------------------------------------------------
+
+FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS base
+WORKDIR /app
+
+FROM base AS toolchain
+# corepack activates the exact pnpm named in the root package.json's
+# `packageManager` field, and verifies it against the sha256 recorded there. That
+# is the whole reason this is corepack and not `npm i -g pnpm`.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
+RUN corepack enable
+
+# ---------------------------------------------------------------------------
+# source: the whole build context.
+#
+# .dockerignore already keeps node_modules, dist, .next, coverage, .git, docs,
+# *.md and — importantly — .env and .env.* out of it, so this is source plus
+# manifests and nothing sensitive. Verified against the committed .dockerignore.
+# ---------------------------------------------------------------------------
+FROM toolchain AS source
+COPY . .
+
+# ---------------------------------------------------------------------------
+# prod-deps: runtime dependencies for the API and its workspace dependencies.
+#
+# `--filter "@prl/api..."` is "@prl/api and everything it depends on", which
+# excludes apps/web and packages/ui — this image has no business containing Next
+# or React. `--ignore-scripts` is belt and braces: pnpm-workspace.yaml already
+# sets `ignoreScripts: true`, and passing the flag means the build does not
+# depend on that file continuing to say so.
+# ---------------------------------------------------------------------------
+FROM source AS prod-deps
+RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@prl/api..."
+# Everything the runtime does not execute. A deny list, so its worst case is a
+# slightly fat image rather than a missing module: node_modules and every
+# package.json stay, because Node needs them to resolve `"type": "module"` and the
+# `exports` maps. `packages/content/data` also stays — the compiled content
+# package reads its authored JSON from disk at runtime.
+RUN rm -rf \
+      apps/*/src apps/*/test apps/*/scripts apps/*/public \
+      packages/*/src packages/*/test \
+      apps/*/tsconfig.json packages/*/tsconfig.json tsconfig.base.json \
+      biome.json db .github scripts Dockerfile.api Dockerfile.web docker-compose.yml
+
+# ---------------------------------------------------------------------------
+# build: full install, then compile.
+#
+# NODE_ENV is deliberately NOT production in this stage. pnpm treats
+# NODE_ENV=production as an implicit `--prod`, which would omit typescript and
+# @types/node and break the build with a confusing "cannot find name 'process'".
+# ---------------------------------------------------------------------------
+FROM source AS build
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter "@prl/api..."
+# One recursive, topologically-ordered build: each workspace dependency emits its
+# dist/*.d.ts before the package that consumes it is compiled. Filtering to
+# "@prl/api..." rather than running `build:packages` matters — the latter includes
+# packages/ui, whose typecheck needs the React types that this filtered install
+# deliberately left out.
+RUN pnpm --filter "@prl/api..." run build
+# Reduce this stage to exactly what the runtime stage should lay over prod-deps:
+# every package's `dist/` (and packages/content/data), and apps/api/dist. The
+# node_modules go first and they MUST go — this stage's tree is a FULL install, and
+# copying it over prod-deps' would silently reinstate typescript and every @types
+# package in the shipped image, undoing the entire point of having two installs.
+#
+# Deleting here rather than listing what to keep in the runtime stage is the whole
+# fix for a defect this file used to have: the runtime stage named each package's
+# dist in a hand-written COPY line, and the day apps/api gained a dependency on
+# @prl/poker-ai the list was one line short. The image built, passed every layer
+# check, and died at boot with ERR_MODULE_NOT_FOUND on
+# /app/apps/api/node_modules/@prl/poker-ai/dist/index.js — the "fails open" failure
+# this file's own header warns about, in this file. A deny list here and one
+# directory-wide COPY below means a new workspace package is included automatically.
+RUN rm -rf \
+      packages/*/node_modules packages/*/src packages/*/test packages/*/tsconfig.json \
+      apps/api/node_modules apps/api/src apps/api/test apps/api/scripts apps/api/tsconfig.json
+
+# ---------------------------------------------------------------------------
+# runtime
+# ---------------------------------------------------------------------------
+FROM base AS runtime
+
+# NODE_ENV=production only here, where nothing installs. PORT is the contract
+# with docker-compose.yml and the healthcheck below.
+#
+# HOST=0.0.0.0 is not a convenience, it is the difference between a container that
+# serves traffic and one that does not. `config.ts` defaults HOST to 127.0.0.1 — the
+# right default for a dev server on a laptop, and wrong for every container, because a
+# process listening on loopback inside its own network namespace is unreachable from
+# the compose network and from a published port. Setting it here rather than only in
+# docker-compose.yml means `docker run` of this image is correct too, and it mirrors
+# HOSTNAME=0.0.0.0 in Dockerfile.web. 0.0.0.0 is safe precisely because the network
+# namespace, not the bind address, is the isolation boundary; the port is only
+# reachable where something publishes or routes it.
+#
+# An operator who genuinely wants loopback-only (a sidecar sharing a namespace) sets
+# HOST back to 127.0.0.1 and the healthcheck below will still be honest about it.
+ENV NODE_ENV=production \
+    PORT=3001 \
+    HOST=0.0.0.0
+
+COPY --from=prod-deps --chown=node:node /app /app
+# Two directory-wide copies, not a per-package list. COPY merges into an existing
+# directory, so prod-deps' node_modules symlink farm survives underneath and the
+# compiled output lands on top of it.
+#
+# packages/ carries every workspace package's dist/ — whichever packages those are
+# today — plus packages/content/data, which stays because content keeps its authored
+# JSON outside src/ (tsc will not emit a file from above rootDir) and the compiled
+# dist reads it from disk at runtime. Without it every content route 500s on a
+# missing glossary.
+COPY --from=build --chown=node:node /app/packages /app/packages
+COPY --from=build --chown=node:node /app/apps/api/dist /app/apps/api/dist
+
+# uid/gid 1000, present in the official Node images. Never root: a process that
+# cannot write to its own code cannot be persuaded to modify it.
+USER node
+
+EXPOSE 3001
+
+# `node -e` rather than curl or wget, because neither is in bookworm-slim and
+# adding one to run a healthcheck is a new package in the runtime image for no
+# reason. Exec form, so there is no shell in the probe either.
+#
+# The probe targets `os.hostname()`, NOT 127.0.0.1. Docker resolves a container's own
+# hostname to its address on the container network, so this asks the question that
+# matters — "is the server reachable at the address other containers and the published
+# port use?" — instead of the weaker "is something listening on loopback?". A probe on
+# 127.0.0.1 reports healthy for a server bound to 127.0.0.1, which is exactly the
+# failure mode that shipped: healthy, and unreachable from anywhere. This probe fails
+# for that configuration, so a missing HOST cannot masquerade as a working service.
+#
+# start-period covers migration waits and connection-pool warm-up; the interval
+# is deliberately unhurried, because a healthcheck that polls hard is a load
+# generator pointed at your own service.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["node", "-e", "fetch(`http://${require('node:os').hostname()}:${process.env.PORT ?? 3001}/api/v1/health`).then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+
+CMD ["node", "apps/api/dist/server.js"]

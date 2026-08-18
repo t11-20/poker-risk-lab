@@ -1,0 +1,120 @@
+/**
+ * The route chrome the Lab and Review screens share: the page opener, the breadcrumb, the
+ * "this came from a fixture" notice, and the sibling-route links at the foot.
+ *
+ * ## Why these four are here and not in `globals.css`
+ *
+ * `globals.css` owns the app *shell* — the sticky header, the two navigations, the theme control,
+ * the footer — and it says so at the top: "a route's own patterns live in a stylesheet the route
+ * imports, so that two people editing two features are never editing the same file." A page's
+ * opening block is a route pattern, not shell.
+ *
+ * ## Why they are not in `lab.css` or `review.css` either
+ *
+ * They were, in `lab.css`, and that was wrong in a way only the browser showed: the Review routes
+ * import `review.css` and never `lab.css`, so a breadcrumb and a fixture notice on
+ * `/review/hand-0042` rendered completely unstyled — the classes existed in the markup and nowhere
+ * in the cascade. Anything two route groups both use has to live where both of them import it, and
+ * this file is that place.
+ *
+ * Four rules is small enough that a fifth stylesheet is worth it; the alternative was the same
+ * block copied into two files, which is how two screens stop looking like one product.
+ *
+ * Same rules as everywhere else: every value is a `--prl-*` token, no shadows, and any border that
+ * carries meaning uses `--prl-line-strong` or the accent rather than the decorative hairline.
+ */
+
+/* ==========================================================================================
+   THE PAGE OPENER
+   ==========================================================================================
+   Eyebrow, `h1`, standfirst — in that order, with one hairline under the block. Every route needs
+   the same opening rhythm, and a page that invents its own heading spacing is how two routes end
+   up looking like two products.
+   ========================================================================================== */
+
+.prl-page-head {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: var(--prl-space-5);
+  padding-block: var(--prl-space-11) var(--prl-space-9);
+  border-block-end: var(--prl-hairline);
+}
+
+.prl-page-head__title {
+  margin: 0;
+}
+
+.prl-page-head__standfirst {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  line-height: var(--prl-leading-body);
+}
+
+/** The trail back up. Quiet, and never the only way out of a page — see `.prl-page-nav`. */
+.prl-crumb {
+  color: var(--prl-accent-text);
+  text-decoration: none;
+}
+
+.prl-crumb:hover {
+  text-decoration: underline;
+}
+
+/* ==========================================================================================
+   THE FIXTURE NOTICE
+   ==========================================================================================
+   Shown on every screen that rendered without the API. Deliberately quiet — a hairline and a
+   label, not a warning tone: rendering from a fixture is a normal state during the build-out, and
+   a yellow banner on every page would train a reader to stop reading it. What it must never be is
+   absent: a reviewer looking at a number is entitled to know whether a server produced it.
+   ========================================================================================== */
+
+.prl-source-note {
+  display: block;
+  margin-block: var(--prl-space-6) 0;
+  padding: var(--prl-space-5) var(--prl-space-6);
+  border: var(--prl-hairline);
+  /* A left rule at the focus width, so the note reads as an aside rather than as a panel. */
+  border-inline-start: var(--prl-focus-width) solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-raised);
+}
+
+.prl-source-note .prl-label {
+  margin-inline-end: var(--prl-space-4);
+}
+
+/* ==========================================================================================
+   SIBLING ROUTES
+   ==========================================================================================
+   The links at the foot of a page. A flex row with a real gap: without one the anchors run
+   together into "All handsScenario Lab", which is what happens when a `<nav>` of bare links has
+   no layout at all.
+   ========================================================================================== */
+
+.prl-page-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-4) var(--prl-space-7);
+  margin-block: var(--prl-space-11);
+  padding-block-start: var(--prl-space-6);
+  border-block-start: var(--prl-hairline);
+}
+
+.prl-page-nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--prl-target-min);
+  color: var(--prl-accent-text);
+  font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label);
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.prl-page-nav a:hover {
+  text-decoration: underline;
+}

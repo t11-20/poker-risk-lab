@@ -1,0 +1,158 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.7/schema.json",
+  "vcs": { "enabled": false, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/dist",
+      "!**/.next",
+      "!**/coverage",
+      "!**/*.tsbuildinfo",
+      "!apps/web/next-env.d.ts",
+      "!docs/sbom/*.json",
+      "!pnpm-lock.yaml"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 110,
+    "lineEnding": "lf"
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "jsxQuoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always",
+      "bracketSpacing": true
+    },
+    "globals": []
+  },
+  "json": {
+    "formatter": { "enabled": true, "indentWidth": 2 }
+  },
+  "css": {
+    "formatter": { "enabled": true, "indentWidth": 2 },
+    "linter": { "enabled": true }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        "noExcessiveCognitiveComplexity": { "level": "warn", "options": { "maxAllowedComplexity": 24 } },
+        "useLiteralKeys": "off"
+      },
+      "correctness": {
+        "noUnusedVariables": "error",
+        "noUnusedImports": "error",
+        "noUnusedFunctionParameters": "error",
+        "useExhaustiveDependencies": "error",
+        "noUndeclaredDependencies": "error",
+        "noPrivateImports": "error"
+      },
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noConsole": { "level": "error", "options": { "allow": ["error", "warn", "info", "log"] } },
+        "noDebugger": "error",
+        "noEmptyBlockStatements": "error",
+        "noArrayIndexKey": "error",
+        "noDoubleEquals": "error",
+        "noMisrefactoredShorthandAssign": "error",
+        "useAwait": "error",
+        "useErrorMessage": "error",
+        "useNumberToFixedDigitsArgument": "error"
+      },
+      "style": {
+        "noNonNullAssertion": "error",
+        "useConst": "error",
+        "useBlockStatements": "off",
+        "noParameterAssign": "error",
+        "useAsConstAssertion": "error",
+        "useDefaultParameterLast": "error",
+        "useEnumInitializers": "error",
+        "useSelfClosingElements": "error",
+        "useSingleVarDeclarator": "error",
+        "noUnusedTemplateLiteral": "error",
+        "useNumberNamespace": "error",
+        "noInferrableTypes": "error",
+        "noUselessElse": "error",
+        "useThrowOnlyError": "error",
+        "useConsistentArrayType": { "level": "error", "options": { "syntax": "shorthand" } },
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "crypto": "Import from 'node:crypto' so the module source is unambiguous.",
+              "assert": "Import from 'node:assert/strict'."
+            }
+          }
+        }
+      },
+      "performance": {
+        "noAccumulatingSpread": "error",
+        "noDelete": "error"
+      },
+      "security": {
+        "noDangerouslySetInnerHtml": "error",
+        "noGlobalEval": "error"
+      },
+      "a11y": {
+        "preset": "recommended",
+        "useSemanticElements": "error",
+        "useFocusableInteractive": "error",
+        "useAriaPropsForRole": "error",
+        "useValidAriaValues": "error",
+        "noStaticElementInteractions": "error",
+        "useButtonType": "error"
+      },
+      "nursery": { "preset": "none" }
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": { "source": { "organizeImports": "on", "useSortedKeys": "off" } }
+  },
+  "overrides": [
+    {
+      "includes": ["packages/poker-engine/**/*.ts", "packages/poker-math/**/*.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noConsole": "error",
+            "noBitwiseOperators": "off"
+          },
+          "complexity": {
+            "noExcessiveCognitiveComplexity": {
+              "level": "warn",
+              "options": { "maxAllowedComplexity": 40 }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["scripts/**/*.mjs"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noConsole": "off" },
+          "correctness": { "noNodejsModules": "off", "noUndeclaredDependencies": "off" },
+          "complexity": { "noExcessiveCognitiveComplexity": "off" }
+        }
+      }
+    },
+    {
+      "includes": ["**/test/**/*.ts", "**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noConsole": "off" },
+          "complexity": { "noExcessiveCognitiveComplexity": "off" }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,190 @@
+# ---------------------------------------------------------------------------
+# Container image for apps/web (the Next.js client).
+#
+# Read the header of Dockerfile.api first: the base-image digest, the reason
+# there is no `# syntax=` directive, the stage layout, the "two installs beat
+# install-then-prune" decision, the reason the manifests are NOT copied one by one
+# (`verifyDepsBeforeRun: error` turns a stale COPY list into a hard build failure
+# the day somebody adds a package), and the symlink-farm constraint that forces
+# every stage to live at /app are all explained there and all apply identically
+# here. This header only covers what is different about the web image.
+#
+# ## The base image digest
+#
+# Same image, same digest, same refresh command as Dockerfile.api. When you
+# refresh one, refresh both — an api and a web container built on different
+# base-OS patch levels is a debugging trap for whoever is on call.
+#
+#     node:24.18.0-bookworm-slim
+#     sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
+#     multi-arch OCI index (linux/amd64, linux/arm64/v8, linux/ppc64le)
+#     captured 2026-08-17
+#
+# ## Why the runtime runs `next start` through the workspace bin shim
+#
+# `next start` needs the `next` package, which is a production dependency, so it
+# is present in the prod-deps tree. It is invoked as
+# /app/apps/web/node_modules/.bin/next — pnpm writes a small executable wrapper
+# there that resolves the real entry point. Hard-coding the path inside
+# node_modules/.pnpm instead would embed the peer-dependency hash pnpm appends to
+# that directory name (`next@16.3.0_@types+node@…_react@…`), which changes
+# whenever a peer moves. The shim is the stable name.
+#
+# Note what this is NOT: `pnpm start`. Running pnpm at container start would fire
+# `verifyDepsBeforeRun: error` (pnpm-workspace.yaml), re-verifying the whole
+# dependency tree against the lockfile on every boot — slow, and guaranteed to
+# fail on an image that has deliberately had its sources removed.
+#
+# ## If the web app ever sets `output: 'standalone'`
+#
+# Next's standalone build emits `.next/standalone/server.js` with a minimal,
+# self-contained node_modules and is the better shape for a container. It has to
+# be enabled in the web app's own next.config, which this file does not own. If
+# and when that lands, replace the runtime stage's CMD with
+# `["node", "apps/web/.next/standalone/apps/web/server.js"]`, copy
+# `.next/static` and `public` into the standalone tree as Next's docs describe,
+# and delete the prod-deps copy from this stage — it stops being needed.
+#
+# ## The runtime working directory is the web app, not the repo root
+#
+# `next start` has no `--dir` in its argv here, so it resolves BOTH `next.config.*`
+# and `.next/` relative to the process working directory. The base stage sets
+# `WORKDIR /app` (the repo root, which is where the symlink farm has to live for the
+# builds), and a runtime stage that inherits it looks for `/app/.next` — which does
+# not exist, because the build output is at `/app/apps/web/.next`. The container then
+# exits 1 with "Could not find a production build in the '.next' directory" and
+# crash-loops under compose's `restart: unless-stopped`; the image itself is fine.
+#
+# The tell, if this ever regresses: the boot log says "Running next.config took Nms"
+# instead of "Running next.config.ts took Nms". From the wrong directory Next finds no
+# config file either, and reports the generic name.
+#
+# So the runtime stage sets `WORKDIR /app/apps/web` explicitly. It is set AFTER the
+# COPYs on purpose — every COPY destination below is absolute, but a reader should not
+# have to check that to know the copies are unaffected. `working_dir:` in
+# docker-compose.yml would fix the compose path only, and leave `docker run` broken;
+# this belongs to the image.
+#
+# ## Writable paths
+#
+# `next start` writes to `.next/cache` (ISR revalidation, the image optimiser).
+# The build cache is stripped from the image on purpose — it is build-time state,
+# not runtime state, and it is large. With a read-only root filesystem the
+# directory has to come back as a tmpfs; docker-compose.yml mounts one at
+# /app/apps/web/.next/cache and explains why. Without that mount, a read-only
+# container will serve pages but log EROFS on the first revalidation.
+# ---------------------------------------------------------------------------
+
+FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS base
+WORKDIR /app
+
+FROM base AS toolchain
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
+RUN corepack enable
+
+# .dockerignore keeps node_modules, dist, .next, coverage, .git, docs, *.md and
+# .env* out of the context, so this is source and manifests only.
+FROM toolchain AS source
+COPY . .
+
+# `--filter "@prl/web..."` is the web app plus its workspace dependencies, so
+# Fastify, @fastify/* and postgres never enter this image.
+FROM source AS prod-deps
+RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@prl/web..."
+# A deny list, as in Dockerfile.api: worst case a fat image, never a broken one.
+# `packages/ui/src` goes here with everything else and is put back from the build
+# stage below — @prl/ui is consumed as source, so keeping the prune uniform and
+# restoring the one exception is better than a hand-maintained package list.
+RUN rm -rf \
+      apps/*/src apps/*/test apps/*/scripts \
+      packages/*/src packages/*/test \
+      apps/*/tsconfig.json packages/*/tsconfig.json tsconfig.base.json \
+      biome.json db .github scripts Dockerfile.api Dockerfile.web docker-compose.yml
+
+FROM source AS build
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter "@prl/web..."
+
+# The `/api/*` rewrite destination, and the ONLY build-time setting in this image.
+#
+# `next build` writes the resolved destination into .next/routes-manifest.json and
+# `next start` reads the manifest rather than re-running next.config.ts, so this is
+# genuinely frozen at build time — which is why it has its own name instead of reusing
+# PRL_API_ORIGIN, the variable the running server reads for its own fetches. One name
+# per lifetime; the last design gave one name two lifetimes and that is the defect
+# being repaired here.
+#
+# Leave it alone for a real deployment. A deployment routes /api/* at the proxy in
+# front of this container (docker-compose.yml, docs/RUNBOOK.md §11) and never reaches
+# the rewrite. Set it only for the case it exists for: `docker run` of this image on a
+# laptop whose API is somewhere other than localhost:3001, with no proxy in play.
+#
+#     docker build -f Dockerfile.web --build-arg PRL_API_REWRITE_ORIGIN=http://host.docker.internal:3001 .
+#
+# It is an origin, not a credential, so a value here in `docker history` is not a leak
+# — and next.config.ts refuses to start a production server if anyone tries to set it
+# as a runtime environment variable, because there it would do nothing at all.
+ARG PRL_API_REWRITE_ORIGIN=http://localhost:3001
+ENV PRL_API_REWRITE_ORIGIN=${PRL_API_REWRITE_ORIGIN}
+
+# Topological: the workspace packages emit their dist/*.d.ts, packages/ui
+# typechecks, then `next build` runs. @prl/ui is consumed as source and
+# transpiled by Next, which is why ui has no dist to copy later.
+RUN pnpm --filter "@prl/web..." run build
+# Reduce this stage to what the runtime should lay over prod-deps. Sources and
+# tsconfigs are not read by `next start`; .next/cache is build cache. Both
+# node_modules trees MUST go: this stage holds a FULL install, and letting it land on
+# top of prod-deps' would silently reinstate every devDependency in the shipped image.
+#
+# packages/ui/src is the one source tree that stays. @prl/ui resolves its `.` export
+# straight to src/index.ts, so the directory has to exist for the symlink in
+# apps/web/node_modules/@prl/ui to resolve if anything reads it at runtime.
+#
+# Pruning here, then copying /app/packages as one directory below, replaces a
+# hand-written per-package list of COPY lines. That list is a latent boot failure: the
+# day the app gains a dependency on a workspace package nobody adds to it, the image
+# builds cleanly and dies at startup with ERR_MODULE_NOT_FOUND. That is not
+# hypothetical — it happened to Dockerfile.api with @prl/poker-ai.
+RUN rm -rf apps/web/node_modules apps/web/src apps/web/tsconfig.json apps/web/.next/cache \
+      packages/*/node_modules packages/*/test packages/*/tsconfig.json \
+ && for pkg in packages/*/; do [ "$pkg" = 'packages/ui/' ] || rm -rf "${pkg}src"; done
+
+FROM base AS runtime
+
+# HOSTNAME matters: Next binds to localhost by default in some configurations,
+# and a server listening on 127.0.0.1 inside a container is unreachable from
+# outside it. 0.0.0.0 is correct here precisely because the container's network
+# namespace is the isolation boundary.
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+COPY --from=prod-deps --chown=node:node /app /app
+# Every workspace package's dist/ — whichever they are today — plus
+# packages/content/data and packages/ui/src. COPY merges into an existing directory,
+# so prod-deps' node_modules symlink farm survives underneath. See the prune above for
+# why this is one line and not one line per package.
+COPY --from=build --chown=node:node /app/packages /app/packages
+# Everything the built web app needs: .next, public, next.config.*, package.json.
+# Copied as one directory because the exact set (does public/ exist? is the
+# config .ts, .mjs or .js?) is the web app's business, not this file's — and a
+# COPY of a glob that matches nothing is a build failure, not a no-op.
+COPY --from=build --chown=node:node /app/apps/web /app/apps/web
+
+# `next start` resolves next.config.* and .next/ from here. See the header.
+WORKDIR /app/apps/web
+
+USER node
+
+EXPOSE 3000
+
+# `/` rather than a dedicated health route: the web app is a page server, and
+# "the home page renders" is the honest statement of its health. See
+# Dockerfile.api for why the probe is `node -e` and not curl, and why it targets
+# `os.hostname()` — the container's address on the container network — rather than
+# 127.0.0.1. Note that `os.hostname()` reads the kernel hostname and is therefore
+# unaffected by the HOSTNAME variable above, which is Next's bind address.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["node", "-e", "fetch(`http://${require('node:os').hostname()}:${process.env.PORT ?? 3000}/`).then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+
+CMD ["/app/apps/web/node_modules/.bin/next", "start"]
