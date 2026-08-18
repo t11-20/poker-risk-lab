@@ -76,6 +76,7 @@ import type {
 import { type Card, parseCards } from '@prl/poker-engine';
 import {
   computeOuts,
+  deriveLegalActions,
   evOfCall,
   evOfSemiBluff,
   exactRange,
@@ -312,7 +313,7 @@ function cardsOf(text: string): Card[] {
  * stall in the life of the process rather than one per request. If content ever grows a
  * top-percentage scenario, that is the line to revisit.
  */
-function coachTaskFor(scenario: Scenario): CoachTask {
+export function coachTaskFor(scenario: Scenario): CoachTask {
   const situation = readSituation(scenario);
   // Hero's own share of this street's commitments. `readSituation` folds every seat's
   // commitment into `pot` and does not report the per-seat split, but the Coach needs
@@ -322,6 +323,22 @@ function coachTaskFor(scenario: Scenario): CoachTask {
   // scenario, which is the same field `readSituation` sums.
   const heroSeat = scenario.seats.find((seat) => seat.isHero === true);
   const heroCommittedThisStreet = scenario.committedThisStreet?.[heroSeat?.seat ?? -1] ?? 0;
+  // A scenario is a described spot, so there is no `HandState` whose `legalActions` could
+  // be asked and the set is derived from the same four figures the Coach prices with. The
+  // rule that matters here is that a bet or raise is withheld when no opponent has chips
+  // behind: before this, the Coach analysed every scenario with no legality filter at all
+  // and headlined an all-in raise in spots where nobody was left to call one.
+  //
+  // `opponentStacks` is chips BEHIND, so an opponent who is all-in is a `0` here. A
+  // scenario whose prose says a seat moved all in but whose `stack` still equals what it
+  // committed does not reach that branch — that is a content-data question and this line
+  // reads whatever the bundle states.
+  const legalActions = deriveLegalActions({
+    toCall: situation.toCall,
+    heroCommittedThisStreet,
+    heroStack: situation.heroStack,
+    opponentStacks: situation.opponentStacks,
+  });
   return {
     kind: 'coach',
     spec: {
@@ -337,6 +354,7 @@ function coachTaskFor(scenario: Scenario): CoachTask {
     heroStack: situation.heroStack,
     opponentStacks: [...situation.opponentStacks],
     bigBlind: scenario.bigBlind,
+    legalActions,
     samples: CONTENT_SAMPLES,
     seed: CONTENT_SEED,
   };
@@ -730,6 +748,21 @@ export function consistencyOf(
     return {
       consistent: true,
       reasoning: `${action} is consistent with this analysis. ${chosen.derivation}${alsoSupported}${sizing}`,
+      claimsOneAction,
+    };
+  }
+  // Folding while a check is free is refused by the rule outright rather than on a margin, so it
+  // needs its own sentence: the generic one below quotes a shortfall in chips, and here the
+  // shortfall can legitimately be nearly nothing while the answer is still wrong. "You gave up the
+  // hand for nothing when staying in cost nothing" is the reason, and it is not an EV comparison.
+  if (chosen.action === 'fold' && verdict.availableActions.includes('check')) {
+    return {
+      consistent: false,
+      reasoning:
+        'fold is not consistent with this analysis, and this is the one case that does not come ' +
+        'down to a margin: you can check here for free. Checking keeps every card still to come ' +
+        'and costs nothing, so it is never behind folding however thin the hand is. What the ' +
+        `range assumption changes is whether betting would beat checking, not this.${alsoSupported}`,
       claimsOneAction,
     };
   }

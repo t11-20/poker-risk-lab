@@ -16,6 +16,11 @@
  * are what those functions produce today. It fails loudly rather than drifting quietly, and its
  * failure message is "regenerate the fixture", not "edit a number".
  *
+ * The remedy is `pnpm run fixtures:regenerate` (`scripts/regenerate-web-fixtures.mjs`).
+ * That script did not exist when this guard was written, which is exactly why the fixtures were
+ * left stale long enough to ship a rule-of-2-and-4 estimate of 1.6 — rendered to a learner as
+ * "160.0%". A check whose remedy is not executable is a check that gets left red.
+ *
  * ## Why the review fixture is rebuilt from reconstructed rows
  *
  * `buildHandReview` takes database rows, and the fixture is its output — the rows themselves were

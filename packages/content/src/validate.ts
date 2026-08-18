@@ -612,7 +612,15 @@ function validateScenarioSeat(problems: Problems, path: string, raw: unknown): S
   return {
     seat: requireInteger(problems, `${path}.seat`, raw['seat'], { min: 0, max: 5 }),
     label: requireString(problems, `${path}.label`, raw['label'], { max: 16 }),
-    stack: requireInteger(problems, `${path}.stack`, raw['stack'], { min: 1, max: 10_000_000 }),
+    // min 0, not 1. `stack` is chips BEHIND (see ScenarioSeat in @prl/contracts),
+    // so a seat that is all in has exactly 0 — and a floor of 1 made the only
+    // correct way to write an all-in opponent unrepresentable. That is not a
+    // hypothetical: five shipped scenarios described a seat as moving all in and
+    // then gave it its whole stack again as chips behind, which fed effectiveStack
+    // and every fold-equity figure derived from it. checkSituationCoherence below
+    // now REQUIRES 0 for a seat the scenario narrates as all in, so this is a
+    // narrower rule than the one it replaces, not a looser one.
+    stack: requireInteger(problems, `${path}.stack`, raw['stack'], { min: 0, max: 10_000_000 }),
     ...(typeof isHero === 'boolean' ? { isHero } : {}),
     ...(typeof holeCards === 'string' ? { holeCards } : {}),
     ...(typeof profile === 'string'
@@ -667,6 +675,348 @@ function validateScenarioClaim(problems: Problems, path: string, raw: unknown): 
   }
 }
 
+// ---------------------------------------------------------------------------
+// Scenario coherence
+//
+// Shape is not the interesting failure mode for a scenario. A scenario can be
+// perfectly shaped and still describe a table that cannot exist — and that kind of
+// defect is invisible in review, because the prose reads correctly and only the
+// numbers underneath it disagree.
+//
+// The release audit found exactly that. `rk-nine-big-blinds-call-or-fold` said
+// "the small blind moves all in for 7,200, which is their whole stack" and then
+// recorded that seat with 7,200 still BEHIND, so every figure derived from the
+// effective stack was computed against an opponent who had twice what they had.
+// It was titled "Nine big blinds" while giving hero 13.5 of them. Nothing failed.
+//
+// The checks below are the ones that can be made mechanically from what a scenario
+// already states about itself: the price against the committed chips, the stated
+// all-ins against the chips behind, the narrated bet sizes against the pot, and any
+// stack depth quoted in words against the blinds. Where a claim is not mechanically
+// checkable it is left alone rather than guessed at — a content gate that cries wolf
+// gets a blanket suppression, which is worse than not having it.
+// ---------------------------------------------------------------------------
+
+/** "moves all in for 7,200", "is all-in for 220". The comma is how the data writes it. */
+const ALL_IN_FOR = /all[-\s]?in for ([\d,]+)/gi;
+/** "bets 25 into a pot of 120", "bet 55 into 110", "leads out for 25 into a pot of 110". */
+const WAGER_INTO_POT =
+  /(?:bets?|leads out for|all[-\s]?in for)\s+([\d,]+)\s+into\s+(?:a pot of\s+)?([\d,]+)/gi;
+/** The scenario stating outright that hero's call is for everything. */
+const CALLING_IS_ALL_IN = /calling puts hero all[-\s]?in/i;
+
+/**
+ * A stack depth quoted in words: "Nine big blinds", "seventy blinds deep", "12 blinds".
+ *
+ * The quantity is the only capture. An optional group for the preceding qualifier
+ * looked tidier and was wrong: being greedy, it took "Nine" out of "Nine big blinds"
+ * and left "big" as the number, so the phrase this whole check exists for was the
+ * one it silently skipped. The word before the match is read separately, below.
+ */
+const STATED_DEPTH = /\b(\d+|[a-z]+(?:-[a-z]+)?)\s+(?:big\s+)?blinds?\b/gi;
+/** The word immediately before a match, which is what bounds it (if anything does). */
+const WORD_BEFORE = /([a-z-]+)[^a-z-]*$/i;
+const DEPTH_QUALIFIERS = new Set([
+  'under',
+  'over',
+  'about',
+  'roughly',
+  'around',
+  'nearly',
+  'almost',
+  'below',
+  'above',
+  'than',
+  'least',
+  'most',
+  'to',
+]);
+const NUMBER_WORDS: Readonly<Record<string, number>> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  sixty: 60,
+  seventy: 70,
+  eighty: 80,
+  ninety: 90,
+};
+
+/** The number a depth phrase names, or null when the token is not a number at all. */
+function readNumberToken(token: string): number | null {
+  if (/^\d+$/.test(token)) return Number(token);
+  const parts = token.toLowerCase().split('-');
+  let total = 0;
+  for (const part of parts) {
+    const value = NUMBER_WORDS[part];
+    if (value === undefined) return null;
+    total += value;
+  }
+  return total;
+}
+
+/** "7,200" as written in the prose -> 7200. */
+const readAmount = (text: string): number => Number(text.replace(/,/g, ''));
+
+interface SeatMoney {
+  readonly seat: ScenarioSeat;
+  /** What this seat has put in on the current street. */
+  readonly committed: number;
+  /** Chips at the start of the street: behind plus committed. */
+  readonly total: number;
+}
+
+function seatMoney(seats: readonly ScenarioSeat[], committed: Record<number, number>): SeatMoney[] {
+  return seats.map((seat) => {
+    const put = committed[seat.seat] ?? 0;
+    return { seat, committed: put, total: seat.stack + put };
+  });
+}
+
+const describeSeat = (money: SeatMoney): string =>
+  `seat ${money.seat.seat} (${money.seat.label}) has ${money.seat.stack} behind and ${money.committed} committed`;
+
+/**
+ * The price hero is being asked, against the chips actually on the table.
+ *
+ * `toCall` is the difference between the largest commitment and hero's own — it is
+ * not a free field. And hero cannot be asked for more than hero has behind, which
+ * is the check that would have caught a hero stack written as a total.
+ */
+function checkPrice(problems: Problems, path: string, money: readonly SeatMoney[], scenario: Scenario): void {
+  const hero = money.find((entry) => entry.seat.isHero === true);
+  if (hero === undefined) return;
+  const highest = Math.max(...money.map((entry) => entry.committed));
+  const owed = highest - hero.committed;
+
+  if (scenario.toCall !== owed) {
+    problems.add(
+      `${path}.toCall`,
+      `is ${scenario.toCall}, but the largest commitment this street is ${highest} and hero has ` +
+        `${hero.committed} in, so hero owes ${owed}`,
+    );
+  }
+  if (scenario.toCall > hero.seat.stack) {
+    problems.add(
+      `${path}.toCall`,
+      `is ${scenario.toCall}, which is more than hero has behind (${hero.seat.stack}). Either the price ` +
+        'or the stack is wrong; `stack` is chips behind, never a total.',
+    );
+  }
+  if (CALLING_IS_ALL_IN.test(scenario.facingAction) && scenario.toCall !== hero.seat.stack) {
+    problems.add(
+      `${path}.facingAction`,
+      `says calling puts hero all in, but hero has ${hero.seat.stack} behind and is only being asked ` +
+        `for ${scenario.toCall}`,
+    );
+  }
+}
+
+/**
+ * Every all-in the prose narrates, against the seat it must belong to.
+ *
+ * Nothing behind is what "all in" MEANS, so the seat that put in that amount has to
+ * have `stack: 0`. This is the check that fails on the defect the audit found.
+ */
+function checkNarratedAllIns(
+  problems: Problems,
+  path: string,
+  money: readonly SeatMoney[],
+  text: string,
+): void {
+  for (const match of text.matchAll(ALL_IN_FOR)) {
+    const amount = readAmount(match[1] ?? '');
+    const candidates = money.filter((entry) => entry.committed === amount);
+    if (candidates.length !== 1) {
+      problems.add(
+        `${path}.facingAction`,
+        `describes an all-in for ${amount}, but ${candidates.length} seat(s) have committed that ` +
+          `this street: ${money.map(describeSeat).join('; ')}`,
+      );
+      continue;
+    }
+    const [entry] = candidates;
+    if (entry !== undefined && entry.seat.stack !== 0) {
+      problems.add(
+        `${path}.seats`,
+        `${describeSeat(entry)}, but facingAction says that seat moved all in for ${amount}. A seat ` +
+          'that is all in has nothing behind: `stack` must be 0. As written, effectiveStack and every ' +
+          'fold-equity figure treat this opponent as able to call a bet they cannot.',
+      );
+    }
+  }
+}
+
+/** "bets N into a pot of M": N has to be somebody's commitment and M the pot before it. */
+function checkNarratedWagers(
+  problems: Problems,
+  path: string,
+  money: readonly SeatMoney[],
+  scenario: Scenario,
+): void {
+  for (const match of scenario.facingAction.matchAll(WAGER_INTO_POT)) {
+    const wager = readAmount(match[1] ?? '');
+    const pot = readAmount(match[2] ?? '');
+    if (!money.some((entry) => entry.committed === wager)) {
+      problems.add(
+        `${path}.facingAction`,
+        `describes a bet of ${wager}, but no seat has committed that this street: ` +
+          `${money.map(describeSeat).join('; ')}`,
+      );
+    }
+    if (pot !== scenario.potBeforeStreet) {
+      problems.add(
+        `${path}.facingAction`,
+        `says the bet went into a pot of ${pot}, but potBeforeStreet is ${scenario.potBeforeStreet}`,
+      );
+    }
+  }
+}
+
+/** Preflop: the blinds are posted, and nothing but antes can already be in the middle. */
+function checkPreflopPosting(
+  problems: Problems,
+  path: string,
+  money: readonly SeatMoney[],
+  scenario: Scenario,
+): void {
+  if (scenario.street !== 'preflop') return;
+  const antes = (scenario.ante ?? 0) * money.length;
+  if (scenario.potBeforeStreet !== antes) {
+    problems.add(
+      `${path}.potBeforeStreet`,
+      `is ${scenario.potBeforeStreet} on a preflop scenario. Nothing precedes the first betting round ` +
+        `except antes, which come to ${antes} here.`,
+    );
+  }
+  const posts: readonly (readonly [string, number])[] = [
+    ['SB', scenario.smallBlind],
+    ['BB', scenario.bigBlind],
+  ];
+  for (const [label, blind] of posts) {
+    for (const entry of money.filter((seat) => seat.seat.label === label)) {
+      if (entry.committed < blind) {
+        problems.add(
+          `${path}.committedThisStreet`,
+          `${describeSeat(entry)}, but a seat labelled ${label} has posted at least ${blind} preflop`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * A stack depth stated in words, against the blinds.
+ *
+ * A depth in the TITLE describes hero's spot — that is what a scenario title is —
+ * so it is checked against hero. One in the range label describes whoever the range
+ * belongs to, so any seat satisfies it. Both readings of a depth are accepted:
+ * chips behind, and chips at the start of the street. What is rejected is a number
+ * that matches neither, which is how "Nine big blinds" came to be worth 13.5 of them.
+ *
+ * Half a big blind of slack, because a title rounds and should be allowed to.
+ */
+function checkStatedDepth(
+  problems: Problems,
+  path: string,
+  money: readonly SeatMoney[],
+  scenario: Scenario,
+): void {
+  const inBlinds = (chips: number): number => chips / scenario.bigBlind;
+  const sources: readonly (readonly [string, string, readonly SeatMoney[]])[] = [
+    ['title', scenario.title, money.filter((entry) => entry.seat.isHero === true)],
+    [
+      'opponentRange.label',
+      scenario.opponentRange.kind === 'exact' ? '' : scenario.opponentRange.label,
+      money,
+    ],
+  ];
+
+  for (const [field, text, candidates] of sources) {
+    for (const match of text.matchAll(STATED_DEPTH)) {
+      const before = WORD_BEFORE.exec(text.slice(0, match.index))?.[1] ?? '';
+      // "under four big blinds each" describes two seats and names neither, so it
+      // is not a claim about any one stack and must not be read as one.
+      if (DEPTH_QUALIFIERS.has(before.toLowerCase())) continue;
+      const stated = readNumberToken(match[1] ?? '');
+      if (stated === null) continue;
+      const matches = candidates.some((entry) =>
+        [inBlinds(entry.seat.stack), inBlinds(entry.total)].some((depth) => Math.abs(depth - stated) < 0.5),
+      );
+      if (matches) continue;
+      problems.add(
+        `${path}.${field}`,
+        `says "${match[0].trim()}", but at a big blind of ${scenario.bigBlind} that is ${
+          stated * scenario.bigBlind
+        } chips and no ${field === 'title' ? 'hero stack' : 'seat'} here holds it: ` +
+          `${candidates.map((entry) => `${entry.seat.label} ${entry.seat.stack} behind / ${entry.total} total`).join('; ')}`,
+      );
+    }
+  }
+}
+
+/**
+ * Everything above, plus the two invariants that need no prose to check.
+ * Skipped entirely when the shape checks already failed: coherence errors derived
+ * from a scenario that has no hero would be noise on top of the real problem.
+ */
+function checkSituationCoherence(problems: Problems, path: string, scenario: Scenario): void {
+  const heroes = scenario.seats.filter((seat) => seat.isHero === true);
+  if (scenario.seats.length < 2 || heroes.length !== 1) return;
+
+  if (scenario.bigBlind <= scenario.smallBlind) {
+    problems.add(
+      `${path}.bigBlind`,
+      `is ${scenario.bigBlind}, which is not above the small blind of ${scenario.smallBlind}`,
+    );
+  }
+
+  const committed = scenario.committedThisStreet ?? {};
+  const seatNumbers = new Set(scenario.seats.map((seat) => seat.seat));
+  for (const key of Object.keys(committed)) {
+    if (!seatNumbers.has(Number(key))) {
+      problems.add(`${path}.committedThisStreet`, `seat ${key} is not at this table`);
+    }
+  }
+
+  const money = seatMoney(scenario.seats, committed);
+  for (const entry of money) {
+    // A seat with nothing behind and nothing in front of it is not in the hand,
+    // and it drags the effective stack to zero for everyone else.
+    if (entry.seat.stack === 0 && entry.committed === 0) {
+      problems.add(
+        `${path}.seats`,
+        `${describeSeat(entry)} — a seat with nothing behind and nothing committed is not in the hand`,
+      );
+    }
+  }
+
+  checkPrice(problems, path, money, scenario);
+  checkNarratedAllIns(problems, path, money, scenario.facingAction);
+  checkNarratedWagers(problems, path, money, scenario);
+  checkPreflopPosting(problems, path, money, scenario);
+  checkStatedDepth(problems, path, money, scenario);
+}
+
 function validateScenario(problems: Problems, path: string, raw: unknown): Scenario {
   if (!isRecord(raw)) {
     problems.add(path, `expected an object, got ${describe(raw)}`);
@@ -690,64 +1040,11 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
     validateScenarioSeat(problems, `${path}.seats[${index}]`, seat),
   );
 
-  if (seats.length < 2 || seats.length > 6) {
-    problems.add(`${path}.seats`, `needs 2 to 6 seats, has ${seats.length}`);
-  }
-  const seatNumbers = seats.map((seat) => seat.seat);
-  if (new Set(seatNumbers).size !== seatNumbers.length) {
-    problems.add(`${path}.seats`, 'two seats share the same seat number');
-  }
-  const heroes = seats.filter((seat) => seat.isHero === true);
-  if (heroes.length !== 1) {
-    problems.add(`${path}.seats`, `exactly one seat must have isHero: true, found ${heroes.length}`);
-  }
-  const hero = heroes[0];
-  if (hero !== undefined && (hero.holeCards === undefined || hero.holeCards === '')) {
-    problems.add(`${path}.seats`, 'the hero seat must have holeCards');
-  }
-
   const buttonSeat = requireInteger(problems, `${path}.buttonSeat`, raw['buttonSeat'], { min: 0, max: 5 });
-  if (seatNumbers.length > 0 && !seatNumbers.includes(buttonSeat)) {
-    problems.add(`${path}.buttonSeat`, `seat ${buttonSeat} is not one of the seats in this scenario`);
-  }
+  checkSeatSet(problems, path, seats, buttonSeat);
 
   const opponentRange = validateRangeSpec(problems, `${path}.opponentRange`, raw['opponentRange']);
-
-  // ---- the check that matters most: no card may appear twice ----
-  const seen = new Map<Card, string>();
-  const noteCards = (cards: readonly Card[], where: string): void => {
-    for (const card of cards) {
-      const existing = seen.get(card);
-      if (existing !== undefined) {
-        problems.add(path, `card appears twice — in ${existing} and in ${where}`);
-      } else {
-        seen.set(card, where);
-      }
-    }
-  };
-  noteCards(boardCards, 'the board');
-  const seatHoleCards: Card[][] = [];
-  for (const [index, seat] of seats.entries()) {
-    if (seat.holeCards === undefined || seat.holeCards === '') continue;
-    const cards = parseCardsSafely(problems, `${path}.seats[${index}].holeCards`, seat.holeCards);
-    if (cards.length !== 2) {
-      problems.add(`${path}.seats[${index}].holeCards`, `expected 2 cards, got ${cards.length}`);
-    }
-    seatHoleCards.push(cards);
-    noteCards(cards, `seat ${seat.seat}'s hole cards`);
-  }
-  if (opponentRange.kind === 'exact') {
-    const rangeCards = parseCardsSafely(problems, `${path}.opponentRange.cards`, opponentRange.cards);
-    // An exact opponent range normally RESTATES the cards already given on that
-    // opponent's seat — the same two cards described in two places, not two pairs of
-    // cards. Only treat them as additional (and therefore as a possible duplicate)
-    // when they do not match any seat's holding, which is the case that really is a
-    // content bug: an exact range naming cards nobody at the table holds.
-    const restatesASeat = seatHoleCards.some(
-      (cards) => cards.length === rangeCards.length && cards.every((card) => rangeCards.includes(card)),
-    );
-    if (!restatesASeat) noteCards(rangeCards, 'the opponent range');
-  }
+  checkNoCardAppearsTwice(problems, path, boardCards, seats, opponentRange);
 
   const claimsRaw = Array.isArray(raw['expectedInsight']) ? raw['expectedInsight'] : [];
   if (!Array.isArray(raw['expectedInsight'])) problems.add(`${path}.expectedInsight`, 'expected an array');
@@ -763,27 +1060,10 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
     );
   }
 
-  const committedRaw = raw['committedThisStreet'];
-  const committed: Record<number, number> = {};
-  if (isRecord(committedRaw)) {
-    for (const [key, value] of Object.entries(committedRaw)) {
-      const seat = Number(key);
-      if (!Number.isInteger(seat)) {
-        problems.add(`${path}.committedThisStreet`, `"${key}" is not a seat number`);
-        continue;
-      }
-      committed[seat] = requireInteger(problems, `${path}.committedThisStreet.${key}`, value, {
-        min: 0,
-        max: 10_000_000,
-      });
-    }
-  } else if (committedRaw !== undefined) {
-    problems.add(`${path}.committedThisStreet`, 'expected an object keyed by seat number');
-  }
-
+  const committed = readCommittedThisStreet(problems, path, raw['committedThisStreet']);
   const ante = raw['ante'];
 
-  return {
+  const scenario: Scenario = {
     id: requireContentId(problems, `${path}.id`, raw['id']),
     title: requireString(problems, `${path}.title`, raw['title'], { max: 120 }),
     topic: requireOneOf(problems, `${path}.topic`, raw['topic'], TOPICS),
@@ -817,6 +1097,107 @@ function validateScenario(problems: Problems, path: string, raw: unknown): Scena
       : {}),
     ...(Object.keys(committed).length > 0 ? { committedThisStreet: committed } : {}),
   };
+
+  // Last, and on the assembled record rather than on `raw`: every coherence check
+  // compares one validated field against another, so running them here means they
+  // can trust the types and say something specific about the situation instead of
+  // re-deriving it from unknowns.
+  checkSituationCoherence(problems, path, scenario);
+  return scenario;
+}
+
+/** Seat count, seat numbers, exactly one hero with cards, and a button that is at the table. */
+function checkSeatSet(
+  problems: Problems,
+  path: string,
+  seats: readonly ScenarioSeat[],
+  buttonSeat: number,
+): void {
+  if (seats.length < 2 || seats.length > 6) {
+    problems.add(`${path}.seats`, `needs 2 to 6 seats, has ${seats.length}`);
+  }
+  const seatNumbers = seats.map((seat) => seat.seat);
+  if (new Set(seatNumbers).size !== seatNumbers.length) {
+    problems.add(`${path}.seats`, 'two seats share the same seat number');
+  }
+  const heroes = seats.filter((seat) => seat.isHero === true);
+  if (heroes.length !== 1) {
+    problems.add(`${path}.seats`, `exactly one seat must have isHero: true, found ${heroes.length}`);
+  }
+  const hero = heroes[0];
+  if (hero !== undefined && (hero.holeCards === undefined || hero.holeCards === '')) {
+    problems.add(`${path}.seats`, 'the hero seat must have holeCards');
+  }
+  if (seatNumbers.length > 0 && !seatNumbers.includes(buttonSeat)) {
+    problems.add(`${path}.buttonSeat`, `seat ${buttonSeat} is not one of the seats in this scenario`);
+  }
+}
+
+/** The check that matters most: no card may appear twice across the board and the seats. */
+function checkNoCardAppearsTwice(
+  problems: Problems,
+  path: string,
+  boardCards: readonly Card[],
+  seats: readonly ScenarioSeat[],
+  opponentRange: RangeSpec,
+): void {
+  const seen = new Map<Card, string>();
+  const noteCards = (cards: readonly Card[], where: string): void => {
+    for (const card of cards) {
+      const existing = seen.get(card);
+      if (existing !== undefined) {
+        problems.add(path, `card appears twice — in ${existing} and in ${where}`);
+      } else {
+        seen.set(card, where);
+      }
+    }
+  };
+
+  noteCards(boardCards, 'the board');
+  const seatHoleCards: Card[][] = [];
+  for (const [index, seat] of seats.entries()) {
+    if (seat.holeCards === undefined || seat.holeCards === '') continue;
+    const cards = parseCardsSafely(problems, `${path}.seats[${index}].holeCards`, seat.holeCards);
+    if (cards.length !== 2) {
+      problems.add(`${path}.seats[${index}].holeCards`, `expected 2 cards, got ${cards.length}`);
+    }
+    seatHoleCards.push(cards);
+    noteCards(cards, `seat ${seat.seat}'s hole cards`);
+  }
+
+  if (opponentRange.kind !== 'exact') return;
+  const rangeCards = parseCardsSafely(problems, `${path}.opponentRange.cards`, opponentRange.cards);
+  // An exact opponent range normally RESTATES the cards already given on that
+  // opponent's seat — the same two cards described in two places, not two pairs of
+  // cards. Only treat them as additional (and therefore as a possible duplicate)
+  // when they do not match any seat's holding, which is the case that really is a
+  // content bug: an exact range naming cards nobody at the table holds.
+  const restatesASeat = seatHoleCards.some(
+    (cards) => cards.length === rangeCards.length && cards.every((card) => rangeCards.includes(card)),
+  );
+  if (!restatesASeat) noteCards(rangeCards, 'the opponent range');
+}
+
+/** `committedThisStreet` as a seat-keyed record, with every key and value checked. */
+function readCommittedThisStreet(problems: Problems, path: string, raw: unknown): Record<number, number> {
+  const committed: Record<number, number> = {};
+  if (raw === undefined) return committed;
+  if (!isRecord(raw)) {
+    problems.add(`${path}.committedThisStreet`, 'expected an object keyed by seat number');
+    return committed;
+  }
+  for (const [key, value] of Object.entries(raw)) {
+    const seat = Number(key);
+    if (!Number.isInteger(seat)) {
+      problems.add(`${path}.committedThisStreet`, `"${key}" is not a seat number`);
+      continue;
+    }
+    committed[seat] = requireInteger(problems, `${path}.committedThisStreet.${key}`, value, {
+      min: 0,
+      max: 10_000_000,
+    });
+  }
+  return committed;
 }
 
 function emptyScenario(): Scenario {
@@ -879,49 +1260,79 @@ export function validateContent(raw: RawContent): ContentBundle {
   assertUniqueIds(problems, 'quizzes', quizzes);
   assertUniqueIds(problems, 'scenarios', scenarios);
 
-  const glossaryIds = new Set(glossary.map((entry) => entry.id));
-  const lessonIds = new Set(lessons.map((lesson) => lesson.id));
-  const quizIds = new Set(quizzes.map((quiz) => quiz.id));
-  const scenarioIds = new Set(scenarios.map((scenario) => scenario.id));
-
-  const checkGlossaryRefs = (where: string, ids: readonly ContentId[]): void => {
-    for (const id of ids) {
-      if (!glossaryIds.has(id)) problems.add(where, `references glossary term "${id}", which does not exist`);
-    }
+  const known: KnownIds = {
+    glossary: new Set(glossary.map((entry) => entry.id)),
+    lessons: new Set(lessons.map((lesson) => lesson.id)),
+    quizzes: new Set(quizzes.map((quiz) => quiz.id)),
+    scenarios: new Set(scenarios.map((scenario) => scenario.id)),
   };
 
+  checkLessonReferences(problems, lessons, known);
+  checkQuizReferences(problems, quizzes, known);
+  checkGlossaryReferences(problems, glossary, scenarios, known);
+
+  detectPrerequisiteCycles(problems, lessons);
+  problems.throwIfAny();
+
+  return { version: raw.version, lessons, quizzes, scenarios, glossary };
+}
+
+/** The id sets every cross-reference check is resolved against. */
+interface KnownIds {
+  readonly glossary: ReadonlySet<ContentId>;
+  readonly lessons: ReadonlySet<ContentId>;
+  readonly quizzes: ReadonlySet<ContentId>;
+  readonly scenarios: ReadonlySet<ContentId>;
+}
+
+function checkGlossaryTerms(
+  problems: Problems,
+  known: KnownIds,
+  where: string,
+  ids: readonly ContentId[],
+): void {
+  for (const id of ids) {
+    if (!known.glossary.has(id)) {
+      problems.add(where, `references glossary term "${id}", which does not exist`);
+    }
+  }
+}
+
+function checkLessonReferences(problems: Problems, lessons: readonly Lesson[], known: KnownIds): void {
   for (const lesson of lessons) {
-    checkGlossaryRefs(`lesson "${lesson.id}".glossaryTerms`, lesson.glossaryTerms);
+    checkGlossaryTerms(problems, known, `lesson "${lesson.id}".glossaryTerms`, lesson.glossaryTerms);
     for (const prerequisite of lesson.prerequisites) {
-      if (!lessonIds.has(prerequisite)) {
+      if (!known.lessons.has(prerequisite)) {
         problems.add(
           `lesson "${lesson.id}".prerequisites`,
           `references lesson "${prerequisite}", which does not exist`,
         );
       }
     }
-    if (lesson.quizId !== undefined && !quizIds.has(lesson.quizId)) {
+    if (lesson.quizId !== undefined && !known.quizzes.has(lesson.quizId)) {
       problems.add(
         `lesson "${lesson.id}".quizId`,
         `references quiz "${lesson.quizId}", which does not exist`,
       );
     }
     for (const block of lesson.blocks) {
-      if (block.kind === 'scenarioLink' && !scenarioIds.has(block.scenarioId)) {
+      if (block.kind === 'scenarioLink' && !known.scenarios.has(block.scenarioId)) {
         problems.add(`lesson "${lesson.id}"`, `links scenario "${block.scenarioId}", which does not exist`);
       }
     }
   }
+}
 
+function checkQuizReferences(problems: Problems, quizzes: readonly Quiz[], known: KnownIds): void {
   for (const quiz of quizzes) {
-    if (quiz.lessonId !== undefined && !lessonIds.has(quiz.lessonId)) {
+    if (quiz.lessonId !== undefined && !known.lessons.has(quiz.lessonId)) {
       problems.add(
         `quiz "${quiz.id}".lessonId`,
         `references lesson "${quiz.lessonId}", which does not exist`,
       );
     }
     for (const question of quiz.questions) {
-      if (question.kind === 'decision' && !scenarioIds.has(question.scenarioId)) {
+      if (question.kind === 'decision' && !known.scenarios.has(question.scenarioId)) {
         problems.add(
           `quiz "${quiz.id}" question "${question.id}"`,
           `references scenario "${question.scenarioId}", which does not exist`,
@@ -929,23 +1340,24 @@ export function validateContent(raw: RawContent): ContentBundle {
       }
     }
   }
+}
 
+function checkGlossaryReferences(
+  problems: Problems,
+  glossary: readonly GlossaryEntry[],
+  scenarios: readonly Scenario[],
+  known: KnownIds,
+): void {
   for (const scenario of scenarios) {
-    checkGlossaryRefs(`scenario "${scenario.id}".glossaryTerms`, scenario.glossaryTerms);
+    checkGlossaryTerms(problems, known, `scenario "${scenario.id}".glossaryTerms`, scenario.glossaryTerms);
   }
-
   for (const entry of glossary) {
     for (const id of entry.seeAlso ?? []) {
-      if (!glossaryIds.has(id)) {
+      if (!known.glossary.has(id)) {
         problems.add(`glossary "${entry.id}".seeAlso`, `references "${id}", which does not exist`);
       }
     }
   }
-
-  detectPrerequisiteCycles(problems, lessons);
-  problems.throwIfAny();
-
-  return { version: raw.version, lessons, quizzes, scenarios, glossary };
 }
 
 function assertUniqueIds(problems: Problems, where: string, records: readonly { id: string }[]): void {

@@ -226,6 +226,30 @@ export type RangeSpec =
 export interface ScenarioSeat {
   readonly seat: number;
   readonly label: string;
+  /**
+   * Chips BEHIND: what this seat still has to put in, *after* whatever it has
+   * already committed on the current street. It is NOT the seat's total.
+   *
+   * So a seat's chips at the start of the street are
+   * `stack + (scenario.committedThisStreet?.[seat] ?? 0)`, and a seat that is all
+   * in has `stack: 0` — nothing behind is the definition of all in, and a
+   * jamming seat written with chips still behind is a content bug, not a
+   * shorthand. `validate.ts` enforces both readings against the scenario's own
+   * `facingAction` text.
+   *
+   * The distinction is load-bearing rather than pedantic. `readSituation` in
+   * @prl/content passes this straight to `effectiveStack`, and the Coach computes
+   * the largest legal raise as `heroCommittedThisStreet + heroStack` — which is
+   * the total only under this reading. Under the other one it would double-count
+   * every chip hero has already put in this street. The ambiguity has cost real
+   * time: the release audit filed a P0 against that Coach line, and the P0 was
+   * wrong, because the convention was never written down anywhere.
+   *
+   * The data has always meant this. In `foundations.json` every seat's
+   * `stack + committedThisStreet` comes to the round 1000 the scenarios are built
+   * on (990 + 10, 995 + 5), and `potBeforeStreet` equals the sum of what the
+   * seats are missing from it. Neither holds under the "total" reading.
+   */
   readonly stack: number;
   /** Only hero's cards are known to the learner. */
   readonly isHero?: boolean;

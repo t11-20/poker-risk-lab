@@ -4,12 +4,39 @@
  *
  *   node apps/api/scripts/migrate.mjs up [--allow-missing]
  *   node apps/api/scripts/migrate.mjs status
+ *   node apps/api/scripts/migrate.mjs down
+ *   node apps/api/scripts/migrate.mjs roles
  *   node apps/api/scripts/migrate.mjs seed
  *   node apps/api/scripts/migrate.mjs reset
  *
  * Dependency-free apart from `postgres` (porsager/postgres), which the API already
  * depends on. A migration runner that pulls in a framework to move some SQL
  * around is a second thing that can break on the day the first one does.
+ *
+ * ## Rollback: there is none, and that is a decision rather than an omission
+ *
+ * **This project is roll-forward only.** There are no `*.down.sql` files, `down`
+ * exists solely to say so, and nothing in this runner will ever undo an applied
+ * migration. The reasoning is the same one that makes an applied migration
+ * immutable: a `down` script is code that has, by construction, never run against
+ * the database it is one day asked to save, and the first time anybody executes it
+ * is the worst possible moment to find out it was wrong. A rollback also cannot
+ * restore data a forward migration dropped, so the rollback that operators
+ * actually need in that case is a restore from backup, not a `down` file that
+ * recreates an empty column.
+ *
+ * A policy is only real if something enforces it, so two things do:
+ *
+ *   * `down` is a **first-class command that refuses**, with the policy and the
+ *     alternatives in the message. A deploy pipeline that asks for a rollback gets
+ *     an answer, not `Unknown command "down"`, which reads like a version skew and
+ *     sends the operator looking for the wrong problem.
+ *   * `up` **refuses to apply a migration containing a destructive statement**
+ *     unless that file declares itself irreversible in as many words — see
+ *     `findIrreversibleStatements` below. Roll-forward-only is safe exactly as long
+ *     as migrations are additive; the day one is not, the person writing it has to
+ *     say so, which is when the two-release plan in docs/RUNBOOK.md §11.3 gets
+ *     thought about rather than discovered.
  *
  * ## Design decisions
  *
@@ -69,9 +96,19 @@
  * `prl` and the ledger table) and enough authority to create roles the first time
  * 0001 runs. The runtime role, `prl_app`, needs none of that — see the privilege
  * matrix at the bottom of 0001.
+ *
+ * **`roles` exists for the one path where no migration will run: a restore.**
+ * `prl_migrator` and `prl_app` are cluster-wide objects, and `pg_dump` of a single
+ * database does not contain them — only `pg_dumpall --globals-only` does. A dump
+ * that kept its ownership and its ACLs (which it must, or the restored database
+ * grants the runtime role nothing) therefore fails on a fresh cluster with "role
+ * prl_migrator does not exist". `roles` applies db/roles/*.sql, which creates just
+ * those two roles, so the restore has somewhere to attach its owners and grants.
+ * It is not recorded in the ledger: it describes the cluster, not the schema.
  */
 
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -81,6 +118,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..', '..', '..');
 const MIGRATIONS_DIR = join(REPO_ROOT, 'db', 'migrations');
 const SEEDS_DIR = join(REPO_ROOT, 'db', 'seeds');
+const ROLES_DIR = join(REPO_ROOT, 'db', 'roles');
 
 /** NNNN_lower_snake_case.sql — anything else is a naming mistake, not a migration. */
 const FILE_NAME_PATTERN = /^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
@@ -91,7 +129,7 @@ const DEFAULT_LOCK_WAIT_MS = 30_000;
 /** How long a migration waits for a table lock before giving up. */
 const STATEMENT_LOCK_TIMEOUT = '10s';
 
-const COMMANDS = ['up', 'status', 'seed', 'reset'];
+const COMMANDS = ['up', 'down', 'status', 'roles', 'seed', 'reset'];
 
 // ---------------------------------------------------------------------------
 // Output. Colour only when a human is watching.
@@ -165,7 +203,20 @@ class MigrateError extends Error {
 // Environment and connection.
 // ---------------------------------------------------------------------------
 
+/**
+ * The connection string, preferring the migration identity over the runtime one.
+ *
+ * `DATABASE_URL` is the API's connection, and after the least-privilege change it
+ * names a member of `prl_app`: DML only, no CREATE, and no grant at all on
+ * prl.schema_migrations. Migrating as that identity cannot work, and the failure
+ * would be a permission error four statements into 0001 rather than a sentence.
+ * `DATABASE_MIGRATION_URL` is therefore read first, and DATABASE_URL remains the
+ * fallback so a deployment that has only ever set one variable keeps working.
+ */
 function databaseUrl() {
+  const migrationUrl = process.env.DATABASE_MIGRATION_URL;
+  if (typeof migrationUrl === 'string' && migrationUrl.trim() !== '') return migrationUrl;
+
   const url = process.env.DATABASE_URL;
   if (typeof url !== 'string' || url.trim() === '') {
     throw new MigrateError(
@@ -173,13 +224,14 @@ function databaseUrl() {
       // prints goes through redact(), which would replace one with [redacted] and
       // leave the reader worse off than a description does.
       [
-        'DATABASE_URL is not set, so there is nothing to migrate.',
+        'Neither DATABASE_MIGRATION_URL nor DATABASE_URL is set, so there is nothing to migrate.',
         '',
-        'Point it at your development database with a libpq URL of the form',
+        'Point one at your development database with a libpq URL of the form',
         '  <postgres|postgresql>://<user>:<password>@<host>:5432/<database>',
         '',
         'either exported in your shell or as a line in .env at the repo root — the pnpm db:*',
-        'scripts load that file if it exists.',
+        'scripts load that file if it exists. DATABASE_MIGRATION_URL should name the migrating',
+        'identity (a member of prl_migrator); DATABASE_URL names the API, which cannot migrate.',
       ].join('\n'),
     );
   }
@@ -270,6 +322,216 @@ async function readSqlDir(dir, label) {
 }
 
 // ---------------------------------------------------------------------------
+// Roll-forward-only enforcement.
+//
+// See the policy at the top of this file. `up` will not apply a migration that
+// destroys data or renames something out from under a running process unless the
+// file declares itself irreversible, because those are exactly the migrations for
+// which "we can always roll back" is false and somebody needs to have noticed.
+// ---------------------------------------------------------------------------
+
+/**
+ * The acknowledgement a genuinely irreversible migration has to carry, as a
+ * comment anywhere in the file:
+ *
+ *   -- prl:irreversible: the invite_code column has been unused since 0014 and
+ *   -- the values are not recoverable; restoring them means restoring a backup.
+ *
+ * A reason is required rather than a bare marker. The point of the gate is to
+ * make somebody write down what cannot be undone, and a marker with no sentence
+ * after it is a checkbox, not a decision.
+ */
+// The reason has to start on the marker's own line, so the horizontal-whitespace
+// classes are deliberate: a plain \s* would cross the newline and read the next
+// SQL statement as the justification for deleting the thing it operates on.
+const IRREVERSIBLE_MARKER = /--[^\S\n]*prl:irreversible[^\S\n]*:[^\S\n]*(\S[^\n]*)/i;
+
+/**
+ * Statements that a later migration cannot put back.
+ *
+ * Deliberately narrow. `DROP INDEX`, `REVOKE` and `ALTER ... SET DEFAULT` are all
+ * absent because a following migration really can restore them — the gate is about
+ * data and about names the running application still holds, not about every
+ * statement that changes something. A gate that fires on ordinary DDL is a gate
+ * that gets a blanket marker pasted into every file, which is worse than no gate.
+ */
+const DESTRUCTIVE_STATEMENTS = [
+  {
+    re: /\bdrop\s+(?:table|schema|database|sequence|type|domain|materialized\s+view|view)\b/i,
+    why: 'drops an object and everything in it',
+  },
+  { re: /\balter\s+[\s\S]{0,200}?\bdrop\s+(?:column|constraint)\b/i, why: 'drops a column or a constraint' },
+  { re: /\btruncate\b/i, why: 'empties a table' },
+  { re: /\bdelete\s+from\b/i, why: 'deletes rows' },
+  {
+    re: /\brename\s+(?:column\s+\S+\s+)?to\b/i,
+    why: 'renames something the currently deployed code still queries by its old name',
+  },
+];
+
+/**
+ * The SQL with comments removed and quoted *values* blanked, so the scan above
+ * reads code and only code.
+ *
+ * Both halves matter and both were needed by the files already in db/migrations.
+ * 0001's prose explains at length that the runtime role holds no DROP and no
+ * TRUNCATE, so a scan of the raw text flags a migration that does neither. And a
+ * `RAISE NOTICE 'dropping ...'` is a message, not a statement.
+ *
+ * Dollar-quoted bodies are deliberately treated as CODE rather than as strings:
+ * `DO $$ ... $$` and a PL/pgSQL function body are the two places a real DROP can
+ * hide, and PL/pgSQL applies the same comment syntax inside them. Single- and
+ * double-quoted runs are treated as data, which is what they are.
+ */
+export function stripSqlComments(sql) {
+  const out = [];
+  let index = 0;
+
+  while (index < sql.length) {
+    const run = runAt(sql, index);
+    out.push(run.kind === 'code' ? sql.slice(index, index + run.length) : blankOut(sql, index, run));
+    index += run.length;
+  }
+  return out.join('');
+}
+
+/** Comment and string content become spaces; newlines survive so offsets and lines do. */
+function blankOut(sql, index, run) {
+  const keep = run.kind === 'quoted' ? 1 : 0;
+  return sql.slice(index, index + keep) + sql.slice(index + keep, index + run.length).replace(/[^\n]/g, ' ');
+}
+
+/** A dollar-quote delimiter — `$$` or `$tag$` — anchored at the scan position. */
+const DOLLAR_TAG = /\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$/y;
+
+/**
+ * Classifies the run starting at `index`.
+ *
+ * @returns {{kind: 'code' | 'comment' | 'quoted', length: number}}
+ */
+function runAt(sql, index) {
+  if (sql.startsWith('--', index)) {
+    const newline = sql.indexOf('\n', index);
+    return { kind: 'comment', length: (newline === -1 ? sql.length : newline) - index };
+  }
+  if (sql.startsWith('/*', index)) {
+    return { kind: 'comment', length: blockCommentLength(sql, index) };
+  }
+  const quote = sql[index];
+  if (quote === "'" || quote === '"') {
+    return { kind: 'quoted', length: quotedRunLength(sql, index) };
+  }
+  DOLLAR_TAG.lastIndex = index;
+  const tag = DOLLAR_TAG.exec(sql);
+  // A dollar-quoted body is passed through as code, and the loop then walks into
+  // it, so the comments and strings inside are classified by the branches above.
+  if (tag !== null) return { kind: 'code', length: tag[0].length };
+  return { kind: 'code', length: 1 };
+}
+
+/**
+ * PostgreSQL block comments nest, so this counts depth rather than searching for the first
+ * closing delimiter. Opening two comments and closing them both is ONE comment in SQL, not one
+ * and a half — searching for the first close would end it early and treat the remainder as
+ * statements, which is how a scanner comes to see a DROP that is really prose.
+ *
+ * (The delimiters are deliberately described rather than written out: this is a JavaScript block
+ * comment, and a literal close sequence inside it would end this comment here. That is not a
+ * hypothetical — this file previously kept the illustration parseable with zero-width spaces
+ * wedged into the delimiters, which `repo-hygiene.mjs` rejects as hidden characters, and removing
+ * them turned the comment into a syntax error.)
+ */
+function blockCommentLength(sql, index) {
+  let depth = 0;
+  let cursor = index;
+  while (cursor < sql.length) {
+    if (sql.startsWith('/*', cursor)) {
+      depth += 1;
+      cursor += 2;
+    } else if (sql.startsWith('*/', cursor)) {
+      depth -= 1;
+      cursor += 2;
+      if (depth === 0) break;
+    } else {
+      cursor += 1;
+    }
+  }
+  return cursor - index;
+}
+
+/**
+ * An E'' string honours backslash escapes; a plain one does not, under the
+ * standard_conforming_strings default this project relies on. Doubling ('' inside
+ * '') closes and immediately reopens, which blanks the same characters either way,
+ * so it needs no special case.
+ */
+function quotedRunLength(sql, index) {
+  const quote = sql[index];
+  const previous = index > 0 ? sql[index - 1] : '';
+  const escaped = quote === "'" && (previous === 'E' || previous === 'e');
+  let cursor = index + 1;
+  while (cursor < sql.length) {
+    if (escaped && sql[cursor] === '\\') {
+      cursor += 2;
+      continue;
+    }
+    if (sql[cursor] === quote) {
+      cursor += 1;
+      break;
+    }
+    cursor += 1;
+  }
+  return cursor - index;
+}
+
+/**
+ * @returns {{why: string, snippet: string}[]} destructive statements found in `sql`
+ */
+export function findIrreversibleStatements(sql) {
+  const code = stripSqlComments(sql);
+  const found = [];
+  for (const { re, why } of DESTRUCTIVE_STATEMENTS) {
+    const match = re.exec(code);
+    if (match === null) continue;
+    found.push({ why, snippet: match[0].replace(/\s+/g, ' ').trim() });
+  }
+  return found;
+}
+
+/** True when the file acknowledges, with a reason, that it cannot be undone. */
+export function declaresIrreversible(sql) {
+  const match = IRREVERSIBLE_MARKER.exec(sql);
+  return match !== null && match[1].trim().length > 0;
+}
+
+/**
+ * Refuses any pending migration that destroys something without saying so.
+ * Called with the whole pending set so one run reports every offending file.
+ */
+function refuseUndeclaredIrreversible(pending) {
+  const offenders = [];
+  for (const file of pending) {
+    if (declaresIrreversible(file.sql)) continue;
+    const found = findIrreversibleStatements(file.sql);
+    if (found.length === 0) continue;
+    offenders.push(
+      `  ${file.version}\n${found.map(({ why, snippet }) => `    "${snippet}" — ${why}`).join('\n')}`,
+    );
+  }
+  if (offenders.length === 0) return;
+
+  throw new MigrateError(
+    `${offenders.length} pending migration(s) destroy something and do not say so:\n${offenders.join('\n')}\n\n` +
+      'Nothing has been applied. This project is roll-forward only: there is no `down`, so a ' +
+      'migration that removes data or renames an object the deployed code still uses cannot be ' +
+      'undone by anything but a restore from backup.\n\n' +
+      'If the change is genuinely intended, make it additive and ship the removal in a later ' +
+      'release (docs/RUNBOOK.md §11.3). If it has to happen now, say so in the file:\n' +
+      '  -- prl:irreversible: <what is lost, and why a restore is the only way back>',
+  );
+}
+
+// ---------------------------------------------------------------------------
 // The ledger.
 // ---------------------------------------------------------------------------
 
@@ -279,20 +541,82 @@ async function ledgerExists(sql) {
 }
 
 async function ensureLedger(sql) {
+  const [present] = await sql`
+    select to_regnamespace('prl') is not null                  as schema_present,
+           to_regclass('prl.schema_migrations') is not null    as ledger_present
+  `;
+
   // Fixed DDL, no interpolation. The schema is created here so the very first
   // migration has somewhere to record itself; 0001 then hands ownership of the
-  // schema to prl_migrator. The ledger itself stays with the migrating identity,
-  // and prl_app is granted nothing on it.
-  await sql.unsafe(`
-    create schema if not exists prl;
-    create table if not exists prl.schema_migrations (
-      version text primary key,
-      checksum text not null,
-      applied_at timestamptz not null default now()
+  // schema to prl_migrator. prl_app is granted nothing on the ledger: the runtime
+  // has no business reading, let alone editing, which migrations have run.
+  //
+  // Each statement is issued only when it has work to do, which is a privilege
+  // decision rather than an optimisation. PostgreSQL checks CREATE on the DATABASE
+  // before it checks the `if not exists`, so running `create schema if not exists
+  // prl` unconditionally makes every deploy require a privilege that is genuinely
+  // needed exactly once — on the first one. With this, a steady-state deploy as
+  // prl_deployer needs nothing beyond what owning the schema already gives it.
+  // `if not exists` is kept on both because this runs inside the advisory lock and
+  // the belt-and-braces form costs nothing.
+  if (present?.schema_present !== true) {
+    await sql.unsafe('create schema if not exists prl');
+  }
+  if (present?.ledger_present !== true) {
+    await sql.unsafe(`
+      create table if not exists prl.schema_migrations (
+        version text primary key,
+        checksum text not null,
+        applied_at timestamptz not null default now()
+      );
+      comment on table prl.schema_migrations is
+        'Applied migrations, with a sha256 of the file that was applied. Written only by apps/api/scripts/migrate.mjs.';
+    `);
+  }
+}
+
+/**
+ * Hands the ledger to prl_migrator, if it is not already there.
+ *
+ * The ledger is created by this script rather than by a migration, so without
+ * this it belongs to whichever identity happened to run `up` first — and nobody
+ * else can read it. That is a defect with a delayed and very confusing symptom:
+ * the first deploy works because it was bootstrapped by a superuser, and the
+ * SECOND one, as the `prl_deployer` role docs/RUNBOOK.md §5 documents, fails with
+ * `permission denied for table schema_migrations` before it has planned anything.
+ * The same thing happens after a restore, where the ledger arrives owned by
+ * whoever ran pg_restore.
+ *
+ * prl_migrator owns everything else in the schema, so the ledger belongs to it
+ * too. Called after the pending files have been applied, because on a virgin
+ * database prl_migrator does not exist until 0001 has created it.
+ *
+ * Silent when it cannot: an identity that is not a member of prl_migrator cannot
+ * give an object away, and that is a privilege decision for a DBA rather than
+ * something a migration runner should force or fail over.
+ */
+async function alignLedgerOwnership(sql) {
+  const [state] = await sql`
+    select
+      pg_catalog.pg_get_userbyid(rel.relowner) as owner,
+      exists (select 1 from pg_catalog.pg_roles where rolname = 'prl_migrator') as role_exists,
+      pg_catalog.pg_has_role(current_user, 'prl_migrator', 'USAGE') as is_member
+    from pg_catalog.pg_class rel
+    join pg_catalog.pg_namespace nsp on nsp.oid = rel.relnamespace
+    where nsp.nspname = 'prl' and rel.relname = 'schema_migrations'
+  `;
+  if (state === undefined || state.owner === 'prl_migrator') return;
+  if (state.role_exists !== true || state.is_member !== true) {
+    warn(
+      `prl.schema_migrations is owned by "${state.owner}", not prl_migrator, and this identity ` +
+        'cannot change that. Another migrating identity will not be able to read the ledger — a DBA ' +
+        'needs to run: ALTER TABLE prl.schema_migrations OWNER TO prl_migrator;',
     );
-    comment on table prl.schema_migrations is
-      'Applied migrations, with a sha256 of the file that was applied. Written only by apps/api/scripts/migrate.mjs.';
-  `);
+    return;
+  }
+  // Fixed DDL: both names are literals in this file, nothing is interpolated.
+  await sql.unsafe('alter table prl.schema_migrations owner to prl_migrator');
+  note(`ledger ownership moved from "${state.owner}" to prl_migrator`);
 }
 
 async function appliedMigrations(sql) {
@@ -454,9 +778,15 @@ async function commandUp(sql, options) {
     // the race the lock exists to remove.
     const applied = await appliedMigrations(sql);
     const pending = planMigrations(files, applied, options);
+    // Checked after planning and before the first apply, so a set containing one
+    // undeclared destructive file applies none of it rather than the first half.
+    refuseUndeclaredIrreversible(pending);
 
     if (pending.length === 0) {
       ok(`up to date — ${applied.length} migration(s) applied, nothing pending`);
+      // Still checked on a no-op run: a database migrated before this alignment
+      // existed is exactly the one whose next deploy would fail on it.
+      await alignLedgerOwnership(sql);
       return;
     }
 
@@ -465,6 +795,7 @@ async function commandUp(sql, options) {
       const elapsed = await applyFile(sql, file, true);
       ok(`${file.version} ${dim(`(${elapsed} ms, ${shortChecksum(file.checksum)})`)}`);
     }
+    await alignLedgerOwnership(sql);
   });
 }
 
@@ -514,6 +845,71 @@ async function commandStatus(sql) {
   note(`${matching} applied and matching, ${pendingCount} pending${changed}`);
   if (driftCount > 0) warn(`${driftCount} applied migration(s) differ from their file — \`up\` will refuse`);
   if (ledger.size > 0) warn(`${ledger.size} applied migration(s) have no file — \`up\` will refuse`);
+}
+
+/**
+ * Always throws. `down` is a command so that asking for a rollback gets the policy
+ * instead of `Unknown command "down"` — which reads like a version skew and sends
+ * an operator hunting for a missing release rather than reading a decision.
+ *
+ * Deliberately never opens a connection: there is nothing to ask the database.
+ */
+function commandDown() {
+  throw new MigrateError(
+    [
+      'There is no `down`. Poker Risk Lab is roll-forward only, and this is the policy, not a',
+      'missing feature.',
+      '',
+      'Why: a rollback script is code that has never run against the database it is one day asked',
+      'to save, and the first execution would be during an incident. It also cannot bring back data',
+      'a forward migration removed, so in the case that actually needs undoing, the answer is a',
+      'restore from backup and not a reversed migration.',
+      '',
+      'What to do instead:',
+      '  * The schema is wrong          write the next migration. Applied files are immutable;',
+      '                                 the fix is 0008, never an edit to 0007.',
+      '  * The release is bad           roll the APPLICATION back and leave the schema. Migrations',
+      '                                 are additive-first (docs/RUNBOOK.md §11.3), so the previous',
+      '                                 release runs against the newer schema.',
+      '  * Data is gone                 restore from backup (docs/RUNBOOK.md §11.4). Nothing this',
+      '                                 script can do would recover it.',
+      '  * A development database       `reset` drops schema prl and reapplies everything. It',
+      '                                 refuses to run with NODE_ENV=production.',
+      '',
+      '`up` enforces the other half of the policy: it refuses a migration that destroys data or',
+      'renames an object unless the file declares itself irreversible in as many words.',
+    ].join('\n'),
+  );
+}
+
+async function commandRoles(sql, options) {
+  const files = await readSqlDir(ROLES_DIR, 'role');
+
+  // Named from the server so the operator can see which cluster is about to gain
+  // roles, without this script going anywhere near the connection string.
+  const [target] = await sql`select current_database() as database, current_user as role`;
+  line(`${bold('Ensuring roles')} in database "${target.database}" as "${target.role}"`);
+
+  await withLock(sql, options.lockWaitMs, async () => {
+    for (const file of files) {
+      const elapsed = await applyFile(sql, file, false);
+      ok(`${file.version} ${dim(`(${elapsed} ms)`)}`);
+    }
+  });
+
+  const roles = await sql`
+    select rolname, rolcanlogin, rolsuper
+    from pg_catalog.pg_roles
+    where rolname in ('prl_migrator', 'prl_app')
+    order by rolname
+  `;
+  for (const role of roles) {
+    note(`${role.rolname}: ${role.rolcanlogin ? 'LOGIN' : 'NOLOGIN'}${role.rolsuper ? ', SUPERUSER' : ''}`);
+  }
+  if (roles.length < 2) {
+    warn('expected both prl_migrator and prl_app to exist by now — check the notices above');
+  }
+  note('roles are cluster-wide, so they are not recorded in the migration ledger');
 }
 
 function refuseInProduction(command) {
@@ -589,11 +985,14 @@ function usage() {
   line(`${bold('migrate.mjs')} — Poker Risk Lab database migrations`);
   line();
   line('  up [--allow-missing]   apply pending migrations');
+  line('  down                   refuses: this project is roll-forward only. Explains what to do');
   line('  status                 show applied and pending migrations');
+  line('  roles                  create the cluster-wide prl_migrator/prl_app roles (before a restore)');
   line('  seed                   apply db/seeds/*.sql (never with NODE_ENV=production)');
   line('  reset                  drop schema prl, then apply every migration again');
   line();
-  line(`${dim('  DATABASE_URL')}               required; never printed`);
+  line(`${dim('  DATABASE_MIGRATION_URL')}     the migrating identity; preferred over DATABASE_URL`);
+  line(`${dim('  DATABASE_URL')}               fallback; never printed`);
   line(`${dim('  PRL_MIGRATE_LOCK_WAIT_MS')}   how long to wait for the migration lock (default 30000)`);
 }
 
@@ -632,6 +1031,9 @@ async function run(options) {
   // afterwards, and the in-command check stays as the backstop that cannot be
   // routed around.
   if (options.command === 'seed' || options.command === 'reset') refuseInProduction(options.command);
+  // Same reasoning: `down` has no database work to do in any environment, so it
+  // answers without a connection and without DATABASE_URL having to be set.
+  if (options.command === 'down') commandDown();
 
   const sql = connect(databaseUrl());
   try {
@@ -643,6 +1045,7 @@ async function run(options) {
     // typo or an unfinished edit can reach.
     if (options.command === 'up') await commandUp(sql, withTimeouts);
     else if (options.command === 'status') await commandStatus(sql);
+    else if (options.command === 'roles') await commandRoles(sql, withTimeouts);
     else if (options.command === 'seed') await commandSeed(sql, withTimeouts);
     else if (options.command === 'reset') await commandReset(sql, withTimeouts);
     else throw new MigrateError(`Command "${options.command}" has no implementation.`);
@@ -663,31 +1066,53 @@ async function main() {
   await run(options);
 }
 
-try {
-  await main();
-} catch (error) {
-  line();
-  if (error instanceof MigrateError) {
-    line(`${red('  ✗')} ${error.message}`);
-  } else {
-    // A driver or PostgreSQL error. Print the message and the useful PostgreSQL
-    // fields, redacted, and keep the stack behind an opt-in flag so a normal
-    // failure reads as a sentence instead of a wall.
-    const detail = [error?.detail, error?.hint, error?.where].filter(Boolean).join(' | ');
-    line(`${red('  ✗')} ${error?.message ?? String(error)}`);
-    if (error?.position) note(`at character ${error.position}`);
-    if (detail !== '') note(detail);
-    // The debug dump goes through redact() like everything else. Driver error
-    // objects carry the failing statement and its bind parameters, so handing
-    // one straight to console.error would be the single place in this script
-    // where "nothing secret is ever printed" stopped being true — and it would
-    // be true right up until the run that failed while sending something worth
-    // hiding.
-    if (process.env.PRL_DEBUG) {
-      console.error(redact(error?.stack ?? String(error)));
-      console.error(redact(inspectError(error)));
-    }
+/**
+ * True when this file was started from the command line rather than imported.
+ *
+ * The pure helpers above (`stripSqlComments`, `findIrreversibleStatements`) are
+ * exported so apps/api/scripts/migrate.test.mjs can assert on them directly; a
+ * roll-forward-only policy whose enforcement has no test is a claim rather than a
+ * gate. Without this guard, importing the module would run `main()` as a side
+ * effect of the import. realpath on both sides so a checkout reached through a
+ * symlink still recognises itself.
+ */
+function startedFromCommandLine() {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
   }
-  line();
-  process.exitCode = 1;
+}
+
+if (startedFromCommandLine()) {
+  try {
+    await main();
+  } catch (error) {
+    line();
+    if (error instanceof MigrateError) {
+      line(`${red('  ✗')} ${error.message}`);
+    } else {
+      // A driver or PostgreSQL error. Print the message and the useful PostgreSQL
+      // fields, redacted, and keep the stack behind an opt-in flag so a normal
+      // failure reads as a sentence instead of a wall.
+      const detail = [error?.detail, error?.hint, error?.where].filter(Boolean).join(' | ');
+      line(`${red('  ✗')} ${error?.message ?? String(error)}`);
+      if (error?.position) note(`at character ${error.position}`);
+      if (detail !== '') note(detail);
+      // The debug dump goes through redact() like everything else. Driver error
+      // objects carry the failing statement and its bind parameters, so handing
+      // one straight to console.error would be the single place in this script
+      // where "nothing secret is ever printed" stopped being true — and it would
+      // be true right up until the run that failed while sending something worth
+      // hiding.
+      if (process.env.PRL_DEBUG) {
+        console.error(redact(error?.stack ?? String(error)));
+        console.error(redact(inspectError(error)));
+      }
+    }
+    line();
+    process.exitCode = 1;
+  }
 }

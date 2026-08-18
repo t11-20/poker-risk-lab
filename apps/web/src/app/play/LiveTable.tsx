@@ -16,6 +16,19 @@
  * never going to arrive. Each close code gets its own sentence and, where there is one, its own
  * control — sign in, or reload — from `describeClose` in `lib/table-socket.ts`.
  *
+ * ## Private tables are reachable from here, in both directions
+ *
+ * Every room this page creates is `invite_only` and always has been — the server has supported
+ * private multiplayer since it was built, and an audit ran a whole hand across two independent
+ * sessions to prove it. What was missing was any way for a person to get at it: the invite code
+ * came back from `POST /rooms` and was thrown away unread, and nothing in this client had ever
+ * called `POST /rooms/join`.
+ *
+ * Both halves are here now. `InviteCode` shows the code for a room this page just created, framed
+ * as what it is — a value that exists exactly once, because only its hash is stored.
+ * `JoinByInviteCode` is the way in for the second person. Neither one keeps the code anywhere; see
+ * the comment on `LiveTable.inviteCode` in `lib/use-live-table.ts`.
+ *
  * ## Nothing here decides a poker question
  *
  * The seat number is the server's. The buttons are the server's `legalActions`. The bet sizer's
@@ -25,9 +38,9 @@
  */
 
 import { Button, Callout, Panel, type TableAction } from '@prl/ui';
-import type { ReactElement } from 'react';
+import { type FormEvent, type ReactElement, useId, useState } from 'react';
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
-import { READER_SEAT } from '@/lib/table-rooms.ts';
+import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
 import { type LiveTable as LiveTableModel, useLiveTable } from '@/lib/use-live-table.ts';
 
@@ -59,7 +72,22 @@ interface ConnectionPanelProps {
   readonly live: LiveTableModel;
 }
 
-/** Where the setup has got to, as one sentence. */
+/**
+ * Where the setup has got to, as one sentence.
+ *
+ * ## The `failed` branch is a fix, not a nicety
+ *
+ * A setup that fails never opens a socket, so `live.status` stays `null` — and the final line
+ * below used to read that as "Ready to connect." This paragraph is the page's ONLY `role="status"`
+ * region, so a reader using a screen reader was told the table was ready to connect at the exact
+ * moment the screen said it could not be prepared. The error itself was in an unlabelled `<div>`
+ * with no live-region ancestor, so the false sentence was the *only* thing announced.
+ *
+ * The error is now announced by a `role="alert"` in `TableStage` (see the comment there), and this
+ * region names the failure rather than denying it. Deliberately short: the reason itself is in the
+ * alert and in the warning callout below, and repeating a paragraph in two live regions is how a
+ * screen reader ends up reading the same failure three times.
+ */
 function statusSentence(live: LiveTableModel): string {
   if (live.phase === 'idle') {
     return (
@@ -70,6 +98,7 @@ function statusSentence(live: LiveTableModel): string {
   if (live.phase === 'preparing') {
     return 'Preparing: reading your session, then finding or creating your private room.';
   }
+  if (live.phase === 'failed') return 'The table could not be prepared. The reason is below.';
   return live.status === null ? 'Ready to connect.' : STATUS_LEDE[live.status];
 }
 
@@ -77,7 +106,11 @@ function statusSentence(live: LiveTableModel): string {
 function hintSentence(live: LiveTableModel): string {
   if (live.phase !== 'ready' || live.status !== 'live') return 'The table opens once the connection is live.';
   if (live.table.seat === null) {
-    return `Seat ${String(READER_SEAT + 1)} is the free one — the five bots hold the rest.`;
+    // The seat is whichever one is actually free, not a constant. At a room reached by invite code
+    // seat 1 is the owner's, so naming it here would send the joiner at a seat they cannot have.
+    return live.readerSeat === null
+      ? 'Every seat is taken, so there is nowhere to sit at this table right now.'
+      : `Seat ${String(live.readerSeat + 1)} is free — take it to be dealt in.`;
   }
   if (live.table.betweenHands) {
     return 'No hand is in progress. Dealing is the owner’s to ask for, so nothing starts until you do.';
@@ -125,6 +158,17 @@ function ConnectionControls({ live }: ConnectionPanelProps): ReactElement {
         </Button>
       ) : null}
 
+      {/*
+        A second creation, not a variant of the first. The bot table fills five of its six seats, so
+        its invite code is a code to a table the server refuses everybody at — the private path needs
+        a room with seats left in it. See `FRIENDS_TABLE_REQUEST`.
+      */}
+      {phase === 'idle' || phase === 'ready' || phase === 'failed' ? (
+        <Button variant="secondary" onClick={live.startPrivateTable}>
+          Start a private table to invite somebody to
+        </Button>
+      ) : null}
+
       {closed?.action === 'signIn' ? (
         <Button variant="primary" onClick={live.startFreshTable}>
           Start a guest session
@@ -137,9 +181,9 @@ function ConnectionControls({ live }: ConnectionPanelProps): ReactElement {
         </Button>
       ) : null}
 
-      {isLive && !seated ? (
+      {isLive && !seated && live.readerSeat !== null ? (
         <Button variant="primary" onClick={live.sit}>
-          {`Take seat ${String(READER_SEAT + 1)}`}
+          {`Take seat ${String(live.readerSeat + 1)}`}
         </Button>
       ) : null}
 
@@ -161,6 +205,145 @@ function ConnectionControls({ live }: ConnectionPanelProps): ReactElement {
         </Button>
       ) : null}
     </p>
+  );
+}
+
+/**
+ * The invite code for a room this page just created — the only moment it exists.
+ *
+ * ## Why this is a whole block and not a line in the facts list
+ *
+ * The server stores `sha256(code)` and has no column for the code itself, so it cannot be looked up
+ * again by anybody, us included. `POST /rooms` is the one response that carries it. It used to be
+ * discarded on arrival — no screen in this client had ever rendered the word `inviteCode` — which
+ * is why "private, invite-only tables with people you already know" was a sentence about the server
+ * and not something a reader could do.
+ *
+ * A value that exists once and is then gone forever has to be presented as one, so this says so
+ * before the code rather than after it, and offers a copy that does not depend on selecting
+ * nineteen characters by hand.
+ *
+ * ## The code is not stored anywhere by this client either
+ *
+ * Not in `sessionStorage` (which is where the room ID goes), not in `localStorage`, and not in the
+ * URL. It lives in React state for as long as this component is mounted. A reload loses it, and
+ * that is correct: writing it down would give this browser a durable key to a private room that the
+ * server itself deliberately cannot reproduce.
+ */
+function InviteCode({ code }: { readonly code: string }): ReactElement {
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle');
+
+  const copy = (): void => {
+    // Feature-detected rather than assumed: the Clipboard API is unavailable over plain HTTP on a
+    // non-localhost origin and in some embedded webviews, and an unhandled rejection there would
+    // leave the reader pressing a button that silently does nothing. The code is on screen and
+    // selectable either way, so a failure costs the convenience and not the feature.
+    if (typeof navigator === 'undefined' || navigator.clipboard === undefined) {
+      setCopied('failed');
+      return;
+    }
+    void navigator.clipboard.writeText(code).then(
+      () => setCopied('done'),
+      () => setCopied('failed'),
+    );
+  };
+
+  return (
+    <div className="prl-play__invite">
+      <p className="prl-label">Invite code — shown once</p>
+      <p className="prl-play__invite-code">
+        <code className="prl-mono">{code}</code>
+      </p>
+      <p className="prl-btn-row">
+        <Button variant="secondary" size="sm" onClick={copy}>
+          Copy the code
+        </Button>
+        {/*
+          Empty in the DOM from the first render rather than appearing with its text: a live region
+          that arrives at the same moment as its content is missed by several screen readers.
+        */}
+        <span className="prl-note" role="status">
+          {copied === 'done'
+            ? 'Copied to the clipboard.'
+            : copied === 'failed'
+              ? 'This browser would not let the page use the clipboard. Select the code above and copy it.'
+              : ''}
+        </span>
+      </p>
+      <p className="prl-note">
+        Anybody with this code can join this table. Only a hash of it is kept, so it cannot be shown again and
+        it is not written down anywhere in this browser — if you lose it, start a fresh table and share the
+        new one. Nothing is at stake either way: the units are free and worth nothing.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The other half of a private table: arriving at one somebody else made.
+ *
+ * A real `<form>`, so Enter submits it from the field — a "join" that only works if you find the
+ * button is a join that a person with a code in their clipboard gives up on. The button is not
+ * disabled while the field is short: a disabled control with no stated reason is the pattern the
+ * audit called out elsewhere in this app, and `normaliseInviteCode` produces a sentence saying what
+ * is wrong instead.
+ *
+ * `aria-invalid` and `aria-describedby` are wired to the refusal, so the reason is announced with
+ * the field rather than sitting somewhere below it — the field is where the reader is when they
+ * find out.
+ */
+function JoinByInviteCode({ live }: ConnectionPanelProps): ReactElement {
+  const [code, setCode] = useState('');
+  const fieldId = useId();
+  const hintId = `${fieldId}-hint`;
+  const errorId = `${fieldId}-error`;
+  const refused = live.join.state === 'refused';
+
+  const onSubmit = (event: FormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    live.joinByInviteCode(code);
+  };
+
+  return (
+    <form className="prl-play__join" onSubmit={onSubmit}>
+      <div className="prl-field">
+        <label className="prl-field__label" htmlFor={fieldId}>
+          Join a private table with an invite code
+        </label>
+        <input
+          className="prl-input prl-mono"
+          id={fieldId}
+          name="inviteCode"
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          maxLength={MAX_INVITE_CODE_INPUT}
+          placeholder={INVITE_CODE_EXAMPLE}
+          aria-describedby={refused ? `${errorId} ${hintId}` : hintId}
+          aria-invalid={refused ? true : undefined}
+          value={code}
+          onChange={(event) => setCode(event.target.value)}
+        />
+        {refused ? (
+          <p className="prl-field__error" id={errorId}>
+            <span aria-hidden="true">{'▲ '}</span>
+            {live.join.state === 'refused' ? live.join.message : ''}
+          </p>
+        ) : null}
+        <p className="prl-field__hint" id={hintId}>
+          The code the table’s owner shared with you. Spaces and lower case are tidied up; the hyphens are
+          part of the code and are not.
+        </p>
+      </div>
+      <p className="prl-btn-row">
+        <Button variant="secondary" type="submit" disabled={live.join.state === 'joining'}>
+          {live.join.state === 'joining' ? 'Joining…' : 'Join that table'}
+        </Button>
+      </p>
+      <p className="prl-note" role="status">
+        {live.join.state === 'joined' ? `Joined ${live.join.roomName}. Take a seat to be dealt in.` : ''}
+      </p>
+    </form>
   );
 }
 
@@ -203,6 +386,10 @@ function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
 
       <ConnectionNotices live={live} />
       <ConnectionControls live={live} />
+
+      {live.inviteCode === null ? null : <InviteCode code={live.inviteCode} />}
+
+      <JoinByInviteCode live={live} />
 
       {room === null ? null : (
         <dl className="prl-stat__pair prl-play__facts">

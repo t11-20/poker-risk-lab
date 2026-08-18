@@ -23,12 +23,18 @@
  *    one. A panel that recommends an action the server rejects has taught a learner
  *    something false about the rules on top of whatever it said about the maths.
  * 5. **Every ACTION it can emit is one the engine offers.** The size being legal is not
- *    the same claim as the action being available, and the second one cannot be derived
- *    from the pot and the stacks: the engine withholds `bet`/`raise` when no opponent
- *    has chips behind, and again when a short all-in has closed the action to a seat
- *    that has already acted. `CoachInput.legalActions` carries the engine's own list and
- *    nothing outside it is published. Without one — the two callers that describe a spot
- *    rather than a table — only what the betting rules alone allow is offered.
+ *    the same claim as the action being available. `CoachInput.legalActions` carries the
+ *    engine's own list and nothing outside it is published. A caller that has no
+ *    `HandState` to ask gets `deriveLegalActions` instead — the betting rules a described
+ *    spot *does* determine, chief among them that `bet`/`raise` is withheld when no
+ *    opponent has chips behind. What the absent case never means again is "everything is
+ *    permitted": that reading is what let four of the five surfaces publish raises the
+ *    table refuses, and the filter now has no branch that can express it.
+ * 5a. **No candidate costs more than hero can put in.** `assertAffordable` checks every
+ *    published row against `heroStack` — chips BEHIND — and every total against
+ *    `heroCommittedThisStreet + heroStack`. Both are invariants of the arithmetic above
+ *    rather than clamps applied after the fact, which is why a violation is a loud
+ *    `CoachError` and not a silently corrected figure.
  * 6. **A free check is never ranked below a fold.** `evOfCheck` prices a check at
  *    `equity x pot` rather than at a hard-coded zero, ties are broken against giving up
  *    the hand, and `buildSuggestion` asserts the ordering rather than trusting it.
@@ -85,6 +91,77 @@ export type Street = 'preflop' | 'flop' | 'turn' | 'river';
 /** The five things a seat can do. Identical to `ActionCandidate['action']` by design. */
 export type CoachAction = ActionCandidate['action'];
 
+/**
+ * The part of a spot that determines which action *kinds* the betting rules allow.
+ *
+ * A subset of `CoachInput` by design, so `deriveLegalActions(input)` type-checks and a
+ * caller that has these four numbers and nothing else can ask the same question.
+ */
+export interface DescribedSpot {
+  /** What hero must add to continue. 0 when hero can check. */
+  readonly toCall: number;
+  /** Chips hero has ALREADY put out on this street. */
+  readonly heroCommittedThisStreet: number;
+  /** Chips hero has BEHIND — remaining, not counting anything already committed. */
+  readonly heroStack: number;
+  /** Chips BEHIND for each opponent still in the hand, one entry per opponent. */
+  readonly opponentStacks: readonly number[];
+}
+
+/**
+ * The actions the betting rules allow in a spot that has been *described* rather than
+ * dealt. **A derivation, and the engine is the authority wherever a `HandState` exists.**
+ *
+ * Read that sentence as a rule about callers, not as a disclaimer. `legalActions(state,
+ * seat)` in `@prl/poker-engine` is this codebase's single definition of legality; anyone
+ * holding a `HandState`, or a `PlayerView` carrying the engine's own list, passes that
+ * and this function is not involved. It exists for the surfaces that genuinely have no
+ * hand state — the ad-hoc calculator, the Scenario Lab, the hand review rebuilt from
+ * stored rows, the profile comparison — because the alternative those callers used to
+ * get was no filter at all.
+ *
+ * ## What is derived, and from which rule
+ *
+ * - **`fold`** is always offered. The engine offers it at every decision point, including
+ *   the one where checking is free — where it attaches a note saying so rather than
+ *   hiding it.
+ * - **`check` exactly when `toCall === 0`, `call` exactly when `toCall > 0`.** The engine
+ *   splits on `amountToCall`; this splits on the same quantity.
+ * - **`bet`/`raise` only when some opponent still has chips behind.** This is the rule
+ *   that was being violated. `legalActions` withholds aggression unless
+ *   `state.seats.some(other => other.status === 'active' && other.stack > 0)`: a bet
+ *   nobody can call is simply returned, so there is nothing to size and nothing to price.
+ *   Pricing one anyway is worse than useless — the fold-equity term charges an opponent
+ *   with no chips behind a 35% chance of folding, which is a probability of an event that
+ *   cannot happen.
+ * - **`bet` when the bet level is zero, `raise` otherwise**, which is the engine's own
+ *   test (`state.betLevel === 0`) rather than a test on `toCall`: a big blind facing a
+ *   limped pot owes nothing and still cannot *bet*, because their own blind is a live bet.
+ * - **and only when hero can actually get past the level in force**: `maxTo > betLevel`,
+ *   with `maxTo = heroCommittedThisStreet + heroStack`, the same comparison `legalActions`
+ *   makes. A short stack that cannot reach the minimum may still shove, which is why the
+ *   test is against the bet level and not against the minimum.
+ *
+ * ## What cannot be derived, and what that costs
+ *
+ * `mayRaise` — the rule that a short all-in below the minimum does not reopen the action
+ * to a seat that has already acted at that level — depends on `lastFullRaiseBetLevel` and
+ * `lastActedAtBetLevel`, neither of which survives into a description of a spot. So this
+ * function can be too generous by exactly that one case, and a caller that can supply the
+ * engine's list should. It is never too generous in the case this fix is about, and it is
+ * never *stricter* than the engine either, so nothing legal is withheld from a learner.
+ */
+export function deriveLegalActions(spot: DescribedSpot): readonly CoachAction[] {
+  const actions: CoachAction[] = ['fold'];
+  actions.push(spot.toCall === 0 ? 'check' : 'call');
+
+  const betLevel = spot.heroCommittedThisStreet + spot.toCall;
+  const maxTo = spot.heroCommittedThisStreet + spot.heroStack;
+  const someOpponentCanAnswer = spot.opponentStacks.some((stack) => stack > 0);
+  if (someOpponentCanAnswer && maxTo > betLevel) actions.push(betLevel === 0 ? 'bet' : 'raise');
+  return actions;
+}
+
 export interface CoachInput {
   readonly heroCards: readonly Card[];
   readonly board: readonly Card[];
@@ -111,7 +188,18 @@ export interface CoachInput {
    * a bet.
    */
   readonly heroCommittedThisStreet: number;
+  /**
+   * Chips hero has BEHIND: what is left to put in, not counting
+   * `heroCommittedThisStreet` and not counting anything carried in from earlier streets.
+   *
+   * Spelled out because two invariants read it and a reviewer has already misread it
+   * once. Hero's whole street total is `heroCommittedThisStreet + heroStack` — the
+   * `maxTo` every size is clamped to — and no candidate may cost more than `heroStack`
+   * on its own. Read this as a starting stack instead and both of those become
+   * double-counts.
+   */
   readonly heroStack: number;
+  /** Chips BEHIND for each opponent still in the hand, on the same reading. */
   readonly opponentStacks: readonly number[];
   readonly bigBlind: number;
   /**
@@ -130,21 +218,48 @@ export interface CoachInput {
    * `legalActions(state, seat).map(entry => entry.type)`.
    *
    * The Coach may publish nothing outside this set. Legality is not a property of the
-   * pot and the stacks alone, and the Coach cannot derive it: the engine withholds
-   * `bet`/`raise` when no opponent has chips behind (nobody could call it), and again
-   * when the last increase was a short all-in and hero has already acted at that level
-   * (`mayRaise`), and it returns an empty list altogether once betting is closed for
-   * the hand. None of those three is visible in `pot`, `toCall`, `heroStack` and
-   * `bigBlind`, which is why the old `if (maxRaiseBy > 0)` guard published raises the
-   * table refuses — measured: a spot where every live opponent was all-in, the engine
-   * offering `fold, call`, and the Coach recommending "raise to 80-100" as its
-   * highest-EV line.
+   * pot and the price alone: the engine withholds `bet`/`raise` when no opponent has
+   * chips behind (nobody could call it), and again when the last increase was a short
+   * all-in and hero has already acted at that level (`mayRaise`), and it returns an empty
+   * list altogether once betting is closed for the hand. The old `if (maxRaiseBy > 0)`
+   * guard could see none of them, and published raises the table refuses — measured: a
+   * spot where every live opponent was all-in, the engine offering `fold, call`, and the
+   * Coach recommending "raise to 80-100" as its highest-EV line.
    *
-   * Optional for the same two callers `minimumRaiseTo` is optional for: the ad-hoc
-   * calculator describes a spot rather than a table, and a profile comparison
-   * reconstructs one. Absent, the Coach falls back to what the betting rules alone
-   * allow — which is the best a described spot supports, and is why every caller that
-   * *has* a hand state passes this.
+   * Of those three, the first is recoverable from a described spot and the other two are
+   * not, which is what `deriveLegalActions` does and does not claim. Pass this whenever
+   * there is a `HandState` or a `PlayerView` to read it from; the derivation is the
+   * fallback for callers that have neither, not an equal alternative.
+   *
+   * ## Absent means "there is no engine to ask", never "everything is permitted"
+   *
+   * This field used to be filtered with `input.legalActions === undefined ||
+   * input.legalActions.includes(action)`, so an absent list disabled the guard
+   * completely. `CoachTask` — the wire type behind the Scenario Lab, the hand review,
+   * the profile comparison and `POST /math/coach` — had no field to put one in, so four
+   * of the five surfaces analysed with the guard off. Measured on the shipped Scenario
+   * Lab: two scenarios headlined an all-in raise, at `reasonable` confidence, priced
+   * with 35% fold equity against an opponent holding no chips behind and therefore
+   * unable to fold. A guard that is skipped whenever it is not handed its input is not a
+   * guard, and it inverts ADR 0003, which exists to make this class of type fail closed.
+   *
+   * So absence is now answered by `deriveLegalActions`, which applies the betting rules a
+   * described spot does determine — including the one that was being violated. There is
+   * no code path left that treats an action as permitted merely because nobody said
+   * otherwise.
+   *
+   * Every caller now supplies one: the live table from the engine's own
+   * `legalActions(state, seat)`, and the four describing callers — the Scenario Lab, the
+   * hand review, `POST /math/coach` and the profile comparison — from
+   * `deriveLegalActions`. `CoachTask.legalActions` is required, so the wire cannot lose it.
+   *
+   * It stays optional *here* deliberately, and the distinction matters: absence is
+   * answered by `deriveLegalActions`, which is conservative, not permissive. Making the
+   * field required would move the failure to compile time for first-party callers while
+   * removing the safety net for anyone constructing an input directly — and it would
+   * delete the two tests that prove the absent case still withholds a raise nobody could
+   * call. A guard that holds when its input is missing is worth more than a signature
+   * that forbids the input from being missing.
    *
    * An empty array is rejected rather than producing an empty report: when the engine
    * offers nothing there is no decision to analyse, and a report whose every candidate
@@ -539,21 +654,23 @@ function raiseSizingNote(option: SizingOption, potAfterCall: number, isAllIn: bo
  * ## Legality is asked, never inferred
  *
  * Everything above prices actions correctly. It says nothing about whether they are
- * *available*, and three of the engine's rules are invisible from the pot and the
- * stacks: no bet or raise when every live opponent is all-in, none when a short all-in
- * has closed the action to a seat that already acted, and no action at all once betting
- * is closed for the hand. So when the caller has a hand state, `input.legalActions`
- * carries the engine's own answer and every candidate below is filtered through it.
- * Without one the derived rules stand — the best a described spot can do — and the
- * Coach then only ever publishes what the betting rules alone allow.
+ * *available*, and three of the engine's rules are invisible from the pot and the price:
+ * no bet or raise when every live opponent is all-in, none when a short all-in has closed
+ * the action to a seat that already acted, and no action at all once betting is closed
+ * for the hand. So when the caller has a hand state, `input.legalActions` carries the
+ * engine's own answer and every candidate below is filtered through it. Without one the
+ * filter is `deriveLegalActions` — the betting rules a described spot does determine —
+ * and never an unconditional yes.
  */
 function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: number): ActionCandidate[] {
   const candidates: ActionCandidate[] = [];
-  // The engine is the authority when there is one. `undefined` means the caller has no
-  // hand state to ask, not that everything is permitted, which is why this reads as
-  // "the engine has not ruled it out" rather than "the engine allowed it".
-  const permitted = (action: CoachAction): boolean =>
-    input.legalActions === undefined || input.legalActions.includes(action);
+  // One list, resolved once, and never an `undefined` short-circuit. The previous form was
+  // `input.legalActions === undefined || input.legalActions.includes(action)`, which reads
+  // as "the engine has not ruled it out" and behaves as "nobody asked, so yes" — the
+  // difference between those two is the whole defect. `deriveLegalActions` answers for the
+  // callers with no hand state; see its doc for what it can and cannot establish.
+  const legal = input.legalActions ?? deriveLegalActions(input);
+  const permitted = (action: CoachAction): boolean => legal.includes(action);
 
   const betLevel = input.heroCommittedThisStreet + input.toCall;
   const isOpening = betLevel === 0;
@@ -614,7 +731,10 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
     // into. For an opening bet there is nothing to call and this is just the pot.
     const potAfterCall = Math.max(1, input.pot + input.toCall);
     const ladder = sizingLadder(potAfterCall, maxRaiseBy);
-    const legal = ladder.filter((option) => option.amount >= floorRaiseBy);
+    // `legalRungs`, not `legal`: this is the set of legal *sizes*, a different question
+    // from the set of legal actions resolved at the top of this function, and one name
+    // for both is how the two got conflated in the first place.
+    const legalRungs = ladder.filter((option) => option.amount >= floorRaiseBy);
 
     // Three representative sizes rather than the whole ladder: enough to show how the
     // decision moves with size without turning the panel into a table nobody reads.
@@ -622,7 +742,11 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
     // rungs, so no size here is one the table would refuse. The ladder always ends in
     // an all-in rung and an all-in always clears the clamped floor, so this list is
     // never empty.
-    const picks = [legal[0], legal[Math.floor((legal.length - 1) / 2)], legal[legal.length - 1]];
+    const picks = [
+      legalRungs[0],
+      legalRungs[Math.floor((legalRungs.length - 1) / 2)],
+      legalRungs[legalRungs.length - 1],
+    ];
     const seen = new Set<number>();
     for (const option of picks) {
       if (option === undefined || option.amount <= 0 || seen.has(option.amount)) continue;
@@ -669,7 +793,46 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
     }
   }
 
+  assertAffordable(candidates, input);
   return candidates;
+}
+
+/**
+ * No published row may cost more than hero has, or reach a total hero cannot reach.
+ *
+ * Both figures follow from the arithmetic above — the call is clamped at the stack, an
+ * opening bet's ladder is capped at `heroStack`, and a raise's risk is
+ * `toCall + raiseBy` with `raiseBy <= heroStack - toCall` — so this asserts rather than
+ * clamps. That direction is deliberate. A clamp would quietly publish a *different*
+ * action from the one it priced, and the EV, the derivation sentence and the size range
+ * would all still describe the size the clamp discarded; a throw says the arithmetic
+ * disagrees with itself and stops.
+ *
+ * ## The two quantities, because they are one word apart
+ *
+ * `cost` is chips leaving the stack for this action alone, so it is compared against
+ * `heroStack` — chips BEHIND. `to` is the seat's whole commitment for the street, so it
+ * is compared against `heroCommittedThisStreet + heroStack`, which is the same `maxTo`
+ * the engine clamps a size to. Comparing either against the other's ceiling looks almost
+ * right and is a double-count in one direction or a needless refusal in the other.
+ */
+function assertAffordable(candidates: readonly ActionCandidate[], input: CoachInput): void {
+  const maxTo = input.heroCommittedThisStreet + input.heroStack;
+  for (const candidate of candidates) {
+    if (candidate.cost > input.heroStack) {
+      throw new CoachError(
+        `internal: the ${candidate.action} candidate costs ${candidate.cost} but hero has only ` +
+          `${input.heroStack} behind. A published row must be one hero could actually pay for.`,
+      );
+    }
+    if (candidate.to !== undefined && candidate.to > maxTo) {
+      throw new CoachError(
+        `internal: the ${candidate.action} candidate reaches a street total of ${candidate.to}, above ` +
+          `hero's maximum of ${maxTo} (${input.heroCommittedThisStreet} already out plus ` +
+          `${input.heroStack} behind).`,
+      );
+    }
+  }
 }
 
 /**

@@ -49,6 +49,7 @@
 
 import { type RefObject, useEffect, useRef, useState } from 'react';
 import { shouldRevealImmediately } from './reduced-motion.ts';
+import { BROWSER_REVEAL_HOST, watchForReveal } from './reveal-watcher.ts';
 import { usePrefersReducedMotion } from './usePrefersReducedMotion.ts';
 
 /**
@@ -91,46 +92,17 @@ export function useReveal<T extends Element = HTMLElement>(options: RevealOption
     const node = ref.current;
     if (node === null) return;
 
-    // The same predicate as above, re-asked with the one input only the client can answer.
-    // A hidden document runs no rendering step, so it delivers no observer entries and
-    // advances no animation clock; waiting for either is waiting forever.
-    const resolveIfUnobservable = (): boolean => {
-      if (
-        !shouldRevealImmediately({ reducedMotion, observerAvailable: true, documentHidden: document.hidden })
-      )
-        return false;
-      setObserved(true);
-      return true;
-    };
-    if (resolveIfUnobservable()) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          // Stop before setting state: the reveal is one-shot, and a second entry for the
-          // same element would otherwise be delivered while React is still rendering.
-          observer.unobserve(entry.target);
-          observer.disconnect();
-          setObserved(true);
-          break;
-        }
-      },
-      { threshold },
+    // The observation itself lives in `watchForReveal` (`reveal-watcher.ts`), which imports no
+    // React and takes the browser as an argument — so the rule that a reader who asked for
+    // reduced motion never gets an observer at all is a thing `test/motion.test.ts` can run,
+    // rather than a thing this file merely claims. It re-asks the same predicate with the one
+    // input only the client can answer: a hidden document runs no rendering step, so it delivers
+    // no observer entries and advances no animation clock; waiting for either is waiting forever.
+    return watchForReveal(
+      { target: node, reducedMotion, observerAvailable: true, threshold },
+      BROWSER_REVEAL_HOST,
+      () => setObserved(true),
     );
-    observer.observe(node);
-
-    // Visible now, hidden later: the observer goes silent the moment the tab is backgrounded
-    // and there is no event to tell us it resumed in time. Resolve instead of gambling.
-    const onVisibilityChange = (): void => {
-      if (resolveIfUnobservable()) observer.disconnect();
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-      observer.disconnect();
-    };
   }, [immediate, observed, reducedMotion, threshold]);
 
   return { ref, revealed };

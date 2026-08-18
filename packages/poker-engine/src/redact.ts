@@ -197,7 +197,13 @@ export function redactFor(state: HandState, options: RedactOptions): PlayerView 
   const occupied = state.seats.filter((seat) => seat.status !== 'sittingOut').map((seat) => seat.seat);
   const labels =
     occupied.length >= 2
-      ? positionLabels(state.buttonSeat, state.config.maxSeats, occupied)
+      ? // The blinds are handed over rather than re-derived from the button: this
+        // hand may have been dealt with a dead button or a dead small blind, and
+        // `assignBlinds` would both refuse the first and mislabel the second.
+        positionLabels(state.buttonSeat, state.config.maxSeats, occupied, {
+          smallBlindSeat: state.smallBlindSeat,
+          bigBlindSeat: state.bigBlindSeat,
+        })
       : new Map<SeatIndex, PositionLabel>();
 
   const seats: SeatView[] = state.seats.map((seat) => {

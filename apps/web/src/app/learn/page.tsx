@@ -138,8 +138,9 @@ export default async function LearnPage(): Promise<ReactElement> {
           across it.
         </p>
         <p className="prl-learn-page__lead">
-          Every figure inside a lesson is computed while you read it, from the situation the lesson describes.
-          There is no odds table in this repository to go stale.
+          Every figure inside a lesson is computed while you read it, from the situation the lesson describes,
+          rather than read out of a table that could have been wrong when it was written. If the calculator
+          cannot be reached, the lesson says so where the figure would have been.
         </p>
         <div className="prl-metric-row prl-learn-page__figures">
           <Metric label="Lessons" value={curriculum.lessonCount} format="number" size="md" />

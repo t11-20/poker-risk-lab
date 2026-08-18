@@ -32,6 +32,12 @@ function candidate(input: {
   readonly action: ActionCandidate['action'];
   readonly ev: number;
   readonly to?: number;
+  /**
+   * Set on exactly the rows `buildCoachReport` sets it on: a bet or a raise, whose EV contains
+   * the `f x pot` term. It is the marker `bestMeasuredCandidate` reads, so a case about the fold
+   * rule has to state it or it is testing a report that could not exist.
+   */
+  readonly foldEquityAssumed?: number;
 }): ActionCandidate {
   return {
     action: input.action,
@@ -39,6 +45,7 @@ function candidate(input: {
     ev: input.ev,
     derivation: `${input.action} is worth ${input.ev} by assumption in this test`,
     ...(input.to === undefined ? {} : { to: input.to }),
+    ...(input.foldEquityAssumed === undefined ? {} : { foldEquityAssumed: input.foldEquityAssumed }),
   };
 }
 
@@ -148,6 +155,82 @@ describe('what counts as consistent', () => {
     const verdict = judgeConsistency({ report: clear, action: 'fold', bigBlind: 10 });
     assert.equal(verdict.consistent, false);
     assert.equal(verdict.shortfallUnits, 40);
+  });
+
+  it('does not mark a fold wrong on the strength of an assumed fold frequency', () => {
+    // The shape of `rk-the-fold-that-feels-wrong` and `eq-implied-odds-deep-stacks-turn`: both ask
+    // "call or fold?", both conclude in their own prose that folding is better, and both used to
+    // tell a learner who folded that their answer was "not consistent with this analysis" — because
+    // a bluff-raise priced at the Coach's default 35% fold equity topped the table. Nothing
+    // measured beat the fold; an assumption did.
+    const report = reportWith([
+      candidate({ action: 'fold', ev: 0 }),
+      candidate({ action: 'call', ev: -60 }),
+      candidate({ action: 'raise', ev: 126, to: 560, foldEquityAssumed: 0.35 }),
+    ]);
+    const verdict = judgeConsistency({ report, action: 'fold', bigBlind: 20 });
+    assert.equal(verdict.consistent, true);
+    assert.equal(verdict.shortfallUnits, 0);
+    // Both figures are still published, and they are different numbers on purpose: `bestEv` is the
+    // best row in the table and `measuredBestEv` is the one the verdict was reached on.
+    assert.equal(verdict.bestEv, 126);
+    assert.equal(verdict.measuredBestEv, 0);
+    assert.deepEqual([...verdict.supportedActions], ['fold', 'raise']);
+    // And the call is still wrong, at -60 against a 20-chip margin. The rule was not loosened for
+    // everything, only for the one comparison that rested on an invented parameter.
+    assert.equal(judgeConsistency({ report, action: 'call', bigBlind: 20 }).consistent, false);
+  });
+
+  it('still marks a fold wrong when something the analysis measured clearly beats it', () => {
+    // The direction that must not move. A call worth 40 chips carries no assumed fold frequency,
+    // so it is a measured figure and it does decide the verdict.
+    const report = reportWith([
+      candidate({ action: 'fold', ev: 0 }),
+      candidate({ action: 'call', ev: 40 }),
+      candidate({ action: 'raise', ev: 300, to: 560, foldEquityAssumed: 0.35 }),
+    ]);
+    const verdict = judgeConsistency({ report, action: 'fold', bigBlind: 10 });
+    assert.equal(verdict.consistent, false);
+    // Quoted against the benchmark the verdict used, not against the raise. Telling somebody they
+    // are 300 chips behind and then judging them against 40 is two answers to one question.
+    assert.equal(verdict.shortfallUnits, 40);
+    assert.equal(verdict.measuredBestEv, 40);
+  });
+
+  it('counts an aggressive row priced at zero fold equity as a measured figure', () => {
+    // The marker is the parameter's value, not the action's name. A raise the caller priced with
+    // `assumedFoldEquity: 0` rests on the equity alone, so excluding it would be excluding a real
+    // measurement and would let a fold stand against a line that genuinely beats it.
+    const report = reportWith([
+      candidate({ action: 'fold', ev: 0 }),
+      candidate({ action: 'call', ev: -5 }),
+      candidate({ action: 'raise', ev: 45, to: 200, foldEquityAssumed: 0 }),
+    ]);
+    const verdict = judgeConsistency({ report, action: 'fold', bigBlind: 10 });
+    assert.equal(verdict.measuredBestEv, 45);
+    assert.equal(verdict.consistent, false);
+  });
+
+  it('never calls a fold defensible while checking is free', () => {
+    // Not an EV comparison, and it must not be left to one: a check costs nothing and keeps every
+    // card still to come, so it dominates a fold outright — and with a small pot and thin equity
+    // the gap between them sits inside the indifference margin, where an EV test would wave a fold
+    // through. `buildCoachReport` throws rather than rank a fold above a free check; this is the
+    // same invariant where the learner's own answer is judged.
+    //
+    // Every EV here is inside a 10-chip margin on purpose. An EV-only rule waves this fold
+    // through; the dominance rule is the only thing that catches it, so the case is only
+    // discriminating with these numbers.
+    const report = reportWith([
+      candidate({ action: 'check', ev: 0.6 }),
+      candidate({ action: 'fold', ev: 0 }),
+      candidate({ action: 'bet', ev: 6, to: 28, foldEquityAssumed: 0.35 }),
+    ]);
+    const verdict = judgeConsistency({ report, action: 'fold', bigBlind: 10 });
+    assert.equal(verdict.consistent, false, 'giving up a hand that costs nothing to keep is never right');
+    assert.deepEqual([...verdict.supportedActions], ['check', 'bet']);
+    // Checking itself is defensible, which is the other half of the same claim.
+    assert.equal(judgeConsistency({ report, action: 'check', bigBlind: 10 }).consistent, true);
   });
 
   it('says the analysis did not price an action rather than calling it wrong', () => {

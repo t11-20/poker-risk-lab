@@ -32,8 +32,17 @@ A pnpm workspace of six libraries and two applications.
 **8 API route modules:** auth, calc, content, hands, legends, progress, rooms, plus the
 router index that mounts them under `/api/v1`.
 
-**Scale:** 217 source files (79,668 lines) and 80 test files (36,128 lines) — 0.45 lines of
-test per line of source.
+**Scale.** Roughly 215 first-party source files against roughly 100 test files. The figures are
+given as commands rather than as constants because they move with every commit, and a frozen count
+in a document nobody re-derives is the smallest possible version of the problem this report has been
+corrected for twice:
+
+```bash
+find apps packages -path '*/src/*' -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.css' \) \
+  ! -path '*/dist/*' ! -path '*/node_modules/*' | wc -l          # source files
+find . -name '*.test.*' ! -name 'tsconfig*' ! -path '*/dist/*' \
+  ! -path '*/node_modules/*' | wc -l                             # test files
+```
 
 ---
 
@@ -89,8 +98,8 @@ procedure, including the one-API-process rule, is in `RUNBOOK.md`.
 ## 4. Verification
 
 ```bash
-pnpm run verify          # security:audit → hygiene → lint → build → typecheck → test
-pnpm run test            # unit + integration + scripts
+pnpm run verify          # the release gate: 11 gates, every one of them run and reported
+pnpm run test            # build:packages, then unit + integration + scripts
 pnpm run test:all        # the above, plus exhaustive, simulation and a11y
 pnpm run security:audit  # 8 supply-chain gates
 pnpm run test:exhaustive # all 133,784,560 seven-card hands
@@ -101,8 +110,25 @@ pnpm run db:verify       # asserts the LIVE schema's security properties
 pnpm run design:contrast # WCAG 2.2 AA, both themes
 ```
 
-`build` precedes `typecheck` deliberately: every `@prl/*` package resolves its types through
-`dist/`, so typechecking a clean install first cascades into TS2307 across seven projects.
+`verify`'s gates, in order:
+
+```
+security:audit · security:hygiene · lint · build · typecheck · design:contrast
+test · test:a11y · test:exhaustive · test:simulation · db:verify
+```
+
+**Every gate runs even if an earlier one fails**, each prints `PASS`/`FAIL`, and the command exits
+non-zero if any failed. `verify` used to be a `&&` chain with `db:verify` last — so while `test` was
+red, the gate described two lines above as asserting the live schema's security properties **had
+never executed inside the command this document tells operators to run**. It passed on its own,
+which is precisely why that went unnoticed for so long. `test:a11y` was in no gate at all;
+accessibility is a stated functional requirement, so it is one now.
+
+`build` precedes `typecheck` and `test` deliberately: every `@prl/*` package resolves its types and
+its runtime exports through `dist/`, so typechecking a clean install first cascades into TS2307
+across seven projects, and *testing* a clean install silently tests the previous build or nothing at
+all. `test` therefore builds the packages itself — `dist/` is `.gitignore`d, so a suite that depends
+on it is not hermetic unless it produces it.
 
 ### What the correctness claims rest on
 
@@ -114,8 +140,11 @@ no access to, not against itself.
   misclassified hand moves at least two counters and fails.
 - **Equity** is checked against published figures — AA vs KK over all 36 suit configurations
   gives 81.946% against a published ~81.9%.
-- **The engine** is checked by a randomised soak of 20,000 hands / 167,987 decision points
-  asserting exact chip conservation and that every pot goes to an entitled seat.
+- **The engine** is checked by three randomised soaks totalling **8,500 hands / 50,236 applied
+  actions** — 4,000 general-invariant hands (27,233 actions), 1,500 shove-heavy (6,847) and 3,000
+  short-blind-heavy (16,156) — asserting exact chip conservation after every action and that every
+  pot goes to an entitled seat. Each soak also asserts its own coverage, so a generator that
+  degenerated into folding every hand fails rather than passing quickly.
 - **The Coach's EV** is checked against hand-derived closed forms written as literals in the
   test, with the derivation in a comment, and every size it can emit is cross-checked
   against the engine's own legality rules.
@@ -132,6 +161,16 @@ suite can report `tests 0`. This exists because the failure it prevents actually
 56 database tests — including the six asserting that one player can never receive another
 player's hole cards — silently skipped while the suite exited 0.
 
+An audit then defeated the first version of that guard three ways, so it now checks execution and
+not only reachability: a workspace `test` script must **be** a `node --test` runner (an
+`echo … && exit 0` used to be exempted from the zero-tests check entirely), every `*.test.*` file
+must declare at least one `test()`/`it()`, and no declaration may be disabled by a literal
+`{ skip: '…' }` — node reports those as `tests 0 / skipped 0`, so a green run never mentions them. A
+skip whose value is an *identifier* is still allowed, because that is the conditional no-database
+waiver, and `database-availability.test.ts` fails inside it whenever `CI` is set. Each of the three
+bypasses has a negative control that builds it in a temporary directory, proves `node --test` exits
+0 on it, and proves the guard reports it.
+
 A missing database now **fails** with a message naming `pnpm run db:setup`. The only waiver
 is a named script that prints a banner saying the run proves nothing about SQL, and it is
 **refused whenever `CI` is set**.
@@ -147,8 +186,11 @@ Full detail in `SECURITY.md` and `THREAT-MODEL.md` (16 threats, plus §9 on acce
 - **Redaction by construction.** `PlayerView` is built field-by-field from server state
   rather than by deleting fields from a fuller object, so it fails closed.
 - **Randomness** is cryptographic, with rejection sampling for an unbiased `unbiasedInt` and
-  Fisher–Yates drawing from `[0, i]`. `Math.random` is banned across all 8 source trees by a
-  scan wired into the release gates.
+  Fisher–Yates drawing from `[0, i]`. `Math.random` is banned across every first-party `src/` tree
+  by a scan wired into the release gates; `pnpm run security:hygiene` reports what it covered —
+  `scanned 194 source files across 8 src/ trees for Math.random` on 2026-08-18 — and the scan has
+  its own negative control, feeding the detector a violation and a prose mention and failing if it
+  cannot tell them apart.
 - **Deck commitment** is a per-card Merkle tree with domain-separated leaf/node hashing and
   32-byte per-card salts, so a post-hand reveal proves the deal without exposing cards that
   were never shown. (The first design hashed the whole deck and leaked folded hands.)
@@ -216,13 +258,17 @@ affiliated. They never reproduce anyone's private thoughts, quotes or beliefs.
 
 ## 8. Review and release
 
-This build was subjected to an adversarial multi-agent release review: seven independent
-reviewers running their own checks in parallel, none permitted to rely on the implementer's
-summary. **All seven returned FAIL**, with 94 findings deduplicated into 15 blocking clusters.
+This build has been through **two** independent adversarial rounds, and neither has yet returned a
+verdict that would permit a release. Both are recorded here, in order, because a report that
+describes only the round it survived is a report nobody should trust.
+
+**Round 1 — release review.** Seven independent reviewers running their own checks in parallel, none
+permitted to rely on the implementer's summary. **All seven returned FAIL**, with 94 findings
+deduplicated into 15 blocking clusters.
 
 The most consequential finding was not a crash. It was that the Coach computed a raise's
 expected value as though it were an opening bet — an error of exactly `(1−f)·C·(1−e)`, always
-positive, and worse the lower the player's equity. It changed 6 of 35 shipped scenario
+positive, and worse the lower the player's equity. It changed 6 of the 36 shipped scenario
 recommendations, 5 of them from *raise* to *fold*. Everything else in the review was something
 that did not work; that was something that worked, presented itself as authoritative, and was
 wrong.
@@ -232,5 +278,16 @@ at all. Every request omitted the `/api/v1` prefix, and a 404 was treated as "AP
 deployed", so every screen silently served bundled fixtures. It rendered correctly, which is
 why internal verification kept passing.
 
-Full detail: `reviews/release-findings.md` (all findings, with the reviewers' disagreements
-preserved rather than averaged) and `reviews/final-release-report.md` (the release decision).
+**Round 2 — independent release audit, 2026-08-18.** Eight reviewers under a single barrier plus a
+final challenger behind an information wall, tasked with disproving the product. **Verdict: FAIL.**
+208 requirements traced, 143 PASS, 31 PARTIAL, 33 FAIL, 1 UNVERIFIED; **4 P0 clusters and 17 P1
+clusters**. Its own summary of what it found good is worth as much as its findings, and both are in
+`audit/final-release-audit.md`. Two of its findings were about this document and the runbook rather
+than the product — numbers stated with more confidence than the evidence supported, and a
+graceful-shutdown behaviour the runbook called "fixed" that was not. Those are corrected in place
+above and in `RUNBOOK.md` §10, with the evidence cited rather than asserted.
+
+Full detail: `reviews/release-findings.md` (round 1: all findings, with the reviewers'
+disagreements preserved rather than averaged), `audit/` (round 2: the summary, the per-requirement
+traceability matrix, and the reviewers' raw records), and `reviews/final-release-report.md` — the
+release decision, which is currently **do not ship**, and says what would have to change.

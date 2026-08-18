@@ -257,8 +257,33 @@ function TableRegion(props: TableRegionProps): ReactElement {
     <div className="prl-play__table">
       {status === 'loading' ? <StageSkeleton /> : null}
 
+      {/*
+        `role="alert"` is load-bearing, not decoration.
+
+        This block replaces the table on the app's most consequential failure path, and it used to
+        be an unlabelled `<div>` with no live-region ancestor. A screen-reader user therefore heard
+        nothing when it appeared — while the connection panel's `role="status"`, the only live
+        region on the page, was still politely reading "Ready to connect." They were told the
+        opposite of what the screen said. That is a WCAG 2.2 SC 4.1.3 (AA) failure, and it was
+        found in a release audit rather than by a test.
+
+        Two properties make this work, and both must be kept:
+
+          1. **The node is mounted only in the error state.** A `role="alert"` that is always in
+             the DOM and merely changes its text is announced far less reliably; an alert fires on
+             insertion. `status === 'error'` is the only thing that puts it here, so the insertion
+             and the error are the same event.
+          2. **The status region cannot contradict it.** `statusSentence` in
+             `src/app/play/LiveTable.tsx` now names a failed setup instead of falling through to
+             "Ready to connect." — see the comment there. An assertive alert and a polite status
+             that disagree is worse than either alone.
+
+        `role="alert"` implies `aria-live="assertive"` and `aria-atomic="true"`, so the whole block
+        is read as one message. Nothing else on this screen is assertive, which is what keeps that
+        interruption meaningful.
+      */}
       {status === 'error' ? (
-        <div className="prl-error">
+        <div className="prl-error" role="alert">
           <p className="prl-error__title">
             <span aria-hidden="true">{'▲ '}</span>
             Error — table unavailable

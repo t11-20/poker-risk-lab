@@ -44,6 +44,7 @@ import type { CoachReport } from '@prl/contracts';
 import type { Card } from '@prl/poker-engine';
 import {
   buildCoachReport,
+  type CoachAction,
   type EquityPlayer,
   type EquityResult,
   type EquitySpec,
@@ -115,6 +116,20 @@ export interface CoachTask {
   readonly bigBlind: number;
   /** The engine's own `legalActions` minimum, when the caller has a hand state. */
   readonly minimumRaiseTo?: number;
+  /**
+   * The action kinds hero may take here. **Required, and required for a reason.**
+   *
+   * `CoachInput.legalActions` was optional and this type had no field for it at all, so
+   * every surface that crosses this boundary — the Scenario Lab, the hand review, the
+   * profile comparison and `POST /math/coach` — analysed with the Coach's legality guard
+   * disabled. Only the live table, which never crosses this boundary, supplied one.
+   *
+   * Making it required here is what stops that recurring: a task built without one is a
+   * compile error at the caller rather than a report whose candidates the table would
+   * refuse. Callers with no `HandState` pass `deriveLegalActions(...)`, which is the
+   * honest answer for a described spot and is never the permissive one.
+   */
+  readonly legalActions: readonly CoachAction[];
   readonly samples: number;
   readonly seed: number;
 }
@@ -220,6 +235,11 @@ function runCoach(task: CoachTask): CoachReport {
     opponentStacks: task.opponentStacks,
     bigBlind: task.bigBlind,
     ...(task.minimumRaiseTo === undefined ? {} : { minimumRaiseTo: task.minimumRaiseTo }),
+    // Passed straight through, never defaulted here. A `?? deriveLegalActions(task)` on
+    // this line would look like belt and braces and would in fact re-open the hole: a
+    // caller that stopped sending the field would keep working, and the compile error
+    // that is the whole point of making it required would never be seen.
+    legalActions: task.legalActions,
     samples: task.samples,
     seed: task.seed,
   });

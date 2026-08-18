@@ -73,7 +73,16 @@ export interface MetricDelta {
 export interface MetricProps {
   /** Required: a figure with no label is not a metric. */
   readonly label: string;
-  /** A fraction in 0..1 for `percent`; otherwise the figure itself. */
+  /**
+   * A fraction in 0..1 for `percent`; otherwise the figure itself.
+   *
+   * **Not range-checked here, deliberately.** A metric does not know whether its `percent` is a
+   * probability (0..1, and 1.6 is a defect) or a rate that may legitimately exceed 100%, so it
+   * renders what it is given — the same reasoning that keeps `format.ts` from rescuing a bad
+   * value and hiding the bug behind it. A caller rendering a *probability* must check first:
+   * `isProbabilityFraction` in `../probability.ts`, and see `CoachPanel` rule 5 for what to draw
+   * instead.
+   */
   readonly value: number;
   readonly format?: MetricFormat;
   /** Overrides the format's default precision. */

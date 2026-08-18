@@ -58,6 +58,28 @@
  *    improves your hand and still loses — so the label says so rather than assuming the reader
  *    knows the jargon.
  *
+ * 5. **A probability that is not a probability is never drawn.** Every figure this panel renders
+ *    as a percentage passes `isProbabilityFraction` (or its sibling for differences and for
+ *    already-scaled points) *before* it reaches a formatter, and a value outside the range is
+ *    replaced by a refusal that says why. See `RefusedFigure` below and the long note in
+ *    `../probability.ts`.
+ *
+ *    This is not redundant with the producer's check, and the distinction matters enough to
+ *    write down. `@prl/poker-math` refuses an impossible figure where it is *computed*
+ *    (`coach.ts` returns `already-ahead` / `no-clean-outs` / `not-a-probability`, and
+ *    `assertProbabilityFraction` throws) — but a `CoachReport` arrives here as plain JSON, past a
+ *    cache, a fixture file and a deserialiser. Fed the stale value `estimate: 1.6` this panel
+ *    used to print "The rule of 2 and 4 estimates 160.0%": a 160% probability, in the app's own
+ *    authoritative voice, in a product whose entire premise is never being confidently wrong
+ *    about probability. The computation was right and the page was still wrong, because the
+ *    presentation layer had no guard. It has one now, and it is deliberately independent of the
+ *    producer's, so that a future regression upstream cannot reach a learner's eyes.
+ *
+ *    What this guard does NOT cover: prose the report supplies verbatim — `explanation`,
+ *    `derivation`, `reason`, `note`, the teaching notes, the assumptions and the limitations. A
+ *    sentence is not a figure and cannot be range-checked; those strings are the producer's
+ *    responsibility. Every number the *panel itself* turns into text is checked here.
+ *
  * ============================================================================================
  * Structure and reading order
  * ============================================================================================
@@ -92,16 +114,29 @@ import type {
 import type { ReactElement } from 'react';
 import { parseCardText } from '../cards.ts';
 import { cx } from '../cx.ts';
+/**
+ * `formatPercent` is deliberately NOT imported here any more, and that absence is load-bearing.
+ * Every percentage this panel renders now goes through `formatProbability`, which returns `null`
+ * for a value that is not a probability instead of a string. Reaching for `formatPercent` again
+ * would silently re-open the hole described in rule 5 above; if you find yourself needing it,
+ * the figure you are rendering is either not a probability or the guard is in the wrong place.
+ */
 import {
   describeSpr,
   formatOdds,
-  formatPercent,
   formatPoints,
   formatSignedUnits,
   formatUnits,
   pluralise,
 } from '../format.ts';
 import { withKeys } from '../keys.ts';
+import {
+  formatProbability,
+  isProbabilityDifference,
+  isProbabilityFraction,
+  isProbabilityPoints,
+  NOT_A_PROBABILITY,
+} from '../probability.ts';
 import { AssumptionList } from './AssumptionList.tsx';
 import { Callout } from './Callout.tsx';
 import { Chip } from './Chip.tsx';
@@ -158,6 +193,39 @@ const TRIAL_NOUN: Readonly<Record<EquitySummary['method'], { readonly one: strin
     'exact-enumeration': { one: 'board enumerated', many: 'boards enumerated' },
     'monte-carlo': { one: 'trial sampled', many: 'trials sampled' },
   };
+
+interface RefusedFigureProps {
+  readonly label: string;
+  /** The figure, named as the reader would name it: "your share of the pot". */
+  readonly what: string;
+}
+
+/**
+ * What stands where a figure would have been, when the figure was not a probability.
+ *
+ * Three decisions in here, each of which is the difference between a useful refusal and a
+ * confusing hole:
+ *
+ *  - **The label stays.** Removing the whole tile would leave the reader wondering whether the
+ *    panel has an equity section at all. The question is still asked; only the answer is withheld.
+ *  - **The offending value is not printed, in any form.** Not as "160.0%", not as "1.6", not in
+ *    an `aria-label`. A wrong probability recited inside an apology is still a wrong probability
+ *    on the page, and it is exactly what a screen-reader user — least able to notice the figure is
+ *    absurd — would hear. `test/coach-panel-render.test.ts` scans attributes as well as text for
+ *    precisely this reason.
+ *  - **It says which kind of absence this is.** "not a probability" rather than "—" or "n/a":
+ *    the figure was not missing, it arrived and was rejected, and a bug reporter needs to be able
+ *    to tell those apart.
+ */
+function RefusedFigure({ label, what }: RefusedFigureProps): ReactElement {
+  return (
+    <StatTile
+      label={label}
+      value={NOT_A_PROBABILITY}
+      note={`A probability has to sit between 0% and 100%. The value this report carried for ${what} does not, so this panel is not stating it — a figure that cannot be true is worse than one that is missing.`}
+    />
+  );
+}
 
 /** Sign class for an EV. Near-zero is its own case: `+0.0` reads as a win. */
 function evSign(ev: number): 'positive' | 'negative' | 'neutral' {
@@ -271,6 +339,19 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
   // types, so the property is added only when there is one.
   const intervalProps = interval === null ? {} : { interval };
 
+  /**
+   * Rule 5, on the delta specifically.
+   *
+   * The surplus is a DIFFERENCE of two probabilities, so its range is -1..1 and it is
+   * legitimately negative — a call that is not priced in. `isProbabilityFraction` would reject
+   * every one of those, which is how a guard gets a reputation for false alarms and then gets
+   * deleted. Checked separately from the equity too, so one bad delta does not take a perfectly
+   * good headline figure down with it.
+   */
+  const deltaProps = isProbabilityDifference(surplus)
+    ? { delta: { value: surplus, label: 'over the break-even equity' } }
+    : {};
+
   return (
     <section className="prl-coach__section prl-coach__section--equity">
       <div className="prl-coach__section-head">
@@ -285,16 +366,22 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
         </Chip>
       </div>
 
-      <Metric
-        label="Your share of the pot"
-        value={equity.heroEquity}
-        format="percent"
-        size="lg"
-        countUp
-        {...intervalProps}
-        delta={{ value: surplus, label: 'over the break-even equity' }}
-        note={`${pluralise(equity.trials, TRIAL_NOUN[equity.method].one, TRIAL_NOUN[equity.method].many)}.`}
-      />
+      {/* Rule 5. `Metric` formats internally, so the check has to happen before it is handed
+          the value — there is no point at which a `Metric` could decline on the panel's behalf. */}
+      {isProbabilityFraction(equity.heroEquity) ? (
+        <Metric
+          label="Your share of the pot"
+          value={equity.heroEquity}
+          format="percent"
+          size="lg"
+          countUp
+          {...intervalProps}
+          {...deltaProps}
+          note={`${pluralise(equity.trials, TRIAL_NOUN[equity.method].one, TRIAL_NOUN[equity.method].many)}.`}
+        />
+      ) : (
+        <RefusedFigure label="Your share of the pot" what="your share of the pot" />
+      )}
 
       <EquityBar players={equity.perPlayer} label="Equity by player" />
     </section>
@@ -313,13 +400,19 @@ function PriceSection({ potOdds }: { readonly potOdds: PotOddsSummary }): ReactE
         never is. Break-even moves whenever the price moves, so counting it too would announce the same
         event a fourth time. Four polite announcements for one change is not more accessible than one.
       */}
-      <Metric
-        label="Break-even equity"
-        value={potOdds.breakEvenEquity}
-        format="percent"
-        size="md"
-        note="The share of the pot a call has to win, on average, just to break even."
-      />
+      {/* Rule 5. This is the figure the whole "should I call?" question turns on, so a wrong one
+          here would misprice every decision the reader makes from this panel. */}
+      {isProbabilityFraction(potOdds.breakEvenEquity) ? (
+        <Metric
+          label="Break-even equity"
+          value={potOdds.breakEvenEquity}
+          format="percent"
+          size="md"
+          note="The share of the pot a call has to win, on average, just to break even."
+        />
+      ) : (
+        <RefusedFigure label="Break-even equity" what="the break-even equity" />
+      )}
 
       {/*
         Two shapes for one member, because `oddsRatio` is `number | null` and the two cases are
@@ -355,16 +448,27 @@ function PriceSection({ potOdds }: { readonly potOdds: PotOddsSummary }): ReactE
 
 function StackSection({ stack }: { readonly stack: StackContext }): ReactElement {
   const spr = describeSpr(stack.spr);
+  // Rule 5. `formatProbability` returns `null` rather than a string for a value that is not a
+  // probability, which is what makes the second branch impossible to forget: a `string | null`
+  // will not go into `StatTile`'s `value` without the caller saying what happens instead.
+  const potSizedBetPrice = formatProbability(stack.potOddsOfferedByPotSizedBet);
   return (
     <section className="prl-coach__section">
       <h3 className="prl-coach__section-heading">Stack context</h3>
       <Metric label="Effective stack" value={stack.effectiveStack} format="units" size="md" />
       <StatTile label="Stack-to-pot ratio" value={spr.label} note={spr.meaning} />
-      <StatTile
-        label="Price a pot-sized bet would offer"
-        value={formatPercent(stack.potOddsOfferedByPotSizedBet)}
-        note="The equity a caller would need if the next bet were the size of the pot."
-      />
+      {potSizedBetPrice === null ? (
+        <RefusedFigure
+          label="Price a pot-sized bet would offer"
+          what="the equity a pot-sized bet would demand"
+        />
+      ) : (
+        <StatTile
+          label="Price a pot-sized bet would offer"
+          value={potSizedBetPrice}
+          note="The equity a caller would need if the next bet were the size of the pot."
+        />
+      )}
       <p className="prl-coach__prose">{stack.explanation}</p>
     </section>
   );
@@ -420,12 +524,24 @@ function CandidateTable({ candidates }: { readonly candidates: readonly ActionCa
         <tbody>
           {candidates.map((candidate, position) => {
             const key = keyed[position]?.key ?? candidate.action;
+            // Rule 5. Both extras are assumptions stated as probabilities, and an assumption the
+            // reader cannot check is exactly the kind of figure that must not be invented.
             const extras: string[] = [];
             if (candidate.foldEquityAssumed !== undefined) {
-              extras.push(`assumes opponents fold ${formatPercent(candidate.foldEquityAssumed)} of the time`);
+              const folds = formatProbability(candidate.foldEquityAssumed);
+              extras.push(
+                folds === null
+                  ? 'the fold-equity this line assumes is not a probability, so it is not stated'
+                  : `assumes opponents fold ${folds} of the time`,
+              );
             }
             if (candidate.potShareIfCalled !== undefined) {
-              extras.push(`wins ${formatPercent(candidate.potShareIfCalled)} of the pot when called`);
+              const share = formatProbability(candidate.potShareIfCalled);
+              extras.push(
+                share === null
+                  ? 'the pot share this line assumes when called is not a probability, so it is not stated'
+                  : `wins ${share} of the pot when called`,
+              );
             }
             return (
               <tr key={key}>
@@ -527,12 +643,92 @@ function Disclose({ summary, children }: DiscloseProps): ReactElement {
   );
 }
 
+/**
+ * The rule-of-2-and-4 comparison, or the reason there is not one. **This is the line the P0 was
+ * found on**, so it is spelled out rather than inlined as a ternary in the JSX.
+ *
+ * ## The units, which have been wrong in both directions
+ *
+ * `rule.estimate` is a FRACTION, like every other probability on this contract, so `formatPercent`
+ * is the right renderer and the multiplication happens exactly once. `@prl/poker-math` used to
+ * publish it in percentage points instead — 36 rather than 0.36 — and this line rendered a
+ * nine-out flush draw as "3,600.0%". `errorPoints` beside it is already scaled, which is what its
+ * name says, so it goes through `formatPoints` and is NOT multiplied. Swapping the two formatters
+ * is the whole bug, in both directions.
+ *
+ * ## Three answers, not two, and they are genuinely different things
+ *
+ *  1. `rule === null` — **the engine withheld it.** The Coach declines the shortcut where it
+ *     cannot mean anything: a made hand, no clean outs, or an out count whose multiple would
+ *     exceed 100%. That is a considered answer and the reason lands in the teaching notes below.
+ *  2. A figure arrived that is **not a probability** — the *panel* withholds it. This is the case
+ *     the audit found: fed the stale fixture value `estimate: 1.6`, this line printed "The rule of
+ *     2 and 4 estimates 160.0%", unconditionally, because it formatted whatever it was handed.
+ *  3. A figure arrived and it is a probability — state it, with its error.
+ *
+ * Cases 1 and 2 must not share a sentence. "The engine decided this shortcut does not apply" and
+ * "something upstream sent a number that cannot be true" are different facts, and the second is a
+ * defect the reader is entitled to recognise as one.
+ *
+ * `rule.note` is deliberately absent from case 2. It is prose written to explain a figure that is
+ * not being shown, and a note reading "9 outs times 4 is roughly 180%" would put the impossible
+ * percentage straight back on the page through the one channel this guard cannot range-check.
+ */
+function RuleOfThumbLine({ rule }: { readonly rule: EquitySummary['ruleOfThumb'] }): ReactElement {
+  if (rule === null) {
+    return (
+      <p className="prl-coach__prose">
+        No rule-of-thumb comparison for this spot. The rule of 2 and 4 is a shortcut for a draw with clean
+        outs still to come, and it is only shown where all three of those hold — the notes below say which one
+        does not.
+      </p>
+    );
+  }
+
+  const estimate = formatProbability(rule.estimate);
+  const error = isProbabilityPoints(rule.errorPoints) ? formatPoints(Math.abs(rule.errorPoints)) : null;
+
+  if (estimate === null || error === null) {
+    return (
+      <p className="prl-coach__prose">
+        The rule-of-thumb comparison is being withheld for this spot. A figure arrived for it, but it is not a
+        probability — the shortcut cannot estimate a chance below 0% or above 100%, and it cannot be wrong by
+        more than the whole range — so this panel is not repeating it. Every figure in this panel is checked
+        the same way; this is one that did not pass.
+      </p>
+    );
+  }
+
+  return (
+    <p className="prl-coach__prose">
+      {`The rule of 2 and 4 estimates ${estimate}, which is off by ${error}. ${rule.note}`}
+    </p>
+  );
+}
+
 export function CoachPanel(props: CoachPanelProps): ReactElement {
   const { report, title = 'Coach analysis', className } = props;
   const equity = report.equity;
   const interval = report.uncertainty.confidenceInterval;
-  const halfWidth = equity.confidenceHalfWidthPoints ?? interval?.halfWidthPoints ?? null;
+  const reportedHalfWidth = equity.confidenceHalfWidthPoints ?? interval?.halfWidthPoints ?? null;
   const isSampled = equity.method === 'monte-carlo';
+
+  /**
+   * Rule 5, on the error bar.
+   *
+   * A half-width is in percentage POINTS, so its own impossible range is ±100: an error bar wider
+   * than the whole 0..100 span it is drawn on describes nothing, and "41.2 % ± 4,000.00 points"
+   * is the same class of untruth as a 160% probability — it just does not carry a `%` sign, which
+   * is precisely why it would have survived a scan that only looks for percentages.
+   *
+   * A refused interval collapses to `null`, which routes it into the existing "sampled without an
+   * error bar" path rather than inventing a new one. The callout below then says *which* absence
+   * it is, because "none was reported" and "one was reported and could not be true" are different
+   * problems for whoever has to fix it.
+   */
+  const halfWidth =
+    reportedHalfWidth !== null && isProbabilityPoints(reportedHalfWidth) ? reportedHalfWidth : null;
+  const intervalWasRefused = reportedHalfWidth !== null && halfWidth === null;
 
   /**
    * Rule 2. Two decimals rather than one: the interval is often a fraction of a point, and rounding
@@ -566,9 +762,9 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
 
       {isSampled && halfWidth === null ? (
         <Callout tone="warning" title="This equity was sampled without an error bar">
-          The figure below came from Monte Carlo sampling, but no confidence interval was reported with it.
-          Read it as approximate: a sampled number without an interval cannot tell you how far from the truth
-          it might be.
+          {intervalWasRefused
+            ? 'The figure below came from Monte Carlo sampling, and an interval did arrive with it — but it is wider than the whole range a probability can occupy, so it is not being shown. Read the figure as approximate: an error bar that cannot be true tells you nothing about how far from the truth the figure might be.'
+            : 'The figure below came from Monte Carlo sampling, but no confidence interval was reported with it. Read it as approximate: a sampled number without an interval cannot tell you how far from the truth it might be.'}
         </Callout>
       ) : null}
 
@@ -624,31 +820,7 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
             expression="stack-to-pot ratio = effective stack / pot"
             explanation="How much room is left relative to what is already in the middle. It is the number that decides whether a commitment decision arrives on this street or a later one."
           />
-          {/*
-            `rule.estimate` is a FRACTION, like every other probability on this contract, so
-            `formatPercent` is the right renderer and the multiplication happens exactly once.
-            `@prl/poker-math` used to publish it in percentage points instead — 36 rather than 0.36 —
-            and this line rendered a nine-out flush draw as "3,600.0%". `errorPoints` beside it is
-            already scaled, which is what its name says, so it goes through `formatPoints` and is
-            NOT multiplied. Swapping the two formatters is the whole bug, in both directions.
-
-            `null` is now a real answer rather than an absence: the Coach withholds the shortcut
-            where it cannot mean anything — a made hand, no clean outs, or an out count whose
-            multiple would exceed 100% — and puts the reason in the teaching notes below.
-          */}
-          {rule === null ? (
-            <p className="prl-coach__prose">
-              No rule-of-thumb comparison for this spot. The rule of 2 and 4 is a shortcut for a draw with
-              clean outs still to come, and it is only shown where all three of those hold — the notes below
-              say which one does not.
-            </p>
-          ) : (
-            <p className="prl-coach__prose">
-              {`The rule of 2 and 4 estimates ${formatPercent(rule.estimate)}, which is off by ${formatPoints(
-                Math.abs(rule.errorPoints),
-              )}. ${rule.note}`}
-            </p>
-          )}
+          <RuleOfThumbLine rule={rule} />
           <p className="prl-coach__prose">
             {`Equity came from ${
               isSampled ? 'Monte Carlo sampling' : 'exact enumeration'

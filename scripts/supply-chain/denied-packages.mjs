@@ -31,10 +31,28 @@ export const DENIED_NAMES = new Map([
   ['jest-canvas-mock', 'Mini Shai-Hulud: compromised 2.5.3/2.6.3/2.7.3 (StepSecurity)'],
 ]);
 
-/** Scope prefixes that are denied outright. */
+/**
+ * Scope prefixes that are denied outright.
+ *
+ * Scopes, not versions, deliberately: the campaign is reported at roughly 1,300
+ * package *versions* across ~2B monthly downloads, and the root cause in every
+ * wave is a maintainer-account compromise, so re-compromise of the same scope is
+ * the expected failure mode rather than the surprising one. A version-granular
+ * list against a campaign that mints new versions is a list that is always one
+ * publish out of date.
+ *
+ * The last three were named in this repository's own cited sources (Snyk on
+ * TanStack; Expel and Arctic Wolf on TanStack, Mistral AI and OpenSearch — see
+ * docs/security/shai-hulud-snapshot-2026-08-17.md §1 and Sources) and were
+ * missing from this file. None of them is in the resolved graph today, which is
+ * the point: a blocklist is for the dependency somebody adds next week.
+ */
 export const DENIED_SCOPES = new Map([
   ['@cacheable/', 'guardrail: Shai-Hulud caching family (CSA AD-2026-009)'],
   ['@antv/', 'Mini Shai-Hulud: 400+ compromised scoped packages (Microsoft, StepSecurity)'],
+  ['@tanstack/', 'Mini Shai-Hulud: TanStack packages compromised (Snyk, Expel, Arctic Wolf)'],
+  ['@mistralai/', 'Mini Shai-Hulud: Mistral AI ecosystem compromised (Expel, Arctic Wolf)'],
+  ['@opensearch-project/', 'Mini Shai-Hulud: OpenSearch ecosystem compromised (Expel, Arctic Wolf)'],
 ]);
 
 /**
@@ -48,8 +66,33 @@ export const ALLOWED_RESOLUTION_HOSTS = new Set(['registry.npmjs.org']);
 /**
  * On-disk artefacts left by the campaign. `ioc-scan.mjs` sweeps the working tree
  * and the installed store for these. Paths are matched relative to a root.
+ *
+ * `.vscode/tasks.json` and `.claude/settings.json` were missing from this list
+ * even though `ioc-scan.mjs`'s own header names `.vscode/tasks.json` verbatim as
+ * the reason the gate exists, and the snapshot names both in §3 under "Claude
+ * Code persistence" / "VS Code persistence". They are the *re-execution* half of
+ * the persistence pair: `setup.mjs` is the payload, `tasks.json` /
+ * `settings.json` is what makes an editor or an agent run it on open.
  */
-export const IOC_PATHS = ['.claude/setup.mjs', '.vscode/setup.mjs', 'cat.py', '.github/workflows/codeql.yml'];
+export const IOC_PATHS = [
+  '.claude/setup.mjs',
+  '.claude/settings.json',
+  '.vscode/setup.mjs',
+  '.vscode/tasks.json',
+  'cat.py',
+  '.github/workflows/codeql.yml',
+];
+
+/**
+ * Workflow files this repository is known to have.
+ *
+ * The campaign injects `.github/workflows/codeql.yml` — a name-squat on a
+ * workflow people expect to see — to mint publish tokens from CI. A repository
+ * with exactly two known workflows can say so, and an unexpected third file is
+ * then a failure rather than a warning nobody reads. `ci-pinning.mjs` enforces
+ * this; adding a workflow means adding it here, in a reviewed diff.
+ */
+export const EXPECTED_WORKFLOWS = new Set(['ci.yml', 'supply-chain.yml']);
 
 /** Byte-level markers. Any hit is treated as a confirmed compromise, not a warning. */
 export const IOC_STRINGS = [

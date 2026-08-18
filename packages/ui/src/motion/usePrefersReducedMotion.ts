@@ -30,40 +30,102 @@
  * `subscribe` and `getSnapshot` must be stable function identities or React re-subscribes on
  * every render. Keeping them at module scope, over one lazily created `MediaQueryList`, gives
  * the whole app a single listener no matter how many components ask.
+ *
+ * ## Why the store is a factory the tests can call
+ *
+ * `node --test` runs no renderer in this repo, by policy, so this hook cannot be mounted. The
+ * release audit's finding was not that the preference was ignored — it is consulted here and in
+ * both hooks that animate — but that **nothing proved it**, which is the same thing a year later.
+ * A guard nobody exercises is a guard nobody notices losing.
+ *
+ * So the part that can be wrong is separated from the part that needs React. `createReducedMotionStore`
+ * takes the `matchMedia` host as an argument instead of reaching for a global, which lets
+ * `test/motion.test.ts` hand it a window that reports `(prefers-reduced-motion: reduce)` and assert
+ * the answer that comes back — the real query string, the real subscription, the real snapshot,
+ * simply not the real browser. `usePrefersReducedMotion` is then the four lines that cannot be
+ * tested and have nothing in them to get wrong.
  */
 
 import { useSyncExternalStore } from 'react';
 import { REDUCED_MOTION_QUERY } from './reduced-motion.ts';
 
-let queryList: MediaQueryList | null = null;
-let queryResolved = false;
+/**
+ * The two members of a `MediaQueryList` this store uses.
+ *
+ * Declared structurally rather than as the DOM's `MediaQueryList` so a test can supply one
+ * without fabricating an entire EventTarget — and so the `addEventListener` guard below is
+ * expressible: the members are optional here precisely because they are the ones a very old
+ * implementation may not have.
+ */
+export interface ReducedMotionQuery {
+  readonly matches: boolean;
+  addEventListener?(type: 'change', listener: () => void): void;
+  removeEventListener?(type: 'change', listener: () => void): void;
+}
+
+/** The one member of `window` this store uses. `matchMedia` is optional: the server has none. */
+export interface MediaQueryHost {
+  matchMedia?(query: string): ReducedMotionQuery;
+}
+
+/** React's external-store contract, narrowed to this one boolean. */
+export interface ReducedMotionStore {
+  readonly subscribe: (onStoreChange: () => void) => () => void;
+  readonly getSnapshot: () => boolean;
+}
 
 /**
- * The shared `MediaQueryList`, or `null` where there is no `matchMedia` — the server, and
- * any test environment without a DOM. `queryResolved` means "we have already looked", so a
- * missing `matchMedia` is not re-probed on every snapshot read.
+ * A store over one host's `prefers-reduced-motion` state.
+ *
+ * The `MediaQueryList` is created lazily and remembered, including the "there isn't one"
+ * answer — `resolved` means "we have already looked", so a missing `matchMedia` is not
+ * re-probed on every snapshot read, and a host that gains one later is not picked up mid-session
+ * (which would change the answer under React without notifying it).
  */
-function mediaQuery(): MediaQueryList | null {
-  if (queryResolved) return queryList;
-  queryResolved = true;
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return null;
-  queryList = window.matchMedia(REDUCED_MOTION_QUERY);
-  return queryList;
+export function createReducedMotionStore(host: MediaQueryHost | undefined): ReducedMotionStore {
+  let query: ReducedMotionQuery | null = null;
+  let resolved = false;
+
+  const mediaQuery = (): ReducedMotionQuery | null => {
+    if (resolved) return query;
+    resolved = true;
+    if (host === undefined || typeof host.matchMedia !== 'function') return null;
+    query = host.matchMedia(REDUCED_MOTION_QUERY);
+    return query;
+  };
+
+  return {
+    subscribe(onStoreChange: () => void): () => void {
+      const list = mediaQuery();
+      // No `matchMedia`, or a `MediaQueryList` too old to be an EventTarget: there is nothing
+      // to listen to, so the snapshot simply never changes. Returning a no-op unsubscribe keeps
+      // React's contract intact rather than throwing in a subscription.
+      if (list === null || list.addEventListener === undefined) return () => undefined;
+      list.addEventListener('change', onStoreChange);
+      return () => list.removeEventListener?.('change', onStoreChange);
+    },
+    getSnapshot(): boolean {
+      return mediaQuery()?.matches ?? false;
+    },
+  };
 }
 
-function subscribe(onStoreChange: () => void): () => void {
-  const list = mediaQuery();
-  // No `matchMedia`, or a `MediaQueryList` too old to be an EventTarget: there is nothing
-  // to listen to, so the snapshot simply never changes. Returning a no-op unsubscribe keeps
-  // React's contract intact rather than throwing in a subscription.
-  if (list === null || typeof list.addEventListener !== 'function') return () => undefined;
-  list.addEventListener('change', onStoreChange);
-  return () => list.removeEventListener('change', onStoreChange);
+let shared: ReducedMotionStore | null = null;
+
+/** One store for the whole app, so N components share one listener rather than opening N. */
+function sharedStore(): ReducedMotionStore {
+  if (shared === null) {
+    shared = createReducedMotionStore(typeof window === 'undefined' ? undefined : window);
+  }
+  return shared;
 }
 
-function getSnapshot(): boolean {
-  return mediaQuery()?.matches ?? false;
-}
+// Module-level constants, so React sees one stable identity for each and never re-subscribes.
+// They delegate rather than close over a store built at import time: the store must not be
+// constructed until something actually asks, or importing this module on the server would
+// probe for a `window` that is not there.
+const subscribe = (onStoreChange: () => void): (() => void) => sharedStore().subscribe(onStoreChange);
+const getSnapshot = (): boolean => sharedStore().getSnapshot();
 
 function getServerSnapshot(): boolean {
   return false;

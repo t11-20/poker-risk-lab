@@ -12,22 +12,24 @@
  * could see the join.
  *
  * So this file asserts on the STRING A READER SEES. It renders the whole panel to static
- * markup and reads every percentage out of the result. A probability above 100% is not a
- * rounding problem to be tolerated at one decimal place, it is a claim that cannot be
- * true, and no rendering of this panel may contain one.
+ * markup and reads every percentage out of the result. A probability above 100% — or below
+ * 0% — is not a rounding problem to be tolerated at one decimal place, it is a claim that
+ * cannot be true, and no rendering of this panel may contain one.
  *
- * ## How the component is loaded
+ * ## What changed when the panel gained its own guard
  *
- * Node runs `.ts` by stripping types, but it cannot run `.tsx`: JSX has to be transformed,
- * not erased. Rather than give up and test a hand-copy of the panel's logic — which would
- * reproduce exactly the class of bug this file exists to catch — the package's own `tsc`
- * emits `src/` to a temporary directory and the emitted module is imported. That is the
- * real component, compiled by the same compiler and the same `tsconfig.json` the app uses.
+ * This file used to prove its scan had teeth by feeding the panel `estimate: 36` and
+ * asserting the panel *rendered* "3,600.0%". That assertion was correct and it now cannot
+ * hold, because the panel refuses such a value instead of formatting it (`CoachPanel` rule
+ * 5, `src/probability.ts`). Both halves of the original intent are kept, and separated:
  *
- * The temp directory gets a `node_modules` symlink to this package's own, so
- * `react/jsx-runtime` inside the emitted module resolves to the same physical files as the
- * `react` this test imports. Node realpaths symlinked packages, so both paths reach one
- * instance and there is no second copy of React.
+ *  - **the scan can fail** — proved against markup directly, so it no longer depends on the
+ *    component being capable of the defect (`the percentage scan has teeth`);
+ *  - **the component refuses** — proved by feeding the real panel the real bad values and
+ *    reading the result (`the panel refuses …`), which is a strictly stronger claim than
+ *    the one it replaces.
+ *
+ * The second is the guard the audit asked for. The first is why the second is believable.
  *
  * ## The fixtures are literals, on purpose
  *
@@ -39,89 +41,21 @@
  */
 
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { after, test } from 'node:test';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { test } from 'node:test';
 import type { CoachReport } from '@prl/contracts';
-import { createElement, type ReactElement } from 'react';
+import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-
-const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+import { loadComponent } from './support/render-component.ts';
 
 // ---------------------------------------------------------------------------
-// Compiling the component
+// Rendering the real component
 // ---------------------------------------------------------------------------
-
-type CoachPanelComponent = (props: { readonly report: CoachReport }) => ReactElement;
-
-let compiled: CoachPanelComponent | null = null;
-let workspace: string | null = null;
-
-after(() => {
-  if (workspace !== null) rmSync(workspace, { recursive: true, force: true });
-});
-
-/** The `tsc` this repo pins, found through its own package rather than by guessing a path. */
-function tscEntryPoint(): string {
-  const require = createRequire(import.meta.url);
-  return join(dirname(require.resolve('typescript/package.json')), 'bin', 'tsc');
-}
-
-async function loadCoachPanel(): Promise<CoachPanelComponent> {
-  if (compiled !== null) return compiled;
-
-  const dir = mkdtempSync(join(tmpdir(), 'prl-coach-render-'));
-  workspace = dir;
-  const out = join(dir, 'out');
-  const config = join(dir, 'tsconfig.json');
-
-  // The package's own config, with emit turned on. `types` is emptied because the ambient
-  // type packages are not resolvable from a directory outside the workspace; type errors
-  // do not block emit, and typechecking is `pnpm run typecheck`'s job, not this file's.
-  writeFileSync(
-    config,
-    JSON.stringify({
-      extends: join(PACKAGE_ROOT, 'tsconfig.json'),
-      compilerOptions: {
-        noEmit: false,
-        outDir: out,
-        rootDir: join(PACKAGE_ROOT, 'src'),
-        declaration: false,
-        declarationMap: false,
-        sourceMap: false,
-        incremental: false,
-        skipLibCheck: true,
-        types: [],
-      },
-      include: [join(PACKAGE_ROOT, 'src', '**', '*.ts'), join(PACKAGE_ROOT, 'src', '**', '*.tsx')],
-    }),
-  );
-
-  const result = spawnSync(process.execPath, [tscEntryPoint(), '-p', config], { encoding: 'utf8' });
-  const entry = join(out, 'components', 'CoachPanel.js');
-  assert.ok(
-    existsSync(entry),
-    `tsc emitted no CoachPanel.js.\nstdout:\n${result.stdout ?? ''}\nstderr:\n${result.stderr ?? ''}`,
-  );
-
-  // `type: module` so the emitted ESM is read as ESM, and the symlink so `react/jsx-runtime`
-  // and `@prl/contracts` resolve from inside the temp tree.
-  writeFileSync(join(out, 'package.json'), '{"type":"module"}');
-  symlinkSync(join(PACKAGE_ROOT, 'node_modules'), join(out, 'node_modules'), 'dir');
-
-  const module: unknown = await import(pathToFileURL(entry).href);
-  const exported = (module as { CoachPanel?: unknown }).CoachPanel;
-  assert.equal(typeof exported, 'function', 'the emitted module does not export CoachPanel');
-  compiled = exported as CoachPanelComponent;
-  return compiled;
-}
 
 async function render(report: CoachReport): Promise<string> {
-  const CoachPanel = await loadCoachPanel();
+  const CoachPanel = await loadComponent<{ readonly report: CoachReport }>(
+    'components/CoachPanel',
+    'CoachPanel',
+  );
   return renderToStaticMarkup(createElement(CoachPanel, { report }));
 }
 
@@ -143,6 +77,19 @@ function percentagesIn(markup: string): readonly { readonly text: string; readon
     found.push({ text: `${text}%`, value: Number(text.replace(/,/g, '')) });
   }
   return found;
+}
+
+/**
+ * Every percentage that cannot be a probability: above 100, or below 0.
+ *
+ * Both ends, because a unit error has two directions and only one of them was ever caught.
+ * "3,600.0%" is the famous one; "-50.0%" is the same defect with a sign, and a scan that
+ * looks only upwards would pass it.
+ */
+function impossiblePercentagesIn(markup: string): readonly string[] {
+  return percentagesIn(markup)
+    .filter((entry) => entry.value > 100 || entry.value < 0)
+    .map((entry) => entry.text);
 }
 
 // ---------------------------------------------------------------------------
@@ -285,9 +232,8 @@ const CHECKED_TO: CoachReport = {
  * The defect, preserved as a fixture rather than as a memory.
  *
  * `estimate: 36` is what `@prl/poker-math` used to publish for this exact hand — the rule
- * of 2 and 4 in percentage POINTS, on a field the panel renders as a fraction. It is here
- * so the guard below can be shown to have teeth: a test that scans for impossible
- * percentages is worth nothing unless it is known to fail when one is present.
+ * of 2 and 4 in percentage POINTS, on a field the panel renders as a fraction. Formatted
+ * without a guard it becomes "3,600.0%".
  */
 const WRONG_UNIT: CoachReport = {
   ...NINE_OUT_DRAW,
@@ -297,11 +243,114 @@ const WRONG_UNIT: CoachReport = {
   },
 };
 
+/**
+ * The value the release audit actually found sitting in a shipped fixture: `estimate: 1.6`.
+ *
+ * Worth its own fixture beside `WRONG_UNIT`, because it is a *different* failure and the
+ * more dangerous of the two. "3,600.0%" is so obviously broken that a reader discounts the
+ * whole panel; "160.0%" is close enough to a real number to be believed by someone who is
+ * here precisely because they are still learning what a probability is.
+ */
+const STALE_FIXTURE: CoachReport = {
+  ...NINE_OUT_DRAW,
+  equity: {
+    ...NINE_OUT_DRAW.equity,
+    ruleOfThumb: { estimate: 1.6, errorPoints: 1.032377428307, note: 'a stale fixture value' },
+  },
+};
+
+/**
+ * Every figure the panel renders as a percentage, out of range at once.
+ *
+ * Not a realistic report — deliberately. The guard is defence in depth against inputs
+ * nobody has predicted, so the fixture that proves it has to be one nobody would predict.
+ * Each field is broken in the way its own type allows:
+ *
+ *   - `heroEquity: 1.6`               a probability above 1
+ *   - `perPlayer[0].equity: 1.6`      the same, in the readout under the bar
+ *   - `perPlayer[0].win: 1.6`         and in its detail line
+ *   - `perPlayer[1].equity: NaN`      non-finite, which `EquityBar` coerces to 0 for the geometry
+ *   - `breakEvenEquity: 2.4`          the figure the call/fold decision turns on
+ *   - `equitySurplus: -3.2`           a difference outside -1..1, rendered as the metric's delta
+ *   - `potOddsOfferedByPotSizedBet: 4` a probability rendered inside a stat tile
+ *   - `foldEquityAssumed: 3`          an assumption stated in the EV table
+ *   - `potShareIfCalled: 9`           likewise
+ *   - `ruleOfThumb.estimate: 1.6`     the P0
+ *   - `confidenceHalfWidthPoints: 5000` an error bar wider than the range it sits on
+ *   - `confidenceInterval.level: 1.6` a 160% confidence level
+ *
+ * The prose fields are left clean on purpose. Free text the report supplies is rendered
+ * verbatim and cannot be range-checked — see `CoachPanel` rule 5 — so putting an impossible
+ * percentage in an `explanation` would fail this test for a reason the guard does not claim
+ * to cover, and would teach the next reader that the guard is unreliable.
+ */
+const EVERY_FIGURE_IMPOSSIBLE: CoachReport = {
+  ...NINE_OUT_DRAW,
+  equity: {
+    heroEquity: 1.6,
+    method: 'monte-carlo',
+    trials: 40_000,
+    confidenceHalfWidthPoints: 5000,
+    ruleOfThumb: { estimate: 1.6, errorPoints: 1.032377428307, note: 'a stale fixture value' },
+    perPlayer: [
+      { label: 'you', equity: 1.6, win: 1.6, tie: 0 },
+      { label: 'top pair', equity: Number.NaN, win: 0, tie: 0 },
+    ],
+  },
+  potOdds: {
+    pot: 100,
+    toCall: 50,
+    breakEvenEquity: 2.4,
+    oddsRatio: 2,
+    equitySurplus: -3.2,
+    explanation: 'Risking 50 to win 100 is 2 to 1.',
+  },
+  candidates: [
+    { action: 'fold', cost: 0, ev: 0, derivation: 'EV(fold) = 0 chips.' },
+    {
+      action: 'call',
+      to: 50,
+      cost: 50,
+      ev: 9.235,
+      derivation: 'EV(call) = equity x (pot + toCall) - toCall.',
+      foldEquityAssumed: 3,
+      potShareIfCalled: 9,
+    },
+  ],
+  stackContext: {
+    effectiveStack: 400,
+    spr: 4,
+    potOddsOfferedByPotSizedBet: 4,
+    explanation: 'The effective stack is 400 against a pot of 100.',
+  },
+  uncertainty: {
+    method: 'monte-carlo',
+    summary: 'Estimated by sampling 40,000 run-outs.',
+    confidenceInterval: { level: 1.6, halfWidthPoints: 5000 },
+    limitations: ['Equity was estimated from sampled run-outs, not enumerated exhaustively.'],
+  },
+  teachingNotes: ['A fixture built to be impossible.'],
+};
+
 // ---------------------------------------------------------------------------
 // The tests
 // ---------------------------------------------------------------------------
 
-test('no percentage the panel renders is above 100%', async () => {
+test('the percentage scan has teeth', () => {
+  // The scan is the instrument every assertion below depends on, so it is calibrated
+  // against markup directly rather than against a component. It used to be calibrated by
+  // rendering a panel known to be broken — which was honest, but tied the instrument's
+  // credibility to the component staying capable of the defect. It no longer is.
+  const impossible = impossiblePercentagesIn(
+    '<p>the rule of 2 and 4 estimates 3,600.0%</p><span aria-label="160.0%"></span><i>-50.0%</i>',
+  );
+  assert.deepEqual(impossible, ['3,600.0%', '160.0%', '-50.0%']);
+
+  // And it does not cry wolf: the two endpoints are reachable and real.
+  assert.deepEqual(impossiblePercentagesIn('<p>0.0% to 100.0%, and 41.2%</p>'), []);
+});
+
+test('no percentage the panel renders is above 100% or below 0%', async () => {
   for (const [label, report] of [
     ['a nine-out draw facing a bet', NINE_OUT_DRAW],
     ['a free continuation with a sampled figure', CHECKED_TO],
@@ -310,23 +359,80 @@ test('no percentage the panel renders is above 100%', async () => {
     const percentages = percentagesIn(markup);
     assert.ok(percentages.length >= 5, `${label}: found only ${percentages.length} percentages to check`);
 
-    const impossible = percentages.filter((entry) => entry.value > 100);
+    const impossible = impossiblePercentagesIn(markup);
     assert.deepEqual(
-      impossible.map((entry) => entry.text),
+      impossible,
       [],
-      `${label}: the panel rendered ${impossible.length} percentage(s) above 100%, which cannot be probabilities`,
+      `${label}: the panel rendered ${impossible.length} percentage(s) that cannot be probabilities`,
     );
   }
 });
 
-test('the guard above would catch the unit error it was written for', async () => {
-  // Not a curiosity. The scan is the whole defence, and a scan that cannot fail is not a
-  // defence. `estimate: 36` is the exact value the producer used to publish for this hand.
+test('the panel refuses the percentage-point unit error rather than rendering it', async () => {
+  // `estimate: 36` is the exact value the producer used to publish for this hand. It must
+  // not reach the reader in any form: not as "3,600.0%", and not as a bare "3,600" either.
   const markup = await render(WRONG_UNIT);
-  const impossible = percentagesIn(markup).filter((entry) => entry.value > 100);
+
+  assert.deepEqual(impossiblePercentagesIn(markup), [], 'no impossible percentage may reach the page');
+  assert.ok(!markup.includes('3,600'), 'the percentage-point unit must never reach the page');
   assert.ok(
-    impossible.some((entry) => entry.text === '3,600.0%'),
-    `the old unit should render as "3,600.0%"; found ${JSON.stringify(impossible.map((e) => e.text))}`,
+    markup.includes('The rule-of-thumb comparison is being withheld for this spot'),
+    'and the panel has to say that it withheld the figure, not leave a silent gap',
+  );
+});
+
+test('the panel refuses the stale fixture value the audit found', async () => {
+  // `estimate: 1.6` rendered as "The rule of 2 and 4 estimates 160.0%" — a 160% probability
+  // stated in the app's own voice. This is the P0, asserted on the string a learner reads.
+  const markup = await render(STALE_FIXTURE);
+
+  assert.deepEqual(impossiblePercentagesIn(markup), [], 'no impossible percentage may reach the page');
+  assert.ok(!markup.includes('160.0'), 'the impossible figure must not survive anywhere in the markup');
+  assert.ok(
+    !markup.includes('The rule of 2 and 4 estimates'),
+    'the claim itself must be withdrawn, not merely reworded around a bad number',
+  );
+  assert.ok(
+    markup.includes('it is not a probability'),
+    'and the reason has to be stated in the panel, in the same voice as everything else',
+  );
+});
+
+test('no figure the panel renders as a percentage can be impossible, whatever it is fed', async () => {
+  const markup = await render(EVERY_FIGURE_IMPOSSIBLE);
+
+  const impossible = impossiblePercentagesIn(markup);
+  assert.deepEqual(
+    impossible,
+    [],
+    `every percentage-bearing field was out of range and the panel rendered ${impossible.length} of them: ${JSON.stringify(impossible)}`,
+  );
+
+  // Refusing must not become a way of quietly dropping half the panel. The sections whose
+  // figures were withheld still have to be present, still labelled, and still say why —
+  // an absent tile reads as "this app does not compute that", which is a second untruth.
+  for (const label of ['Your share of the pot', 'Break-even equity', 'Price a pot-sized bet would offer']) {
+    assert.ok(markup.includes(label), `the "${label}" figure should still be labelled`);
+  }
+  assert.equal(
+    markup.split('not a probability').length - 1,
+    // Counted rather than merely "present", so a change that silently stops refusing one of
+    // them fails here. Nine, made up of:
+    //   3  refused stat tiles — equity, break-even, the pot-sized-bet price
+    //   2  `EquityBar` readout rows — the 1.6 equity and the NaN one
+    //   1  `EquityBar` detail — the 1.6 win rate (the 0 tie rate is a real 0.0%)
+    //   2  EV-table assumptions — fold equity and pot share when called
+    //   1  the rule-of-2-and-4 refusal
+    9,
+    'every refused figure should say so, and the count is fixed so a lost refusal is visible',
+  );
+
+  // The caveats are never collapsible and never droppable, however bad the figures were.
+  assert.ok(markup.includes('Every hand in the opponent range is weighted equally.'), 'assumptions survive');
+  assert.ok(markup.includes('How certain is this?'), 'the uncertainty note survives');
+  assert.ok(
+    markup.includes('its confidence level or its width is not a possible one'),
+    'and the refused interval explains itself rather than claiming there was no sampling error',
   );
 });
 

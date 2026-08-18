@@ -56,7 +56,7 @@
 
 import type { CoachRequest, EquityRequest } from '@prl/contracts';
 import { type Card, CardParseError, cardsToString, parseCards } from '@prl/poker-engine';
-import { choose, type ParsedRange, parseRange, RangeParseError } from '@prl/poker-math';
+import { choose, deriveLegalActions, type ParsedRange, parseRange, RangeParseError } from '@prl/poker-math';
 import { AppError } from '../errors.ts';
 import { withoutControlCharacters } from '../logging.ts';
 import type { CoachTask, WireRange, WireSpec } from '../workers/equity-worker.ts';
@@ -683,6 +683,17 @@ export function parseCoachRequest(body: CoachRequest, limits: WorkLimits = DEFAU
       heroStack: body.heroStack,
       opponentStacks,
       bigBlind: body.bigBlind,
+      // Same reasoning as `heroCommittedThisStreet` above, one level up: the body
+      // describes a spot, so there is no `HandState` whose `legalActions` could be asked
+      // and the set is derived from what the body does state. Chiefly, a caller who says
+      // every opponent is all-in (`opponentStacks: [0]`) is no longer offered a bet or a
+      // raise priced on a 35% chance that one of them folds.
+      legalActions: deriveLegalActions({
+        toCall: body.toCall,
+        heroCommittedThisStreet: 0,
+        heroStack: body.heroStack,
+        opponentStacks,
+      }),
       samples: Math.max(MIN_DEFAULT_SAMPLES, work.samples),
       seed: DEFAULT_SEED,
     },

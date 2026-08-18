@@ -13,6 +13,7 @@
  * different fallback.
  */
 
+export { driveCountUp, type FrameClock } from './count-up-driver.ts';
 export {
   cubicBezier,
   easeStandard,
@@ -27,10 +28,22 @@ export {
   shouldRevealImmediately,
 } from './reduced-motion.ts';
 export {
+  BROWSER_REVEAL_HOST,
+  type RevealHost,
+  type RevealPlan,
+  watchForReveal,
+} from './reveal-watcher.ts';
+export {
   COUNT_DURATION_MS,
   EASE_STANDARD_CONTROL_POINTS,
   MIN_COUNT_UP_CHANGE,
 } from './tokens.ts';
 export { type CountUpOptions, useCountUp } from './useCountUp.ts';
-export { usePrefersReducedMotion } from './usePrefersReducedMotion.ts';
+export {
+  createReducedMotionStore,
+  type MediaQueryHost,
+  type ReducedMotionQuery,
+  type ReducedMotionStore,
+  usePrefersReducedMotion,
+} from './usePrefersReducedMotion.ts';
 export { type RevealOptions, type RevealState, useReveal } from './useReveal.ts';

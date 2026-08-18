@@ -89,9 +89,12 @@
 #
 # The Node process is PID 1 in its container. PID 1 has no default signal
 # handlers, so a plain `node server.js` ignores SIGTERM unless the app installs a
-# handler, and `docker compose down` then waits ten seconds and SIGKILLs it —
-# dropping in-flight WebSocket closes and leaving Postgres connections to time
-# out. PID 1 also has to reap orphaned children or they accumulate as zombies.
+# handler, and `docker compose down` then waits out the stop grace period and
+# SIGKILLs it — dropping in-flight WebSocket closes and leaving Postgres
+# connections to time out. (That grace is ten seconds unless a service says
+# otherwise; `api` says otherwise, and the note on `stop_grace_period` there
+# explains why it has to.) PID 1 also has to reap orphaned children or they
+# accumulate as zombies.
 # `init: true` asks Docker to insert its own tiny init (docker-init) as PID 1,
 # which reaps children and forwards signals to the real process. That is why
 # there is no tini or dumb-init package in the images: adding a dependency to
@@ -203,7 +206,29 @@ services:
       # Host is the compose service name, resolved on the project's private
       # network. This is the one place the connection string is assembled for
       # containers; the host-side scripts read DATABASE_URL from .env instead.
-      DATABASE_URL: postgres://${POSTGRES_USER:-poker}:${POSTGRES_PASSWORD:-poker-dev-only}@postgres:5432/${POSTGRES_DB:-poker_risk_lab}
+      #
+      # The USER is `prl_api`, not the cluster superuser `poker`, and that is the
+      # whole point of the line. `db/migrations/0001_initial.sql` creates two
+      # privilege roles — `prl_migrator` (owns the schema) and `prl_app` (DML on
+      # exactly the tables the request path touches, no CREATE, no TRUNCATE, no
+      # ownership). Both are NOLOGIN by design: they are privilege containers, not
+      # identities, so nothing connects AS `prl_app`. Something connects as a login
+      # role that is a MEMBER of it and inherits its privileges — docs/RUNBOOK.md §5.
+      #
+      # This stack used to connect as `poker`, which has rolsuper and rolbypassrls.
+      # The roles were correct and were proven to work, and nothing exercised them:
+      # every query in development ran with every privilege there is, so a query
+      # needing a grant `prl_app` does not hold could not fail here. It failed for
+      # the first time in production, as a permission-denied at request time.
+      #
+      # `prl_api` is created with this password by `db/seeds/0002_dev_login_roles.sql`,
+      # which `pnpm run db:seed` — and therefore `pnpm run db:setup`, step 1 of First
+      # run at the top of this file — applies. If you skipped that step, this
+      # container will log `password authentication failed for user "prl_api"`; the
+      # fix is `pnpm run db:seed`, not a superuser in this line. A real deployment
+      # creates the role by hand with a password from a secret manager (RUNBOOK §5)
+      # and sets PRL_API_DB_PASSWORD accordingly.
+      DATABASE_URL: postgres://${PRL_API_DB_USER:-prl_api}:${PRL_API_DB_PASSWORD:-poker-dev-only}@postgres:5432/${POSTGRES_DB:-poker_risk_lab}
       # The origin the BROWSER uses, which is the proxy's published address — not
       # web's and not api's, neither of which the browser ever sees. Enforced on
       # WebSocket upgrades (WS_CLOSE.badOrigin) and on CSRF checks, so a wrong value
@@ -224,6 +249,34 @@ services:
       # choose its own rate-limit bucket. The cost is that rate limits key on the
       # proxy's address in this stack. A deployment that does not publish the API
       # sets TRUST_PROXY=true — see docs/RUNBOOK.md §11.
+      #
+      # ## The shutdown pair. Read this together with `stop_grace_period` below.
+      #
+      # SHUTDOWN_GRACE_MS is how long the process gives ITSELF to drain after
+      # SIGTERM: answer in-flight requests, send every WebSocket a
+      # `serverShuttingDown` close frame, close the pool and the worker threads
+      # (apps/api/src/server.ts). When it expires the process logs `shutdown timed
+      # out; exiting hard` and exits 1.
+      #
+      # stop_grace_period is how long DOCKER waits after SIGTERM before SIGKILL.
+      #
+      # Neither was set here, and both defaults are 10 s — the same 10 s. A tie is
+      # not a margin: the two timers start together, and the one that ends the
+      # process first is whichever the scheduler reaches, so `docker compose stop`
+      # was measured at 10.62 s / exit 137 (SIGKILL) with a single socket open. The
+      # app's own log line, the one that says why the deploy was slow, was killed
+      # along with it.
+      #
+      # So they are both written down, and the container's is three times the
+      # process's. The app must ALWAYS reach its own deadline first: that is what
+      # turns a hung drain into a diagnosable exit 1 with a reason in the log,
+      # rather than an undiagnosable 137. Change one of these two numbers and you
+      # must change the other.
+      SHUTDOWN_GRACE_MS: '10000'
+    # 30 s against the app's 10 s above. See "The shutdown pair" there before
+    # touching this: `stop_grace_period` must stay comfortably ABOVE
+    # SHUTDOWN_GRACE_MS, never equal to it and never below it.
+    stop_grace_period: 30s
     ports:
       # Loopback only, and NOT the browser's path to the API: the browser goes through
       # the proxy on ${WEB_PORT:-3000}. This exists for `curl`, for scripts/*.mjs and

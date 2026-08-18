@@ -45,6 +45,8 @@ export {
   type CoachAction,
   CoachError,
   type CoachInput,
+  type DescribedSpot,
+  deriveLegalActions,
   type RuleOfThumbRefusal,
   ruleOfThumbFor,
   ruleOfThumbRefusalFor,
@@ -53,6 +55,7 @@ export {
 } from './coach.ts';
 export {
   bestCandidate,
+  bestMeasuredCandidate,
   CONSISTENCY_MARGIN_BIG_BLINDS,
   type ConsistencyAction,
   ConsistencyError,

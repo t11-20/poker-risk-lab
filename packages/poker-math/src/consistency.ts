@@ -90,6 +90,61 @@ export function bestCandidate(report: CoachReport): ActionCandidate | null {
 }
 
 /**
+ * Is this row's value a function of an assumed fold frequency?
+ *
+ * True for a bet or a raise the Coach priced with fold equity above zero, false for a check, a
+ * call, a fold, and for an aggressive line priced at a stated 0% — where the parameter is
+ * present but contributes nothing, so the figure rests on the equity alone after all.
+ *
+ * `foldEquityAssumed` is set by `buildCoachReport` on exactly the rows whose EV contains the
+ * `f x pot` term, so this reads the producer's own marker rather than re-deriving which action
+ * names happen to be aggressive today.
+ */
+function restsOnAssumedFoldEquity(candidate: ActionCandidate): boolean {
+  const assumed = candidate.foldEquityAssumed;
+  return assumed !== undefined && assumed > 0;
+}
+
+/**
+ * The highest-EV row that a learner could be held to, or null when there is none.
+ *
+ * **The benchmark a FOLD is judged against**, and different from `bestCandidate` in exactly one
+ * respect: it skips the rows whose value depends on how often an opponent is assumed to fold.
+ *
+ * That parameter — `DEFAULT_ASSUMED_FOLD_EQUITY`, 0.35 — is an input, not a measurement. The
+ * Coach says so in its own assumptions ("That is an input you can change, not something
+ * measured") and again in `whatWouldChangeIt` ("Being raised is not modelled here, so treat the
+ * figure as optimistic"). `isDefensible`'s doc has always said the same thing about the rule:
+ * marking an action wrong "because a raise scores a few chips higher under an *assumed* fold
+ * frequency would be presenting an invented parameter as a fact".
+ *
+ * The fold branch did precisely that. It compared a fold against `bestCandidate`, which on a
+ * spot where a bluff-raise wins the table under the assumed 35% is the bluff-raise. Two shipped
+ * scenarios — `rk-the-fold-that-feels-wrong` and `eq-implied-odds-deep-stacks-turn` — asked
+ * "call or fold?", concluded in their own prose that folding is better, and then told a learner
+ * who folded that their answer was "not consistent with this analysis", quoting a shortfall in
+ * thousands of chips against a raise nobody had claimed was right. `matched_expected` went to
+ * the database as `false`.
+ *
+ * So a fold is measured against what the analysis actually measured: checking, calling, and
+ * folding itself. If one of those clearly beats a fold, the fold is not defensible and the
+ * reason is a number the report stands behind. If the only thing that beats it is an
+ * assumption, the learner is not told they were wrong on the strength of it.
+ *
+ * This narrows nothing else. Every non-fold action is still judged against folding at zero, so
+ * a bet or raise is not made easier to defend by this — its own row still has to clear the
+ * margin.
+ */
+export function bestMeasuredCandidate(report: CoachReport): ActionCandidate | null {
+  let best: ActionCandidate | null = null;
+  for (const candidate of report.candidates) {
+    if (restsOnAssumedFoldEquity(candidate)) continue;
+    if (best === null || candidate.ev > best.ev) best = candidate;
+  }
+  return best;
+}
+
+/**
  * Is this action defensible against the stated range?
  *
  * Not "is it the highest-EV action". That distinction is the whole reason this reports consistency
@@ -103,11 +158,22 @@ export function bestCandidate(report: CoachReport): ActionCandidate | null {
  * - Every action other than folding is consistent when it does at least as well as folding, give or
  *   take the indifference margin. A call that clears the price is consistent whether or not a raise
  *   clears it by more.
- * - Folding is consistent when nothing else clearly beats it. It cannot be tested against itself.
+ * - Folding is consistent when nothing else *that the analysis measured* clearly beats it. It
+ *   cannot be tested against itself, and it is not tested against an assumed fold frequency
+ *   either — see `bestMeasuredCandidate` for the two shipped scenarios that made the difference
+ *   visible.
+ * - With one exception, which runs the other way: **folding is never defensible while checking is
+ *   free.** That is not an EV comparison and must not be left to one. A check costs nothing and
+ *   keeps every future branch of the hand, so it dominates a fold outright however small the
+ *   numbers are — and with a small pot and thin equity the gap between them sits inside the
+ *   indifference margin, where an EV test would call giving up the hand for nothing "close
+ *   enough". `buildCoachReport` refuses to rank a fold above a free check for the same reason and
+ *   throws if it ever does; this is that invariant, restated where the learner's answer is judged.
  */
 export function isDefensible(report: CoachReport, candidate: ActionCandidate, marginUnits: number): boolean {
   if (candidate.action === 'fold') {
-    const best = bestCandidate(report);
+    if (report.candidates.some((row) => row.action === 'check')) return false;
+    const best = bestMeasuredCandidate(report);
     return best === null || best.ev <= marginUnits;
   }
   return candidate.ev >= -marginUnits;
@@ -137,6 +203,16 @@ export interface ConsistencyVerdict {
    * the worst of them look like the best available choice.
    */
   readonly bestEv: number;
+  /**
+   * The best EV among the rows that do not rest on an assumed fold frequency, floored at zero.
+   *
+   * The benchmark a fold was actually judged against, published so a caller can show the reader
+   * the number the verdict used rather than a different one. It equals `bestEv` whenever the
+   * best row is a check, a call or a fold; it is lower whenever a bet or raise tops the table on
+   * the strength of the assumed fold equity, which is exactly the case where quoting `bestEv` at
+   * somebody who folded would be quoting an assumption at them. See `bestMeasuredCandidate`.
+   */
+  readonly measuredBestEv: number;
   /** The margin in chips this verdict used, for showing the reader the threshold they were held to. */
   readonly marginUnits: number;
   /** Every action the analysis supports. */
@@ -190,6 +266,8 @@ export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
   const chosen = candidateFor(report, action, to);
   const best = bestCandidate(report);
   const bestEv = Math.max(0, best === null ? 0 : best.ev);
+  const measured = bestMeasuredCandidate(report);
+  const measuredBestEv = Math.max(0, measured === null ? 0 : measured.ev);
   const supportedActions = defensibleActions(report, marginUnits);
   const availableActions = [...new Set(report.candidates.map((candidate) => candidate.action))];
   const claimsOneAction = supportedActions.length === 1;
@@ -200,6 +278,7 @@ export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
       chosen: null,
       best,
       bestEv,
+      measuredBestEv,
       marginUnits,
       supportedActions,
       availableActions,
@@ -211,12 +290,18 @@ export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
   const consistent = isDefensible(report, chosen, marginUnits);
   // Measured against folding in both directions, because that is what the rule tests: a fold is
   // behind by whatever the best row is worth, and anything else by however far below zero it sits.
-  const shortfall = chosen.action === 'fold' ? bestEv : -chosen.ev;
+  //
+  // `measuredBestEv` for the fold, not `bestEv`, so the shortfall a learner is shown is the one
+  // the verdict was reached on. Quoting the assumed-fold-equity raise here while judging against
+  // something else is how the same screen came to say "your fold is not consistent with this
+  // analysis, 11,873.7 chips behind" next to prose concluding that folding was better.
+  const shortfall = chosen.action === 'fold' ? measuredBestEv : -chosen.ev;
   return {
     consistent,
     chosen,
     best,
     bestEv,
+    measuredBestEv,
     marginUnits,
     supportedActions,
     availableActions,

@@ -1459,6 +1459,201 @@ describe('hands — against Postgres', dbOptions, () => {
       assert.equal(stranger.hands.length, 0);
     });
   });
+
+  // #########################################################################
+  // # RESTORING THE ROTATION, AND CLOSING WHAT CANNOT FINISH                #
+  // #########################################################################
+
+  it('reports the last deal, so a re-opened room does not restart the blind rotation', async () => {
+    await inRollback(async (tx) => {
+      const { roomId, handId, heroId, villainId } = await dealtHand(tx);
+      const last = await hands.lastDealtHand(tx, roomId);
+      assert.deepEqual(
+        last === null
+          ? null
+          : {
+              handId: last.handId,
+              handNumber: last.handNumber,
+              buttonSeat: last.buttonSeat,
+              dealtSeats: [...last.dealtSeats],
+            },
+        { handId, handNumber: 1, buttonSeat: 0, dealtSeats: [0, 1] },
+      );
+
+      // The newest hand wins even when it is still in progress: it was dealt, so it is where the
+      // rotation had got to, and a restart must carry on from there rather than from the last one
+      // that happened to finish.
+      const second = generateId('hand');
+      await hands.start(tx, {
+        handId: second,
+        roomId,
+        handNumber: 2,
+        buttonSeat: 1,
+        config: { smallBlind: 1, bigBlind: 2, ante: 0, maxSeats: 6, actionTimeoutSeconds: 30 },
+        commitmentRoot: ROOT,
+        commitmentContext: `prl-deck-v2|${second}`,
+        randomSourceKind: 'csprng',
+        seats: [
+          {
+            seat: 0,
+            userId: heroId,
+            isBot: false,
+            startingStack: 200,
+            holeCards: [parseCard('Ah'), parseCard('Kh')],
+            status: 'active',
+          },
+          {
+            seat: 1,
+            userId: villainId,
+            isBot: false,
+            startingStack: 200,
+            holeCards: [parseCard('7c'), parseCard('2d')],
+            status: 'active',
+          },
+        ],
+      });
+      assert.equal((await hands.lastDealtHand(tx, roomId))?.buttonSeat, 1);
+      assert.equal(await hands.lastDealtHand(tx, generateId('room')), null);
+    });
+  });
+
+  it('closes an interrupted hand instead of leaving it open forever', async () => {
+    await inRollback(async (tx) => {
+      const { roomId, handId, heroId } = await dealtHand(tx);
+      assert.equal(await hands.activeHandIdForRoom(tx, roomId), handId, 'the orphan is there to begin with');
+
+      const abandoned = await hands.abandonInterruptedHands(tx, roomId);
+      assert.deepEqual(
+        abandoned.map((hand) => ({ handId: hand.handId, roomId: hand.roomId, handNumber: hand.handNumber })),
+        [{ handId, roomId, handNumber: 1 }],
+      );
+
+      // Nothing is left for the history to render as a null: the hand is complete, it has a
+      // completion time, and both blank-result constraints on `prl.hands` are satisfied.
+      const rows = await tx<
+        {
+          street: string;
+          completed_at: Date | null;
+          result: Record<string, unknown>;
+          reveal: Record<string, unknown>;
+        }[]
+      >`select street, completed_at, result, reveal from prl.hands where id = ${handId}`;
+      const row = rows[0];
+      assert.ok(row !== undefined);
+      assert.equal(row.street, 'complete');
+      assert.notEqual(row.completed_at, null);
+      assert.equal(row.result.abandoned, true, 'and it says so, rather than posing as an ordinary fold');
+      assert.equal(row.result.endedByFold, true, 'no cards were shown, which is what the flag means');
+      assert.deepEqual(row.result.showdowns, []);
+      assert.deepEqual(row.result.awards, []);
+      // The deck is gone with the process, so the only honest reveal proves nothing at all — and
+      // it must still be a reveal the verifier and both CHECK constraints accept.
+      assert.deepEqual(row.reveal.cards, []);
+      assert.equal(row.reveal.complete, false);
+      assert.deepEqual(row.reveal.commitment, {
+        algorithm: 'sha256',
+        version: COMMITMENT_VERSION,
+        root: ROOT,
+        context: `prl-deck-v2|${handId}`,
+      });
+
+      // Chips: an interrupted hand never wrote a stack back, so nobody won or lost anything, and
+      // zero is the true figure rather than a placeholder.
+      const seats = await hands.seatsOf(tx, handId, heroId);
+      assert.deepEqual(
+        seats.map((seat) => ({ seat: seat.seat, net: seat.netResult, starting: seat.startingStack })),
+        [
+          { seat: 0, net: 0, starting: 200 },
+          { seat: 1, net: 0, starting: 200 },
+        ],
+      );
+
+      // And the learner's own history has something to render rather than a row of nulls, which
+      // is the whole complaint: three of these accumulated in one audit session.
+      const history = await hands.listForUser(tx, { userId: heroId, roomId });
+      const listed = history.hands[0];
+      assert.ok(listed !== undefined);
+      assert.notEqual(listed.completedAt, null, 'the history no longer shows an unfinished hand');
+      assert.equal(listed.heroNet, 0);
+      assert.equal(listed.potTotal, 0);
+
+      assert.equal(await hands.activeHandIdForRoom(tx, roomId), null, 'and the room has no live hand');
+      assert.deepEqual(await hands.abandonInterruptedHands(tx, roomId), [], 'running it again does nothing');
+    });
+  });
+
+  it('leaves a settled hand and another room untouched', async () => {
+    await inRollback(async (tx) => {
+      const { roomId, handId, heroId, villainId } = await dealtHand(tx);
+      const result: HandResult = {
+        showdowns: [],
+        pots: [{ amount: 4, eligibleSeats: [0, 1], capPerSeat: 2, index: 0 }],
+        awards: [],
+        netBySeat: { 0: 2, 1: -2 },
+        endedByFold: true,
+        reveal: {
+          commitment: {
+            algorithm: 'sha256',
+            version: COMMITMENT_VERSION,
+            root: ROOT,
+            context: `prl-deck-v2|${handId}`,
+          },
+          cards: [],
+          complete: false,
+        },
+      };
+      const settled = await hands.complete(tx, {
+        handId,
+        board: [parseCard('2s'), parseCard('9d'), parseCard('Jc')],
+        result,
+        seats: [
+          { seat: 0, netResult: 2, status: 'active', showedDown: true },
+          { seat: 1, netResult: -2, status: 'folded', showedDown: false },
+        ],
+      });
+      assert.notEqual(settled.completed_at, null);
+
+      // A different room's orphan is not this room's business: the reconciliation is scoped to the
+      // room being taken over, because that is the only room this process can be sure nobody else
+      // is mid-hand in.
+      const otherRoom = await makeRoom(tx, villainId);
+      const otherHand = generateId('hand');
+      await rooms.addMember(tx, { roomId: otherRoom.room.id, userId: villainId });
+      await hands.start(tx, {
+        handId: otherHand,
+        roomId: otherRoom.room.id,
+        handNumber: 1,
+        buttonSeat: 0,
+        config: { smallBlind: 1, bigBlind: 2, ante: 0, maxSeats: 6, actionTimeoutSeconds: 30 },
+        commitmentRoot: ROOT,
+        commitmentContext: `prl-deck-v2|${otherHand}`,
+        randomSourceKind: 'csprng',
+        seats: [
+          {
+            seat: 0,
+            userId: villainId,
+            isBot: false,
+            startingStack: 200,
+            holeCards: [parseCard('Ah'), parseCard('Kh')],
+            status: 'active',
+          },
+        ],
+      });
+
+      assert.deepEqual(await hands.abandonInterruptedHands(tx, roomId), [], 'nothing to close here');
+      const after = await hands.seatsOf(tx, handId, heroId);
+      assert.deepEqual(
+        after.map((seat) => seat.netResult),
+        [2, -2],
+        'the settled hand keeps the nets it settled with',
+      );
+      assert.equal(
+        await hands.activeHandIdForRoom(tx, otherRoom.room.id),
+        otherHand,
+        'and the other room is untouched',
+      );
+    });
+  });
 });
 
 describe('progress — against Postgres', dbOptions, () => {

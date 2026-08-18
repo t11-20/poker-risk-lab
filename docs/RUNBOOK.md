@@ -88,17 +88,29 @@ The container stack has no such split: there is exactly one published origin (§
 
 | Command | What it does | Runtime |
 | --- | --- | --- |
-| `pnpm run test` | Unit + integration + script tests. **Needs a database** | ~1–2 min |
+| `pnpm run test` | **Builds the packages**, then unit + integration + script tests. **Needs a database** | ~2–3 min |
 | `pnpm run test:unit` | Package and web tests only | ~1 min |
 | `pnpm run test:integration` | API tests | seconds |
 | `pnpm run test:scripts` | The `scripts/*.mjs` tooling's own tests | seconds |
-| `pnpm run test:no-database` | The whole suite with the database waiver applied — see below | ~1 min |
+| `pnpm run test:no-database` | Builds, then the whole suite with the database waiver applied — see below | ~2 min |
 | `pnpm run test:exhaustive` | **All 133,784,560 seven-card hands** against published frequencies | ~7 s |
-| `pnpm run test:simulation` | AI-Legends declared traits against a large simulation | ~30 s |
-| `pnpm run test:a11y` | Static accessibility audit of the rendered pages | ~30 s |
+| `pnpm run test:simulation` | AI-Legends declared traits against a large simulation | ~2 min |
+| `pnpm run test:a11y` | Static accessibility audit of the rendered pages. Starts web on **:3000** itself, or pass `--no-start --base-url <url>` | ~30 s |
 | `pnpm run test:smoke` | End-to-end smoke against a running stack; `-- --strict` fails on warnings | seconds |
 | `pnpm run test:load` | WebSocket load harness against a local server | configurable |
-| `pnpm run test:all` | test + exhaustive + simulation + a11y | ~3 min |
+| `pnpm run test:all` | test + exhaustive + simulation + a11y | ~5 min |
+
+Runtimes are estimates on one developer machine. Two were re-measured on 2026-08-18 and the table
+now says what was measured rather than what was hoped: `test:exhaustive` **6.8 s** (133,784,560
+hands at 20.8 M/s) and `test:simulation` **1 min 58 s**, which the table used to give as ~30 s. The
+rest are unchanged estimates plus the build step, and are not measurements.
+
+**`test` builds the packages first, and that is not a convenience.** Every `@prl/*` package resolves
+its `.` export to `dist/`, and `dist/` is `.gitignore`d — so a fresh checkout could not run the suite
+at all, and a checkout with a stale `dist/` ran the suite against *the previous build of the code*
+while reporting green. Testing a stale artefact that is not part of the audited source is a worse
+failure than a missing one, because it is silent. The build is incremental, so on a warm tree it
+costs seconds.
 
 **The database tests cannot be skipped silently.** With no database reachable, `pnpm run test`
 exits 1 and tells you to run `pnpm run db:setup`. The only waiver is the named script
@@ -142,12 +154,31 @@ never receive another player's hole cards. A guardrail that skips is not a guard
 
 ```bash
 pnpm run verify
-# security:audit → security:hygiene → lint → build → typecheck → design:contrast → test → db:verify
+# security:audit · security:hygiene · lint · build · typecheck · design:contrast
+# test · test:a11y · test:exhaustive · test:simulation · db:verify
 ```
 
-`build` runs **before** `typecheck`, and the order is load-bearing rather than stylistic: every
-`@prl/*` package resolves its types through its built `dist/`, so a typecheck on a clean tree with
-no `dist/` reports missing modules that a build would have produced. Do not reorder it.
+**Every gate runs, every gate reports, and the command exits non-zero if any of them failed.** It
+prints `=== PASS <gate> ===` or `=== FAIL <gate> ===` after each one and finishes with the list of
+gates that did not pass.
+
+That is not a style choice. `verify` used to be a `&&` chain ending in `db:verify`, which meant a
+failure anywhere skipped everything after it — and because `test` was failing, **the gate this
+runbook describes as asserting the live schema's security properties had never once executed inside
+the command operators are told to run.** It passed when run on its own, which is exactly why nobody
+noticed. A chain reports the first failure; a release gate has to report all of them, because the
+question before a release is "what is wrong", not "what is the first wrong thing".
+
+`build` still runs **before** `typecheck` and before `test`, and the order is load-bearing rather
+than stylistic: every `@prl/*` package resolves its types through its built `dist/`, so a typecheck
+on a clean tree with no `dist/` reports missing modules that a build would have produced. Keep it.
+A failing `build` will therefore also fail `typecheck` and `test` — that is a cascade, not a skip,
+and every one of them is still reported.
+
+Three gates were added because a claim no gate enforces is a claim, not a result: `test:a11y`
+(accessibility is a stated functional requirement, and it was in no gate at all), `test:exhaustive`
+(the strongest single check in the project, and 7 seconds) and `test:simulation` (the AI profiles'
+only statistical evidence, ~2 minutes — which is what a release gate is for).
 
 ## 4. Adding a dependency
 
@@ -391,21 +422,55 @@ deciding, so the action was rejected rather than applied to a spot they never sa
   OIDC codes and display names are redacted. IPs are logged as keyed hashes.
 * **Health**: `GET /api/v1/health` (liveness), `GET /api/v1/ready` (readiness, checks the
   database).
-* **Graceful shutdown** on SIGTERM/SIGINT: stop accepting, drain in-flight work, close the
-  database pool and the equity worker pool, exit 0. It exits non-zero only if the drain genuinely
-  fails or the grace period (`SHUTDOWN_GRACE_MS`, default 10 s) expires first.
+* **Graceful shutdown** on SIGTERM/SIGINT: stop accepting, close every WebSocket with a real close
+  frame, drain in-flight work, close the database pool and the equity worker pool, exit 0. It exits
+  non-zero only if the drain genuinely fails or the grace period (`SHUTDOWN_GRACE_MS`, default 10 s)
+  expires first.
 
-  Two details an operator plans around. **A keep-alive socket does not hold the drain open.**
-  Fastify's `forceCloseConnections: 'idle'` only drops sockets that are idle at the instant SIGTERM
-  arrives; a socket that was mid-request is not, and Node would then hold it for the full
-  `keepAliveTimeout` (72 s) — far past any deploy grace. So the shutdown path collapses
-  `keepAliveTimeout` and sweeps for newly-idle sockets until the drain finishes. **The worker
-  threads are closed on the shutdown path itself**, not only through a route module's `onClose`
-  hook, because four live worker threads at exit present as a deploy that simply hangs.
+  Three details an operator plans around.
 
-  Set the orchestrator's termination grace period above `SHUTDOWN_GRACE_MS`, not below it. Do not
-  add retries or a longer grace to compensate for an exit 1 under load: that behaviour was a
-  defect and is fixed, and compensating for it now just slows every rollout down.
+  **A keep-alive socket does not hold the drain open.** Fastify's `forceCloseConnections: 'idle'`
+  only drops sockets that are idle at the instant SIGTERM arrives; a socket that was mid-request is
+  not, and Node would then hold it for the full `keepAliveTimeout` (72 s) — far past any deploy
+  grace. So the shutdown path collapses `keepAliveTimeout` and sweeps for newly-idle sockets until
+  the drain finishes.
+
+  **An open WebSocket does not hold it open either, and it is told why it is closing.** The hub's
+  `preClose` hook (`apps/api/src/ws/hub.ts`) sends every live socket a close frame carrying
+  `WS_CLOSE.serverShuttingDown` (**4503**) and then drops any peer that has not answered the
+  handshake within a tenth of `SHUTDOWN_GRACE_MS`. The code matters as much as the exit code: a
+  client cannot tell a deploy from a lost network unless the server says so, and the web client has
+  a "the server is restarting" state keyed on exactly that value. This is closed in `preClose` and
+  not `onClose` because Fastify's order is `preClose` → `server.close()` → `onClose`, and
+  `server.close()` waits for every upgraded connection — an `onClose` that closed them would be
+  waiting for the thing waiting for it.
+
+  **The worker threads are closed on the shutdown path itself**, not only through a route module's
+  `onClose` hook, because four live worker threads at exit present as a deploy that simply hangs.
+
+  Set the orchestrator's termination grace period above `SHUTDOWN_GRACE_MS`, not below it, and not
+  equal to it — `docker-compose.yml` now sets `stop_grace_period: 30s` against `SHUTDOWN_GRACE_MS:
+  '10000'` and says so next to both. A tie is not a margin: the two timers start together, so
+  whichever the scheduler reaches first ends the process, and the app's own "why" log line is lost
+  with it. Do not add retries or a longer grace to compensate for an exit 1: fix the drain, because
+  an exit 1 means the process could not finish, and slowing every rollout down does not change that.
+
+  > **This paragraph used to be wrong, which is why it now cites its evidence.** Until the
+  > 2026-08-18 fix, `ws` was registered with `clientTracking: false`, which made
+  > `@fastify/websocket`'s `defaultPreClose` a silent no-op (`if (server.clients)` is `undefined`).
+  > Every upgraded socket stayed open, `app.close()` never resolved, and the grace deadline fired
+  > `process.exit(1)`. The release audit measured it with **one idle WebSocket and no load**:
+  > 10.18 s and exit 1 on the host, and exit 137 (SIGKILL) under `docker compose stop`
+  > (`docs/audit/final-release-audit.md` P0-3) — while this runbook called the behaviour "a defect
+  > and is fixed". It was not; the suite that was supposed to prove it passed 3/3 and contained no
+  > WebSocket at all.
+  >
+  > What is written above is what `apps/api/test/shutdown.test.ts` now asserts, over a real spawned
+  > server and real sockets, and it was re-run for this paragraph rather than taken on trust:
+  > **5/5 pass** — a socket at a table, a socket that has not finished its handshake, a client that
+  > ignores the close frame entirely, a keep-alive request in flight, and a worker-thread
+  > calculation in flight. The suite also asserts the drain finishes inside a *third* of the grace,
+  > so "inside the deadline" cannot pass for "prompt".
 * **Scheduled audit**: `.github/workflows/supply-chain.yml` runs the full audit daily
   against the committed lockfile, so an advisory disclosed against an already-pinned
   dependency surfaces without waiting for a push.
@@ -481,17 +546,52 @@ Additive-first schema changes make that order safe; a destructive change needs t
 The database holds hand history and the audit log — the two things the app promises are
 verifiable after the fact. Nothing else in the stack is durable.
 
+**Dump and restore with ownership and privileges intact.** The schema's grants *are* part of the
+schema here: `prl` is owned by `prl_migrator` and `prl_app` holds exactly the table-level rights the
+request path needs (§5, `db/migrations/0001_initial.sql`). A dump that strips them restores a
+database the application cannot read — see the box below, which is what this procedure used to say.
+
 ```bash
 # Nightly, retained per your policy. --format=custom so pg_restore can be selective.
-pg_dump --format=custom --no-owner --no-privileges "$DATABASE_URL" > prl-$(date +%F).dump
+# No --no-owner and no --no-privileges: they would drop the grants the app runs on.
+pg_dump --format=custom "$DATABASE_URL" > prl-$(date +%F).dump
 
-# Restore into an empty database, then verify the schema matches what the app expects.
-pg_restore --dbname="$TARGET_URL" --no-owner prl-2026-08-18.dump
-pnpm run db:verify
+# The four roles must exist in the TARGET cluster before the restore, or pg_restore
+# cannot reassign ownership. §5 creates them; they are cluster-wide, not per-database.
+psql "$TARGET_ADMIN_URL" -c "select rolname from pg_roles where rolname like 'prl\_%';"
+
+# Restore into an EMPTY database, then verify the schema matches what the app expects.
+pg_restore --dbname="$TARGET_URL" prl-2026-08-18.dump
+pnpm run db:verify        # must print "every documented schema security property holds"
 ```
 
 Test the restore on a schedule. A backup nobody has restored is a hypothesis. `pnpm run
 db:migrate:status` on the restored database tells you which release it belongs to.
+
+> **If you inherited a dump taken with `--no-owner --no-privileges`**, the symptom is precise and
+> the repair is two steps. `pnpm run db:verify` exits 1 with
+> `✗ prl_app: lacks USAGE on schema prl, so the app cannot read anything`, and `select … from
+> prl.users` as a `prl_api` session answers `ERROR: permission denied for schema prl`. Repair, in
+> this order, as a superuser or as the schema's new owner:
+>
+> ```bash
+> psql "$TARGET_ADMIN_URL" -c 'ALTER SCHEMA prl OWNER TO prl_migrator;'
+> # Then re-apply the grant block — the section headed "grants" in
+> # db/migrations/0001_initial.sql (REVOKE ALL ON SCHEMA prl FROM PUBLIC through the two
+> # GRANT EXECUTE lines). It is idempotent.
+> sed -n '/^REVOKE ALL ON SCHEMA prl FROM PUBLIC/,/^GRANT EXECUTE ON FUNCTION prl.is_card/p' \
+>   db/migrations/0001_initial.sql | psql "$TARGET_ADMIN_URL"
+> pnpm run db:verify
+> ```
+>
+> **The `ALTER SCHEMA` alone is not enough** — `db:verify` still exits 1, because `--no-privileges`
+> removed the table grants as well as the ownership. Both steps, then re-verify.
+>
+> Measured on 2026-08-18 against a migrated and seeded database, to make sure this section is not
+> wrong twice: the procedure as it was written restored with exit 0 and then failed `db:verify`
+> (`prl` owned by the dumping superuser, `prl_app` denied); the procedure above restored with `prl`
+> owned by `prl_migrator` and `db:verify` exit 0; and the repair above took the broken restore to
+> `db:verify` exit 0 with `prl_app` reading rows again.
 
 ### 11.5 Logs
 
@@ -513,8 +613,12 @@ log driver, or a sidecar. Points that matter when you configure it:
 * Web has no health route; `GET /` renders the home page and that is the honest check.
 * Both container `HEALTHCHECK`s probe the container's own network address, so "healthy" means
   "reachable", not "a process exists".
-* Shutdown is graceful on SIGTERM (drain, close the pool). Set the orchestrator's grace period
-  above the drain timeout, and expect live rooms to end — see 11.1.
+* Shutdown is graceful on SIGTERM: in-flight requests are answered, every WebSocket gets a `4503`
+  `serverShuttingDown` close frame, the pool and the worker threads are closed, exit 0. Set the
+  orchestrator's grace period **above** `SHUTDOWN_GRACE_MS`, never equal to it (§10), and expect
+  live rooms to end — see 11.1. A client that sees `4503` can say "the server is restarting" and
+  reconnect; a client that sees `1006` is looking at a hard kill, which is what a grace period equal
+  to the app's own deadline produces.
 
 ### 11.7 The pre-deployment checklist
 
@@ -526,6 +630,8 @@ log driver, or a sidecar. Points that matter when you configure it:
 - [ ] `TRUST_PROXY` matches reality (on only if the API is unreachable except via the proxy)
 - [ ] API pinned to one replica, or room affinity implemented and tested with two players in one room
 - [ ] Migrations run from outside the serving container, at the release commit
-- [ ] Backups scheduled **and a restore rehearsed**
+- [ ] Backups scheduled **and a restore rehearsed** — rehearsed means `pnpm run db:verify` exited 0
+      against the restored database, not that `pg_restore` exited 0 (§11.4)
 - [ ] Logs shipped somewhere with retention set
-- [ ] `pnpm run verify` green on the release commit
+- [ ] Orchestrator termination grace **above** `SHUTDOWN_GRACE_MS`, never equal to it (§10)
+- [ ] `pnpm run verify` green on the release commit — every gate `PASS`, not just an exit code

@@ -1,10 +1,15 @@
 # Verification
 
-**Last run:** 2026-08-17 · Node 24.18.0 · pnpm 11.10.0 · macOS arm64
+**Last run:** 2026-08-18 · Node 24.18.0 · pnpm 11.10.0 · macOS arm64
 
 Every correctness claim this project makes, and the evidence for it. Where a claim rests on
 something weaker than proof, this document says so — a verification record that only lists
 its successes is a marketing document.
+
+Timings and counts below were re-measured on the date above. Where a figure is machine-dependent it
+says so; where a figure moved because the tests changed, the new one is stated rather than the one
+that was easier to keep. **Which of these checks a gate enforces is stated in §12**, because a ✔
+that no command produces is a claim, not a result.
 
 ---
 
@@ -47,7 +52,9 @@ Two independent checks over the complete enumeration:
 | Four of a kind | 624 | ✔ |
 | Straight flush | 40 | ✔ |
 
-Runtime: **1.8 s**.
+Runtime: **1.9–2.1 s** for the exhaustive comparison across repeated runs (machine-dependent, and
+quoted as a range because two consecutive runs here differed by 12%); the whole
+`packages/poker-engine/test/evaluate.test.ts` — 15 tests — is ~2.5 s.
 
 ### 2.2 Every seven-card hand — all 133,784,560
 
@@ -70,11 +77,17 @@ classified, and the nine category counts match the published result **exactly**:
 | Straight flush | 41,584 | ✔ |
 | **Total** | **133,784,560** | ✔ |
 
-Measured: **6.5 s at 20.6 million hands/second.**
+Measured 2026-08-18: **6.4 s at 20.8 million hands/second** (machine-dependent).
 
 **Why this is strong.** A single misclassified hand moves at least two counters. The sum is
 independently checked against C(52,7). And the frequencies were derived mathematically long
 before this code existed, so matching them cannot be circular.
+
+**And it is now gated.** This check was in neither `test` nor `verify` — it lived only in
+`test:all`, which is not the release gate — so the ✔ above was a result somebody had produced once,
+not a result the release procedure reproduces. An audit correctly marked it UNVERIFIED for that
+reason. `test:exhaustive` is now one of `verify`'s gates; at 7 seconds there was never a good
+argument for leaving the strongest single check in the project outside the gate.
 
 ### 2.3 Ordering, not just classification
 
@@ -143,7 +156,7 @@ which is also what a dealer does. The function is now total.
 
 `packages/poker-engine/test/invariants.test.ts`
 
-**4,000 randomised hands, 32,245 actions.** Random seat counts (2–6), stacks (deliberately
+**4,000 randomised hands, 27,233 actions.** Random seat counts (2–6), stacks (deliberately
 including stacks smaller than the blinds), blind structures, antes, button positions and
 action choices. After **every single action**, it asserts:
 
@@ -157,9 +170,18 @@ action choices. After **every single action**, it asserts:
 * on completion: awards equal the pots, the hand's own commitment reveal verifies, and nobody
   lost more than they committed.
 
-Coverage achieved: 3,518 hands reached showdown, 482 ended by folding, **3,114 produced side
-pots**, 31 were all-in before the flop. A fuzz run that never reaches the interesting states
-tests nothing, so those counts are themselves asserted.
+Coverage achieved: 3,385 hands reached showdown, 615 ended by folding, **2,945 produced side
+pots**, 123 were all-in before the flop. A fuzz run that never reaches the interesting states
+tests nothing, so those counts are themselves asserted — as *floors* (showdown > 200, folds > 200,
+side pots > 100, every street reached), which is why the exact figures above move when the
+generator or the engine changes and the test still passes. They are printed by the run; the numbers
+here are the 2026-08-18 measurement, not a target.
+
+The engine's other two soaks, for the same reason: `all-in-runout.test.ts` — **1,500 shove-heavy
+hands, 6,847 actions** (1,459 showdowns, 41 fold-outs, 23 run out before any action);
+`short-blinds.test.ts` — **3,000 short-blind-heavy hands, 16,156 actions** (2,002 short posts across
+1,699 hands, 201 decided by the blinds alone). **8,500 hands and 50,236 applied actions in total**,
+which is the figure `REPORT.md` §4 quotes.
 
 Two further properties:
 
@@ -202,7 +224,7 @@ hole, and the two have to be designed together.**
 
 ## 7. Randomness and the commitment
 
-`packages/poker-engine/test/rng.test.ts` (19 tests) ·
+`packages/poker-engine/test/rng.test.ts` (**10 tests**) ·
 `test/commitment.test.ts` (16 tests)
 
 **Randomness**
@@ -231,8 +253,10 @@ roots.
 
 ## 8. The mathematics
 
-**25 independently-derived identity checks**, verified directly. Every one below was computed
-by hand or from a closed form, not read off the implementation:
+**19 independently-derived identity checks**, verified directly — several of the rows carry more
+than one value, so the number of asserted equalities is higher, and it is the rows that are counted
+here rather than an aggregate nobody can reproduce. Every one was computed by hand or from a closed
+form, not read off the implementation:
 
 | Check | Expected | Result |
 | --- | --- | --- |
@@ -391,6 +415,25 @@ The honest section.
 | **Accessibility, fully** | The audit is static (server-rendered HTML) because a headless browser needs install scripts the supply-chain policy forbids. It reports exactly what it covers. THREAT-MODEL G5 |
 | **Load behaviour at scale** | The harness measures a local dev server, not production capacity, and says so in its output |
 | **Container image digests** | Pinned where a digest could be verified at authoring time; otherwise tagged and marked `TODO`. A fabricated digest would be worse than an honest gap |
+| **That a test which runs actually asserts anything** | The reachability guard (`apps/api/test/workspace-test-reachability.test.ts`) now proves each package's suite *would execute* tests — a real `node --test` runner, at least one `test()`/`it()` per file, no declaration disabled by a literal skip — but it is a static reader. A test whose body asserts nothing still counts as executing. Closing that needs each package's runner to emit a machine-readable summary a root script asserts on, which is a change to every workspace manifest |
+| **Everything outside the gate** | See the table below. A ✔ in this document that no gate reproduces is a result somebody obtained once |
+
+### What the release gate actually enforces
+
+`pnpm run verify` runs eleven gates, reports each, and exits non-zero if any failed. Every section of
+this document is mapped onto it here, because "we check that" and "the release checks that" are
+different sentences and this project has confused them before.
+
+| This document's claim | Enforced by |
+| --- | --- |
+| §2.1 five-card enumeration, §3 betting, §4 side pots, §5 whole-hand invariants, §6 hidden information, §7 randomness and commitment, §8 mathematics, §9 content | `test` (via `test:unit`) |
+| §2.2 the 133,784,560-hand exhaustive check | `test:exhaustive` — **added to the gate 2026-08-18**; it was in neither `test` nor `verify` before that |
+| AI profile axes (`REPORT.md` §7) | `test:simulation` — also added to the gate 2026-08-18 |
+| §10 supply chain | `security:audit`, `security:hygiene` |
+| The live schema's security properties | `db:verify` — present in the gate before, but as the last link of a `&&` chain, so a failure anywhere earlier skipped it. It had never run inside `verify` |
+| Contrast ratios, both themes | `design:contrast` |
+| Accessibility, to the extent §12 says it is checked at all | `test:a11y` — **added to the gate 2026-08-18**; it lived only in `test:all`, which is not the gate |
+| Everything in the "NOT verified" table above | **Nothing.** That is what the table means |
 
 ---
 
@@ -399,11 +442,15 @@ The honest section.
 ```bash
 pnpm install --frozen-lockfile
 pnpm run security:audit        # 8 gates
-pnpm run build:packages        # required before tests
-pnpm run test                  # unit + integration
+pnpm run test                  # builds the packages first, then unit + integration + scripts
 pnpm run test:exhaustive       # all 133,784,560 seven-card hands (~7 s)
+pnpm run test:simulation       # AI profile axes (~2 min)
 pnpm run test:a11y
 node scripts/check-contrast.mjs   # the design system's contrast claims
 ```
+
+`build:packages` no longer needs to be a separate step before `test`: `dist/` is `.gitignore`d and
+every `@prl/*` package resolves through it, so `test` builds the packages itself rather than testing
+whatever build happened to be on disk.
 
 Or in one command: `pnpm run verify`.

@@ -144,6 +144,39 @@ function defaultWorkerUrl(): URL {
 }
 
 /**
+ * The report a thread sent back names no action the task did not permit.
+ *
+ * `buildCoachReport` already filters its own candidates through `legalActions`, so in a
+ * healthy process this never fires. It is here because the failure it guards against is
+ * silent by nature and was live in production for the whole of this feature's life: the
+ * field was optional, the wire type had no slot for it, and the filter treated "absent" as
+ * "everything is permitted", so four of the five Coach surfaces published actions the table
+ * would refuse and nothing anywhere said so. A report is the one thing a learner is asked to
+ * trust, so the pool checks the reply against the request rather than assuming the two agree.
+ *
+ * Deliberately on the boundary between the thread and the route, not inside the route:
+ * `routes/calc.ts` and `routes/content.ts` both serve Coach reports, and a check written
+ * twice is a check one of them eventually loses.
+ *
+ * Exported for `test/coach-legality.test.ts` only. It cannot be reached through `runCoach`
+ * with a healthy worker — which is the point of it — so the alternative to exporting it is a
+ * guard nothing ever executes, and the audit that produced this fix was largely a list of
+ * those.
+ */
+export function assertReportStaysInsideItsLegalSet(task: CoachTask, report: CoachReport): void {
+  const permitted = new Set<string>(task.legalActions);
+  const published = [...new Set(report.candidates.map((candidate) => candidate.action))];
+  const outside = published.filter((action) => !permitted.has(action));
+  if (outside.length > 0 || !permitted.has(report.suggestion.action)) {
+    throw new AppError('internal_error', {
+      logDetail:
+        `a Coach report named ${[...new Set([...outside, report.suggestion.action])].join(', ')} for a ` +
+        `spot whose legal actions are ${[...permitted].join(', ')}; refusing to serve it`,
+    });
+  }
+}
+
+/**
  * One equity calculation, possibly split across shards.
  *
  * Produced by `calc/parse.ts`, which is where the method, the sample count and the shard count
@@ -218,6 +251,7 @@ export class WorkerPool {
         logDetail: 'calculation thread returned a non-coach reply for a coach task',
       });
     }
+    assertReportStaysInsideItsLegalSet(task, response.report);
     return response.report;
   }
 

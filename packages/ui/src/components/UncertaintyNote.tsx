@@ -27,6 +27,7 @@ import type { ReactElement } from 'react';
 import { cx } from '../cx.ts';
 import { formatPoints } from '../format.ts';
 import { withKeys } from '../keys.ts';
+import { isProbabilityFraction, isProbabilityPoints } from '../probability.ts';
 import type { HeadingLevel } from './AssumptionList.tsx';
 import { Chip, type ChipTone } from './Chip.tsx';
 
@@ -56,14 +57,35 @@ const METHOD_CHIP: Readonly<
 };
 
 /**
- * The interval sentence. Written as a function so the three cases are visibly
- * exhaustive rather than buried in nested ternaries inside JSX.
+ * The interval sentence. Written as a function so the cases are visibly exhaustive rather
+ * than buried in nested ternaries inside JSX.
+ *
+ * ## Why the figures are range-checked here too
+ *
+ * Both halves of an interval have a range they cannot leave, and each is checked against its
+ * own: `level` is a probability (0..1, rendered as a percentage), `halfWidthPoints` is
+ * already in percentage points (±100 at the very widest, since that is the entire span the
+ * figure lives on). A `level` of 1.6 renders as "160% confidence interval" — an impossible
+ * claim about certainty, sitting directly under the equity it is supposed to qualify, which
+ * is the worst possible place for one. See `../probability.ts`: the producer refuses these at
+ * source, and this refuses them again at the point they would be read.
+ *
+ * A refused interval does not fall back to the exact-enumeration sentence. "There is no
+ * sampling error" would be a *stronger* claim than the one being withdrawn.
  */
 function intervalSentence(note: UncertaintyNoteData): string {
   const interval = note.confidenceInterval;
   if (interval !== null) {
-    const level = Math.round(interval.level * 100);
-    return `${level}% confidence interval: ± ${formatPoints(Math.abs(interval.halfWidthPoints))}.`;
+    const levelIsReal = isProbabilityFraction(interval.level);
+    const spreadIsReal = isProbabilityPoints(interval.halfWidthPoints);
+    if (levelIsReal && spreadIsReal) {
+      const level = Math.round(interval.level * 100);
+      return `${level}% confidence interval: ± ${formatPoints(Math.abs(interval.halfWidthPoints))}.`;
+    }
+    return (
+      'An interval was reported with this figure, but its confidence level or its width is not a ' +
+      'possible one, so it is not being shown. Treat the figure as approximate rather than precise.'
+    );
   }
   if (note.method === 'exact-enumeration') {
     return 'Every remaining board was enumerated, so there is no sampling error in this figure.';

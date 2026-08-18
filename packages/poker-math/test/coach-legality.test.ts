@@ -45,6 +45,20 @@
  *    of half one.
  * 3. **Hands the engine restricts.** The two spots above, played out, where the engine
  *    withholds aggression for a reason nothing in the pot or the stacks reveals.
+ * 4. **The derivation, measured against the engine.** `deriveLegalActions` is what the
+ *    callers with no `HandState` are given instead of the engine's list. It is only worth
+ *    having if it agrees with the engine, so it is run against the engine's own answer for
+ *    every state this file builds — and the single case where it is knowingly wider is
+ *    named, asserted, and explained rather than left to be discovered.
+ *
+ * ## What this file could NOT catch, and where that is caught instead
+ *
+ * Every case here hands `buildCoachReport` its own input. That is the right shape for
+ * testing a filter and the wrong shape for testing whether the *product* reaches the
+ * filter: the field was optional, `CoachTask` had no slot for it, and four of the five
+ * Coach surfaces therefore analysed with the guard disabled while this file passed. The
+ * end-to-end half lives in `apps/api/test/coach-legality.test.ts`, which drives the real
+ * task builders through a real worker pool. Both are needed; neither replaces the other.
  */
 
 import assert from 'node:assert/strict';
@@ -65,7 +79,7 @@ import {
   startHand,
   validateAction,
 } from '@prl/poker-engine';
-import { buildCoachReport, type CoachInput, type Street } from '../src/coach.ts';
+import { buildCoachReport, type CoachInput, deriveLegalActions, type Street } from '../src/coach.ts';
 import { topPercentRange } from '../src/hand-ranking.ts';
 import { exactRange, type ParsedRange, parseRange } from '../src/ranges.ts';
 
@@ -498,7 +512,7 @@ function playedHands(): readonly PlayedHand[] {
  * Both are real code paths (the WebSocket caller has a hand state, the ad-hoc calculator
  * and the profile comparison do not) and both are tested.
  */
-function inputForPlayedHand(hand: PlayedHand, tellTheMinimum: boolean): CoachInput {
+function inputForPlayedHand(hand: PlayedHand, tellTheMinimum: boolean, tellTheActions = true): CoachInput {
   const view = redactFor(hand.state, { viewerSeat: hand.seat });
   const own = view.seats.find((seat) => seat.isSelf);
   const heroCards = own?.holeCards;
@@ -531,7 +545,12 @@ function inputForPlayedHand(hand: PlayedHand, tellTheMinimum: boolean): CoachInp
     ...(tellTheMinimum ? { minimumRaiseTo: view.minimumRaiseTo } : {}),
     // The view's own list, which is `legalActions(state, seat)` — populated by `redactFor`
     // only for the seat that is to act. This is the line `coachForView` has too.
-    legalActions: view.legalActions.map((entry) => entry.type),
+    //
+    // `tellTheActions: false` is the other real code path, not a hypothetical: it is what a
+    // caller with no `HandState` produces, and what the Coach then has to answer for itself.
+    // Leaving the field off used to mean "every action is legal"; it now means the derivation
+    // runs, and the cases below check that the two answers agree.
+    ...(tellTheActions ? { legalActions: view.legalActions.map((entry) => entry.type) } : {}),
     samples: SAMPLES,
     seed: SEED,
   };
@@ -737,4 +756,166 @@ test('the smallest raise the Coach offers is never below the engine minimum, tol
       `${hand.label}: the derived floor must never sit below the engine's own minimum`,
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// Half four: the derivation the callers with no hand state are given
+// ---------------------------------------------------------------------------
+
+/** The engine's own answer, as a sorted list of action names. */
+function engineOffers(state: HandState, seat: SeatIndex): readonly string[] {
+  return legalActions(state, seat)
+    .map((entry) => entry.type)
+    .sort();
+}
+
+test('the derived legal set reproduces the engine on every state this file builds', () => {
+  // The derivation is only worth having if it agrees with the authority. Both halves of the
+  // file are re-used rather than re-stated: the scenario reconstructions (heads-up, hero to
+  // act) and the hands actually played through `applyAction`.
+  const spots = readScenarioSpots();
+  assert.ok(spots.length >= 30, `expected the shipped Scenario Lab, found ${spots.length}`);
+
+  const mismatches: string[] = [];
+  for (const spot of spots) {
+    const state = stateForSpot(spot);
+    // The reconstruction is heads-up, so the derivation is asked about the same one opponent
+    // rather than about the whole multiway seat list — like against like, or a disagreement
+    // here would be about the fixture and not about the rule.
+    const derived = [
+      ...deriveLegalActions({
+        toCall: spot.toCall,
+        heroCommittedThisStreet: spot.heroCommittedThisStreet,
+        heroStack: spot.heroStack,
+        opponentStacks: [spot.opponentStacks[0] ?? 0],
+      }),
+    ].sort();
+    const offered = engineOffers(state, 0);
+    if (derived.join(',') !== offered.join(',')) {
+      mismatches.push(`${spot.id}: derived ${derived.join('+')}, engine ${offered.join('+')}`);
+    }
+  }
+
+  for (const hand of playedHands()) {
+    const input = inputForPlayedHand(hand, true, false);
+    const derived = [...deriveLegalActions(input)].sort();
+    const offered = engineOffers(hand.state, hand.seat);
+    if (derived.join(',') !== offered.join(',')) {
+      mismatches.push(`${hand.label}: derived ${derived.join('+')}, engine ${offered.join('+')}`);
+    }
+  }
+
+  assert.deepEqual(mismatches, [], `the derivation disagreed with the engine:\n${mismatches.join('\n')}`);
+});
+
+test('the derivation matches the engine when nobody is left to call, and is knowingly wider only for mayRaise', () => {
+  // The two restricted shapes, one each way, so the derivation's limits are a measured claim
+  // rather than a sentence in a doc comment.
+  const [everyoneAllIn, shortAllIn] = restrictedHands();
+  assert.ok(everyoneAllIn !== undefined && shortAllIn !== undefined);
+
+  // (iv) The rule this fix exists for. Nothing in the pot, the price or hero's own stack says
+  // a raise is unavailable — only `opponentStacks` does, and the derivation reads it.
+  const allInInput = inputForPlayedHand(everyoneAllIn, true, false);
+  assert.ok(
+    allInInput.opponentStacks.some((stack) => stack === 0),
+    'the live opponent is all-in',
+  );
+  assert.deepEqual(
+    [...deriveLegalActions(allInInput)].sort(),
+    engineOffers(everyoneAllIn.state, everyoneAllIn.seat),
+  );
+
+  // (v) The one case the derivation cannot see: a short all-in that did not reopen the action.
+  // It depends on `lastFullRaiseBetLevel` and `lastActedAtBetLevel`, neither of which survives
+  // into a description of a spot. Asserted as a known, bounded gap — if it ever closes, or ever
+  // widens to something else, this fails instead of quietly drifting.
+  const shortInput = inputForPlayedHand(shortAllIn, true, false);
+  assert.deepEqual(engineOffers(shortAllIn.state, shortAllIn.seat), ['call', 'fold']);
+  assert.deepEqual([...deriveLegalActions(shortInput)].sort(), ['call', 'fold', 'raise']);
+  assert.ok(
+    shortInput.opponentStacks.some((stack) => stack > 0),
+    'this gap exists precisely because somebody here does still have chips behind',
+  );
+});
+
+test('with no legal-action list at all, the Coach still withholds a raise nobody could call', () => {
+  // The regression that shipped. `legalActions` was optional and its absence disabled the
+  // filter, so this exact input published three raises and headlined one of them. Every caller
+  // that crosses `CoachTask` used to produce exactly this input.
+  const [everyoneAllIn] = restrictedHands();
+  assert.ok(everyoneAllIn !== undefined);
+
+  const withoutTheList = inputForPlayedHand(everyoneAllIn, true, false);
+  assert.equal(withoutTheList.legalActions, undefined, 'this is the shape the wire used to produce');
+  assert.ok(
+    withoutTheList.heroStack - withoutTheList.toCall > withoutTheList.bigBlind * 2,
+    'hero can plainly afford a raise — affordability was the only thing the old guard checked',
+  );
+
+  const report = buildCoachReport(withoutTheList);
+  assert.deepEqual(
+    report.candidates
+      .filter((candidate) => candidate.action === 'bet' || candidate.action === 'raise')
+      .map((candidate) => `${candidate.action} to ${String(candidate.to)}`),
+    [],
+    'the Coach published aggression against a table that had nothing left to call with',
+  );
+  assert.ok(
+    report.suggestion.action === 'fold' || report.suggestion.action === 'call',
+    `headlined ${report.suggestion.action}`,
+  );
+  assert.deepEqual(rejectionsFor(everyoneAllIn.state, everyoneAllIn.seat, report), []);
+});
+
+test('with no legal-action list, an ordinary spot is not over-restricted either', () => {
+  // The other direction. A fail-closed guard that closes on everything teaches a learner that
+  // lines exist which do not, and the fix would have traded one wrong panel for another.
+  for (const hand of playedHands()) {
+    const derived = buildCoachReport(inputForPlayedHand(hand, true, false));
+    const told = buildCoachReport(inputForPlayedHand(hand, true, true));
+    assert.deepEqual(
+      [...new Set(derived.candidates.map((candidate) => candidate.action))].sort(),
+      [...new Set(told.candidates.map((candidate) => candidate.action))].sort(),
+      `${hand.label}: the derived set and the engine's set produced different action kinds`,
+    );
+    assert.deepEqual(rejectionsFor(hand.state, hand.seat, derived), [], hand.label);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Half five: nothing published costs more than hero has
+// ---------------------------------------------------------------------------
+
+test('no candidate costs more than hero has behind, or reaches a total hero cannot reach', () => {
+  // `heroStack` is chips BEHIND, so `cost` is measured against it directly and `to` — a whole
+  // street commitment — against `heroCommittedThisStreet + heroStack`. Confusing the two is a
+  // double-count in one direction and a needless refusal in the other, which is why both are
+  // checked here on data that exercises both: scenarios where hero has posted a blind, and
+  // scenarios where hero has not.
+  const spots = readScenarioSpots();
+  const problems: string[] = [];
+  let withCommitment = 0;
+
+  for (const spot of spots) {
+    if (spot.heroCommittedThisStreet > 0) withCommitment += 1;
+    const state = stateForSpot(spot);
+    const report = buildCoachReport(coachInputFor(spot, state));
+    const maxTo = spot.heroCommittedThisStreet + spot.heroStack;
+    for (const candidate of report.candidates) {
+      if (candidate.cost > spot.heroStack) {
+        problems.push(
+          `${spot.id}: ${candidate.action} costs ${candidate.cost} with ${spot.heroStack} behind`,
+        );
+      }
+      if (candidate.to !== undefined && candidate.to > maxTo) {
+        problems.push(
+          `${spot.id}: ${candidate.action} reaches ${candidate.to} against a maximum of ${maxTo}`,
+        );
+      }
+    }
+  }
+
+  assert.ok(withCommitment >= 3, `only ${withCommitment} scenarios have hero committed on the street`);
+  assert.deepEqual(problems, [], problems.join('\n'));
 });

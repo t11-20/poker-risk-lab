@@ -448,9 +448,9 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           trials: 224730,
           confidenceHalfWidthPoints: null,
           ruleOfThumb: {
-            estimate: 0.6,
-            errorPoints: 16.676011213456142,
-            note: '15 outs with two cards to come, times 4, is roughly 60% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut overstates by 16.7 points here — 60% against an exact 43.3%. That is enough to flip a marginal call into a fold or the other way round, so use the exact figure for this decision.',
+            estimate: 0.32,
+            errorPoints: 0.5476410730804773,
+            note: "8 outs with two cards to come, times 4, is roughly 32% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut overstates by 0.5 points here — 32% against an exact 31.5%. Fine as a rough read, but do not hang a marginal call on it. The comparison is against the exact chance of one of those 8 clean cards arriving (Two cards to come, 8 outs, 47 cards unseen. Count the misses instead of the hits: 39 cards do not help. The turn misses 39/47 of the time, and with one miss now gone the river misses 38/46 of the time, so both cards miss (39/47) x (38/46) = 68.5% of the time. Hitting at least one is whatever is left: 1 - 68.5% = 31.5%. Adding 8/47 + 8/46 instead would count every run-out that hits twice twice over, and overstate the chance.), not against hero's equity: hitting and winning are different questions, and the 7 dirty outs are exactly the gap between them. The shortcut is an approximation and this is its error, stated rather than hidden.",
           },
           perPlayer: [
             {
@@ -573,7 +573,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         teachingNotes: [
           'The pot is laying you 3.0 to 1, so you need 25.0% to break even on a call. That number depends only on the price — not on your cards.',
           'Notice the split: 8 clean and 7 dirty, out of 15 outs in total. A card that improves you is not the same as a card that wins you the hand — an opponent who is behind after it lands can still draw out on the last card.',
-          'The rule of 2 and 4 gives 60% here, overstating the real figure by 16.7 points. Useful at the table, worth knowing the direction of its error.',
+          'The rule of 2 and 4 gives 32% on your 8 cards of clean outs, overstating the exact chance of hitting one of them by 0.5 points. Your equity here is 43.3%, which is a different question again: hitting is not the same as winning.',
           'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
         ],
       },
@@ -618,8 +618,8 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           confidenceHalfWidthPoints: null,
           ruleOfThumb: {
             estimate: 0.24,
-            errorPoints: -8.139217284957198,
-            note: '12 outs with one card to come, times 2, is roughly 24% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut understates by 8.1 points here — 24% against an exact 32.1%. That is enough to flip a marginal call into a fold or the other way round, so use the exact figure for this decision.',
+            errorPoints: -2.086956521739129,
+            note: "12 outs with one card to come, times 2, is roughly 24% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut understates by 2.1 points here — 24% against an exact 26.1%. That is enough to flip a marginal call into a fold or the other way round, so use the exact figure for this decision. The comparison is against the exact chance of one of those 12 clean cards arriving (One card to come. 12 of the 46 unseen cards win the hand, so the chance is 12/46 = 26.1%. With a single card there is nothing to correct for: the count of outs over the count of unseen cards is the probability.), not against hero's equity: hitting and winning are different questions, and the dirty-out count is zero here only because every out is clean. The shortcut is an approximation and this is its error, stated rather than hidden.",
           },
           perPlayer: [
             {
@@ -739,7 +739,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         },
         teachingNotes: [
           'The pot is laying you 3.0 to 1, so you need 25.0% to break even on a call. That number depends only on the price — not on your cards.',
-          'The rule of 2 and 4 gives 24% here, understating the real figure by 8.1 points. Useful at the table, worth knowing the direction of its error.',
+          'The rule of 2 and 4 gives 24% on your 12 cards of clean outs, understating the exact chance of hitting one of them by 2.1 points. Your equity here is 32.1%, which is a different question again: hitting is not the same as winning.',
           'At an SPR of 1.9 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
           'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
         ],

@@ -27,7 +27,14 @@ import type { DatabaseHandle } from '../src/db.ts';
 import { AppError, isAppError } from '../src/errors.ts';
 import type { RoomMemberRow, RoomRow } from '../src/repositories/rooms.ts';
 import { botDisplayName, persistableProfile, resolveProfile } from '../src/rooms/bots.ts';
-import { RoomRegistry, type RoomStore } from '../src/rooms/registry.ts';
+import {
+  blindsFromLastHand,
+  type HandArchive,
+  noopArchive,
+  type RoomRecord,
+  RoomRegistry,
+  type RoomStore,
+} from '../src/rooms/registry.ts';
 import { LiveTable } from '../src/rooms/table.ts';
 import { createManualClock, type ManualClock, TurnTimer } from '../src/rooms/timers.ts';
 import { createRoomRoutes } from '../src/routes/rooms.ts';
@@ -935,5 +942,166 @@ describe('the Legends endpoints', () => {
       );
     }
     await test.app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A room re-opened after a restart
+// ---------------------------------------------------------------------------
+
+/**
+ * The two things a restart used to lose, and the two the registry now recovers.
+ *
+ * A live hand cannot survive a restart — the deck and the salts are never persisted, deliberately
+ * (`db/migrations/0001_initial.sql`) — but the two things around it can. `prl.hands.button_seat`
+ * was already being written and simply never read back, so the blind rotation restarted under the
+ * players and somebody paid a second consecutive big blind; and the interrupted hand row was left
+ * at `completed_at IS NULL` forever, turning up in the learner's own history with null fields.
+ * Three of those accumulated in a single audit session.
+ */
+describe('a room re-opened after a restart', () => {
+  const RESTART_CONFIG = { smallBlind: 5, bigBlind: 10, ante: 0, maxSeats: 6, actionTimeoutSeconds: 30 };
+
+  function restartedRecord(): RoomRecord {
+    return {
+      id: 'room_restart',
+      name: 'Restarted',
+      ownerUserId: 'usr_a',
+      config: RESTART_CONFIG,
+      startingStack: 1_000,
+      createdAt: new Date().toISOString(),
+      closed: false,
+    };
+  }
+
+  /** An archive that remembers the last deal, and records what was asked of it. */
+  function replayingArchive(): { readonly archive: HandArchive; readonly abandonedFor: string[] } {
+    const abandonedFor: string[] = [];
+    return {
+      abandonedFor,
+      archive: {
+        ...noopArchive,
+        nextHandNumber: async () => 5,
+        // Hand 4 was dealt BTN 1 / SB 3 / BB 0 to seats 0, 1 and 3.
+        lastDealtHand: async () => ({
+          handId: 'hand_before_restart',
+          handNumber: 4,
+          buttonSeat: 1,
+          dealtSeats: [0, 1, 3],
+        }),
+        abandonInterruptedHands: (roomId) => {
+          abandonedFor.push(roomId);
+          return Promise.resolve([{ handId: 'hand_before_restart', roomId, handNumber: 4 }]);
+        },
+      },
+    };
+  }
+
+  function restartedRegistry(archive: HandArchive): RoomRegistry {
+    return new RoomRegistry({
+      store: fakeRoomStore(),
+      clock: createManualClock(),
+      random: createSecureRandom(),
+      nextHandId: incrementingHandIds(),
+      archive,
+    });
+  }
+
+  it('reconstructs the blind positions from the persisted button and who was dealt in', () => {
+    assert.deepEqual(
+      blindsFromLastHand({ handId: 'h', handNumber: 4, buttonSeat: 1, dealtSeats: [0, 1, 3] }, 6),
+      { buttonSeat: 1, smallBlindSeat: 3, bigBlindSeat: 0 },
+    );
+    // Heads-up the button posted the small blind, so both positions are its seat. Walking the
+    // table instead would put the big blind back on the button at the end of its lap.
+    assert.deepEqual(
+      blindsFromLastHand({ handId: 'h', handNumber: 4, buttonSeat: 2, dealtSeats: [0, 2] }, 6),
+      { buttonSeat: 2, smallBlindSeat: 2, bigBlindSeat: 0 },
+    );
+    // A dead button — nobody was playing from seat 2 — still names where the rotation was.
+    assert.deepEqual(
+      blindsFromLastHand({ handId: 'h', handNumber: 4, buttonSeat: 2, dealtSeats: [0, 1, 3] }, 6),
+      { buttonSeat: 2, smallBlindSeat: 3, bigBlindSeat: 0 },
+    );
+    assert.equal(blindsFromLastHand({ handId: 'h', handNumber: 4, buttonSeat: 0, dealtSeats: [0] }, 6), null);
+  });
+
+  it('carries the rotation on rather than charging the last big blind a second one', async () => {
+    const { archive } = replayingArchive();
+    const registry = restartedRegistry(archive);
+    const room = await registry.open({ record: restartedRecord() });
+
+    assert.equal(room.table.snapshot().buttonSeat, 1, 'the button is restored, not reset');
+    assert.equal(room.table.snapshot().handNumber, 4, 'and the numbering continues');
+
+    for (const [userId, seat] of [
+      ['usr_a', 0],
+      ['usr_b', 1],
+      ['usr_c', 3],
+    ] as const) {
+      await room.table.sit({
+        userId,
+        displayName: userId,
+        seat,
+        stack: 1_000,
+        resumingSeat: true,
+      });
+      assert.equal(room.table.owesBlind(userId), false, 'a restart is not an arrival');
+    }
+
+    await room.table.startHand();
+    const view = room.table.viewFor('usr_a');
+    assert.ok(view !== null);
+    assert.equal(view.handNumber, 5);
+    const posted = new Map(view.forcedBets.map((bet) => [bet.kind, bet.seat]));
+    // Seat 0 posted the big blind in hand 4. Restarting the rotation from the first player to sit
+    // down would have dealt BTN 1 / SB 3 / BB 0 all over again and charged them twice.
+    assert.notEqual(posted.get('bigBlind'), 0, 'seat 0 must not pay the big blind twice');
+    assert.equal(posted.get('bigBlind'), 1, 'the big blind advances one live player from seat 0');
+    assert.equal(posted.get('smallBlind'), 0, 'the small blind falls where the big blind was');
+    assert.equal(view.buttonSeat, 3, 'and the button where the small blind was');
+  });
+
+  it('closes the interrupted hand as it takes the room over, and only then', async () => {
+    const { archive, abandonedFor } = replayingArchive();
+    const registry = restartedRegistry(archive);
+
+    const room = await registry.open({ record: restartedRecord() });
+    assert.deepEqual(abandonedFor, ['room_restart'], 'reconciled exactly once, as the room opened');
+
+    // Opening again returns the live room and must NOT reconcile: this process is now mid-hand in
+    // it, and closing a hand it is playing would be worse than the orphan.
+    await registry.open({ record: restartedRecord() });
+    assert.deepEqual(abandonedFor, ['room_restart']);
+    assert.equal(await registry.reconcileInterruptedHands('room_restart'), 0, 'refused while live');
+    assert.deepEqual(abandonedFor, ['room_restart']);
+
+    registry.close(room.record.id);
+    assert.equal(await registry.reconcileInterruptedHands('room_restart'), 1, 'and available again');
+    assert.deepEqual(abandonedFor, ['room_restart', 'room_restart']);
+  });
+
+  it('opens the room anyway when the reconciliation fails', async () => {
+    const problems: string[] = [];
+    const registry = new RoomRegistry({
+      store: fakeRoomStore(),
+      clock: createManualClock(),
+      random: createSecureRandom(),
+      nextHandId: incrementingHandIds(),
+      archive: {
+        ...noopArchive,
+        abandonInterruptedHands: () => Promise.reject(new Error('database is down')),
+      },
+      onProblem: (message) => problems.push(message),
+    });
+
+    // A history row that could not be tidied is a reporting problem. Refusing to open the room
+    // would turn it into a gameplay one.
+    const room = await registry.open({ record: restartedRecord() });
+    assert.ok(room.table.snapshot().seats.length === 0);
+    assert.ok(
+      problems.some((message) => message.includes('could not reconcile interrupted hands')),
+      `the failure must be logged, got ${JSON.stringify(problems)}`,
+    );
   });
 });

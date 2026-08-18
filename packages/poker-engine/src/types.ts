@@ -185,7 +185,21 @@ export interface HandState {
   readonly roomId: string;
   readonly handNumber: number;
   readonly config: TableConfig;
+  /**
+   * Where the button sat for this hand.
+   *
+   * Under the dead-button rule this is a POSITION, and it is not necessarily a
+   * seat that was dealt in: when the player who was the small blind leaves, the
+   * button falls on their empty chair for one hand rather than moving forward
+   * and dragging the blinds onto players who have already paid. Nothing derives
+   * the blinds from it — `smallBlindSeat` and `bigBlindSeat` below are the
+   * record of where they actually fell.
+   */
   readonly buttonSeat: SeatIndex;
+  /** Who posted the small blind, or null when it was dead and nobody did. */
+  readonly smallBlindSeat: SeatIndex | null;
+  /** Who posted the big blind. Always a seat that was dealt in. */
+  readonly bigBlindSeat: SeatIndex;
   readonly seats: readonly SeatState[];
   readonly board: readonly Card[];
   readonly street: Street;

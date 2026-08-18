@@ -5,8 +5,16 @@
  * Hand-rolled rather than using @cyclonedx/cyclonedx-npm, for two reasons:
  * that generator pulls a sizeable dependency tree of its own into a repo whose
  * whole policy is dependency minimisation, and it would have to be exempted from
- * the release-age cooldown to stay current. The output here is validated against
- * the CycloneDX 1.6 JSON schema shape in scripts/supply-chain/sbom.test.mjs.
+ * the release-age cooldown to stay current.
+ *
+ * The output is validated against the CycloneDX 1.6 JSON schema shape in
+ * `scripts/supply-chain/sbom.test.mjs`, which regenerates this file and checks
+ * required fields, enum values, purl form, hash algorithms and digest lengths,
+ * and the referential integrity of the `dependencies` graph — and which proves
+ * its validator can fail by feeding it ten broken documents. That sentence was
+ * in this header for a long time while the file it named did not exist; it is
+ * the kind of claim a reviewer takes at face value and stops checking, so if you
+ * ever have to delete the test, delete the sentence in the same commit.
  *
  * Component identity comes from the lockfile integrity hash (subresource
  * integrity → CycloneDX `hashes`), so the SBOM names the exact artefacts.

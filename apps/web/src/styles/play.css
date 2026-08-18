@@ -175,6 +175,51 @@
 }
 
 /* ==========================================================================================
+   1.2  THE INVITE CODE, AND THE FIELD FOR SOMEBODY ELSE'S
+   ==========================================================================================
+   Two blocks that only exist on a private table: the code for a room this page just created, and
+   the way in to a room somebody else made.
+
+   The code is set apart with an inset surface and a left edge rather than made large, and that is
+   the deliberate choice. It is a value the reader has to transcribe or copy exactly once, so what
+   it needs is to be findable and unambiguous — a monospaced face at a comfortable reading size,
+   with `user-select: all` so one click takes the whole thing and no hyphen is lost to a sloppy
+   drag. Making it a display-size number would be shouting a secret.
+
+   `word-break: break-all` is NOT used: the code is nineteen characters and fits every supported
+   width, and breaking it mid-group would produce a line that reads as two shorter codes.
+   ========================================================================================== */
+
+.prl-play__invite,
+.prl-play__join {
+  display: grid;
+  gap: var(--prl-space-4);
+  max-width: var(--prl-measure);
+  padding: var(--prl-space-5) var(--prl-space-6);
+  border-inline-start: 2px solid var(--prl-accent-edge);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-play__invite-code {
+  margin: 0;
+  font-size: var(--prl-type-body-lg);
+  /* One click selects the whole code. A partial selection is a code that will not work, and the
+     failure arrives later, at somebody else's keyboard. */
+  user-select: all;
+}
+
+.prl-play__invite-code code {
+  letter-spacing: 0.08em;
+}
+
+/* The field is a fixed-width value, not prose: sized to the code rather than to the panel, so a
+   1360px panel does not put a nineteen-character input across the whole screen. */
+.prl-play__join .prl-input {
+  max-width: 24ch;
+}
+
+/* ==========================================================================================
    2. THE STAGE
    ==========================================================================================
    One column by default. `align-items: start` matters at the rail breakpoint: without it the rail

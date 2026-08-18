@@ -40,12 +40,23 @@
  * restarts at zero on each new socket, which is why `welcome` resets it here.
  */
 
-import type { CoachReport, RoomSummary, WsServerMessage } from '@prl/contracts';
+import type { CoachReport, CreateRoomRequest, RoomSummary, WsServerMessage } from '@prl/contracts';
 import type { PlayerView, TableAction, TurnClock } from '@prl/ui';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { TableSubmission } from '@/components/TableStage.tsx';
 import { ApiRequestError } from './api.ts';
-import { chooseRoom, createBotRoom, ensureSession, listRooms, READER_SEAT } from './table-rooms.ts';
+import {
+  BOT_TABLE_REQUEST,
+  chooseRoom,
+  createRoom,
+  ensureSession,
+  FRIENDS_TABLE_REQUEST,
+  firstFreeSeat,
+  joinRoomByInviteCode,
+  listRooms,
+  normaliseInviteCode,
+  READER_SEAT,
+} from './table-rooms.ts';
 import {
   type CloseMeaning,
   newRequestId,
@@ -153,6 +164,19 @@ function seatFrom(room: RoomSummary, userId: string | null): number | null {
   if (userId === null) return null;
   return room.members.find((member) => member.userId === userId)?.seat ?? null;
 }
+
+/**
+ * The two sentences the Coach contributes to the table's polite live region.
+ *
+ * Exported so a test can assert the reducer produces exactly these, rather than asserting a string
+ * literal it has copied — a test that carries its own copy of the text passes after somebody
+ * deletes the announcement and pastes the sentence into the test.
+ *
+ * Neither one carries a number. See the `coach` case in `onFrame` for why.
+ */
+export const COACH_READY_ANNOUNCEMENT =
+  'The analysis of this decision is ready in the Coach panel, below the table on a narrow screen.';
+export const COACH_FAILED_ANNOUNCEMENT = 'The analysis could not be shown.';
 
 /** One sentence for the table's single polite live region. */
 function announce(event: Extract<WsServerMessage, { type: 'event' }>['event']): string {
@@ -287,6 +311,18 @@ function onFrame(state: TableState, frame: WsServerMessage): TableState {
             coach: { key: decisionKey(state.view), report: frame.report },
             coachRequestId: null,
             coachProblem: null,
+            // The analysis ARRIVING is news, and it was silent. The panel fills in beside the
+            // buttons with no announcement at all, and below 600px it is not even on screen —
+            // `styles/play.css` makes it a bottom sheet that starts collapsed, so a reader who
+            // cannot see the panel had no way to learn the thing they are waiting for is there.
+            //
+            // The same event is already announced correctly one screen away, in
+            // `ScenarioStage.tsx`'s reveal region, and this is that pattern rather than a new one:
+            // one short sentence, in the polite region the table already owns, saying WHERE the
+            // analysis is rather than what it says. It must not carry a figure — a number read out
+            // of the panel it came from has lost the assumptions it rests on, which is the one
+            // thing this product refuses to do with a number.
+            announcement: COACH_READY_ANNOUNCEMENT,
           }
         : state;
     case 'ack':
@@ -321,7 +357,17 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
     case 'coachFailed':
       // The request is over: no second answer is coming for it, so the outstanding id is cleared
       // and the reason takes the place of the analysis rather than sitting beside a stale one.
-      return { ...state, coachRequestId: null, coach: null, coachProblem: event.reason };
+      //
+      // Announced for the same reason the success is: a reader who asked for the analysis is
+      // waiting for it, and silence is indistinguishable from "still working". The reason is
+      // included because, unlike a figure, it is complete on its own.
+      return {
+        ...state,
+        coachRequestId: null,
+        coach: null,
+        coachProblem: event.reason,
+        announcement: `${COACH_FAILED_ANNOUNCEMENT} ${event.reason}`,
+      };
     case 'notice':
       return { ...state, notice: event.message };
     case 'reset':
@@ -345,12 +391,34 @@ export type SetupPhase =
   /** Setup failed for a reason the reader is told about. */
   | 'failed';
 
+/** Where a join-by-invite-code attempt has got to. */
+export type JoinPhase =
+  | { readonly state: 'idle' }
+  | { readonly state: 'joining' }
+  /** The server refused, in its own words. The field keeps what was typed so it can be corrected. */
+  | { readonly state: 'refused'; readonly message: string }
+  | { readonly state: 'joined'; readonly roomName: string };
+
 export interface LiveTable {
   readonly phase: SetupPhase;
   readonly status: TableSocketStatus | null;
   readonly closed: CloseMeaning | null;
   readonly setupError: string | null;
   readonly displayName: string | null;
+  /**
+   * The invite code of a room THIS page just created, and only that.
+   *
+   * Null at every other moment, and that is the contract rather than an implementation detail: the
+   * server stores `sha256(code)` and nothing else, so the code exists exactly once, in the response
+   * to `POST /rooms`. It is held in React state for the life of this component and written nowhere
+   * — not `sessionStorage`, not `localStorage`, not the URL. A reload does not bring it back, which
+   * is the honest behaviour: the room's owner shares it now or creates another room.
+   *
+   * Null also when an EXISTING room was reused (`chooseRoom`), because no code was issued for that
+   * request and there is no way to recover the one issued for the original.
+   */
+  readonly inviteCode: string | null;
+  readonly join: JoinPhase;
   readonly table: TableState;
   readonly turn: TurnClock | null;
   readonly report: CoachReport | null;
@@ -359,10 +427,22 @@ export interface LiveTable {
   readonly seatNames: Readonly<Record<number, string>>;
   readonly highlightedCards: readonly number[];
   readonly isMyTurn: boolean;
+  /** The seat `sit()` will ask for, or null when every seat is taken. */
+  readonly readerSeat: number | null;
   /** Opts in: session, room, socket. Safe to call twice. */
   readonly start: () => void;
-  /** Abandons the remembered room and builds a fresh one. */
+  /** Abandons the remembered room and builds a fresh bot table. */
   readonly startFreshTable: () => void;
+  /**
+   * Builds a private table with seats free for other people, and surfaces its invite code.
+   *
+   * Separate from `startFreshTable` because the bot table is FULL by construction — six seats, five
+   * bots, the owner in the sixth — so its invite code is a code to a table the server will refuse
+   * anybody at with `room_full`. An invite code nobody can use is not the feature.
+   */
+  readonly startPrivateTable: () => void;
+  /** Joins somebody else's private room with the code they shared, then opens a socket to it. */
+  readonly joinByInviteCode: (code: string) => void;
   readonly sit: () => void;
   readonly stand: () => void;
   readonly deal: () => void;
@@ -417,6 +497,8 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [status, setStatus] = useState<TableSocketStatus | null>(null);
   const [closed, setClosed] = useState<CloseMeaning | null>(null);
+  const [inviteCode, setInviteCode] = useState<string | null>(null);
+  const [join, setJoin] = useState<JoinPhase>({ state: 'idle' });
 
   const socketRef = useRef<TableSocketHandle | null>(null);
   const pendingRef = useRef<PendingDecision | null>(null);
@@ -435,7 +517,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
    * The controller is kept so unmount can abort it. Without that, a reader who navigates away
    * mid-setup leaves a `POST /rooms` in flight that creates a table nobody will ever sit at.
    */
-  const prepare = useCallback((fresh: boolean) => {
+  const prepare = useCallback((fresh: boolean, request: CreateRoomRequest = BOT_TABLE_REQUEST) => {
     setupRef.current?.abort();
     setPhase('preparing');
     setSetupError(null);
@@ -448,10 +530,17 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         const rooms = await listRooms(controller.signal);
         const preferred = fresh ? null : rememberedRoom();
         const existing = fresh ? null : chooseRoom(rooms, session.user.id, preferred);
-        const chosen = existing ?? (await createBotRoom(session.csrfToken, controller.signal)).room;
-        if (controller.signal.aborted) return;
+        // The code comes back with the room, once, and only when a room was actually created. A
+        // reused room issued no code on this request and its original cannot be recovered — only
+        // `sha256(code)` is stored — so `null` there is the truth rather than a gap to fill in.
+        const created =
+          existing === null ? await createRoom(session.csrfToken, request, controller.signal) : null;
+        const chosen = existing ?? created?.room;
+        if (controller.signal.aborted || chosen === undefined) return;
         rememberRoom(chosen.id);
         dispatch({ kind: 'reset' });
+        setInviteCode(created?.inviteCode ?? null);
+        setJoin({ state: 'idle' });
         setRoomId(chosen.id);
         setPhase('ready');
       } catch (cause) {
@@ -470,15 +559,95 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     prepare(false);
   }, [phase, prepare]);
 
-  const startFreshTable = useCallback((): void => {
-    socketRef.current?.dispose();
-    socketRef.current = null;
-    setRoomId(null);
-    setStatus(null);
-    setClosed(null);
-    rememberRoom(null);
-    prepare(true);
-  }, [prepare]);
+  /** Abandons whatever room is open and builds a new one to `request`. */
+  const buildFresh = useCallback(
+    (request: CreateRoomRequest): void => {
+      socketRef.current?.dispose();
+      socketRef.current = null;
+      setRoomId(null);
+      setStatus(null);
+      setClosed(null);
+      setInviteCode(null);
+      setJoin({ state: 'idle' });
+      rememberRoom(null);
+      prepare(true, request);
+    },
+    [prepare],
+  );
+
+  const startFreshTable = useCallback((): void => buildFresh(BOT_TABLE_REQUEST), [buildFresh]);
+
+  /**
+   * Creates a table for people, always fresh.
+   *
+   * Never reuses an existing room, unlike `start`. "Make me a private table to invite somebody to"
+   * is an explicit act with an answer the reader is waiting for — the invite code — and a version
+   * of it that quietly handed back a room they made yesterday would hand back a room whose code was
+   * issued once and is gone. Only a creation produces a code.
+   */
+  const startPrivateTable = useCallback(() => buildFresh(FRIENDS_TABLE_REQUEST), [buildFresh]);
+
+  /**
+   * Joins somebody else's private room, then opens a socket to it.
+   *
+   * The same ordered set of HTTP calls `prepare` makes, with the room supplied instead of found: a
+   * session (a guest one if there is none — the joiner is usually a second person who has never
+   * been here), then `POST /rooms/join`, then the socket. It uses the same `setupRef` controller,
+   * so a join and a "start a fresh table" cannot both be in flight; the later one wins.
+   *
+   * A refusal is a value, not an error page. `invite_code_invalid` is the ordinary answer to a
+   * mistyped code and the server's own wording for it is what the reader sees, because a client
+   * that rewrote it would be guessing at which of several refusals it had received. The socket is
+   * not touched until the join has succeeded, so a bad code leaves whatever table is already open
+   * exactly as it was.
+   */
+  const joinByInviteCode = useCallback((code: string): void => {
+    const normalised = normaliseInviteCode(code);
+    if (normalised === null) {
+      // Refused here rather than sent: below eight characters there is nothing the server could
+      // match, and spending a rate-limit token to be told so helps nobody.
+      setJoin({
+        state: 'refused',
+        message:
+          'That is not a complete invite code. They are nineteen characters in four groups, like ' +
+          'ABCD-EFGH-JKMN-PQRS — spaces and lower case are fine, and are tidied up for you.',
+      });
+      return;
+    }
+
+    setupRef.current?.abort();
+    const controller = new AbortController();
+    setupRef.current = controller;
+    setJoin({ state: 'joining' });
+    setSetupError(null);
+    setPhase('preparing');
+    void (async (): Promise<void> => {
+      try {
+        const session = await ensureSession(controller.signal);
+        setDisplayName(session.user.displayName);
+        const room = await joinRoomByInviteCode(session.csrfToken, normalised, controller.signal);
+        if (controller.signal.aborted) return;
+        socketRef.current?.dispose();
+        socketRef.current = null;
+        setStatus(null);
+        setClosed(null);
+        // Not this session's code to show: it was issued to whoever created the room.
+        setInviteCode(null);
+        rememberRoom(room.id);
+        dispatch({ kind: 'reset' });
+        setJoin({ state: 'joined', roomName: room.name });
+        setRoomId(room.id);
+        setPhase('ready');
+      } catch (cause) {
+        if (controller.signal.aborted) return;
+        // `phase` goes back to whatever the socket can still support rather than to `failed`: a
+        // wrong code is not a broken page, and turning the whole screen into an error state would
+        // throw away a table the reader may already be sitting at.
+        setPhase(socketRef.current === null ? 'idle' : 'ready');
+        setJoin({ state: 'refused', message: messageOf(cause) });
+      }
+    })();
+  }, []);
 
   /**
    * The socket's whole lifetime, tied to one room id.
@@ -526,9 +695,24 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     };
   }, [roomId, url, socketFactory, scheduler]);
 
+  /**
+   * The seat `sit()` will ask for: the one this reader already holds, or the first free one.
+   *
+   * `READER_SEAT` alone was right for exactly one table — the bot table this page creates, where
+   * `seatRequestedBots` fills from seat 1 upwards specifically to leave seat 0 free. It was wrong
+   * for every room reached by invite code, because seat 0 is where the room's owner is sitting, so
+   * the second person to arrive at a private table could only ever ask for a taken seat. Null means
+   * the table is full, and the control that offers it is hidden rather than offering a refusal.
+   */
+  const readerSeat = useMemo<number | null>(() => {
+    if (table.room === null || table.userId === null) return READER_SEAT;
+    return firstFreeSeat(table.room, table.userId);
+  }, [table.room, table.userId]);
+
   const sit = useCallback((): void => {
-    socketRef.current?.sit(READER_SEAT, newRequestId('sit'));
-  }, []);
+    if (readerSeat === null) return;
+    socketRef.current?.sit(readerSeat, newRequestId('sit'));
+  }, [readerSeat]);
 
   const stand = useCallback((): void => {
     socketRef.current?.stand(newRequestId('stand'));
@@ -609,6 +793,8 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     closed,
     setupError,
     displayName,
+    inviteCode,
+    join,
     table,
     turn,
     report,
@@ -616,8 +802,11 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     seatNames,
     highlightedCards,
     isMyTurn,
+    readerSeat,
     start,
     startFreshTable,
+    startPrivateTable,
+    joinByInviteCode,
     sit,
     stand,
     deal,

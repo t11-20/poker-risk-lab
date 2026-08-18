@@ -17,3 +17,7 @@ docs/sbom/*.json
 .pnpm-store/
 *.log
 /tmp/
+
+# A quarantine candidate lockfile written by `pnpm run deps:quarantine` for review.
+# It is a proposal, never the source of truth, and must not be committed.
+pnpm-lock.yaml.new

@@ -36,8 +36,8 @@
  */
 
 import type { RoomMember, RoomSummary } from '@prl/contracts';
-import type { LoggedAction, RandomSource, TableConfig } from '@prl/poker-engine';
-import { createSecureRandom } from '@prl/poker-engine';
+import type { BlindPositions, LoggedAction, RandomSource, TableConfig } from '@prl/poker-engine';
+import { createSecureRandom, orderFrom } from '@prl/poker-engine';
 import { getSql } from '../db.ts';
 import { AppError } from '../errors.ts';
 import * as handsRepository from '../repositories/hands.ts';
@@ -104,6 +104,18 @@ export interface ArchivedStacks {
 export interface HandArchive {
   /** The next `hand_number` for a room, so a restart does not collide with played hands. */
   readonly nextHandNumber: (roomId: string) => Promise<number>;
+  /**
+   * The room's most recent deal, so a re-opened table picks the blind rotation back up rather
+   * than restarting it from whoever sits down first.
+   */
+  readonly lastDealtHand: (roomId: string) => Promise<handsRepository.LastDealtHand | null>;
+  /**
+   * Closes hands that can never complete, for a room this process is about to take over.
+   *
+   * A hand interrupted by a restart is unrecoverable by design — the deck and the salts are never
+   * persisted — so the row has to be settled by somebody, and nobody was doing it.
+   */
+  readonly abandonInterruptedHands: (roomId: string) => Promise<readonly handsRepository.AbandonedHand[]>;
   readonly handStarted: (deal: ArchivedDeal) => Promise<void>;
   readonly actionsApplied: (handId: string, actions: readonly LoggedAction[]) => Promise<void>;
   readonly streetAdvanced: (
@@ -119,6 +131,8 @@ export interface HandArchive {
 /** Writes nothing. The default for tests and for a development run with no database. */
 export const noopArchive: HandArchive = {
   nextHandNumber: async () => 1,
+  lastDealtHand: async () => null,
+  abandonInterruptedHands: async () => [],
   handStarted: async () => undefined,
   actionsApplied: async () => undefined,
   streetAdvanced: async () => undefined,
@@ -137,6 +151,8 @@ export const noopArchive: HandArchive = {
 export function postgresArchive(sql: () => Db): HandArchive {
   return {
     nextHandNumber: (roomId) => handsRepository.nextHandNumber(sql(), roomId),
+    lastDealtHand: (roomId) => handsRepository.lastDealtHand(sql(), roomId),
+    abandonInterruptedHands: (roomId) => handsRepository.abandonInterruptedHands(sql(), roomId),
     handStarted: async (deal) => {
       await handsRepository.start(sql(), {
         handId: deal.handId,
@@ -459,13 +475,25 @@ export class RoomRegistry {
     const existing = this.rooms.get(request.record.id);
     if (existing !== undefined) return existing;
 
+    // Nothing in this process holds a table for this room yet, so any hand still open in the
+    // database belongs to a process that is gone and can never finish it. Closed here, before the
+    // table exists, so the reconciliation can never race a hand this process is about to deal.
+    await this.reconcileInterruptedHands(request.record.id);
+
     // Seeded from the database so a room re-opened after a restart cannot collide with a hand
-    // number that has already been played (`hands_room_hand_number_key`).
+    // number that has already been played (`hands_room_hand_number_key`), and so the blind
+    // rotation carries on from where it was rather than restarting under the players.
     let played = 0;
+    let blinds: BlindPositions | undefined;
     try {
       played = Math.max(0, (await this.archive.nextHandNumber(request.record.id)) - 1);
+      const last = await this.archive.lastDealtHand(request.record.id);
+      blinds =
+        last === null ? undefined : (blindsFromLastHand(last, request.record.config.maxSeats) ?? undefined);
     } catch (error) {
-      this.onProblem('could not read the played hand count', {
+      // A room that will not open is worse than one that opens with a fresh rotation, so both
+      // reads fail soft. The cost of the second one failing is one repeated big blind.
+      this.onProblem('could not read the played hand count or the last deal', {
         roomId: request.record.id,
         error: String(error),
       });
@@ -478,6 +506,7 @@ export class RoomRegistry {
       random: this.random,
       nextHandId: this.nextHandId,
       initialHandNumber: played,
+      ...(blinds === undefined ? {} : { initialBlinds: blinds }),
       onProblem: this.onProblem,
     });
     const bots = new BotRunner({
@@ -500,6 +529,35 @@ export class RoomRegistry {
 
   get(roomId: string): LiveRoom | null {
     return this.rooms.get(roomId) ?? null;
+  }
+
+  /**
+   * Closes any hand of this room that can never complete, and reports how many there were.
+   *
+   * Called from `open`, which is the moment this process takes responsibility for the room and
+   * the moment it can be sure nobody here is mid-hand in it. Public so that a startup task can
+   * sweep rooms that nobody re-opens — an orphan in a room the learner never revisits stays in
+   * their history until somebody closes it, and this is the call that does.
+   *
+   * A failure is logged and swallowed: a room that would not open because a history row could not
+   * be tidied would turn a reporting problem into a gameplay one, which is the same trade
+   * `LiveRoom.archiveNotice` makes and for the same reason.
+   */
+  async reconcileInterruptedHands(roomId: string): Promise<number> {
+    if (this.rooms.has(roomId)) return 0;
+    try {
+      const abandoned = await this.archive.abandonInterruptedHands(roomId);
+      if (abandoned.length > 0) {
+        this.onProblem('closed hands that were interrupted and can never complete', {
+          roomId,
+          hands: abandoned.map((hand) => hand.handId),
+        });
+      }
+      return abandoned.length;
+    } catch (error) {
+      this.onProblem('could not reconcile interrupted hands', { roomId, error: String(error) });
+      return 0;
+    }
   }
 
   /**
@@ -558,6 +616,9 @@ export class RoomRegistry {
           stack: member.stack,
           isBot: member.is_bot,
           botProfile: member.bot_profile,
+          // These players were in the rotation a moment ago; a restart is not an arrival, and
+          // charging them the newcomer's wait would sit the whole table out for an orbit.
+          resumingSeat: true,
         });
       } catch (error) {
         this.onProblem('a recorded seat could not be re-taken', {
@@ -860,6 +921,44 @@ export function summaryFromRows(
     })),
     createdAt: room.created_at.toISOString(),
   };
+}
+
+/**
+ * The blind positions a re-opened table carries on from, reconstructed from the last deal.
+ *
+ * Only `button_seat` is persisted, so the other two positions are recovered the way the rules
+ * define them for a hand with a live button: the small blind is the first seat clockwise from the
+ * button that was dealt in, and the big blind is the next one. `orderFrom` is used rather than
+ * `assignBlinds` precisely because the button may be a DEAD seat — nobody was playing from it, and
+ * `assignBlinds` refuses that case, which is exactly the hand a reconstruction has to survive.
+ *
+ * The limit is stated in `repositories/hands.ts`: a hand whose SMALL blind was dead cannot be
+ * reconstructed exactly, because its small blind seat is not in `dealtSeats` at all and the walk
+ * lands on the big blind instead. That costs one player one repeated big blind, once, across a
+ * single restart. Making it exact is a migration adding the two seat columns.
+ *
+ * Returns null for a hand with fewer than two dealt seats, which cannot have happened and which a
+ * corrupt row could still claim.
+ */
+export function blindsFromLastHand(
+  hand: handsRepository.LastDealtHand,
+  maxSeats: number,
+): BlindPositions | null {
+  const dealt = [...hand.dealtSeats].sort((left, right) => left - right);
+  if (dealt.length < 2) return null;
+  if (dealt.length === 2) {
+    // Heads-up the button posted the small blind, so both positions are the button's seat and the
+    // big blind is the other one. Derived rather than walked, because `orderFrom` heads-up would
+    // put the big blind on the button itself at the end of its lap.
+    const other = dealt.find((seat) => seat !== hand.buttonSeat);
+    if (other === undefined) return null;
+    return { buttonSeat: hand.buttonSeat, smallBlindSeat: hand.buttonSeat, bigBlindSeat: other };
+  }
+  const order = orderFrom(hand.buttonSeat, maxSeats, dealt);
+  const smallBlindSeat = order[0];
+  const bigBlindSeat = order[1];
+  if (smallBlindSeat === undefined || bigBlindSeat === undefined) return null;
+  return { buttonSeat: hand.buttonSeat, smallBlindSeat, bigBlindSeat };
 }
 
 /** The `TableConfig` for a persisted room row. */

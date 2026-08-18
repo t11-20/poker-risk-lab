@@ -91,8 +91,11 @@ These are the rules a reviewer will actually check.
 
 ### Randomness
 
-* Cards come only from `createSecureRandom()`. `Math.random` is banned in engine and server
-  code; a source scan asserts it, and the scan has its own test proving it can fail.
+* Cards come only from `createSecureRandom()`. `Math.random` is banned in **every** first-party
+  `src/` tree, not just engine and server code — `pnpm run security:hygiene` scans all of them and
+  reports what it covered (`scanned 194 source files across 8 src/ trees`, 2026-08-18), and the scan
+  has its own test proving it can fail. The ban was once enforced over two of those trees by
+  per-package tests, which is why it is a repository gate now.
 * Index selection uses rejection sampling (`unbiasedInt`). `x % n` on a 32-bit draw is not
   uniform, and for a 52-card deck the low indices would be favoured.
 * `createDeterministicRandomForTests` throws under `NODE_ENV=production`, and any hand it
@@ -145,7 +148,7 @@ These are the rules a reviewer will actually check.
 ## 4. Running the gates
 
 ```bash
-pnpm run security:audit          # all eight gates — the release gate
+pnpm run security:audit          # all eight supply-chain gates
 pnpm run security:audit -- --offline   # skip the network gates (NOT a valid release audit)
 
 pnpm run security:policy         # is the policy actually in effect?
@@ -162,10 +165,14 @@ Artifacts land in `docs/sbom/`: the SBOM, the OSV report and the provenance repo
 SBOM is content-derived and byte-stable, so `git diff` shows dependency changes rather than
 a fresh timestamp.
 
-`security:audit` is a **release gate**. Findings are not waived to unblock a release — fix
-the dependency, pin an older version, or remove it. The single escape hatch is an entry in
-`scripts/supply-chain/osv-allowlist.json`, which requires a reason and an expiry date and
-fails the build once it lapses.
+`security:audit` and `security:hygiene` are **two of the eleven gates in `pnpm run verify`**, which
+is the release gate as a whole (`RUNBOOK.md` §3). They are the first two it runs, and it runs the
+other nine whether or not they pass — a supply-chain failure must not be the reason nobody found out
+that the schema check also fails.
+
+Findings are not waived to unblock a release — fix the dependency, pin an older version, or remove
+it. The single escape hatch is an entry in `scripts/supply-chain/osv-allowlist.json`, which requires
+a reason and an expiry date and fails the build once it lapses.
 
 ## 5. If a compromise is suspected
 

@@ -27,12 +27,27 @@
  * its track, while the *text* shows each player's actual equity — so a set that does not
  * sum to 100% is visible in the numbers instead of being silently rescaled away.
  *
+ * ## A share that is not a probability is refused, not drawn
+ *
+ * The readout is the authoritative half of this component, so it is the half that has to refuse.
+ * A per-player equity outside 0..1 reaches the reader as "160.0%" if it is simply formatted, and
+ * the geometry hides it: the segment widths are *normalised*, so an impossible equity produces a
+ * perfectly ordinary-looking bar with an impossible number underneath it. `formatProbability`
+ * returns `null` for such a value and the row says `not a probability` instead — see
+ * `../probability.ts` for why this guard is duplicated at the render boundary rather than left to
+ * the producer.
+ *
+ * The non-finite case is the same defect in disguise. `prepare` coerces a `NaN` equity to `0` so
+ * the widths stay drawable, and formatting *that* would print a confident "0.0%" for a figure
+ * nobody knows — a lie rather than a gap. The readout is therefore derived from the caller's
+ * original value, never from the coerced one.
+ *
  * Server-render safe: no state, no effects.
  */
 
 import type { ReactElement } from 'react';
 import { cx, type StyleWithVars } from '../cx.ts';
-import { formatPercent } from '../format.ts';
+import { formatProbability, NOT_A_PROBABILITY } from '../probability.ts';
 
 export interface EquityBarPlayer {
   /** Shown in the readout, e.g. "you" or "a tight opening range". */
@@ -58,7 +73,10 @@ const SERIES_COUNT = 6;
 interface Prepared {
   readonly key: string;
   readonly label: string;
+  /** Clamped to a drawable number. Feeds the geometry only — never the readout. */
   readonly equity: number;
+  /** The readout, already refused where the caller's value was not a probability. */
+  readonly valueText: string;
   readonly share: number;
   readonly series: number;
   readonly detail: string | null;
@@ -80,12 +98,15 @@ function prepare(players: readonly EquityBarPlayer[]): readonly Prepared[] {
     const share = total > 0 ? (Math.max(equity, 0) / total) * 100 : 100 / Math.max(players.length, 1);
     const win = player.win;
     const tie = player.tie;
+    // Win and tie rates are probabilities in their own right, so each is refused on its own
+    // terms: a report can carry a sound win rate beside a broken tie rate, and losing both to
+    // one bad field would hide information the reader is entitled to.
     const detail =
       win === undefined && tie === undefined
         ? null
         : [
-            win === undefined ? null : `wins ${formatPercent(win)}`,
-            tie === undefined ? null : `ties ${formatPercent(tie)}`,
+            win === undefined ? null : `wins ${formatProbability(win) ?? NOT_A_PROBABILITY}`,
+            tie === undefined ? null : `ties ${formatProbability(tie) ?? NOT_A_PROBABILITY}`,
           ]
             .filter((part): part is string => part !== null)
             .join(', ');
@@ -95,6 +116,8 @@ function prepare(players: readonly EquityBarPlayer[]): readonly Prepared[] {
       key: `${player.label}#${ordinal}`,
       label: player.label,
       equity,
+      // `player.equity`, not `equity`: the coerced value would render a NaN as a confident "0.0%".
+      valueText: formatProbability(player.equity) ?? NOT_A_PROBABILITY,
       share,
       series: (ordinal % SERIES_COUNT) + 1,
       detail,
@@ -134,7 +157,7 @@ export function EquityBar(props: EquityBarProps): ReactElement {
           <div className="prl-equity-bar__row" key={entry.key} data-series={entry.series}>
             <span className="prl-equity-bar__swatch prl-fill" data-series={entry.series} aria-hidden="true" />
             <dt className="prl-equity-bar__name">{entry.label}</dt>
-            <dd className="prl-equity-bar__value">{formatPercent(entry.equity)}</dd>
+            <dd className="prl-equity-bar__value">{entry.valueText}</dd>
             {entry.detail === null ? null : <dd className="prl-equity-bar__detail">{entry.detail}</dd>}
           </div>
         ))}

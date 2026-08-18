@@ -2,8 +2,8 @@
  * Tests for the motion primitives' pure parts.
  *
  * The hooks themselves cannot be tested here — `node --test` runs no renderer in this repo, by
- * policy — so everything the hooks *decide* was extracted into pure modules precisely so that
- * it could be. What is covered:
+ * policy — so everything the hooks *decide*, and everything they *do*, was extracted into
+ * modules that import no React precisely so that it could be. What is covered:
  *
  *  - the count-up's arithmetic, including the two floating-point traps (an animation that
  *    settles on 41.199999, and a NaN progress reaching the DOM);
@@ -11,25 +11,55 @@
  *    rather than by a table of magic numbers copied from the implementation;
  *  - the reduced-motion decisions, which are the accessibility-critical part: a false positive
  *    here means a reader who asked for no motion gets motion;
+ *  - **the reduced-motion preference itself, exercised rather than asserted** — see the block
+ *    below;
  *  - the JS mirror of the motion tokens, asserted **against `tokens.css` itself**. That
  *    duplication is deliberate and documented, and this is what stops it drifting: change the
  *    token and forget the mirror, and this test fails.
+ *
+ * ## The A11Y-016 block, and what "exercised" means here
+ *
+ * The release audit recorded reduced motion as PARTIAL: the CSS backstop was verified in a real
+ * browser, but the three JavaScript drivers "were not proven to respect `prefers-reduced-motion`".
+ * They did respect it. Nothing demonstrated it — and for an accessibility guarantee that is very
+ * nearly the same thing, because the way it is lost is a refactor nobody notices.
+ *
+ * The three tests below therefore do not check that a flag is passed along. They set the
+ * preference and count the consequences, through the real code:
+ *
+ *  1. `createReducedMotionStore` is handed a `matchMedia` that reports `reduce`, and the store's
+ *     own snapshot is read back — the real query string, the real subscription, the real answer.
+ *  2. `driveCountUp` is run with that answer and a fake frame clock, and the assertion is that
+ *     **zero** animation frames are requested. Not "fewer", not "the predicate said no": none.
+ *  3. `watchForReveal` is run the same way with a fake browser, and the assertion is that **no
+ *     `IntersectionObserver` is created** and the content is revealed at once.
+ *
+ * What is still not covered, stated plainly rather than papered over: the two lines where each
+ * hook calls `usePrefersReducedMotion()` and hands the result to the function under test. Those
+ * need a renderer this package does not have. Everything on either side of them is exercised.
  */
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
+import { driveCountUp, type FrameClock } from '../src/motion/count-up-driver.ts';
 import { cubicBezier, easeStandard, interpolate, progress } from '../src/motion/easing.ts';
 import {
   REDUCED_MOTION_QUERY,
   shouldCountUp,
   shouldRevealImmediately,
 } from '../src/motion/reduced-motion.ts';
+import { type RevealHost, watchForReveal } from '../src/motion/reveal-watcher.ts';
 import {
   COUNT_DURATION_MS,
   EASE_STANDARD_CONTROL_POINTS,
   MIN_COUNT_UP_CHANGE,
 } from '../src/motion/tokens.ts';
+import {
+  createReducedMotionStore,
+  type MediaQueryHost,
+  type ReducedMotionQuery,
+} from '../src/motion/usePrefersReducedMotion.ts';
 
 /** The bézier solver converges to 1e-7, so comparisons allow a little more than that. */
 const TOLERANCE = 1e-6;
@@ -260,6 +290,356 @@ describe('shouldCountUp', () => {
     assert.equal(shouldCountUp({ ...base, durationMs: 0, from: 0, to: 100 }), false);
     assert.equal(shouldCountUp({ ...base, durationMs: -1, from: 0, to: 100 }), false);
     assert.equal(shouldCountUp({ ...base, durationMs: Number.NaN, from: 0, to: 100 }), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A11Y-016 — the preference, exercised
+// ---------------------------------------------------------------------------
+
+interface FakeMedia {
+  readonly host: MediaQueryHost;
+  /** Every query string `matchMedia` was called with, in order. */
+  readonly queries: readonly string[];
+  /** How many listeners are attached right now. */
+  listenerCount(): number;
+  /** Changes the OS preference and notifies, exactly as a real change event would. */
+  setMatches(next: boolean): void;
+}
+
+/**
+ * A `window` that reports whatever preference the test asks for.
+ *
+ * `supportsEvents: false` models the `MediaQueryList` implementations too old to be an
+ * `EventTarget`, which is the one case `createReducedMotionStore` has a branch for.
+ */
+function fakeMediaHost(options: { matches: boolean; supportsEvents?: boolean }): FakeMedia {
+  const queries: string[] = [];
+  const listeners = new Set<() => void>();
+  let matches = options.matches;
+
+  const withEvents: ReducedMotionQuery = {
+    get matches(): boolean {
+      return matches;
+    },
+    addEventListener(_type: 'change', listener: () => void): void {
+      listeners.add(listener);
+    },
+    removeEventListener(_type: 'change', listener: () => void): void {
+      listeners.delete(listener);
+    },
+  };
+  const withoutEvents: ReducedMotionQuery = {
+    get matches(): boolean {
+      return matches;
+    },
+  };
+  const query = options.supportsEvents === false ? withoutEvents : withEvents;
+
+  return {
+    host: {
+      matchMedia(text: string): ReducedMotionQuery {
+        queries.push(text);
+        return query;
+      },
+    },
+    queries,
+    listenerCount: () => listeners.size,
+    setMatches(next: boolean): void {
+      matches = next;
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+describe('createReducedMotionStore — the preference is actually read', () => {
+  it('reports true when the OS says reduce, through the query the stylesheet uses', () => {
+    // The whole accessibility guarantee starts here. If this returns the wrong boolean, every
+    // careful decision downstream is carefully wrong.
+    const media = fakeMediaHost({ matches: true });
+    const store = createReducedMotionStore(media.host);
+
+    assert.equal(store.getSnapshot(), true);
+    assert.deepEqual(media.queries, [REDUCED_MOTION_QUERY]);
+  });
+
+  it('reports false when the reader has expressed no preference', () => {
+    const store = createReducedMotionStore(fakeMediaHost({ matches: false }).host);
+    assert.equal(store.getSnapshot(), false);
+  });
+
+  it('follows a preference the reader changes mid-session, and tells React', () => {
+    const media = fakeMediaHost({ matches: false });
+    const store = createReducedMotionStore(media.host);
+    let notified = 0;
+    const unsubscribe = store.subscribe(() => {
+      notified += 1;
+    });
+
+    assert.equal(store.getSnapshot(), false);
+    media.setMatches(true);
+    assert.equal(notified, 1, 'React has to be told, or the new answer never reaches a render');
+    assert.equal(store.getSnapshot(), true);
+
+    unsubscribe();
+    assert.equal(media.listenerCount(), 0, 'and the listener has to go when the subscription does');
+    media.setMatches(false);
+    assert.equal(notified, 1, 'an unsubscribed store must not keep being notified');
+  });
+
+  it('asks matchMedia once, however many times it is read', () => {
+    const media = fakeMediaHost({ matches: true });
+    const store = createReducedMotionStore(media.host);
+    store.getSnapshot();
+    store.getSnapshot();
+    store.subscribe(() => undefined);
+    assert.equal(media.queries.length, 1, 'one MediaQueryList for the whole app, not one per read');
+  });
+
+  it('answers false, and subscribes to nothing, where there is no matchMedia', () => {
+    // The server, and any environment without a DOM. False is the safe guess: the client's first
+    // render corrects it before paint, and guessing true would render every reveal as
+    // already-arrived and then take it away again on hydration.
+    const store = createReducedMotionStore(undefined);
+    assert.equal(store.getSnapshot(), false);
+    assert.doesNotThrow(() => store.subscribe(() => undefined)());
+  });
+
+  it('still reads the preference from a MediaQueryList too old to be an EventTarget', () => {
+    // The snapshot is the part that must not be lost. Only the change notification is.
+    const media = fakeMediaHost({ matches: true, supportsEvents: false });
+    const store = createReducedMotionStore(media.host);
+    assert.equal(store.getSnapshot(), true);
+    assert.doesNotThrow(() => store.subscribe(() => undefined)());
+  });
+});
+
+interface FakeClock {
+  readonly clock: FrameClock;
+  /** Total frames requested since the driver started. */
+  requested(): number;
+  cancelled(): number;
+  /** Runs the pending frame callback with this timestamp. Does nothing if none is pending. */
+  advance(now: number): void;
+}
+
+function fakeClock(): FakeClock {
+  let requested = 0;
+  let cancelled = 0;
+  let nextHandle = 1;
+  let pending: { readonly handle: number; readonly callback: (now: number) => void } | null = null;
+
+  return {
+    clock: {
+      requestAnimationFrame(callback: (now: number) => void): number {
+        requested += 1;
+        const handle = nextHandle;
+        nextHandle += 1;
+        pending = { handle, callback };
+        return handle;
+      },
+      cancelAnimationFrame(handle: number): void {
+        cancelled += 1;
+        if (pending !== null && pending.handle === handle) pending = null;
+      },
+    },
+    requested: () => requested,
+    cancelled: () => cancelled,
+    advance(now: number): void {
+      const frame = pending;
+      pending = null;
+      if (frame !== null) frame.callback(now);
+    },
+  };
+}
+
+describe('driveCountUp — reduced motion means no animation at all', () => {
+  const base = { from: 0.412, to: 0.489, durationMs: COUNT_DURATION_MS };
+
+  it('requests zero animation frames when the reader asked for reduced motion', () => {
+    // The requirement, stated as the reader would state it: "I asked for no motion, so do not
+    // animate this number." Counting frames is the only way to say that and mean it — a test
+    // that checked `shouldCountUp` returned false would pass just as happily against a driver
+    // that ignored the answer.
+    const clock = fakeClock();
+    const seen: number[] = [];
+
+    const cancel = driveCountUp({ ...base, reducedMotion: true }, clock.clock, (value) => seen.push(value));
+
+    assert.equal(clock.requested(), 0, 'a frame was requested for a reader who asked for no motion');
+    assert.deepEqual(seen, [0.489], 'the figure should simply be its settled value, once');
+    assert.doesNotThrow(cancel);
+  });
+
+  it('animates the same change when motion is allowed, so the guard is doing the work', () => {
+    // The contrast is the point. Without it, a driver that never animated anything at all would
+    // pass the test above and look like a fix.
+    const clock = fakeClock();
+    const seen: number[] = [];
+    driveCountUp({ ...base, reducedMotion: false }, clock.clock, (value) => seen.push(value));
+
+    assert.equal(clock.requested(), 1, 'the first frame is requested immediately');
+    clock.advance(1_000);
+    clock.advance(1_000 + COUNT_DURATION_MS / 2);
+    assert.equal(clock.requested(), 3, 'and each frame schedules the next until the duration is up');
+
+    clock.advance(1_000 + COUNT_DURATION_MS);
+    assert.equal(seen.length, 3);
+    assert.equal(seen[0], 0.412, 'the first frame is the starting value, not a jump');
+    assert.equal(seen[seen.length - 1], 0.489, 'and the last is the target exactly');
+    const middle = seen[1] ?? 0;
+    assert.ok(middle > 0.412 && middle < 0.489, `the middle frame should be in between, got ${middle}`);
+  });
+
+  it('stops when cancelled, so a value change mid-flight cannot leave two loops running', () => {
+    const clock = fakeClock();
+    const cancel = driveCountUp({ ...base, reducedMotion: false }, clock.clock, () => undefined);
+    cancel();
+    assert.equal(clock.cancelled(), 1);
+    clock.advance(1_000);
+    assert.equal(clock.requested(), 1, 'a cancelled run must not schedule another frame');
+  });
+
+  it('settles without animating for a change too small to be worth watching', () => {
+    const clock = fakeClock();
+    const seen: number[] = [];
+    driveCountUp(
+      { from: 100, to: 100.5, durationMs: COUNT_DURATION_MS, reducedMotion: false },
+      clock.clock,
+      (v) => seen.push(v),
+    );
+    assert.equal(clock.requested(), 0);
+    assert.deepEqual(seen, [100.5]);
+  });
+});
+
+interface FakeBrowser {
+  readonly host: RevealHost;
+  /** How many times an observer was created. Under reduced motion this must stay zero. */
+  observeCalls(): number;
+  /** Delivers the "it is in view now" callback. */
+  intersect(): void;
+  /** Backgrounds or foregrounds the tab, firing the visibility listener. */
+  setHidden(next: boolean): void;
+  visibilityListeners(): number;
+  disconnects(): number;
+}
+
+function fakeBrowser(options: { hidden?: boolean } = {}): FakeBrowser {
+  let hidden = options.hidden ?? false;
+  let observeCalls = 0;
+  let disconnects = 0;
+  let onIntersecting: (() => void) | null = null;
+  const visibility = new Set<() => void>();
+
+  return {
+    host: {
+      observe(_target: Element, _threshold: number, callback: () => void): () => void {
+        observeCalls += 1;
+        onIntersecting = callback;
+        return () => {
+          disconnects += 1;
+          onIntersecting = null;
+        };
+      },
+      isDocumentHidden: () => hidden,
+      onVisibilityChange(listener: () => void): () => void {
+        visibility.add(listener);
+        return () => visibility.delete(listener);
+      },
+    },
+    observeCalls: () => observeCalls,
+    intersect(): void {
+      onIntersecting?.();
+    },
+    setHidden(next: boolean): void {
+      hidden = next;
+      for (const listener of visibility) listener();
+    },
+    visibilityListeners: () => visibility.size,
+    disconnects: () => disconnects,
+  };
+}
+
+/**
+ * `watchForReveal` takes an `Element` only to hand it straight back to the host, so the tests
+ * pass a token rather than a DOM node — there is no DOM here, and inventing one would be
+ * testing the stand-in rather than the watcher.
+ */
+const TARGET = { nodeName: 'DIV' } as unknown as Element;
+
+describe('watchForReveal — reduced motion means no observer', () => {
+  const base = { target: TARGET, observerAvailable: true, threshold: 0.2 };
+
+  it('creates no IntersectionObserver at all when the reader asked for reduced motion', () => {
+    const browser = fakeBrowser();
+    let revealed = 0;
+
+    const stop = watchForReveal({ ...base, reducedMotion: true }, browser.host, () => {
+      revealed += 1;
+    });
+
+    assert.equal(browser.observeCalls(), 0, 'an observer was created for a reader who asked for no motion');
+    assert.equal(revealed, 1, 'and the content must be revealed at once rather than left hidden');
+    assert.equal(browser.visibilityListeners(), 0, 'with nothing left subscribed');
+    assert.doesNotThrow(stop);
+  });
+
+  it('observes when motion is allowed, so the guard is doing the work', () => {
+    const browser = fakeBrowser();
+    let revealed = 0;
+    watchForReveal({ ...base, reducedMotion: false }, browser.host, () => {
+      revealed += 1;
+    });
+
+    assert.equal(browser.observeCalls(), 1);
+    assert.equal(revealed, 0, 'nothing is revealed until the element is actually in view');
+    browser.intersect();
+    assert.equal(revealed, 1);
+  });
+
+  it('reveals without observing when the document is hidden', () => {
+    // A hidden document runs no rendering step, so an observer would never fire and the element
+    // would stay at opacity 0 forever. That is "I opened it in a new tab and the page was blank".
+    const browser = fakeBrowser({ hidden: true });
+    let revealed = 0;
+    watchForReveal({ ...base, reducedMotion: false }, browser.host, () => {
+      revealed += 1;
+    });
+
+    assert.equal(browser.observeCalls(), 0);
+    assert.equal(revealed, 1);
+  });
+
+  it('reveals and stops observing if the tab is backgrounded while a reveal is pending', () => {
+    const browser = fakeBrowser();
+    let revealed = 0;
+    watchForReveal({ ...base, reducedMotion: false }, browser.host, () => {
+      revealed += 1;
+    });
+    assert.equal(browser.observeCalls(), 1);
+
+    browser.setHidden(true);
+    assert.equal(revealed, 1, 'the reveal resolves rather than waiting for a callback that cannot come');
+    assert.equal(browser.disconnects(), 1);
+  });
+
+  it('reveals at once where there is no observer to watch with', () => {
+    const browser = fakeBrowser();
+    let revealed = 0;
+    watchForReveal({ ...base, reducedMotion: false, observerAvailable: false }, browser.host, () => {
+      revealed += 1;
+    });
+    assert.equal(browser.observeCalls(), 0);
+    assert.equal(revealed, 1);
+  });
+
+  it('tears down both subscriptions when it stops', () => {
+    const browser = fakeBrowser();
+    const stop = watchForReveal({ ...base, reducedMotion: false }, browser.host, () => undefined);
+    stop();
+    assert.equal(browser.disconnects(), 1);
+    assert.equal(browser.visibilityListeners(), 0);
   });
 });
 

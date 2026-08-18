@@ -10,7 +10,14 @@
  * | 133,784,560 | `packages/poker-engine/test/exhaustive/seven-card-distribution.test.ts` | `pnpm run test:exhaustive` |
  * | 36 | `packages/content/data/scenarios/` | `pnpm --filter @prl/content test` |
  * | 12 | `PROFILES` in `packages/poker-ai/src/profiles.ts` | `docs/AI-LEGENDS.md` §"The twelve profiles" |
- * | 0 | there is no odds table in the repository | `docs/THREAT-MODEL.md` |
+ * | 0 | no figure is produced by reading an odds table | `docs/THREAT-MODEL.md` |
+ *
+ * The last row is scoped deliberately and must not be shortened back to "there is no odds table in
+ * the repository". `apps/web/src/fixtures/*.ts` ships stored equity figures as the offline
+ * fallback — a release audit counted twenty-one of them and found four disagreeing with the live
+ * calculation — so the unqualified claim is false. What is true, and is the claim worth making, is
+ * that no figure is ever PRODUCED by a lookup: the fallback is a bundled rendering, labelled as one
+ * on the page that shows it.
  *
  * There is no fifth figure about users, downloads or hands played by other people, because that is
  * social proof rather than evidence and the design system rules it out.
@@ -79,9 +86,9 @@ const FIGURES: readonly ProjectFigure[] = [
     note: 'Strategy simulations, each a vector across sixteen behavioural axes. Styles, not people.',
   },
   {
-    label: 'Hard-coded odds',
+    label: 'Figures read from an odds table',
     value: 0,
-    note: 'There is no odds table in this product. Every figure is computed from the deck on request.',
+    note: 'Every figure is computed from the deck on request. Where the calculator cannot be reached a bundled example is shown instead, and the page says so.',
   },
 ];
 

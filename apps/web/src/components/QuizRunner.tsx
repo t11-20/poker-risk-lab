@@ -35,6 +35,22 @@
  * drift out of step with the maths the lesson taught. The working is shown after answering, not
  * before.
  *
+ * ## The answer goes to the server, and the server's comparison is the one displayed
+ *
+ * This file used to grade every answer in the browser and send nothing at all, which had two
+ * consequences. `prl.quiz_attempts` was never written, so `quizQuestionsAnswered` in
+ * `GET /me/progress` could not be anything but zero however much work a learner did. And the
+ * comparison on screen was nobody's record of anything — there was no server answer for it to
+ * agree or disagree with.
+ *
+ * Both are fixed by `src/lib/quiz-attempts.ts`: every graded answer is posted, and the verdict
+ * shown is the server's whenever the server answered. Where it did not, the local comparison
+ * stands in and the screen says plainly that nothing was recorded — see `VERDICT_SOURCE_NOTE`. A
+ * failed POST must never take a lesson down with it, which is why nothing on this path throws.
+ *
+ * A `decision` question is still not sent. There is no answer to record for one; see
+ * `DecisionQuestion` below.
+ *
  * ## Focus
  *
  * Moving to another question is a keystroke or a click by the learner, so focus follows them to
@@ -59,12 +75,18 @@ import {
   QUIZ_UNIT_WORDS,
   withinTolerance,
 } from '@/lib/learn-calculations.ts';
+import {
+  attemptBodyFor,
+  type QuizAnswer,
+  type QuizVerdict,
+  resolvedVerdict,
+  submitQuizAttempt,
+  VERDICT_SOURCE_NOTE,
+} from '@/lib/quiz-attempts.ts';
+import { RECORD_PATH } from '@/lib/record-data.ts';
 
 /** What the learner did. `revealed` is a decision question, which has nothing to check. */
-type Answer =
-  | { readonly kind: 'choice'; readonly index: number }
-  | { readonly kind: 'number'; readonly value: number; readonly raw: string }
-  | { readonly kind: 'revealed' };
+type Answer = QuizAnswer;
 
 export interface QuizRunnerProps {
   readonly quiz: Quiz;
@@ -82,9 +104,10 @@ const CHOICE_MARKER = { lesson: '◆', yours: '✕' } as const;
 function MultipleChoice(props: {
   readonly question: Extract<QuizQuestion, { kind: 'multipleChoice' }>;
   readonly answer: Answer | undefined;
+  readonly server: QuizVerdict;
   readonly onAnswer: (answer: Answer) => void;
 }): ReactElement {
-  const { question, answer, onAnswer } = props;
+  const { question, answer, server, onAnswer } = props;
   const chosen = answer?.kind === 'choice' ? answer.index : null;
   const answered = chosen !== null;
   // Keys from the option text, with an occurrence counter, rather than from the position: an
@@ -92,9 +115,13 @@ function MultipleChoice(props: {
   // position is still available as the `index` argument for the logic that genuinely needs it.
   const options = withKeys(question.options, 'option');
 
+  // The server's comparison when there is one, this page's when there is not. `correctIndex` still
+  // decides which option carries the "the answer this lesson gives" chip, because that is a fact
+  // about the option rather than about what the learner did.
+  const resolved = resolvedVerdict(server, chosen === question.correctIndex);
   const verdict = !answered
     ? ''
-    : chosen === question.correctIndex
+    : resolved.matched
       ? 'That matches the answer this lesson gives. The reasoning is below — worth reading even so, because the reasoning is the part that transfers.'
       : 'That is not the answer this lesson gives. Nothing is deducted for it, and you can change your mind as often as you like; the note beside each option says why it is a tempting one.';
 
@@ -149,6 +176,7 @@ function MultipleChoice(props: {
       */}
       <p className="prl-learn-quiz__verdict" aria-live="polite">
         {verdict}
+        {answered ? ` ${VERDICT_SOURCE_NOTE[resolved.source]}` : ''}
       </p>
     </div>
   );
@@ -198,62 +226,129 @@ function Working(props: {
   );
 }
 
+/**
+ * What stands in for a numeric question whose target could not be computed.
+ *
+ * `role="alert"`, because this block REPLACES the question: a reader who cannot see the screen is
+ * otherwise left waiting at a field that has silently gone away. It is mounted only in the failure
+ * state, which is what makes an alert fire — an always-present region whose text merely changes is
+ * announced far less reliably.
+ */
+function Unmarkable(props: { readonly reason: string; readonly explanation: string }): ReactElement {
+  return (
+    <div className="prl-error" role="alert">
+      <p className="prl-error__title">
+        <span aria-hidden="true">▲ </span>
+        This question cannot be marked
+      </p>
+      <p>{props.reason}</p>
+      <p>{props.explanation}</p>
+    </div>
+  );
+}
+
+/**
+ * The sentence about one numeric answer.
+ *
+ * `against` is the figure the comparison was actually made against — the server's when the server
+ * made it — so the number quoted here is always the number that produced the verdict beside it.
+ * Pulled out of the component because a comparison written inline next to five other conditionals
+ * is where a precedence gets quietly reversed.
+ */
+function numericVerdict(input: {
+  readonly submitted: { readonly value: number } | null;
+  readonly against: number | undefined;
+  readonly matched: boolean;
+  readonly unit: Extract<QuizQuestion, { kind: 'numeric' }>['unit'];
+}): string {
+  const { submitted, against, matched, unit } = input;
+  if (submitted === null) return '';
+  if (against === undefined) {
+    return 'The computed figure is not available, so there is nothing to compare your answer with.';
+  }
+  const yours = formatQuizValue(submitted.value, unit);
+  const theirs = formatQuizValue(against, unit);
+  if (matched) return `${yours} is within the tolerance of ${theirs}.`;
+  return (
+    `${yours} is outside the tolerance of ${theirs}. Nothing is deducted for that — the working is ` +
+    'below, and the gap is usually one step of the method rather than the whole of it.'
+  );
+}
+
 function NumericQuestion(props: {
   readonly question: Extract<QuizQuestion, { kind: 'numeric' }>;
   readonly answer: Answer | undefined;
+  readonly server: QuizVerdict;
   readonly onAnswer: (answer: Answer) => void;
 }): ReactElement {
-  const { question, answer, onAnswer } = props;
+  const { question, answer, server, onAnswer } = props;
   const { outcome, pending } = useCalculationOutcome(question.calculation);
   // Seeded from the recorded answer so that coming back to a question shows what was typed.
   // Mounting fresh per question is what makes the initialiser correct — see the `key` in
   // `questionBody`.
   const [draft, setDraft] = useState(() => (answer?.kind === 'number' ? answer.raw : ''));
+  /**
+   * Whether the browser is holding text it could not parse as a number.
+   *
+   * Tracked separately from `draft` because it CANNOT be derived from it. An `<input type="number">`
+   * reports `value === ''` for anything it failed to parse — type "one third" and the characters
+   * are on screen while `event.target.value` is the empty string — so a check written against the
+   * draft alone can never fire, which is exactly what the first version of this fix got wrong. The
+   * only signal that anything was typed is `validity.badInput`, and without it the field looks
+   * empty, the button disables, and nothing anywhere says why. That is the "announce or silently
+   * clamp without marking the field" the audit named.
+   */
+  const [badInput, setBadInput] = useState(false);
   const inputId = `${question.id}-value`;
   const hintId = `${question.id}-hint`;
+  const invalidId = `${question.id}-invalid`;
 
   const submitted = answer?.kind === 'number' ? answer : null;
 
   if (outcome !== null && !outcome.ok) {
-    return (
-      <div className="prl-error">
-        <p className="prl-error__title">
-          <span aria-hidden="true">▲ </span>
-          This question cannot be marked
-        </p>
-        <p>{outcome.reason}</p>
-        <p>{question.explanation}</p>
-      </div>
-    );
+    return <Unmarkable reason={outcome.reason} explanation={question.explanation} />;
   }
 
   const expected = outcome === null ? null : expectedFromResult(outcome.result, question);
   if (expected !== null && !expected.ok) {
-    return (
-      <div className="prl-error">
-        <p className="prl-error__title">
-          <span aria-hidden="true">▲ </span>
-          This question cannot be marked
-        </p>
-        <p>{expected.reason}</p>
-        <p>{question.explanation}</p>
-      </div>
-    );
+    return <Unmarkable reason={expected.reason} explanation={question.explanation} />;
   }
 
   const target = expected === null ? null : expected.expected;
-  const matched = submitted !== null && target !== null && withinTolerance(submitted.value, target);
   const parsed = Number(draft);
-  const canCheck = !pending && draft.trim() !== '' && Number.isFinite(parsed);
+  // `!badInput` is stated rather than relied upon: a number field sanitises an unparseable value to
+  // the empty string, so the draft check already covers it today — but that is the platform's rule
+  // and not this component's, and "the button was enabled for text that is not a number" is not a
+  // defect worth inheriting if a browser ever keeps the characters.
+  const canCheck = !pending && !badInput && draft.trim() !== '' && Number.isFinite(parsed);
 
-  const verdict =
-    submitted === null
-      ? ''
-      : target === null
-        ? 'The computed figure is not available, so there is nothing to compare your answer with.'
-        : matched
-          ? `${formatQuizValue(submitted.value, question.unit)} is within the tolerance of ${formatQuizValue(target.value, question.unit)}.`
-          : `${formatQuizValue(submitted.value, question.unit)} is outside the tolerance of ${formatQuizValue(target.value, question.unit)}. Nothing is deducted for that — the working is below, and the gap is usually one step of the method rather than the whole of it.`;
+  /**
+   * The field is marked invalid when what is in it is not a number this question can be answered
+   * with — and only then.
+   *
+   * "Invalid" here means the INPUT, never the answer. An answer outside the tolerance is a correct
+   * use of this field, and marking it `aria-invalid` would tell a screen reader the learner had
+   * typed something malformed — which is both false and the closest thing to a mark this product
+   * allows itself.
+   *
+   * Two conditions, because there are two ways to get text that is not a number into this field:
+   * `badInput` is the browser holding characters it could not parse (see the state above), and the
+   * second covers a draft that survives as a string but does not produce a finite number.
+   */
+  const malformed = badInput || (draft.trim() !== '' && !Number.isFinite(parsed));
+  const describedBy = malformed ? `${invalidId} ${hintId}` : hintId;
+
+  // The server's comparison when it answered, this page's when it did not. `resolvedVerdict` keeps
+  // that precedence in one place, shared with the multiple-choice branch.
+  const localMatch = submitted !== null && target !== null && withinTolerance(submitted.value, target);
+  const resolved = resolvedVerdict(server, localMatch);
+  const against = server.state === 'live' && server.expected !== null ? server.expected.value : target?.value;
+  const verdict = numericVerdict({
+    submitted,
+    against,
+    matched: resolved.matched,
+    unit: question.unit,
+  });
 
   return (
     <div className="prl-stack">
@@ -272,10 +367,27 @@ function NumericQuestion(props: {
           type="number"
           inputMode="decimal"
           step="any"
-          aria-describedby={hintId}
+          aria-describedby={describedBy}
+          aria-invalid={malformed ? true : undefined}
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setBadInput(event.target.validity.badInput);
+          }}
         />
+        {/*
+          The correction comes FIRST in `aria-describedby`, so a reader who has just been told the
+          field is invalid hears why before hearing the tolerance rule again. It is rendered only
+          while it applies rather than hidden with CSS: an always-present description that is
+          sometimes irrelevant is read out on every visit to the field.
+        */}
+        {malformed ? (
+          <p className="prl-field__error" id={invalidId}>
+            <span aria-hidden="true">{'▲ '}</span>
+            That is not a number this question can be checked against. Type digits — a decimal point is fine,
+            and so is a rough figure.
+          </p>
+        ) : null}
         <p className="prl-field__hint" id={hintId}>
           {`Anything within ${formatChips(question.tolerance, { decimals: QUIZ_UNIT_DECIMALS[question.unit] })} ${QUIZ_UNIT_WORDS[question.unit]} of the computed figure is accepted. Work it out roughly — the point is the method, not the decimal place.`}
         </p>
@@ -299,6 +411,7 @@ function NumericQuestion(props: {
 
       <p className="prl-learn-quiz__verdict" aria-live="polite">
         {verdict}
+        {submitted === null ? '' : ` ${VERDICT_SOURCE_NOTE[resolved.source]}`}
       </p>
       {submitted === null || target === null ? null : <Working result={target.result} expected={target} />}
     </div>
@@ -358,24 +471,56 @@ function DecisionQuestion(props: {
 function questionBody(
   question: QuizQuestion,
   answer: Answer | undefined,
+  server: QuizVerdict,
   onAnswer: (answer: Answer) => void,
 ): ReactElement {
   if (question.kind === 'multipleChoice') {
-    return <MultipleChoice key={question.id} question={question} answer={answer} onAnswer={onAnswer} />;
+    return (
+      <MultipleChoice
+        key={question.id}
+        question={question}
+        answer={answer}
+        server={server}
+        onAnswer={onAnswer}
+      />
+    );
   }
   if (question.kind === 'numeric') {
-    return <NumericQuestion key={question.id} question={question} answer={answer} onAnswer={onAnswer} />;
+    return (
+      <NumericQuestion
+        key={question.id}
+        question={question}
+        answer={answer}
+        server={server}
+        onAnswer={onAnswer}
+      />
+    );
   }
+  // No `server` prop: a decision question is not graded and nothing is posted for it.
   return <DecisionQuestion key={question.id} question={question} answer={answer} onAnswer={onAnswer} />;
 }
+
+/** Nothing has been answered yet. One object so the identity is stable across renders. */
+const IDLE_VERDICT: QuizVerdict = { state: 'idle' };
 
 export function QuizRunner(props: QuizRunnerProps): ReactElement {
   const { quiz, lessonHref, lessonTitle } = props;
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<ReadonlyMap<ContentId, Answer>>(new Map());
+  const [verdicts, setVerdicts] = useState<ReadonlyMap<ContentId, QuizVerdict>>(new Map());
   const headingRef = useRef<HTMLHeadingElement>(null);
   /** The first render must not steal focus; only a step *change* moves it. */
   const mounted = useRef(false);
+  /**
+   * The answer object each question has already been posted for.
+   *
+   * Identity, not value: `record` mints a fresh object on every press, so "the learner pressed
+   * Check again with the same number" is a new answer and is posted again — which is what they
+   * asked for — while merely paging back to a question they answered ten minutes ago is not. A ref
+   * rather than state because nothing renders from it, and putting it in state would re-run the
+   * effect that writes it.
+   */
+  const posted = useRef(new Map<ContentId, Answer>());
 
   const total = quiz.questions.length;
   const onReview = step >= total;
@@ -406,6 +551,49 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
     });
   };
 
+  const currentAnswer = question === undefined ? undefined : answers.get(question.id);
+
+  /**
+   * One controller for every attempt this runner sends, aborted when the runner goes away.
+   *
+   * Deliberately NOT one per question. A per-question controller would be cleaned up by React the
+   * moment the learner pressed "Next question", which would abort the POST for the answer they had
+   * just given — the attempt would be lost for exactly the learner who works quickly. Unmount is
+   * the only moment at which nobody is waiting for the answer any more.
+   */
+  const submissions = useRef<AbortController | null>(null);
+  useEffect(() => () => submissions.current?.abort(), []);
+
+  /**
+   * Sends the answer, once per answer.
+   *
+   * The guard is on object IDENTITY, and `record` mints a fresh object on every press: pressing
+   * "Check again" is a new attempt and is sent again, while paging back to a question answered ten
+   * minutes ago sends nothing. Re-sending on navigation would be harmless to the count the server
+   * derives — it counts DISTINCT questions — but it would write rows nobody asked for.
+   *
+   * Nothing here throws and nothing here can fail the render: `submitQuizAttempt` returns the
+   * failure as a value, and the screen keeps its own comparison and says so.
+   */
+  useEffect(() => {
+    if (question === undefined || currentAnswer === undefined) return;
+    if (posted.current.get(question.id) === currentAnswer) return;
+    const body = attemptBodyFor(question, currentAnswer);
+    // A decision question, or a "show me the reasoning". Neither is an attempt at anything.
+    if (body === null) return;
+
+    posted.current.set(question.id, currentAnswer);
+    submissions.current ??= new AbortController();
+    const signal = submissions.current.signal;
+    const questionId = question.id;
+    setVerdicts((current) => new Map(current).set(questionId, { state: 'pending' }));
+    void (async () => {
+      const verdict = await submitQuizAttempt(quiz.id, body, signal);
+      if (signal.aborted) return;
+      setVerdicts((current) => new Map(current).set(questionId, verdict));
+    })();
+  }, [quiz.id, question, currentAnswer]);
+
   if (question === undefined) {
     return (
       <Panel
@@ -419,9 +607,19 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
           What to do with all that
         </h3>
         <p className="prl-learn-quiz__advice">{quiz.reviewAdvice}</p>
+        {/*
+          This used to read "nothing was recorded as a result", which was true only because the
+          answers were never sent anywhere. They are sent now, so the sentence says what is actually
+          kept — and, more usefully, what is not: there is no total, and the schema has no column
+          one could be stored in.
+        */}
         <p className="prl-note">
-          Nothing here was scored, and nothing was recorded as a result. These questions exist to make your
-          own reasoning visible to you, which a mark out of five actively gets in the way of.
+          Nothing here was scored. If you are signed in, each question you answered is stored as one row — the
+          question, the answer you sent, and whether it matched — and the only figure derived from those rows
+          is how many different questions you have answered, which you can see under{' '}
+          <Link href={RECORD_PATH}>your record</Link>. Nothing adds them up, and there is nowhere in this
+          product for a mark out of five to live. These questions exist to make your own reasoning visible to
+          you, which a score actively gets in the way of.
         </p>
         <div className="prl-btn-row">
           <Button variant="secondary" onClick={() => setStep(0)}>
@@ -440,8 +638,9 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
     );
   }
 
-  const answer = answers.get(question.id);
+  const answer = currentAnswer;
   const answered = answer !== undefined;
+  const server = verdicts.get(question.id) ?? IDLE_VERDICT;
 
   return (
     <Panel
@@ -460,7 +659,7 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
         {question.prompt}
       </h3>
 
-      {questionBody(question, answer, (given) => record(question.id, given))}
+      {questionBody(question, answer, server, (given) => record(question.id, given))}
 
       {answered ? (
         <div className="prl-learn-quiz__explanation">

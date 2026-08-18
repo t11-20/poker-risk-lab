@@ -48,7 +48,7 @@ import type {
   Street,
   TableConfig,
 } from '@prl/poker-engine';
-import { cardToString } from '@prl/poker-engine';
+import { COMMITMENT_VERSION, cardToString } from '@prl/poker-engine';
 import { AppError } from '../errors.ts';
 import { newHandActionId, newHandSeatId } from './ids.ts';
 import { type Db, jsonbText, violationError } from './sql.ts';
@@ -263,6 +263,166 @@ export async function activeHandIdForRoom(sql: Db, roomId: string): Promise<stri
      limit 1
   `;
   return rows[0]?.id ?? null;
+}
+
+/** Where the button sat for a room's most recent hand, and who was in it. */
+export interface LastDealtHand {
+  readonly handId: string;
+  readonly handNumber: number;
+  readonly buttonSeat: number;
+  /** The seats that were dealt cards, ascending. */
+  readonly dealtSeats: readonly number[];
+}
+
+/**
+ * The most recent hand a room dealt, for restoring the blind rotation after a restart.
+ *
+ * ############################################################################
+ * ## THE BUTTON IS PERSISTED. THE BLINDS ARE NOT, AND THAT IS THE LIMIT.    ##
+ * ############################################################################
+ *
+ * `prl.hands.button_seat` is written on every deal, and a room re-opened after a restart used to
+ * ignore it entirely and restart the rotation from the first seat to sit down — which hands
+ * somebody a second consecutive big blind across the restart boundary, the exact defect the
+ * dead-button rule exists to prevent (`docs/audit/poker-correctness.md`, P2).
+ *
+ * The rotation needs three positions and only one is stored, so the other two are reconstructed
+ * from the button and the seats that were actually dealt in: the small blind is the first dealt
+ * seat clockwise from the button and the big blind the one after it. That is EXACT for every hand
+ * whose button and small blind were both live, which is every hand except one played with a dead
+ * small blind — there the reconstruction lands one live seat early, and one player pays the big
+ * blind twice across that single restart before the rotation is self-consistent again.
+ *
+ * Making it exact needs `small_blind_seat` and `big_blind_seat` columns on `prl.hands`, which is a
+ * migration; this reconstruction is what can be done without one, and it is strictly better than
+ * the reset it replaces.
+ *
+ * The newest hand is used whether or not it completed: an interrupted hand was still dealt, so its
+ * button is still where the rotation had got to.
+ */
+export async function lastDealtHand(sql: Db, roomId: string): Promise<LastDealtHand | null> {
+  const rows = await sql<{ id: string; hand_number: number; button_seat: number }[]>`
+    select id, hand_number, button_seat
+      from prl.hands
+     where room_id = ${roomId}
+     order by hand_number desc
+     limit 1
+  `;
+  const hand = rows[0];
+  if (hand === undefined) return null;
+  // `sittingOut` is the status of a seat that was never dealt cards, so excluding it is exactly
+  // "who was in the hand". A dead button seat has no row here at all, which is the point.
+  const seats = await sql<{ seat: number }[]>`
+    select seat from prl.hand_seats
+     where hand_id = ${hand.id} and status <> 'sittingOut'
+     order by seat
+  `;
+  return {
+    handId: hand.id,
+    handNumber: hand.hand_number,
+    buttonSeat: hand.button_seat,
+    dealtSeats: seats.map((row) => row.seat),
+  };
+}
+
+/** One hand that was abandoned by `abandonInterruptedHands`. */
+export interface AbandonedHand {
+  readonly handId: string;
+  readonly roomId: string;
+  readonly handNumber: number;
+}
+
+/**
+ * Settles hands that can never complete, so they stop being permanent orphans.
+ *
+ * ############################################################################
+ * ## AN INTERRUPTED HAND IS UNRECOVERABLE BY DESIGN, SO IT MUST BE CLOSED   ##
+ * ############################################################################
+ *
+ * The deck and the salts are never persisted (see the header of this file), so a hand that was in
+ * progress when the process died cannot be resumed — that is a deliberate trade, not a bug. What
+ * WAS a bug is that nothing ever finished the row: it sat at `completed_at IS NULL` forever and
+ * turned up in the learner's own history with null fields and no explanation. Three accumulated in
+ * a single audit session (`docs/audit/poker-correctness.md`, P2).
+ *
+ * ## Why net_result is zero, and why that is the whole of "chips are accounted for"
+ *
+ * Stacks are written back to `prl.room_members.stack` only when a hand COMPLETES
+ * (`LiveRoom.archiveNotice` calls `stacksSettled` on the completing notice and on no other). An
+ * interrupted hand therefore never moved a durable chip: every player's stored stack is still what
+ * they had before the deal, and `hand_seats.starting_stack` says so. A net of exactly zero is not
+ * a placeholder here — it is the true figure, and it is what makes the history add up.
+ *
+ * ## Why the result is shaped like a result
+ *
+ * `hands_completed_iff_street_complete` and `hands_result_iff_completed` mean a hand cannot be
+ * closed without a `result`, and `hands_result_shape` names the six keys it must carry. So the
+ * abandoned hand gets a real, empty `HandResult`: no showdowns, no pots, no awards, nobody's net
+ * anything, and a reveal that proves no cards at all — which is also the only honest reveal for a
+ * hand whose deck is gone. `endedByFold` is true in the sense the field is defined ("ended without
+ * cards being shown"), and the extra `abandoned` key is the marker a history view can read to say
+ * so in words rather than presenting it as an ordinary fold.
+ *
+ * Scoped to one room, because that is the unit that has an owner: the registry calls this as it
+ * re-opens a room, at a moment when this process holds no live table for it. Running it across
+ * every room would abandon another process's live hand, and the one-process-per-room assumption
+ * this design rests on (see `rooms/registry.ts`) is not something a sweep should quietly rely on.
+ */
+export async function abandonInterruptedHands(
+  sql: Db,
+  roomId: string,
+  reason = 'interrupted-by-restart',
+): Promise<readonly AbandonedHand[]> {
+  const abandoned = await sql<{ id: string; room_id: string; hand_number: number }[]>`
+    update prl.hands
+       set street = 'complete',
+           completed_at = now(),
+           result = jsonb_build_object(
+             'showdowns', '[]'::jsonb,
+             'pots', '[]'::jsonb,
+             'awards', '[]'::jsonb,
+             'netBySeat', '{}'::jsonb,
+             'endedByFold', true,
+             'abandoned', true,
+             'abandonedReason', ${reason}::text,
+             'reveal', jsonb_build_object(
+               'commitment', jsonb_build_object(
+                 'algorithm', 'sha256',
+                 'version', ${COMMITMENT_VERSION}::text,
+                 'root', commitment_root,
+                 'context', commitment_context
+               ),
+               'cards', '[]'::jsonb,
+               'complete', false
+             )
+           ),
+           reveal = jsonb_build_object(
+             'commitment', jsonb_build_object(
+               'algorithm', 'sha256',
+               'version', ${COMMITMENT_VERSION}::text,
+               'root', commitment_root,
+               'context', commitment_context
+             ),
+             'cards', '[]'::jsonb,
+             'complete', false
+           )
+     where room_id = ${roomId} and completed_at is null
+    returning id, room_id, hand_number
+  `;
+  for (const hand of abandoned) {
+    // Only the seats still unsettled: a hand cannot be half-settled today, but writing over a net
+    // that somebody had already recorded would be inventing a figure rather than closing a gap.
+    await sql`
+      update prl.hand_seats
+         set net_result = 0
+       where hand_id = ${hand.id} and net_result is null
+    `;
+  }
+  return abandoned.map((hand) => ({
+    handId: hand.id,
+    roomId: hand.room_id,
+    handNumber: hand.hand_number,
+  }));
 }
 
 // ---------------------------------------------------------------------------

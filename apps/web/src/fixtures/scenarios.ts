@@ -487,7 +487,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       cleanCards: ['3h', '4h', '6h', '7h', 'Th', 'Jh', 'Qh', '2h', 'Kh'],
       dirtyCards: [],
       explanation:
-        'On Ah 5h 2c hero holds 9h 8h — high card ace, nine eight kickers — for 38% equity against exactly AsKd. Of the 45 cards that can come next, 9 are clean and 0 are dirty, which is 9 outs in total. Clean means hero\u0027s equity after that card is at least 90%; dirty means at least 50% but below 90%.',
+        "On Ah 5h 2c hero holds 9h 8h — high card ace, nine eight kickers — for 38% equity against exactly AsKd. Of the 45 cards that can come next, 9 are clean and 0 are dirty, which is 9 outs in total. Clean means hero's equity after that card is at least 90%; dirty means at least 50% but below 90%.",
     },
     equity: {
       heroEquity: 0.3843434343434343,
@@ -496,8 +496,8 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       confidenceHalfWidthPoints: null,
       ruleOfThumb: {
         estimate: 0.36,
-        errorPoints: -2.4343434343434325,
-        note: '9 outs with two cards to come, times 4, is roughly 36% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut understates by 2.4 points here — 36% against an exact 38.4%. That is enough to flip a marginal call into a fold or the other way round, so use the exact figure for this decision.',
+        errorPoints: 1.0323774283071216,
+        note: "9 outs with two cards to come, times 4, is roughly 36% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut overstates by 1.0 points here — 36% against an exact 35.0%. Fine as a rough read, but do not hang a marginal call on it. The comparison is against the exact chance of one of those 9 clean cards arriving (Two cards to come, 9 outs, 47 cards unseen. Count the misses instead of the hits: 38 cards do not help. The turn misses 38/47 of the time, and with one miss now gone the river misses 37/46 of the time, so both cards miss (38/47) x (37/46) = 65.0% of the time. Hitting at least one is whatever is left: 1 - 65.0% = 35.0%. Adding 9/47 + 9/46 instead would count every run-out that hits twice twice over, and overstate the chance.), not against hero's equity: hitting and winning are different questions, and the dirty-out count is zero here only because every out is clean. The shortcut is an approximation and this is its error, stated rather than hidden.",
       },
       perPlayer: [
         {
@@ -521,7 +521,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       oddsRatio: 3,
       equitySurplus: 0.13434343434343432,
       explanation:
-        'Hero risks 65 to win the 195 already in the middle, a price of 3 to 1. Calling breaks even at 65 / (195 + 65) = 25.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 195 is what is in the middle before hero\u0027s own 65 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 38.4% equity, a 13.4 point surplus.',
+        "Hero risks 65 to win the 195 already in the middle, a price of 3 to 1. Calling breaks even at 65 / (195 + 65) = 25.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 195 is what is in the middle before hero's own 65 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 38.4% equity, a 13.4 point surplus.",
     },
     candidates: [
       {
@@ -615,7 +615,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     teachingNotes: [
       'The pot is laying you 3.0 to 1, so you need 25.0% to break even on a call. That number depends only on the price — not on your cards.',
-      'The rule of 2 and 4 gives 36% here, understating the real figure by 2.4 points. Useful at the table, worth knowing the direction of its error.',
+      'The rule of 2 and 4 gives 36% on your 9 cards of clean outs, overstating the exact chance of hitting one of them by 1.0 points. Your equity here is 38.4%, which is a different question again: hitting is not the same as winning.',
       'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
     ],
   },
@@ -630,7 +630,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       cleanCards: ['9c', '9d', '9h', '9s'],
       dirtyCards: [],
       explanation:
-        'On Jc Ts 3d 2c hero holds 8h 7h — high card jack, ten eight kickers — for 9.1% equity against exactly AcJd. Of the 44 cards that can come next, 4 are clean and 0 are dirty, which is 4 outs in total. Clean means hero\u0027s equity after that card is at least 90%; dirty means at least 50% but below 90%.',
+        "On Jc Ts 3d 2c hero holds 8h 7h — high card jack, ten eight kickers — for 9.1% equity against exactly AcJd. Of the 44 cards that can come next, 4 are clean and 0 are dirty, which is 4 outs in total. Clean means hero's equity after that card is at least 90%; dirty means at least 50% but below 90%.",
     },
     equity: {
       heroEquity: 0.09090909090909091,
@@ -639,8 +639,8 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       confidenceHalfWidthPoints: null,
       ruleOfThumb: {
         estimate: 0.08,
-        errorPoints: -1.0909090909090917,
-        note: '4 outs with one card to come, times 2, is roughly 8% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut understates by 1.1 points here — 8% against an exact 9.1%. Fine as a rough read, but do not hang a marginal call on it.',
+        errorPoints: -0.695652173913043,
+        note: "4 outs with one card to come, times 2, is roughly 8% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut understates by 0.7 points here — 8% against an exact 8.7%. Fine as a rough read, but do not hang a marginal call on it. The comparison is against the exact chance of one of those 4 clean cards arriving (One card to come. 4 of the 46 unseen cards win the hand, so the chance is 4/46 = 8.7%. With a single card there is nothing to correct for: the count of outs over the count of unseen cards is the probability.), not against hero's equity: hitting and winning are different questions, and the dirty-out count is zero here only because every out is clean. The shortcut is an approximation and this is its error, stated rather than hidden.",
       },
       perPlayer: [
         {
@@ -664,7 +664,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       oddsRatio: 3,
       equitySurplus: -0.1590909090909091,
       explanation:
-        'Hero risks 100 to win the 300 already in the middle, a price of 3 to 1. Calling breaks even at 100 / (300 + 100) = 25.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 300 is what is in the middle before hero\u0027s own 100 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 9.1% equity, a -15.9 point shortfall.',
+        "Hero risks 100 to win the 300 already in the middle, a price of 3 to 1. Calling breaks even at 100 / (300 + 100) = 25.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 300 is what is in the middle before hero's own 100 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 9.1% equity, a -15.9 point shortfall.",
     },
     candidates: [
       {
@@ -759,7 +759,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     teachingNotes: [
       'The pot is laying you 3.0 to 1, so you need 25.0% to break even on a call. That number depends only on the price — not on your cards.',
-      'The rule of 2 and 4 gives 8% here, understating the real figure by 1.1 points. Useful at the table, worth knowing the direction of its error.',
+      'The rule of 2 and 4 gives 8% on your 4 cards of clean outs, understating the exact chance of hitting one of them by 0.7 points. Your equity here is 9.1%, which is a different question again: hitting is not the same as winning.',
       'At an SPR of 2.3 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
     ],
   },
@@ -796,7 +796,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       oddsRatio: 1.5,
       equitySurplus: -0.014912499999999995,
       explanation:
-        'Hero risks 60 to win the 90 already in the middle, a price of 1.50 to 1. Calling breaks even at 60 / (90 + 60) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 90 is what is in the middle before hero\u0027s own 60 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 38.5% equity, a -1.5 point shortfall.',
+        "Hero risks 60 to win the 90 already in the middle, a price of 1.50 to 1. Calling breaks even at 60 / (90 + 60) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 90 is what is in the middle before hero's own 60 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 38.5% equity, a -1.5 point shortfall.",
     },
     candidates: [
       {
@@ -949,18 +949,14 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         'Kc',
       ],
       explanation:
-        'On Jh 7c 4d hero holds Qs Qd — a pair of queens, jack kicker — for 65% equity against "JJ, 77, 44, AJ, KJs, QJs, JTs, 98s, 65s, A5s, KQo" (46 combinations still possible). Of the 47 cards that can come next, 2 are clean and 38 are dirty, which is 40 outs in total. Clean means hero\u0027s equity after that card is at least 90%; dirty means at least 50% but below 90%. Hero is already in front before any card arrives — equity now is above the same threshold a card has to clear to count as an out — so read the counts as cards that keep hero ahead rather than as the size of a draw.',
+        'On Jh 7c 4d hero holds Qs Qd — a pair of queens, jack kicker — for 65% equity against "JJ, 77, 44, AJ, KJs, QJs, JTs, 98s, 65s, A5s, KQo" (46 combinations still possible). Of the 47 cards that can come next, 2 are clean and 38 are dirty, which is 40 outs in total. Clean means hero\'s equity after that card is at least 90%; dirty means at least 50% but below 90%. Hero is already in front before any card arrives — equity now is above the same threshold a card has to clear to count as an out — so read the counts as cards that keep hero ahead rather than as the size of a draw.',
     },
     equity: {
       heroEquity: 0.6450812472551603,
       method: 'exact-enumeration',
       trials: 45540,
       confidenceHalfWidthPoints: null,
-      ruleOfThumb: {
-        estimate: 1.6,
-        errorPoints: 95.49187527448397,
-        note: '40 outs with two cards to come, times 4, is roughly 160% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut overstates by 95.5 points here — 160% against an exact 64.5%. That is enough to flip a marginal call into a fold or the other way round, so use the exact figure for this decision.',
-      },
+      ruleOfThumb: null,
       perPlayer: [
         {
           label: 'you',
@@ -980,29 +976,24 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       pot: 280,
       toCall: 0,
       breakEvenEquity: 0,
-      // Nothing to call, so there is no "X to 1" price — `null`, which is what `buildCoachReport`
-      // produces here and the only value for it that survives JSON. This member read
-      // `Number.POSITIVE_INFINITY` while the maths package used that sentinel, and a fixture is
-      // supposed to be a recording of the wire: `JSON.stringify(Infinity)` is `null`, so this line
-      // described a frame the API could never actually send.
       oddsRatio: null,
       equitySurplus: 0.6450812472551603,
       explanation: 'Nothing to call, so there is no price to beat — checking keeps you in for free.',
     },
     candidates: [
       {
+        action: 'check',
+        cost: 0,
+        ev: 180.62274923144486,
+        derivation:
+          'EV(check) = equity x pot = 0.6451 x 280 = 180.62 chips. Checking costs nothing and keeps the hand, so it is a call priced at zero: it risks nothing and still holds a share of what is already in the middle. That share is what folding gives up, which is why a free check is never worse than a fold.',
+      },
+      {
         action: 'fold',
         cost: 0,
         ev: 0,
         derivation:
           'EV(fold) = 0 chips. Folding is the baseline every other action is measured against: it costs nothing further and risks nothing further. Everything already in the pot is spent either way, so folding is the zero point every other action is measured against.',
-      },
-      {
-        action: 'check',
-        cost: 0,
-        ev: 0,
-        derivation:
-          'Checking costs nothing and keeps you in the hand, so it is worth the same as folding right now, plus whatever the rest of the hand is worth.',
       },
       {
         action: 'bet',
@@ -1081,7 +1072,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     teachingNotes: [
       'Notice the split: 2 clean and 38 dirty, out of 40 outs in total. A card that improves you is not the same as a card that wins you the hand — an opponent who is behind after it lands can still draw out on the last card.',
-      'The rule of 2 and 4 gives 160% here, overstating the real figure by 95.5 points. Useful at the table, worth knowing the direction of its error.',
+      'No rule-of-2-and-4 figure here, deliberately: at 64.5% you are already ahead, so you are not drawing to anything. The shortcut counts the cards that rescue a hand that is behind; applied to a hand that is already winning it counts cards that change nothing and returns a number that is not a probability of anything.',
       'At an SPR of 1.9 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
     ],
   },
@@ -1118,7 +1109,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       oddsRatio: 1.6666666666666667,
       equitySurplus: -0.13175675675675674,
       explanation:
-        'Hero risks 540 to win the 900 already in the middle, a price of 1.67 to 1. Calling breaks even at 540 / (900 + 540) = 37.5% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 900 is what is in the middle before hero\u0027s own 540 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 24.3% equity, a -13.2 point shortfall.',
+        "Hero risks 540 to win the 900 already in the middle, a price of 1.67 to 1. Calling breaks even at 540 / (900 + 540) = 37.5% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 900 is what is in the middle before hero's own 540 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 24.3% equity, a -13.2 point shortfall.",
     },
     candidates: [
       {
@@ -1228,7 +1219,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       oddsRatio: 3.75,
       equitySurplus: 0.2352736842105263,
       explanation:
-        'Hero risks 40 to win the 150 already in the middle, a price of 3.75 to 1. Calling breaks even at 40 / (150 + 40) = 21.1% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 150 is what is in the middle before hero\u0027s own 40 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 44.6% equity, a 23.5 point surplus.',
+        "Hero risks 40 to win the 150 already in the middle, a price of 3.75 to 1. Calling breaks even at 40 / (150 + 40) = 21.1% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 150 is what is in the middle before hero's own 40 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 44.6% equity, a 23.5 point surplus.",
     },
     candidates: [
       {

@@ -76,6 +76,38 @@ const LIBRARY_PAYLOAD_CEILING = WS_LIMITS.maxMessageBytes * 4;
 /** A socket that missed this many heartbeats is gone. */
 const MISSED_HEARTBEATS_ALLOWED = 2;
 
+/**
+ * How long a peer gets to answer a close frame before its socket is dropped.
+ *
+ * A WebSocket close is a *handshake*: the server sends a close frame, the peer answers with one, and
+ * only then does the TCP socket end. Until it ends, `http.Server#close()` is still counting it — so
+ * a peer that never answers holds the whole shutdown open. `ws` does have its own fallback, but it
+ * is a 30 s `closeTimeout`: three times the default `SHUTDOWN_GRACE_MS`, so a single unanswered
+ * close turns a deploy into a SIGKILL. Every close this module sends is therefore bounded.
+ *
+ * Derived from the process's own shutdown budget rather than fixed, because it has to be a *small
+ * part* of it — after the sockets, the drain still has the database pool and the worker threads to
+ * close — and because that makes the bound true by construction rather than by coincidence: no
+ * socket this hub has closed can outlive a tenth of the grace.
+ */
+function closeHandshakeGraceMs(shutdownGraceMs: number): number {
+  return Math.min(1_000, Math.ceil(shutdownGraceMs / 10));
+}
+
+/**
+ * Arms the drop that stops an unanswered close frame from holding a socket open.
+ *
+ * Returns the timer so a caller that can cheaply cancel it does. `unref`'d because this timer exists
+ * to let the process go *sooner*; keeping it alive for its own sake would invert the point. Calling
+ * `terminate` on a socket that has already closed is a no-op, so a timer that outlives its socket is
+ * harmless rather than merely tolerable.
+ */
+function dropUnlessAnswered(socket: { readonly terminate: () => void }, graceMs: number): NodeJS.Timeout {
+  const drop = setTimeout(() => socket.terminate(), graceMs);
+  drop.unref();
+  return drop;
+}
+
 /** Only what the heartbeat needs from a socket, so no `ws` type is named in this module. */
 interface Heartbeat {
   readonly ping: () => void;
@@ -185,6 +217,28 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
       (app.hasRequestDecorator('session') ? null : createAuthStore(getSql()).sessions);
     if (store !== null) await app.register(sessionPlugin, { store });
 
+    /**
+     * `clientTracking: false` is deliberate, and it has one trap that has already cost a release.
+     *
+     * `ws` only builds its `WebSocketServer#clients` Set when client tracking is on. The library's
+     * `defaultPreClose` closes sockets with `if (server.clients) { … }`
+     * (`@fastify/websocket/index.js`) — so with tracking off that guard is false, the loop is
+     * SILENTLY SKIPPED, and every upgraded socket stays open. `server.close()` waits for every
+     * connection, so `app.close()` never resolves, the `onClose` hook below never runs, and the
+     * deadline in `server.ts` fires `process.exit(1)`: one idle socket turned every deploy into a
+     * hard kill, and the client saw 1006 (a dropped connection) rather than a shutdown.
+     *
+     * Turning tracking on would fix the hang but not the rest of it. `defaultPreClose` calls
+     * `client.close()` with no arguments, which sends a close frame carrying NO status code, and
+     * the peer reports 1005 — so `apps/web/src/lib/table-socket.ts`, which has a dedicated
+     * "the server is restarting" state keyed on `WS_CLOSE.serverShuttingDown`, could not reach it.
+     * It also puts no bound on the close handshake (see `closeHandshakeGraceMs`).
+     *
+     * So tracking stays off — the hub already indexes every socket in `live` for the heartbeat, and
+     * `ws`'s Set would be a second registry of the same thing — and the `preClose` hook below does
+     * the closing, with the protocol's own code. Anyone reaching for `clientTracking: true` should
+     * read that hook first: it, not the library, is what closes these sockets.
+     */
     await app.register(websocketPlugin, {
       options: { maxPayload: LIBRARY_PAYLOAD_CEILING, clientTracking: false },
     });
@@ -200,8 +254,19 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
 
     /** Sockets per session, for `maxSocketsPerSession`. */
     const bySession = new Map<string, number>();
-    /** Everything open, so the heartbeat can read a counter and reach a socket. */
+    /**
+     * Everything open, so the heartbeat can read a counter and reach a socket — and so the drain
+     * below can close every socket, including the ones the router has never heard of.
+     *
+     * That last part is the reason `preClose` reads this map rather than calling `router.closeAll`:
+     * the router indexes connections by room, so a socket that is open but has not sent `hello` yet
+     * is in no room and `closeAll` cannot see it. It is still an upgraded TCP connection that
+     * `server.close()` will wait for.
+     */
     const live = new Map<string, { readonly connection: WsConnection; readonly heartbeat: Heartbeat }>();
+
+    /** Read once: `appConfig` is frozen, and every close in this plugin is bounded by the same value. */
+    const closeGraceMs = closeHandshakeGraceMs(app.appConfig.shutdownGraceMs);
 
     /**
      * One heartbeat timer for the whole hub rather than one per socket.
@@ -225,11 +290,55 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
     }, WS_LIMITS.heartbeatIntervalMs);
     heartbeat.unref();
 
-    app.addHook('onClose', async () => {
+    /**
+     * Closing the sockets HAS to happen here, in `preClose`, and not in `onClose`.
+     *
+     * Fastify's close sequence is: `preClose` hooks → `server.close()` → `onClose` hooks. Node's
+     * `server.close()` waits for every connection it is still counting, and an upgraded WebSocket
+     * is one of those. So a hub that only closed its sockets in `onClose` would be waiting for a
+     * callback that is waiting for it — which is exactly what shipped, via the library's
+     * `defaultPreClose` no-op described above: `app.close()` never resolved, the process hit the
+     * grace deadline, and every connected learner's socket died as a 1006 with no close frame.
+     *
+     * The close is polite first and forced second. `router.closeConnection` sends a real close
+     * frame carrying `WS_CLOSE.serverShuttingDown`, which is what lets a client tell a deploy from
+     * a network fault and reconnect with backoff instead of surfacing an error, and it releases the
+     * room state the connection held. Anything whose peer has not completed the handshake within
+     * `closeHandshakeGraceMs` is then dropped, because a socket nobody is listening on must not be
+     * the reason a deploy is SIGKILLed.
+     */
+    app.addHook('preClose', async () => {
+      // Stop pinging first: a `ping` on a socket that is already CLOSING is refused by `ws` and
+      // arrives as an `error` event, which would fill the shutdown log with noise about sockets
+      // that are closing exactly as intended.
       clearInterval(heartbeat);
+      if (live.size === 0) return;
+
+      app.log.info({ sockets: live.size, graceMs: closeGraceMs }, 'closing websockets for shutdown');
+      for (const entry of [...live.values()]) {
+        // The close frame carries `WS_CLOSE.serverShuttingDown`, and the drop below bounds the
+        // answer. Nothing here waits: `server.close()` is the thing that waits for these sockets,
+        // and it now has a guarantee that they all end within `closeGraceMs`. The timers are not
+        // cancelled on close because they are `unref`'d and `terminate` is a no-op on a socket that
+        // has gone — cancelling them would be bookkeeping for its own sake on the exit path.
+        router.closeConnection(entry.connection, WS_CLOSE.serverShuttingDown, 'server shutting down');
+        dropUnlessAnswered(entry.heartbeat, closeGraceMs);
+      }
+      await Promise.resolve();
+    });
+
+    app.addHook('onClose', async () => {
+      // Idempotent, and both calls are meant: `preClose` stops the pings as early as it can, and
+      // this runs even for a close that never reached `preClose` (a hook before it having thrown).
+      clearInterval(heartbeat);
+      // A backstop, not the mechanism — `preClose` has already closed every socket by now, and
+      // `closeConnection` is a no-op on a connection that is already closed. It stays because it
+      // costs nothing and because a router left holding room subscriptions for a closed app is a
+      // leak that no test would see.
       router.closeAll('server shutting down');
       live.clear();
       bySession.clear();
+      app.log.info('websocket hub closed');
       await Promise.resolve();
     });
 
@@ -249,18 +358,34 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
           userId: session?.user.id ?? null,
           socketsForSession: bySession.get(sessionId) ?? 0,
         });
+        /**
+         * Refuses this upgrade, and makes sure the refusal actually ends the connection.
+         *
+         * A refused socket is never adopted into `live`, so the shutdown drain above cannot see it
+         * — and by then it is far too late anyway. The upgrade has already completed at the
+         * protocol level, so this is a real WebSocket that `http.Server#close()` counts, and a peer
+         * that ignores the close frame keeps it counted. That is a socket anyone can open, from any
+         * origin, without a session: without the bound below, one of them is enough to make every
+         * deploy miss its grace and die by SIGKILL.
+         */
+        const refuse = (code: number, reason: string): void => {
+          socket.close(code, reason);
+          const drop = dropUnlessAnswered(socket, closeGraceMs);
+          socket.once('close', () => clearTimeout(drop));
+        };
+
         if (!decision.ok) {
           // Logged with the reason, answered with only a close code. Nothing about the session or
           // the origin goes back to the client.
           request.log.warn({ wsRefusal: decision.reason }, 'websocket upgrade refused');
-          socket.close(decision.code, decision.reason);
+          refuse(decision.code, decision.reason);
           return;
         }
         if (session === null) {
           // Unreachable: `evaluateUpgrade` refuses a null user id, so an accepted decision implies a
           // session. Closing rather than returning means that if the two ever disagree, the socket
           // is shut instead of left open with nobody attached to it.
-          socket.close(WS_CLOSE.unauthenticated, 'no session');
+          refuse(WS_CLOSE.unauthenticated, 'no session');
           return;
         }
 

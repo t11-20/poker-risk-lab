@@ -89,12 +89,63 @@
  * double application impossible across processes; this makes a retry correct and cheap inside
  * one, and it is also what lets the socket answer a retry with the sequence the original was
  * applied at.
+ *
+ * ###########################################################################
+ * ##  THE BIG BLIND ADVANCES BY ONE LIVE PLAYER PER HAND. EVERYTHING ELSE   ##
+ * ##  ABOUT THE ROTATION FOLLOWS FROM THAT.                                 ##
+ * ##                                                                        ##
+ * ##  This table used to advance the BUTTON by one occupied seat and read    ##
+ * ##  the blinds off it as button + 1 / button + 2 among whoever happened to ##
+ * ##  be seated at that instant. That is correct for one hand and wrong for  ##
+ * ##  a sequence of them: seat somebody between the button and the blinds    ##
+ * ##  and the assignment shifts backwards onto players who have already      ##
+ * ##  paid. Measured over 40 hands with a join/leave schedule, six players   ##
+ * ##  paid the big blind twice in a row and one skipped it entirely          ##
+ * ##  (`docs/audit/poker-correctness.md`, P1-1). Two consecutive big blinds  ##
+ * ##  cost `2 x BB` where the rules charge `BB + SB`.                        ##
+ * ##                                                                        ##
+ * ##  `nextRotation` now runs the dead-button rule out of the engine's       ##
+ * ##  `advanceBlindRotation`: the big blind moves one seat forward in the    ##
+ * ##  rotation, the small blind falls where the big blind was, the button    ##
+ * ##  falls where the small blind was, and either of the last two is DEAD    ##
+ * ##  when nobody in the hand is sitting there. A dead button and a dead     ##
+ * ##  small blind are correct outcomes, not errors, and the engine's         ##
+ * ##  `startHand` takes both as inputs so neither has to be re-derived.      ##
+ * ###########################################################################
+ *
+ * ## What an arriving player owes, and why "wait for the big blind"
+ *
+ * Nothing used to track blind obligations, so a player could sit down anywhere and be dealt
+ * straight in — including on the button, for free, having paid nothing. Standing up as the blinds
+ * approached and sitting back down afterwards was unpunished (P1-2: four of fifteen seating
+ * combinations gave the newcomer a completely free hand, twice on the button).
+ *
+ * The two standard remedies are "post an amount equivalent to the blind you missed" and "wait for
+ * the big blind to reach you". This table implements the second, for all entries, and the choice
+ * is deliberate rather than expedient:
+ *
+ *   - It needs no new kind of money. Posting a missed blind means a DEAD big blind — money that
+ *     goes to the pot without buying any part of the current bet — which is a forced-bet kind the
+ *     engine does not have, a `hand_actions` shape the schema does not have, and a rule the Coach
+ *     would then have to teach. Waiting costs a player nothing but time.
+ *   - It cannot be gamed. The obligation is keyed by USER ID in `blindDebts` and is NOT cleared by
+ *     standing up, so leaving as the blinds approach and returning afterwards leaves the debt
+ *     exactly where it was: the player still sits out until the big blind reaches their seat.
+ *   - This is play money. Nobody is protected from an unfair edge by being made to pay; the point
+ *     of the rule here is that the rotation is honest and the learner sees a real one.
+ *
+ * The one case where waiting cannot apply is a table that would be left with fewer than two
+ * players in the hand. There the game restarts: every obligation is discharged, the rotation is
+ * re-seeded, and everyone posts normally — which is what a card room does when a game breaks and
+ * re-forms, and is the only alternative to a table that can never deal again.
  */
 
 import type { WsEvent } from '@prl/contracts';
 import type { PublicActionEvent } from '@prl/poker-ai';
 import type {
   Action,
+  BlindPositions,
+  BlindRotation,
   Card,
   DeckSecret,
   HandEvent,
@@ -110,12 +161,14 @@ import type {
   TableConfig,
 } from '@prl/poker-engine';
 import {
+  advanceBlindRotation,
   applyAction,
   cardToString,
   startHand as dealHand,
   legalActions,
   nextOccupied,
   redactFor,
+  seedBlindRotation,
   timeoutAction,
 } from '@prl/poker-engine';
 import { AppError } from '../errors.ts';
@@ -229,7 +282,21 @@ export interface TableSnapshot {
   readonly seats: readonly TableSeat[];
   readonly handInProgress: boolean;
   readonly handNumber: number;
+  /**
+   * Where the button sat for the most recent hand, or where it will be seeded from.
+   *
+   * Under the dead-button rule this can name a seat nobody is sitting in: that is what a dead
+   * button IS, and reporting the next occupied seat instead would be reporting a lie.
+   */
   readonly buttonSeat: SeatIndex | null;
+  /**
+   * Seats that owe a blind and are therefore not being dealt in yet.
+   *
+   * Public, because it is not hidden information — everyone at a real table can see who is sitting
+   * out waiting for the blind — and because a client that does not render it shows a seated player
+   * who mysteriously receives no cards.
+   */
+  readonly awaitingBigBlind: readonly SeatIndex[];
   /** Absolute server time by which the seat to act must act, or null. */
   readonly deadlineMs: number | null;
 }
@@ -252,6 +319,14 @@ export interface LiveTableOptions {
    * from zero unless it is told otherwise — which would make the first deal collide.
    */
   readonly initialHandNumber?: number;
+  /**
+   * The blind positions this room was last playing under, for a table re-opened after a restart.
+   *
+   * Without it the rotation silently resets to the first seat to sit down, which hands somebody a
+   * second big blind across the restart boundary — `prl.hands.button_seat` is persisted precisely
+   * so that it does not have to. See `RoomRegistry.open`, which reconstructs this.
+   */
+  readonly initialBlinds?: BlindPositions;
   /** Non-fatal problems: a subscriber that threw, a rejected timeout. Never given a card. */
   readonly onProblem?: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
 }
@@ -275,6 +350,18 @@ interface LiveHand {
    * archive wants the stacks each seat *started* with.
    */
   readonly deal: ArchivedDeal;
+}
+
+/**
+ * What an arriving player owes before they may be dealt in.
+ *
+ * Keyed by user id rather than by seat, and deliberately not cleared when they stand up: a debt
+ * that lived on the chair would be discharged by the act of leaving it, which is exactly the dodge
+ * this exists to close.
+ */
+interface BlindDebt {
+  /** The hand number this table had reached when the obligation was incurred. */
+  readonly since: number;
 }
 
 interface ApplyOptions {
@@ -315,7 +402,12 @@ export class LiveTable {
   private seats: readonly TableSeat[] = [];
   private hand: LiveHand | null = null;
   private handNumber = 0;
+  /** The button of the most recent hand, or the seat the first one will be seeded from. */
   private buttonSeat: SeatIndex | null = null;
+  /** Where the blinds sat last hand, carried forward. Null until the first hand is dealt. */
+  private blinds: BlindPositions | null = null;
+  /** Who owes a blind before they may be dealt in. See the file comment. */
+  private readonly blindDebts = new Map<string, BlindDebt>();
   private currentMemo: HandMemo | null = null;
   /** Kept so a retry arriving after the hand ended is deduplicated rather than re-applied. */
   private previousMemo: HandMemo | null = null;
@@ -333,6 +425,10 @@ export class LiveTable {
     this.random = options.random;
     this.nextHandId = options.nextHandId;
     this.handNumber = Math.max(0, options.initialHandNumber ?? 0);
+    if (options.initialBlinds !== undefined) {
+      this.blinds = options.initialBlinds;
+      this.buttonSeat = options.initialBlinds.buttonSeat;
+    }
     this.onProblem = options.onProblem ?? ((): void => undefined);
     this.timer = new TurnTimer({
       clock: options.clock,
@@ -406,12 +502,27 @@ export class LiveTable {
       handInProgress: this.handInProgress,
       handNumber: this.handNumber,
       buttonSeat: this.buttonSeat,
+      // Derived from `blindDebts` at read time rather than stored on the seat, so there is one
+      // source of truth for the obligation and no second copy to drift out of step with it.
+      awaitingBigBlind: this.seats
+        .filter((seat) => this.blindDebts.has(seat.userId))
+        .map((seat) => seat.seat),
       deadlineMs: this.timer.deadlineMs,
     };
   }
 
   seatOf(userId: string): SeatIndex | null {
     return this.seats.find((entry) => entry.userId === userId)?.seat ?? null;
+  }
+
+  /**
+   * True while this player still owes a blind and is therefore not being dealt in.
+   *
+   * By user id, because the obligation belongs to the person: it survives standing up, taking a
+   * different chair, and coming back three hands later.
+   */
+  owesBlind(userId: string): boolean {
+    return this.blindDebts.has(userId);
   }
 
   isSeatFree(seat: SeatIndex): boolean {
@@ -486,6 +597,10 @@ export class LiveTable {
    *
    * Legality that belongs to the *room* — is the caller a member, do they hold enough units — is
    * the registry's business. This enforces only what the table itself knows.
+   *
+   * Arriving at a table with a rotation already running incurs a blind obligation: the player is
+   * seated, and is dealt in on the hand the big blind reaches their seat and not before. See the
+   * file comment for why waiting is the remedy chosen over posting.
    */
   sit(request: {
     readonly userId: string;
@@ -494,6 +609,18 @@ export class LiveTable {
     readonly stack: number;
     readonly isBot?: boolean;
     readonly botProfile?: string | null;
+    /**
+     * True when this seat is being re-taken exactly as it stood before a restart.
+     *
+     * Such a player is already in the rotation and owes nothing — they were being dealt in a
+     * minute ago. Only the registry's re-open path passes it; a player sitting down of their own
+     * accord never does.
+     *
+     * The honest limit: an obligation that was outstanding when the process died is not persisted
+     * (there is no column for it), so a player who was waiting for the big blind is re-seated as
+     * though they had already paid. That costs at most one hand's blind, once, per restart.
+     */
+    readonly resumingSeat?: boolean;
   }): Promise<TableSeat> {
     return this.enqueue(() => {
       this.assertOpen();
@@ -522,7 +649,16 @@ export class LiveTable {
         leaving: false,
       };
       this.seats = [...this.seats, seat].sort((left, right) => left.seat - right.seat);
+      // The first player to sit seeds the button, so the first hand deals it to the seat after
+      // them, exactly as it always has. Afterwards this holds the last hand's button.
       this.buttonSeat ??= seat.seat;
+      // A rotation is running as soon as one hand has been dealt, and only then is there anybody
+      // who has already paid for this player to jump ahead of. `has` first so that a player who
+      // stood up owing a blind and came back keeps the debt they already had, with its original
+      // `since` — the whole point is that the round trip changes nothing.
+      if (this.blinds !== null && request.resumingSeat !== true && !this.blindDebts.has(seat.userId)) {
+        this.blindDebts.set(seat.userId, { since: this.handNumber + 1 });
+      }
       this.publish(
         'seating',
         { ...collector(), events: [{ kind: 'playerJoined', displayName: seat.displayName }] },
@@ -583,15 +719,22 @@ export class LiveTable {
       if (this.handInProgress) {
         throw new AppError('illegal_action', { logDetail: 'a hand is already in progress' });
       }
-      const playable = this.seats.filter((seat) => seat.stack > 0 && !seat.leaving);
-      if (playable.length < 2) {
+      // Everyone in the blind rotation: seated, with chips, not on the way out. Players who owe a
+      // blind are IN this list — that is how the rotation reaches them and collects it — but they
+      // are not necessarily dealt in, which is what `rotation.dealtIn` decides.
+      const entrants = this.seats.filter((seat) => seat.stack > 0 && !seat.leaving);
+      if (entrants.length < 2) {
         throw new AppError('illegal_action', {
-          logDetail: `a hand needs two seats with chips; this table has ${playable.length}`,
+          logDetail: `a hand needs two seats with chips; this table has ${entrants.length}`,
         });
       }
 
-      const occupied = playable.map((seat) => seat.seat).sort((left, right) => left - right);
-      const button = this.nextButton(occupied);
+      const rotation = this.nextRotation(entrants);
+      const playable = entrants.filter((seat) => rotation.dealtIn.includes(seat.seat));
+      // Being dealt in discharges the obligation: the seat the big blind landed on is paying it
+      // right now, and every other dealt-in seat never owed one.
+      for (const seat of playable) this.blindDebts.delete(seat.userId);
+
       const handId = this.nextHandId();
       this.handNumber += 1;
 
@@ -600,12 +743,16 @@ export class LiveTable {
         roomId: this.roomId,
         handNumber: this.handNumber,
         config: this.config,
-        buttonSeat: button,
+        buttonSeat: rotation.buttonSeat,
+        // Handed over rather than derived. A dead button is not a seat the engine could find a
+        // player in, and a dead small blind is not a seat it should charge.
+        blinds: { smallBlindSeat: rotation.smallBlindSeat, bigBlindSeat: rotation.bigBlindSeat },
         seats: playable.map((seat) => ({ seat: seat.seat, playerId: seat.userId, stack: seat.stack })),
         random: this.random,
       });
 
-      this.buttonSeat = button;
+      this.buttonSeat = rotation.buttonSeat;
+      this.blinds = rotation.positions;
       this.hand = {
         state: dealt.state,
         secret: dealt.secret,
@@ -890,8 +1037,44 @@ export class LiveTable {
     );
   }
 
-  /** The next button seat, clockwise from the last one. */
-  private nextButton(occupied: readonly SeatIndex[]): SeatIndex {
+  /**
+   * Where the blinds fall for the hand about to be dealt.
+   *
+   * The dead-button rule, with one table-level policy the engine has no business knowing about:
+   * when honouring the outstanding obligations would leave fewer than two players in the hand, the
+   * game restarts. Every debt is discharged, the rotation is re-seeded from the last button, and
+   * everybody posts normally. The alternative is a table that can never deal again — one player
+   * live, one waiting, and no hand to advance the rotation that would end the wait — which is a
+   * far worse failure than a player being dealt in a hand or two early at a table of two.
+   */
+  private nextRotation(entrants: readonly TableSeat[]): BlindRotation {
+    const seats = entrants.map((seat) => seat.seat).sort((left, right) => left - right);
+    const previous = this.blinds;
+    if (previous !== null) {
+      const waiting = entrants.filter((seat) => this.blindDebts.has(seat.userId)).map((seat) => seat.seat);
+      // The big blind is computed here as well as inside `advanceBlindRotation` so that "would
+      // this deal a real hand?" can be answered before committing to it. It is the same call on
+      // the same inputs, so the two cannot disagree.
+      const bigBlindSeat = nextOccupied(previous.bigBlindSeat, this.config.maxSeats, seats);
+      const dealtIn = seats.filter((seat) => seat === bigBlindSeat || !waiting.includes(seat));
+      if (dealtIn.length >= 2) {
+        return advanceBlindRotation({
+          previous,
+          maxSeats: this.config.maxSeats,
+          entrants: seats,
+          awaitingBigBlind: waiting,
+        });
+      }
+    }
+
+    // A fresh game. Nobody has paid anything yet under this rotation, so nobody can be charged
+    // twice and nobody owes anything.
+    this.blindDebts.clear();
+    return seedBlindRotation(this.seedButton(seats), this.config.maxSeats, seats);
+  }
+
+  /** The button a fresh rotation starts on: one seat clockwise from the last one. */
+  private seedButton(occupied: readonly SeatIndex[]): SeatIndex {
     const first = occupied[0];
     if (first === undefined) {
       throw new AppError('illegal_action', { logDetail: 'no occupied seat to put the button on' });

@@ -59,7 +59,7 @@ export {
 } from './components/AssumptionList.tsx';
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from './components/Button.tsx';
 export { Callout, type CalloutProps, type CalloutTone } from './components/Callout.tsx';
-export { CardRow, type CardRowProps } from './components/CardRow.tsx';
+export { type CardEntry, CardRow, type CardRowProps } from './components/CardRow.tsx';
 export { Chip, type ChipProps, type ChipTone } from './components/Chip.tsx';
 export { CoachPanel, type CoachPanelProps } from './components/CoachPanel.tsx';
 export { EquityBar, type EquityBarPlayer, type EquityBarProps } from './components/EquityBar.tsx';
@@ -110,25 +110,47 @@ export { type Keyed, withKeys } from './keys.ts';
 // The hooks plus the pure decisions behind them, so anything outside this package that has to
 // judge whether to animate asks the same question and gets the same answer.
 export {
+  BROWSER_REVEAL_HOST,
   COUNT_DURATION_MS,
   type CountUpDecision,
   type CountUpOptions,
+  createReducedMotionStore,
   cubicBezier,
+  driveCountUp,
   EASE_STANDARD_CONTROL_POINTS,
   easeStandard,
+  type FrameClock,
   interpolate,
+  type MediaQueryHost,
   MIN_COUNT_UP_CHANGE,
   progress,
   REDUCED_MOTION_QUERY,
+  type ReducedMotionQuery,
+  type ReducedMotionStore,
   type RevealDecision,
+  type RevealHost,
   type RevealOptions,
+  type RevealPlan,
   type RevealState,
   shouldCountUp,
   shouldRevealImmediately,
   useCountUp,
   usePrefersReducedMotion,
   useReveal,
+  watchForReveal,
 } from './motion/index.ts';
+// -- The render-boundary probability guard -----------------------------------
+// Exported, not kept private to the components, because the rule it encodes ("a probability that
+// is not a probability is never drawn") belongs to every surface that renders one — including the
+// app's own pages. A second, subtly different copy of `value >= 0 && value <= 1` somewhere in
+// `apps/web` would be exactly the drift this package exists to prevent.
+export {
+  formatProbability,
+  isProbabilityDifference,
+  isProbabilityFraction,
+  isProbabilityPoints,
+  NOT_A_PROBABILITY,
+} from './probability.ts';
 // -- Chart geometry ----------------------------------------------------------
 // Pure, deterministic, and exported because the next polar chart should reuse these rather
 // than re-derive the trigonometry with a different idea of where zero is.

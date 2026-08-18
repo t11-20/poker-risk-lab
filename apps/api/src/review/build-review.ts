@@ -73,7 +73,7 @@ import {
   verifyDeckReveal,
 } from '@prl/poker-engine';
 import type { Street as BettingStreetName, ParsedRange } from '@prl/poker-math';
-import { buildCoachReport, parseRange } from '@prl/poker-math';
+import { buildCoachReport, deriveLegalActions, parseRange } from '@prl/poker-math';
 
 // ---------------------------------------------------------------------------
 // The persisted rows this module reads
@@ -752,6 +752,19 @@ function analyse(request: AnalysisRequest): CoachReport {
     heroStack: situation.heroStack,
     opponentStacks: situation.opponentStacks,
     bigBlind: request.bigBlind,
+    // A review replays stored rows; it never holds the `HandState` those rows came from,
+    // so the engine's own `legalActions` is not available and the set is derived from the
+    // situation. This is the surface where the derived rule bites most often: `situation`
+    // counts an all-in opponent as a live opponent with a stack of 0 — correctly, they can
+    // still win the pot — and a review that offered "raise" against a table of all-in
+    // opponents would be telling a learner they missed a line the server would have
+    // rejected on the night.
+    legalActions: deriveLegalActions({
+      toCall: situation.toCall,
+      heroCommittedThisStreet: situation.committedThisStreet,
+      heroStack: situation.heroStack,
+      opponentStacks: situation.opponentStacks,
+    }),
     samples: request.samples,
     seed: seedFor(request.handId, request.sequence),
   });

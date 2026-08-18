@@ -46,6 +46,36 @@
 # the cache would buy very little and cost one more action and one more trust
 # boundary. If install time ever becomes the bottleneck, pin the cache action by
 # SHA and say here what changed.
+#
+# The paragraphs above used to be the *only* thing holding the pinning rule.
+# `scripts/supply-chain/ci-pinning.mjs` now reads this file and fails the release
+# audit on an unpinned `uses:`, a floating `runs-on: *-latest`, an undigested
+# service container, an unpinned Dockerfile `FROM`, or a workflow file that is
+# not declared in `EXPECTED_WORKFLOWS`. A comment is guidance; a gate is a rule.
+#
+# ## Which identity the database jobs connect as
+#
+# `db/migrations/0001_initial.sql` defines a two-role model: `prl_migrator` owns
+# the schema, `prl_app` is the runtime role and holds the narrowest per-table
+# verb set the API actually needs (no CREATE, no DROP, no TRUNCATE, no DELETE on
+# the append-only tables). Both are `NOLOGIN` privilege containers; a real login
+# identity is granted membership out of band.
+#
+# Every CI job used to connect as the `postgres` superuser, so the model was
+# enforced by nothing that runs automatically and a missing GRANT in a future
+# migration would have surfaced first in production. The `end-to-end` and `a11y`
+# jobs — the two whose database access is purely the application's own runtime
+# path — now create a login role `prl_ci_app`, grant it `prl_app`, and run the
+# server as that. Migration and seeding keep the privileged identity, because
+# creating roles and owning a schema is exactly what the runtime role must not be
+# able to do.
+#
+# The `test` job is deliberately still privileged: `apps/api/test/helpers/hands-app.ts`
+# cleans up fixtures with `delete from prl.rooms`, and `prl_app` holds only
+# SELECT/INSERT/UPDATE there. That is the privilege model working as designed, so
+# the fix belongs in the fixture helper (delete as the migrator, or cascade from a
+# table the app may delete from) rather than in the grants. Until then this job
+# says out loud that it does not exercise least privilege.
 # ---------------------------------------------------------------------------
 
 name: CI
@@ -243,6 +273,9 @@ jobs:
           --health-retries 20
 
     env:
+      # The privileged identity, on purpose — see the "Which identity the
+      # database jobs connect as" section in this file's header. This job does
+      # NOT exercise the least-privilege model; `end-to-end` and `a11y` do.
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_test
 
     steps:
@@ -360,7 +393,13 @@ jobs:
           --health-retries 20
 
     env:
-      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_e2e
+      # The job default is the LEAST-PRIVILEGED identity: a login role that is a
+      # member of `prl_app` and nothing else. The API is started with this, so a
+      # missing GRANT fails this build instead of a deployment. The steps that
+      # legitimately need more (waiting, migrating, seeding, creating the role
+      # itself) override it with DATABASE_URL_ADMIN at step level.
+      DATABASE_URL: postgres://prl_ci_app:prl-ci-not-a-secret@127.0.0.1:5432/poker_risk_lab_e2e
+      DATABASE_URL_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_e2e
       NODE_ENV: development
       PORT: '3001'
       HOST: 127.0.0.1
@@ -393,12 +432,54 @@ jobs:
         run: pnpm run build:packages
 
       - name: Wait for PostgreSQL
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
         run: pnpm run db:wait
 
       - name: Migrate and seed
+        # Schema ownership and role creation are precisely what the runtime role
+        # must not be able to do, so these run as the privileged identity.
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
         run: |
           pnpm run db:migrate
           pnpm run db:seed
+
+      - name: Grant a login identity membership of prl_app
+        # `prl_app` is NOLOGIN by design (db/migrations/0001_initial.sql): it is a
+        # privilege container, and the real login identity is granted membership
+        # out of band. This is that out-of-band step, done the way a deployment
+        # would do it. The password is a throwaway for an ephemeral container on a
+        # private network destroyed with the job — deliberately not a repository
+        # secret, for the same reason the postgres password above is not.
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql --host 127.0.0.1 --username postgres --dbname poker_risk_lab_e2e \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'prl_ci_app') THEN
+              CREATE ROLE prl_ci_app LOGIN PASSWORD 'prl-ci-not-a-secret';
+            END IF;
+          END
+          $$;
+          GRANT prl_app TO prl_ci_app;
+          GRANT CONNECT ON DATABASE poker_risk_lab_e2e TO prl_ci_app;
+          SQL
+          # Prove the identity is bounded rather than assuming it: a role that can
+          # still create tables would make this whole job theatre.
+          PGPASSWORD=prl-ci-not-a-secret psql --host 127.0.0.1 --username prl_ci_app \
+            --dbname poker_risk_lab_e2e --tuples-only --no-align \
+            --command "select rolsuper or rolcreatedb or rolcreaterole from pg_roles where rolname = current_user" \
+            | grep -qx f
+          if PGPASSWORD=prl-ci-not-a-secret psql --host 127.0.0.1 --username prl_ci_app \
+               --dbname poker_risk_lab_e2e --set ON_ERROR_STOP=1 --quiet \
+               --command "create table prl.ci_should_not_be_allowed (x int)" 2>/dev/null; then
+            echo "prl_ci_app can create tables in the prl schema — the least-privilege model is not in effect"
+            exit 1
+          fi
+          echo "prl_ci_app is a member of prl_app and cannot create objects"
 
       - name: Start the API
         # Backgrounded, then polled: a fixed sleep either wastes time or races the boot.
@@ -500,6 +581,53 @@ jobs:
         run: pnpm run build
 
   # -------------------------------------------------------------------------
+  # 6b. Build the release artefacts.
+  #
+  # The two Docker images are what actually ships, and until now nothing in CI
+  # built either of them: `grep "docker build" .github/workflows/*.yml` matched
+  # only comments. Both Dockerfiles carry multi-stage logic whose past failures
+  # their own headers document, and both run `pnpm install --frozen-lockfile`
+  # against the *Linux* dependency set — the 58 platform-specific optionals that
+  # a macOS developer never installs and that `dep-shapes.mjs` therefore cannot
+  # read from disk. A build here is the only automated check that the release
+  # artefact assembles at all.
+  #
+  # `docker build` directly rather than docker/build-push-action: nothing is
+  # pushed, the runner already has BuildKit, and a third-party action here would
+  # be one more trust boundary in the job that produces the thing we ship.
+  # -------------------------------------------------------------------------
+  containers:
+    name: Container images
+    needs: supply-chain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the API image
+        run: docker build --file Dockerfile.api --tag prl-api:ci .
+
+      - name: Build the web image
+        run: docker build --file Dockerfile.web --tag prl-web:ci .
+
+      - name: Check both images run as a non-root user
+        # A container that ships as root undoes the least-privilege story the
+        # rest of this pipeline tells. Both Dockerfiles set `USER node`; this
+        # asserts the built image agrees with the file.
+        run: |
+          for image in prl-api:ci prl-web:ci; do
+            user="$(docker image inspect --format '{{.Config.User}}' "$image")"
+            if [ "$user" != "node" ]; then
+              echo "$image runs as '${user:-root}', expected 'node'"
+              exit 1
+            fi
+            echo "$image runs as $user"
+          done
+
+  # -------------------------------------------------------------------------
   # 7. Accessibility audit of the built web app.
   #
   # The audit is static (it parses server-rendered HTML — see the file header of
@@ -533,7 +661,10 @@ jobs:
           --health-retries 20
 
     env:
-      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_a11y
+      # As in `end-to-end`: the audit starts the API with `--with-api`, so the
+      # pages it audits are rendered by a server running as a `prl_app` member.
+      DATABASE_URL: postgres://prl_ci_app:prl-ci-not-a-secret@127.0.0.1:5432/poker_risk_lab_a11y
+      DATABASE_URL_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_a11y
 
     steps:
       - name: Check out
@@ -556,12 +687,35 @@ jobs:
         run: pnpm run build
 
       - name: Wait for PostgreSQL
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
         run: pnpm run db:wait
 
       - name: Migrate and seed
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
         run: |
           pnpm run db:migrate
           pnpm run db:seed
+
+      - name: Grant a login identity membership of prl_app
+        # See the identical step in `end-to-end`, and the header section that
+        # explains why the runtime role is NOLOGIN.
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql --host 127.0.0.1 --username postgres --dbname poker_risk_lab_a11y \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'prl_ci_app') THEN
+              CREATE ROLE prl_ci_app LOGIN PASSWORD 'prl-ci-not-a-secret';
+            END IF;
+          END
+          $$;
+          GRANT prl_app TO prl_ci_app;
+          GRANT CONNECT ON DATABASE poker_risk_lab_a11y TO prl_ci_app;
+          SQL
 
       - name: Accessibility audit
         # `--out` is opt-in so a local run does not leave an untracked report file

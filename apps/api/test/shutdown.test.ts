@@ -1,7 +1,30 @@
 /**
- * Graceful shutdown, against a real process holding a real keep-alive socket.
+ * Graceful shutdown, against a real process holding a real socket — keep-alive HTTP, and WebSocket.
  *
- * ## The defect this exists for
+ * ## The second defect, and why this file did not catch it
+ *
+ * This suite passed 3/3 while graceful shutdown was broken for **every WebSocket connection**,
+ * because it contained no WebSocket: it locked in the keep-alive fix described below and never
+ * touched an upgraded connection. `ws/hub.ts` registered `@fastify/websocket` with
+ * `clientTracking: false`, and the library's `defaultPreClose` closes sockets inside
+ * `if (server.clients)` — a Set `ws` only builds when tracking is on. So the close loop silently
+ * did nothing, `server.close()` waited forever on the upgraded socket, `app.close()` never
+ * resolved, and the grace deadline fired `process.exit(1)`. Measured on the same build, with only
+ * the connection state differing:
+ *
+ *     idle                                 0.012 s / exit 0
+ *     one socket at a table               10.012 s / exit 1, and the client saw 1006
+ *     one socket that had not said hello   5.061 s / exit 0, and the client saw 4408
+ *
+ * One socket. No load. Every deploy while a learner had a table open was a hard kill, on the one
+ * connection type this product is built on — and the client could not tell it from a lost network,
+ * so `apps/web/src/lib/table-socket.ts`'s "the server is restarting" state was unreachable.
+ *
+ * `SIGTERM with a WebSocket open` below is the coverage that was missing. Both of its tests fail
+ * against the old behaviour — the first with code 1 after the full grace and close code 1006, the
+ * second with code 1 after the full grace.
+ *
+ * ## The first defect this exists for
  *
  * `forceCloseConnections: 'idle'` makes Fastify call `closeIdleConnections()` exactly once, when
  * `app.close()` is invoked. A keep-alive socket that is mid-request at that moment is not idle, is
@@ -28,12 +51,16 @@
 
 import assert from 'node:assert/strict';
 import { type ChildProcessByStdio, spawn } from 'node:child_process';
-import { connect, createServer } from 'node:net';
+import { randomBytes } from 'node:crypto';
+import { connect, createServer, type Socket } from 'node:net';
 import { dirname, join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import type { Readable } from 'node:stream';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { WS_CLOSE, WS_PROTOCOL_VERSION } from '@prl/contracts';
+import WebSocket from 'ws';
+import { databaseSkip, TEST_DATABASE_URL } from './helpers/database.ts';
 
 const API_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO_ROOT = join(API_DIR, '..', '..');
@@ -118,7 +145,10 @@ function freePort(): Promise<number> {
  * Values passed here win over `.env`: node's `--env-file` never overrides a variable that is
  * already in the environment.
  */
-async function startServer(graceMs: number = GRACE_MS): Promise<RunningServer> {
+async function startServer(
+  graceMs: number = GRACE_MS,
+  extraEnv: Readonly<Record<string, string>> = {},
+): Promise<RunningServer> {
   const chosenPort = await freePort();
   const child = spawn(process.execPath, ['--env-file-if-exists=.env', ENTRY], {
     cwd: REPO_ROOT,
@@ -130,6 +160,7 @@ async function startServer(graceMs: number = GRACE_MS): Promise<RunningServer> {
       PORT: String(chosenPort),
       PUBLIC_WEB_ORIGIN: WEB_ORIGIN,
       SHUTDOWN_GRACE_MS: String(graceMs),
+      ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -365,6 +396,250 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
     await health.text();
 
     const exit = await terminate(server);
+    assertCleanExit(exit, server.output());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WebSockets
+//
+// Everything below exists because the suite above proved a shutdown correct without ever opening
+// the connection this product runs on. See the second section of this file's header.
+// ---------------------------------------------------------------------------
+
+/** A cookie jar as one header value, with a response's `Set-Cookie` folded in. */
+function mergeCookies(existing: string, response: Response): string {
+  const jar = new Map<string, string>();
+  const remember = (pair: string): void => {
+    const name = pair.split('=', 1)[0];
+    if (name !== undefined && name !== '' && pair.includes('=')) jar.set(name, pair);
+  };
+  for (const pair of existing.split('; ')) remember(pair);
+  for (const raw of response.headers.getSetCookie()) remember(raw.split(';', 1)[0] ?? '');
+  return [...jar.values()].join('; ');
+}
+
+/**
+ * A guest account, and the cookies that authenticate its WebSocket upgrade.
+ *
+ * The socket carries no credential of its own — `ws/hub.ts` reads the session from the same signed
+ * cookie every REST route uses — so a real upgrade needs a real sign-in, and that needs the
+ * database. Hence the `databaseSkip` on the test that calls this.
+ */
+async function guestSession(port: number): Promise<{ readonly cookie: string; readonly token: string }> {
+  const { cookie, token } = await csrfCredentials(port);
+  const created = await fetch(`http://127.0.0.1:${port}/api/v1/auth/guest`, {
+    method: 'POST',
+    headers: {
+      origin: WEB_ORIGIN,
+      'content-type': 'application/json',
+      cookie,
+      'x-csrf-token': token,
+    },
+    body: JSON.stringify({ displayName: 'Shutdown Probe' }),
+  });
+  const body = await created.text();
+  assert.equal(created.status, 201, `guest sign-in must succeed before a socket is opened: ${body}`);
+  return { cookie: mergeCookies(cookie, created), token };
+}
+
+/** A room for the socket to join, so one of the two sockets is in the state a learner's is. */
+async function createRoom(
+  port: number,
+  credentials: { readonly cookie: string; readonly token: string },
+): Promise<string> {
+  const response = await fetch(`http://127.0.0.1:${port}/api/v1/rooms`, {
+    method: 'POST',
+    headers: {
+      origin: WEB_ORIGIN,
+      'content-type': 'application/json',
+      cookie: credentials.cookie,
+      'x-csrf-token': credentials.token,
+    },
+    body: JSON.stringify({
+      name: 'Shutdown Probe',
+      maxSeats: 2,
+      smallBlind: 1,
+      bigBlind: 2,
+      startingStack: 200,
+    }),
+  });
+  const body: unknown = await response.json();
+  assert.equal(response.status, 201, `the room must exist before a socket joins it: ${JSON.stringify(body)}`);
+  const id = (body as { room?: { id?: unknown } }).room?.id;
+  assert.equal(typeof id, 'string', 'POST /rooms must answer with the room it created');
+  return String(id);
+}
+
+/** Opens a real socket over loopback, rejecting with the close code if the upgrade is refused. */
+function openSocket(port: number, cookie: string): Promise<WebSocket> {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/api/v1/ws`, {
+    headers: { origin: WEB_ORIGIN, cookie },
+  });
+  return new Promise<WebSocket>((resolve, reject) => {
+    socket.once('open', () => resolve(socket));
+    socket.once('error', reject);
+    socket.once('close', (code: number, reason: Buffer) => {
+      reject(new Error(`the upgrade was refused: ${code} ${reason.toString('utf8')}`));
+    });
+  });
+}
+
+/** Sends `hello` and settles when the server has welcomed the socket into the room. */
+function joinRoom(socket: WebSocket, roomId: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('no welcome frame within 10s')), 10_000);
+    timer.unref();
+    const onMessage = (data: Buffer): void => {
+      const frame: unknown = JSON.parse(data.toString('utf8'));
+      if ((frame as { type?: unknown }).type !== 'welcome') return;
+      clearTimeout(timer);
+      socket.off('message', onMessage);
+      resolve();
+    };
+    socket.on('message', onMessage);
+    socket.once('close', (code: number) => {
+      clearTimeout(timer);
+      reject(new Error(`the socket closed ${code} before it was welcomed`));
+    });
+    socket.send(
+      JSON.stringify({
+        type: 'hello',
+        protocolVersion: WS_PROTOCOL_VERSION,
+        roomId,
+        // 12 base64url characters, which is inside the contract's 8..64 for a request id.
+        clientNonce: randomBytes(9).toString('base64url'),
+      }),
+    );
+  });
+}
+
+interface ObservedClose {
+  readonly code: number;
+  readonly reason: string;
+}
+
+/** What the client saw when the socket ended, which is the half of this the server cannot assert. */
+function closeOf(socket: WebSocket): Promise<ObservedClose> {
+  return new Promise<ObservedClose>((resolve) => {
+    socket.once('close', (code: number, reason: Buffer) => {
+      resolve({ code, reason: reason.toString('utf8') });
+    });
+  });
+}
+
+/**
+ * Completes a WebSocket upgrade by hand, and then never says another word.
+ *
+ * Written on a raw TCP socket precisely because a `ws` client is well behaved: it answers a close
+ * frame, and the failure being tested is what happens when nothing does. No cookie is sent, so the
+ * hub refuses the upgrade — but only *after* the protocol-level upgrade has completed, which is the
+ * point: this is a real WebSocket that `http.Server#close()` counts, and any client on the internet
+ * can open one without a session.
+ */
+async function muteSocket(port: number): Promise<{ readonly socket: Socket; readonly reply: string }> {
+  const socket = connect(port, '127.0.0.1');
+  socket.setNoDelay(true);
+  let received = Buffer.alloc(0);
+  socket.on('data', (chunk: Buffer) => {
+    received = Buffer.concat([received, chunk]);
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.once('connect', resolve);
+    socket.once('error', reject);
+  });
+  socket.write(
+    'GET /api/v1/ws HTTP/1.1\r\n' +
+      `host: 127.0.0.1:${port}\r\n` +
+      `origin: ${WEB_ORIGIN}\r\n` +
+      'upgrade: websocket\r\n' +
+      'connection: Upgrade\r\n' +
+      `sec-websocket-key: ${randomBytes(16).toString('base64')}\r\n` +
+      'sec-websocket-version: 13\r\n\r\n',
+  );
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`no upgrade reply within 5s: ${received.toString('latin1')}`));
+    }, 5_000);
+    timer.unref();
+    const check = (): void => {
+      if (!received.toString('latin1').includes('\r\n\r\n')) return;
+      clearTimeout(timer);
+      socket.off('data', check);
+      resolve();
+    };
+    socket.on('data', check);
+    check();
+  });
+  return { socket, reply: received.toString('latin1').split('\r\n')[0] ?? '' };
+}
+
+describe('SIGTERM with a WebSocket open', () => {
+  it('closes every socket with the protocol shutdown code and exits 0', {
+    skip: databaseSkip('a real WebSocket upgrade, which needs a signed-in session'),
+  }, async () => {
+    const server = await startServer(GRACE_MS, {
+      // The database the availability guard probed, so this test and that one agree on which
+      // schema they are talking about even when `.env` names another.
+      ...(TEST_DATABASE_URL === undefined ? {} : { DATABASE_URL: TEST_DATABASE_URL }),
+    });
+    const credentials = await guestSession(server.port);
+    const roomId = await createRoom(server.port, credentials);
+
+    // Two sockets, in the two states a socket can be in, because they are closed by different
+    // code. `atTable` is in a room and so is indexed by `WsRouter`; `connecting` has not sent
+    // `hello`, is in no room, and is therefore invisible to `router.closeAll` — it is only
+    // reachable through the hub's own `live` map, which is why the drain reads that instead.
+    const atTable = await openSocket(server.port, credentials.cookie);
+    await joinRoom(atTable, roomId);
+    const connecting = await openSocket(server.port, credentials.cookie);
+    assert.equal(atTable.readyState, WebSocket.OPEN, 'the table socket must be open at the signal');
+    assert.equal(connecting.readyState, WebSocket.OPEN, 'the second socket must be open at the signal');
+
+    const closes = Promise.all([closeOf(atTable), closeOf(connecting)]);
+    const exit = await terminate(server);
+    const [tableClose, connectingClose] = await closes;
+
+    // The close code is the assertion that matters as much as the exit code. A client cannot tell
+    // a deploy from a lost network unless the server says so, and 1006 — no close frame at all,
+    // which is what `process.exit` leaves behind — is exactly "lost network" to
+    // `apps/web/src/lib/table-socket.ts`.
+    assert.equal(
+      tableClose.code,
+      WS_CLOSE.serverShuttingDown,
+      `a socket at a table must be told the server is shutting down, saw ${tableClose.code} ` +
+        `${tableClose.reason}`,
+    );
+    assert.equal(
+      connectingClose.code,
+      WS_CLOSE.serverShuttingDown,
+      `a socket that had not finished its handshake must be too, saw ${connectingClose.code} ` +
+        `${connectingClose.reason}`,
+    );
+    assertCleanExit(exit, server.output());
+    // The hub's own cleanup hangs off `onClose`, which only runs once `app.close()` resolves —
+    // the very thing that did not happen. Asserting the line proves the cleanup ran rather than
+    // inferring it from the exit code.
+    assert.match(server.output(), /websocket hub closed/, 'the hub onClose cleanup must run');
+  });
+
+  it('is not held open by a client that never answers the close frame', async () => {
+    // No SQL anywhere on this path: an upgrade with no cookie is refused before a query is issued
+    // (`resolveSession` short-circuits on a missing cookie), so a placeholder URL is honest and
+    // this test runs in `test:without-database` too — where it belongs, because a socket that will
+    // not close has nothing to do with the schema.
+    const server = await startServer(GRACE_MS, {
+      DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused',
+    });
+    const { socket, reply } = await muteSocket(server.port);
+    assert.match(reply, /^HTTP\/1\.1 101 /, `the upgrade must complete before it is refused: ${reply}`);
+
+    const exit = await terminate(server);
+    socket.destroy();
+
+    // Before the fix this exited 1 after the whole grace: the hub refuses the upgrade with a close
+    // frame, this client ignores it, and `ws`'s own fallback is a 30 s `closeTimeout` — three times
+    // the default grace. One socket, no session, any origin.
     assertCleanExit(exit, server.output());
   });
 });

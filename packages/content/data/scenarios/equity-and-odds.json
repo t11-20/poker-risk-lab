@@ -10,7 +10,7 @@
     "buttonSeat": 5,
     "seats": [
       { "seat": 1, "label": "BB", "stack": 500, "isHero": true, "holeCards": "QhJh" },
-      { "seat": 5, "label": "BTN", "stack": 500, "profile": "tight-aggressive" }
+      { "seat": 5, "label": "BTN", "stack": 475, "profile": "tight-aggressive" }
     ],
     "board": "Kh 7h 3c 2s",
     "street": "turn",
@@ -26,7 +26,7 @@
     "assumptions": [
       "The button bets this turn with the range stated. If this opponent only makes a small bet with hands that already beat a pair of queens, the equity figure falls and so does the case for calling.",
       "The price comparison assumes the hand reaches showdown with no further betting after the river card. Any river bet is a separate decision at a separate price.",
-      "Stacks shown are the units each player has behind at the start of this street; nobody is close to all in.",
+      "Stacks shown are the units each player has left behind right now, after anything already committed on this street; nobody is close to all in.",
       "Only one card is left to come, so the two-cards-to-come version of the rule of 2 and 4 does not apply here."
     ],
     "reasoning": "Read the board first: king high, no pair, two hearts, and two low cards — so a straight is available only to a hand holding low cards of its own, and only if the right river card arrives. You hold two more hearts, so a fifth heart on the river makes you a flush. Notice which flush: the king of hearts is on the board, so an opponent holding the ace of hearts would make a better one — this is not the nut draw, and that matters more in other spots than it does at this price. The bet is small next to the pot, which is the whole story: a small bet asks you to be best only a small share of the time, and a one-card draw of this shape gets there well under half the time but comfortably more often than a price this cheap demands. You also pick up equity you did not pay for, because against the range assumed here a queen or a jack on the river beats the small pairs and the hands with nothing. Both of those push the same way, so calling follows from the price rather than from any strength in your hand. Raising is a different plan with a different justification — it needs the opponent to fold hands that beat you — and nothing in this range assumption supports it. Change the price and the answer changes, which is exactly what the companion scenario does. Change the range to one containing nothing you can beat by pairing and your equity drops back to the bare draw, which is still enough here, but only just.",
@@ -50,7 +50,7 @@
     "buttonSeat": 5,
     "seats": [
       { "seat": 1, "label": "BB", "stack": 500, "isHero": true, "holeCards": "QhJh" },
-      { "seat": 5, "label": "BTN", "stack": 500, "profile": "tight-aggressive" }
+      { "seat": 5, "label": "BTN", "stack": 260, "profile": "tight-aggressive" }
     ],
     "board": "Kh 7h 3c 2s",
     "street": "turn",
@@ -66,7 +66,7 @@
     "assumptions": [
       "The range is deliberately identical to the small-bet scenario so that the only thing that changes is the size of the bet. In real play a much larger bet usually means a narrower, stronger range, which would lower hero's equity further and make folding clearer still.",
       "The price comparison assumes the hand reaches showdown with no further betting after the river card.",
-      "Stacks shown are the units each player has behind at the start of this street; both players can cover this bet.",
+      "Stacks shown are the units each player has left behind right now, after anything already committed on this street; both players can cover this bet.",
       "Only one card is left to come."
     ],
     "reasoning": "Nothing about your hand has changed: same two hearts, same king-high board with no pair, same single card to come. What changed is the price, and the price is the decision. When a bet is larger than the pot, the share of the time you must end up best climbs a long way, and a one-card draw cannot climb with it. It is worth seeing how that requirement behaves as bets grow: it rises quickly through the small sizes, then more slowly, approaching but never passing even money no matter how enormous the bet gets. A draw that needed only a modest share against the small bet is now well short of what is required, so folding follows. The honest footnote is that holding the range fixed flatters your call here — an opponent who fires this much is usually doing it with a stronger set of hands than one who bets a token amount, which would only lower your equity. So the fold is safe in both directions: the price alone is enough to justify it, and the likely range shift points the same way.",
@@ -88,7 +88,7 @@
     "bigBlind": 10,
     "buttonSeat": 5,
     "seats": [
-      { "seat": 1, "label": "BB", "stack": 170, "profile": "unknown", "holeCards": "AdAc" },
+      { "seat": 1, "label": "BB", "stack": 0, "profile": "unknown", "holeCards": "AdAc" },
       { "seat": 5, "label": "BTN", "stack": 260, "isHero": true, "holeCards": "JhTh" }
     ],
     "board": "9h 8c 3h",
@@ -102,7 +102,7 @@
       "This is a face-up teaching spot: the opponent's hand is known, so the only uncertainty left is the two cards still to come. Being certain of an opponent's hand is the exception, not the normal case.",
       "Calling puts the opponent all in, so both remaining cards will be dealt and no more units can go in. That is what makes a two-cards-to-come estimate the right kind of estimate here.",
       "Neither of the opponent's cards is a heart, so none of hero's flush cards make the opponent a better hand.",
-      "Stacks shown are the units each player has behind at the start of this street."
+      "Stacks shown are the units each player has left behind right now, after anything already committed on this street."
     ],
     "reasoning": "The board is nine high with no pair, two hearts, and two connected cards, so your jack-ten of hearts has a flush draw and an open-ended straight draw at the same time. That large combined out count is exactly where the rule of 2 and 4 is least trustworthy, and it is worth being precise about why. The four-times version doubles the one-card estimate, which counts the runouts where you hit on both cards twice over, and the drift grows with the number of outs — so the biggest draws are where the shortcut flatters you most. It also assumes you get to see both cards for free, which is only true here because the bet puts all the units in now; with units left behind you might pay again on the turn or be priced out, and then the four-times figure is not the number you should be comparing at all. Work with the computed figure rather than the shortcut and the hand still holds up as a favourite against a pair of aces with no hearts, while the price on offer asks for clearly less than half. So calling follows. Two changes would flip it: if the opponent held a heart, part of your flush draw would be making you a losing hand rather than a winning one; and if the bet had left units behind, you would have to price the turn decision separately instead of buying both cards at once.",
     "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
@@ -132,7 +132,7 @@
     "buttonSeat": 5,
     "seats": [
       { "seat": 4, "label": "CO", "stack": 400, "isHero": true, "holeCards": "JcTc" },
-      { "seat": 5, "label": "BTN", "stack": 400, "profile": "tight-aggressive" }
+      { "seat": 5, "label": "BTN", "stack": 310, "profile": "tight-aggressive" }
     ],
     "board": "Qs 8d 5c 3h",
     "street": "turn",
@@ -149,7 +149,7 @@
       "The button bets this turn with the range stated; a range containing fewer hands with nothing would make hero's equity lower still.",
       "The price comparison assumes the hand reaches showdown with no further betting after the river card.",
       "Every suit appears exactly once on this board, so no flush can be made by anyone — hero's two clubs are decoration, not a draw.",
-      "Stacks shown are the units each player has behind at the start of this street."
+      "Stacks shown are the units each player has left behind right now, after anything already committed on this street."
     ],
     "reasoning": "Start with the board: queen high, no pair, and all four suits present, which means no flush is possible for anybody on the river. With the queen and the eight out there, your jack-ten needs one specific rank — a nine — to make a straight, and that is the thinnest of the standard draws. A pot-sized bet is a useful landmark to hold in your head, because it is where the price stops being generous: you are being asked to risk the size of the pot to win it. As the bet grows relative to the pot, the share of the time you must be best grows too — fast through the small sizes, then more gently, approaching but never passing even money. A single-rank draw with one card to come is nowhere near that landmark, even after crediting the times a jack or a ten pairs and beats the hands in this range that have nothing. So this is a fold, and it is not close. What makes the spot worth studying is that the same hand against the same range becomes a reasonable call if this opponent bets a quarter of this amount instead: the cards did not change, the required share did. Get in the habit of pricing the bet before you evaluate the hand, because the bet is what sets the bar the hand has to clear.",
     "expectedInsight": [{ "kind": "breakEvenExceedsEquity" }, { "kind": "callEvSign", "expect": "negative" }],
@@ -171,7 +171,7 @@
     "bigBlind": 10,
     "buttonSeat": 5,
     "seats": [
-      { "seat": 1, "label": "BB", "stack": 380, "profile": "loose-aggressive" },
+      { "seat": 1, "label": "BB", "stack": 320, "profile": "loose-aggressive" },
       { "seat": 5, "label": "BTN", "stack": 380, "isHero": true, "holeCards": "9h8h" }
     ],
     "board": "Ah 9s 6d 3c",
@@ -189,7 +189,7 @@
       "This opponent bets the turn with the wide range stated. That is a read about a player, and the whole answer here depends on it.",
       "The price comparison assumes the hand reaches showdown with no further betting after the river card.",
       "All four suits are on the board, so no flush is possible for anyone, and no hand in the range assumed here can complete a straight with one card. Hands are therefore compared as pairs and high cards.",
-      "Stacks shown are the units each player has behind at the start of this street."
+      "Stacks shown are the units each player has left behind right now, after anything already committed on this street."
     ],
     "reasoning": "Read the board: ace high, no pair, and all four suits present, so no flush can be made by anybody, and nothing in the range assumed here can complete a straight with a single card. That strips the hand down to something simple — you hold second pair, which loses to any ace and beats any unpaired hand without one. With no flush or straight to worry about, your equity is close to a pure hand-reading question: what share of this opponent's betting range does not contain an ace or a pair bigger than nines? Against a range this wide — one that keeps firing with broadway cards, small pairs and the odd hand with nothing — that share is large enough to clear the price being offered, so calling follows. Notice where the equity comes from: mostly from hands you already beat, not from improving, although a river nine or eight does promote you. The call is a consequence of the range, not of the hand: the same second pair at the same price is a fold against a narrow range, which is the companion scenario. If you think this particular opponent only bets the turn with an ace or better, then the assumption is what you should argue with, not the arithmetic that follows from it.",
     "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
@@ -210,7 +210,7 @@
     "bigBlind": 10,
     "buttonSeat": 5,
     "seats": [
-      { "seat": 1, "label": "BB", "stack": 380, "profile": "nit" },
+      { "seat": 1, "label": "BB", "stack": 320, "profile": "nit" },
       { "seat": 5, "label": "BTN", "stack": 380, "isHero": true, "holeCards": "9h8h" }
     ],
     "board": "Ah 9s 6d 3c",
@@ -228,7 +228,7 @@
       "This opponent bets the turn only with the narrow range stated, and almost never without a pair or an ace. That is an assumption about a person, not a fact about poker.",
       "The price comparison assumes the hand reaches showdown with no further betting after the river card.",
       "All four suits are on the board, so no flush is possible for anyone, and no hand in this narrow range can complete a straight with one card. Hands are therefore compared as pairs and high cards.",
-      "Stacks shown are the units each player has behind at the start of this street; the cards, the pot and the bet are identical to the wide-range scenario."
+      "Stacks shown are the units each player has left behind right now, after anything already committed on this street; the cards, the pot and the bet are identical to the wide-range scenario."
     ],
     "reasoning": "Every visible fact is the same as in the wide-range version: same second pair, same ace-high board where no flush is possible and no hand in this range can make a straight, same pot, same bet, same price. The only thing that changed is who you have decided is betting. Against a range built from big pairs and big aces, second pair is behind nearly all of it, and the river cards that promote you to trips or two pair arrive too seldom to bridge the gap the price demands, so folding follows. This is the most useful thing to take from the pair of scenarios: an equity figure is not a property of your cards, it is a statement about your cards against an assumed range, and moving the assumption can reverse the decision without a single card changing. It also shows why 'am I getting the right price?' cannot be answered on its own. The price is fixed by the bet and the pot and is not open to argument; the equity is an estimate that inherits every weakness of your read. When those two are close, spend your thinking on the read rather than on recomputing the price.",
     "expectedInsight": [{ "kind": "breakEvenExceedsEquity" }, { "kind": "callEvSign", "expect": "negative" }],
@@ -251,7 +251,7 @@
     "buttonSeat": 5,
     "seats": [
       { "seat": 0, "label": "SB", "stack": 300, "isHero": true, "holeCards": "6d5d" },
-      { "seat": 5, "label": "BTN", "stack": 300, "profile": "unknown", "holeCards": "KdQd" }
+      { "seat": 5, "label": "BTN", "stack": 245, "profile": "unknown", "holeCards": "KdQd" }
     ],
     "board": "Ad 9d 4c 2s",
     "street": "turn",
@@ -263,7 +263,7 @@
     "assumptions": [
       "This is a face-up teaching spot: the opponent's two diamonds are known. Away from a lesson you would have to estimate how often a range like theirs holds two of your suit.",
       "The price comparison assumes the hand reaches showdown with no further betting after the river card. In practice the cards that complete hero's flush are also the cards hero pays off with, which makes calling worse than the immediate figure suggests.",
-      "Stacks shown are the units each player has behind at the start of this street.",
+      "Stacks shown are the units each player has left behind right now, after anything already committed on this street.",
       "Only one card is left to come, so every out is a single-card out."
     ],
     "reasoning": "Read the board before reading your hand: ace high, no pair, two diamonds, and with the four and the deuce out there your six-five also has a gap to fill, so it looks like a hand with two ways to win. The opponent's cards are face up here, and they rewrite the picture: they hold two higher diamonds, so every diamond that completes your flush completes a bigger one for them. Those cards are not outs — they are the most expensive cards in the deck for you, because they are precisely the ones that will make you happy to put units in. What is actually left is the cards that pair you and the cards that fill the gap, and here is the part worth remembering: the number of cards that genuinely rescue you is the same size as the flush draw you thought you had, and not one of them is a card you were counting. At this price you need a larger share than that count provides, so folding follows. The general lesson is that an out is only an out relative to the hand you are up against, and the outs that are easiest to count are the ones most likely to be shared.",
@@ -299,7 +299,7 @@
     "buttonSeat": 5,
     "seats": [
       { "seat": 3, "label": "HJ", "stack": 320, "isHero": true, "holeCards": "8s8d" },
-      { "seat": 5, "label": "BTN", "stack": 150, "profile": "loose-aggressive" }
+      { "seat": 5, "label": "BTN", "stack": 0, "profile": "loose-aggressive" }
     ],
     "board": "8h 7c 6h",
     "street": "flop",
@@ -315,7 +315,7 @@
     "assumptions": [
       "The button jams the range stated. It contains made straights as well as draws — if it were mostly straights the same call would be far closer.",
       "Calling puts the opponent all in, so both remaining cards are dealt and no more units can go in.",
-      "Stacks shown are the units each player has behind at the start of this street; the button has a short stack, which is why jamming is a normal choice for them.",
+      "Stacks shown are the units each player has left behind right now, after anything already committed on this street; the button has a short stack, which is why jamming is a normal choice for them.",
       "The units in play are free practice units with no value, so the only thing at stake in a lost pot is what it teaches you."
     ],
     "reasoning": "Read the board out loud: eight high, no pair, three cards in sequence and two hearts — one of the most connected flops there is. Your pair of eights has made three of a kind, and against the jamming range assumed here you are a clear favourite, so the price is met with a lot of room and calling follows. The interesting part is what 'favourite' does and does not mean. This texture already allows a made straight, and several hands that do not have one yet will finish with a straight or a flush, so a comfortable favourite here still loses the pot often enough that you will notice it. That is variance doing exactly what it is supposed to do: nothing about a run of lost pots means you played them wrong, and nothing about a lost pot makes the next one more likely to be yours. The practical care is in the planning rather than in this decision: on a board like this you can name in advance the cards that beat you, and if the units were not all in now you would want to think about how much you are willing to put in on later streets. Being a big favourite is a reason to get units in, not a reason to stop reading the board.",
@@ -339,7 +339,7 @@
     "buttonSeat": 5,
     "seats": [
       { "seat": 1, "label": "BB", "stack": 400, "isHero": true, "holeCards": "QcJd" },
-      { "seat": 5, "label": "BTN", "stack": 400, "profile": "unknown", "holeCards": "QhTs" }
+      { "seat": 5, "label": "BTN", "stack": 325, "profile": "unknown", "holeCards": "QhTs" }
     ],
     "board": "Qd 9s 5c 3h",
     "street": "turn",
@@ -352,7 +352,7 @@
       "This is a face-up teaching spot: the opponent's hand is known exactly, which is the least realistic assumption in this batch and the reason the number looks so comfortable.",
       "The price comparison assumes the hand reaches showdown with no further betting after the river card.",
       "All four suits are on the board, so no flush is possible for anyone, and neither of these two known hands can make a straight; the river only matters if it pairs a card in play.",
-      "Stacks shown are the units each player has behind at the start of this street."
+      "Stacks shown are the units each player has left behind right now, after anything already committed on this street."
     ],
     "reasoning": "The board is queen high, unpaired, and shows all four suits, so no flush is possible for anybody, and neither of these two hands can make a straight — the river only matters if it pairs a card in play. Both players hold a queen, so both have top pair, and the whole matchup comes down to the second card: yours is bigger. Against this one hand you are a large favourite, because the opponent needs their kicker rank to arrive on a single card, and calling is straightforward at this price. The number is not the lesson, though — where the number came from is. It answers a very narrow question: how do I do against exactly this hand? That question is answerable with certainty and almost never available at the table, because you can seldom see an opponent's cards. The companion scenario puts the identical hand at the identical price against the whole range that a hand like this belongs to, and the answer is much less comfortable. So whenever you see a large equity figure, check which question it answered: one hand you have convinced yourself of, or everything the opponent could be holding.",
     "expectedInsight": [{ "kind": "equityExceedsBreakEven" }, { "kind": "callEvSign", "expect": "positive" }],
@@ -374,7 +374,7 @@
     "buttonSeat": 5,
     "seats": [
       { "seat": 1, "label": "BB", "stack": 400, "isHero": true, "holeCards": "QcJd" },
-      { "seat": 5, "label": "BTN", "stack": 400, "profile": "tight-aggressive" }
+      { "seat": 5, "label": "BTN", "stack": 325, "profile": "tight-aggressive" }
     ],
     "board": "Qd 9s 5c 3h",
     "street": "turn",
@@ -414,7 +414,7 @@
     "buttonSeat": 5,
     "seats": [
       { "seat": 4, "label": "CO", "stack": 900, "isHero": true, "holeCards": "Ad5d" },
-      { "seat": 5, "label": "BTN", "stack": 900, "profile": "tight-aggressive" }
+      { "seat": 5, "label": "BTN", "stack": 780, "profile": "tight-aggressive" }
     ],
     "board": "Kd Jd 8s 2c",
     "street": "turn",
@@ -430,7 +430,7 @@
     "assumptions": [
       "The button bets the turn with the value-heavy range stated, and has enough behind to pay a river bet.",
       "The immediate price comparison the app shows assumes no further betting. Implied odds are exactly the relaxation of that assumption, so the two figures are answering different questions.",
-      "Stacks shown are the units each player has behind at the start of this street: far more is behind than is currently in the middle, which is what makes the later units worth counting.",
+      "Stacks shown are the units each player has left behind right now, after anything already committed on this street: far more is behind than is currently in the middle, which is what makes the later units worth counting.",
       "Implied odds only count if the extra units actually arrive — the opponent must still be in the hand, still have units behind, and be willing to pay.",
       "Hero's draw makes the best possible flush on this board, so the units won when it arrives are not at risk from a bigger flush."
     ],
@@ -463,7 +463,7 @@
     "buttonSeat": 5,
     "seats": [
       { "seat": 1, "label": "BB", "stack": 350, "isHero": true, "holeCards": "Ah7c" },
-      { "seat": 5, "label": "BTN", "stack": 350, "profile": "tight-aggressive" }
+      { "seat": 5, "label": "BTN", "stack": 325, "profile": "tight-aggressive" }
     ],
     "board": "Ac 9h 6d 2s",
     "street": "turn",
@@ -480,7 +480,7 @@
       "The button bets the turn with the range stated, and will bet the river with the aces that have hero outkicked.",
       "The immediate price comparison assumes no further betting. This scenario is about what happens when that assumption is false, so read the computed figure as the answer to a one-street question only.",
       "All four suits are on the board, so no flush is possible for anyone; one suited hand in this range can complete a straight with the right river card, and otherwise the pot is decided by pairs and kickers.",
-      "Stacks shown are the units each player has behind at the start of this street: enough behind for a river bet that dwarfs this one.",
+      "Stacks shown are the units each player has left behind right now, after anything already committed on this street: enough behind for a river bet that dwarfs this one.",
       "Hero's kicker is below the nine on the board, so almost every other ace in this range outkicks it; only the weakest ace listed does not."
     ],
     "reasoning": "Read the board: ace high, no pair, all four suits present, so no flush is coming and, apart from one suited hand in this range that can fill a straight, the pot will be decided by pairs and kickers. You have top pair and the bet is tiny, so against the range assumed here the immediate arithmetic clears the bar easily — as a single-street question this is a call, and the app will show you that. Now look at what that figure quietly assumed: that the hand ends after the river with no more units going in. In this spot that is exactly what will not happen. Your kicker is the problem, because nearly every hand in this range that keeps betting the river either has you outkicked or has made three of a kind, while the hands you are beating are the ones that will give up and pay you nothing. That asymmetry is reverse implied odds: ahead you win a small pot, behind you lose a large one, and the units you will lose later are part of the price of calling now. The decision that follows is a call with a plan attached — you are calling one small bet and you are not calling a large river bet with this hand, and you are not raising it for value either. Against an opponent whose betting range is mostly better aces, folding now is better than calling twice, and if this same ace had a kicker that could win a big pot none of this would apply.",

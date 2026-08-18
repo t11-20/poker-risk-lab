@@ -6,7 +6,17 @@
  * prevent the others from reporting, and so that a gate can never accidentally
  * mutate shared state to make a later gate pass.
  *
- * Exit code 0 only if every gate exits 0. This is the release gate.
+ * Exit code 0 only if every gate ran AND every gate exited 0. This is the
+ * release gate.
+ *
+ * ## `--offline` does not exit 0
+ *
+ * It used to. The summary said "2 network gate(s) skipped — NOT a valid release
+ * audit" and then exited 0, so the honest sentence was addressed to a human while
+ * the dishonest number was addressed to every script. `quarantine.mjs` consumed
+ * that exit code and reported success after checking a brand-new lockfile with
+ * six of eight gates. An audit that did not run its gates is not a passed audit;
+ * the exit code now says the same thing the prose does.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -22,6 +32,7 @@ const GATES = [
   { file: 'deny-list.mjs', label: 'denied packages', network: false },
   { file: 'dep-shapes.mjs', label: 'dependency shapes', network: false },
   { file: 'ioc-scan.mjs', label: 'Shai-Hulud IOC sweep', network: false },
+  { file: 'ci-pinning.mjs', label: 'CI + container pinning', network: false },
   { file: 'provenance.mjs', label: 'integrity + release age', network: true },
   { file: 'osv-scan.mjs', label: 'OSV vulnerabilities', network: true },
   { file: 'sbom.mjs', label: 'SBOM generation', network: false },
@@ -66,8 +77,11 @@ if (failed.length > 0) {
 }
 
 if (skipped.length > 0) {
-  console.log(dim(`\n${skipped.length} network gate(s) skipped — NOT a valid release audit.\n`));
-  process.exit(0);
+  console.log(red(bold(`\n${skipped.length} network gate(s) skipped — NOT a valid release audit.`)));
+  console.log(dim('  Exiting non-zero on purpose: an audit that did not run its gates has not passed.'));
+  console.log(dim('  Run `pnpm run security:audit` with network access before releasing.\n'));
+  // A distinct code so a caller can tell "incomplete" from "something failed".
+  process.exit(2);
 }
 
 console.log(green(bold('\nAll supply-chain gates passed.\n')));

@@ -19,8 +19,10 @@
  * ## 2. Reduced motion, or a change under 1%, jumps straight there
  *
  * Both decisions live in `shouldCountUp` (`reduced-motion.ts`) so they are testable and
- * stated once. A jump is not a degraded experience here; for a figure that moved 0.3% it is
- * the *better* one.
+ * stated once, and the loop that acts on them lives in `driveCountUp` (`count-up-driver.ts`)
+ * for the same reason — `test/motion.test.ts` runs the real driver with a fake frame clock and
+ * asserts that a reader who asked for reduced motion causes **zero** animation frames. A jump is
+ * not a degraded experience here; for a figure that moved 0.3% it is the *better* one.
  *
  * ## 3. `requestAnimationFrame`, cancelled on unmount and on a value change mid-flight
  *
@@ -44,8 +46,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { easeStandard, interpolate, progress } from './easing.ts';
-import { shouldCountUp } from './reduced-motion.ts';
+import { driveCountUp, type FrameClock } from './count-up-driver.ts';
 import { COUNT_DURATION_MS, MIN_COUNT_UP_CHANGE } from './tokens.ts';
 import { usePrefersReducedMotion } from './usePrefersReducedMotion.ts';
 
@@ -55,6 +56,21 @@ export interface CountUpOptions {
   /** Relative change floor as a fraction. Defaults to 1%. */
   readonly minChange?: number;
 }
+
+/**
+ * The browser's frame clock, wrapped.
+ *
+ * The wrapping is not ceremony: `requestAnimationFrame` detached from `window` throws "Illegal
+ * invocation" in several engines. Module-level rather than rebuilt per render, so the effect's
+ * dependency list stays honest. Nothing calls it at import time, so a server import is safe even
+ * though `requestAnimationFrame` does not exist there.
+ */
+const BROWSER_FRAMES: FrameClock = {
+  requestAnimationFrame: (callback) => requestAnimationFrame(callback),
+  cancelAnimationFrame: (handle) => {
+    cancelAnimationFrame(handle);
+  },
+};
 
 /**
  * @param value the true figure; always render this one for assistive tech
@@ -70,44 +86,25 @@ export function useCountUp(value: number, options: CountUpOptions = {}): number 
   // animation actually got to without listing `shown` as a dependency (which would restart
   // the animation on every frame it produced).
   const shownRef = useRef(value);
-  const frameRef = useRef<number | null>(null);
 
   useEffect(() => {
-    const cancel = (): void => {
-      if (frameRef.current === null) return;
-      cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    };
-
-    const from = shownRef.current;
-    const to = value;
-    cancel();
-
-    if (!shouldCountUp({ from, to, reducedMotion, durationMs, minChange })) {
-      shownRef.current = to;
-      setShown(to);
-      return;
-    }
-
-    // The first frame's own timestamp is the start, rather than a `performance.now()` read
-    // taken here: between this line and the first callback the browser may have spent a
-    // whole frame elsewhere, and starting the clock early would skip that much of the curve.
-    let startedAt: number | null = null;
-    const step = (now: number): void => {
-      if (startedAt === null) startedAt = now;
-      const elapsed = progress(now - startedAt, durationMs);
-      const next = interpolate(from, to, easeStandard(elapsed));
-      shownRef.current = next;
-      setShown(next);
-      if (elapsed < 1) {
-        frameRef.current = requestAnimationFrame(step);
-        return;
-      }
-      frameRef.current = null;
-    };
-    frameRef.current = requestAnimationFrame(step);
-
-    return cancel;
+    // Everything that decides anything lives in `driveCountUp` (`count-up-driver.ts`), which is
+    // testable without a renderer — including the rule that matters most here, that reduced
+    // motion requests no frame at all. What is left is the state plumbing: where the animation
+    // starts from, and how the figure it produces reaches React.
+    //
+    // The returned canceller IS the cleanup, so React's own ordering does the work the old
+    // hand-rolled `frameRef` did: a value change mid-flight cancels the previous run before the
+    // next one starts, and a table pushing three updates a second cannot leave three loops
+    // fighting over one number.
+    return driveCountUp(
+      { from: shownRef.current, to: value, reducedMotion, durationMs, minChange },
+      BROWSER_FRAMES,
+      (next) => {
+        shownRef.current = next;
+        setShown(next);
+      },
+    );
   }, [value, durationMs, minChange, reducedMotion]);
 
   return shown;

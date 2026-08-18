@@ -41,6 +41,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 import { MetricsBand } from '@/components/MetricsBand.tsx';
 import { ProcessSpine } from '@/components/ProcessSpine.tsx';
+import { RECORD_PATH } from '@/lib/record-data.ts';
 import '@/styles/home.css';
 
 export const metadata: Metadata = {
@@ -48,7 +49,7 @@ export const metadata: Metadata = {
   title: { absolute: 'Poker Risk Lab — a decision laboratory for poker' },
   description:
     'Play no-limit hold’em with the probability, expected value and variance behind every ' +
-    'decision computed in front of you. Free practice units, no real money, no odds table.',
+    'decision computed in front of you. Free practice units, no real money, nothing looked up.',
 };
 
 interface CapabilityModule {
@@ -137,9 +138,9 @@ const PROOF: readonly ProofEntry[] = [
     check: 'pnpm --filter @prl/content test',
   },
   {
-    claim: 'No odds table, anywhere',
+    claim: 'Nothing is looked up in an odds table',
     detail:
-      'A hard-coded odds table is a lie waiting to happen: if it was wrong when it was written, or right for a situation slightly different from yours, nothing in the product will ever say so. Every figure here is computed from the actual deck at the moment you ask, and arrives with its method — exact enumeration, or Monte Carlo with an interval.',
+      'A hard-coded odds table is a lie waiting to happen: if it was wrong when it was written, or right for a situation slightly different from yours, nothing in the product will ever say so. No figure here is produced by reading one — every one is computed from the actual deck at the moment you ask, and arrives with its method: exact enumeration, or Monte Carlo with an interval. The single exception is a bundled worked example shown when the calculator cannot be reached, and the page you are on says so at the top when that happens.',
     check: 'docs/THREAT-MODEL.md',
   },
 ];
@@ -178,9 +179,9 @@ export default function HomePage(): ReactElement {
           <p className="prl-home__guardrail-label prl-label prl-label--strong">Not a gambling product</p>
           <p className="prl-home__guardrail-text">
             There is no real money in this app. Chips are <strong>units</strong>: free practice counters with
-            no monetary value, which cannot be bought, sold, transferred or cashed out, and which you can
-            reset to the starting amount at any time. Nothing here is a recommendation, and no figure is
-            presented as the one correct play.
+            no monetary value, which cannot be bought, sold, transferred or cashed out, and which you can{' '}
+            <Link href={RECORD_PATH}>reset to the starting amount at any time</Link>. Nothing here is a
+            recommendation, and no figure is presented as the one correct play.
           </p>
         </div>
       </section>

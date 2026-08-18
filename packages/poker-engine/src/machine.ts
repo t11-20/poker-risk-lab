@@ -27,7 +27,13 @@ import { assertDistinctCards, type Card, DECK_SIZE } from './cards.ts';
 import type { DeckCommitment, DeckSecret } from './commitment.ts';
 import { revealPositions } from './commitment.ts';
 import type { HandScore } from './evaluate.ts';
-import { assignBlinds, dealtSeats, firstToActPostflop, firstToActPreflop, orderFrom } from './positions.ts';
+import {
+  assignBlinds,
+  dealtSeats,
+  firstToActPostflop,
+  firstToActPreflopFor,
+  orderFrom,
+} from './positions.ts';
 import { awardPots, buildPotLayers, computeShowdowns } from './pots.ts';
 import { commitToDeck, commitToKnownDeck, type RandomSource } from './rng.ts';
 import type {
@@ -66,6 +72,22 @@ export interface StartHandOptions {
   readonly buttonSeat: SeatIndex;
   readonly seats: readonly SeatSetup[];
   readonly random: RandomSource;
+  /**
+   * Where the blinds actually fell, for a table running the dead-button rule.
+   *
+   * Omit it and the blinds are derived from the button exactly as they always
+   * were — correct for a single hand, and what every Scenario Lab hand and every
+   * test that deals one hand wants. Supply it and the button becomes a position
+   * rather than a derivation: it may name a seat nobody is playing from (a dead
+   * button), and the small blind may be `null` (a dead small blind). Both are
+   * legitimate outcomes of the rule that keeps the big blind advancing by
+   * exactly one live player per hand — see `advanceBlindRotation` in
+   * positions.ts for why the alternative charges people twice.
+   */
+  readonly blinds?: {
+    readonly smallBlindSeat: SeatIndex | null;
+    readonly bigBlindSeat: SeatIndex;
+  };
   /**
    * Deals a fixed deck instead of shuffling. Scenario Lab only: a teaching hand
    * must deal the same cards to every learner. Such a hand still carries a real
@@ -122,6 +144,56 @@ function validateSeats(options: StartHandOptions): readonly SeatSetup[] {
 }
 
 /**
+ * Where the blinds fall for this deal, checked rather than trusted.
+ *
+ * The caller supplying the blinds is the caller taking responsibility for the
+ * rotation, so every property the rest of the machine relies on is asserted here
+ * — at the boundary, once, with a message that names the problem. Downstream
+ * code then never has to ask whether the big blind is really in the hand.
+ */
+function resolveBlinds(
+  options: StartHandOptions,
+  occupied: readonly SeatIndex[],
+): { readonly smallBlindSeat: SeatIndex | null; readonly bigBlindSeat: SeatIndex } {
+  const { buttonSeat, config } = options;
+  if (options.blinds === undefined) {
+    // No rotation supplied: the button must be a real seat, because the blinds
+    // are about to be derived from it.
+    if (!occupied.includes(buttonSeat)) {
+      throw new HandStateError(`button seat ${buttonSeat} has no player with chips`);
+    }
+    const { smallBlindSeat, bigBlindSeat } = assignBlinds(buttonSeat, config.maxSeats, occupied);
+    return { smallBlindSeat, bigBlindSeat };
+  }
+
+  const { smallBlindSeat, bigBlindSeat } = options.blinds;
+  if (!occupied.includes(bigBlindSeat)) {
+    throw new HandStateError(`big blind seat ${bigBlindSeat} has no player with chips`);
+  }
+  if (smallBlindSeat !== null && !occupied.includes(smallBlindSeat)) {
+    // A small blind seat that is not in the hand is a DEAD small blind, and a
+    // dead small blind is spelled `null`. Passing the seat anyway would post a
+    // blind for somebody who is not playing, so it is a caller bug, not a rule.
+    throw new HandStateError(`small blind seat ${smallBlindSeat} has no player with chips; pass null`);
+  }
+  if (smallBlindSeat === bigBlindSeat) {
+    throw new HandStateError(`seat ${bigBlindSeat} cannot post both blinds`);
+  }
+  if (occupied.length === 2) {
+    // Heads-up the button IS the small blind, and both are the same live seat.
+    // Everything downstream — who acts first preflop, who acts last afterwards —
+    // depends on it, so it is refused rather than silently repaired.
+    if (smallBlindSeat !== buttonSeat) {
+      throw new HandStateError(
+        `heads-up the button posts the small blind: button ${buttonSeat}, ` +
+          `small blind ${String(smallBlindSeat)}`,
+      );
+    }
+  }
+  return { smallBlindSeat, bigBlindSeat };
+}
+
+/**
  * Deals a hand: shuffle, commit, post antes and blinds, deal hole cards, then set
  * the first player to act.
  */
@@ -131,9 +203,7 @@ export function startHand(options: StartHandOptions): StartedHand {
   const { config, buttonSeat } = options;
 
   const occupied = playing.map((seat) => seat.seat).sort((a, b) => a - b);
-  if (!occupied.includes(buttonSeat)) {
-    throw new HandStateError(`button seat ${buttonSeat} has no player with chips`);
-  }
+  const blinds = resolveBlinds(options, occupied);
 
   // The context binds the commitment to one specific hand, so a commitment can
   // never be replayed as the commitment for a different hand.
@@ -207,8 +277,12 @@ export function startHand(options: StartHandOptions): StartedHand {
   if (config.ante > 0) {
     for (const target of orderFrom(buttonSeat, config.maxSeats, occupied)) post(target, config.ante, 'ante');
   }
-  const { smallBlindSeat, bigBlindSeat } = assignBlinds(buttonSeat, config.maxSeats, occupied);
-  post(smallBlindSeat, config.smallBlind, 'smallBlind');
+  const { smallBlindSeat, bigBlindSeat } = blinds;
+  // A dead small blind posts nothing at all. It is not "posted by the house" and
+  // it is not moved onto the next player: the player it would move onto paid it
+  // last hand, and charging them again is the defect the dead-button rule exists
+  // to prevent. The hand is simply played for one big blind.
+  if (smallBlindSeat !== null) post(smallBlindSeat, config.smallBlind, 'smallBlind');
   post(bigBlindSeat, config.bigBlind, 'bigBlind');
   events.push({ type: 'forcedBetsPosted', forcedBets });
 
@@ -272,6 +346,8 @@ export function startHand(options: StartHandOptions): StartedHand {
     handNumber: options.handNumber,
     config,
     buttonSeat,
+    smallBlindSeat,
+    bigBlindSeat,
     seats,
     board: [],
     street: 'preflop',
@@ -313,9 +389,13 @@ function firstActor(state: HandState, street: BettingStreet): SeatIndex | null {
   // a fold, and a bet nobody could call — on a hand that is already all-in.
   if (isBettingClosedForHand(state)) return null;
   const occupied = dealtSeats(state.seats);
+  // Preflop the opener is read off the big blind the hand actually posted, not
+  // re-derived from the button. With a dead button or a dead small blind
+  // `button + 2` is not the big blind, and re-deriving would open the action on
+  // the wrong seat — under the gun would act out of turn, every hand.
   const start =
     street === 'preflop'
-      ? firstToActPreflop(state.buttonSeat, state.config.maxSeats, occupied)
+      ? firstToActPreflopFor(state.buttonSeat, state.bigBlindSeat, state.config.maxSeats, occupied)
       : firstToActPostflop(state.buttonSeat, state.config.maxSeats, occupied);
   // Walk clockwise from `start` inclusive.
   for (const candidate of [start, ...orderFrom(start, state.config.maxSeats, occupied)]) {

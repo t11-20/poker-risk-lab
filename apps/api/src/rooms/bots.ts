@@ -87,7 +87,13 @@ import type {
   SeatState,
 } from '@prl/poker-engine';
 import { commitToKnownDeck, createSecureRandom, orderedDeck, redactFor } from '@prl/poker-engine';
-import { buildCoachReport, type ParsedRange, parseRange, topPercentRange } from '@prl/poker-math';
+import {
+  buildCoachReport,
+  deriveLegalActions,
+  type ParsedRange,
+  parseRange,
+  topPercentRange,
+} from '@prl/poker-math';
 import { AppError } from '../errors.ts';
 import type { LiveTable, TableNotice } from './table.ts';
 import type { Clock, ScheduledTask } from './timers.ts';
@@ -688,6 +694,12 @@ export function buildHypotheticalState(spot: HypotheticalSpot): HandState {
       actionTimeoutSeconds: 30,
     },
     buttonSeat: HERO_SEAT,
+    // Heads-up the button posts the small blind, so hero holds both — which is what the response's
+    // `takeaway` already tells the caller it assumed. Recorded rather than derived because a hand
+    // dealt under the dead-button rule can have a dead button or a dead small blind, and a
+    // reconstruction has no way to know which; this one is neither.
+    smallBlindSeat: HERO_SEAT,
+    bigBlindSeat: OPPONENT_SEAT,
     seats,
     board: [...spot.board],
     street: spot.street,
@@ -842,6 +854,17 @@ function coachReportFor(request: CompareRequest): CoachReport {
     heroStack: spot.heroStack,
     opponentStacks: [spot.opponentStack],
     bigBlind: spot.bigBlind,
+    // A comparison spot has no `HandState`, so there is no `legalActions(state, seat)` to
+    // ask. Derive the set instead of omitting it: an omitted set used to mean "everything
+    // is permitted", which is how the Coach came to price a raise against an opponent with
+    // nothing behind. Passing it explicitly is also what lets the field stay required, so
+    // a future caller cannot reopen the hole by simply not thinking about it.
+    legalActions: deriveLegalActions({
+      toCall: spot.toCall,
+      heroCommittedThisStreet: 0,
+      heroStack: spot.heroStack,
+      opponentStacks: [spot.opponentStack],
+    }),
   });
 }
 
