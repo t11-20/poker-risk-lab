@@ -20,12 +20,38 @@
  * not about the reader. That is the line: the page will tell you how long the syllabus is, and it
  * will not tell you how you are doing against it.
  *
- * ## A server component
+ * ## A server component, and a shared one — which is why it does not know who you are
  *
  * Everything here is data plus links, so it renders on the server and arrives as HTML. The two
  * client components are `Onboarding` (which needs `localStorage`) and `Metric` (which is a client
  * component in `@prl/ui` because of its count-up), and neither is on the critical path for
  * reading the page.
+ *
+ * `loadLessonList()` forwards no session cookie, so the `completed` flag the API returns is its
+ * answer for an anonymous caller — `false` for all seventeen, for everybody. That is a deliberate
+ * trade rather than an oversight: this is the most cacheable screen in the product, seventeen
+ * summaries identical for every reader, and forwarding a session to personalise one chip per card
+ * would make it a per-reader dynamic render. The trade is only defensible if the screen is honest
+ * about it, and it was not: it printed "N of those are not marked read" on sixteen of seventeen
+ * cards and picked a "start here" from the same non-answer, both stated as facts about the reader.
+ *
+ * So the page now tells `buildCurriculum` that completion is not known (`completionKnown: false`),
+ * which turns those claims into `null` rather than `false`, and says once, in the lead, where
+ * reading actually is recorded. `test/y1-learn-index-honesty.test.ts` couples the two: the moment
+ * `loadLessonList` starts forwarding a session, that test fails and tells whoever did it to flip
+ * this flag.
+ *
+ * ## Nine cards used to warn readers off nine working lessons
+ *
+ * `READABLE_LESSON_IDS` is derived from the bundled fixture, which carries eight of the seventeen
+ * lesson BODIES. It was passed to `buildCurriculum` unconditionally, so with a healthy API — one
+ * serving all seventeen bodies — nine cards told the reader "this lesson's text comes from the
+ * content service, which is not reachable". The content service was reachable; it had just answered
+ * this very request. The index was reporting fixture coverage in the words of service availability,
+ * on more than half the curriculum, on a working deployment.
+ *
+ * It is now passed only when the list itself came from the fixture, which is the only condition
+ * under which it describes anything true.
  */
 
 import { Callout, Chip, formatIndex, Metric, Panel, pluralise } from '@prl/ui';
@@ -80,7 +106,9 @@ function EntryCard({
         <div className="prl-row prl-learn-entry__chips">
           <DifficultyChip difficulty={summary.difficulty} />
           <Chip>{pluralise(summary.estimatedMinutes, 'minute')}</Chip>
-          {summary.completed ? <Chip glyph="✓">read</Chip> : null}
+          {/* `=== true`, not truthiness: `null` means nobody asked, and a "read" tick on a lesson
+              nobody checked would be the same lie in the opposite direction. */}
+          {entry.completed === true ? <Chip glyph="✓">read</Chip> : null}
           {isStart ? <Chip glyph="▸">start here</Chip> : null}
           {summary.quizId === undefined ? null : <Chip glyph="?">has a quiz</Chip>}
         </div>
@@ -97,19 +125,22 @@ function EntryCard({
                 </Link>
               </span>
             ))}
-            {entry.unlocked ? null : (
+            {/* Only when the index actually knows. `unlocked` is `null` on this screen as it stands,
+                and printing this note for `null` is what warned sixteen of seventeen cards' readers
+                about prerequisites nobody had checked. */}
+            {entry.unlocked === false ? (
               <span className="prl-learn-entry__prereq-note">
                 {entry.outstandingPrerequisites.length === 1
                   ? ' — one of those is not marked read. Nothing stops you reading this one now.'
                   : ` — ${entry.outstandingPrerequisites.length} of those are not marked read. Nothing stops you reading this one now.`}
               </span>
-            )}
+            ) : null}
           </p>
         )}
         {entry.readable ? null : (
           <p className="prl-learn-entry__pending">
-            This lesson's text comes from the content service, which is not reachable. The page will tell you
-            the same thing rather than showing you an empty lesson.
+            The content service is not reachable, and the bundled copy of the curriculum does not carry this
+            lesson's text — so this link will tell you that rather than showing you an empty lesson.
           </p>
         )}
       </div>
@@ -119,7 +150,16 @@ function EntryCard({
 
 export default async function LearnPage(): Promise<ReactElement> {
   const lessons = await loadLessonList();
-  const curriculum = buildCurriculum(lessons.data.lessons, { readableIds: READABLE_LESSON_IDS });
+  const curriculum = buildCurriculum(lessons.data.lessons, {
+    // Fixture coverage, and only meaningful when the list itself is the fixture. Passed
+    // unconditionally, it warned readers off the nine lessons whose bodies the bundle lacks — while
+    // the API was serving all seventeen.
+    ...(lessons.source === 'fixture' ? { readableIds: READABLE_LESSON_IDS } : {}),
+    // `loadLessonList()` forwards no session, so the `completed` flags below are the API's answer
+    // for an anonymous caller rather than this reader's record. Flip this the same day that
+    // changes; `test/y1-learn-index-honesty.test.ts` fails until somebody does.
+    completionKnown: false,
+  });
   const start = curriculum.startHere;
 
   return (
@@ -142,6 +182,16 @@ export default async function LearnPage(): Promise<ReactElement> {
           rather than read out of a table that could have been wrong when it was written. If the calculator
           cannot be reached, the lesson says so where the figure would have been.
         </p>
+        {curriculum.completionKnown ? null : (
+          // Said once, in the lead, rather than hedged on seventeen cards. The index is the same
+          // page for every reader — that is what makes it fast — so it has no way to know what you
+          // have read, and it now says so instead of guessing `false` and printing the guess.
+          <p className="prl-learn-page__lead">
+            This index is the same for every reader, so it does not know which lessons you have already
+            finished — nothing below is a mark on your record. What you have read is recorded when you press
+            the control at the end of a lesson, and it is counted on <Link href="/record">your record</Link>.
+          </p>
+        )}
         <div className="prl-metric-row prl-learn-page__figures">
           <Metric label="Lessons" value={curriculum.lessonCount} format="number" size="md" />
           <Metric label="Topics" value={curriculum.topicCount} format="number" size="md" />
@@ -178,16 +228,21 @@ export default async function LearnPage(): Promise<ReactElement> {
       ) : (
         <Panel
           className="prl-learn-start"
-          eyebrow="Start here"
+          eyebrow={curriculum.completionKnown ? 'Start here' : 'Where the syllabus starts'}
           title={start.summary.title}
           index={start.position}
           actions={<DifficultyChip difficulty={start.summary.difficulty} />}
         >
           <p className="prl-learn-start__summary">{start.summary.summary}</p>
           <p className="prl-note">
-            {start.unlocked
+            {/* Three states, because `unlocked` has three. The third used to be rendered as the
+                second — "the earliest lesson you have not marked read" — about a reader this page
+                had never asked after. */}
+            {start.unlocked === true
               ? 'Everything this lesson assumes is already marked read.'
-              : 'This is the earliest lesson in the syllabus you have not marked read. Its prerequisites are listed on its card below.'}
+              : start.unlocked === false
+                ? 'This is the earliest lesson in the syllabus you have not marked read. Its prerequisites are listed on its card below.'
+                : 'This is the first lesson in the syllabus, not a suggestion based on what you have read — this page has no way to know that. It assumes nothing, so it is the safe place to start if you are new.'}
           </p>
           <Link className="prl-btn prl-btn--primary prl-btn--lg" href={lessonHref(start.summary.id)}>
             {`Read lesson ${formatIndex(start.position)}`}

@@ -863,9 +863,16 @@ describe('a whole hand over a real socket', () => {
     const view = complete['view'] as {
       street: string;
       handId: string;
-      seats: readonly { seat: number; stack: number; holeCards: readonly number[] | null }[];
+      config: { smallBlind: number; bigBlind: number };
+      seats: readonly {
+        seat: number;
+        stack: number;
+        committedTotal: number;
+        holeCards: readonly number[] | null;
+      }[];
       result: {
         netBySeat: Readonly<Record<string, number>>;
+        pots: readonly { amount: number }[];
         awards: readonly { seat: number; amount: number }[];
         endedByFold: boolean;
         showdowns: readonly { seat: number }[];
@@ -884,12 +891,43 @@ describe('a whole hand over a real socket', () => {
       result.endedByFold || result.showdowns.length >= 2,
       'a hand that did not end by a fold must have shown at least two hands down',
     );
-    // Somebody's stack moved. A "completed" hand in which no chips changed hands would mean the
-    // blinds were never posted, and every other assertion here would still pass.
-    const stacks = view.seats.map((seat) => seat.stack);
+    // Chips really moved: the blinds were posted, every chip in every pot was paid out, and each
+    // seat closed on exactly the stack its net says it should have. A "completed" hand in which
+    // nothing actually happened fails all three, and every other assertion here would still pass.
+    //
+    // ## Why this is no longer "somebody's stack changed"
+    //
+    // It used to be `stacks.some((stack) => stack !== 1_000)`, and that is NOT a property of a
+    // settled hand — it is a property of a settled hand *somebody won*. A CHOPPED pot returns
+    // every seat exactly what it put in, so both seats close on the 1,000 they started with while
+    // the hand was completely normal. The deal here is a real CSPRNG deal, so that outcome arrived
+    // on its own schedule: it was measured on 2 of 40 runs of this file in isolation, and on 15 of
+    // 400 hands of this same line-up driven through the table directly. The captured terminal view
+    // of a failing run is unambiguous — two seats dealt in, `smallBlind 5` and `bigBlind 10` in
+    // `forcedBets`, eight logged actions, a 50-chip pot, and a board of 5d 5s 4s 4h Ad that played
+    // for both 6sTc and 3hTs, so both `showdowns` carry the same score and the same `bestFive` and
+    // `awards` is 25 each with `wasSplit: true`. Nothing was wrong except the expectation.
+    //
+    // A release gate that fails nondeterministically cannot tell a regression from noise, so the
+    // fix is not to retry or to relax: it is to assert the thing the comment always meant. These
+    // three are strictly stronger than the check they replace. A hand whose blinds were never
+    // posted commits nothing and fails the first; a pot that is formed and then not paid out fails
+    // the second (the old check passed happily as long as *some* stack differed); and a settlement
+    // that credits the wrong seat, or credits nobody, fails the third — which the old check could
+    // not see at all, and which was verified by mutation: withholding one seat's award in the
+    // engine's `settle` left the old predicate perfectly happy and fails this one. None of the
+    // three can be satisfied by a hand that never started.
+    const committed = view.seats.reduce((total, seat) => total + seat.committedTotal, 0);
     assert.ok(
-      stacks.some((stack) => stack !== 1_000),
-      `no stack changed across the hand: ${JSON.stringify(stacks)}`,
+      committed >= view.config.smallBlind + view.config.bigBlind,
+      `the blinds were never posted: the seats committed ${committed} in total`,
+    );
+    const potted = result.pots.reduce((total, pot) => total + pot.amount, 0);
+    assert.equal(awarded, potted, 'every chip in every pot is awarded to somebody');
+    assert.deepEqual(
+      view.seats.map((seat) => seat.stack),
+      view.seats.map((seat) => 1_000 + (result.netBySeat[seat.seat] ?? 0)),
+      'every seat closes on the stack it started with plus its net for the hand',
     );
     // The action log has real actions in it, so "complete" did not mean "never started".
     assert.ok(client.actionsAcked.length >= 1, 'the player acted at least once and was acked');

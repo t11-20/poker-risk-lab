@@ -171,6 +171,7 @@ import {
   seedBlindRotation,
   timeoutAction,
 } from '@prl/poker-engine';
+import { DEFAULT_LEARNER_TURN_SECONDS } from '../config.ts';
 import { AppError } from '../errors.ts';
 import { type Clock, type TurnExpiry, TurnTimer } from './timers.ts';
 
@@ -327,6 +328,16 @@ export interface LiveTableOptions {
    * so that it does not have to. See `RoomRegistry.open`, which reconstructs this.
    */
   readonly initialBlinds?: BlindPositions;
+  /**
+   * Floor on a lone person's turn clock, in seconds. Defaults to `DEFAULT_LEARNER_TURN_SECONDS`.
+   *
+   * Optional because it is a policy about learners rather than a property of the room, and
+   * because every existing caller wants the default. Supply it from `AppConfig.learnerTurnSeconds`
+   * to make `LEARNER_TURN_SECONDS` effective for a deployment; supply it directly to drive the
+   * clock in a test. It applies to exactly one situation — a person at a table where everybody
+   * else is a bot — which `turnSecondsFor` sets out at length.
+   */
+  readonly learnerTurnSeconds?: number;
   /** Non-fatal problems: a subscriber that threw, a rejected timeout. Never given a card. */
   readonly onProblem?: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
 }
@@ -396,6 +407,8 @@ export class LiveTable {
   private readonly random: RandomSource;
   private readonly nextHandId: () => string;
   private readonly onProblem: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+  /** The floor a person's turn clock is never allowed below. See `turnSecondsFor`. */
+  private readonly learnerTurnSeconds: number;
   private readonly timer: TurnTimer;
   private readonly listeners = new Set<TableListener>();
 
@@ -430,6 +443,7 @@ export class LiveTable {
       this.buttonSeat = options.initialBlinds.buttonSeat;
     }
     this.onProblem = options.onProblem ?? ((): void => undefined);
+    this.learnerTurnSeconds = options.learnerTurnSeconds ?? DEFAULT_LEARNER_TURN_SECONDS;
     this.timer = new TurnTimer({
       clock: options.clock,
       onExpiry: (expiry) => {
@@ -978,6 +992,69 @@ export class LiveTable {
     return true;
   }
 
+  /**
+   * How long the seat currently to act gets, in seconds.
+   *
+   * ## The problem this solves
+   *
+   * At `action_timeout_seconds = 60` the product's two headline features were in direct tension:
+   * you could read the analysis or you could act, not both. The Coach panel a learner is *meant
+   * to read at that moment* runs to thousands of characters plus a five-row EV table and a
+   * card-by-card table with one row per unseen card — several minutes of reading — and a
+   * browser-level verification pass lost two hands to `seat 0 | fold | was_automatic = t` while
+   * the learner was reading it. Nothing was hidden (the countdown is on screen, and folding
+   * rather than calling on expiry is the correct rule) and the clock was still shorter than the
+   * thing it was asking the learner to read.
+   *
+   * ## The rule
+   *
+   * A seat gets the longer of the room's clock and `learnerTurnSeconds` when, and only when, all
+   * three of these hold:
+   *
+   *   1. **the seat is a person.** A bot has nothing to read and acts inside its thinking delay;
+   *      for a bot the timer is only a safety net against a policy that threw, and four minutes
+   *      is four minutes of a frozen table before that net catches anything;
+   *   2. **nobody else at the table is a person.** This is the clause that keeps the extra time
+   *      free. The audited spot is a play-money educational table against bots with nothing at
+   *      stake, where a longer clock costs exactly nothing because bots do not get bored. Put a
+   *      second human in the room and it stops being free: the room's `action_timeout_seconds`
+   *      is the pace everybody there agreed to, and one player's reading time is now everybody's
+   *      waiting time. That room can still configure up to 300 seconds for itself;
+   *   3. **the room's own clock is shorter.** `Math.max`, so a room that deliberately allows
+   *      longer keeps what it chose. This raises a clock that is too short; it never lowers one.
+   *
+   * The timeout mechanism itself is untouched, deliberately. An abandoned seat still folds — a
+   * clock that never expires lets one absent player stall a table forever, which is a worse
+   * failure than the one being fixed here. `DEFAULT_LEARNER_TURN_SECONDS` in `../config.ts`
+   * carries the number and why it is that number.
+   *
+   * ## The alternative that was rejected
+   *
+   * Leaving the first decision of a hand untimed. The first decision is precisely when a seat is
+   * most likely to have been abandoned — the tab was closed before the hand started — so an
+   * untimed first action is the stall above, on the most common path to it.
+   */
+  private turnSecondsFor(toAct: SeatIndex): number {
+    const configured = this.config.actionTimeoutSeconds;
+    // Resolved by PERSON, not by chair: the hand's roster is pinned at deal time, so the seat
+    // index is looked up in the hand and the id it yields is looked up in the seating. Reading
+    // `this.seats[toAct]` directly would ask who is sitting there *now*, which is a different
+    // question and the class of bug the banner at the top of this file exists to prevent.
+    const dealt = this.hand?.state.seats.find((seat) => seat.seat === toAct);
+    if (dealt === undefined) return configured;
+    const actorId = dealt.playerId;
+    // Not `=== false`: a seat the current seating has lost track of is not evidence of a bot, and
+    // the two failure directions are not symmetric. Too long a clock costs a table some waiting;
+    // too short a clock folds a hand out from under somebody who was reading.
+    if (this.seats.find((seat) => seat.userId === actorId)?.isBot === true) return configured;
+    // Everyone at the table, not only those dealt into this hand: a player waiting for the big
+    // blind is sitting there watching, and is kept waiting by a long clock exactly as a player in
+    // the hand is.
+    const anotherPersonIsWaiting = this.seats.some((seat) => seat.userId !== actorId && !seat.isBot);
+    if (anotherPersonIsWaiting) return configured;
+    return Math.max(configured, this.learnerTurnSeconds);
+  }
+
   private armTimer(): void {
     const live = this.hand;
     if (live === null || live.state.street === 'complete' || live.state.toAct === null) {
@@ -990,7 +1067,7 @@ export class LiveTable {
     this.timer.arm({
       handId: live.state.handId,
       seat: live.state.toAct,
-      deadlineMs: this.clock.now() + this.config.actionTimeoutSeconds * 1_000,
+      deadlineMs: this.clock.now() + this.turnSecondsFor(live.state.toAct) * 1_000,
     });
   }
 

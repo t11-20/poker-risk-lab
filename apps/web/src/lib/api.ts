@@ -74,10 +74,58 @@ export const API_ORIGIN =
   typeof window === 'undefined' ? (process.env['PRL_API_ORIGIN'] ?? 'http://localhost:3001') : '';
 
 /**
- * How long any single call may take. Short, because the only caller that matters is a server
+ * How long an ORDINARY call may take. Short, because the only caller that matters is a server
  * render with a reader waiting on it, and every screen in this app can render from a fixture.
+ *
+ * "Ordinary" means a read the API answers out of the database or the content bundle. It is the
+ * wrong deadline for an endpoint that computes its answer, and `EXPENSIVE_READ_TIMEOUT_MS` below
+ * is why that distinction had to be made explicit rather than left to each call site.
  */
 export const REQUEST_TIMEOUT_MS = 4_000;
+
+/**
+ * How long a call to an endpoint that COMPUTES its answer may take.
+ *
+ * ## The defect this closes
+ *
+ * `GET /api/v1/hands/:handId` does not fetch a hand review; it builds one. Nothing derived is
+ * stored (decision 7 in `db/migrations/0001_initial.sql`), so every read re-runs the Coach over
+ * every hero decision in the hand — a bounded Monte Carlo each, up to `MAX_ANALYSED_DECISIONS`.
+ * The route states in writing how long it may spend on that: `budgetMs:
+ * Math.floor(app.appConfig.requestTimeoutMs / 2)` in `apps/api/src/routes/hands.ts`, which is
+ * **ten seconds** at the shipped `REQUEST_TIMEOUT_MS` of 20 s.
+ *
+ * The deadline above was four seconds — well under half the budget the endpoint declares for
+ * itself, before a byte of the 45 KB payload is serialised. So the client aborted healthy work on
+ * exactly the hands worth reviewing: a four-seat showdown with fifteen actions was measured at
+ * 6.3–7.0 s against the same session where a two-decision hand answered in 1.4 s. The learner did
+ * not see a slow page. They saw a 404, because the abort surfaced as "there is no API" and
+ * `/review/[handId]` fell through to a fixture that carries only the sample hands — which is to
+ * say the deck-commitment proof, this product's headline verifiable claim, was unreachable for
+ * every hand with enough decisions in it to be worth checking.
+ *
+ * ## Why fifteen seconds, and not "however long it takes"
+ *
+ * The value is bounded on both sides by numbers the API already publishes, which is what makes it
+ * a derived figure rather than a guess:
+ *
+ *  - **Above the review's own analysis budget (10 s)**, with room for the query, the JSON and the
+ *    wire. A deadline below it cannot be reached by a healthy server doing its declared maximum of
+ *    work, which is the property that was missing.
+ *  - **Below the API's own `REQUEST_TIMEOUT_MS`** (20 s; the fallback is in `apps/api/src/config.ts`).
+ *    When the server is the one that gives up, it answers with a code and a request id that
+ *    correlates to a log line. Aborting first throws that away and leaves us guessing. Losing the
+ *    race to the server is the better failure.
+ *
+ * It is deliberately NOT the default. A fifteen-second deadline on the session read in the app
+ * shell would hold every page in the product open for fifteen seconds against a hung API, to
+ * settle one number in the header.
+ *
+ * `apps/web/test/y1-review-deadline.test.ts` re-derives both bounds from the API's own source and
+ * fails if this window ever closes again — including if somebody lowers `REQUEST_TIMEOUT_MS`, which
+ * moves the analysis budget with it.
+ */
+export const EXPENSIVE_READ_TIMEOUT_MS = 15_000;
 
 /** Methods that carry the CSRF header. Anything not listed here is treated as a read. */
 const MUTATING_METHODS: readonly string[] = ['POST', 'PUT', 'PATCH', 'DELETE'];
@@ -360,7 +408,10 @@ async function callWithHeaders<T>(
     });
   }
 
-  if (response.status === 204) return { data: undefined as T, headers: response.headers };
+  if (response.status === 204) {
+    notifyMutationAccepted(mutating);
+    return { data: undefined as T, headers: response.headers };
+  }
 
   const text = await response.text();
   let parsed: unknown = null;
@@ -399,6 +450,9 @@ async function callWithHeaders<T>(
       code: 'internal_error',
     });
   }
+  // After the last throw, so nothing that failed is announced as having happened. See
+  // `notifyMutationAccepted` for why the shell needs to hear about this at all.
+  notifyMutationAccepted(mutating);
   return { data: parsed as T, headers: response.headers };
 }
 
@@ -476,6 +530,78 @@ export async function safeFetch<T>(run: () => Promise<T>): Promise<SafeResult<T>
  */
 export function fetchSession(options: ApiCallOptions = {}): Promise<SafeResult<SessionResponse>> {
   return safeFetch<SessionResponse>(() => apiGet<SessionResponse>(API_PATHS.session(), options));
+}
+
+// ---------------------------------------------------------------------------
+// "Something the reader did changed the session"
+// ---------------------------------------------------------------------------
+
+/**
+ * Anyone who wants to know that a mutation went through. Browser only — see
+ * `subscribeToAcceptedMutations` below.
+ *
+ * A module-level set rather than a `CustomEvent` on `window`: the subscriber is a React effect
+ * either way, and a set cannot be listened to by anything outside this bundle, cannot be
+ * dispatched by a page script, and needs no name that a second module could typo.
+ */
+const mutationListeners = new Set<() => void>();
+
+/**
+ * Fires after any mutating request the API accepted.
+ *
+ * ## The defect this closes
+ *
+ * `POST /me/units/reset` succeeded, `/record` said "Done. Your units are back to 2000", and the
+ * header badge two inches above it went on reading `3,308 UNITS` until the reader happened to
+ * reload. One screen, two totals, both presented as fact. The header could not have known: it
+ * reads the session once on mount and nothing tells it that anything moved.
+ *
+ * ## Why the signal carries no figure
+ *
+ * It would be easy to hand the new units along with it — the reset response contains them. That
+ * would be wrong in a way this codebase keeps a rule about: the header would then be displaying a
+ * number derived from a mutation's echo rather than from the endpoint whose job is to say what the
+ * session holds. This signal says only "ask again". The subscriber re-reads
+ * `GET /auth/session` and shows whatever the API says, including "I could not tell you" if that
+ * read fails. One authority for the figure, which is what stops two screens disagreeing in the
+ * first place.
+ *
+ * ## Why every mutation and not just the reset
+ *
+ * Because the reset is not the only thing that moves the number. A hand settles, a guest session
+ * is opened, a room is joined — the units in the header are stale after all of them, and a rule
+ * keyed on one path would have to be extended each time somebody adds an endpoint, silently
+ * failing until they remembered. "The reader changed something; the shell's copy of the session is
+ * now suspect" is the fact that is actually true, and it is true at exactly this line.
+ *
+ * The cost is one extra `GET /auth/session` — a cookie lookup and a row — per accepted mutation,
+ * and mutations happen at human speed. Reads do not fire it, so there is no loop.
+ */
+function notifyMutationAccepted(mutating: boolean): void {
+  // The "was this a mutation at all" test lives here rather than at the two call sites, so the one
+  // transport function stays a single straight read of the response rather than growing a branch
+  // per success path.
+  if (!mutating) return;
+  // A server render has no shell to update and no reader watching it; firing there would also mean
+  // one request's listeners could be invoked by another's, since this module is per process.
+  if (typeof window === 'undefined') return;
+  for (const listener of [...mutationListeners]) listener();
+}
+
+/**
+ * Registers a listener, and returns the function that removes it.
+ *
+ * Returns a no-op unsubscribe on the server rather than throwing: a client component's effect body
+ * does not run during a server render, but the module is still evaluated there, and a subscriber
+ * that has to guard `typeof window` at every call site is a subscriber somebody will forget to
+ * guard.
+ */
+export function subscribeToAcceptedMutations(listener: () => void): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  mutationListeners.add(listener);
+  return () => {
+    mutationListeners.delete(listener);
+  };
 }
 
 // ---------------------------------------------------------------------------

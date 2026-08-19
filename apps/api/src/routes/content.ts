@@ -884,11 +884,21 @@ function wrongAnswerKind(expected: string, got: string): AppError {
   });
 }
 
+/**
+ * Everything the reply says about the answer itself, and nothing about whether it was kept.
+ *
+ * `recorded` is deliberately not reachable from here. Grading is a pure function of the question
+ * and the answer; storing is a fact about the caller's session, decided after the grading, at the
+ * route. Letting one function produce both is how the two came to be conflated in the first place
+ * — see the note on `QuizAttemptResponse.recorded`.
+ */
+type QuizGrade = Omit<QuizAttemptResponse, 'recorded'>;
+
 async function gradeQuestion(
   question: QuizQuestion,
   answer: QuizAttemptRequest['answer'],
   deps: { readonly pool: WorkerPool; readonly limits: WorkLimits },
-): Promise<QuizAttemptResponse> {
+): Promise<QuizGrade> {
   if (question.kind === 'multipleChoice') {
     if (answer.kind !== 'choice') throw wrongAnswerKind('choice', answer.kind);
     return {
@@ -1139,14 +1149,6 @@ const contentRoutes: FastifyPluginAsync = (app) => {
   );
 
   /**
-   * One quiz answer.
-   *
-   * Nothing about a score is computed, stored or returned: the response says whether this one
-   * answer matched the computed value, and shows the working. For a numeric question the value
-   * comes from the question's `calculation`, never from the content file — a stored answer key is
-   * a number that can silently disagree with the maths, and it is the learner who pays for that.
-   */
-  /**
    * Records that a learner has read a lesson.
    *
    * ## Why this is a route at all
@@ -1195,6 +1197,25 @@ const contentRoutes: FastifyPluginAsync = (app) => {
     },
   );
 
+  /**
+   * One quiz answer.
+   *
+   * Nothing about a score is computed, stored or returned: the response says whether this one
+   * answer matched the computed value, and shows the working. For a numeric question the value
+   * comes from the question's `calculation`, never from the content file — a stored answer key is
+   * a number that can silently disagree with the maths, and it is the learner who pays for that.
+   *
+   * ## The reply says whether the answer was kept, because for most callers it is not
+   *
+   * A signed-out learner is the product's default state — nothing creates a session until a table
+   * is opened — and this route answers them 200 and stores nothing, on purpose: the app is
+   * guest-first and refusing the call would make the client's success path depend on whether
+   * somebody happens to be signed in. What was wrong was that the 200 was indistinguishable from
+   * the signed-in one, so the quiz panel told every anonymous learner the server had "recorded" a
+   * question they had answered while `prl.quiz_attempts` stayed empty and `/me/progress` answered
+   * them `401`. `recorded` is that difference, on the wire, for every caller — the same job
+   * `LessonReadResponse.completedAt` already did for the sibling route.
+   */
   app.post<{ Params: IdParams; Body: QuizAttemptRequest }>(
     '/content/quizzes/:id/attempt',
     { schema: { params: { $ref: 'prl:contentIdParams#' }, body: { $ref: 'prl:quizAttemptBody#' } } },
@@ -1205,23 +1226,31 @@ const contentRoutes: FastifyPluginAsync = (app) => {
         throw new AppError('content_not_found', { logDetail: `no quiz ${request.params.id}` });
       }
       const question = questionIn(quiz, request.body.questionId);
-      const outcome = await gradeQuestion(question, request.body.answer, { pool, limits });
+      const grade = await gradeQuestion(question, request.body.answer, { pool, limits });
 
       const userId = callerUserId(request);
-      if (userId !== null) {
-        // Append-only, one row per answered question, no aggregate. `was_correct` is this app's
-        // comparison against a value computed at runtime; the value itself is not stored. The
-        // statement lives in `repositories/progress.ts`, which also owns the check that the answer
-        // serialises to a JSON *object* — `quiz_attempts_answer_is_object` refuses anything else.
-        await recordQuizAttempt(getSql(), {
-          userId,
-          quizId: quiz.id,
-          questionId: question.id,
-          answer: { ...request.body.answer },
-          wasCorrect: outcome.correct,
-        });
+      if (userId === null) {
+        // Graded, and stored nowhere. `recorded: false` is the whole of the honesty here: the
+        // reply is otherwise identical to a member's, and a client that could not see the
+        // difference would put "recorded" on the screen for a row that does not exist.
+        return { ...grade, recorded: false };
       }
-      return outcome;
+
+      // Append-only, one row per answered question, no aggregate. `was_correct` is this app's
+      // comparison against a value computed at runtime; the value itself is not stored. The
+      // statement lives in `repositories/progress.ts`, which also owns the check that the answer
+      // serialises to a JSON *object* — `quiz_attempts_answer_is_object` refuses anything else.
+      await recordQuizAttempt(getSql(), {
+        userId,
+        quizId: quiz.id,
+        questionId: question.id,
+        answer: { ...request.body.answer },
+        wasCorrect: grade.correct,
+      });
+      // Set only after the insert returns. A write that throws takes the whole request with it
+      // (there is no catch here on purpose), so this line is only ever reached by an attempt that
+      // is actually in the table.
+      return { ...grade, recorded: true };
     },
   );
 

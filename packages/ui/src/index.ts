@@ -139,6 +139,11 @@ export {
   useReveal,
   watchForReveal,
 } from './motion/index.ts';
+// -- The render-boundary "is this an outs count?" guard ----------------------
+// Exported for the same reason the probability guard below is: the rule ("a count is only called
+// outs where a card could be one") belongs to every surface that shows one, and a second copy of
+// `equity < 0.5` in `apps/web` is exactly the drift this package exists to prevent.
+export { ALREADY_AHEAD_EQUITY, countsAsOuts } from './outs-count.ts';
 // -- The render-boundary probability guard -----------------------------------
 // Exported, not kept private to the components, because the rule it encodes ("a probability that
 // is not a probability is never drawn") belongs to every surface that renders one — including the

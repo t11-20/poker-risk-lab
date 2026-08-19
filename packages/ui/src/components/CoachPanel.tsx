@@ -34,7 +34,7 @@
  * it works with JavaScript disabled. Nothing in this panel needs JS to be readable.
  *
  * ============================================================================================
- * THE OTHER FOUR RULES. Do not "improve" these away.
+ * THE OTHER RULES. Do not "improve" these away.
  * ============================================================================================
  *
  * 1. **A bare percentage with no method is a bug, not a style choice.** The method chip is
@@ -79,6 +79,14 @@
  *    `derivation`, `reason`, `note`, the teaching notes, the assumptions and the limitations. A
  *    sentence is not a figure and cannot be range-checked; those strings are the producer's
  *    responsibility. Every number the *panel itself* turns into text is checked here.
+ *
+ * 6. **A count is only called "outs" where a card could be one.** The same shape as rule 5, one
+ *    level up: a figure can be a perfectly good number and still be the wrong ANSWER to the
+ *    question its label asks. On a made hand every unseen card clears the equity bar that defines
+ *    an out, so this panel headed a flopped two pair "OUTS — 47 CARDS IN TOTAL" — every card in
+ *    the deck, from a section whose own lesson teaches that an out rescues a hand that is behind.
+ *    `countsAsOuts` in `../outs-count.ts` decides, here, from hero's equity; the counts still
+ *    show, the word and the sum do not. Read the long note in that file before changing this.
  *
  * ============================================================================================
  * Structure and reading order
@@ -130,6 +138,7 @@ import {
   pluralise,
 } from '../format.ts';
 import { withKeys } from '../keys.ts';
+import { countsAsOuts } from '../outs-count.ts';
 import {
   formatProbability,
   isProbabilityDifference,
@@ -273,6 +282,16 @@ function OutCard({ text }: { readonly text: string }): ReactElement {
 interface OutsBucketProps {
   readonly kind: 'clean' | 'dirty';
   readonly count: number;
+  /**
+   * False when hero is already in front, so these cards are not outs.
+   *
+   * The consequence sentence has to change with it, and this is not a wording preference.
+   * "These improve your hand but can still lose" is simply FALSE of most of the 37 cards a
+   * flopped two pair sees: a blank does not improve two pair, it just fails to beat it. The
+   * bucket still means something real — the card leaves hero in front but not safe — and that
+   * is what it says instead.
+   */
+  readonly areOuts: boolean;
 }
 
 /**
@@ -281,7 +300,14 @@ interface OutsBucketProps {
  * The card faces are NOT here — they are in the collapsible breakdown. The count is the part a
  * decision needs; the identity of each card is the part a review wants.
  */
-function OutsBucket({ kind, count }: OutsBucketProps): ReactElement {
+function OutsBucket({ kind, count, areOuts }: OutsBucketProps): ReactElement {
+  const meaning = areOuts
+    ? kind === 'clean'
+      ? 'These win the pot against the range assumed below if they arrive.'
+      : 'These improve your hand but can still lose — the same card can complete a better hand for an opponent.'
+    : kind === 'clean'
+      ? 'These keep you in front of the range assumed below, with almost nothing left to go wrong.'
+      : 'These leave you in front but not safe — the card still to come can take the pot back.';
   return (
     <div className={cx('prl-outs__bucket', `prl-outs__bucket--${kind}`)}>
       <div className="prl-outs__bucket-head">
@@ -291,16 +317,33 @@ function OutsBucket({ kind, count }: OutsBucketProps): ReactElement {
         <span className="prl-outs__bucket-label">{kind === 'clean' ? 'Clean' : 'Dirty'}</span>
       </div>
       <p className="prl-outs__count">{pluralise(count, 'card')}</p>
-      <p className="prl-outs__meaning">
-        {kind === 'clean'
-          ? 'These win the pot against the range assumed below if they arrive.'
-          : 'These improve your hand but can still lose — the same card can complete a better hand for an opponent.'}
-      </p>
+      <p className="prl-outs__meaning">{meaning}</p>
     </div>
   );
 }
 
-function OutsSection({ outs }: { readonly outs: OutsBreakdown | null }): ReactElement {
+interface OutsSectionProps {
+  readonly outs: OutsBreakdown | null;
+  /**
+   * Hero's equity before any card arrives — the figure that decides whether this section has an
+   * outs count at all. See `../outs-count.ts`.
+   */
+  readonly heroEquity: number;
+}
+
+/**
+ * The outs section, or the reason there is not an outs count in it.
+ *
+ * **The headline number must never contradict the lesson that names it.** `countsAsOuts` decides
+ * which of the two headings this is, at the render boundary and independently of what the report's
+ * own prose claims — a stale fixture whose `explanation` still reads "which is 47 outs in total"
+ * gets a heading that refuses anyway, and the reader can see the two disagree.
+ *
+ * The counts and the card lists survive the refusal, deliberately. They are true — 10 cards leave
+ * hero comfortably in front, 37 leave hero in front and beatable — and dropping them would trade a
+ * misleading number for a missing one. What is withheld is the word "outs" and the sum.
+ */
+function OutsSection({ outs, heroEquity }: OutsSectionProps): ReactElement {
   if (outs === null) {
     return (
       <section className="prl-coach__section">
@@ -313,12 +356,22 @@ function OutsSection({ outs }: { readonly outs: OutsBreakdown | null }): ReactEl
       </section>
     );
   }
+  const areOuts = countsAsOuts(heroEquity);
   return (
     <section className="prl-coach__section">
-      <h3 className="prl-coach__section-heading">{`Outs — ${pluralise(outs.total, 'card')} in total`}</h3>
+      <h3 className="prl-coach__section-heading">
+        {areOuts ? `Outs — ${pluralise(outs.total, 'card')} in total` : 'Outs — no outs count for this spot'}
+      </h3>
+      {areOuts ? null : (
+        <p className="prl-coach__prose">
+          An out is a card that rescues a hand that is behind, and you are not behind — your equity is already
+          past the share a card would have to reach to count as one. So there is no outs count here. The two
+          figures below are real, and they are cards that keep you in front rather than the size of a draw.
+        </p>
+      )}
       <div className="prl-outs__buckets">
-        <OutsBucket kind="clean" count={outs.clean} />
-        <OutsBucket kind="dirty" count={outs.dirty} />
+        <OutsBucket kind="clean" count={outs.clean} areOuts={areOuts} />
+        <OutsBucket kind="dirty" count={outs.dirty} areOuts={areOuts} />
       </div>
       <p className="prl-coach__prose">{outs.explanation}</p>
     </section>
@@ -772,7 +825,7 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
       <div className="prl-coach__grid">
         <EquitySection equity={equity} interval={intervalText} surplus={report.potOdds.equitySurplus} />
         <PriceSection potOdds={report.potOdds} />
-        <OutsSection outs={outs} />
+        <OutsSection outs={outs} heroEquity={equity.heroEquity} />
         <StackSection stack={report.stackContext} />
       </div>
 
@@ -784,8 +837,16 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
           <CandidateTable candidates={report.candidates} />
         </Disclose>
 
+        {/* The same refusal as the section heading, for the same reason: this summary is the other
+            place the panel puts a number next to the word "outs". */}
         {outs === null ? null : (
-          <Disclose summary={`Outs, card by card (${pluralise(outs.total, 'card')})`}>
+          <Disclose
+            summary={
+              countsAsOuts(equity.heroEquity)
+                ? `Outs, card by card (${pluralise(outs.total, 'card')})`
+                : `Every card that can come, one by one (${pluralise(outs.total, 'card')})`
+            }
+          >
             <div className="prl-outs__lists">
               <div className="prl-outs__list">
                 <span className="prl-label">{`Clean — ${pluralise(outs.clean, 'card')}`}</span>

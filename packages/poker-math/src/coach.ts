@@ -78,7 +78,7 @@ import {
   probabilityOfHitting,
   ruleOf24Accuracy,
 } from './odds.ts';
-import { computeOuts, DEFAULT_AHEAD_THRESHOLD, type OutsResult } from './outs.ts';
+import { computeOuts, type OutsResult } from './outs.ts';
 import { exactRange, type ParsedRange } from './ranges.ts';
 import { effectiveStack, type SizingOption, sizingLadder, stackToPotRatio } from './stacks.ts';
 
@@ -424,8 +424,14 @@ export function ruleOfThumbRefusalFor(
   // already there does not need one. Using one threshold for both halves is what stops
   // the two definitions drifting into contradiction — the state the panel was in, where
   // a hand with 45 "outs" was 100% to win and the shortcut called it 180%.
-  if (outs.equityNow >= DEFAULT_AHEAD_THRESHOLD) {
-    return { kind: 'already-ahead', equityNow: outs.equityNow };
+  //
+  // Asked through `outs.refusal` rather than by re-testing `equityNow` against the
+  // default threshold, which is what this line used to do. The result already carries the
+  // answer, computed against the thresholds THAT result was actually produced with — so a
+  // caller who moved `aheadThreshold` can no longer end up with a shortcut that thinks
+  // hero is drawing and an outs count that says hero is not.
+  if (outs.refusal !== null) {
+    return { kind: 'already-ahead', equityNow: outs.refusal.equityNow };
   }
   if (outs.cleanCount === 0) return { kind: 'no-clean-outs', dirty: outs.dirtyCount };
   const ceiling = maximumOutsForRuleOf24(cardsToCome);
@@ -1006,8 +1012,13 @@ function buildSuggestion(
     whatWouldChangeIt.push('Being raised is not modelled here, so treat the figure as optimistic.');
   }
   if (outs !== null && outs.dirtyCount > 0) {
+    // Two sentences for two different spots, because "N of your M outs are dirty" is
+    // false whenever `refusal` is set: there are no outs to be a fraction of. See the
+    // "When hero is already in front" section of `outs.ts`.
     whatWouldChangeIt.push(
-      `${outs.dirtyCount} of your ${outs.totalOuts} outs are dirty — they improve you without making you safe, so counting all of them would overstate your chances.`,
+      outs.refusal === null
+        ? `${outs.dirtyCount} of your ${outs.totalOuts} outs are dirty — they improve you without making you safe, so counting all of them would overstate your chances.`
+        : `${outs.dirtyCount} of the ${outs.cleanCount + outs.dirtyCount} cards that keep you in front leave a way to lose — they are not outs, because you are not drawing, but they are the cards a river can still take the pot back with.`,
     );
   }
   if (equitySummary.method === 'monte-carlo') {
@@ -1057,7 +1068,9 @@ function buildUncertainty(result: EquityResult, input: CoachInput, outs: OutsRes
   }
   if (outs !== null) {
     limitations.push(
-      'The clean/dirty split for outs uses documented equity thresholds. They are a modelling choice, not a law of the game.',
+      outs.refusal === null
+        ? 'The clean/dirty split for outs uses documented equity thresholds. They are a modelling choice, not a law of the game.'
+        : 'The clean/dirty split uses documented equity thresholds, and here it is not a count of outs at all — you are already in front of the same bar a card would have to clear. The thresholds are a modelling choice, not a law of the game.',
     );
   }
   limitations.push('No implied odds, reverse implied odds or future-street play are modelled.');
@@ -1142,14 +1155,24 @@ function buildTeachingNotes(
       `The pot is laying you ${potOddsSummary.oddsRatio.toFixed(1)} to 1, so you need ${(potOddsSummary.breakEvenEquity * 100).toFixed(1)}% to break even on a call. That number depends only on the price — not on your cards.`,
     );
   }
+  // Two wordings for the same teaching point, because the word "outs" is only earned by
+  // one of them. `refusal` set means hero is already in front, no card rescues anything,
+  // and there is no outs count for these two figures to be a split of — which is exactly
+  // how "47 outs in total" ended up over a flopped two pair. See the "When hero is
+  // already in front" section of `outs.ts`.
   if (outs !== null && outs.dirtyCount > 0) {
     notes.push(
-      `Notice the split: ${outs.cleanCount} clean and ${outs.dirtyCount} dirty, out of ${outs.totalOuts} outs in total. ` +
-        'A card that improves you is not the same as a card that wins you the hand — an opponent who is behind after it lands can still draw out on the last card.',
+      outs.refusal === null
+        ? `Notice the split: ${outs.cleanCount} clean and ${outs.dirtyCount} dirty, out of ${outs.totalOuts} outs in total. ` +
+            'A card that improves you is not the same as a card that wins you the hand — an opponent who is behind after it lands can still draw out on the last card.'
+        : `Notice the split: ${outs.cleanCount} clean and ${outs.dirtyCount} dirty — and notice that neither figure is a number of outs. ` +
+            `You are in front already at ${(outs.equityNow * 100).toFixed(1)}%, so no card here rescues anything: these are the cards that keep you in front, and the ${outs.dirtyCount} dirty ones leave the river a way to take it back.`,
     );
     if (outs.cleanCount === 0) {
       notes.push(
-        'None of these outs is clean, which is worth sitting with: you can hit and still lose. That is what a redraw costs you, and it is invisible if you only count outs.',
+        outs.refusal === null
+          ? 'None of these outs is clean, which is worth sitting with: you can hit and still lose. That is what a redraw costs you, and it is invisible if you only count outs.'
+          : 'Not one of those cards is clean, which is worth sitting with: every card that can come leaves somebody live to beat you. Being in front is not the same as being safe, and the difference is invisible if you only count cards.',
       );
     }
   }

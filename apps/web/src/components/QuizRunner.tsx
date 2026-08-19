@@ -48,6 +48,16 @@
  * stands in and the screen says plainly that nothing was recorded — see `VERDICT_SOURCE_NOTE`. A
  * failed POST must never take a lesson down with it, which is why nothing on this path throws.
  *
+ * ## "Recorded" is only said when a row exists
+ *
+ * The sentence under a verdict used to claim the server had recorded the question for every
+ * successful call, including the signed-out one — the product's default state — where the route
+ * answers 200 and deliberately stores nothing. `QuizAttemptResponse.recorded` now carries that
+ * difference and `resolvedVerdict` turns it into a fourth source, `'anonymous'`, whose sentence
+ * says what actually happened and how a learner who wants their answers kept gets a session. It is
+ * said once, under the answer, and never as a banner or a gate: this quiz is worth doing signed
+ * out, and it is not worth nagging anybody through.
+ *
  * A `decision` question is still not sent. There is no answer to record for one; see
  * `DecisionQuestion` below.
  *
@@ -77,6 +87,7 @@ import {
 } from '@/lib/learn-calculations.ts';
 import {
   attemptBodyFor,
+  gradedAnswer,
   type QuizAnswer,
   type QuizVerdict,
   resolvedVerdict,
@@ -342,7 +353,11 @@ function NumericQuestion(props: {
   // that precedence in one place, shared with the multiple-choice branch.
   const localMatch = submitted !== null && target !== null && withinTolerance(submitted.value, target);
   const resolved = resolvedVerdict(server, localMatch);
-  const against = server.state === 'live' && server.expected !== null ? server.expected.value : target?.value;
+  // `gradedAnswer` rather than `server.state === 'live'`: a signed-out learner's answer is graded by
+  // the server and stored nowhere, which is the `'anonymous'` state — a `=== 'live'` test here would
+  // quietly show them this page's figure while the server's own sat unread in the reply.
+  const graded = gradedAnswer(server);
+  const against = graded !== null && graded.expected !== null ? graded.expected.value : target?.value;
   const verdict = numericVerdict({
     submitted,
     against,

@@ -149,9 +149,11 @@ export {
   DEFAULT_AHEAD_THRESHOLD,
   DEFAULT_CLEAN_THRESHOLD,
   type OutClassification,
+  type OutsCountRefusal,
   OutsError,
   type OutsInput,
   type OutsResult,
+  outsCountRefusalFor,
   outsSummaryFor,
 } from './outs.ts';
 export {

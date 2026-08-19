@@ -37,6 +37,52 @@ export type NodeEnv = (typeof NODE_ENVS)[number];
 export const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
+/**
+ * The shortest turn clock a person alone at a table of bots is given, in seconds.
+ *
+ * ## Why this number exists at all
+ *
+ * The product has two headline features and, at a 60-second clock, they are in direct
+ * tension: you cannot read the analysis and still act. A browser-level verification pass
+ * lost two hands to `seat 0 | fold | was_automatic = t` while the learner was reading the
+ * Coach panel, which for a live flop runs to roughly **5,700 characters** of prose plus a
+ * five-row EV table and a card-by-card table with one row per unseen card. At 200-250
+ * words per minute — and slower for dense numeric material — the prose alone is around
+ * four minutes of reading before a single table is looked at.
+ *
+ * Nothing about that was hidden: the countdown is on screen, and folding rather than
+ * calling on expiry is the correct rule (`timeoutAction` in `@prl/poker-engine`). The
+ * clock was simply shorter than the thing it was asking the learner to read.
+ *
+ * ## Why 240 and not something else
+ *
+ * It is the reading time of the panel, rounded to a whole number of minutes. Not longer,
+ * because the clock still has a job — the number below is a floor on how long an
+ * abandoned seat can hold a table, and every extra minute is a minute the other players
+ * wait. Not shorter, because a clock that expires mid-panel is the defect this replaces.
+ *
+ * ## Why it is free, and where it therefore stops applying
+ *
+ * The cost of a longer clock is other people's patience, and at a table of bots there is
+ * nobody to be patient: this is play money against bots with nothing at stake. That is the
+ * whole justification, so `LiveTable.turnSecondsFor` applies it only where the
+ * justification holds — a person with no other person waiting on them. A room with two
+ * humans in it keeps the pace they agreed to, and can configure up to 300 seconds of it
+ * for itself (`repositories/rooms.ts`). It is also a floor rather than a replacement: a
+ * room that already allows longer keeps what it chose.
+ *
+ * ## Why a longer clock rather than "no clock until the learner has acted once"
+ *
+ * The alternative considered was leaving the first decision of a hand untimed. It was
+ * rejected: the first decision is precisely when a seat is most likely to have been
+ * abandoned — the tab was closed before the hand started — so an untimed first action
+ * lets one absent player stall a table indefinitely, which is a worse failure than a
+ * clock that is too short. The timeout mechanism stays; only its floor moves.
+ *
+ * Override with `LEARNER_TURN_SECONDS`.
+ */
+export const DEFAULT_LEARNER_TURN_SECONDS = 240;
+
 export interface OidcConfig {
   readonly issuer: string;
   readonly clientId: string;
@@ -104,6 +150,16 @@ export interface AppConfig {
   readonly monteCarloWorkers: number;
   /** Wall-clock budget for one Coach analysis before it is abandoned. */
   readonly coachTimeoutMs: number;
+
+  /**
+   * Floor on the turn clock of a person alone at a table of bots, in seconds.
+   *
+   * Bots keep the room's own setting, and so does a table with a second person at it. A
+   * room configured with a longer clock than this keeps it — the floor only raises a clock
+   * that is shorter than the Coach panel takes to read. See `DEFAULT_LEARNER_TURN_SECONDS`
+   * for the reasoning and `LiveTable.turnSecondsFor` for exactly where it applies.
+   */
+  readonly learnerTurnSeconds: number;
 
   readonly rateLimit: RateLimitConfig;
 
@@ -551,6 +607,19 @@ export function loadConfig(env: EnvRecord): AppConfig {
       collect,
     ),
     coachTimeoutMs: readInt(env, 'COACH_TIMEOUT_MS', { min: 100, max: 30_000, fallback: 3_000 }, collect),
+
+    // The bounds are wider than `prl.rooms.action_timeout_seconds` accepts (5..300,
+    // `repositories/rooms.ts`) on purpose: this is not a room setting, it is the floor
+    // applied on top of one, and a deployment that wants to give a learner ten minutes
+    // with the panel should not be blocked by a limit written for the per-room field.
+    // The lower bound matches that field's, so setting this to 5 turns the floor off
+    // rather than making it unreachable.
+    learnerTurnSeconds: readInt(
+      env,
+      'LEARNER_TURN_SECONDS',
+      { min: 5, max: 900, fallback: DEFAULT_LEARNER_TURN_SECONDS },
+      collect,
+    ),
 
     rateLimit: {
       globalMax: readInt(env, 'RATE_LIMIT_MAX', { min: 1, max: 100_000, fallback: 300 }, collect),

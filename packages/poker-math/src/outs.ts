@@ -69,13 +69,32 @@
  * inflated. On a flop, `equityAfter` does account for the river; it just does not
  * count river-only improvements as outs.
  *
- * ## When hero is already in front
+ * ## When hero is already in front, this result HAS NO OUTS COUNT
  *
- * If hero's equity before any card arrives is already at or above `cleanThreshold`,
- * "outs" is the wrong frame: there is nothing to draw to, and almost every card is
- * trivially "clean". The result still reports the counts (they are what the
- * definitions say) but `explanation` and `assumptions` say plainly that this is not
- * a drawing spot, so nobody reads "44 clean outs" as a strong draw.
+ * An out is a card that rescues a hand that is behind. Hero who is already in front is
+ * not behind, so no card rescues anything and there is no count to report — however
+ * many cards happen to clear the thresholds. Applied to a made hand the definitions
+ * above degenerate: on a flop with two pair against a range, every one of the 47
+ * unseen cards leaves hero at or above `aheadThreshold`, and the module used to
+ * publish that as "47 outs in total" while the app's own lesson — *Outs: Clean, Dirty
+ * and Imaginary* — teaches the standard meaning. A learner saw a textbook 15 on a real
+ * draw and a nonsensical 47 one spot later, from the same panel.
+ *
+ * So `computeOuts` refuses, the way `coach.ts` already refuses the rule of 2 and 4
+ * (`already-ahead` / `no-clean-outs` / `not-a-probability`): the result carries a typed
+ * `refusal`, and every sentence it generates stops calling the counts outs. What the
+ * counts still are is worth reading and is still reported — `cleanCount` cards leave
+ * hero at or above `cleanThreshold`, `dirtyCount` leave hero in front but beatable —
+ * they are simply cards that KEEP hero ahead rather than the size of a draw, and the
+ * explanation says so in those words.
+ *
+ * `totalOuts` deliberately stays `cleanCount + dirtyCount` rather than going null or
+ * zero. Zero would read as "drawing dead", which is the opposite of the truth here, and
+ * a null would only move the decision to whichever consumer forgot to handle it. The
+ * number is honest arithmetic on the classifications; `refusal` is what says the word
+ * "outs" does not apply to it. Consumers that print the word must check it — `coach.ts`
+ * does, in the explanation, the teaching notes and the suggestion, and `@prl/ui`'s
+ * `CoachPanel` refuses the same headline independently at the render boundary.
  */
 
 import {
@@ -102,6 +121,43 @@ export class OutsError extends Error {
 
 export type OutClassification = 'clean' | 'dirty' | 'neutral';
 
+/**
+ * Why this result carries no outs count, or `null` when it carries one.
+ *
+ * Modelled on `RuleOfThumbRefusal` in `coach.ts`, and for the same reason: a shortcut
+ * that has stopped meaning anything should say which of its own preconditions failed,
+ * not return a number and hope the caveat underneath is read. "An out is a card that
+ * rescues a hand that is behind" has exactly one precondition — that hero is behind —
+ * so this union has exactly one member. It is written as a union anyway so that adding
+ * a second reason later is an additive change rather than a shape change at every call
+ * site.
+ *
+ * A discriminated `kind` rather than a boolean because the *reason* is what the reader
+ * needs. `refusal !== null` tells a consumer to stop saying "outs"; `refusal.kind` tells
+ * it what to say instead.
+ */
+export type OutsCountRefusal = {
+  readonly kind: 'already-ahead';
+  /** Hero's equity before any card arrives — the figure that cleared the bar. */
+  readonly equityNow: number;
+  /** The bar: the equity a card has to reach to count as an out at all. */
+  readonly threshold: number;
+};
+
+/**
+ * The one definition of "this spot has no outs to count", so nothing re-derives it.
+ *
+ * Deliberately the SAME yardstick a card is judged by. A card counts as an out once it
+ * puts hero at or above `aheadThreshold`; a hand already there does not need one. Using
+ * two different bars for the two halves is how the panel ended up saying a hand was
+ * 100% to win and had 45 outs at the same time — see the note above
+ * `ruleOfThumbRefusalFor`, which now asks this same question through `OutsResult.refusal`.
+ */
+export function outsCountRefusalFor(equityNow: number, aheadThreshold: number): OutsCountRefusal | null {
+  if (equityNow >= aheadThreshold) return { kind: 'already-ahead', equityNow, threshold: aheadThreshold };
+  return null;
+}
+
 export interface CardOutcome {
   readonly card: Card;
   /** The card as a player would write it, e.g. "Th". */
@@ -121,8 +177,22 @@ export interface OutsResult {
   readonly neutral: readonly CardOutcome[];
   readonly cleanCount: number;
   readonly dirtyCount: number;
-  /** clean + dirty. Neutral cards are not outs. */
+  /**
+   * `cleanCount + dirtyCount`. Neutral cards are not outs.
+   *
+   * **An outs count only while `refusal` is null.** When hero is already in front this is
+   * still the honest sum of the two classifications, and it is still not a number of
+   * outs — see the file comment. Anything that prints it beside the word "outs" has to
+   * check `refusal` first.
+   */
   readonly totalOuts: number;
+  /**
+   * Why the counts above are not outs, or `null` when they are.
+   *
+   * Read this before the numbers, not after them. The counts are always computed; this
+   * is what says whether the word "outs" may be attached to them.
+   */
+  readonly refusal: OutsCountRefusal | null;
   readonly equityNow: number;
   /** Candidate cards actually evaluated. */
   readonly cardsConsidered: number;
@@ -563,6 +633,12 @@ function describeOpponent(opponent: ParsedRange, legal: readonly Combo[]): strin
  * result computed for a hand that is already ahead says so in as many words. Graded,
  * because "already ahead of the clean threshold" and "ahead but not safe" are
  * different situations and deserve different sentences.
+ *
+ * This returns a sentence for exactly the spots `outsCountRefusalFor` refuses — both
+ * ask `equityNow >= aheadThreshold`, the higher branch being a sharper case of the
+ * same thing. The two must stay in step: this is the paragraph that explains the
+ * refusal, and a refusal with no explanation, or an explanation with no refusal, would
+ * be half the fix.
  */
 function alreadyAheadNote(equityNow: number, cleanThreshold: number, aheadThreshold: number): string | null {
   if (equityNow >= cleanThreshold) {
@@ -581,6 +657,33 @@ function alreadyAheadNote(equityNow: number, cleanThreshold: number, aheadThresh
   return null;
 }
 
+/**
+ * The sentence carrying the two counts.
+ *
+ * The whole point of the refusal lives in this one string. It used to read "…which is 47
+ * outs in total" whatever the spot was, and 47 is every unseen card: a headline number
+ * that contradicted the lesson naming it. Refused, it states the same two counts — they
+ * are real and they are informative — and says in the same breath that neither is a
+ * number of outs, so a reader who stops at this sentence has still not been misled.
+ */
+function countSentence(args: {
+  readonly cleanCount: number;
+  readonly dirtyCount: number;
+  readonly cardsConsidered: number;
+  readonly refusal: OutsCountRefusal | null;
+}): string {
+  const preamble =
+    `Of the ${args.cardsConsidered} cards that can come next, ${args.cleanCount} are clean and ` +
+    `${args.dirtyCount} are dirty`;
+  if (args.refusal === null) {
+    return `${preamble}, which is ${args.cleanCount + args.dirtyCount} outs in total`;
+  }
+  return (
+    `${preamble} — but none of them is an out and there is no outs count here, deliberately: an out is ` +
+    'a card that rescues a hand that is behind, and hero is not behind'
+  );
+}
+
 function buildExplanation(args: {
   readonly heroCards: readonly Card[];
   readonly board: readonly Card[];
@@ -592,15 +695,23 @@ function buildExplanation(args: {
   readonly cardsConsidered: number;
   readonly cleanThreshold: number;
   readonly aheadThreshold: number;
+  readonly refusal: OutsCountRefusal | null;
 }): string {
   const sentences = [
     `On ${cardsToString(args.board)} hero holds ${cardsToString(args.heroCards)} — ` +
       `${args.standingNow.heroPhrase} — for ${formatPercent(args.equityNow)} equity against ${args.opponentText}`,
-    `Of the ${args.cardsConsidered} cards that can come next, ${args.cleanCount} are clean and ` +
-      `${args.dirtyCount} are dirty, which is ${args.cleanCount + args.dirtyCount} outs in total`,
+    countSentence({
+      cleanCount: args.cleanCount,
+      dirtyCount: args.dirtyCount,
+      cardsConsidered: args.cardsConsidered,
+      refusal: args.refusal,
+    }),
     `Clean means hero's equity after that card is at least ${formatPercent(args.cleanThreshold)}; dirty ` +
       `means at least ${formatPercent(args.aheadThreshold)} but below ${formatPercent(args.cleanThreshold)}`,
   ];
+  // The honest paragraph that was already here, kept. It is the sentence that explains
+  // WHY the counts are what they are; the refusal above is what stops the headline
+  // number contradicting it.
   const ahead = alreadyAheadNote(args.equityNow, args.cleanThreshold, args.aheadThreshold);
   if (ahead !== null) sentences.push(ahead);
   return `${sentences.join('. ')}.`;
@@ -747,6 +858,12 @@ export function computeOuts(input: OutsInput): OutsResult {
   const dirty = sorted.filter((outcome) => outcome.classification === 'dirty');
   const neutral = sorted.filter((outcome) => outcome.classification === 'neutral');
 
+  // Decided once, from the same threshold every card was judged against, and then
+  // carried on the result. Every sentence below and every consumer downstream asks this
+  // one value rather than re-testing the equity, so there is no second place for the two
+  // definitions of "drawing" to drift apart.
+  const refusal = outsCountRefusalFor(nowEquity.value, aheadThreshold);
+
   const explanation = buildExplanation({
     heroCards,
     board,
@@ -758,6 +875,7 @@ export function computeOuts(input: OutsInput): OutsResult {
     cardsConsidered: outcomes.length,
     cleanThreshold,
     aheadThreshold,
+    refusal,
   });
 
   return {
@@ -767,6 +885,7 @@ export function computeOuts(input: OutsInput): OutsResult {
     cleanCount: clean.length,
     dirtyCount: dirty.length,
     totalOuts: clean.length + dirty.length,
+    refusal,
     equityNow: nowEquity.value,
     cardsConsidered: outcomes.length,
     explanation,
@@ -789,11 +908,18 @@ export function computeOuts(input: OutsInput): OutsResult {
  * The shape the Coach renders. Deliberately flat and plain: the Coach shows the two
  * counts, the two card lists and one sentence, and never a bare "outs" number
  * without the split behind it.
+ *
+ * `refusal` travels with the counts rather than being left behind on the full result,
+ * because this is the flattened shape a display layer reaches for and the flattening is
+ * exactly where "these are not outs" gets lost. A caller that renders `total` beside the
+ * word "outs" without consulting `refusal` is reintroducing the defect this field exists
+ * to close.
  */
 export function outsSummaryFor(result: OutsResult): {
   clean: number;
   dirty: number;
   total: number;
+  refusal: OutsCountRefusal | null;
   cleanCards: string[];
   dirtyCards: string[];
   explanation: string;
@@ -802,6 +928,7 @@ export function outsSummaryFor(result: OutsResult): {
     clean: result.cleanCount,
     dirty: result.dirtyCount,
     total: result.totalOuts,
+    refusal: result.refusal,
     cleanCards: result.clean.map((outcome) => outcome.label),
     dirtyCards: result.dirty.map((outcome) => outcome.label),
     explanation: result.explanation,

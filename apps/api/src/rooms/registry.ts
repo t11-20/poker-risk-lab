@@ -421,6 +421,15 @@ export class LiveRoom {
 
 export interface RoomRegistryOptions {
   readonly clock?: Clock;
+  /**
+   * How long a lone learner gets to act, in seconds, when every other seat is a bot.
+   * Supplied from `AppConfig.learnerTurnSeconds`; omitted, `LiveTable` applies its own default.
+   *
+   * It is threaded from here rather than read from the environment inside `LiveTable` because the
+   * table is a pure-ish component the tests construct directly, and a constant it reads for itself
+   * is a constant they cannot vary.
+   */
+  readonly learnerTurnSeconds?: number;
   /** The dealing source. `createSecureRandom()` unless a test needs otherwise. */
   readonly random?: RandomSource;
   readonly archive?: HandArchive;
@@ -454,6 +463,7 @@ export class RoomRegistry {
   private readonly rooms = new Map<string, LiveRoom>();
   private readonly clock: Clock;
   private readonly random: RandomSource;
+  private readonly learnerTurnSeconds: number | undefined;
   private readonly archive: HandArchive;
   private readonly botThinkingDelayMs: number | undefined;
   private readonly nextHandId: () => string;
@@ -462,6 +472,7 @@ export class RoomRegistry {
 
   constructor(options: RoomRegistryOptions = {}) {
     this.clock = options.clock ?? systemClock;
+    this.learnerTurnSeconds = options.learnerTurnSeconds;
     this.random = options.random ?? createSecureRandom();
     this.archive = options.archive ?? noopArchive;
     this.store = options.store ?? postgresRoomStore(getSql);
@@ -507,6 +518,7 @@ export class RoomRegistry {
       nextHandId: this.nextHandId,
       initialHandNumber: played,
       ...(blinds === undefined ? {} : { initialBlinds: blinds }),
+      ...(this.learnerTurnSeconds === undefined ? {} : { learnerTurnSeconds: this.learnerTurnSeconds }),
       onProblem: this.onProblem,
     });
     const bots = new BotRunner({

@@ -260,6 +260,52 @@ const STALE_FIXTURE: CoachReport = {
 };
 
 /**
+ * The spot the outs count degenerates on: hero already in front, before any card arrives.
+ *
+ * Hero holds Ac 5d on Ah 5s 2c — two pair, aces and fives — against a wide continuing range,
+ * and is 88.2% before the turn. Fifty-two cards, less hero's two and the flop's three, leaves
+ * **47** that can come next, and at 88% every one of them leaves hero above the equity bar a
+ * card has to clear to count as an out. So the report carries `clean: 10`, `dirty: 37`,
+ * `total: 47` — and the panel used to head the section
+ *
+ *     OUTS — 47 CARDS IN TOTAL
+ *
+ * which is every unseen card in the deck, published as a property of hero's hand.
+ *
+ * The `explanation` here is deliberately the OLD one, word for word: it still ends "which is
+ * 47 outs in total". That is the point of this fixture. The producer no longer writes that
+ * sentence, but fixtures in this repo are regenerated on their own schedule and a report
+ * reaches this panel past a cache, a file and a deserialiser. The panel must refuse the
+ * headline on the strength of the equity it was handed, not on the strength of the prose
+ * agreeing with it.
+ */
+const ALREADY_AHEAD: CoachReport = {
+  ...NINE_OUT_DRAW,
+  outs: {
+    clean: 10,
+    dirty: 37,
+    total: 47,
+    cleanCards: ['2d', '2h', '2s', '5c', '5h', 'Ad', 'As', '3c', '3d', '3h'],
+    dirtyCards: ['4c', '4d', '4h', '4s', '6c', '6d', '6h', '6s', '7c', '7d'],
+    explanation:
+      'On Ah 5s 2c hero holds Ac 5d — two pair, aces and fives — for 88% equity against a wide range. ' +
+      'Of the 47 cards that can come next, 10 are clean and 37 are dirty, which is 47 outs in total.',
+  },
+  equity: {
+    ...NINE_OUT_DRAW.equity,
+    heroEquity: 0.882,
+    // Withheld by the Coach for this spot — a made hand is one of the three reasons the
+    // rule of 2 and 4 declines — which is the refusal this one is modelled on.
+    ruleOfThumb: null,
+    perPlayer: [
+      { label: 'you', equity: 0.882, win: 0.882, tie: 0 },
+      { label: 'a wide range', equity: 0.118, win: 0.118, tie: 0 },
+    ],
+  },
+  potOdds: { ...NINE_OUT_DRAW.potOdds, equitySurplus: 0.882 - 1 / 3 },
+};
+
+/**
  * Every figure the panel renders as a percentage, out of range at once.
  *
  * Not a realistic report — deliberately. The guard is defence in depth against inputs
@@ -378,6 +424,70 @@ test('the panel refuses the percentage-point unit error rather than rendering it
   assert.ok(
     markup.includes('The rule-of-thumb comparison is being withheld for this spot'),
     'and the panel has to say that it withheld the figure, not leave a silent gap',
+  );
+});
+
+test('a hand already in front is not given an outs count', async () => {
+  // Rule 6, asserted on the string a learner reads. The report says 47; the panel must not
+  // put 47 next to the word "outs" anywhere, in the heading or in the disclosure summary.
+  const markup = await render(ALREADY_AHEAD);
+
+  assert.ok(
+    !markup.includes('Outs — 47 cards in total'),
+    'the section title must not publish every unseen card as an outs count',
+  );
+  assert.ok(
+    !markup.includes('Outs, card by card (47 cards)'),
+    'nor may the collapsed breakdown, which is the other place the two words meet a number',
+  );
+  assert.ok(
+    markup.includes('Outs — no outs count for this spot'),
+    'the section still has to be there, still labelled, and still say what is missing',
+  );
+
+  // Refusing is not licence to drop the section. The counts are true and useful — 10 cards
+  // leave hero comfortably in front, 37 leave hero in front and beatable — so they stay,
+  // and so does the card-by-card list behind them.
+  assert.ok(markup.includes('10 cards'), 'the clean count survives the refusal');
+  assert.ok(markup.includes('37 cards'), 'and so does the dirty count');
+  assert.ok(
+    markup.includes('Every card that can come, one by one (47 cards)'),
+    'the breakdown is still reachable, under a name that describes what is in it',
+  );
+
+  // The "dirty" bucket's stock sentence is FALSE here: a blank does not improve two pair.
+  assert.ok(
+    !markup.includes('These improve your hand but can still lose'),
+    'a card that leaves hero in front has not necessarily improved anything',
+  );
+  assert.ok(
+    markup.includes('These leave you in front but not safe'),
+    'the bucket still has to say what it means, in words that are true of this spot',
+  );
+
+  // And the panel says why, in its own voice, without waiting for the report's prose to
+  // agree with it — the prose in this fixture still says "47 outs in total".
+  assert.ok(
+    markup.includes('An out is a card that rescues a hand that is behind, and you are not behind'),
+    'the refusal has to carry its reason, exactly as the rule-of-thumb refusal does',
+  );
+});
+
+test('a real draw keeps its outs count', async () => {
+  // The control. Suppression that fires everywhere is not a fix, it is the same defect with
+  // the sign flipped: a nine-out flush draw at 39.5% is behind, so nine cards genuinely
+  // rescue the hand and the panel must say so.
+  const markup = await render(NINE_OUT_DRAW);
+
+  assert.ok(markup.includes('Outs — 9 cards in total'), 'a hand that is behind keeps its count');
+  assert.ok(markup.includes('Outs, card by card (9 cards)'), 'and its breakdown keeps the word');
+  assert.ok(
+    !markup.includes('no outs count for this spot'),
+    'the refusal must not fire on a spot that has a perfectly good count',
+  );
+  assert.ok(
+    markup.includes('These improve your hand but can still lose'),
+    'and the dirty bucket keeps the sentence that is true of a draw',
   );
 });
 

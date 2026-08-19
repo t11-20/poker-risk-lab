@@ -434,8 +434,11 @@ describe('POST /content/quizzes/:id/attempt', () => {
         'the response should carry the working as well as the stored explanation',
       );
 
-      // Exactly the contract's fields, and no aggregate of any kind.
-      assert.deepEqual(Object.keys(right.body).sort(), ['correct', 'expected', 'explanation']);
+      // Exactly the contract's fields, and no aggregate of any kind. `recorded` is a fact about
+      // THIS one answer — whether a row was written for it — not a count of anything; the
+      // forbidden-name loop below is what guards against the aggregate, and it is unchanged.
+      // See `test/y2-quiz-attempt-recording.test.ts` for what the field is for.
+      assert.deepEqual(Object.keys(right.body).sort(), ['correct', 'expected', 'explanation', 'recorded']);
       for (const forbidden of ['score', 'streak', 'total', 'percentage', 'grade', 'passed']) {
         assert.equal(right.body[forbidden], undefined, `there must be no ${forbidden} in the response`);
       }

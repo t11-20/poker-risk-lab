@@ -85,6 +85,14 @@ export interface WsConnection {
   readonly principal: WsPrincipal;
   /** Null until `hello` has been accepted. */
   roomId: string | null;
+  /**
+   * True from the moment a `hello` is accepted for validation until it has joined a room or failed.
+   *
+   * Only `roomId` existed, and it was enough while the handshake was synchronous. Reopening a room
+   * after a restart reads the database, so there is now a window in which `roomId` is still null and
+   * a second `hello` would be let through to join the same socket twice. See `onHello`.
+   */
+  joining: boolean;
   /** Monotonic per socket, so a client can discard an out-of-order frame. */
   revision: number;
   /** Token bucket for `messagesPerSecond` / `burstAllowance`. */
@@ -173,6 +181,7 @@ export class WsRouter {
       sink,
       principal,
       roomId: null,
+      joining: false,
       revision: 0,
       tokens: WS_LIMITS.burstAllowance,
       lastRefillMs: this.clock.now(),
@@ -335,12 +344,26 @@ export class WsRouter {
    * Authentication is *not* here. It happened during the upgrade, from the session cookie, and a
    * token in the first frame would end up in client logs and browser history far more easily than
    * an `HttpOnly` cookie does.
+   *
+   * ## An empty registry is not a refusal
+   *
+   * This used to be `registry.require` on its own, and room state is in memory by design, so an API
+   * restart stranded every open table: the first `hello` afterwards found no live room, answered
+   * `room_not_found_or_not_permitted`, and the client showed a member of their own table "Not your
+   * table… either it does not exist or this session is not a member of it". The row was still
+   * there, and so was their membership. `reopenFor` rebuilds it from the database the way the REST
+   * path (`openRoomFor` in `routes/rooms.ts`) always has.
    */
   private async onHello(
     connection: WsConnection,
     message: WsClientMessage & { type: 'hello' },
   ): Promise<void> {
-    if (connection.roomId !== null) {
+    // `joining` as well as `roomId`, because reopening a room reads the database and this handler
+    // is dispatched with `void`. Two `hello` frames arriving in one tick would both pass a
+    // `roomId === null` test, both await, and both run the join below — registering the same socket
+    // twice and leaving `noteSocket` one increment over, so a member who has disconnected still
+    // shows as connected at the table. Set synchronously, before anything can suspend.
+    if (connection.roomId !== null || connection.joining) {
       this.sendError(connection, null, 'invalid_request');
       return;
     }
@@ -349,11 +372,25 @@ export class WsRouter {
       this.closeConnection(connection, WS_CLOSE.protocolMismatch, 'protocol version');
       return;
     }
+    connection.joining = true;
 
     let room: LiveRoom;
     try {
-      room = this.registry.require(message.roomId, connection.principal.userId);
+      // A room already in memory is taken with no `await` EVALUATED on this path — the branch is
+      // the point, not an optimisation. `await` on an already-resolved promise still suspends for
+      // a microtask, and suspending here would move every handshake behind one: a client whose
+      // `hello` and `sit` arrive in a single read would have the `sit` refused by the "no room
+      // yet" guard in `handleFrame`, and `test/ws-router.test.ts` — which drives the protocol with
+      // no event loop between frames — would stop seeing a welcome at all. Only the first `hello`
+      // for a room this process has not loaded, which is to say the first one after a restart,
+      // waits for anything.
+      const live = this.registry.get(message.roomId);
+      room =
+        live === null
+          ? await this.reopenFor(message.roomId, connection.principal.userId)
+          : this.registry.require(message.roomId, connection.principal.userId);
     } catch (error) {
+      connection.joining = false;
       const code: ErrorCode = isAppError(error) ? error.code : 'internal_error';
       this.sendError(connection, null, code);
       // 4403 for both "no such room" and "not your room": the frame already carries the one code
@@ -361,6 +398,11 @@ export class WsRouter {
       this.closeConnection(connection, WS_CLOSE.forbidden, 'not permitted');
       return;
     }
+    connection.joining = false;
+    // The socket may have gone while the room was being read back from the database. Joining it now
+    // would put a closed connection in `byRoom` that `handleClose` has already been through, so the
+    // room would carry a socket nothing will ever remove.
+    if (connection.closed) return;
 
     connection.handshake?.cancel();
     connection.handshake = null;
@@ -387,6 +429,52 @@ export class WsRouter {
     // Everybody else's `connected` flag just changed.
     this.broadcastExcept(message.roomId, connection);
     await Promise.resolve();
+  }
+
+  /**
+   * Rebuilds a room this process has never seen, and refuses a stranger without telling them it
+   * exists.
+   *
+   * Only called when `registry.get` came back null — `onHello` takes a live room synchronously, and
+   * the comment there says why that branch is load-bearing rather than an optimisation. The `get`
+   * is repeated here anyway so this method is correct on its own terms: a caller that reached it
+   * with a live room would otherwise re-read the durable rows for no reason.
+   *
+   * ## The order of the two checks is a security property
+   *
+   * Membership is read from the durable rows BEFORE anything is built. Opening first and checking
+   * afterwards would be shorter and would let anybody who guessed a room id make this process
+   * construct a live table — a `HandState`, a turn timer, a bot runner — before being told no.
+   *
+   * Every refusal is the same `room_not_found_or_not_permitted`, with the detail only in the log:
+   * "that room exists but is not yours" is a free way to confirm a room id, which is why the REST
+   * side answers a 404 that does not confirm the room exists and the socket answers one error code
+   * and one close code (4403) for both cases.
+   *
+   * This deliberately mirrors `openRoomFor` in `routes/rooms.ts` step for step, including the
+   * `logDetail`. The two really should be one method on `RoomRegistry` — that is the file both
+   * transports already depend on, and a rule about who may open a room belongs next to the opening.
+   * Left duplicated here only because this change could not touch either of those files; if you are
+   * editing one of these two functions, move both.
+   */
+  private async reopenFor(roomId: string, userId: string): Promise<LiveRoom> {
+    const live = this.registry.get(roomId);
+    if (live !== null) return this.registry.require(roomId, userId);
+
+    const refuse = (): never => {
+      throw new AppError('room_not_found_or_not_permitted', {
+        logDetail: `room ${roomId} is unknown, closed, or not this caller's`,
+      });
+    };
+    const row = await this.registry.store.byId(roomId);
+    if (row === null || row.status === 'closed') refuse();
+    const member = await this.registry.store.memberOf(roomId, userId);
+    if (member === null && row?.owner_user_id !== userId) refuse();
+
+    // The row is durable, the table is not. This is what makes a room usable again after a restart:
+    // it rebuilds the table from the roster, re-taking the seats the database records.
+    if ((await this.registry.ensureOpen(roomId)) === null) refuse();
+    return this.registry.require(roomId, userId);
   }
 
   private async onSit(connection: WsConnection, seat: number, requestId: string): Promise<void> {

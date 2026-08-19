@@ -58,6 +58,33 @@ function assertInvariants(result: OutsResult): void {
   assert.equal(result.dirtyCount, result.dirty.length);
   assert.equal(result.totalOuts, result.cleanCount + result.dirtyCount);
   assert.equal(result.method, 'exact-per-card');
+
+  // The refusal and the sentence that carries it are one decision, and this is the
+  // invariant that keeps them one. A result may say "N outs in total" or it may carry a
+  // refusal; never both, and never neither. The panel headline that read "OUTS — 47 CARDS
+  // IN TOTAL" over a flopped two pair was the second failure of exactly this pair: the
+  // caveat was in the paragraph, the word "outs" was still on the number.
+  const refused = result.refusal !== null;
+  assert.equal(
+    /outs in total/.test(result.explanation),
+    !refused,
+    refused
+      ? `a refused result still called its count outs: ${result.explanation}`
+      : `a drawing spot lost its outs count: ${result.explanation}`,
+  );
+  if (result.refusal !== null) {
+    assert.equal(result.refusal.kind, 'already-ahead');
+    assert.equal(result.refusal.equityNow, result.equityNow, 'the refusal quotes the equity it refused on');
+    assert.ok(
+      result.equityNow >= result.refusal.threshold,
+      'a refusal has to be justified by the threshold it names',
+    );
+    assert.match(
+      result.explanation,
+      /no outs count here/,
+      'a refused result has to say so, not merely omit the number',
+    );
+  }
   for (const outcome of [...result.clean, ...result.dirty, ...result.neutral]) {
     assert.ok(outcome.equityAfter >= 0 && outcome.equityAfter <= 1, `${outcome.label} equity out of range`);
     closeTo(outcome.equityBefore, result.equityNow, `${outcome.label} equityBefore`);
@@ -313,6 +340,107 @@ test('a hand that is already ahead is reported as such, not as a 43-out draw', (
   assert.equal(boat.classification, 'clean');
   closeTo(boat.equityAfter, 1, '2d after');
   assert.match(boat.note, /full house/);
+});
+
+test('two pair on the flop reports no outs count at all, and still reports the cards', () => {
+  // THE DEFECT, exactly as a learner met it. Hero Ac 5d on Ah 5s 2c — two pair, aces and
+  // fives — against a wide continuing range. Hero is a long way in front before any card
+  // arrives, so the equity-threshold definition degenerates: EVERY one of the 47 unseen
+  // cards leaves hero at or above the 50% a card has to reach to count, and the panel
+  // headed the section "OUTS — 47 CARDS IN TOTAL". 47 is the whole rest of the deck.
+  //
+  // Counting from the board rather than from the implementation: hero holds 2 cards, the
+  // board holds 3, so 52 - 5 = 47 cards can come next. That is the number the old
+  // explanation published as an outs count, which is what makes it the wrong number for
+  // the word: it is not a property of hero's hand at all.
+  const heroCards = parseCards('Ac 5d');
+  const board = parseCards('Ah 5s 2c');
+  const result = computeOuts({
+    heroCards,
+    board,
+    opponent: parseRange('22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo', [...heroCards, ...board]),
+  });
+  assertInvariants(result);
+
+  assert.equal(result.cardsConsidered, 47, '52 less hero two and the flop three');
+  assert.ok(result.equityNow > 0.5, 'hero is in front before any card arrives');
+  assert.equal(
+    result.cleanCount + result.dirtyCount,
+    47,
+    'every card clears the bar, which is what makes the count meaningless as outs',
+  );
+
+  // The refusal, stated rather than implied.
+  assert.notEqual(result.refusal, null, 'a made hand must not carry an outs count');
+  assert.ok(!result.explanation.includes('47 outs'), `"47 outs" is back: ${result.explanation}`);
+  assert.match(result.explanation, /none of them is an out/);
+  assert.match(result.explanation, /rescues a hand that is behind/);
+
+  // The honest paragraph is kept. Suppressing the number is not licence to stop
+  // explaining, and the explanation is where the counts get their real meaning.
+  assert.match(result.explanation, /already in front/);
+  assert.ok(
+    result.assumptions.some((note) => note.includes('cards that keep hero ahead')),
+    'the assumptions still say what the counts are',
+  );
+
+  // The classifications survive: withholding the word must not throw the data away.
+  assert.equal(result.clean.length + result.dirty.length + result.neutral.length, 47);
+  assert.ok(result.cleanCount > 0 && result.dirtyCount > 0, 'both buckets still hold cards');
+});
+
+test('a hand that is genuinely behind still gets its textbook count', () => {
+  // The control, and the half of this that a suppression must not break. Hero 9h 8h on
+  // Ah 5h 2c against the same wide range — the flush-draw spot from
+  // `apps/web/src/fixtures/review.ts`.
+  //
+  // Fifteen candidates, counted from the deck: the 9 unseen hearts that complete the
+  // flush, plus the 3 remaining nines and the 3 remaining eights that pair hero up. The
+  // 8/7 clean-dirty split between them is the thresholds' work; the 15 is card counting.
+  //
+  // Hero is BEHIND at 43%, which is the precondition an out needs, so this count is a
+  // count of outs and the explanation says so in the words the lesson uses.
+  const heroCards = parseCards('9h 8h');
+  const board = parseCards('Ah 5h 2c');
+  const result = computeOuts({
+    heroCards,
+    board,
+    opponent: parseRange('22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo', [...heroCards, ...board]),
+  });
+  assertInvariants(result);
+
+  assert.ok(result.equityNow < 0.5, 'hero is behind, which is the precondition for an out');
+  assert.equal(result.refusal, null, 'a real draw must keep its count');
+  assert.equal(result.totalOuts, 15, 'eight clean and seven dirty');
+  assert.equal(result.cleanCount, 8);
+  assert.equal(result.dirtyCount, 7);
+  assert.match(result.explanation, /which is 15 outs in total/);
+});
+
+test('the refusal moves with the threshold it is defined against', () => {
+  // The bar is a parameter, not a law, and the refusal has to be measured against the
+  // same one the cards were. Hero 9c 8d against 9h 8s on 7s 6h 2c 3d chops every river,
+  // so equityNow is exactly 0.5 — sitting precisely ON the default bar, which is
+  // inclusive, so this is refused.
+  const spot = {
+    heroCards: parseCards('9c 8d'),
+    board: parseCards('7s 6h 2c 3d'),
+    opponent: exactRange(parseCards('9h 8s')),
+  };
+  const atTheBar = computeOuts(spot);
+  assertInvariants(atTheBar);
+  closeTo(atTheBar.equityNow, 0.5, 'equityNow');
+  assert.notEqual(atTheBar.refusal, null, 'the bar is inclusive at the bottom, for cards and for hero');
+  assert.equal(atTheBar.refusal?.threshold, 0.5);
+
+  // Raise the bar above a chop and hero is no longer "already ahead" of it — so the same
+  // 44 cards become a countable (and empty) set of outs again. Refusing on a hard-coded
+  // 0.5 instead of the threshold in force would get this backwards.
+  const raised = computeOuts({ ...spot, aheadThreshold: 0.51 });
+  assertInvariants(raised);
+  assert.equal(raised.refusal, null, 'hero is behind the raised bar, so outs are countable again');
+  assert.equal(raised.totalOuts, 0);
+  assert.match(raised.explanation, /which is 0 outs in total/);
 });
 
 // ---------------------------------------------------------------------------
@@ -783,4 +911,20 @@ test('outsSummaryFor gives the Coach the counts, the card lists and one sentence
   assert.equal(summary.total, summary.clean + summary.dirty);
   // The summary is a view, never a second opinion.
   assert.deepEqual(summary.dirtyCards, labelsInOrder(result.dirty));
+
+  // The refusal travels with the counts. Flattening the result is exactly where "these
+  // are not outs" would otherwise be dropped, leaving a display layer with a `total` and
+  // no way to know whether the word applies to it. Hero is drawing dead-ish here — 0% is
+  // not the case, but well under the bar — so there is a count and no refusal.
+  assert.equal(summary.refusal, null);
+  assert.equal(summary.refusal, result.refusal);
+
+  const madeHand = computeOuts({
+    heroCards: parseCards('Kh Kd'),
+    board: parseCards('Kc 7h 2c 3d'),
+    opponent: exactRange(parseCards('7c 7d')),
+  });
+  const madeSummary = outsSummaryFor(madeHand);
+  assert.notEqual(madeSummary.refusal, null, 'the flattened shape has to carry the refusal too');
+  assert.equal(madeSummary.refusal?.kind, 'already-ahead');
 });

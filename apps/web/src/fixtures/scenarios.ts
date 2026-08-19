@@ -949,7 +949,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         'Kc',
       ],
       explanation:
-        'On Jh 7c 4d hero holds Qs Qd — a pair of queens, jack kicker — for 65% equity against "JJ, 77, 44, AJ, KJs, QJs, JTs, 98s, 65s, A5s, KQo" (46 combinations still possible). Of the 47 cards that can come next, 2 are clean and 38 are dirty, which is 40 outs in total. Clean means hero\'s equity after that card is at least 90%; dirty means at least 50% but below 90%. Hero is already in front before any card arrives — equity now is above the same threshold a card has to clear to count as an out — so read the counts as cards that keep hero ahead rather than as the size of a draw.',
+        'On Jh 7c 4d hero holds Qs Qd — a pair of queens, jack kicker — for 65% equity against "JJ, 77, 44, AJ, KJs, QJs, JTs, 98s, 65s, A5s, KQo" (46 combinations still possible). Of the 47 cards that can come next, 2 are clean and 38 are dirty — but none of them is an out and there is no outs count here, deliberately: an out is a card that rescues a hand that is behind, and hero is not behind. Clean means hero\'s equity after that card is at least 90%; dirty means at least 50% but below 90%. Hero is already in front before any card arrives — equity now is above the same threshold a card has to clear to count as an out — so read the counts as cards that keep hero ahead rather than as the size of a draw.',
     },
     equity: {
       heroEquity: 0.6450812472551603,
@@ -1038,7 +1038,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
-        '38 of your 40 outs are dirty — they improve you without making you safe, so counting all of them would overstate your chances.',
+        '38 of the 40 cards that keep you in front leave a way to lose — they are not outs, because you are not drawing, but they are the cards a river can still take the pot back with.',
       ],
     },
     stackContext: {
@@ -1066,12 +1066,12 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       limitations: [
         'This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.',
         'Every hand in the opponent range is weighted equally. Real opponents do not play every hand in a range the same way.',
-        'The clean/dirty split for outs uses documented equity thresholds. They are a modelling choice, not a law of the game.',
+        'The clean/dirty split uses documented equity thresholds, and here it is not a count of outs at all — you are already in front of the same bar a card would have to clear. The thresholds are a modelling choice, not a law of the game.',
         'No implied odds, reverse implied odds or future-street play are modelled.',
       ],
     },
     teachingNotes: [
-      'Notice the split: 2 clean and 38 dirty, out of 40 outs in total. A card that improves you is not the same as a card that wins you the hand — an opponent who is behind after it lands can still draw out on the last card.',
+      'Notice the split: 2 clean and 38 dirty — and notice that neither figure is a number of outs. You are in front already at 64.5%, so no card here rescues anything: these are the cards that keep you in front, and the 38 dirty ones leave the river a way to take it back.',
       'No rule-of-2-and-4 figure here, deliberately: at 64.5% you are already ahead, so you are not drawing to anything. The shortcut counts the cards that rescue a hand that is behind; applied to a hand that is already winning it counts cards that change nothing and returns a number that is not a probability of anything.',
       'At an SPR of 1.9 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
     ],

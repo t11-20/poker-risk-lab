@@ -45,6 +45,7 @@
 import type { FastifyInstance } from 'fastify';
 import { type RouteModule, registerRoutes } from '../app.ts';
 import { sessionPlugin } from '../auth/session.ts';
+import { getConfig } from '../config.ts';
 import { getSql } from '../db.ts';
 import { postgresArchive, roomRegistry } from '../rooms/registry.ts';
 import wsHub from '../ws/hub.ts';
@@ -87,6 +88,10 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   // as a crash at boot.
   roomRegistry({
     archive: postgresArchive(getSql),
+    // A lone learner at a table of bots gets this long to act, so the Coach panel can actually be
+    // read before the clock folds them. Threaded from config rather than read inside `LiveTable`,
+    // so a test constructing a table directly can still vary it.
+    learnerTurnSeconds: getConfig().learnerTurnSeconds,
     onProblem: (message, detail) => {
       app.log.warn({ ...detail }, message);
     },

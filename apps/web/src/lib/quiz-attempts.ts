@@ -22,6 +22,21 @@
  * an ordinary state of the screen: signed out, offline, rate limited, a quiz id the deployment does
  * not carry. None of them should take a lesson down with them.
  *
+ * ## …and "recorded" is a fact the server has to send, not one this client may assume
+ *
+ * A second defect, found in a browser-level journey verification and fixed here. The route answers
+ * 200 to a signed-out learner and stores nothing — which is the product's DEFAULT state, since
+ * nothing creates a session until a table is opened — and the reply carried no signal at all about
+ * whether a row had been written. So `state: 'live'` meant only "the call succeeded", the panel
+ * read that as "recorded", and every anonymous learner was told the server had recorded a question
+ * they had answered while `prl.quiz_attempts` held nothing of theirs and `GET /me/progress`
+ * answered them `401 not_authenticated`.
+ *
+ * `QuizAttemptResponse.recorded` is that signal, and it splits the graded outcome into `'live'` and
+ * `'anonymous'` below. `lesson-reads.ts` already used exactly this shape for exactly this problem
+ * on the sibling route, and the two are deliberately the same shape: two different answers to "was
+ * anything stored?" would be two places to get the honesty wrong.
+ *
  * ## What is deliberately not sent
  *
  * A `decision` question. It has no recorded answer anywhere in the contract — see the note on
@@ -53,24 +68,58 @@ export type QuizAnswer =
   | { readonly kind: 'revealed' };
 
 /**
- * What the server said about one answer.
+ * The server's comparison, on its own — everything that is true of the answer whether or not it
+ * was kept.
+ *
+ * Split out because both graded states below carry exactly this and nothing about the grading
+ * differs between them. A signed-out learner's answer is graded by the same code, against the same
+ * figure, and the explanation they read is the same one; the only difference is that no row exists
+ * afterwards, and that belongs in the state rather than in the grading.
+ */
+export interface GradedAnswer {
+  readonly correct: boolean;
+  readonly explanation: string;
+  /** Numeric questions only: the value the server computed and graded against. */
+  readonly expected: { readonly value: number; readonly unit: string; readonly tolerance: number } | null;
+}
+
+/**
+ * What the server said about one answer, and whether it kept it.
  *
  * `'idle'` is "nothing has been answered yet", which is distinct from `'pending'` — a screen that
  * showed "asking the server" before the learner had answered anything would be describing a request
  * that does not exist.
+ *
+ * `'live'` and `'anonymous'` are the same two states `lesson-reads.ts` calls `'recorded'` and
+ * `'anonymous'`, and they exist here for the same reason: the route answers 200 and stores nothing
+ * for a signed-out learner — which is the product's default state, since nothing creates a session
+ * until a table is opened — and until `QuizAttemptResponse.recorded` existed this client could not
+ * tell the two apart. It said the server had recorded the question either way. Two states rather
+ * than a boolean on one, so that no screen can read `state === 'live'` and mean "graded": the
+ * grading is `gradedAnswer`, and the recording is the state.
  */
 export type QuizVerdict =
   | { readonly state: 'idle' }
   | { readonly state: 'pending' }
   /** The call could not be made or was refused. Nothing was recorded. */
   | { readonly state: 'unavailable' }
-  | {
-      readonly state: 'live';
-      readonly correct: boolean;
-      readonly explanation: string;
-      /** Numeric questions only: the value the server computed and graded against. */
-      readonly expected: { readonly value: number; readonly unit: string; readonly tolerance: number } | null;
-    };
+  /** Graded by the server, and stored as one of the questions this learner has answered. */
+  | ({ readonly state: 'live' } & GradedAnswer)
+  /** Graded by the server, and stored nowhere: there is no session to attach an attempt to. */
+  | ({ readonly state: 'anonymous' } & GradedAnswer);
+
+/**
+ * The server's comparison when there was one, whichever graded state it arrived in.
+ *
+ * The reason this is a function and not two `state ===` checks at each call site: a reader who
+ * wants "did the server answer?" writes `state === 'live'`, which was the only graded state until
+ * now and is now the *recorded* one. Every such check would silently start treating a signed-out
+ * learner as an outage — falling back to the browser's own figure while the server's sat unread.
+ */
+export function gradedAnswer(verdict: QuizVerdict): GradedAnswer | null {
+  if (verdict.state === 'live' || verdict.state === 'anonymous') return verdict;
+  return null;
+}
 
 /**
  * The request body for an answer, or null when this answer is not something the server grades.
@@ -98,6 +147,27 @@ export function attemptBodyFor(question: QuizQuestion, answer: QuizAnswer): Quiz
     return { questionId: question.id, answer: { kind: 'number', value: answer.value } };
   }
   return null;
+}
+
+/**
+ * The server's reply, as a state this screen can render.
+ *
+ * Exported, and a function of the reply alone, for the same reason `outcomeFor` is in
+ * `lesson-reads.ts`: it is the whole of the honesty in this file, and a mapping buried inside a
+ * function that needs `fetch`, a CSRF round trip and a running API is a mapping nothing tests.
+ *
+ * The `recorded` branch is the point. This client cannot see the session cookie — it is
+ * `HttpOnly` — so "am I signed in?" is not a question it can answer, and inferring it from a
+ * `GET /auth/session` read a moment earlier would be describing a different request than the one
+ * that was just graded. The server says whether the row exists, and this reads what it said.
+ */
+export function verdictFor(response: QuizAttemptResponse): QuizVerdict {
+  return {
+    state: response.recorded ? 'live' : 'anonymous',
+    correct: response.correct,
+    explanation: response.explanation,
+    expected: response.expected ?? null,
+  };
 }
 
 /**
@@ -130,12 +200,7 @@ export async function submitQuizAttempt(
     }),
   );
   if (!attempt.ok) return { state: 'unavailable' };
-  return {
-    state: 'live',
-    correct: attempt.data.correct,
-    explanation: attempt.data.explanation,
-    expected: attempt.data.expected ?? null,
-  };
+  return verdictFor(attempt.data);
 }
 
 /**
@@ -150,16 +215,37 @@ export async function submitQuizAttempt(
 export function resolvedVerdict(
   verdict: QuizVerdict,
   local: boolean,
-): { readonly matched: boolean; readonly source: 'server' | 'local' | 'pending' } {
+): { readonly matched: boolean; readonly source: VerdictSource } {
   if (verdict.state === 'live') return { matched: verdict.correct, source: 'server' };
+  // Graded by the server exactly as `'live'` was, so its comparison is still the one shown — the
+  // difference is only what the sentence beside it is allowed to claim.
+  if (verdict.state === 'anonymous') return { matched: verdict.correct, source: 'anonymous' };
   if (verdict.state === 'pending') return { matched: local, source: 'pending' };
   return { matched: local, source: 'local' };
 }
 
-/** What the screen says about where its verdict came from. Never claims a recording that failed. */
-export const VERDICT_SOURCE_NOTE: Readonly<Record<'server' | 'local' | 'pending', string>> = {
+/** Who made the comparison on screen, and what became of it. One sentence each, below. */
+export type VerdictSource = 'server' | 'anonymous' | 'local' | 'pending';
+
+/**
+ * What the screen says about where its verdict came from. Never claims a recording that failed.
+ *
+ * `anonymous` is the sentence this table was missing. The server graded the answer and stored
+ * nothing, and for the whole of that case the screen said what `server` says — "the one it recorded
+ * as a question you have answered" — about a row that was never written. It is the sibling
+ * sentence in `lessonReadNote`, phrased for an answer rather than a lesson: what happened, why
+ * nothing was kept, and what a learner who wants it kept would do, in that order.
+ *
+ * It says it once, where it matters, and only when it applies. There is no banner, no badge on the
+ * question and no prompt before answering: the app is guest-first on purpose, a quiz is worth
+ * doing without an account, and a standing reminder that answers do not count is a nag that
+ * teaches nothing.
+ */
+export const VERDICT_SOURCE_NOTE: Readonly<Record<VerdictSource, string>> = {
   server:
     'This is the server’s own comparison, made against a figure it computed when you answered — and the one it recorded as a question you have answered.',
+  anonymous:
+    'This is the server’s own comparison, made against a figure it computed when you answered. Nothing was recorded, because there is no session to attach it to — answers count towards your record once this browser is carrying one, and opening a table creates a guest session in one request, with no email and no password.',
   pending: 'Asking the server for its comparison. What is shown is the same comparison made in your browser.',
   local:
     'The server could not be reached, so this comparison was made in your browser and nothing was recorded. It is the same comparison the server makes.',

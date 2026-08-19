@@ -73,19 +73,42 @@
  *
  * ## The units badge
  *
- * Permanent, in the bar, on every route, reading `1,000 units` with the word spelled out and
- * never a currency symbol (`UnitsBadge` in `@prl/ui` enforces that and carries the "free,
- * valueless, resettable" explanation as a real disclosure rather than a `title` tooltip). It is
- * never hidden, shortened or dropped at any viewport width: it is a product guardrail, and the
- * whole bar is laid out around keeping it visible.
+ * Permanent, in the bar, on every route, with the word `units` spelled out and never a currency
+ * symbol (`UnitsBadge` in `@prl/ui` enforces that and carries the "free, valueless, resettable"
+ * explanation as a real disclosure rather than a `title` tooltip). It is never hidden, shortened
+ * or dropped at any viewport width: it is a product guardrail, and the whole bar is laid out
+ * around keeping it visible.
  *
  * It renders the fixture's starting balance on the server and asks the API for the real figure
  * after mount. That order is deliberate: the badge is part of the shell, the shell is on every
  * page, and awaiting a session in the root layout would make every route in the app dynamic and
  * add a round trip to first byte — to change one number that the fixture already gets right for a
- * new player. If the API is absent (another team is still building it) the fixture stands and
- * nothing renders as broken, which is the whole point of `safeFetch` returning a result rather
- * than throwing.
+ * new player.
+ *
+ * ### It stops claiming a figure the moment it learns it cannot check one
+ *
+ * The session effect used to read `if (!result.ok) return;`, which left the bundled starting
+ * balance standing whenever the API could not be reached. With the API stopped the bar therefore
+ * stated `1,000 UNITS`, unqualified, on every page, to a reader whose real figure was 2,000 — and
+ * on `/record` it sat directly above that page's own "your record could not be fetched" notice.
+ * Two statements about the same reader, on one screen, one of them invented.
+ *
+ * So the badge now tracks a `UnitsReadout` rather than a number, and when nothing has told it a
+ * figure it shows no figure. The precedent is its own sibling three fields down: the scenario
+ * count renders nothing at all when the request fails, because not answering is a fine answer and
+ * a made-up count is not. The difference here is that the readout says which of the two happened
+ * instead of going quiet — the pill stays in the bar, holding the word `units` and the sentence
+ * that no figure could be fetched, so the guardrail is intact and nothing on screen is a guess.
+ *
+ * ### And it re-asks when the reader changes something
+ *
+ * Pressing "reset my units" on `/record` produced "Done. Your units are back to 2000" while this
+ * badge went on reading `3,308 UNITS` until a reload: it read the session once, on mount, and
+ * nothing told it the number had moved. It now subscribes to `subscribeToAcceptedMutations`
+ * (`lib/api.ts`), which fires after any mutating request the API accepts, and re-reads the
+ * session. It re-reads rather than being handed the new figure on purpose — see that function's
+ * note. The header shows what `GET /auth/session` says and nothing else, which is what makes it
+ * incapable of disagreeing with any other screen.
  *
  * ## What the active destination is marked with
  *
@@ -99,7 +122,7 @@ import { UnitsBadge } from '@prl/ui';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { type ReactElement, useEffect, useRef, useState } from 'react';
-import { API_PATHS, apiGet, fetchSession, safeFetch } from '@/lib/api.ts';
+import { API_PATHS, apiGet, fetchSession, safeFetch, subscribeToAcceptedMutations } from '@/lib/api.ts';
 import { isCurrentDestination, NAV_DESTINATIONS } from '@/lib/nav.ts';
 import { MobileNav } from './MobileNav.tsx';
 
@@ -134,6 +157,53 @@ const CTA_DESTINATION = NAV_DESTINATIONS.find((destination) => destination.href 
  */
 let cachedScenarioCount: number | null = null;
 
+/**
+ * What the bar is entitled to say about the reader's units.
+ *
+ * Three states rather than a number, because "1,000" and "1,000, and nobody has confirmed that"
+ * and "we could not find out" are three different claims and the bar was making the first one for
+ * all three. The union is what stops a future edit collapsing them again: there is no number to
+ * read without first saying which of the three you are in.
+ *
+ *  - `assumed` — the figure on screen is the starting balance the shell was handed, and no answer
+ *    from the API has either confirmed or replaced it. This is the server render, the moment
+ *    before the session read lands, and the reader who has no session at all: a visitor with no
+ *    account has no figure of their own, and the starting balance is exactly what the product will
+ *    give them, so showing it is a statement about the product rather than about them.
+ *  - `known` — `GET /auth/session` named a user and this is that user's figure.
+ *  - `unknown` — the session read failed. No figure is shown at all.
+ */
+type UnitsReadout =
+  | { readonly state: 'assumed'; readonly units: number }
+  | { readonly state: 'known'; readonly units: number }
+  | { readonly state: 'unknown' };
+
+/**
+ * The pill, when there is no figure to put in it.
+ *
+ * Shaped like `UnitsBadge` and wearing its classes, so the bar's layout does not move and the
+ * word `units` stays where the guardrail requires it. What it does not have is a number, a
+ * placeholder digit or a dash that could be mistaken for one: the whole point is that this
+ * component knows nothing and says so.
+ *
+ * No `i` disclosure here. That button explains what a unit is, and it is attached to a figure —
+ * `SiteFooter` carries the same `UNITS_EXPLANATION` on every page and at every width, so nothing
+ * about what units ARE is lost while the API is unreachable.
+ */
+function UnitsUnknown(): ReactElement {
+  return (
+    <span className="prl-units prl-shell__units">
+      <span className="prl-units__value">
+        <span className="prl-units__word prl-label">units — not available</span>
+        <span className="prl-visually-hidden">
+          Your practice units could not be fetched, so no figure is shown here. Nothing about your units has
+          changed.
+        </span>
+      </span>
+    </span>
+  );
+}
+
 export interface SiteHeaderProps {
   /**
    * The units to show before the API answers — the fixture's starting balance. Passed in rather
@@ -147,7 +217,7 @@ export function SiteHeader(props: SiteHeaderProps): ReactElement {
   const pathname = usePathname();
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const [stuck, setStuck] = useState(false);
-  const [units, setUnits] = useState(fallbackUnits);
+  const [units, setUnits] = useState<UnitsReadout>({ state: 'assumed', units: fallbackUnits });
   const [scenarioCount, setScenarioCount] = useState<number | null>(cachedScenarioCount);
 
   useEffect(() => {
@@ -168,14 +238,38 @@ export function SiteHeader(props: SiteHeaderProps): ReactElement {
     // Aborted on unmount so a navigation away does not leave a request resolving into a component
     // that is gone. `safeFetch` never throws, so there is no rejection to swallow either.
     const controller = new AbortController();
-    void fetchSession({ signal: controller.signal }).then((result) => {
-      if (!result.ok) return;
-      const user = result.data.user;
-      if (user === null) return;
-      setUnits(user.units);
-    });
-    return () => controller.abort();
-  }, []);
+    let mounted = true;
+
+    const readSession = (): void => {
+      void fetchSession({ signal: controller.signal }).then((result) => {
+        // The unsubscribe below runs before the abort, so nothing re-reads after unmount; this
+        // guard is for the read already in flight when the reader navigated away.
+        if (!mounted) return;
+        if (!result.ok) {
+          // The failure is the answer. Keeping the starting balance on screen here is what stated
+          // `1,000 UNITS` to a reader with 2,000 for as long as the API stayed down — and it did
+          // it silently, because `return` looks like "nothing to update" rather than "we just
+          // found out we are guessing".
+          setUnits({ state: 'unknown' });
+          return;
+        }
+        const user = result.data.user;
+        setUnits(
+          user === null ? { state: 'assumed', units: fallbackUnits } : { state: 'known', units: user.units },
+        );
+      });
+    };
+
+    readSession();
+    // A reset, a guest sign-up, anything the API accepted: the shell's copy of the session is now
+    // out of date, and the fix is to ask the one endpoint that knows rather than to trust the echo.
+    const unsubscribe = subscribeToAcceptedMutations(readSession);
+    return () => {
+      mounted = false;
+      unsubscribe();
+      controller.abort();
+    };
+  }, [fallbackUnits]);
 
   useEffect(() => {
     if (cachedScenarioCount !== null) return;
@@ -266,7 +360,11 @@ export function SiteHeader(props: SiteHeaderProps): ReactElement {
           </nav>
 
           <div className="prl-shell__header-tools">
-            <UnitsBadge className="prl-shell__units" label="Practice units" units={units} />
+            {units.state === 'unknown' ? (
+              <UnitsUnknown />
+            ) : (
+              <UnitsBadge className="prl-shell__units" label="Practice units" units={units.units} />
+            )}
             <MobileNav pathname={pathname} />
           </div>
         </div>

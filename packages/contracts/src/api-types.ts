@@ -125,6 +125,23 @@ export interface QuizAttemptResponse {
   readonly expected?: { readonly value: number; readonly unit: string; readonly tolerance: number };
   /** Present for multiple choice: why each option is right or wrong. */
   readonly optionNotes?: readonly string[];
+  /**
+   * Whether this answer was stored as one of the questions this learner has answered.
+   *
+   * `false` is the ordinary outcome, not an error. The route grades for everybody — the app is
+   * guest-first and a client's success path must not depend on whether somebody happens to be
+   * signed in — but a signed-out caller has no user row to attribute an attempt to, so nothing is
+   * written and `quizQuestionsAnswered` on `GET /me/progress` does not move.
+   *
+   * Required rather than optional, and that is the whole point of the field. Without it the reply
+   * to a signed-out learner was byte-for-byte the reply to a signed-in one, so the panel said the
+   * server "recorded" a question it had discarded — the product's own honesty rule broken in its
+   * teaching surface. `LessonReadResponse.completedAt` carries the same signal for the sibling
+   * route (`null` means nothing was stored); this is a boolean rather than a timestamp because
+   * `prl.quiz_attempts` is append-only with no row to echo back, and inventing a timestamp from
+   * this process's clock would be a fact the database never asserted.
+   */
+  readonly recorded: boolean;
 }
 
 /**
