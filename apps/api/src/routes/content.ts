@@ -59,6 +59,8 @@ import type {
   GlossaryResponse,
   Lesson,
   LessonListResponse,
+  LessonReadRequest,
+  LessonReadResponse,
   LessonResponse,
   LessonSummary,
   LiveCalculation,
@@ -93,7 +95,7 @@ import type { ResolvedSession } from '../auth/session.ts';
 import { DEFAULT_WORK_LIMITS, type EquityPlan, parseEquityRequest, type WorkLimits } from '../calc/parse.ts';
 import { getSql } from '../db.ts';
 import { AppError } from '../errors.ts';
-import { recordQuizAttempt, recordScenarioAttempt } from '../repositories/progress.ts';
+import { recordQuizAttempt, recordScenarioAttempt, upsertLessonProgress } from '../repositories/progress.ts';
 import type { CoachTask, WireRange } from '../workers/equity-worker.ts';
 import { closeSharedPool, getSharedPool, type WorkerPool } from '../workers/pool.ts';
 
@@ -986,6 +988,55 @@ const contentRoutes: FastifyPluginAsync = (app) => {
    * comes from the question's `calculation`, never from the content file — a stored answer key is
    * a number that can silently disagree with the maths, and it is the learner who pays for that.
    */
+  /**
+   * Records that a learner has read a lesson.
+   *
+   * ## Why this is a route at all
+   *
+   * `upsertLessonProgress` existed, was tested, and had no caller outside its own test, so
+   * `lessonsCompleted` could never be anything but zero and the learner's record was a column of
+   * noughts that no action could move. A repository function with no route is not a feature.
+   *
+   * ## Why the client has to say so explicitly
+   *
+   * Completion is NOT inferred from `GET /content/lessons/:id`. A prefetch, a crawler, a
+   * back-button and a genuine read are indistinguishable at that route, and progress that fills
+   * itself in describes nobody. The client posts when the learner reaches the end.
+   *
+   * A guest with no session gets a 200 and nothing stored, exactly like the quiz-attempt route:
+   * the app is guest-first, and refusing the call would make the client's success path depend on
+   * whether somebody happens to be signed in.
+   */
+  app.post<{ Params: IdParams; Body: LessonReadRequest }>(
+    '/content/lessons/:id/read',
+    { schema: { params: { $ref: 'prl:contentIdParams#' }, body: { $ref: 'prl:lessonReadBody#' } } },
+    async (request, reply): Promise<LessonReadResponse> => {
+      perCaller(reply);
+      const lesson = lessonById(request.params.id);
+      if (lesson === null) {
+        throw new AppError('content_not_found', { logDetail: `no lesson ${request.params.id}` });
+      }
+
+      const userId = callerUserId(request);
+      if (userId === null) {
+        // Nothing to store, and nothing to pretend: the reply describes the read that just
+        // happened rather than a row, so a guest client renders the same shape as a member's.
+        return { lessonId: lesson.id, completedAt: null, lastViewedAt: new Date().toISOString() };
+      }
+
+      const row = await upsertLessonProgress(getSql(), {
+        userId,
+        lessonId: lesson.id,
+        completed: request.body.completed,
+      });
+      return {
+        lessonId: row.lesson_id,
+        completedAt: row.completed_at === null ? null : row.completed_at.toISOString(),
+        lastViewedAt: row.last_viewed_at.toISOString(),
+      };
+    },
+  );
+
   app.post<{ Params: IdParams; Body: QuizAttemptRequest }>(
     '/content/quizzes/:id/attempt',
     { schema: { params: { $ref: 'prl:contentIdParams#' }, body: { $ref: 'prl:quizAttemptBody#' } } },

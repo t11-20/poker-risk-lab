@@ -70,12 +70,15 @@
 # creating roles and owning a schema is exactly what the runtime role must not be
 # able to do.
 #
-# The `test` job is deliberately still privileged: `apps/api/test/helpers/hands-app.ts`
-# cleans up fixtures with `delete from prl.rooms`, and `prl_app` holds only
-# SELECT/INSERT/UPDATE there. That is the privilege model working as designed, so
-# the fix belongs in the fixture helper (delete as the migrator, or cascade from a
-# table the app may delete from) rather than in the grants. Until then this job
-# says out loud that it does not exercise least privilege.
+# The `test` job now runs as `prl_ci_app` too. It could not before: the fixture
+# helper cleaned up with `delete from prl.rooms`, on which `prl_app` holds only
+# SELECT/INSERT/UPDATE. That was the privilege model working as designed, so the
+# fix went into the helper — it issues that one delete as the schema-owning
+# identity via `DATABASE_URL_ADMIN` — rather than into the grants. Two coverage
+# files legitimately need more as well (they create throwaway databases and run
+# ALTER/GRANT/REVOKE to prove the schema gate can fail), and they ask for the
+# admin DSN explicitly. Everything else in the suite runs with the verb set the
+# API actually has.
 # ---------------------------------------------------------------------------
 
 name: CI
@@ -273,10 +276,13 @@ jobs:
           --health-retries 20
 
     env:
-      # The privileged identity, on purpose — see the "Which identity the
-      # database jobs connect as" section in this file's header. This job does
-      # NOT exercise the least-privilege model; `end-to-end` and `a11y` do.
-      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_test
+      # The job default is the LEAST-PRIVILEGED identity, so a missing GRANT fails
+      # this build rather than a deployment. The steps that legitimately need more
+      # — waiting, migrating, creating the role, and the two coverage files that
+      # verify the schema gate and the migration runner — override it at step level
+      # with DATABASE_URL_ADMIN.
+      DATABASE_URL: postgres://prl_ci_app:prl-ci-not-a-secret@127.0.0.1:5432/poker_risk_lab_test
+      DATABASE_URL_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_test
 
     steps:
       - name: Check out
@@ -300,14 +306,49 @@ jobs:
 
       - name: Wait for PostgreSQL
         # The service container's own healthcheck already gates the job, but this
-        # also proves the connection string this job will use actually works,
-        # which is a far more useful failure than a timeout inside a test.
+        # also proves a connection string actually works, which is a far more
+        # useful failure than a timeout inside a test. Run as the admin identity,
+        # because the job's own role does not exist yet.
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
         run: pnpm run db:wait
 
       - name: Migrate
+        # Owning a schema is exactly what the runtime role must not be able to do.
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
         run: pnpm run db:migrate
 
+      - name: Grant a login identity membership of prl_app
+        # `prl_app` is NOLOGIN by design: a privilege container whose real login
+        # identity is granted membership out of band. This is that step, done the
+        # way a deployment would do it. The password is a throwaway for an
+        # ephemeral container destroyed with the job.
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql --host 127.0.0.1 --username postgres --dbname poker_risk_lab_test \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'prl_ci_app') THEN
+              CREATE ROLE prl_ci_app LOGIN PASSWORD 'prl-ci-not-a-secret';
+            END IF;
+          END
+          $$;
+          GRANT prl_app TO prl_ci_app;
+          GRANT CONNECT ON DATABASE poker_risk_lab_test TO prl_ci_app;
+          SQL
+          # Prove the identity is bounded rather than assuming it: a role that could
+          # still create tables would make this whole job theatre.
+          PGPASSWORD=prl-ci-not-a-secret psql --host 127.0.0.1 --username prl_ci_app \
+            --dbname poker_risk_lab_test --tuples-only --no-align \
+            --command "select rolsuper or rolcreatedb or rolcreaterole from pg_roles where rolname = current_user" \
+            | grep -qx f || { echo "prl_ci_app is not bounded"; exit 1; }
+
       - name: Verify the live schema's security properties
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
         # `db:verify` checks things no unit test can see: that `prl_app` has no privileges it should
         # not, that the deck and salt columns do not exist, that every documented constraint is
         # actually on the table. It passed and was run by no job.

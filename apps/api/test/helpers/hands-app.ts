@@ -29,7 +29,7 @@ import { sha256 } from '../../src/repositories/hashing.ts';
 import { newHandActionId, newHandSeatId } from '../../src/repositories/ids.ts';
 import type { Db } from '../../src/repositories/sql.ts';
 import handsRoutes from '../../src/routes/hands.ts';
-import { databaseSkip, TEST_DATABASE_URL } from './database.ts';
+import { databaseSkip, TEST_DATABASE_URL, withAdminSql } from './database.ts';
 import type { PersistedHand } from './hand-rows.ts';
 
 /**
@@ -214,13 +214,37 @@ export async function insertHand(sql: Db, fixture: PersistedHand): Promise<void>
  * The room cascades to its hands, and each hand to its seats and actions, so the order is: rooms
  * first (which takes the history with it), then the accounts, which `rooms.owner_user_id` would
  * otherwise RESTRICT.
+ *
+ * ## Why the two deletes run on two different connections
+ *
+ * `prl.rooms` is one of the tables the runtime role may not delete from: the grant matrix at the
+ * bottom of `db/migrations/0001_initial.sql` gives `prl_app` SELECT/INSERT/UPDATE there and no
+ * DELETE, because a room carries other learners' hand history and removing it must be a deliberate
+ * ordered operation rather than something the API can do by accident.
+ *
+ * This one statement is why CI's `test` job could not connect as a member of `prl_app` and had to
+ * keep using the superuser — so the job that runs every SQL-backed test was the one job that never
+ * exercised the privilege model (audit finding OPS-008). Widening the grant to fix that would have
+ * deleted the finding rather than the defect. Instead the teardown says which identity it needs:
+ * the room delete goes to the schema-owning identity (`DATABASE_URL_ADMIN`, falling back to
+ * `DATABASE_URL`), and everything the application itself can legitimately do — `prl.users` carries
+ * a real DELETE grant, because a learner deleting their account is an application path — stays on
+ * the suite's own connection, where a missing GRANT still fails the suite.
+ *
+ * `prl.users` is deleted second and on the app connection ON PURPOSE: it is the assertion that the
+ * runtime role can still do its own work. Moving it to the admin handle for tidiness would make
+ * this helper prove nothing about the grant it depends on.
  */
 export async function deleteFixtures(
   sql: Db,
   roomIds: readonly string[],
   userIds: readonly string[],
 ): Promise<void> {
-  for (const roomId of roomIds) await sql`delete from prl.rooms where id = ${roomId}`;
+  if (roomIds.length > 0) {
+    await withAdminSql(async (admin) => {
+      for (const roomId of roomIds) await admin`delete from prl.rooms where id = ${roomId}`;
+    });
+  }
   for (const userId of userIds) await sql`delete from prl.users where id = ${userId}`;
 }
 

@@ -111,3 +111,10 @@ a feeling of readiness.
 This file is updated when a decision changes, and only then. If it says DO NOT SHIP and the tree has
 moved on, the correct reading is that no one has made a newer decision — not that the old one has
 lapsed.
+
+**2026-08-19 — status note, not a decision.** Remediation of the round-2 findings is under way and
+some of it has landed; what has been re-run and by what evidence is recorded in
+[`../REPORT.md`](../REPORT.md) §8. **The decision above is unchanged**, and none of that work
+changes it: bar 4 asks for a third independent round against the remediated tree by reviewers who
+did not do the remediation, and that round has not been run. Remediation is not clearance, which is
+the whole reason this file has its own rule about when it changes.

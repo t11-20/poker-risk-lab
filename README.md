@@ -51,7 +51,7 @@ positions.
 corepack enable                      # Node 24.18.0 and pnpm 11.10.0 required
 
 pnpm install --frozen-lockfile
-pnpm run security:audit              # 8 supply-chain gates — run this first
+pnpm run security:audit              # 9 supply-chain gates — run this first
 
 cp .env.example .env
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
@@ -119,10 +119,13 @@ through EV-of-bet to zero; the closed-form two-card hit probability is confirmed
 enumerating run-outs through the engine; ICM with 3:1 stacks and 70/30 payouts gives
 exactly 60/40.
 
-**The rules** are checked by 4,000 randomised hands asserting, after **every single
-action**, that chips are conserved, that no card is dealt twice, that the bet level agrees
-with the seats, that pots always balance, and that a rejected action leaves the state
-byte-identical.
+**The rules** are checked by three randomised soaks — **8,500 hands and 50,236 applied
+actions** in total (4,000 general-invariant, 1,500 shove-heavy, 3,000 short-blind-heavy),
+measured 2026-08-19 — asserting, after **every single action**, that chips are conserved,
+that no card is dealt twice, that the bet level agrees with the seats, that pots always
+balance, and that a rejected action leaves the state byte-identical. Each soak also asserts
+its own coverage, so a generator that degenerated into folding every hand fails rather than
+passing quickly.
 
 **Hidden information** is checked at runtime, not by review: every view for every recipient
 at every point in a hand is serialised and scanned for cards that recipient must not see.
@@ -162,10 +165,13 @@ have to be designed together.
 This repo was built during the **Mini Shai-Hulud** campaign — a self-propagating npm/PyPI
 worm that compromised on the order of 1,300 package versions, steals CI and developer
 credentials, and forges Sigstore provenance attestations. So the dependency policy is
-release-blocking and enforced by eight gates:
+release-blocking and enforced by nine gates:
 lifecycle scripts disabled, registry-only resolutions, a 7-day release-age cooldown, exact
 versions, lockfile hashes cross-checked against the registry, a family deny-list, an OSV
-scan, an on-disk IOC sweep, and a CycloneDX SBOM.
+scan, an on-disk IOC sweep, a CycloneDX SBOM, and — added after the release audit —
+**pinning of the pipeline's own dependencies**: every GitHub Action by 40-hex commit SHA and
+every container base image by `@sha256:` digest, because `actions/cache@v4` is a pointer its
+owner can repoint at code that then runs inside this repository's CI.
 
 The footgun: **pnpm 11 reads only auth and registry settings from `.npmrc`.** A policy
 written there is *silently ignored* — the repo looks hardened while being wide open. That

@@ -37,6 +37,7 @@ import { notFound } from 'next/navigation';
 import type { ReactElement } from 'react';
 import { LessonBlockRenderer } from '@/components/LessonBlockRenderer.tsx';
 import { LessonContents } from '@/components/LessonContents.tsx';
+import { LessonRead } from '@/components/LessonRead.tsx';
 import { QuizRunner } from '@/components/QuizRunner.tsx';
 import { lessonSummaryFixture } from '@/fixtures/learn.ts';
 import {
@@ -105,7 +106,6 @@ export default async function LessonPage({ params }: LessonPageProps): Promise<R
   const { lesson, quiz, glossary } = loaded.data;
   const outline = lessonOutline(lesson.blocks);
   const difficulty = asDifficulty(lesson.difficulty);
-  const summary = lessonSummaryFixture(lesson.id);
   const prerequisites = lesson.prerequisites.map((id) => ({
     id,
     title: lessonSummaryFixture(id)?.title ?? id,
@@ -131,7 +131,15 @@ export default async function LessonPage({ params }: LessonPageProps): Promise<R
             <Chip glyph={DIFFICULTY_GLYPHS[difficulty]}>{DIFFICULTY_LABELS[difficulty]}</Chip>
           )}
           <Chip>{pluralise(lesson.estimatedMinutes, 'minute')}</Chip>
-          {summary?.completed === true ? <Chip glyph="✓">read</Chip> : null}
+          {/*
+            There was a `✓ read` chip here, and it was not about the reader.
+            It came from `lessonSummaryFixture(lesson.id).completed` — bundled sample data, two
+            entries of which are hard-coded `true` — and it was rendered whether or not the lesson
+            body had come from the live API, so two lessons showed every visitor a tick for a read
+            they had never made and no notice on the page qualified it. The header of a lesson is
+            not a place to guess at somebody's record; `LessonRead` at the foot is where a reader
+            states it and `/record` is where the answer lives. See the audit's PROD-028.
+          */}
           {quiz === null ? null : <Chip glyph="?">{pluralise(quiz.questions.length, 'question')}</Chip>}
         </div>
         {prerequisites.length === 0 ? null : (
@@ -202,6 +210,15 @@ export default async function LessonPage({ params }: LessonPageProps): Promise<R
           {quiz === null ? null : (
             <QuizRunner quiz={quiz} lessonHref={lessonHref(lesson.id)} lessonTitle={lesson.title} />
           )}
+
+          {/*
+            Last, and that placement is the feature. Reaching this control means having gone past
+            the prose, the takeaways, the vocabulary and the quiz, so pressing it is a statement the
+            learner makes at the end rather than something the page inferred from their arrival —
+            which is the whole of PROD-028. `POST /content/lessons/:id/read` is called from nowhere
+            else in this client.
+          */}
+          <LessonRead lessonId={lesson.id} lessonTitle={lesson.title} />
 
           <div className="prl-btn-row prl-learn-lesson__foot">
             <Link className="prl-btn prl-btn--secondary prl-btn--md" href={LEARN_PATH}>

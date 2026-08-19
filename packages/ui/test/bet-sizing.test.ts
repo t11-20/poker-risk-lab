@@ -16,6 +16,7 @@ import { describe, it } from 'node:test';
 import {
   type BetBounds,
   clampBetTo,
+  isDraftMalformed,
   presetTotal,
   resolveDraft,
   resolveSizedAction,
@@ -95,6 +96,88 @@ describe('resolveDraft', () => {
   it('takes the leading integer from partly numeric text, as an input element would', () => {
     assert.equal(resolveDraft('600abc', bounds(200, 840)), 600);
     assert.equal(resolveDraft('600.9', bounds(200, 840)), 600);
+  });
+});
+
+/**
+ * The invalid state of the bet field.
+ *
+ * ## The defect these exist for
+ *
+ * The field silently clamped and never marked itself. Type `one third` into the bet amount and
+ * the browser holds the characters on screen, hands the change handler `value === ''`, and the
+ * sizer quietly resolves that to the minimum — so the commit button changed its number, the field
+ * still showed letters, and nothing anywhere said the two were related. The web app's quiz and
+ * invite-code fields were given `aria-invalid` for exactly this; this control lives in the shared
+ * package and was missed.
+ *
+ * ## Why the cases below are shaped the way they are
+ *
+ * `{ text: '', badInput: true }` is not a contrived pair — it is *literally* what an
+ * `<input type="number">` reports for text it could not parse, and the reason this predicate
+ * cannot be written against the text alone.
+ *
+ * Verified against a real browser rather than assumed. Typing `one third` into a number input in
+ * Chrome 151 and then clearing it produced, in order:
+ *
+ *     after typing "one third"   value: ""      badInput: true    valid: false
+ *     after clearing it          value: ""      badInput: false   valid: true
+ *     after typing 600           value: "600"   badInput: false   valid: true
+ *
+ * The first two rows have the SAME value and must not have the same answer — which is the whole
+ * argument in one table. On that first row `resolveDraft` still returned the minimum (200) and
+ * would have sent it; `isDraftMalformed` returned true and a value-derived predicate returned
+ * false, which is exactly the defect. The negative control below is that pair, and the first
+ * version of the same fix elsewhere in this repo did get it wrong.
+ */
+describe('isDraftMalformed', () => {
+  it('is not malformed before anything has been typed', () => {
+    assert.equal(isDraftMalformed(null), false);
+  });
+
+  it('is not malformed when the field has simply been cleared', () => {
+    // A blank field is a legitimate state on the way to a new number, and `resolveDraft` already
+    // resolves it to the minimum. Marking it invalid would tell a screen reader that deleting the
+    // contents was a mistake.
+    assert.equal(isDraftMalformed({ text: '', badInput: false }), false);
+    assert.equal(isDraftMalformed({ text: '   ', badInput: false }), false);
+  });
+
+  it('is not malformed for any amount the sizer can use, in range or out of it', () => {
+    // Out of range is NOT invalid: `resolveDraft` clamps it, and the readout says what will be
+    // sent. Only text that is not an amount at all is invalid.
+    for (const text of ['0', '1', '600', '9999', '-40', '600.9', '600abc']) {
+      assert.equal(isDraftMalformed({ text, badInput: false }), false, `text "${text}"`);
+      // The pairing that makes the claim mean something: everything called well-formed here has
+      // to be something `resolveDraft` can actually turn into a number.
+      assert.ok(Number.isFinite(resolveDraft(text, bounds(200, 840))), `resolvable "${text}"`);
+    }
+  });
+
+  it('is malformed when the browser reports text it could not parse', () => {
+    // THE case. The browser has sanitised the value to '' and the only evidence that anything was
+    // typed is the flag beside it.
+    assert.equal(isDraftMalformed({ text: '', badInput: true }), true);
+  });
+
+  it('cannot be satisfied by looking at the value, which is the whole point', () => {
+    // The negative control. These two drafts have IDENTICAL text and must disagree; an
+    // implementation that derives the invalid state from `text` returns the same answer for both
+    // and fails here. That implementation is the defect this predicate replaces, and it is
+    // undetectable by any test that does not state this pair explicitly.
+    const typedLetters = { text: '', badInput: true } as const;
+    const clearedField = { text: '', badInput: false } as const;
+    assert.equal(typedLetters.text, clearedField.text);
+    assert.notEqual(isDraftMalformed(typedLetters), isDraftMalformed(clearedField));
+  });
+
+  it('also catches non-numeric text from a browser that keeps it in the value', () => {
+    // Defence in depth for the second branch: `badInput` false, unparseable text present. No
+    // current browser produces this on a number input, which is exactly why it would go unnoticed
+    // if one ever did.
+    for (const text of ['abc', 'e5', '-', '.', '+', 'one third']) {
+      assert.equal(isDraftMalformed({ text, badInput: false }), true, `text "${text}"`);
+    }
   });
 });
 

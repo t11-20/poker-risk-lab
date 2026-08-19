@@ -32,10 +32,12 @@ A pnpm workspace of six libraries and two applications.
 **8 API route modules:** auth, calc, content, hands, legends, progress, rooms, plus the
 router index that mounts them under `/api/v1`.
 
-**Scale.** Roughly 215 first-party source files against roughly 100 test files. The figures are
-given as commands rather than as constants because they move with every commit, and a frozen count
-in a document nobody re-derives is the smallest possible version of the problem this report has been
-corrected for twice:
+**Scale.** Run the two commands below rather than citing a number from this page. They are given
+as commands because the counts move with every commit — measured twice on 2026-08-19, an hour
+apart, they read 214/103 and then 216/108 — and a frozen count in a document nobody re-derives is
+the smallest possible version of the problem this report has now been corrected for three times.
+The order of magnitude is what the sentence is for: roughly two hundred first-party source files
+against roughly a hundred test files.
 
 ```bash
 find apps packages -path '*/src/*' -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.css' \) \
@@ -101,13 +103,14 @@ procedure, including the one-API-process rule, is in `RUNBOOK.md`.
 pnpm run verify          # the release gate: 11 gates, every one of them run and reported
 pnpm run test            # build:packages, then unit + integration + scripts
 pnpm run test:all        # the above, plus exhaustive, simulation and a11y
-pnpm run security:audit  # 8 supply-chain gates
+pnpm run security:audit  # 9 supply-chain gates
 pnpm run test:exhaustive # all 133,784,560 seven-card hands
 pnpm run test:simulation # AI profiles vs their published cards
 pnpm run test:smoke -- --strict
 pnpm run test:load
-pnpm run db:verify       # asserts the LIVE schema's security properties
+pnpm run db:verify       # asserts the LIVE schema's security properties — but not its ownership, §6
 pnpm run design:contrast # WCAG 2.2 AA, both themes
+pnpm run fixtures:check  # the web fixtures still equal what the engine computes
 ```
 
 `verify`'s gates, in order:
@@ -187,10 +190,11 @@ Full detail in `SECURITY.md` and `THREAT-MODEL.md` (16 threats, plus §9 on acce
   rather than by deleting fields from a fuller object, so it fails closed.
 - **Randomness** is cryptographic, with rejection sampling for an unbiased `unbiasedInt` and
   Fisher–Yates drawing from `[0, i]`. `Math.random` is banned across every first-party `src/` tree
-  by a scan wired into the release gates; `pnpm run security:hygiene` reports what it covered —
-  `scanned 194 source files across 8 src/ trees for Math.random` on 2026-08-18 — and the scan has
-  its own negative control, feeding the detector a violation and a prose mention and failing if it
-  cannot tell them apart.
+  by a scan wired into the release gates — **eight** trees: `apps/api`, `apps/web` and the six
+  packages. `pnpm run security:hygiene` prints the file count it covered; read that line rather
+  than a number here, because it moves with every commit (it changed twice in one afternoon while
+  this report was being corrected). The scan has its own negative control, feeding the detector a
+  violation and a prose mention and failing if it cannot tell them apart.
 - **Deck commitment** is a per-card Merkle tree with domain-separated leaf/node hashing and
   32-byte per-card salts, so a post-hand reveal proves the deal without exposing cards that
   were never shown. (The first design hashed the whole deck and leaked folded hands.)
@@ -233,6 +237,22 @@ Stated plainly. Several of these are things the automated suite cannot detect.
    measured N concurrent players" that traces back to it is wrong.
 7. **Two advisory complexity warnings** remain in `packages/content/src/validate.ts`.
 8. **AI Legends are educational strategy simulations**, not the real players. See §7.
+9. **The release verdict is FAIL and no independent round has been run since remediation.** §8.
+   Reading the source and seeing a repair is not the same as verifying it, and this project has
+   been caught making that substitution twice.
+10. **Nothing in the repository restores a backup, and `db:verify` does not check schema
+    ownership.** The `RUNBOOK` §11.4 procedure was rehearsed by hand and is enforced by no gate.
+    Worse, the command the checklist says to trust as the rehearsal exits 0 on a database whose
+    54 relations are owned by the runtime role — it asks whether `prl_app` owns anything and never
+    asks who does. Measured 2026-08-19; the fix is one query in
+    `apps/api/scripts/verify-schema.mjs`.
+11. **A pinned digest is not a safe digest.** The new `ci-pinning` gate proves every action and
+    base image is referenced immutably. It cannot say the artefact was benign when the digest was
+    taken, and the OSV gate queries the npm ecosystem only, so an advisory against a base image
+    reaches this repository through a human.
+12. **The roll-forward gate's wiring is untested.** `apps/api/scripts/migrate.test.mjs` proves the
+    destructive-statement scanner works and that `down` refuses. Nothing proves `up` consults the
+    scanner before applying, because that needs a live database and a deliberately bad migration.
 
 ---
 
@@ -282,10 +302,68 @@ why internal verification kept passing.
 final challenger behind an information wall, tasked with disproving the product. **Verdict: FAIL.**
 208 requirements traced, 143 PASS, 31 PARTIAL, 33 FAIL, 1 UNVERIFIED; **4 P0 clusters and 17 P1
 clusters**. Its own summary of what it found good is worth as much as its findings, and both are in
-`audit/final-release-audit.md`. Two of its findings were about this document and the runbook rather
-than the product — numbers stated with more confidence than the evidence supported, and a
-graceful-shutdown behaviour the runbook called "fixed" that was not. Those are corrected in place
-above and in `RUNBOOK.md` §10, with the evidence cited rather than asserted.
+`audit/final-release-audit.md`. Several of its findings were about this document and the runbook
+rather than the product — numbers stated with more confidence than the evidence supported, and a
+graceful-shutdown behaviour the runbook called "fixed" that was not.
+
+### Round 2 remediation — in progress, and not a clearance
+
+Remediation began 2026-08-18 and is still under way as this section is written (2026-08-19). It is
+recorded here at the level of evidence rather than as a list of ticks, because the audit's most
+repeated criticism was of exactly that: work reported complete on weaker evidence than the report
+implied.
+
+**What has been fixed, with what I checked myself.** Every item below was re-run for this
+paragraph; the numbers are that run's output, not a carry-forward.
+
+| Audit finding | State | How that was established |
+|---|---|---|
+| **P0-4** `verify` was a `&&` chain, so `db:verify` had never executed inside it | Fixed | `verify` is now a loop over eleven gates that prints `PASS`/`FAIL` for each, runs all of them regardless, and exits 1 listing every failure. Read from `package.json`; the control flow was executed with stand-in gates and two deliberate failures — both were reported and the exit was 1 |
+| **OPS-015** `RUNBOOK` §11.4 backup/restore produced an unservable database | Fixed | Rehearsed end to end 2026-08-19. The old `--no-owner --no-privileges` restore exits **0** and then `db:verify` exits **1** with `prl_app: lacks USAGE on schema prl`. The corrected procedure — `migrate.mjs roles`, then `pg_restore --exit-on-error` with ownership kept — gives `db:verify` exit 0 and `db:migrate:status` exit 0 |
+| **OPS-008** the least-privilege database model was never exercised | Fixed | `docker-compose.yml` and `.env.example` connect as `prl_api`; `db/seeds/0002_dev_login_roles.sql` creates it as a member of `prl_app` and asserts it holds `USAGE` and not `CREATE` on schema `prl` |
+| **OPS-003** no rollback path and no roll-forward-only policy in its place | Fixed | `migrate.mjs down` refuses and lists four alternatives (run, exit 1); `up` refuses an undeclared destructive statement; `apps/api/scripts/migrate.test.mjs` covers it, 10/10 pass |
+| **SUP** no gate enforced CI action SHA or base-image digest pinning | Fixed | A ninth audit gate, `ci-pinning`. Run 2026-08-19: 24 action references, 2 Dockerfile base images, 2 compose images — all pinned, pass |
+| **SUP-018** `audit.mjs --offline` exited 0 with two gates unrun | Fixed | Now exits **2** |
+| **P0-2** the shipped web fixtures published a `1.6` estimate rendered as "160.0%" | Fixed | `scripts/regenerate-web-fixtures.mjs` now exists — it did not before, which is why the guard's stated remedy was not executable — and `pnpm run fixtures:check` reports `web fixtures are already the analysis the engine produces today`, exit 0 |
+| **LEAD-007** the project was not under version control | Fixed | Two commits: the audited baseline, then the first remediation pass |
+| **P2** documentation overclaims (20,000-hand soak, "6 of 35" scenarios, stale coverage figures, "19 tests", "25 identity checks", "8 gates") | Fixed | Every figure in `VERIFICATION.md` re-measured 2026-08-19 by running the test that produces it. §1 above now gives commands instead of constants |
+
+**Two corrections to the audit itself, and one thing it missed.**
+
+* The audit recorded *"8 source trees where the scan says seven"*. The scan says **eight**, and
+  there really are eight (`apps/api`, `apps/web`, and six packages). What was stale was inside
+  the gate: a comment reading "Seven trees today" and a `trees.length < 7` lower bound that had
+  been left behind by the tree it counts. The bound is a floor, so it never fired. Cite the line
+  the gate prints — `scanned 200 source files across 8 src/ trees` — not a constant in a document.
+* `docs/reviews/final-release-report.md`, which the audit correctly reported as missing while
+  being cited as "the release decision", now exists.
+* **Not in the audit, found while rehearsing the restore:** `pnpm run db:verify` **cannot see a
+  wrongly-owned schema**. Restoring a dump as `prl_api` without `--exit-on-error` leaves all 54
+  relations in schema `prl` owned by `prl_api` — which then holds `CREATE` on the schema and can
+  `DROP` every table it serves — and `db:verify` exits **0**, because check 6 asks whether
+  `prl_app` owns anything and never asks who does. The one command the checklist says to trust as
+  the restore rehearsal is blind to this restore. Recorded in `VERIFICATION.md` §12 and
+  `RUNBOOK.md` §11.4; the fix is one query in `apps/api/scripts/verify-schema.mjs`.
+* **Not in the audit, found while re-deriving `VERIFICATION.md` §8:** two equity figures were
+  quoted as the *extreme* suit configuration and placed beside an *average*, which reads as an
+  average. `AKo` vs `QQ` averages **43.24%** across its 72 configurations, not the 42.84% given
+  (that is the minimum); `AKs` vs `22` averages **49.89%**, not 50.08% (the maximum). Both are
+  corrected in place, and §12 now records that **no test reproduces any of those figures** — the
+  nearest gated assertion bounds a single configuration to 0.80–0.84.
+
+**What is not established here.** P0-1 (the Coach's legality guard failing open) and P0-3 (graceful
+shutdown killing every WebSocket) both show clear evidence of repair in the source —
+`CoachTask.legalActions` is now a required field, and `shutdown.test.ts` now contains WebSocket
+cases where the audit found none — but **that is reading, not verification**, and reading is what
+the audit repeatedly caught this project doing. Neither is claimed as fixed by this document. The
+same applies to the seventeen P1 clusters: several are being worked on in parallel with this
+section, so any status written here would be a status at a moment that has already passed.
+
+**The verdict has not changed, and nothing above changes it.** No independent round has been run
+against the remediated tree. `reviews/final-release-report.md` still reads **do not ship**, and
+under its own rule it changes only when a decision changes — not when work is done. Its bar
+includes a third independent round by reviewers who did not do the remediation, and that has not
+happened.
 
 Full detail: `reviews/release-findings.md` (round 1: all findings, with the reviewers'
 disagreements preserved rather than averaged), `audit/` (round 2: the summary, the per-requirement

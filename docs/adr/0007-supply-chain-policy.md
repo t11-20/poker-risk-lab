@@ -12,16 +12,44 @@ re-runs the payload. Full snapshot: `docs/security/shai-hulud-snapshot-2026-08-1
 
 ## Decision
 
-Eight gates, all release-blocking, all runnable with `pnpm run security:audit`:
+Nine gates, all release-blocking, all runnable with `pnpm run security:audit`:
 
 1. **policy-in-effect** — asserts the policy is actually active
 2. **repo-hygiene** — source encoding and hidden characters
 3. **deny-list** — banned packages anywhere in the graph
 4. **dependency-shapes** — registry-only resolutions, no install scripts, exact versions
 5. **IOC sweep** — campaign artefacts in the tree *and* the installed store
-6. **integrity + release age** — lockfile hashes cross-checked against the registry
-7. **OSV** — known vulnerabilities
-8. **SBOM** — CycloneDX 1.6 with per-artefact hashes
+6. **CI + container pinning** — GitHub Actions by commit SHA, base images by digest
+7. **integrity + release age** — lockfile hashes cross-checked against the registry
+8. **OSV** — known vulnerabilities
+9. **SBOM** — CycloneDX 1.6 with per-artefact hashes
+
+The order is the audit's own: gates 1–6 need no network, 7–8 do, and 9 writes the artefact.
+`--offline` skips 7 and 8 — and then **exits 2**, because an audit that did not run its
+gates has not passed. It used to exit 0, which made the skip indistinguishable from a clean
+release audit in any pipeline that only reads the exit code.
+
+## Amendment 2026-08-19 — gate 6, added after the release audit
+
+Gates 1–5 and 7–9 hold *this repository's dependencies* to "no mutable references". The
+**pipeline's** dependencies were held to the same standard by nothing but header comments.
+`uses: actions/cache@v4` added tomorrow would have passed all eight original gates, and
+`actions/cache@v4` is a pointer its owner can repoint at new code that then runs inside this
+repository's CI with this repository's secrets. The campaign snapshot lists GitHub Actions
+and Docker images among the supply chains it compromised, and records that it hijacks
+workflows to mint publish tokens.
+
+`scripts/supply-chain/ci-pinning.mjs` therefore fails on an unpinned `uses:` (anything but a
+40-character commit SHA), an unpinned `FROM` or compose `image:` (anything without
+`@sha256:`), a floating `runs-on: *-latest`, and — the part that is not about pinning — **a
+workflow file nobody declared**, because `.github/workflows/codeql.yml` is a named campaign
+IOC: the worm injects a workflow whose name squats on one a reviewer expects to see. Adding
+a workflow is now a two-file diff.
+
+Measured 2026-08-19: `2 workflow(s), 24 action reference(s), 2 Dockerfile(s) with 2 external
+base image(s), 1 compose file(s) with 2 image reference(s)` — pass. The consequence to plan
+for is the same friction as the npm policy: bumping an action is a digest change, not a tag
+change, and the digest has to be looked up.
 
 ## The finding that shaped the implementation
 

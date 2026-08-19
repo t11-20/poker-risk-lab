@@ -42,7 +42,7 @@ import { promisify } from 'node:util';
 import { loadConfig } from '../src/config.ts';
 import { createDatabaseClient, type Sql } from '../src/db.ts';
 import { generateOpaqueSecret } from '../src/repositories/ids.ts';
-import { databaseSkip, TEST_DATABASE_URL } from './helpers/database.ts';
+import { adminDatabaseUrl, databaseSkip } from './helpers/database.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -71,7 +71,7 @@ const MIGRATION_FILES = readdirSync(MIGRATIONS_DIR)
   .sort()
   .map((name) => ({ version: name, checksum: checksumOf(readFileSync(join(MIGRATIONS_DIR, name), 'utf8')) }));
 
-const databaseUrl = TEST_DATABASE_URL;
+const databaseUrl = adminDatabaseUrl();
 let maintenance: Sql | null = null;
 let skipReason: string | false = databaseSkip('the migration runner');
 

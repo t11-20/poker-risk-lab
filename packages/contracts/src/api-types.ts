@@ -127,6 +127,29 @@ export interface QuizAttemptResponse {
   readonly optionNotes?: readonly string[];
 }
 
+/**
+ * What a learner records when they finish reading a lesson.
+ *
+ * `completed: false` is a legitimate value — it records that the lesson was opened without
+ * claiming it was finished — which is why the field is explicit rather than implied by the call.
+ */
+export interface LessonReadRequest {
+  readonly completed: boolean;
+}
+
+/**
+ * The stored state after recording, echoed back so a client renders what the server holds rather
+ * than what it hoped it wrote.
+ *
+ * Timestamps are ISO strings; `completedAt` is null until the lesson is finished and never returns
+ * to null afterwards, because completion is sticky in `upsertLessonProgress`.
+ */
+export interface LessonReadResponse {
+  readonly lessonId: string;
+  readonly completedAt: string | null;
+  readonly lastViewedAt: string;
+}
+
 export interface ScenarioAttemptRequest {
   readonly action: 'fold' | 'check' | 'call' | 'bet' | 'raise';
   readonly to?: number;
@@ -380,6 +403,23 @@ export interface RoomMember {
   readonly isBot: boolean;
   readonly botProfile: string | null;
   readonly connected: boolean;
+  /**
+   * True while this seat owes a blind and is therefore not being dealt in yet.
+   *
+   * A newcomer waits for the big blind to reach them rather than being dealt straight in, so
+   * between sitting down and posting there are hands in which they hold a seat and receive no
+   * cards. Without this field that is invisible: `PlayerView.seats` contains only the seats that
+   * were dealt in, so the client has a member with a seat number, a stack, and nothing anywhere
+   * saying why they are not playing — which reads as a bug in the table.
+   *
+   * Public, and safe to be: everyone at a real table can see who is sitting out waiting for the
+   * blind. It says nothing about cards, and it is derived from the obligation the server already
+   * enforces (`LiveTable.owesBlind`) rather than being a second copy of it.
+   *
+   * False for a member who is not seated — the obligation survives standing up, but "is not being
+   * dealt in" is a statement about a chair, and there is no chair to say it about.
+   */
+  readonly awaitingBigBlind: boolean;
 }
 
 export interface JoinRoomRequest {

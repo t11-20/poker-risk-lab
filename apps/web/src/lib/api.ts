@@ -174,9 +174,29 @@ export function isMissingResource(error: unknown): boolean {
  * per-reader server render forwards the reader's session cookie explicitly (`ApiCallOptions.cookie`
  * and `src/lib/server-session.ts`), so `not_authenticated` on the server now means what it says —
  * this reader is not signed in.
+ *
+ * ## Both 401 codes, and why missing one of them was a 500
+ *
+ * The API splits the refusal in two on purpose (`requireSession` in `apps/api/src/auth/session.ts`):
+ * `not_authenticated` when no session cookie was presented or it was not ours, `session_expired`
+ * when a cookie *this deployment signed* no longer resolves to a live session. Its own comment says
+ * what the split is for — "a client that knows to open a fresh guest session rather than showing a
+ * dead end".
+ *
+ * This predicate matched only the first, so the dead end is exactly what the client showed. A
+ * reader whose guest session had been swept, or who was holding a cookie from a redeployed
+ * database, got an unhandled `ApiRequestError` out of `loadRecord`, `/review` and
+ * `/review/[handId]` — the error boundary, an incident-reference number, and a screen saying
+ * something went wrong — for the entirely ordinary condition of an old cookie. Both codes are 401,
+ * both mean "there is no usable session here", and every caller of this function does the same
+ * thing with the answer: render the signed-out state and offer the way to get a session.
+ *
+ * Widening it is not a loosening: nothing here decides whether to trust a caller. The API alone
+ * settles that, and this only chooses which of two truthful screens to draw.
  */
 export function isSignedOut(error: unknown): boolean {
-  return error instanceof ApiRequestError && error.code === 'not_authenticated';
+  if (!(error instanceof ApiRequestError)) return false;
+  return error.code === 'not_authenticated' || error.code === 'session_expired';
 }
 
 /** Narrows an unknown parsed body to the contract's error envelope. */

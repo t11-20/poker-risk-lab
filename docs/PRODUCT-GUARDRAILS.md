@@ -129,9 +129,13 @@ WCAG 2.2 AA, treated as a functional requirement rather than a polish item.
 * A bet-size slider is always paired with a number input; a slider alone cannot be
   operated precisely by assistive technology.
 
-**Enforcement:** `pnpm run test:a11y` in CI. Its coverage is static and its limitations
-are stated explicitly in the script's own output — an accessibility check that overstates
-what it verifies is worse than none (`docs/THREAT-MODEL.md` G5).
+**Enforcement:** `pnpm run test:a11y` and `pnpm run design:contrast`, both of which are gates
+inside **`pnpm run verify`** — run that, not the individual commands. `test:a11y` was in no gate
+at all until 2026-08-18: accessibility is stated here as a functional requirement, and a
+functional requirement no release gate checks is a preference. Its coverage is static and its
+limitations are stated explicitly in the script's own output — an accessibility check that
+overstates what it verifies is worse than none (`docs/THREAT-MODEL.md` G5), and what it still does
+not cover is listed in `docs/VERIFICATION.md` §12.
 
 ## 7. Original content only
 

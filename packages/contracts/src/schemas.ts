@@ -115,6 +115,21 @@ export const quizAttemptBodySchema = {
   },
 } as const;
 
+/**
+ * The body of `POST /content/lessons/:id/read`.
+ *
+ * `additionalProperties: false` and a single required boolean: there is nothing else a client may
+ * say about a read, and in particular no timestamp — the server stamps `now()` so a fleet with
+ * drifting clocks cannot record a lesson as read before it existed.
+ */
+export const lessonReadBodySchema = {
+  $id: 'prl:lessonReadBody',
+  type: 'object',
+  additionalProperties: false,
+  required: ['completed'],
+  properties: { completed: { type: 'boolean' } },
+} as const;
+
 export const scenarioAttemptBodySchema = {
   $id: 'prl:scenarioAttemptBody',
   type: 'object',
@@ -395,6 +410,7 @@ export const ALL_SCHEMAS = [
   oidcCallbackQuerySchema,
   contentIdParamsSchema,
   quizAttemptBodySchema,
+  lessonReadBodySchema,
   scenarioAttemptBodySchema,
   equityBodySchema,
   coachBodySchema,

@@ -30,11 +30,10 @@
  * change: their played hands and everything derived from them stay exactly as they are.
  */
 
-import type { ResetUnitsResponse } from '@prl/contracts';
+import { API_PATHS, type ResetUnitsResponse } from '@prl/contracts';
 import { Button } from '@prl/ui';
 import { type ReactElement, useState } from 'react';
 import { apiSend, fetchSession, safeFetch } from '@/lib/api.ts';
-import { UNPUBLISHED_API_PATHS } from '@/lib/unpublished-api-paths.ts';
 
 type ResetState =
   | { readonly state: 'idle' }
@@ -61,7 +60,7 @@ export function UnitsReset(): ReactElement {
       // An empty object rather than no body at all: the endpoint accepts both, and a POST with a
       // `content-type` and no body is refused by Fastify's parser as a malformed request.
       const result = await safeFetch<ResetUnitsResponse>(() =>
-        apiSend<ResetUnitsResponse>('POST', UNPUBLISHED_API_PATHS.unitsReset(), {}, { csrfToken: token }),
+        apiSend<ResetUnitsResponse>('POST', API_PATHS.unitsReset(), {}, { csrfToken: token }),
       );
       setReset(
         result.ok

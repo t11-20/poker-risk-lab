@@ -431,7 +431,12 @@ function isRoomMember(value: unknown): boolean {
     isNumber(value['stack']) &&
     isBoolean(value['isBot']) &&
     (value['botProfile'] === null || isString(value['botProfile'])) &&
-    isBoolean(value['connected'])
+    isBoolean(value['connected']) &&
+    // Required, and checked: a seat awaiting the big blind holds a chair but is not dealt in, and a
+    // frame missing the field would validate, read `undefined`, and render that seat as an ordinary
+    // player receiving no cards with nothing explaining why — the exact defect the field was added
+    // to remove. Adding a field is wire-compatible; silently accepting its absence is not.
+    isBoolean(value['awaitingBigBlind'])
   );
 }
 

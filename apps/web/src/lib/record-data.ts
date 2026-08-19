@@ -33,9 +33,8 @@
  * the page can explain it, rather than as an outage or a crash.
  */
 
-import type { ProgressResponse } from '@prl/contracts';
+import { API_PATHS, type ProgressResponse } from '@prl/contracts';
 import { apiGet, isApiUnavailable, isSignedOut, safeFetch } from './api.ts';
-import { UNPUBLISHED_API_PATHS } from './unpublished-api-paths.ts';
 
 export const RECORD_PATH = '/record';
 
@@ -104,7 +103,7 @@ export type RecordState =
  */
 export async function loadRecord(options: Parameters<typeof apiGet>[1] = {}): Promise<RecordState> {
   const result = await safeFetch<ProgressResponse>(() =>
-    apiGet<ProgressResponse>(UNPUBLISHED_API_PATHS.progress(), options),
+    apiGet<ProgressResponse>(API_PATHS.progress(), options),
   );
   if (result.ok) return { state: 'ready', progress: result.data };
   if (isSignedOut(result.error)) return { state: 'signedOut' };

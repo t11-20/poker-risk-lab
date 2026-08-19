@@ -44,6 +44,9 @@ one that is absent, because it reads as protection.
 | No denied package anywhere in the graph | `deny-list` gate |
 | No known vulnerability in any resolved version | `osv-scan` gate |
 | No campaign IOC on disk | `ioc-scan` gate |
+| Every GitHub Action pinned to a 40-hex commit SHA, never a tag | `ci-pinning` gate |
+| Every container base image pinned by `@sha256:` digest | `ci-pinning` gate |
+| No workflow file this repository has not declared | `ci-pinning` gate |
 | Frozen lockfile in CI | `pnpm install --frozen-lockfile` |
 | `node_modules` matches the lockfile before any script runs | `verifyDepsBeforeRun: error` |
 
@@ -60,7 +63,7 @@ fetched at build time rather than pinned.
 pnpm run deps:quarantine      # resolve in a throwaway dir with a scrubbed environment
 git diff -- pnpm-lock.yaml    # review every added line
 pnpm install --frozen-lockfile
-pnpm run security:audit       # all eight gates must pass
+pnpm run security:audit       # all nine gates must pass
 ```
 
 `deps:quarantine` resolves in a temporary directory with a throwaway `HOME`, no `.git`, no
@@ -92,10 +95,19 @@ These are the rules a reviewer will actually check.
 ### Randomness
 
 * Cards come only from `createSecureRandom()`. `Math.random` is banned in **every** first-party
-  `src/` tree, not just engine and server code — `pnpm run security:hygiene` scans all of them and
-  reports what it covered (`scanned 194 source files across 8 src/ trees`, 2026-08-18), and the scan
-  has its own test proving it can fail. The ban was once enforced over two of those trees by
-  per-package tests, which is why it is a repository gate now.
+  `src/` tree — **eight** of them: `apps/api`, `apps/web` and the six packages — not just engine
+  and server code. `pnpm run security:hygiene` scans them all and prints what it covered:
+
+  ```
+  · scanned <N> source files across 8 src/ trees for Math.random
+  ```
+
+  **Read that line, not a number in this document.** `N` moves with every file added — it changed
+  twice in one afternoon while this paragraph was being written — and a constant copied into a
+  document is a number nobody re-derives. The tree count is the part worth asserting, because a
+  tree disappearing from the scan is how a ban quietly stops covering something. The scan has its
+  own test proving it can fail. The ban was once enforced over two of those trees by per-package
+  tests, which is why it is a repository gate now.
 * Index selection uses rejection sampling (`unbiasedInt`). `x % n` on a 32-bit draw is not
   uniform, and for a 52-card deck the low indices would be favoured.
 * `createDeterministicRandomForTests` throws under `NODE_ENV=production`, and any hand it
@@ -148,17 +160,32 @@ These are the rules a reviewer will actually check.
 ## 4. Running the gates
 
 ```bash
-pnpm run security:audit          # all eight supply-chain gates
-pnpm run security:audit -- --offline   # skip the network gates (NOT a valid release audit)
+pnpm run security:audit          # all nine supply-chain gates
+pnpm run security:audit -- --offline   # skip the two network gates — EXITS 2, see below
 
 pnpm run security:policy         # is the policy actually in effect?
 pnpm run security:hygiene        # source encoding, hidden characters
 pnpm run security:denylist       # banned packages
 pnpm run security:shapes         # resolution shapes, install scripts, exact versions
 pnpm run security:ioc            # Shai-Hulud IOC sweep
+pnpm run security:pinning        # CI actions by commit SHA, base images by digest
 pnpm run security:provenance     # lockfile ↔ registry integrity, release age
 pnpm run security:osv            # OSV.dev vulnerabilities
 pnpm run security:sbom           # CycloneDX 1.6 SBOM
+```
+
+**`--offline` exits 2, deliberately.** It skips *integrity + release age* and *OSV*, prints
+`2 network gate(s) skipped — NOT a valid release audit`, and then exits non-zero. It used to
+exit 0, which is the defect: an audit that did not run two of its gates is indistinguishable,
+to anything reading only the exit code, from one that ran all nine and passed. Exit 2 rather
+than 1 so a caller can still tell "skipped" from "a gate failed". Verified 2026-08-19:
+
+```
+$ node scripts/supply-chain/audit.mjs --offline; echo $?
+  ○ skipped  integrity + release age
+  ○ skipped  OSV vulnerabilities
+2 network gate(s) skipped — NOT a valid release audit.
+2
 ```
 
 Artifacts land in `docs/sbom/`: the SBOM, the OSV report and the provenance report. The
@@ -200,5 +227,13 @@ it. The headline items:
 * **Out-of-band collusion** between players who know each other is undetectable.
 * The **accessibility audit does not run a real browser**, because a headless browser needs
   install scripts.
-* **Container base images may not be digest-pinned** where a digest could not be verified
-  at authoring time; those are marked `TODO` rather than filled with a fabricated digest.
+* **A digest pins bytes, not trustworthiness.** As of 2026-08-19 every base image and every
+  GitHub Action *is* digest/SHA-pinned and the `ci-pinning` gate fails the release if one is
+  not — this bullet used to say the opposite, and the opposite was true. What the gate proves
+  is that the reference is immutable and that the reference is one somebody reviewed. It does
+  not prove the image or the action was benign when that digest was taken, and it cannot: a
+  pinned digest of a compromised artefact is pinned to the compromise. The control it buys is
+  that an upstream cannot change what runs here without a diff in this repository.
+* **Nothing re-checks a pin for a newly disclosed advisory.** OSV covers npm packages only.
+  An advisory against `node:24.18.0-bookworm-slim` or a pinned action surfaces through
+  whatever watches those ecosystems, which today is a human.

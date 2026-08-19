@@ -18,14 +18,15 @@
  * always a decision, and the way to record the decision is to add the exception here with its
  * reason rather than to let the silence stand.
  *
- * ## And the paths that are NOT published
+ * ## The three paths that were once built outside the contract
  *
- * Three routes this client needs are absent from `API_PATHS` and are built in
- * `src/lib/unpublished-api-paths.ts` instead, because `packages/contracts` could not be edited at
- * the time. That file is a temporary arrangement, so the second half of this test pins its exact
- * contents: a fourth entry appearing there is a thing somebody has to justify in a diff rather than
- * a quiet return to building paths at call sites, which is the habit that once made every path in
- * this client omit `/api/v1`.
+ * `roomJoin`, `progress` and `unitsReset` were briefly built in a local holding pen, because the
+ * contract package could not be edited while those features were written. They are published now,
+ * and the holding pen is gone. What survives from it is the property that mattered: **none of the
+ * three may take an argument**, because the only one that would ever carry an identifier is the
+ * invite code, and an invite code is the sole thing protecting a private table. A URL is written to
+ * the access log of every proxy it passes and is sent onwards in `Referer`; the code has to travel
+ * in a request body. That is asserted below against the published builders.
  */
 
 import assert from 'node:assert/strict';
@@ -34,7 +35,6 @@ import { dirname, extname, join, relative, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { API_PATHS, API_PREFIX } from '@prl/contracts';
-import { UNPUBLISHED_API_PATHS } from '../src/lib/unpublished-api-paths.ts';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
@@ -74,38 +74,24 @@ describe('every path the contract publishes is reached from a screen', () => {
   }
 });
 
-describe('the paths @prl/contracts has not published yet', () => {
-  it('is exactly the three routes named in the module header', () => {
-    assert.deepEqual(
-      Object.keys(UNPUBLISHED_API_PATHS).sort(),
-      ['progress', 'roomJoin', 'unitsReset'],
-      'src/lib/unpublished-api-paths.ts is a holding pen for routes the contract package does not ' +
-        'publish, and it exists only because packages/contracts could not be edited when these three ' +
-        'features were built. Adding a fourth entry means building a second contract surface — read ' +
-        'that file’s header, which carries the three-step recipe for moving these into API_PATHS and ' +
-        'deleting the module.',
-    );
-  });
+describe('the three paths that carry an invite code, a progress read and a reset', () => {
+  const BODY_ONLY: readonly (keyof typeof API_PATHS)[] = ['roomJoin', 'progress', 'unitsReset'];
 
-  for (const name of Object.keys(UNPUBLISHED_API_PATHS)) {
-    it(`${name} is under the API prefix and has a call site`, () => {
-      const build = UNPUBLISHED_API_PATHS[name as keyof typeof UNPUBLISHED_API_PATHS];
+  for (const name of BODY_ONLY) {
+    it(`${name} is under the API prefix`, () => {
+      const build = API_PATHS[name] as () => string;
       assert.ok(
         build().startsWith(`${API_PREFIX}/`),
         `${name} must be built from API_PREFIX; a path written without it is how every request in ` +
           'this client once missed the version segment and fell back to a fixture in silence.',
       );
-      assert.ok(
-        callersOf('UNPUBLISHED_API_PATHS', name).length > 0,
-        `${name} is declared and called by nothing, which is the state this whole file exists to fix.`,
-      );
     });
   }
 
   it('never interpolates an identifier, so no invite code can reach a URL', () => {
-    for (const [name, build] of Object.entries(UNPUBLISHED_API_PATHS)) {
+    for (const name of BODY_ONLY) {
       assert.equal(
-        build.length,
+        (API_PATHS[name] as (...args: unknown[]) => string).length,
         0,
         `${name} takes an argument. An invite code is the only thing protecting a private table and ` +
           'it must travel in a request body: a URL is written to the access log of every proxy it ' +

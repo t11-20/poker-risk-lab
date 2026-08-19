@@ -219,6 +219,50 @@ try {
     note(`checked ${tables.length} tables for prl_app privileges`);
   }
 
+  // ---- 6b. The schema and everything in it is owned by the migrator ---------------------
+  //
+  // Check 6 asks whether `prl_app` owns anything. It never asks *who does* — and that gap is
+  // reachable by the one procedure this script exists to rehearse. Restoring a dump as `prl_api`
+  // without `--exit-on-error` completes with "errors ignored on restore", leaving every relation
+  // in `prl` owned by `prl_api`, which then holds CREATE on the schema. `prl_app` owns nothing in
+  // that state, so check 6 is satisfied and this script exited 0 over a database whose runtime
+  // role could drop the tables it serves. RUNBOOK §11.4 calls `db:verify` the restore rehearsal,
+  // so the rehearsal has to be able to see it.
+  {
+    const [schemaOwner] = await sql`
+      select pg_get_userbyid(nspowner) as owner from pg_namespace where nspname = ${SCHEMA}
+    `;
+    if (schemaOwner !== undefined && schemaOwner.owner !== 'prl_migrator') {
+      fail(
+        'schema ownership',
+        `schema ${SCHEMA} is owned by ${schemaOwner.owner}, not prl_migrator — an owner holds ` +
+          'CREATE and can DROP; this is what a restore without --exit-on-error leaves behind',
+      );
+    }
+
+    const misowned = await sql`
+      select c.relname, pg_get_userbyid(c.relowner) as owner
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = ${SCHEMA}
+        and c.relkind in ('r', 'v', 'm', 'S', 'p')
+        and pg_get_userbyid(c.relowner) <> 'prl_migrator'
+      order by c.relname
+    `;
+    if (misowned.length > 0) {
+      const shown = misowned
+        .slice(0, 5)
+        .map((r) => `${r.relname} (${r.owner})`)
+        .join(', ');
+      fail(
+        'relation ownership',
+        `${misowned.length} relation(s) in ${SCHEMA} are not owned by prl_migrator: ${shown}` +
+          (misowned.length > 5 ? ', …' : ''),
+      );
+    }
+    note(`checked schema and ${misowned.length === 0 ? 'every' : 'each'} relation owner`);
+  }
+
   // ---- 7. No aggregate quiz score -----------------------------------------------------
   // Matched on whole words, not substrings. A bare /level/ flagged `hand_actions.bet_level_after`
   // — the poker bet level, which is core game state and has nothing to do with gamification.

@@ -244,6 +244,8 @@ controls are built against.
 | IOC sweep of the tree **and** the installed store | On-disk persistence, including `.claude/setup.mjs` |
 | Quarantined acquisition (`pnpm run deps:quarantine`) | Credential theft *during* resolution |
 | Source-encoding gate | Hidden characters and NUL bytes in source |
+| CI actions pinned to 40-hex commit SHAs; base images pinned by `@sha256:` digest (`ci-pinning` gate, added 2026-08-19) | An upstream repointing a tag — `actions/cache@v4` is a pointer, and the campaign compromised GitHub Actions and Docker images as well as npm |
+| Only declared workflow files may exist (same gate) | An **injected** workflow. `.github/workflows/codeql.yml` is a named campaign IOC: the worm squats on a filename a reviewer expects to see |
 
 **Deliberately not treated as a control: npm provenance attestations.** The campaign
 forges Sigstore attestations. The audit *records* attestation state for incident
@@ -392,7 +394,9 @@ Stated without hedging.
 | G7 | **The ICM model is Malmuth–Harville**, an approximation that ignores skill, position and blind pressure | It is the standard teaching model and its assumptions are stated | Nothing; the limitation is the teaching point |
 | G8 | **Risk-of-ruin uses a diffusion approximation** assuming a constant edge, constant stakes and an infinite horizon | Stated with the figure, every time | Nothing; a real bankroll faces stake changes and non-normal tails, which is said out loud |
 | G9 | **No rate limiting on WebSocket reconnection storms** beyond the per-session socket cap | Low impact for the current scale | A backoff requirement enforced server-side |
-| G10 | **Container base images may not be digest-pinned** if a digest could not be verified at authoring time | A fabricated digest would be worse than an honest TODO | Pin the digest before any real deployment |
+| G10 | ~~**Container base images may not be digest-pinned**~~ **Closed 2026-08-19.** Every base image and every GitHub Action is now pinned, and `ci-pinning` fails the release otherwise. Kept in the table, struck through, because a gap that vanishes without a trace teaches nobody anything | — | — |
+| G11 | **A pinned digest is not a vouched-for digest** | Pinning buys immutability: an upstream cannot change what runs here without a diff in this repository. It does not say the artefact was benign when the digest was taken | Verifying the base image and each action against upstream attestation at pin time, and recording the evidence — the release audit did this by hand once |
+| G12 | **Nothing re-checks a pin against new advisories** | The OSV gate queries the `npm` ecosystem only. An advisory against `node:24.18.0-bookworm-slim` or against a pinned action does not reach any gate here | A second advisory source for base images and actions, wired into the daily scheduled audit |
 
 ## 10. Review triggers
 

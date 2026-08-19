@@ -34,13 +34,40 @@
  */
 
 import { loadConfig } from '../../src/config.ts';
-import { createDatabaseClient } from '../../src/db.ts';
+import { createDatabaseClient, type Sql } from '../../src/db.ts';
 
 /** `DATABASE_URL`, or undefined when it is absent or blank. Blank is absent, not a URL. */
 export const TEST_DATABASE_URL = ((): string | undefined => {
   const raw = process.env['DATABASE_URL'];
   return raw === undefined || raw.trim() === '' ? undefined : raw;
 })();
+
+/**
+ * The DSN a fixture teardown may use for the statements the RUNTIME role must never be able to
+ * issue — read lazily, so a test can set it around a call.
+ *
+ * ## Why a second identity exists at all
+ *
+ * `db/migrations/0001_initial.sql` gives `prl_app` SELECT/INSERT/UPDATE on `prl.rooms`,
+ * `prl.hands`, `prl.hand_seats` and INSERT-only on `prl.hand_actions`: the hand history is an
+ * append-only ledger, and the application genuinely cannot retract a room or a hand. That is the
+ * privilege model working, not a gap in it.
+ *
+ * A fixture, though, has to be able to put the database back. Doing that with the application's
+ * own connection is what forced CI's `test` job to keep connecting as a superuser, so the whole
+ * least-privilege model went unexercised by the one job that runs the SQL (audit finding OPS-008).
+ * Splitting the identities is what lets the suite run its *application* statements as `prl_app`
+ * while its *teardown* runs as the migrating identity that owns the schema — which is exactly the
+ * split `.github/workflows/ci.yml` already makes for the `end-to-end` and `a11y` jobs.
+ *
+ * Unset, it falls back to `DATABASE_URL`, so a developer whose single DSN is privileged (the
+ * default `docker compose` credentials are) sees no change at all.
+ */
+export function adminDatabaseUrl(): string | undefined {
+  const raw = process.env['DATABASE_URL_ADMIN'];
+  if (raw !== undefined && raw.trim() !== '') return raw;
+  return TEST_DATABASE_URL;
+}
 
 /**
  * True when the caller ran the explicitly named `test:without-database` script.
@@ -80,6 +107,51 @@ export const DATABASE_FIX_HINT =
   'Docker, run `pnpm run test:no-database` — which prints a banner saying the run proves ' +
   'nothing about SQL and is refused in CI.';
 
+/**
+ * A pool of two, for one short job, closed by its caller.
+ *
+ * Deliberately not `configureDatabase`: that installs the process-wide client and refuses to be
+ * called twice, and its callers run alongside a suite that has already installed one. Exported so
+ * that a test connecting as a DIFFERENT identity — the least-privilege role, say — does not have
+ * to keep its own copy of what the test configuration is.
+ */
+export function testClientFor(url: string): Sql {
+  return createDatabaseClient(
+    loadConfig({
+      NODE_ENV: 'test',
+      DATABASE_URL: url,
+      PUBLIC_WEB_ORIGIN: 'http://localhost:3000',
+      SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
+      DATABASE_POOL_MAX: '2',
+    }),
+  );
+}
+
+/**
+ * Runs one job on the schema-owning identity, on a connection opened and closed around it.
+ *
+ * Only for teardown — never for a statement a test is asserting about. The point of the split is
+ * that everything the *application* does keeps going through the application's own connection, so
+ * a missing GRANT still fails the suite; borrowing this handle for an application path would put
+ * the finding straight back.
+ */
+export async function withAdminSql<T>(use: (sql: Sql) => Promise<T>): Promise<T> {
+  const url = adminDatabaseUrl();
+  if (url === undefined) {
+    throw new Error(
+      'no DSN for the schema-owning identity: set DATABASE_URL_ADMIN (or DATABASE_URL, which it ' +
+        'falls back to). Fixture teardown removes rows from the append-only tables, which the ' +
+        'runtime role prl_app cannot and must not be able to do.',
+    );
+  }
+  const client = testClientFor(url);
+  try {
+    return await use(client);
+  } finally {
+    await client.end({ timeout: 5 }).catch(() => undefined);
+  }
+}
+
 export interface SchemaProbe {
   /** True when a `select` against `prl.users` succeeded. */
   readonly ok: boolean;
@@ -99,15 +171,7 @@ export async function probeSchema(): Promise<SchemaProbe> {
   if (TEST_DATABASE_URL === undefined) {
     return { ok: false, problem: `DATABASE_URL is not set. ${DATABASE_FIX_HINT}` };
   }
-  const client = createDatabaseClient(
-    loadConfig({
-      NODE_ENV: 'test',
-      DATABASE_URL: TEST_DATABASE_URL,
-      PUBLIC_WEB_ORIGIN: 'http://localhost:3000',
-      SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
-      DATABASE_POOL_MAX: '2',
-    }),
-  );
+  const client = testClientFor(TEST_DATABASE_URL);
   try {
     await client`select 1 from prl.users limit 1`;
     return { ok: true };

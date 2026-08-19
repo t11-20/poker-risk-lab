@@ -39,7 +39,15 @@ error to report — not a fabricated zero.
 Equity was checked against a published result the implementation had no access to: AA vs
 KK averaged over all 36 suit configurations comes out at **81.946%**, matching the widely
 published ~81.9% figure, with individual configurations spanning 81.26%–82.64%. Monte
-Carlo agrees with exact enumeration within its stated interval.
+Carlo agrees with exact enumeration within its stated interval — re-derived 2026-08-19,
+20,000 samples on AhAs vs KdKc (exact 81.255%), three seeds: |diff| 0.455 / 0.100 / 0.050
+points against 95% half-widths of ±0.544 / ±0.540 / ±0.538.
+
+**No test reproduces either figure.** The nearest gated assertion bounds a single
+configuration to 0.80–0.84 (`apps/api/test/calc.test.ts`), which is wide enough to pass on a
+materially wrong evaluator, and nothing compares a sampled result against an exact one. This
+paragraph is therefore a result somebody obtained, not a result the release procedure
+reproduces — recorded in `docs/VERIFICATION.md` §12 rather than left to look like a gate.
 
 ## Consequences
 

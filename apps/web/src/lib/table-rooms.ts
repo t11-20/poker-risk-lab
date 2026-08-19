@@ -32,7 +32,7 @@
  * with people you already know" was a sentence about the server.
  *
  * `joinRoomByInviteCode` below is that missing call, and `normaliseInviteCode` is what makes a
- * pasted code work. Its path is not in `API_PATHS` and is built in `unpublished-api-paths.ts`
+ * pasted code work. Its path is `API_PATHS.roomJoin`
  * instead — read that file's header before copying the pattern; it is a temporary arrangement with
  * a documented way out, not a licence to build paths at call sites again.
  */
@@ -48,7 +48,6 @@ import type {
 } from '@prl/contracts';
 import { API_PATHS } from '@prl/contracts';
 import { apiGet, apiSend } from './api.ts';
-import { UNPUBLISHED_API_PATHS } from './unpublished-api-paths.ts';
 
 /** The opponents a bot table is dealt against, and why this particular mix. */
 export const BOT_TABLE: readonly { readonly profile: string; readonly count: number }[] = [
@@ -248,7 +247,7 @@ export async function joinRoomByInviteCode(
 ): Promise<RoomSummary> {
   const options = signal === undefined ? { csrfToken } : { csrfToken, signal };
   const body: JoinRoomRequest = { inviteCode };
-  const response = await apiSend<JoinRoomResponse>('POST', UNPUBLISHED_API_PATHS.roomJoin(), body, options);
+  const response = await apiSend<JoinRoomResponse>('POST', API_PATHS.roomJoin(), body, options);
   return response.room;
 }
 

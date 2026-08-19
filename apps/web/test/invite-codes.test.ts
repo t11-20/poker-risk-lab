@@ -98,6 +98,10 @@ function roomWith(seats: readonly (number | null)[], maxSeats = 6): RoomSummary 
       isBot: index > 0,
       botProfile: null,
       connected: true,
+      // Everyone in this fixture is already dealt in. `firstFreeSeat` is about which chairs are
+      // occupied, and a member owing a blind occupies theirs exactly as much as anyone else does —
+      // so the flag is false here rather than absent, and varying it would change nothing below.
+      awaitingBigBlind: false,
     })),
     createdAt: '2026-01-01T00:00:00.000Z',
   };

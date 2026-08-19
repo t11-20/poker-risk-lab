@@ -179,7 +179,7 @@ await runGate(gate, () => {
  *
  * ## Why this is a repo gate and not (only) a test
  *
- * The ban was enforced over TWO of the repository's seven source trees: `apps/api/src`
+ * The ban was enforced over TWO of the repository's eight source trees: `apps/api/src`
  * (`test/server-randomness.test.ts`) and `packages/poker-engine/src`
  * (`packages/poker-engine/test/rng.test.ts`). Unscanned were `packages/poker-math/src` — which
  * holds `monteCarloEquity` and the variance simulations, precisely where reaching for
@@ -202,10 +202,11 @@ await runGate(gate, () => {
  */
 function checkRandomnessBan(gate) {
   const trees = sourceTrees();
-  // Seven trees today: apps/api, apps/web, and the five publishing packages. Stated as a lower
-  // bound rather than an equality so adding a package does not fail the gate for the wrong reason —
-  // but losing one does, because a tree that stops being scanned is exactly this defect.
-  if (trees.length < 7) {
+  // Eight trees today: apps/api, apps/web, and the six packages. Stated as a lower bound rather
+  // than an equality so adding a package does not fail the gate for the wrong reason — but losing
+  // one does, because a tree that stops being scanned is exactly this defect. The bound read 7
+  // while the scan printed 8, so it could not have fired for the one tree that mattered.
+  if (trees.length < 8) {
     gate.fail(
       `found only ${trees.length} src/ trees to scan for Math.random`,
       'the ban is repo-wide; a tree that silently drops out of the scan is how it was enforced over 2 of 7',

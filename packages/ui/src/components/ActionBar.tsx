@@ -23,11 +23,15 @@
  *     on the next render and the value follows — no effect, no stale state, no "reset on prop
  *     change" dance
  *
- * The draft is a *string*, not a number, on purpose. Clamping on every keystroke makes the field
+ * The draft is *text*, not a number, on purpose. Clamping on every keystroke makes the field
  * unusable: type `5` on the way to `500` and it snaps to the minimum before the second digit lands.
  * The string is what the reader is typing; the clamped number is what the button will send. They
  * are allowed to disagree while the field has focus — which is why the readout always shows the
  * number that will actually be sent, and why blur normalises the text back to it.
+ *
+ * It carries `badInput` alongside the text because on an `<input type="number">` the text is not
+ * enough to know what is in the field: the browser sanitises anything it cannot parse to `''`, so
+ * letters on screen and an empty field are indistinguishable from the value alone. See `BetDraft`.
  *
  * ## Every button prints its cost, and announces it
  *
@@ -62,13 +66,22 @@
  *    so the selection is not signalled by colour alone.
  *  - The allowed range is stated as visible text and referenced by `aria-describedby` from both
  *    inputs, instead of being discoverable only by hitting the end of the slider.
+ *  - The number field carries a real invalid state: `aria-invalid` plus a visible correction that
+ *    `aria-describedby` names FIRST, ahead of the range. The state is read from
+ *    `event.target.validity.badInput` and could not have been derived from the value — a number
+ *    input reports `value === ''` for text it failed to parse, so a check written against the
+ *    draft can never fire, and the field would sit there looking empty while the reader looks at
+ *    their own letters. That silent version is the "clamp without marking the field" the audit
+ *    named on the quiz's numeric answer, and this is the same control in the shared package.
  *  - The sizer is a `<fieldset>` with a `<legend>`, so its controls are announced as one group, and
  *    `disabled` on the fieldset disables all of them at once.
  */
 
 import { type ReactElement, useId, useState } from 'react';
 import {
+  type BetDraft,
   clampBetTo,
+  isDraftMalformed,
   presetTotal,
   resolveDraft,
   resolveSizedAction,
@@ -128,20 +141,21 @@ interface BetSizerProps {
   readonly sized: SizedAction;
   /** The clamped amount that will be sent. */
   readonly to: number;
-  /** What the number field shows, which may be mid-edit and therefore unclamped. */
-  readonly numberValue: string;
+  /** What the reader has typed, which may be mid-edit and therefore unclamped. Null before then. */
+  readonly draft: BetDraft | null;
   readonly pot: number;
   readonly toCall: number;
   readonly committedThisStreet: number;
   readonly disabled: boolean;
-  readonly onDraft: (next: string) => void;
+  readonly onDraft: (next: BetDraft) => void;
 }
 
 function BetSizer(props: BetSizerProps): ReactElement {
-  const { sized, to, numberValue, pot, toCall, committedThisStreet, disabled, onDraft } = props;
+  const { sized, to, draft, pot, toCall, committedThisStreet, disabled, onDraft } = props;
   const rangeId = useId();
   const numberId = useId();
   const boundsId = useId();
+  const invalidId = useId();
 
   const { bounds } = sized;
   const isBet = sized.kind === 'bet';
@@ -149,6 +163,22 @@ function BetSizer(props: BetSizerProps): ReactElement {
   const cost = to - committedThisStreet;
   const remainingAfter = bounds.max - to;
   const isAllIn = to >= bounds.max && bounds.max > bounds.min;
+
+  /**
+   * The field is marked invalid when it is holding text this control cannot size a bet with.
+   *
+   * "Invalid" means the INPUT and never the amount: a legal-but-unwise size is a correct use of
+   * this field, and `resolveDraft` clamps an out-of-range number rather than refusing it, so a
+   * number outside the bounds is not invalid either — it is a number the sizer has already
+   * corrected, and the readout says so.
+   *
+   * The correction comes FIRST in `aria-describedby`, so a reader who has just been told the
+   * field is invalid hears why before hearing the allowed range again. It is rendered only while
+   * it applies rather than hidden with CSS: a description that is present but usually irrelevant
+   * is read out on every visit to the field.
+   */
+  const malformed = isDraftMalformed(draft);
+  const describedBy = malformed ? `${invalidId} ${boundsId}` : boundsId;
 
   return (
     <fieldset className="prl-sizer" disabled={disabled}>
@@ -166,7 +196,7 @@ function BetSizer(props: BetSizerProps): ReactElement {
               type="button"
               className="prl-preset"
               aria-pressed={target === to}
-              onClick={() => onDraft(String(target))}
+              onClick={() => onDraft({ text: String(target), badInput: false })}
             >
               <span aria-hidden="true" className="prl-preset__mark">
                 ✓
@@ -191,7 +221,9 @@ function BetSizer(props: BetSizerProps): ReactElement {
           step={1}
           value={to}
           aria-describedby={boundsId}
-          onChange={(event) => onDraft(event.currentTarget.value)}
+          // A slider cannot produce unparseable text, so dragging it also clears the invalid
+          // state — which is the point of carrying the flag in the draft rather than beside it.
+          onChange={(event) => onDraft({ text: event.currentTarget.value, badInput: false })}
         />
         <span className="prl-sizer__field">
           <label className="prl-sizer__field-label" htmlFor={numberId}>
@@ -205,15 +237,33 @@ function BetSizer(props: BetSizerProps): ReactElement {
             min={bounds.min}
             max={bounds.max}
             step={1}
-            value={numberValue}
-            aria-describedby={boundsId}
-            onChange={(event) => onDraft(event.currentTarget.value)}
+            value={draft?.text ?? String(to)}
+            aria-describedby={describedBy}
+            aria-invalid={malformed ? true : undefined}
+            // `validity.badInput` is read here and nowhere else, because here is the only place it
+            // can be read. The value has ALREADY been sanitised to '' by the time it arrives, so
+            // no later inspection of the draft could recover the fact that anything was typed —
+            // and a field that silently reads as empty while the reader is looking at their own
+            // letters is exactly the state this markup exists to name.
+            onChange={(event) =>
+              onDraft({ text: event.target.value, badInput: event.target.validity.badInput })
+            }
             // Normalising on blur is what makes the typed text and the clamped value agree again
-            // once the field is left.
-            onBlur={() => onDraft(String(to))}
+            // once the field is left. Writing a real number over the field also clears whatever
+            // the browser was holding, so the invalid state goes with it.
+            onBlur={() => onDraft({ text: String(to), badInput: false })}
           />
         </span>
       </div>
+
+      {malformed ? (
+        <p className="prl-field__error prl-sizer__error" id={invalidId}>
+          <span aria-hidden="true">{'▲ '}</span>
+          {
+            'That is not an amount. Type whole units — or use the slider or a preset above, which always set a legal size.'
+          }
+        </p>
+      ) : null}
 
       <p className="prl-sizer__bounds" id={boundsId}>
         {`Allowed range ${formatChips(bounds.min)} to ${formatChips(bounds.max)} units. Presets are a fraction of the pot after your call.`}
@@ -247,7 +297,11 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     className,
   } = props;
 
-  const [draft, setDraft] = useState<string | null>(null);
+  // One piece of state, not two: the text and whether the browser could parse it are set by the
+  // same event and must never be read from different renders. A separate `badInput` flag could
+  // outlive the text it described — a preset click clearing the value while the flag stayed true
+  // would leave a legal amount marked invalid.
+  const [draft, setDraft] = useState<BetDraft | null>(null);
 
   const sized = resolveSizedAction(legalActions);
   const canFold = legalActions.some((action) => action.type === 'fold');
@@ -257,7 +311,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   // The single clamp every path goes through. `draft` is what the reader typed; `to` is what will
   // be sent, and the two cannot disagree at submit time because the button reads `to`.
   const bounds = sized?.bounds ?? { min: 0, max: 0 };
-  const to = resolveDraft(draft, bounds);
+  const to = resolveDraft(draft?.text ?? null, bounds);
   const sizedCost = to - committedThisStreet;
   const isAllIn = sized !== null && to >= bounds.max && bounds.max > bounds.min;
   const callCost = call?.costAtMin ?? toCall;
@@ -300,7 +354,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
         <BetSizer
           sized={sized}
           to={to}
-          numberValue={draft ?? String(to)}
+          draft={draft}
           pot={pot}
           toCall={toCall}
           committedThisStreet={committedThisStreet}

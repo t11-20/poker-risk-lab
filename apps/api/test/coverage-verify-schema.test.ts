@@ -35,7 +35,7 @@ import { promisify } from 'node:util';
 import { loadConfig } from '../src/config.ts';
 import { createDatabaseClient, type Sql } from '../src/db.ts';
 import { generateOpaqueSecret } from '../src/repositories/ids.ts';
-import { databaseSkip, TEST_DATABASE_URL } from './helpers/database.ts';
+import { adminDatabaseUrl, databaseSkip } from './helpers/database.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -45,7 +45,11 @@ const REPO_ROOT = join(API_DIR, '..', '..');
 const VERIFY = join(API_DIR, 'scripts', 'verify-schema.mjs');
 const MIGRATE = join(API_DIR, 'scripts', 'migrate.mjs');
 
-const databaseUrl = TEST_DATABASE_URL;
+// The schema-owning identity: this file creates throwaway databases and applies hostile
+// ALTER/GRANT/REVOKE changes to prove the gate can fail. The runtime role deliberately
+// cannot do any of that, so asking for it here is what lets the rest of the suite run as a
+// prl_app member without widening a single grant.
+const databaseUrl = adminDatabaseUrl();
 let maintenance: Sql | null = null;
 let skipReason: string | false = databaseSkip('the schema verifier');
 

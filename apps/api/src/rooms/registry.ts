@@ -861,6 +861,11 @@ export function resetRoomRegistryForTests(): void {
 export function toRoomSummary(room: LiveRoom): RoomSummary {
   const snapshot = room.table.snapshot();
   const seatByUser = new Map(snapshot.seats.map((seat) => [seat.userId, seat]));
+  // The seats the table is holding out of the deal until they have paid a blind. Read from the one
+  // snapshot taken above rather than by asking `table.owesBlind` per member, so every field in this
+  // summary describes the same instant — a member list in which one row came from a later read of
+  // the table is a table that never existed.
+  const awaitingBigBlind = new Set(snapshot.awaitingBigBlind);
   const members: RoomMember[] = room.memberList().map((member) => {
     const seat = seatByUser.get(member.userId);
     return {
@@ -871,6 +876,10 @@ export function toRoomSummary(room: LiveRoom): RoomSummary {
       isBot: member.isBot,
       botProfile: member.botProfile,
       connected: member.isBot || member.sockets > 0,
+      // Named field by field, like every other member of this object, because that is what makes
+      // the wire shape a deliberate decision rather than whatever the internal record happens to
+      // hold (ADR 0003). A member with no seat is not being held out of anything.
+      awaitingBigBlind: seat !== undefined && awaitingBigBlind.has(seat.seat),
     };
   });
   return {
@@ -918,6 +927,11 @@ export function summaryFromRows(
       botProfile: member.bot_profile,
       // A room with no live table in this process has nobody connected to it, by definition.
       connected: member.is_bot,
+      // Nor anybody waiting for a blind: the obligation lives on the live table and is not
+      // persisted, so there is no such thing as one for a room nothing is playing. Stated rather
+      // than left off — the field is required precisely so that a mapping which forgot about it
+      // cannot compile.
+      awaitingBigBlind: false,
     })),
     createdAt: room.created_at.toISOString(),
   };

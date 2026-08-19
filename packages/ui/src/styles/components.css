@@ -819,9 +819,20 @@
   border-color: var(--prl-accent-edge);
 }
 
+/**
+ * The invalid state is a border colour and NOTHING ELSE is left to it: every control that sets
+ * `aria-invalid` also renders a `.prl-field__error` sentence naming what is wrong, because colour
+ * alone is not a message (WCAG 2.2 SC 1.4.1) and a red border says nothing to a screen reader.
+ *
+ * `.prl-sizer__number` is named here rather than being given `.prl-input`: the bet sizer's number
+ * field is a bare `input` on purpose, so it inherits the surrounding font and its digits line up
+ * with the ones on the commit button beside it (see the `font: inherit` note in reset.css), which
+ * `.prl-input`'s own `font-size` would undo. It still needs the state drawn, so it is listed.
+ */
 .prl-input[aria-invalid="true"],
 .prl-select[aria-invalid="true"],
-.prl-textarea[aria-invalid="true"] {
+.prl-textarea[aria-invalid="true"],
+.prl-sizer__number[aria-invalid="true"] {
   border-color: var(--prl-adverse);
 }
 
@@ -2940,6 +2951,20 @@
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
   font-variant-numeric: tabular-nums;
+}
+
+/**
+ * The correction, on a line of its own directly under the controls it is about.
+ *
+ * A full-width basis rather than a shared one: it appears only while the field is holding text
+ * that is not an amount, and a sentence that squeezes in beside the range line would reflow the
+ * whole sizer at the moment the reader is being told something went wrong. Colour comes from
+ * `.prl-field__error`; this rule only places it.
+ */
+.prl-sizer__error {
+  flex: 1 1 100%;
+  margin: 0;
+  max-width: none;
 }
 
 /**

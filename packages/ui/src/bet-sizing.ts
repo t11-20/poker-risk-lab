@@ -103,6 +103,60 @@ export function resolveDraft(draft: string | null, bounds: BetBounds): number {
   return clampBetTo(Number.parseInt(draft, 10), bounds);
 }
 
+/**
+ * What the reader has typed into the sizer's number field.
+ *
+ * Two fields rather than one string, because on an `<input type="number">` the text and the
+ * browser's opinion of it are genuinely two facts and only one of them is readable from `value`.
+ */
+export interface BetDraft {
+  /**
+   * The field's `value`.
+   *
+   * **Empty does not mean "nothing typed".** A number input sanitises anything it could not
+   * parse to the empty string: type `one third` and the characters stay on screen while
+   * `event.target.value` is `''`. So this string alone cannot distinguish a cleared field from
+   * a field full of letters, which is why the flag below exists.
+   */
+  readonly text: string;
+  /**
+   * `event.target.validity.badInput` — the browser is holding characters it could not parse.
+   *
+   * The ONLY platform signal that unparseable text is present. It has to be captured in the
+   * change handler and carried, because nothing about the value can be re-derived into it later.
+   */
+  readonly badInput: boolean;
+}
+
+/**
+ * Whether the field is holding something the sizer cannot use, and should therefore be marked
+ * invalid.
+ *
+ * Two conditions, because there are two ways to get non-numeric text into the field, and the
+ * first one is invisible in `text`:
+ *
+ *  - `badInput`: the browser parsed nothing and reported so;
+ *  - non-empty text that does not resolve to a number, for a browser that keeps the characters
+ *    in `value` instead of sanitising them. Stated rather than relied upon — today's browsers
+ *    take the first branch — because "the field looked fine while holding letters" is not a
+ *    defect worth inheriting from a platform detail.
+ *
+ * An EMPTY field is not malformed: nothing has been typed, `resolveDraft` falls back to the
+ * minimum, and marking a blank field invalid would tell a screen reader the reader had made a
+ * mistake by clearing it.
+ *
+ * `Number.parseInt` and not `Number`, deliberately: this must agree with `resolveDraft`, or the
+ * field could be marked invalid while the commit button beside it offers an amount derived from
+ * the very same text.
+ */
+export function isDraftMalformed(draft: BetDraft | null): boolean {
+  if (draft === null) return false;
+  if (draft.badInput) return true;
+  const text = draft.text.trim();
+  if (text === '') return false;
+  return !Number.isFinite(Number.parseInt(text, 10));
+}
+
 /** The total a preset resolves to, already clamped into the legal range. */
 export function presetTotal(preset: SizingPreset, context: SizingContext): number {
   const { bounds, pot, toCall, committedThisStreet } = context;

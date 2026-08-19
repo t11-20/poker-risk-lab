@@ -67,6 +67,17 @@ export const API_PATHS = {
 
   lessons: (): string => `${API_PREFIX}/content/lessons`,
   lesson: (lessonId: string): string => `${API_PREFIX}/content/lessons/${encodeURIComponent(lessonId)}`,
+
+  /**
+   * Records that a learner has read a lesson to the end.
+   *
+   * A `POST` rather than a field on the `GET`, because reading is a thing the learner did and the
+   * server must not infer it from a fetch: a prefetch, a crawler or a back-button would all look
+   * identical to a read, and progress that fills itself in is worth nothing to the person it
+   * claims to describe. Completion is sticky server-side, so re-reading never un-finishes a lesson.
+   */
+  lessonRead: (lessonId: string): string =>
+    `${API_PREFIX}/content/lessons/${encodeURIComponent(lessonId)}/read`,
   glossary: (): string => `${API_PREFIX}/content/glossary`,
   scenarios: (): string => `${API_PREFIX}/content/scenarios`,
   scenario: (scenarioId: string): string =>
@@ -108,6 +119,34 @@ export const API_PATHS = {
    * give two routes with no ordering between them.
    */
   rooms: (): string => `${API_PREFIX}/rooms`,
+
+  /**
+   * Join a private room with the invite code its owner was shown once.
+   *
+   * Separate from `rooms` because it is a different authorisation question: `POST /rooms` asks
+   * "may this session create a table", and this asks "does this session hold the code for that
+   * one". The server answers a wrong or unknown code with 404 rather than 403, so the reply
+   * cannot be used to discover which rooms exist.
+   */
+  roomJoin: (): string => `${API_PREFIX}/rooms/join`,
+
+  /**
+   * The reader's own progress counts.
+   *
+   * Counts only — no score, rank, streak or percentage. `docs/PRODUCT-GUARDRAILS.md` §2 forbids
+   * those, and `apps/api/test/…` asserts the payload carries none of them, so this path cannot
+   * quietly grow into a leaderboard.
+   */
+  progress: (): string => `${API_PREFIX}/me/progress`,
+
+  /**
+   * Reset the reader's units to the starting figure.
+   *
+   * Every page states the units are free and resettable at any time; this is the path that makes
+   * that statement true rather than aspirational. It resets units only: progress is not touched,
+   * because a learner clearing a play-money stack has not asked to forget what they have read.
+   */
+  unitsReset: (): string => `${API_PREFIX}/me/units/reset`,
 
   /**
    * The WebSocket upgrade path — the *path only*, because the scheme and host are the page's own.
@@ -181,6 +220,7 @@ export const API_PATH_PROBES: Readonly<Record<ApiPathName, ApiPathProbe>> = {
   guest: { methods: ['POST'], build: () => API_PATHS.guest() },
   lessons: { methods: ['GET'], build: () => API_PATHS.lessons() },
   lesson: { methods: ['GET'], build: (ex) => API_PATHS.lesson(ex.lessonId) },
+  lessonRead: { methods: ['POST'], build: (ex) => API_PATHS.lessonRead(ex.lessonId) },
   glossary: { methods: ['GET'], build: () => API_PATHS.glossary() },
   scenarios: { methods: ['GET'], build: () => API_PATHS.scenarios() },
   scenario: { methods: ['GET'], build: (ex) => API_PATHS.scenario(ex.scenarioId) },
@@ -195,5 +235,8 @@ export const API_PATH_PROBES: Readonly<Record<ApiPathName, ApiPathProbe>> = {
   // Both methods, because the live-table client sends both: the list on load, the creation when
   // there is no room to reuse.
   rooms: { methods: ['GET', 'POST'], build: () => API_PATHS.rooms() },
+  roomJoin: { methods: ['POST'], build: () => API_PATHS.roomJoin() },
+  progress: { methods: ['GET'], build: () => API_PATHS.progress() },
+  unitsReset: { methods: ['POST'], build: () => API_PATHS.unitsReset() },
   ws: { methods: ['UPGRADE'], build: () => API_PATHS.ws() },
 };
