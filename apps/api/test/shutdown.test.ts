@@ -1,6 +1,28 @@
 /**
  * Graceful shutdown, against a real process holding a real socket — keep-alive HTTP, and WebSocket.
  *
+ * ## The third defect, and why this file did not catch it either
+ *
+ * The WebSocket section below was added when the second defect was found, and the suite stopped
+ * there. It therefore proved that every *upgraded* connection drains, and said nothing at all about
+ * a connection that never became a request — which was still the original bug, untouched. Measured
+ * on the build that had just been declared fixed:
+ *
+ *     idle websocket                        0.010 s / exit 0
+ *     websocket mid-hand                    0.044 s / exit 0
+ *     peer ignores the close frame          1.014 s / exit 0
+ *     a TCP connection that sends nothing  10.022 s / exit 1
+ *
+ * `closeIdleConnections()` only drops a connection that has FINISHED a request; one that never
+ * started one is invisible to it, and `server.close()` waits for it anyway. So a load balancer's
+ * TCP health probe, a port scanner, a stalled TLS handshake, or any client that connects a moment
+ * before it is ready to speak was enough to turn every deploy back into a hard kill — the exact
+ * failure the first two fixes were for, reached by a connection that is easier to produce than
+ * either of them.
+ *
+ * `SIGTERM with a connection that never became a request` below is that coverage. All three of its
+ * tests fail against the old behaviour with code 1 after the full grace.
+ *
  * ## The second defect, and why this file did not catch it
  *
  * This suite passed 3/3 while graceful shutdown was broken for **every WebSocket connection**,
@@ -641,5 +663,115 @@ describe('SIGTERM with a WebSocket open', () => {
     // frame, this client ignores it, and `ws`'s own fallback is a 30 s `closeTimeout` — three times
     // the default grace. One socket, no session, any origin.
     assertCleanExit(exit, server.output());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Connections that never became a request
+//
+// See the first section of this file's header. Everything above holds a request or a WebSocket
+// open across the signal; none of it opens a connection that does less than that, which is the
+// cheapest thing a client can do and was still enough to hang the drain.
+// ---------------------------------------------------------------------------
+
+/**
+ * Opens a TCP connection to the API and sends exactly what it is given — including nothing at all.
+ *
+ * Raw rather than through a client library on purpose: no HTTP client will hold a connection in
+ * these states, because they are all states a correct client never enters. That is not a reason to
+ * ignore them — nothing stops a peer on the network from producing them, and several kinds of
+ * ordinary infrastructure do so by design.
+ */
+async function rawConnection(
+  port: number,
+  prelude = '',
+): Promise<{ readonly socket: Socket; readonly received: () => string }> {
+  const socket = connect(port, '127.0.0.1');
+  socket.setNoDelay(true);
+  let received = '';
+  socket.on('data', (chunk: Buffer) => {
+    received += chunk.toString('utf8');
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.once('connect', resolve);
+    socket.once('error', reject);
+  });
+  // The drain is *supposed* to destroy these, so ECONNRESET on this end is the expected outcome
+  // rather than a failure — and an unhandled 'error' would take the test process down with it.
+  socket.on('error', () => undefined);
+  if (prelude !== '') socket.write(prelude);
+  // Long enough for the server to have accepted the connection and parsed whatever was sent, so
+  // the state under test is the state the process is really in when the signal lands.
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  return { socket, received: () => received };
+}
+
+describe('SIGTERM with a connection that never became a request', () => {
+  // None of these three reaches a route, let alone a query, so a placeholder DSN is honest and they
+  // run under `test:without-database` too — where they belong, because a connection that hangs a
+  // deploy has nothing to do with the schema.
+  const noDatabase = { DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused' };
+
+  it('is not held open by a TCP connection that sends nothing', async () => {
+    const server = await startServer(GRACE_MS, noDatabase);
+    const { socket, received } = await rawConnection(server.port);
+    assert.equal(received(), '', 'nothing was sent, so nothing may come back');
+
+    const exit = await terminate(server);
+    socket.destroy();
+
+    // The whole original defect in its simplest form. A connection with no request on it can never
+    // be owed an answer, so there is nothing for the drain to wait for and no reason to be slower
+    // than the sweep interval.
+    assertCleanExit(exit, server.output());
+  });
+
+  it('is not held open by a request whose headers never end', async () => {
+    const server = await startServer(GRACE_MS, noDatabase);
+    // A request line and one header, and no blank line — so the parser has a message started and
+    // never completed, and Fastify has never been handed a request at all. This is what a client
+    // that dies mid-write leaves behind, and what a slowloris does on purpose.
+    const { socket } = await rawConnection(
+      server.port,
+      `GET /api/v1/health HTTP/1.1\r\nhost: 127.0.0.1:${server.port}\r\n`,
+    );
+
+    const exit = await terminate(server);
+    socket.destroy();
+
+    assertCleanExit(exit, server.output());
+  });
+
+  it('is not held open by a Content-Length whose body never arrives', async () => {
+    const server = await startServer(GRACE_MS, noDatabase);
+    const { cookie, token } = await csrfCredentials(server.port);
+
+    // The hardest of the three, and the one that says what "in flight" has to mean. The headers are
+    // complete and announce a body, so Fastify HAS been handed a request and is waiting for it —
+    // byte for byte the state the first test in this file requires the drain to wait for. The only
+    // difference is that this client never sends the rest, and the drain cannot know that in
+    // advance. So it waits for the client's half of the exchange for a bounded slice of the grace
+    // and then drops the connection, rather than waiting out the deadline and exiting 1.
+    const body = JSON.stringify({ heroCards: 'AhAd', opponents: ['KsKc'], samples: 20_000 });
+    const { socket, received } = await rawConnection(
+      server.port,
+      'POST /api/v1/math/equity HTTP/1.1\r\n' +
+        `host: 127.0.0.1:${server.port}\r\n` +
+        `origin: ${WEB_ORIGIN}\r\n` +
+        'content-type: application/json\r\n' +
+        `content-length: ${Buffer.byteLength(body)}\r\n` +
+        `cookie: ${cookie}\r\n` +
+        `x-csrf-token: ${token}\r\n` +
+        'connection: keep-alive\r\n\r\n',
+    );
+    assert.equal(received(), '', 'the request cannot have been answered: its body was never sent');
+
+    const exit = await terminate(server);
+    socket.destroy();
+
+    // Half the grace rather than the usual third: this one legitimately spends the send grace
+    // waiting to find out whether the client is merely slow, and that wait is the point. What must
+    // not happen — and did — is spending the whole grace and then exiting 1.
+    assertCleanExit(exit, server.output(), GRACE_MS / 2);
   });
 });

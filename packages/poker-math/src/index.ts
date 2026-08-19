@@ -47,9 +47,12 @@ export {
   type CoachInput,
   type DescribedSpot,
   deriveLegalActions,
+  maximumTo,
+  minimumAggressiveTo,
   type RuleOfThumbRefusal,
   ruleOfThumbFor,
   ruleOfThumbRefusalFor,
+  type SizedSpot,
   type Street,
   summariseCoachReport,
 } from './coach.ts';
@@ -60,12 +63,14 @@ export {
   type ConsistencyAction,
   ConsistencyError,
   type ConsistencyInput,
+  type ConsistencyPricing,
   type ConsistencyVerdict,
   candidateFor,
   consistencyMarginUnits,
   defensibleActions,
   isDefensible,
   judgeConsistency,
+  pricedSizesFor,
 } from './consistency.ts';
 export {
   choose,

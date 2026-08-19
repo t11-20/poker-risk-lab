@@ -342,7 +342,7 @@ paragraph; the numbers are that run's output, not a carry-forward.
   relations in schema `prl` owned by `prl_api` — which then holds `CREATE` on the schema and can
   `DROP` every table it serves — and `db:verify` exits **0**, because check 6 asks whether
   `prl_app` owns anything and never asks who does. The one command the checklist says to trust as
-  the restore rehearsal is blind to this restore. Recorded in `VERIFICATION.md` §12 and
+  the restore rehearsal was blind to this restore. Check 6b in `verify-schema.mjs` now closes it, and caught a real wrongly-owned ledger on first run. Recorded in `VERIFICATION.md` §12 and
   `RUNBOOK.md` §11.4; the fix is one query in `apps/api/scripts/verify-schema.mjs`.
 * **Not in the audit, found while re-deriving `VERIFICATION.md` §8:** two equity figures were
   quoted as the *extreme* suit configuration and placed beside an *average*, which reads as an

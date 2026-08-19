@@ -237,8 +237,10 @@ describe('what counts as consistent', () => {
     const report = reportWith([candidate({ action: 'fold', ev: 0 }), candidate({ action: 'call', ev: 5 })]);
     const verdict = judgeConsistency({ report, action: 'raise', bigBlind: 10 });
     assert.equal(verdict.consistent, false);
+    assert.equal(verdict.pricing, 'action-not-priced');
     assert.equal(verdict.chosen, null);
     assert.deepEqual([...verdict.availableActions], ['fold', 'call']);
+    assert.deepEqual([...verdict.pricedSizes], []);
     assert.equal(verdict.shortfallUnits, 0);
   });
 
@@ -251,6 +253,70 @@ describe('what counts as consistent', () => {
     // Unsized: judged on the most favourable raise, because several sizings share the name and the
     // learner was not offered the worst of them as "raise".
     assert.equal(judgeConsistency({ report, action: 'raise', bigBlind: 10 }).chosen?.ev, 12);
+  });
+
+  /**
+   * The defect that survived the release audit, at the level of the rule itself.
+   *
+   * `candidateFor` used to end its loop with `return best`, so a `to` matching no row fell
+   * through to the highest-EV row for that action name. A learner's 26,000-chip raise into a
+   * 500-chip stack was scored against the 67-chip raise the Coach liked, and the product replied
+   * `consistentWithAnalysis: true` — an action nobody could have made, reported as agreeing with
+   * an analysis that never considered it.
+   *
+   * Both halves are asserted, because only asserting the boolean would pass against a rule that
+   * had merely flipped the sign on the same substitution. The chosen row must be *absent*: there
+   * is no row, so there is nothing to be consistent or inconsistent with.
+   */
+  it('does not grade an unmatched sizing against a row the learner did not choose', () => {
+    const report = reportWith([
+      candidate({ action: 'fold', ev: 0 }),
+      candidate({ action: 'call', ev: 20, to: 25 }),
+      candidate({ action: 'raise', ev: 51, to: 67 }),
+      candidate({ action: 'raise', ev: 30, to: 138 }),
+    ]);
+    for (const to of [26_000, 100_000, 1, 0, 66, 68]) {
+      const verdict = judgeConsistency({ report, action: 'raise', to, bigBlind: 10 });
+      assert.equal(verdict.consistent, false, `raise to ${to} must not be reported as consistent`);
+      assert.equal(verdict.chosen, null, `raise to ${to} must not borrow another row's figures`);
+      assert.equal(verdict.pricing, 'sizing-not-priced');
+      assert.equal(
+        verdict.shortfallUnits,
+        0,
+        'there is no shortfall to quote against a row that does not exist',
+      );
+      // The sizes that *were* priced, so a caller can name them instead of only refusing.
+      assert.deepEqual([...verdict.pricedSizes], [67, 138]);
+    }
+    // The honest case is untouched: a size the analysis did price is graded on its own row.
+    const priced = judgeConsistency({ report, action: 'raise', to: 67, bigBlind: 10 });
+    assert.equal(priced.pricing, 'priced');
+    assert.equal(priced.chosen?.ev, 51);
+    assert.equal(priced.consistent, true);
+  });
+
+  it('tells an unpriced action apart from an unpriced size, because they need different words', () => {
+    const report = reportWith([
+      candidate({ action: 'fold', ev: 0 }),
+      candidate({ action: 'call', ev: 20, to: 25 }),
+    ]);
+    // No raise row at all: the analysis did not evaluate raising here.
+    assert.equal(
+      judgeConsistency({ report, action: 'raise', to: 90, bigBlind: 10 }).pricing,
+      'action-not-priced',
+    );
+    // A call row exists, at a different total: the analysis evaluated calling, not this call.
+    assert.equal(
+      judgeConsistency({ report, action: 'call', to: 90, bigBlind: 10 }).pricing,
+      'sizing-not-priced',
+    );
+    // Fold is priced and moves no chips, so a size attached to it matches nothing that exists.
+    assert.equal(
+      judgeConsistency({ report, action: 'fold', to: 5, bigBlind: 10 }).pricing,
+      'sizing-not-priced',
+    );
+    // And an unsized fold is still judged on its own row, exactly as before.
+    assert.equal(judgeConsistency({ report, action: 'fold', bigBlind: 10 }).pricing, 'priced');
   });
 
   it('floors the best EV at zero, because folding is always available at zero', () => {

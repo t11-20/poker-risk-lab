@@ -66,18 +66,57 @@ export function consistencyMarginUnits(bigBlind: number): number {
 /**
  * The candidate row for one action.
  *
- * With a `to`, an exact sizing match wins. Without one, the most favourable row for that action name
- * is used: several sizings share a name, and judging an unsized "raise" against the worst raise on
- * the table would be judging the learner for a choice they were not offered.
+ * Without a `to`, the most favourable row for that action name is used: several sizings share a
+ * name, and judging an unsized "raise" against the worst raise on the table would be judging the
+ * learner for a choice they were not offered.
+ *
+ * **With a `to`, an exact sizing match is required and there is no fallback.** That second clause
+ * is the fix for a defect that survived the release audit, so it is worth stating what it used to
+ * do: the loop below ended `return best`, so a `to` matching no row fell through to the
+ * highest-EV row for that action name and the learner's action was graded against a completely
+ * different decision. Measured on the shipped Scenario Lab, at runtime:
+ *
+ *     POST /content/scenarios/eq-flush-draw-turn-small-bet/attempt {"action":"raise","to":26000}
+ *       -> consistentWithAnalysis: true
+ *
+ * Hero had 500 behind. The 26,000-chip raise was scored against the 67-chip one the Coach liked,
+ * and the product told a learner that an action nobody at that table could have made agreed with
+ * an analysis that never considered it. `to: 100000`, `to: 1` and `to: 0` did the same. The
+ * product's stated guardrail is that it never teaches something false, and a substitution that
+ * quietly answers a different question than the one asked is the purest form of teaching
+ * something false.
+ *
+ * So an unmatched size is `null` — the same answer as an action the report never priced at all,
+ * and `judgeConsistency` tells the two apart with `pricing` so a caller can say which happened.
+ * Callers holding a size a learner chose should reject an unpayable one before they get here; see
+ * `minimumAggressiveTo` and `maximumTo` in `./coach.ts`, which are the Coach's own bounds.
  */
 export function candidateFor(report: CoachReport, action: string, to?: number): ActionCandidate | null {
+  if (to !== undefined) {
+    return report.candidates.find((candidate) => candidate.action === action && candidate.to === to) ?? null;
+  }
   let best: ActionCandidate | null = null;
   for (const candidate of report.candidates) {
     if (candidate.action !== action) continue;
-    if (to !== undefined && candidate.to === to) return candidate;
     if (best === null || candidate.ev > best.ev) best = candidate;
   }
   return best;
+}
+
+/**
+ * Every size the analysis priced for one action name, in the order it priced them.
+ *
+ * Published so a caller refusing an unpriced size can name the ones that were priced instead of
+ * saying only that the learner's was not. Empty for an action the report did not price, and empty
+ * for `fold` and `check`, which move no chips and carry no `to` at all.
+ */
+export function pricedSizesFor(report: CoachReport, action: string): readonly number[] {
+  const sizes: number[] = [];
+  for (const candidate of report.candidates) {
+    if (candidate.action !== action || candidate.to === undefined) continue;
+    if (!sizes.includes(candidate.to)) sizes.push(candidate.to);
+  }
+  return sizes;
 }
 
 /** The highest-EV row in the table, or null when the report published no candidates. */
@@ -188,11 +227,43 @@ export function defensibleActions(report: CoachReport, marginUnits: number): rea
   });
 }
 
+/**
+ * Whether the analysis had anything at all to say about the action that was submitted.
+ *
+ * Three outcomes rather than a boolean, because the two ways of having nothing to say are
+ * different things to tell a learner and the copy for one reads as nonsense on the other:
+ *
+ * - `'priced'` — the report has a row for this exact decision, so there is a verdict.
+ * - `'action-not-priced'` — the report priced no row for this action name at all. A learner who
+ *   checks where the report priced only fold, call and raise. "The analysis did not evaluate
+ *   checking here."
+ * - `'sizing-not-priced'` — the report priced this action, but at other sizes. A learner who
+ *   raises to 90 where the report priced raises to 67, 138 and 500. "The analysis priced raising,
+ *   but not at that size."
+ *
+ * Neither of the last two is a wrong answer, and neither may be recorded as one: with no row to
+ * compare against, `consistent` is `false` in the sense of "not established", never in the sense
+ * of "established to be wrong". A caller writing a nullable "did this match?" column must write
+ * NULL for both — the whole reason this member exists is that a boolean cannot carry that
+ * distinction across the wire, and the audit's most damaging finding was a grader recording a
+ * learner as wrong against a figure that did not apply to them.
+ */
+export type ConsistencyPricing = 'priced' | 'action-not-priced' | 'sizing-not-priced';
+
 /** The verdict, and every figure it rests on. Both callers render from these; neither recomputes. */
 export interface ConsistencyVerdict {
   readonly consistent: boolean;
+  /** Whether the analysis priced this exact decision, and if not, in which of the two ways. */
+  readonly pricing: ConsistencyPricing;
   /** The row the chosen action was judged on, or null when the analysis did not price it. */
   readonly chosen: ActionCandidate | null;
+  /**
+   * The sizes the analysis priced for the submitted action name, in the order it priced them.
+   *
+   * Empty when it priced none — either because it did not price the action, or because the action
+   * moves no chips. For naming the alternatives when a submitted size matched nothing.
+   */
+  readonly pricedSizes: readonly number[];
   /** The highest-EV row in the table, or null when the report published none. */
   readonly best: ActionCandidate | null;
   /**
@@ -254,9 +325,16 @@ export interface ConsistencyInput {
 /**
  * Judges one action against the report's own candidate table.
  *
- * An action the report has no row for is `consistent: false` with `chosen: null`, which the screens
- * render as "the analysis did not price this action" rather than as a wrong answer. That happens for
- * real: a learner can check where the report only priced fold, call and raise.
+ * A decision the report has no row for is `consistent: false` with `chosen: null` and a `pricing`
+ * saying which kind of gap it was, which the screens render as "the analysis did not price this"
+ * rather than as a wrong answer. Both kinds happen for real: a learner can check where the report
+ * only priced fold, call and raise, and a learner can raise to a size the report did not put on
+ * its ladder.
+ *
+ * **`consistent: false` in those two cases means "not established", not "established wrong".** The
+ * distinction is not decoration — see `ConsistencyPricing`. A caller that renders the boolean
+ * without reading `pricing` will tell somebody their decision disagreed with an analysis that
+ * never looked at it.
  */
 export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
   const { report, action, to } = input;
@@ -271,11 +349,20 @@ export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
   const supportedActions = defensibleActions(report, marginUnits);
   const availableActions = [...new Set(report.candidates.map((candidate) => candidate.action))];
   const claimsOneAction = supportedActions.length === 1;
+  const pricedSizes = pricedSizesFor(report, action);
 
   if (chosen === null) {
+    // Which of the two gaps it is, decided on whether the report priced the action name at all.
+    // Tested against the rows rather than against `pricedSizes`, because fold and check are priced
+    // and carry no size — a `to` on one of those is an unpriced *sizing*, not an unpriced action.
+    const pricing: ConsistencyPricing = report.candidates.some((candidate) => candidate.action === action)
+      ? 'sizing-not-priced'
+      : 'action-not-priced';
     return {
       consistent: false,
+      pricing,
       chosen: null,
+      pricedSizes,
       best,
       bestEv,
       measuredBestEv,
@@ -298,7 +385,9 @@ export function judgeConsistency(input: ConsistencyInput): ConsistencyVerdict {
   const shortfall = chosen.action === 'fold' ? measuredBestEv : -chosen.ev;
   return {
     consistent,
+    pricing: 'priced',
     chosen,
+    pricedSizes,
     best,
     bestEv,
     measuredBestEv,

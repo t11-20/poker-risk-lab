@@ -109,6 +109,21 @@ export interface DescribedSpot {
 }
 
 /**
+ * A described spot, plus the two things that fix a legal *size* rather than a legal action.
+ *
+ * Separate from `DescribedSpot` because the two questions have different inputs and different
+ * answers: which action kinds the rules allow needs neither the stakes nor the engine's `minTo`,
+ * and `deriveLegalActions` should not start asking for figures it does not read. `CoachInput`
+ * satisfies this structurally, so the Coach's own floor and a caller holding only these six
+ * numbers are answered by the same function.
+ */
+export interface SizedSpot extends DescribedSpot {
+  readonly bigBlind: number;
+  /** The engine's own `minTo` when there is a `HandState` to read it from. See `CoachInput`. */
+  readonly minimumRaiseTo?: number;
+}
+
+/**
  * The actions the betting rules allow in a spot that has been *described* rather than
  * dealt. **A derivation, and the engine is the authority wherever a `HandState` exists.**
  *
@@ -155,11 +170,37 @@ export function deriveLegalActions(spot: DescribedSpot): readonly CoachAction[] 
   const actions: CoachAction[] = ['fold'];
   actions.push(spot.toCall === 0 ? 'check' : 'call');
 
-  const betLevel = spot.heroCommittedThisStreet + spot.toCall;
-  const maxTo = spot.heroCommittedThisStreet + spot.heroStack;
   const someOpponentCanAnswer = spot.opponentStacks.some((stack) => stack > 0);
-  if (someOpponentCanAnswer && maxTo > betLevel) actions.push(betLevel === 0 ? 'bet' : 'raise');
+  if (someOpponentCanAnswer && maximumTo(spot) > betLevelOf(spot)) {
+    actions.push(betLevelOf(spot) === 0 ? 'bet' : 'raise');
+  }
   return actions;
+}
+
+/**
+ * The level in force on this street: what hero would have out there after calling.
+ *
+ * One expression, named once, because three separate places compare a size against it and
+ * `heroCommittedThisStreet + toCall` written out by hand is indistinguishable from
+ * `heroCommittedThisStreet + heroStack` at a glance.
+ */
+function betLevelOf(spot: DescribedSpot): number {
+  return spot.heroCommittedThisStreet + spot.toCall;
+}
+
+/**
+ * The largest street total hero can reach: everything already out plus everything behind.
+ *
+ * The engine's `maxTo`, and the ceiling every published size is clamped to. Exported because
+ * the ceiling is not only a fact about what the Coach may *publish*: whoever accepts a size
+ * from a learner has to hold it to the same figure, and a second hand-written
+ * `heroCommittedThisStreet + heroStack` somewhere else is how the two drift apart.
+ *
+ * Note which stack this is. `heroStack` is chips BEHIND, so this is a total, not a doubling of
+ * anything hero has already committed.
+ */
+export function maximumTo(spot: DescribedSpot): number {
+  return spot.heroCommittedThisStreet + spot.heroStack;
 }
 
 export interface CoachInput {
@@ -311,7 +352,7 @@ function validate(input: CoachInput): void {
   // is not a stricter floor, it is a different quantity — most likely an increment
   // passed where a total was wanted, which would put every emitted size below the
   // minimum again.
-  const betLevel = input.heroCommittedThisStreet + input.toCall;
+  const betLevel = betLevelOf(input);
   const minimum = input.minimumRaiseTo;
   if (minimum !== undefined) {
     if (!Number.isInteger(minimum) || minimum <= betLevel) {
@@ -589,14 +630,37 @@ function buildStackContext(input: CoachInput): StackContext {
  * `toCall` are both 0 and the expression collapses to one big blind, which is the
  * engine's minimum opening bet.
  *
- * Erring upward is the only safe direction. A floor that is too low publishes a size
- * the table rejects; a floor that is too high publishes a legal size that is larger
- * than it strictly had to be, and says so in chips a learner can read.
+ * Erring upward is the only safe direction *for what gets published*. A floor that is too
+ * low publishes a size the table rejects; a floor that is too high publishes a legal size
+ * that is larger than it strictly had to be, and says so in chips a learner can read. Be
+ * aware that the direction inverts for a caller that uses this to *refuse* a size — see
+ * below.
+ *
+ * ## The all-in clamp is part of the floor, not part of the caller
+ *
+ * A stack that cannot reach the minimum may still shove: a short all-in is a legal
+ * (incomplete) raise, and `legalActions` allows it for exactly that reason. That clamp used
+ * to live at the one call site, which was fine while there was one call site. There is now a
+ * second — `apps/api/src/routes/content.ts` holds a learner's submitted size to this same
+ * floor before grading it — and a floor whose callers have to remember to clamp it is a floor
+ * that will eventually refuse a legal shove.
+ *
+ * ## What a refusing caller is signing up for
+ *
+ * The derivation can sit *above* the engine's true minimum, in the one case the derivation
+ * names: a spot where the bet hero faces is not itself the last full raise. A caller that
+ * refuses everything below this floor therefore refuses, in that case, a size a real table
+ * might have accepted. That is the right trade for the Scenario Lab — every spot there is a
+ * described one facing a single bet, where the two figures coincide — but it is a refusal
+ * with a stated number rather than a silent one, and it must stay that way: quoting the floor
+ * back to the learner is what makes the rare over-strict case visible instead of mysterious.
+ *
+ * `minimumRaiseTo` removes the question entirely, which is why any caller holding a
+ * `HandState` should pass it.
  */
-function minimumAggressiveTo(input: CoachInput): number {
-  if (input.minimumRaiseTo !== undefined) return input.minimumRaiseTo;
-  const betLevel = input.heroCommittedThisStreet + input.toCall;
-  return betLevel + Math.max(input.toCall, input.bigBlind);
+export function minimumAggressiveTo(spot: SizedSpot): number {
+  const derived = spot.minimumRaiseTo ?? betLevelOf(spot) + Math.max(spot.toCall, spot.bigBlind);
+  return Math.min(derived, maximumTo(spot));
 }
 
 /**
@@ -672,7 +736,7 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
   const legal = input.legalActions ?? deriveLegalActions(input);
   const permitted = (action: CoachAction): boolean => legal.includes(action);
 
-  const betLevel = input.heroCommittedThisStreet + input.toCall;
+  const betLevel = betLevelOf(input);
   const isOpening = betLevel === 0;
 
   // Check first, then fold. The order is the ranking's first tiebreak (the sort below
@@ -720,10 +784,11 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
   // stack goes out, and the part of it that merely matches the bet is not a raise.
   const maxRaiseBy = input.heroStack - input.toCall;
   if (maxRaiseBy > 0 && permitted(isOpening ? 'bet' : 'raise')) {
-    const maxTo = input.heroCommittedThisStreet + input.heroStack;
-    // A stack that cannot reach the minimum may still shove: a short all-in is a legal
-    // (incomplete) raise, and this is the same clamp `legalActions` applies.
-    const floorTo = Math.min(minimumAggressiveTo(input), maxTo);
+    // Already clamped at `maximumTo` by `minimumAggressiveTo`, because a stack that cannot reach
+    // the minimum may still shove — a short all-in is a legal (incomplete) raise, and that is
+    // the clamp `legalActions` applies. It moved into the floor itself when a second caller
+    // appeared that has to hold a learner's submitted size to the same figure.
+    const floorTo = minimumAggressiveTo(input);
     const floorRaiseBy = floorTo - betLevel;
 
     // Sizes are fractions of the pot as it stands *after* the call, which is both how
@@ -817,7 +882,7 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
  * right and is a double-count in one direction or a needless refusal in the other.
  */
 function assertAffordable(candidates: readonly ActionCandidate[], input: CoachInput): void {
-  const maxTo = input.heroCommittedThisStreet + input.heroStack;
+  const maxTo = maximumTo(input);
   for (const candidate of candidates) {
     if (candidate.cost > input.heroStack) {
       throw new CoachError(

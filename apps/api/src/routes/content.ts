@@ -83,11 +83,14 @@ import {
   evOfSemiBluff,
   exactRange,
   judgeConsistency,
+  maximumTo,
+  minimumAggressiveTo,
   parseRange,
   potOdds,
   projectResults,
   riskOfRuin,
   ruleOf24,
+  type SizedSpot,
   stackToPotRatio,
 } from '@prl/poker-math';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -699,6 +702,20 @@ interface Consistency {
    * that nullable column is for. Never shown as a score.
    */
   readonly claimsOneAction: boolean;
+  /**
+   * True when the analysis actually has a row for the decision that was submitted.
+   *
+   * False in the two cases where it has nothing to say: an action it did not price, and a
+   * *sizing* it did not price. `consistent` is `false` in both, and in both that means "not
+   * established" rather than "established to be wrong" — a distinction one boolean cannot carry,
+   * which is why this one exists beside it.
+   *
+   * The consequence is at the write, not at the wording: with no row to compare against there is
+   * no claim to record, so `matched_expected` goes in as NULL. Recording `false` would put "this
+   * learner was wrong" in the database on the strength of an analysis that never looked at what
+   * they did — the same shape of defect as grading them against a figure that did not apply.
+   */
+  readonly priced: boolean;
 }
 
 /**
@@ -723,6 +740,35 @@ export function consistencyOf(
   const verdict = judgeConsistency({ report, action, bigBlind, ...(to === undefined ? {} : { to }) });
   const { claimsOneAction } = verdict;
 
+  // A size the analysis never put a price on. `to` is necessarily present here — `judgeConsistency`
+  // only reports an unpriced *sizing* when a size was supplied, because an unsized action falls
+  // back to the best row for its name — and the narrowing is written out so this cannot silently
+  // start rendering "undefined" if that ever changes.
+  //
+  // This case used to be invisible. `candidateFor` substituted the highest-EV row for the action
+  // name whenever the submitted `to` matched nothing, so a raise to 26,000 into a 500-chip stack
+  // came back `consistentWithAnalysis: true`, graded against the 67-chip raise. The substitution is
+  // gone; what is left is a spot where the product genuinely has nothing to say, and the honest
+  // answer is to say that rather than to pick a verdict. Sizes outside what hero could pay are
+  // refused earlier still — see `requirePayableSizing`.
+  if (verdict.pricing === 'sizing-not-priced' && to !== undefined) {
+    const whatWasPriced =
+      verdict.pricedSizes.length === 0
+        ? `The analysis priced ${action} with no sizing at all, because ${action} moves no chips`
+        : `The analysis priced ${action} to ${verdict.pricedSizes.join(', ')}`;
+    return {
+      consistent: false,
+      reasoning:
+        `The analysis did not price ${action} to ${to}, so there is nothing here to judge that ` +
+        `decision against. ${whatWasPriced}, and a differently sized ${action} is a different decision — ` +
+        'reporting it against one of those would be answering a question you did not ask. This is ' +
+        'not a statement that your size is wrong; it is a statement that this analysis does not ' +
+        'cover it.',
+      claimsOneAction,
+      priced: false,
+    };
+  }
+
   if (verdict.chosen === null) {
     return {
       consistent: false,
@@ -730,6 +776,7 @@ export function consistencyOf(
         `${action} is not one of the actions available in this spot, so there is nothing for the ` +
         `analysis to compare it with. It evaluated: ${verdict.availableActions.join(', ')}.`,
       claimsOneAction,
+      priced: false,
     };
   }
   const chosen = verdict.chosen;
@@ -740,9 +787,12 @@ export function consistencyOf(
       ? ''
       : ` Against this range the analysis also supports ${alternatives.join(' and ')}, so this spot ` +
         'does not come down to one answer.';
-  // The learner's own sizing is reported next to the size the analysis priced, because the same
-  // action at a very different size is a different decision, and saying so is more useful than
-  // quietly grading one against the other.
+  // The size the verdict was actually reached on, stated next to the learner's own. The two now
+  // agree by construction — reaching this line at all means the analysis had a row for this exact
+  // total — and the sentence survives that change because it is what makes the agreement visible.
+  // It was written when they could differ, which is the defect above: the same action at a very
+  // different size is a different decision, and grading one against the other quietly is what this
+  // sentence would once have been the only trace of.
   const sizing =
     to === undefined ? '' : ` You sized it to ${to}; the analysis priced ${chosen.to ?? chosen.cost}.`;
 
@@ -751,6 +801,7 @@ export function consistencyOf(
       consistent: true,
       reasoning: `${action} is consistent with this analysis. ${chosen.derivation}${alsoSupported}${sizing}`,
       claimsOneAction,
+      priced: true,
     };
   }
   // Folding while a check is free is refused by the rule outright rather than on a margin, so it
@@ -766,6 +817,7 @@ export function consistencyOf(
         'and costs nothing, so it is never behind folding however thin the hand is. What the ' +
         `range assumption changes is whether betting would beat checking, not this.${alsoSupported}`,
       claimsOneAction,
+      priced: true,
     };
   }
   return {
@@ -777,6 +829,7 @@ export function consistencyOf(
       `treats as indifferent.${alsoSupported} That is a statement about the stated range assumption, ` +
       `and a different assumption could change it.${sizing}`,
     claimsOneAction,
+    priced: true,
   };
 }
 
@@ -898,6 +951,111 @@ function requireSizing(body: ScenarioAttemptRequest): void {
     fields: { to: 'is required for a bet or a raise, as a whole number of units' },
     logDetail: `a scenario attempt chose ${body.action} without a sizing`,
   });
+}
+
+/**
+ * The spot behind a scenario, as the five figures the betting rules read, memoised.
+ *
+ * Deriving it means reading the situation, which expands the opponent range, so it is memoised
+ * for the same reason `reports` is: a scenario cannot change while the process runs, so the work
+ * is once per scenario rather than once per attempt. Deliberately a separate memo from the report
+ * rather than a change to `reportFor`, which serves other routes.
+ *
+ * `coachTaskFor` rather than a second reading of the scenario's own fields: hero's own street
+ * commitment is not stored as a number anywhere — it is looked up by seat out of
+ * `committedThisStreet` — and the pot is `potBeforeStreet` plus every seat's commitment. A
+ * hand-rolled copy here would be the second source of truth ADR 0006 exists to prevent, and it
+ * would be a copy of exactly the arithmetic the Coach's own legality depends on.
+ */
+const attemptSpots = new Map<string, SizedSpot>();
+
+function sizedSpotFor(scenario: Scenario): SizedSpot {
+  const cached = attemptSpots.get(scenario.id);
+  if (cached !== undefined) return cached;
+  const task = coachTaskFor(scenario);
+  const spot: SizedSpot = {
+    toCall: task.toCall,
+    heroCommittedThisStreet: task.heroCommittedThisStreet,
+    heroStack: task.heroStack,
+    opponentStacks: task.opponentStacks,
+    bigBlind: task.bigBlind,
+  };
+  attemptSpots.set(scenario.id, spot);
+  return spot;
+}
+
+/**
+ * A submitted size has to be one hero could actually have put out.
+ *
+ * **The half of the legality guard that was missing.** The Coach derives the legal set with
+ * `deriveLegalActions` and asserts that every row it publishes is affordable, and all of that
+ * governs what the product *says*. Nothing governed what it *accepted*. Measured on the shipped
+ * Scenario Lab, hero holding 500 behind:
+ *
+ *     POST /content/scenarios/eq-flush-draw-turn-small-bet/attempt {"action":"raise","to":26000}
+ *       -> 200, consistentWithAnalysis: true
+ *
+ * The 26,000 matched no candidate, so the rule fell back to the highest-EV raise — 67 chips — and
+ * reported that a learner's impossible action agreed with an analysis which had never considered
+ * it. `to: 100000`, `to: 1` and `to: 0` did the same. The substitution is fixed in
+ * `@prl/poker-math` (see `candidateFor`), and this is the other half: a size nobody at that table
+ * could have paid is not a decision to be graded, consistent or otherwise, so it is refused before
+ * anything is judged at all.
+ *
+ * ## The three bounds, and where each comes from
+ *
+ * - **Above zero.** A `to` is a total street commitment; zero puts no chips out and negatives are
+ *   already refused by `scenarioAttemptBodySchema`. It is checked here anyway rather than left to
+ *   the schema, because a rule about what hero can pay should be readable in one place.
+ * - **At most `maximumTo`** — everything already out plus everything behind. The engine's own
+ *   ceiling, imported rather than rewritten.
+ * - **At least `minimumAggressiveTo`**, for a bet or a raise the rules actually allow here. Also
+ *   the engine's rule, and clamped to a shove for a stack too short to reach the minimum. This one
+ *   can sit *above* the engine's true minimum in a spot whose facing bet is not the last full
+ *   raise — see its doc — so the floor is quoted back to the caller rather than being a silent
+ *   refusal. Every Scenario Lab spot is a described one facing a single bet, where the two agree.
+ *
+ * The floor is applied only where the rules allow aggression at all. In a spot where they do not,
+ * a submitted raise is not a sizing problem, and answering "must reach at least 50" would be
+ * worse than useless — `consistencyOf` says "raise is not one of the actions available in this
+ * spot" instead, which is the true statement.
+ */
+function requirePayableSizing(scenario: Scenario, body: ScenarioAttemptRequest): void {
+  const to = body.to;
+  if (to === undefined) return;
+  const spot = sizedSpotFor(scenario);
+
+  // Returned and thrown at the call site rather than thrown from in here, so every branch below
+  // reads as a refusal at a glance. Same shape as `wrongAnswerKind` above.
+  const refusal = (message: string, detail: string): AppError =>
+    new AppError('invalid_request', {
+      fields: { to: message },
+      logDetail: `scenario ${scenario.id}: ${body.action} to ${to} ${detail}`,
+    });
+
+  if (to <= 0) {
+    throw refusal(
+      'is a total commitment for the street, so it has to be above zero — a total of 0 puts no chips out',
+      'is not a positive total',
+    );
+  }
+  const maxTo = maximumTo(spot);
+  if (to > maxTo) {
+    throw refusal(
+      `is more than you can reach: ${spot.heroCommittedThisStreet} is already out and ${spot.heroStack} ` +
+        `is behind, so ${maxTo} is your whole stack`,
+      `exceeds hero's maximum of ${maxTo}`,
+    );
+  }
+  if (body.action !== 'bet' && body.action !== 'raise') return;
+  if (!deriveLegalActions(spot).includes(body.action)) return;
+  const floorTo = minimumAggressiveTo(spot);
+  if (to < floorTo) {
+    throw refusal(
+      `is below the smallest legal ${body.action} here, which is a total of ${floorTo}`,
+      `is below the floor of ${floorTo}`,
+    );
+  }
 }
 
 // A plain function returning a resolved promise, not an `async` function with no `await`: every
@@ -1085,20 +1243,24 @@ const contentRoutes: FastifyPluginAsync = (app) => {
         throw new AppError('content_not_found', { logDetail: `no scenario ${request.params.id}` });
       }
       requireSizing(request.body);
+      // Before anything is judged: a size hero could not have paid is not a decision to grade.
+      // See `requirePayableSizing` for the runtime measurement that made this necessary.
+      requirePayableSizing(scenario, request.body);
       const analysis = await reportFor(pool, scenario);
       const consistency = consistencyOf(analysis, request.body.action, request.body.to, scenario.bigBlind);
 
       const userId = callerUserId(request);
       if (userId !== null) {
         // `matched_expected` stays NULL when the analysis does not single out one action — see the
-        // route comment. The statement, and the shape of `chosen_action`, belong to
-        // `repositories/progress.ts`.
+        // route comment — and equally when it has no row for what the learner actually did, which
+        // is a claim it cannot make either. The statement, and the shape of `chosen_action`,
+        // belong to `repositories/progress.ts`.
         await recordScenarioAttempt(getSql(), {
           userId,
           scenarioId: scenario.id,
           action: request.body.action,
           ...(request.body.to === undefined ? {} : { to: request.body.to }),
-          matchedExpected: consistency.claimsOneAction ? consistency.consistent : null,
+          matchedExpected: consistency.priced && consistency.claimsOneAction ? consistency.consistent : null,
         });
       }
 

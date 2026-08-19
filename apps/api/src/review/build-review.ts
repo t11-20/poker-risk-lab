@@ -22,9 +22,29 @@
  *   - every chip movement comes from `prl.hand_actions`: `amount_paid` is what actually left a
  *     stack, `bet_level_after` is the level the next player faced, and `pot_after` is the engine's
  *     own total. Stacks, per-street commitments and the pot are re-derived by adding those up;
- *   - the blinds and antes are the one thing that is not an action row, so they are re-derived
- *     from `prl.hands.config` and `button_seat` using the engine's own `assignBlinds` and
- *     `orderFrom` — the same functions `startHand` used to post them in the first place.
+ *   - the blinds and antes are the one thing that is not an action row, so they are RECOVERED from
+ *     what the hand recorded — see `recoverPostedBlinds` below. They are emphatically not
+ *     re-derived from the button.
+ *
+ * ## Why the blinds are recovered rather than derived from the button
+ *
+ * They used to be derived, with the engine's own `assignBlinds(button_seat, …)`. That was correct
+ * only while the blinds were a function of the button, and the dead-button rule
+ * (`packages/poker-engine/src/positions.ts`) ended that: the big blind advances by exactly one live
+ * player per hand, the small blind may be DEAD (nobody posts it) and the button itself may sit in
+ * an empty chair. Both are ordinary outcomes of the rule, not degenerate states.
+ *
+ * A review that re-derived the blinds therefore reconstructed a different hand from the one that
+ * was played — it charged a small blind nobody paid, and charged both blinds to the wrong seats.
+ * The pot cross-check in `analysisFor` caught the divergence and refused every decision, so the
+ * whole analysis silently vanished for any hand with a dead small blind or a dead button. The
+ * cross-check was right; the reconstruction was wrong.
+ *
+ * `prl.hands` has no `small_blind_seat` or `big_blind_seat` column, so there is nothing to read
+ * back. What the rows DO record is what actually happened, and that pins both seats exactly:
+ * whoever opened the action names the big blind, and the engine's own pot total says whether a
+ * small blind was posted at all. Recovering them that way needs no migration and works on every
+ * hand already in the table, including the ones dealt before the rule existed.
  *
  * The deck was only ever needed to *choose* those cards. Once chosen, the ones that legitimately
  * became public are persisted and the rest are gone for good — which is the point. A replay that
@@ -63,7 +83,6 @@ import type {
 } from '@prl/contracts';
 import type { Card, DeckCommitment, DeckReveal, RevealedCard } from '@prl/poker-engine';
 import {
-  assignBlinds,
   COMMITMENT_VERSION,
   cardToString,
   DECK_SIZE,
@@ -546,25 +565,78 @@ interface ReplayState {
 }
 
 /**
- * Posts the antes and blinds, mirroring `startHand`.
+ * Where the blinds actually fell in one hand.
  *
- * This is the one part of a hand that is not an action row, and it is re-derived rather than
- * guessed: `assignBlinds` and `orderFrom` are the engine's own functions, so the seats charged
- * here are exactly the seats charged when the hand was dealt. An ante is dead money — it goes
- * straight to the middle and buys no part of the bet level — while a blind is a live bet, and
- * conflating the two would make every `toCall` in the review wrong by the ante.
+ * `smallBlindSeat` is null for a DEAD small blind — nobody posted it. That is a legitimate outcome
+ * of the dead-button rule and not a missing value, which is why it is spelled the same way the
+ * engine spells it (`HandState.smallBlindSeat`, `BlindRotation.smallBlindSeat`).
  */
-function openReplay(
+interface PostedBlinds {
+  readonly smallBlindSeat: number | null;
+  readonly bigBlindSeat: number;
+}
+
+/**
+ * The dealt seat immediately before `from`, clockwise, or null when there is none.
+ *
+ * `orderFrom` walks a FULL orbit and — as its own header spells out — returns an occupied `from`
+ * as the LAST element. So the element before that last one is the seat immediately preceding
+ * `from`, and a last element that is not `from` means `from` was not dealt in at all.
+ */
+function previousDealt(from: number, maxSeats: number, dealt: readonly number[]): number | null {
+  const orbit = orderFrom(from, maxSeats, dealt);
+  if (orbit[orbit.length - 1] !== from) return null;
+  return orbit[orbit.length - 2] ?? null;
+}
+
+/**
+ * Which seat posted the big blind, read off who opened the action.
+ *
+ * The engine opens preflop betting at `firstToActPreflopFor`, which is `nextOccupied(bigBlindSeat)`
+ * three or more handed and the button heads-up. Both are invertible, so the first action row names
+ * the big blind exactly — with no reference to the button, which under the dead-button rule may be
+ * two seats away from the blinds or in an empty chair altogether.
+ *
+ * The one shape this cannot read is a table with an ante large enough to put the opener all-in
+ * before they act, because the engine then skips them and the first action row belongs to a later
+ * seat. The pot check in `openReplay` refuses that hand rather than analysing a mis-reconstructed
+ * one — the same fail-closed outcome as before, and no room in this app is configured with an ante.
+ */
+function recoverBigBlindSeat(
+  hand: HandRow,
+  config: TableConfigFields,
+  dealt: readonly number[],
+  opener: HandActionRow,
+): number | null {
+  // Heads-up the button IS the small blind (`assignBlinds`, and `resolveBlinds` refuses any other
+  // arrangement), so the big blind is simply the other seat. Read structurally rather than from the
+  // action log because heads-up the button also acts first preflop, so the log says nothing new.
+  if (dealt.length === 2) {
+    if (!dealt.includes(hand.button_seat)) return null;
+    return dealt.find((seat) => seat !== hand.button_seat) ?? null;
+  }
+  return previousDealt(opener.seat, config.maxSeats, dealt);
+}
+
+/**
+ * Posts the antes and blinds into a fresh tally, mirroring `startHand`.
+ *
+ * An ante is dead money — it goes straight to the middle and buys no part of the bet level — while
+ * a blind is a live bet, and conflating the two would make every `toCall` in the review wrong by
+ * the ante. A dead small blind posts nothing at all: it is not covered by the house and it is not
+ * moved onto the next player, because that player paid it last hand.
+ *
+ * The ante order starts at the button, exactly as `startHand` does. `orderFrom` does not require
+ * `from` to be occupied, so a dead button is fine here; the order does not affect the total anyway,
+ * only which short stack pays first.
+ */
+function openTally(
   hand: HandRow,
   seats: readonly ReviewSeat[],
   config: TableConfigFields,
-): ReplayState | null {
-  const dealt = seats
-    .filter((seat) => seat.dealtIn)
-    .map((seat) => seat.seat)
-    .sort((a, b) => a - b);
-  if (dealt.length < 2 || !dealt.includes(hand.button_seat)) return null;
-
+  dealt: readonly number[],
+  blinds: PostedBlinds,
+): ReplayState {
   const tally = new Map<number, ReplaySeat>();
   for (const seat of seats) {
     tally.set(seat.seat, {
@@ -585,25 +657,80 @@ function openReplay(
     else state.potInMiddle += paid;
   };
 
-  try {
-    if (config.ante > 0) {
-      for (const target of orderFrom(hand.button_seat, config.maxSeats, dealt)) {
-        post(target, config.ante, false);
-      }
+  if (config.ante > 0) {
+    for (const target of orderFrom(hand.button_seat, config.maxSeats, dealt)) {
+      post(target, config.ante, false);
     }
-    const { smallBlindSeat, bigBlindSeat } = assignBlinds(hand.button_seat, config.maxSeats, dealt);
-    post(smallBlindSeat, config.smallBlind, true);
-    post(bigBlindSeat, config.bigBlind, true);
-  } catch {
-    // `assignBlinds` and `orderFrom` throw on a seat layout they cannot make sense of. A review
-    // still shows the action log; it simply has no situation to analyse.
-    return null;
   }
+  if (blinds.smallBlindSeat !== null) post(blinds.smallBlindSeat, config.smallBlind, true);
+  post(blinds.bigBlindSeat, config.bigBlind, true);
 
-  for (const seat of state.seats.values()) {
-    state.betLevel = Math.max(state.betLevel, seat.committedThisStreet);
-  }
+  // The opening level is the big blind — the largest FULL wager in force — and not merely the
+  // largest amount that reached the pot. `startHand` says why at length: a big blind posted short
+  // does not reduce what everybody else has to pay, and taking the level from the largest
+  // commitment would under-charge every caller in the review.
+  let posted = 0;
+  for (const seat of state.seats.values()) posted = Math.max(posted, seat.committedThisStreet);
+  state.betLevel = Math.max(config.bigBlind, posted);
   return state;
+}
+
+function potTotal(state: ReplayState): number {
+  return state.potInMiddle + sumCommitted(state);
+}
+
+/**
+ * Opens the replay with the blinds the hand actually had.
+ *
+ * Two independent recorded facts pin the two unknowns. The first action row names the big blind
+ * (see `recoverBigBlindSeat`). The engine's own pot before that action — `pot_after` less what the
+ * action paid — then says which of the two remaining possibilities happened: a small blind posted
+ * by the seat before the big blind, or a dead one posted by nobody. The dead-button rule allows
+ * exactly those two, because the small blind sits where the big blind was last hand and the big
+ * blind is the next live player after it, so no dealt seat can be between them.
+ *
+ * Both candidates are built with the same `openTally`, so the arithmetic that decides between them
+ * is literally the arithmetic the accepted reconstruction goes on to use.
+ *
+ * When NEITHER matches, the rows do not describe a hand this module can reproduce — a tampered
+ * `pot_after`, say. The first candidate is returned anyway rather than null, and that is
+ * deliberate: an opening that is wrong by some amount is wrong by that same amount at every
+ * decision, so `analysisFor`'s pot cross-check refuses all of them and says exactly which check
+ * failed. Nothing unverified is ever analysed either way; this only decides which reason reaches
+ * the log. `null` is kept for the case where there is no anchor to check against at all.
+ */
+function openReplay(
+  hand: HandRow,
+  seats: readonly ReviewSeat[],
+  config: TableConfigFields,
+  actions: readonly HandActionRow[],
+): ReplayState | null {
+  const dealt = seats
+    .filter((seat) => seat.dealtIn)
+    .map((seat) => seat.seat)
+    .sort((a, b) => a - b);
+  if (dealt.length < 2) return null;
+
+  // The anchor for everything below, and both halves of it come off the FIRST action: the seat the
+  // engine opened the action on, and its own pot before that action. It has to be a preflop action
+  // for either to mean anything. A hand whose blinds put everybody all-in has no action rows at
+  // all, and no decisions to analyse either, so nothing is lost by refusing it here.
+  const opener = actions[0];
+  if (opener === undefined || opener.street !== 'preflop') return null;
+  const bigBlindSeat = recoverBigBlindSeat(hand, config, dealt, opener);
+  if (bigBlindSeat === null) return null;
+  const postedByForcedBets = opener.pot_after - opener.amount_paid;
+
+  // Live first, so a hand where the small blind seat could not put a chip in either way — an ante
+  // took its whole stack — settles on the arrangement that names a seat rather than on `null`.
+  const smallBlindCandidates: readonly (number | null)[] = [
+    dealt.length === 2 ? hand.button_seat : previousDealt(bigBlindSeat, config.maxSeats, dealt),
+    null,
+  ];
+  const candidates = smallBlindCandidates.map((smallBlindSeat) =>
+    openTally(hand, seats, config, dealt, { smallBlindSeat, bigBlindSeat }),
+  );
+  return candidates.find((state) => potTotal(state) === postedByForcedBets) ?? candidates[0] ?? null;
 }
 
 /** Sweeps a finished street's bets into the middle and resets the per-street tallies. */
@@ -647,7 +774,7 @@ function situationBefore(state: ReplayState, action: HandActionRow): Situation |
 
   return {
     street,
-    potBefore: state.potInMiddle + sumCommitted(state),
+    potBefore: potTotal(state),
     toCall: Math.max(0, Math.min(state.betLevel - actor.committedThisStreet, actor.stack)),
     committedThisStreet: actor.committedThisStreet,
     heroStack: actor.stack,
@@ -960,18 +1087,18 @@ export function buildHandReview(
   const viewer = seats.find((seat) => seat.userId !== null && seat.userId === input.viewerUserId) ?? null;
   const board = cardsFromJson(hand.board);
   const config = configFromJson(hand.config);
+  // Sorted once and shared: the replay reads the FIRST action to recover the blinds the hand
+  // actually posted, and it has to be the same first action the walk below starts from.
+  const actions = [...input.actions].sort((a, b) => a.sequence - b.sequence);
 
-  const decisions = buildDecisions(
-    [...input.actions].sort((a, b) => a.sequence - b.sequence),
-    {
-      hand,
-      viewer,
-      board: board === null ? [] : board.cards,
-      bigBlind: config === null ? 0 : config.bigBlind,
-      state: config === null ? null : openReplay(hand, seats, config),
-      budget,
-    },
-  );
+  const decisions = buildDecisions(actions, {
+    hand,
+    viewer,
+    board: board === null ? [] : board.cards,
+    bigBlind: config === null ? 0 : config.bigBlind,
+    state: config === null ? null : openReplay(hand, seats, config, actions),
+    budget,
+  });
 
   const revealCheck = checkReveal(hand);
   return {

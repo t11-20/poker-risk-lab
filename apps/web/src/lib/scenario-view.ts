@@ -50,7 +50,7 @@
 
 import type { Scenario, ScenarioSeat } from '@prl/contracts';
 import type { LegalAction, PlayerView, SeatStatus, SeatView } from '@prl/poker-engine';
-import { parseCards, positionLabels } from '@prl/poker-engine';
+import { assignBlinds, parseCards, positionLabels } from '@prl/poker-engine';
 
 export interface ScenarioTable {
   readonly view: PlayerView;
@@ -101,14 +101,33 @@ export function scenarioToPlayerView(scenario: Scenario): ScenarioTable | null {
   const potTotal =
     scenario.potBeforeStreet + scenario.seats.reduce((sum, seat) => sum + commitmentOf(seat.seat), 0);
 
-  const occupied = scenario.seats.map((seat) => seat.seat);
-  const maxSeats = Math.max(2, Math.min(6, scenario.seats.length));
+  const occupied = scenario.seats.map((seat) => seat.seat).sort((a, b) => a - b);
+  // The number of CHAIRS, not the number of players sitting in them.
+  //
+  // Every walk round a table is `(seat + step) % maxSeats`, so a table sized by the count of
+  // players can never reach a seat above that count. Sizing it by the count is why the twelve
+  // scenarios that seat two players at seats 3 and 5 rendered with NO position labels at all —
+  // `assignBlinds` walked a two-chair table, found neither seat, and threw "heads-up table has no
+  // second seat" — and why `rk-when-survival-outweighs-chip-ev` badged seats 2 and 3 as the blinds
+  // when its own `committedThisStreet` says seats 4 and 5 posted them. A hand played by two people
+  // at seats 3 and 5 is a six-max table with four empty chairs, and that is what the seat
+  // arithmetic has to be told.
+  const maxSeats = Math.max(2, Math.min(6, Math.max(...occupied, 1) + 1));
   // `positionLabels` needs at least two occupied seats and throws on a layout it cannot read. A
   // scenario without positions is still a perfectly renderable table, so a failure here degrades
   // to unlabelled seats rather than to no table.
+  //
+  // The blinds are stated rather than left to be derived. A scenario is a single authored spot and
+  // not a hand in a rotation: there is no previous hand, so nobody can already have paid and
+  // neither blind can be dead. The button really does fix the blinds here — the one case
+  // `assignBlinds` is correct for, as `positions.ts` puts it — and saying so at the call site
+  // records it as a decision about scenarios rather than as whatever `positionLabels` defaults to.
   let labels: ReadonlyMap<number, SeatView['position']>;
   try {
-    labels = occupied.length >= 2 ? positionLabels(scenario.buttonSeat, maxSeats, occupied) : new Map();
+    // `assignBlinds` refuses fewer than two players and a button nobody occupies, which is exactly
+    // the set of layouts `positionLabels` cannot read either.
+    const blinds = assignBlinds(scenario.buttonSeat, maxSeats, occupied);
+    labels = positionLabels(scenario.buttonSeat, maxSeats, occupied, blinds);
   } catch {
     labels = new Map();
   }

@@ -79,7 +79,14 @@ import {
   startHand,
   validateAction,
 } from '@prl/poker-engine';
-import { buildCoachReport, type CoachInput, deriveLegalActions, type Street } from '../src/coach.ts';
+import {
+  buildCoachReport,
+  type CoachInput,
+  deriveLegalActions,
+  maximumTo,
+  minimumAggressiveTo,
+  type Street,
+} from '../src/coach.ts';
 import { topPercentRange } from '../src/hand-ranking.ts';
 import { exactRange, type ParsedRange, parseRange } from '../src/ranges.ts';
 
@@ -918,4 +925,58 @@ test('no candidate costs more than hero has behind, or reaches a total hero cann
 
   assert.ok(withCommitment >= 3, `only ${withCommitment} scenarios have hero committed on the street`);
   assert.deepEqual(problems, [], problems.join('\n'));
+});
+
+test("the bounds a grader holds a learner to are the engine's own maxTo, and never below its minTo", () => {
+  // `minimumAggressiveTo` and `maximumTo` used to be private to this module: the Coach applied
+  // them to what it *published* and nothing applied them to what the product *accepted*. The
+  // Scenario Lab's attempt endpoint now refuses a submitted size outside them, which promotes
+  // both from an internal detail to a rule a learner is held to — so both are measured against
+  // the engine here rather than trusted.
+  //
+  // The two directions are not symmetric, and the asymmetry is the point:
+  //
+  //   - `maximumTo` must equal the engine's `maxTo` exactly. It is pure arithmetic on chips
+  //     hero holds, there is nothing to derive, and a refusal above it is a refusal of a size
+  //     hero could not have paid for. Getting it wrong in either direction is a defect.
+  //   - `minimumAggressiveTo` may sit at or above the engine's `minTo` and never below it. Below
+  //     it would accept a size the table rejects; above it refuses a legal one, which the
+  //     derivation's own doc admits is possible for a spot whose facing bet is not the last full
+  //     raise. Measured, so the size of that gap is a fact rather than a hope.
+  let checked = 0;
+  for (const hand of playedHands()) {
+    const input = inputForPlayedHand(hand, false);
+    const aggressive = legalActions(hand.state, hand.seat).find(
+      (entry) => entry.type === 'bet' || entry.type === 'raise',
+    );
+    assert.ok(aggressive !== undefined, `${hand.label}: the engine should offer aggression`);
+    assert.ok(aggressive.minTo !== undefined && aggressive.maxTo !== undefined);
+
+    assert.equal(
+      maximumTo(input),
+      aggressive.maxTo,
+      `${hand.label}: the ceiling a submitted size is held to must be the engine's own maximum`,
+    );
+    assert.ok(
+      minimumAggressiveTo(input) >= aggressive.minTo,
+      `${hand.label}: derived floor ${minimumAggressiveTo(input)} sits below the engine minimum of ${aggressive.minTo}`,
+    );
+    // Told the engine's figure, the derivation is not consulted at all and the floor is exact.
+    assert.equal(minimumAggressiveTo(inputForPlayedHand(hand, true)), aggressive.minTo);
+    checked += 1;
+  }
+  assert.ok(checked >= 3, `only ${checked} hands exercised the bounds`);
+
+  // The all-in clamp, which is part of the floor rather than part of its callers: a stack too
+  // short to reach the minimum may still shove, and a floor above hero's whole stack would
+  // refuse the one aggressive action left to them.
+  const short = {
+    toCall: 40,
+    heroCommittedThisStreet: 10,
+    heroStack: 25,
+    opponentStacks: [500],
+    bigBlind: 20,
+  };
+  assert.equal(maximumTo(short), 35);
+  assert.equal(minimumAggressiveTo(short), 35, 'clamped to the shove rather than left above it');
 });

@@ -23,8 +23,8 @@
  *     the response. It is recovered from the rule the builder itself follows — only the requesting
  *     user's own decisions are analysed — so the seat that owns an analysed decision is the viewer.
  *     Two fallbacks follow for the case where none of their decisions got a report.
- *  2. **The blinds, and the button.** No `TableConfig`, no `buttonSeat`. Both are recovered from
- *     the forced bets, which are themselves recovered as described below.
+ *  2. **The blinds, and the button.** No `TableConfig`, no `buttonSeat`, and — since the
+ *     dead-button rule landed — no way to derive either from the other. See the next section.
  *  3. **The forced bets.** No row exists for them: `prl.hand_actions` holds voluntary actions only.
  *     But `seats[].net` plus `amountPaid` pins them down. For any seat that did not win chips,
  *     `-net - paid` IS that seat's forced bet, exactly. The seats that did win are the remainder of
@@ -37,6 +37,28 @@
  * reconstructed pot against the server's `potBefore` at every step, and the replay says so on
  * screen if they ever differ.
  *
+ * ## Positions are recovered, not derived from the button
+ *
+ * Under the dead-button rule (`packages/poker-engine/src/positions.ts`) the big blind advances by
+ * one live player per hand, the small blind may be DEAD — nobody posts it — and the button may sit
+ * in an empty chair. `button + 1` and `button + 2` are then simply not the blinds, and a replay
+ * that let `positionLabels` derive them badged the big-blind payer 'SB' and a player who posted
+ * nothing 'BB'. So the blinds are recovered here and passed to `positionLabels` explicitly, which
+ * is the argument it grew for exactly this case:
+ *
+ *   - the BIG BLIND is read off who opened the action. The server opens preflop betting on the seat
+ *     after the big blind (`firstToActPreflopFor`), and heads-up on the button, which is the small
+ *     blind — so in both cases the big blind is the dealt seat immediately BEFORE the first
+ *     decision. That is exact, and it needs no reference to the button;
+ *   - the SMALL BLIND is the dealt seat before the big blind, and it is live only if it actually put
+ *     chips in. A dead small blind reads as `null`, not as a seat that posted nothing;
+ *   - the BUTTON follows from those: the seat before a live small blind, or — when the small blind
+ *     is dead, and the chair it would have sat in is therefore empty — the seat before the big
+ *     blind. Both are exact whenever the button itself is live. A DEAD button cannot be recovered
+ *     from this payload at all: nothing on the wire distinguishes it from a live one, so the badge
+ *     lands on the seat before the blinds. That is the one position this module can still get
+ *     wrong, and the fix for it is `buttonSeat` on `HandReviewResponse`.
+ *
  * ## What the pot readout uses
  *
  * The server's `decisions[k].potBefore`, always — it comes from the engine's own running total.
@@ -48,7 +70,7 @@
 
 import type { CoachReport, HandReviewDecision, HandReviewResponse } from '@prl/contracts';
 import type { PlayerView, SeatStatus, SeatView, Street } from '@prl/poker-engine';
-import { parseCards, positionLabels } from '@prl/poker-engine';
+import { orderFrom, parseCards, positionLabels } from '@prl/poker-engine';
 
 /** Board cards in play on each betting street. */
 const BOARD_LENGTH: Readonly<Record<string, number>> = { preflop: 0, flop: 3, turn: 4, river: 5 };
@@ -189,8 +211,71 @@ function recoverForcedBets(review: HandReviewResponse): ForcedBets {
   return { bySeat, approximate: unresolved.length > 1 };
 }
 
-/** Blinds recovered from the forced bets: the smallest positive is the small blind, the largest the big. */
-function recoverBlinds(forced: ReadonlyMap<number, number>): { small: number; big: number } {
+/**
+ * The seats the blinds fell on.
+ *
+ * `smallBlindSeat` is null for a DEAD small blind — nobody posted it. That is an ordinary outcome
+ * of the dead-button rule rather than a missing value, and it is spelled the way the engine spells
+ * it (`HandState.smallBlindSeat`) so it can be handed straight to `positionLabels`.
+ */
+interface BlindSeats {
+  readonly smallBlindSeat: number | null;
+  readonly bigBlindSeat: number;
+}
+
+/**
+ * The dealt seat immediately before `from`, clockwise, or null when there is none.
+ *
+ * `orderFrom` walks a FULL orbit and returns an occupied `from` as its LAST element — its own
+ * header says so — which makes the element before that the seat immediately preceding `from`, and a
+ * last element that is not `from` means `from` was never dealt in.
+ */
+function previousDealt(from: number, maxSeats: number, dealt: readonly number[]): number | null {
+  const orbit = orderFrom(from, maxSeats, dealt);
+  if (orbit[orbit.length - 1] !== from) return null;
+  return orbit[orbit.length - 2] ?? null;
+}
+
+/**
+ * Which seats posted the blinds. See the header for why this is read rather than derived.
+ *
+ * Null when the payload carries no anchor to read it from — no decisions, or a first decision that
+ * is not preflop — in which case the callers below fall back to what the forced bets alone say.
+ */
+function recoverBlindSeats(
+  forced: ReadonlyMap<number, number>,
+  dealt: readonly number[],
+  maxSeats: number,
+  first: HandReviewDecision | undefined,
+): BlindSeats | null {
+  if (dealt.length < 2 || first === undefined || first.street !== 'preflop') return null;
+  const bigBlindSeat = previousDealt(first.seat, maxSeats, dealt);
+  if (bigBlindSeat === null) return null;
+  const candidate = previousDealt(bigBlindSeat, maxSeats, dealt);
+  // Posted nothing means the small blind was dead: the chair it belongs in is empty, and the dealt
+  // seat before the big blind is somebody else — the button, usually. It is NOT a small blind that
+  // happens to have paid zero, and labelling it 'SB' is the bug this recovery exists to stop.
+  const posted = candidate === null ? 0 : (forced.get(candidate) ?? 0);
+  return { smallBlindSeat: posted > 0 ? candidate : null, bigBlindSeat };
+}
+
+/**
+ * The blind amounts for the replay's `TableConfig`.
+ *
+ * Taken from the seats that posted them rather than from the sorted list of forced bets, because
+ * with a dead small blind there is only ONE forced bet and "smallest positive, largest positive"
+ * then reports the big blind as both — a hand played 5/10 rendered as a 10/10 game. A dead small
+ * blind has no amount to report, so it reads as the inert 0 rather than as a plausible figure a
+ * learner could mistake for the table's stakes.
+ */
+function recoverBlindAmounts(
+  forced: ReadonlyMap<number, number>,
+  blinds: BlindSeats | null,
+): { small: number; big: number } {
+  if (blinds !== null) {
+    const small = blinds.smallBlindSeat === null ? 0 : (forced.get(blinds.smallBlindSeat) ?? 0);
+    return { small, big: forced.get(blinds.bigBlindSeat) ?? 0 };
+  }
   const positive = [...forced.values()].filter((amount) => amount > 0).sort((a, b) => a - b);
   const smallest = positive[0];
   const largest = positive[positive.length - 1];
@@ -199,19 +284,38 @@ function recoverBlinds(forced: ReadonlyMap<number, number>): { small: number; bi
 }
 
 /**
- * The button, recovered from who posted what.
+ * The button, from the blinds where they are known and from who posted what where they are not.
  *
- * Three or more handed the button posts nothing, so it is the dealt seat with a forced bet of zero.
- * Heads-up both blinds are posted and the button is the small blind, so it is the seat with the
- * smaller one. Ties fall back to the lowest seat index, which affects only the dealer badge and the
- * position labels.
+ * The blinds are the reliable route: heads-up the button IS the small blind, and otherwise the
+ * button is the dealt seat before the small blind — or, when the small blind is dead and its chair
+ * is therefore empty, the dealt seat before the big blind. The dead-button rule guarantees no dealt
+ * seat sits between the button and the small blind, so both readings are exact whenever the button
+ * is live; a dead button is not distinguishable here at all (see the header).
+ *
+ * The fallback is the older reading and stays for the hands with no decisions to anchor on: three
+ * or more handed the button posts nothing, heads-up it posts the smaller blind. Ties fall back to
+ * the lowest seat index, which affects only the dealer badge and the position labels.
  */
-function recoverButtonSeat(review: HandReviewResponse, forced: ReadonlyMap<number, number>): number {
-  const dealt = review.seats.filter((seat) => seat.startingStack > 0);
-  const zeroPosters = dealt.filter((seat) => (forced.get(seat.seat) ?? 0) === 0);
+function recoverButtonSeat(
+  review: HandReviewResponse,
+  forced: ReadonlyMap<number, number>,
+  dealt: readonly number[],
+  maxSeats: number,
+  blinds: BlindSeats | null,
+): number {
+  if (blinds !== null) {
+    const fromBlinds =
+      dealt.length === 2
+        ? blinds.smallBlindSeat
+        : previousDealt(blinds.smallBlindSeat ?? blinds.bigBlindSeat, maxSeats, dealt);
+    if (fromBlinds !== null) return fromBlinds;
+  }
+
+  const seated = review.seats.filter((seat) => seat.startingStack > 0);
+  const zeroPosters = seated.filter((seat) => (forced.get(seat.seat) ?? 0) === 0);
   const onlyZero = zeroPosters[0];
   if (zeroPosters.length === 1 && onlyZero !== undefined) return onlyZero.seat;
-  const sorted = [...dealt].sort(
+  const sorted = [...seated].sort(
     (a, b) => (forced.get(a.seat) ?? 0) - (forced.get(b.seat) ?? 0) || a.seat - b.seat,
   );
   return sorted[0]?.seat ?? 0;
@@ -234,6 +338,7 @@ interface ViewInput {
   readonly buttonSeat: number;
   readonly labels: ReadonlyMap<number, SeatView['position']>;
   readonly blinds: { readonly small: number; readonly big: number };
+  readonly maxSeats: number;
   readonly board: readonly number[];
   readonly betLevel: number;
   readonly actionSequence: number;
@@ -284,7 +389,7 @@ function buildView(input: ViewInput): PlayerView {
       // Antes are not separable from blinds in a recovery based on totals, and no room in this app
       // is configured with one. A hand that had one would show its ante folded into the blinds.
       ante: 0,
-      maxSeats: Math.max(2, Math.min(6, review.seats.length)),
+      maxSeats: input.maxSeats,
       // Not carried by the review payload and not rendered. Zero is the inert value; a plausible
       // 30 would be a number somebody could mistake for a fact.
       actionTimeoutSeconds: 0,
@@ -330,6 +435,7 @@ interface WalkInput {
   readonly buttonSeat: number;
   readonly labels: ReadonlyMap<number, SeatView['position']>;
   readonly blinds: { readonly small: number; readonly big: number };
+  readonly maxSeats: number;
 }
 
 interface WalkResult {
@@ -349,7 +455,7 @@ interface WalkResult {
  * reader is about to watch.
  */
 function walkDecisions(input: WalkInput): WalkResult {
-  const { review, decisions, tallies, board, viewerSeat, buttonSeat, labels, blinds } = input;
+  const { review, decisions, tallies, board, viewerSeat, buttonSeat, labels, blinds, maxSeats } = input;
   const steps: ReplayStep[] = [];
   let street = input.street;
   let potInMiddle = input.potInMiddle;
@@ -380,6 +486,7 @@ function walkDecisions(input: WalkInput): WalkResult {
         buttonSeat,
         labels,
         blinds,
+        maxSeats,
         board: board.slice(0, BOARD_LENGTH[street] ?? 0),
         betLevel,
         actionSequence: decision.sequence - 1,
@@ -417,26 +524,50 @@ function sumCommitted(tallies: ReadonlyMap<number, Tally>): number {
   return total;
 }
 
+/**
+ * How many chairs the table has, as the seat arithmetic needs it.
+ *
+ * The HIGHEST seat index in the hand plus one, not the NUMBER of seats. Every walk round the table
+ * is `(seat + step) % maxSeats`, so a table sized by the count can never reach a seat above it: a
+ * hand at seats 0, 1 and 3 sized as 3 leaves seat 3 unreachable, and `positionLabels` then labels
+ * two of the three players and silently drops the rest of the orbit. A player leaving a six-max
+ * table does not make the table smaller.
+ */
+function tableSize(review: HandReviewResponse): number {
+  const highest = review.seats.reduce((seat, entry) => Math.max(seat, entry.seat), 0);
+  return Math.max(2, Math.min(6, highest + 1));
+}
+
 /** Builds the whole replay. Never throws: a hand it cannot read produces a replay with no steps. */
 export function buildHandReplay(review: HandReviewResponse): HandReplay {
   const decisions = [...review.decisions].sort((a, b) => a.sequence - b.sequence);
   const viewerSeat = findViewerSeat(review);
   const forced = recoverForcedBets(review);
-  const blinds = recoverBlinds(forced.bySeat);
-  const buttonSeat = recoverButtonSeat(review, forced.bySeat);
   const board = parseNotation(review.hand.board) ?? [];
+  const maxSeats = tableSize(review);
 
   const seatNames: Record<number, string> = {};
   for (const seat of review.seats) seatNames[seat.seat] = seat.displayName;
 
-  const occupied = review.seats.filter((seat) => seat.startingStack > 0).map((seat) => seat.seat);
+  const occupied = review.seats
+    .filter((seat) => seat.startingStack > 0)
+    .map((seat) => seat.seat)
+    .sort((a, b) => a - b);
+  const blindSeats = recoverBlindSeats(forced.bySeat, occupied, maxSeats, decisions[0]);
+  const blinds = recoverBlindAmounts(forced.bySeat, blindSeats);
+  const buttonSeat = recoverButtonSeat(review, forced.bySeat, occupied, maxSeats, blindSeats);
+
   // Typed as the seat view's own `position` union rather than `string`, so no cast is needed where
   // it is read: `positionLabels` returns exactly that union, and the empty fallback adopts it.
+  //
+  // The blinds are passed in rather than left to be derived. Deriving them from the button is only
+  // right while the button determines them, which the dead-button rule ended — and it is also the
+  // one path that throws, on a button sitting in an empty chair.
   let labels: ReadonlyMap<number, SeatView['position']>;
   try {
     labels =
       occupied.length >= 2
-        ? positionLabels(buttonSeat, Math.max(2, Math.min(6, review.seats.length)), occupied)
+        ? positionLabels(buttonSeat, maxSeats, occupied, blindSeats ?? undefined)
         : new Map();
   } catch {
     labels = new Map();
@@ -471,6 +602,7 @@ export function buildHandReplay(review: HandReviewResponse): HandReplay {
     buttonSeat,
     labels,
     blinds,
+    maxSeats,
   });
   const steps: ReplayStep[] = [...walk.steps];
   const disagrees = walk.disagrees;
@@ -493,6 +625,7 @@ export function buildHandReplay(review: HandReviewResponse): HandReplay {
       buttonSeat,
       labels,
       blinds,
+      maxSeats,
       board,
       betLevel: 0,
       actionSequence: decisions.length,

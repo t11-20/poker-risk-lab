@@ -761,11 +761,14 @@ pnpm run db:migrate:status
   schema and can `DROP` every table it serves — the entire least-privilege posture, inverted, in a
   database that has every row and every index.
 
-> **And `pnpm run db:verify` exits 0 on that database.** Measured 2026-08-19. This is a real gap,
-> not a subtlety: `verify-schema.mjs` check 6 asserts that **`prl_app`** owns no relation and
-> holds no `CREATE` — which is true, because ownership landed on `prl_api` instead — and it never
-> asks who *does* own schema `prl`. So the one command §11.7 tells you to trust as the restore
-> rehearsal cannot see this particular broken restore. Until it can, check the owner yourself:
+> **`pnpm run db:verify` used to exit 0 on that database, and now does not.** This was a real gap:
+> `verify-schema.mjs` check 6 asserts that **`prl_app`** owns no relation and holds no `CREATE` —
+> which is true, because ownership landed on `prl_api` instead — and it never asked who *does* own
+> schema `prl`. So the one command §11.7 tells you to trust as the restore rehearsal could not see
+> this particular broken restore. **Check 6b now closes it**, asserting the schema and every
+> relation in it are owned by `prl_migrator`; a restore that lands ownership anywhere else fails
+> `db:verify` with the offending relations named. The queries below are the same thing by hand, and
+> are worth keeping for a database you cannot run the script against:
 >
 > ```sql
 > select nspname, pg_get_userbyid(nspowner) from pg_namespace where nspname = 'prl';
@@ -783,9 +786,10 @@ Rehearsed end to end on 2026-08-19 against a migrated and seeded database — du
 
 ```
 $ pnpm run db:verify                    # DATABASE_URL naming prl_api
-  · 118 columns across the prl schema
+  · 121 columns across the prl schema
   · 41 indexes
-  · checked 12 tables for prl_app privileges
+  · checked 13 tables for prl_app privileges
+  · checked schema and every relation owner
   ✓ every documented schema security property holds      → exit 0
 
 $ pnpm run db:migrate:status            # DATABASE_MIGRATION_URL naming prl_deployer

@@ -176,15 +176,17 @@ function analysisAt(review: HandReviewResponse, sequence: number): CoachReport {
 // ---------------------------------------------------------------------------
 
 describe('the review replays a hand from its rows, with no deck anywhere', () => {
-  it('reconstructs the pot and the price from the action log and the re-derived blinds', () => {
+  it('reconstructs the pot and the price from the action log and the recovered blinds', () => {
     const fixture = foldOutHand();
     const review = reviewAs(fixture, ALICE);
 
     const fold = review.decisions[0];
     assert.ok(fold !== undefined);
     assert.equal(review.decisions.length, 1);
-    // Small blind 1 plus big blind 2. Neither is an action row, so both were re-derived from
-    // `config` and `button_seat` through the engine's own `assignBlinds`.
+    // Small blind 1 plus big blind 2. Neither is an action row, so both were recovered from what
+    // the hand recorded — who opened the action, and the engine's own pot before they did. NOT
+    // from `button_seat`: the dead-button rule means the button no longer determines the blinds,
+    // and `test/x3-dead-blind-review.test.ts` covers the hands where the difference shows.
     assert.equal(fold.potBefore, 3);
 
     const analysis = analysisAt(review, 1);
