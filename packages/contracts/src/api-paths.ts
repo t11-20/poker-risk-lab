@@ -109,6 +109,26 @@ export const API_PATHS = {
     `${API_PREFIX}/legends/profiles/${encodeURIComponent(profileId)}/stats`,
   /** `POST`: the request carries a whole situation, which does not belong in a URL. */
   legendCompare: (): string => `${API_PREFIX}/legends/compare`,
+  /**
+   * `POST`. A private room with the named Legend profiles already seated.
+   * `/play?profile=&difficulty=` is how the web client reaches this.
+   */
+  legendMatches: (): string => `${API_PREFIX}/legends/matches`,
+
+  /**
+   * `GET`. One of the caller's OWN finished hands, as a decision-by-decision comparison against
+   * the modelled style that played it.
+   *
+   * A separate path from `hand` rather than a flag on it, because they are different reports for
+   * different questions: `hand` is the hand history's review (every seat's actions, the deck
+   * reveal, the commitment proof), and this is the Legends screen's "how did I play this, against
+   * whom". They also cost differently — this one prices the actions not taken.
+   *
+   * Scoped to the caller by the same rule as `hand`: no seat in the hand, no answer, and the same
+   * `hand_not_found` either way so a hand id cannot be confirmed by probing.
+   */
+  legendHandComparison: (handId: string): string =>
+    `${API_PREFIX}/legends/hands/${encodeURIComponent(handId)}/comparison`,
 
   /**
    * The live table's rooms: `GET` lists the ones this session can see, `POST` creates one.
@@ -232,6 +252,8 @@ export const API_PATH_PROBES: Readonly<Record<ApiPathName, ApiPathProbe>> = {
   legendProfile: { methods: ['GET'], build: (ex) => API_PATHS.legendProfile(ex.profileId) },
   legendProfileStats: { methods: ['GET'], build: (ex) => API_PATHS.legendProfileStats(ex.profileId) },
   legendCompare: { methods: ['POST'], build: () => API_PATHS.legendCompare() },
+  legendMatches: { methods: ['POST'], build: () => API_PATHS.legendMatches() },
+  legendHandComparison: { methods: ['GET'], build: (ex) => API_PATHS.legendHandComparison(ex.handId) },
   // Both methods, because the live-table client sends both: the list on load, the creation when
   // there is no room to reuse.
   rooms: { methods: ['GET', 'POST'], build: () => API_PATHS.rooms() },

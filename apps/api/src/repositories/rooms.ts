@@ -27,8 +27,8 @@
  * stays closed.
  */
 
-import { OPPONENT_PROFILES, type OpponentProfile } from '@prl/contracts';
 import { AppError } from '../errors.ts';
+import { type DurableBotSeat, durableProfile, durableSeed, isDifficulty } from '../rooms/bot-profile.ts';
 import { hashInviteCode, sha256, timingSafeEquals } from './hashing.ts';
 import { generateInviteCode, newRoomId, newRoomMemberId } from './ids.ts';
 import { type Db, insideSavepoint, isUniqueViolation, violationError } from './sql.ts';
@@ -87,9 +87,36 @@ export interface RoomMemberRow {
   readonly seat: number | null;
   readonly stack: number;
   readonly is_bot: boolean;
-  readonly bot_profile: OpponentProfile | null;
+  /**
+   * The `@prl/poker-ai` strategy profile id playing this seat, `'unknown'` for a row written
+   * before migration 0003, and null for a human. NOT an `OpponentProfile`: that five-value type is
+   * the Scenario Lab's range vocabulary, and reusing it here is what cost seven of the twelve
+   * Legends their identity across a restart.
+   */
+  readonly bot_profile: string | null;
+  /** `'educational' | 'realistic' | 'expert'`. Null only on a pre-0003 bot row. */
+  readonly bot_difficulty: string | null;
+  /** The resolved uint32 decision seed. Null only on a pre-0003 bot row. */
+  readonly bot_seed: number | null;
   readonly joined_at: Date;
   readonly left_at: Date | null;
+}
+
+/**
+ * `RoomMemberRow` as Postgres hands it over.
+ *
+ * `bot_seed` is `bigint`, and postgres.js returns every int8 as a STRING — deliberately, because
+ * an int8 does not fit a JavaScript number in general. This one always does (it is a uint32, and
+ * the column has a CHECK saying so), but the driver cannot know that, so the conversion is done
+ * here rather than by typing the column as something narrower than its domain. `int` would have
+ * been the narrower type and it is signed: half the seed space would not fit.
+ */
+interface RoomMemberRowRaw extends Omit<RoomMemberRow, 'bot_seed'> {
+  readonly bot_seed: string | null;
+}
+
+function toMemberRow(raw: RoomMemberRowRaw): RoomMemberRow {
+  return { ...raw, bot_seed: raw.bot_seed === null ? null : Number(raw.bot_seed) };
 }
 
 // ---------------------------------------------------------------------------
@@ -381,28 +408,29 @@ export async function membersOfRooms(
 ): Promise<readonly RoomMemberRow[]> {
   if (roomIds.length === 0) return [];
   const includeDeparted = options.includeDeparted ?? false;
-  const rows = await sql<RoomMemberRow[]>`
+  const rows = await sql<RoomMemberRowRaw[]>`
     select m.id, m.room_id, m.user_id, u.display_name, m.seat, m.stack, m.is_bot, m.bot_profile,
-           m.joined_at, m.left_at
+           m.bot_difficulty, m.bot_seed, m.joined_at, m.left_at
       from prl.room_members m
       join prl.users u on u.id = m.user_id
      where m.room_id = any(${[...roomIds]}::text[])
        and (${includeDeparted}::boolean or m.left_at is null)
      order by m.room_id, m.seat asc nulls last, m.joined_at
   `;
-  return rows;
+  return rows.map(toMemberRow);
 }
 
 /** One learner's live membership of one room, or null. The authorisation primitive. */
 export async function memberOf(sql: Db, roomId: string, userId: string): Promise<RoomMemberRow | null> {
-  const rows = await sql<RoomMemberRow[]>`
+  const rows = await sql<RoomMemberRowRaw[]>`
     select m.id, m.room_id, m.user_id, u.display_name, m.seat, m.stack, m.is_bot, m.bot_profile,
-           m.joined_at, m.left_at
+           m.bot_difficulty, m.bot_seed, m.joined_at, m.left_at
       from prl.room_members m
       join prl.users u on u.id = m.user_id
      where m.room_id = ${roomId} and m.user_id = ${userId} and m.left_at is null
   `;
-  return rows[0] ?? null;
+  const raw = rows[0];
+  return raw === undefined ? null : toMemberRow(raw);
 }
 
 // ---------------------------------------------------------------------------
@@ -415,8 +443,15 @@ export interface AddMemberInput {
   /** Chips in front of them. Defaults to the room's `starting_stack`. */
   readonly stack?: number;
   readonly isBot?: boolean;
-  /** Required when `isBot`, forbidden otherwise — `room_members_bot_profile_iff_bot`. */
-  readonly botProfile?: OpponentProfile | null;
+  /**
+   * The whole of what a bot seat is: which strategy, how hard, and the decision seed.
+   *
+   * Required when `isBot`, forbidden otherwise — `room_members_bot_profile_iff_bot` and
+   * `room_members_bot_config_requires_bot`. All three together, because a profile id on its own
+   * does not reproduce an opponent and a row that carries only part of the answer is a seat that
+   * cannot be rehydrated. See `rooms/bot-profile.ts`.
+   */
+  readonly bot?: DurableBotSeat | null;
 }
 
 /**
@@ -438,7 +473,7 @@ export interface AddMemberInput {
  */
 export async function addMember(sql: Db, input: AddMemberInput): Promise<RoomMemberRow> {
   const isBot = input.isBot ?? false;
-  const botProfile = normaliseBotProfile(isBot, input.botProfile ?? null);
+  const bot = normaliseBotSeat(isBot, input.bot ?? null);
   const stack = input.stack ?? null;
   if (stack !== null && (!Number.isInteger(stack) || stack < 0)) {
     throw new AppError('invalid_request', {
@@ -449,9 +484,13 @@ export async function addMember(sql: Db, input: AddMemberInput): Promise<RoomMem
 
   try {
     const rows = await sql<{ id: string }[]>`
-      insert into prl.room_members (id, room_id, user_id, seat, stack, is_bot, bot_profile)
+      insert into prl.room_members
+             (id, room_id, user_id, seat, stack, is_bot, bot_profile, bot_difficulty, bot_seed)
       select ${newRoomMemberId()}, r.id, ${input.userId}, null,
-             coalesce(${stack}::int, r.starting_stack), ${isBot}, ${botProfile}
+             coalesce(${stack}::int, r.starting_stack), ${isBot},
+             ${bot === null ? null : bot.profileId},
+             ${bot === null ? null : bot.difficulty},
+             ${bot === null ? null : String(bot.seed)}::bigint
         from prl.rooms r
        where r.id = ${input.roomId}
          and r.status <> 'closed'
@@ -650,23 +689,42 @@ export async function close(sql: Db, roomId: string, options: CloseRoomOptions =
 // Helpers
 // ---------------------------------------------------------------------------
 
-function normaliseBotProfile(isBot: boolean, profile: OpponentProfile | null): OpponentProfile | null {
+/**
+ * Refuses a bot seat that could not be put back after a restart, at the moment it is written.
+ *
+ * This is the forward half of migration 0003. The column CHECKs cannot express "a NEW bot row
+ * must carry all three fields" without also rejecting the pre-0003 rows that legitimately carry
+ * none, so the requirement lives here — one write path, one refusal, before anything reaches the
+ * table. `durableProfile` and `durableSeed` throw on their own for a value the schema would
+ * reject anyway, so an unknown profile id fails here rather than as a constraint violation.
+ */
+function normaliseBotSeat(isBot: boolean, bot: DurableBotSeat | null): DurableBotSeat | null {
   if (!isBot) {
-    if (profile !== null) {
+    if (bot !== null) {
       throw new AppError('invalid_request', {
-        fields: { botProfile: 'only applies to a bot seat' },
-        logDetail: 'a human seat was given a bot profile',
+        fields: { bot: 'only applies to a bot seat' },
+        logDetail: 'a human seat was given a bot configuration',
       });
     }
     return null;
   }
-  if (profile === null || !OPPONENT_PROFILES.includes(profile)) {
+  if (bot === null) {
     throw new AppError('invalid_request', {
-      fields: { botProfile: 'must name one of the opponent profiles' },
-      logDetail: 'a bot seat was created without a recognised profile',
+      fields: { bot: 'a bot seat needs a profile, a difficulty and a seed' },
+      logDetail: 'a bot seat was created without a strategy configuration',
     });
   }
-  return profile;
+  if (!isDifficulty(bot.difficulty)) {
+    throw new AppError('invalid_request', {
+      fields: { bot: 'difficulty must be educational, realistic or expert' },
+      logDetail: `a bot seat was created with difficulty "${bot.difficulty}"`,
+    });
+  }
+  return {
+    profileId: durableProfile(bot.profileId),
+    difficulty: bot.difficulty,
+    seed: durableSeed(bot.seed),
+  };
 }
 
 /**

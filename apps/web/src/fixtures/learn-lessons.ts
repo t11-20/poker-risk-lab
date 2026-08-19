@@ -3,7 +3,7 @@
  *
  * Eight of the seventeen, chosen so that between them they exercise every
  * `LessonBlock` variant and every `LiveCalculation` kind in the contract — equity, outs,
- * ruleOf24, potOdds, callEv, foldEquity, spr, variance and riskOfRuin. The remaining
+ * ruleOf24, potOdds, callEv, foldEquity, spr, variance, riskOfRuin and icm. The remaining
  * nine lessons appear in the index (see `learn-lesson-summaries.ts`) and are served by
  * the API once `apps/api/src/routes/content.ts` exists.
  *

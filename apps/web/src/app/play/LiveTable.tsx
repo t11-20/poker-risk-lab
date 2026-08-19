@@ -407,8 +407,15 @@ function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
   );
 }
 
-export function LiveTable(): ReactElement {
-  const live = useLiveTable();
+export function LiveTable({
+  legendMatch,
+}: {
+  readonly legendMatch?: {
+    readonly profileId: string;
+    readonly difficulty: 'educational' | 'realistic' | 'expert';
+  };
+} = {}): ReactElement {
+  const live = useLiveTable(legendMatch === undefined ? {} : { legendMatch });
   const { table } = live;
   const status = stageStatusOf(live);
   const highlighted = live.highlightedCards;

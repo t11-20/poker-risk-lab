@@ -132,7 +132,15 @@ describe('the Scenario Lab fixture is the analysis the engine produces today', (
  * call a raise to 60, so the blinds are 10 and 20; seat 0 acts first preflop three-handed, which
  * makes it the button.
  */
-const REVIEW_CONFIG = { smallBlind: 10, bigBlind: 20, ante: 0, maxSeats: 6 };
+/**
+ * The five members `hands_config_shape` requires of every stored `config`.
+ *
+ * `actionTimeoutSeconds` was missing here for as long as nothing read it. The Legends comparison
+ * does — it rebuilds a `TableConfig` per decision — and a real row always carries it, because the
+ * CHECK constraint in `db/migrations/0001_initial.sql` lists all five. A fixture that is missing a
+ * member every stored row has is a fixture testing a shape that cannot occur.
+ */
+const REVIEW_CONFIG = { smallBlind: 10, bigBlind: 20, ante: 0, maxSeats: 6, actionTimeoutSeconds: 30 };
 const REVIEW_BUTTON_SEAT = 0;
 const REVIEW_VIEWER = 'usr-you';
 
@@ -204,6 +212,7 @@ function rebuildReview(review: HandReviewResponse): HandReviewResponse {
         config: REVIEW_CONFIG,
         commitment_root: review.commitmentRoot,
         commitment_context: review.commitmentContext,
+        random_source_kind: 'csprng' as const,
         street: review.decisions.at(-1)?.street ?? 'preflop',
         reveal: review.reveal,
       },

@@ -77,7 +77,14 @@
  *    `disabled` on the fieldset disables all of them at once.
  */
 
-import { type ReactElement, useId, useState } from 'react';
+import {
+  type ReactElement,
+  type FocusEvent as ReactFocusEvent,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react';
 import {
   type BetDraft,
   clampBetTo,
@@ -303,6 +310,55 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   // would leave a legal amount marked invalid.
   const [draft, setDraft] = useState<BetDraft | null>(null);
 
+  /**
+   * Where focus goes when the controls it was on are taken away.
+   *
+   * ## The defect
+   *
+   * Found by `scripts/keyboard-audit.mjs` folding a real hand with the keyboard: pressing Enter on
+   * Fold unmounts every button in this bar — correctly, it is no longer this seat's turn — and the
+   * browser's only remaining option is to drop focus to `<body>`. A keyboard user who has just
+   * acted is therefore returned to the very top of the document, with no announcement, and has to
+   * tab past the whole page to get back to the table. A screen-reader user is worse off again:
+   * nothing was announced at all, because focus did not land on anything that says something.
+   *
+   * ## The fix, and its limits
+   *
+   * The idle line takes `tabIndex={-1}` and focus moves to it, but ONLY when focus was inside this
+   * bar when the controls went away. That condition is the whole design: a table where the
+   * opponent acts while the reader is halfway down the Coach panel must not have focus yanked back
+   * here, which would be a worse bug than the one being fixed and is how "manage focus" usually
+   * goes wrong.
+   *
+   * `hadFocus` stays true through the unmount on purpose. `focusout` fires as the button is
+   * removed with a null `relatedTarget`, and treating that as "focus left the bar" would clear the
+   * flag a moment before the effect needs to read it.
+   */
+  const idleRef = useRef<HTMLParagraphElement>(null);
+  const hadFocus = useRef(false);
+  const wasActing = useRef(false);
+  const acting = legalActions.length > 0;
+
+  const onFocusCapture = (): void => {
+    hadFocus.current = true;
+  };
+  const onBlurCapture = (event: ReactFocusEvent<HTMLDivElement>): void => {
+    const next = event.relatedTarget;
+    // Null means the focused node was removed, not that the reader went elsewhere.
+    if (next !== null && !event.currentTarget.contains(next)) hadFocus.current = false;
+  };
+
+  useEffect(() => {
+    const left = wasActing.current && !acting;
+    wasActing.current = acting;
+    if (!left || !hadFocus.current) return;
+    // Only when the browser has actually given up on focus. If something else legitimately took it
+    // — a Coach panel that re-rendered and restored its own — leave it alone.
+    if (document.activeElement !== document.body && document.activeElement !== null) return;
+    idleRef.current?.focus();
+    hadFocus.current = false;
+  }, [acting]);
+
   const sized = resolveSizedAction(legalActions);
   const canFold = legalActions.some((action) => action.type === 'fold');
   const canCheck = legalActions.some((action) => action.type === 'check');
@@ -327,7 +383,14 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   if (legalActions.length === 0) {
     return (
       <div className={cx('prl-action-bar', className)}>
-        <p className="prl-action-bar__idle">{idleText}</p>
+        {/*
+          `tabIndex={-1}` so the effect above can land focus here, and `role="status"` so the same
+          sentence is announced whether or not focus arrived. Not in the tab order: a reader tabbing
+          past a table that is not theirs to act on should not stop on a line that says so.
+        */}
+        <p className="prl-action-bar__idle" ref={idleRef} role="status" tabIndex={-1}>
+          {idleText}
+        </p>
       </div>
     );
   }
@@ -335,7 +398,11 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   const sizedWord = sized?.kind === 'bet' ? 'Bet to' : 'Raise to';
 
   return (
-    <div className={cx('prl-action-bar', className)}>
+    <div
+      className={cx('prl-action-bar', className)}
+      onBlurCapture={onBlurCapture}
+      onFocusCapture={onFocusCapture}
+    >
       {/* The price of the decision, in one line, above the controls that act on it. It repeats
           figures the buttons also carry — deliberately: the pot is nowhere else in this component,
           and a player comparing the price with the pot should not have to look in two places. */}

@@ -130,6 +130,15 @@ export type LiveCalculation =
       readonly bankrollBb: number;
       readonly winRateBbPer100: number;
       readonly standardDeviationBbPer100: number;
+    }
+  | {
+      /**
+       * Independent-chip-model prize equity for a stack/payout situation.
+       * `stacks` and `payouts` are the situation; the shares are computed.
+       */
+      readonly kind: 'icm';
+      readonly stacks: readonly number[];
+      readonly payouts: readonly number[];
     };
 
 export interface Lesson {

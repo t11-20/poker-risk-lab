@@ -196,6 +196,29 @@ function FixturePage({ state }: { readonly state: TableStateName }): ReactElemen
   );
 }
 
+/** The difficulties `POST /legends/matches` accepts. Mirrors `LiveTable`'s own prop type. */
+type MatchDifficulty = 'educational' | 'realistic' | 'expert';
+
+/**
+ * A narrowing predicate, rather than the `===` chain that used to be written inline.
+ *
+ * The inline form did not typecheck, and the reason is worth recording because it looks like it
+ * should: TypeScript narrows the *reference* `difficulty` inside the conditional, but a fresh
+ * object literal built from it widens the property straight back to `string`. So
+ * `{ profileId: profile, difficulty }` was inferred as `{ difficulty: string }` and failed against
+ * `LiveTable`'s literal union under `exactOptionalPropertyTypes`. A type predicate carries the
+ * narrowing across the literal because the return type says what the value is, rather than
+ * leaving it to be re-inferred.
+ */
+function isMatchDifficulty(value: string | undefined): value is MatchDifficulty {
+  return value === 'educational' || value === 'realistic' || value === 'expert';
+}
+
+/** The first value of a repeated query parameter, or undefined. `?a=1&a=2` is a caller mistake. */
+function firstValue(raw: string | string[] | undefined): string | undefined {
+  return Array.isArray(raw) ? raw[0] : raw;
+}
+
 export default async function PlayPage({ searchParams }: PlayPageProps): Promise<ReactElement> {
   const params = await searchParams;
   const requested = params['state'];
@@ -204,6 +227,11 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
   // Only an explicit, valid `?state=` reaches the fixture. Anything else — including a typo — gets
   // the live table, because a fixture that a wrong URL can fall into is a fixture that ships.
   if (isTableStateName(asked)) return <FixturePage state={asked} />;
+
+  const profile = firstValue(params['profile']);
+  const difficulty = firstValue(params['difficulty']);
+  const legendMatch =
+    profile !== undefined && isMatchDifficulty(difficulty) ? { profileId: profile, difficulty } : undefined;
 
   return (
     <div className="prl-play">
@@ -214,11 +242,13 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
           </span>
           <span className="prl-label">Play</span>
         </p>
-        <h1 className="prl-play__title">Six-handed table</h1>
+        <h1 className="prl-play__title">
+          {legendMatch === undefined ? 'Six-handed table' : 'Heads-up against this style'}
+        </h1>
         <p className="prl-play__lede">{LIVE_LEDE}</p>
       </header>
 
-      <LiveTable />
+      <LiveTable {...(legendMatch === undefined ? {} : { legendMatch })} />
 
       <details className="prl-disclose">
         <summary className="prl-disclose__summary">Fixture renderings, for design and audit</summary>

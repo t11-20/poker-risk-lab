@@ -178,6 +178,12 @@ export interface ScenarioAttemptResponse {
    * "consistent with the analysis", never as a score — see the product guardrails.
    */
   readonly consistentWithAnalysis: boolean;
+  /**
+   * Whether a row was written for this caller. Same job as `QuizAttemptResponse.recorded`:
+   * a signed-out learner is graded 200 and stored nowhere, and the reply must say so
+   * instead of letting the Lab panel claim "the same one it recorded".
+   */
+  readonly recorded: boolean;
   readonly reasoning: string;
   readonly analysis: CoachReport;
   readonly commonMistakes: readonly string[];

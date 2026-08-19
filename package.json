@@ -29,6 +29,7 @@
     "test:exhaustive": "pnpm --filter @prl/poker-engine test:exhaustive",
     "test:simulation": "pnpm --filter @prl/poker-ai test:simulation",
     "test:a11y": "node scripts/a11y-audit.mjs",
+    "test:keyboard": "node scripts/keyboard-audit.mjs",
     "test:load": "node scripts/load-test.mjs",
     "test:all": "pnpm run test && pnpm run test:exhaustive && pnpm run test:simulation && pnpm run test:a11y",
     "fixtures:regenerate": "node scripts/regenerate-web-fixtures.mjs",

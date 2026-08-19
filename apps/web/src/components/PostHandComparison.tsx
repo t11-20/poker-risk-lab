@@ -63,11 +63,12 @@ import {
   Formula,
   formatChips,
   formatIndex,
-  formatPercent,
   formatPoints,
+  formatProbability,
   formatSignedUnits,
   formatUnits,
   Metric,
+  NOT_A_PROBABILITY,
   Panel,
   parseCardText,
   UncertaintyNote,
@@ -191,7 +192,7 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
             priced
               ? {
                   value: surplus,
-                  label: `against the ${formatPercent(report.potOdds.breakEvenEquity)} this price needs`,
+                  label: `against the ${formatProbability(report.potOdds.breakEvenEquity) ?? NOT_A_PROBABILITY} this price needs`,
                   direction,
                 }
               : {
@@ -226,7 +227,11 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
       {priced ? (
         <Formula
           eyebrow="Pot odds"
-          expression={`break-even equity = ${formatChips(report.toCall)} / (${formatChips(report.potOdds.pot)} + ${formatChips(report.toCall)}) = ${formatPercent(report.potOdds.breakEvenEquity)}`}
+          // Break-even equity is a probability — `toCall / (pot + toCall)` cannot exceed 1 — so the
+          // right-hand side of the formula goes through the domain. A pot-odds line that resolved
+          // to an impossible percentage would be the worst place in the app to print one: it is
+          // the figure a learner is being taught to compare their equity against.
+          expression={`break-even equity = ${formatChips(report.toCall)} / (${formatChips(report.potOdds.pot)} + ${formatChips(report.toCall)}) = ${formatProbability(report.potOdds.breakEvenEquity) ?? NOT_A_PROBABILITY}`}
           explanation={report.potOdds.explanation}
         />
       ) : null}

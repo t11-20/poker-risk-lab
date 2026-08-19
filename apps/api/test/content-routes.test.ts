@@ -627,10 +627,10 @@ describe('POST /content/scenarios/:id/attempt', () => {
       assert.equal(response.headers['cache-control'], 'no-store');
       assert.deepEqual(
         Object.keys(response.body).sort(),
-        ['analysis', 'commonMistakes', 'consistentWithAnalysis', 'reasoning'],
+        ['analysis', 'commonMistakes', 'consistentWithAnalysis', 'reasoning', 'recorded'],
         'exactly the contract, and nothing that could be read as a mark',
       );
-      assert.equal(typeof response.body['consistentWithAnalysis'], 'boolean');
+      assert.equal(typeof response.body['recorded'], 'boolean');
       assert.ok(String(response.body['reasoning']).length > 0);
       assert.ok(arrayAt(response.body, 'commonMistakes').length > 0);
       assert.ok(arrayAt(objectAt(response.body, 'analysis'), 'assumptions').length > 0);

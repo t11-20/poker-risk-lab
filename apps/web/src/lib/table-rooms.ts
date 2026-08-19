@@ -38,6 +38,8 @@
  */
 
 import type {
+  CreateLegendMatchRequest,
+  CreateLegendMatchResponse,
   CreateRoomRequest,
   CreateRoomResponse,
   JoinRoomRequest,
@@ -179,6 +181,15 @@ export async function createRoom(
 ): Promise<CreateRoomResponse> {
   const options = signal === undefined ? { csrfToken } : { csrfToken, signal };
   return await apiSend<CreateRoomResponse>('POST', API_PATHS.rooms(), request, options);
+}
+
+export async function createLegendMatch(
+  csrfToken: string,
+  request: CreateLegendMatchRequest,
+  signal?: AbortSignal,
+): Promise<CreateLegendMatchResponse> {
+  const options = signal === undefined ? { csrfToken } : { csrfToken, signal };
+  return await apiSend<CreateLegendMatchResponse>('POST', API_PATHS.legendMatches(), request, options);
 }
 
 // ---------------------------------------------------------------------------

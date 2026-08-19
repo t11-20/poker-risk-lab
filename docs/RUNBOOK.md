@@ -96,6 +96,7 @@ The container stack has no such split: there is exactly one published origin (§
 | `pnpm run test:exhaustive` | **All 133,784,560 seven-card hands** against published frequencies | ~7 s |
 | `pnpm run test:simulation` | AI-Legends declared traits against a large simulation | ~2 min |
 | `pnpm run test:a11y` | Static accessibility audit of the rendered pages. Starts web on **:3000** itself, or pass `--no-start --base-url <url>` | ~30 s |
+| `pnpm run test:keyboard` | **Real keyboard journeys in real Chrome** over the DevTools Protocol: focus order, focus visibility, keyboard traps, the modal sheet, the bet-size slider, and one hand folded from the keyboard at a live table. Needs a **running production build** on :3000 and a running API — it is not started for you, because a dev build ships overlays that do not ship | ~2 min |
 | `pnpm run test:smoke` | End-to-end smoke against a running stack; `-- --strict` fails on warnings | seconds |
 | `pnpm run test:load` | WebSocket load harness against a local server | configurable |
 | `pnpm run test:all` | test + exhaustive + simulation + a11y | ~5 min |

@@ -66,10 +66,13 @@ export interface PotLayers {
  *
  * That cap is what makes this function total. Without it, a state where the
  * single largest contributor has folded produces a layer with no eligible seats,
- * and the awarding step has nowhere to put the chips. Such a state should not
- * arise from legal play — a player cannot fold chips nobody matched — but
- * returning the chips is the right answer if it ever does, and it is a far better
- * failure mode than throwing midway through settling a hand.
+ * and the awarding step has nowhere to put the chips.
+ *
+ * The short-blind fold against a shorter all-in big blind *is* legal play: the
+ * unmatched part of the blind is an uncalled bet, and TDA / Robert’s Rules return
+ * uncalled chips to the player who put them in. Returning that excess is the
+ * dealer procedure, not a consolation for an illegal fold. A fold still forfeits
+ * every chip that *was* matched.
  *
  * @param seats every seat that put chips in this hand, folded or not
  */

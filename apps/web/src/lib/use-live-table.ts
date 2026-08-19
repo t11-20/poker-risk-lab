@@ -48,6 +48,7 @@ import { ApiRequestError } from './api.ts';
 import {
   BOT_TABLE_REQUEST,
   chooseRoom,
+  createLegendMatch,
   createRoom,
   ensureSession,
   FRIENDS_TABLE_REQUEST,
@@ -455,6 +456,11 @@ export interface UseLiveTableOptions {
   readonly socketFactory?: RawSocketFactory;
   readonly scheduler?: Scheduler;
   readonly url?: string;
+  /** When set, open a Legends match against these profiles instead of the generic bot table. */
+  readonly legendMatch?: {
+    readonly profileId: string;
+    readonly difficulty: 'educational' | 'realistic' | 'expert';
+  };
 }
 
 /** Display names by seat, from the room roster. Bots are named by the server, never invented here. */
@@ -479,6 +485,40 @@ function messageOf(cause: unknown): string {
   if (cause instanceof ApiRequestError) return `${cause.message} (${cause.code})`;
   if (cause instanceof Error) return cause.message;
   return 'the table could not be prepared';
+}
+
+async function openPracticeRoom(
+  session: { readonly user: { readonly id: string }; readonly csrfToken: string },
+  request: CreateRoomRequest,
+  legendMatch: UseLiveTableOptions['legendMatch'],
+  fresh: boolean,
+  signal: AbortSignal,
+): Promise<{ room: RoomSummary; inviteCode: string | null }> {
+  const rooms = await listRooms(signal);
+  const reuse = !fresh && legendMatch === undefined;
+  const existing = reuse ? chooseRoom(rooms, session.user.id, rememberedRoom()) : null;
+  if (existing !== null) return { room: existing, inviteCode: null };
+  if (legendMatch !== undefined) {
+    const match = await createLegendMatch(
+      session.csrfToken,
+      {
+        profileIds: [legendMatch.profileId],
+        difficulty: legendMatch.difficulty,
+        startingStack: 1_000,
+        smallBlind: 5,
+        bigBlind: 10,
+      },
+      signal,
+    );
+    const after = await listRooms(signal);
+    const room = after.find((entry) => entry.id === match.roomId);
+    if (room === undefined) {
+      throw new Error('the Legends match was created but did not appear in the room list');
+    }
+    return { room, inviteCode: null };
+  }
+  const created = await createRoom(session.csrfToken, request, signal);
+  return { room: created.room, inviteCode: created.inviteCode };
 }
 
 /**
@@ -509,7 +549,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   pendingRef.current = table.pending;
   viewRef.current = table.view;
 
-  const { socketFactory, scheduler, url } = options;
+  const { socketFactory, scheduler, url, legendMatch } = options;
 
   /**
    * Session, then room. One abortable pass; a second click while it runs is ignored.
@@ -517,39 +557,34 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
    * The controller is kept so unmount can abort it. Without that, a reader who navigates away
    * mid-setup leaves a `POST /rooms` in flight that creates a table nobody will ever sit at.
    */
-  const prepare = useCallback((fresh: boolean, request: CreateRoomRequest = BOT_TABLE_REQUEST) => {
-    setupRef.current?.abort();
-    setPhase('preparing');
-    setSetupError(null);
-    const controller = new AbortController();
-    setupRef.current = controller;
-    void (async (): Promise<void> => {
-      try {
-        const session = await ensureSession(controller.signal);
-        setDisplayName(session.user.displayName);
-        const rooms = await listRooms(controller.signal);
-        const preferred = fresh ? null : rememberedRoom();
-        const existing = fresh ? null : chooseRoom(rooms, session.user.id, preferred);
-        // The code comes back with the room, once, and only when a room was actually created. A
-        // reused room issued no code on this request and its original cannot be recovered — only
-        // `sha256(code)` is stored — so `null` there is the truth rather than a gap to fill in.
-        const created =
-          existing === null ? await createRoom(session.csrfToken, request, controller.signal) : null;
-        const chosen = existing ?? created?.room;
-        if (controller.signal.aborted || chosen === undefined) return;
-        rememberRoom(chosen.id);
-        dispatch({ kind: 'reset' });
-        setInviteCode(created?.inviteCode ?? null);
-        setJoin({ state: 'idle' });
-        setRoomId(chosen.id);
-        setPhase('ready');
-      } catch (cause) {
-        if (controller.signal.aborted) return;
-        setSetupError(messageOf(cause));
-        setPhase('failed');
-      }
-    })();
-  }, []);
+  const prepare = useCallback(
+    (fresh: boolean, request: CreateRoomRequest = BOT_TABLE_REQUEST) => {
+      setupRef.current?.abort();
+      setPhase('preparing');
+      setSetupError(null);
+      const controller = new AbortController();
+      setupRef.current = controller;
+      void (async (): Promise<void> => {
+        try {
+          const session = await ensureSession(controller.signal);
+          setDisplayName(session.user.displayName);
+          const opened = await openPracticeRoom(session, request, legendMatch, fresh, controller.signal);
+          if (controller.signal.aborted) return;
+          rememberRoom(opened.room.id);
+          dispatch({ kind: 'reset' });
+          setInviteCode(opened.inviteCode);
+          setJoin({ state: 'idle' });
+          setRoomId(opened.room.id);
+          setPhase('ready');
+        } catch (cause) {
+          if (controller.signal.aborted) return;
+          setSetupError(messageOf(cause));
+          setPhase('failed');
+        }
+      })();
+    },
+    [legendMatch],
+  );
 
   /** Whatever setup pass is still running when the component goes away. */
   useEffect(() => () => setupRef.current?.abort(), []);

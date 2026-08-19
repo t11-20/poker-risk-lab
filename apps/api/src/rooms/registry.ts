@@ -45,7 +45,8 @@ import { newHandId } from '../repositories/ids.ts';
 import * as roomsRepository from '../repositories/rooms.ts';
 import type { Db } from '../repositories/sql.ts';
 import * as usersRepository from '../repositories/users.ts';
-import { BotRunner, type BotSeatSpec, persistableProfile } from './bots.ts';
+import { type DurableBotSeat, describeRefusal, durableProfile, rehydrateBotSeat } from './bot-profile.ts';
+import { BotRunner, type BotSeatSpec } from './bots.ts';
 import {
   type ArchivedDeal,
   type ArchivedResult,
@@ -77,9 +78,13 @@ export interface RoomMemberRecord {
   readonly displayName: string;
   readonly isBot: boolean;
   /**
-   * The strategy profile id for a bot, else null. This is the *real* profile id, which may be one
-   * `room_members.bot_profile` cannot store — that CHECK predates the Legends profile set, so the
-   * database holds `unknown` and the live record holds the truth. See `persistableProfile`.
+   * The strategy profile id for a bot, else null.
+   *
+   * The same value `room_members.bot_profile` now holds. It used to differ: the column was
+   * CHECK-constrained to five scenario range labels, so seven of the twelve Legends were written
+   * as `unknown` and only this record knew who was actually sitting there. Migration 0003 made the
+   * column carry the profile id, so the durable row and this record agree — which is the whole
+   * reason a restart can now put the same opponent back. See `rooms/bot-profile.ts`.
    */
   readonly botProfile: string | null;
   /** Open sockets this member holds. Zero means "not connected", not "not a member". */
@@ -259,7 +264,8 @@ export interface RoomStore {
     readonly userId: string;
     readonly stack?: number;
     readonly isBot?: boolean;
-    readonly botProfile?: PersistedBotProfile | null;
+    /** All three facts, or none. A partial bot row cannot be rehydrated — see `bot-profile.ts`. */
+    readonly bot?: DurableBotSeat | null;
   }) => Promise<roomsRepository.RoomMemberRow>;
   readonly seatMember: (roomId: string, userId: string, seat: number) => Promise<void>;
   readonly unseatMember: (roomId: string, userId: string) => Promise<void>;
@@ -273,8 +279,8 @@ export interface RoomStore {
   readonly readUnits: (userId: string) => Promise<number>;
 }
 
-/** The five names `room_members.bot_profile` accepts, plus the fallback for a Legends profile. */
-export type PersistedBotProfile = ReturnType<typeof persistableProfile>;
+/** What `room_members.bot_profile` accepts: any strategy profile id. See `bot-profile.ts`. */
+export type PersistedBotProfile = ReturnType<typeof durableProfile>;
 
 /** Binds the store to the repositories. `sql` is a getter for the reason `postgresArchive` says. */
 export function postgresRoomStore(sql: () => Db): RoomStore {
@@ -613,11 +619,32 @@ export class RoomRegistry {
       })),
     });
     // Seats recorded in the database are re-taken at the live table, so a room re-opened after a
-    // restart looks the way the roster says it does. Bots are NOT re-registered with the runner
-    // here: a bot's decision stream and its opponent model died with the process, and a seat that
-    // cannot act is more honest than one that silently plays a different style with a fresh model.
-    // The turn timer resolves the consequence — an inert seat checks or folds when its clock runs
-    // out — so the table is never stuck, it is only slower until somebody stands the bot up.
+    // restart looks the way the roster says it does — and a bot seat is re-registered with the
+    // runner, so it plays instead of sitting there until the turn clock folds it.
+    //
+    // ## Why this changed
+    //
+    // This loop used to re-take the seats and register no bots at all, on the stated reasoning
+    // that "a seat that cannot act is more honest than one that silently plays a different
+    // style". The premise was true and forced: `room_members.bot_profile` could not name seven of
+    // the twelve profiles, so there was frequently no style to put back. The conclusion did not
+    // follow — the fix for a column that cannot name the opponent is to make it name the opponent
+    // (migration 0003), not to stop restoring opponents. Restarting the only API process turned
+    // every AI Legends table into a row of timeout-folders, which teaches a learner nothing and
+    // silently ruins the session they were in the middle of.
+    //
+    // ## What is restored, and what honestly is not
+    //
+    // Restored exactly: the profile, the difficulty, and the decision seed — the three things
+    // that decide how the seat plays. `rehydrateBotSeat` reads them from the row and REFUSES
+    // rather than substituting when any is missing or unrecognised, so a retired profile id or a
+    // pre-0003 row leaves an inert seat and a logged reason. That is the old behaviour, kept for
+    // exactly the case it was right about.
+    //
+    // Not restored: `OpponentModel`. It is built from observed actions and those observations
+    // died with the process. A rehydrated bot therefore starts with no read on the table, which
+    // is a real difference and is stated here rather than papered over — it is also what a
+    // genuinely new opponent would have, so it costs the learner nothing they can be misled by.
     for (const member of members) {
       if (member.seat === null) continue;
       try {
@@ -638,9 +665,44 @@ export class RoomRegistry {
           seat: member.seat,
           error: String(error),
         });
+        continue;
       }
+      if (member.is_bot) this.rehydrateBot(room, member.seat, member);
     }
     return room;
+  }
+
+  /**
+   * Puts one persisted bot seat back on the runner, or says why it will not.
+   *
+   * Never throws: one unrepairable row must not cost the room its other seats. A refusal is
+   * logged with the seat's own reason and the seat stays occupied but inert, which the turn timer
+   * resolves by checking or folding it. There is deliberately no nearest-match fallback — seating
+   * `patient-technician` where the row asked for a profile this build no longer carries would be
+   * inventing an opponent, and the learner would have no way to tell.
+   */
+  private rehydrateBot(room: LiveRoom, seat: number, member: roomsRepository.RoomMemberRow): void {
+    const rehydrated = rehydrateBotSeat({
+      botProfile: member.bot_profile,
+      botDifficulty: member.bot_difficulty,
+      botSeed: member.bot_seed,
+    });
+    if (!rehydrated.ok) {
+      this.onProblem('a bot seat could not be restored and will not act', {
+        roomId: room.record.id,
+        seat,
+        botProfile: member.bot_profile,
+        reason: describeRefusal(rehydrated.refusal),
+      });
+      return;
+    }
+    room.bots.add({
+      userId: member.user_id,
+      seat: seat as BotSeatSpec['seat'],
+      profileId: rehydrated.seat.profileId,
+      difficulty: rehydrated.seat.difficulty,
+      seed: rehydrated.seat.seed,
+    });
   }
 
   /**
@@ -718,9 +780,12 @@ export class RoomRegistry {
       throw new AppError('not_room_member', { logDetail: `not a live member of ${roomId}` });
     }
     const units = await this.store.readUnits(principal.userId);
-    if (units < room.record.startingStack) {
+    // A returning occupant keeps the stack the last settled hand left them. Inventing
+    // `startingStack` here is how a winning session vanished on stand/sit.
+    const buyIn = member.stack > 0 ? member.stack : room.record.startingStack;
+    if (units < buyIn) {
       throw new AppError('insufficient_units', {
-        logDetail: `buy-in ${room.record.startingStack} exceeds available units`,
+        logDetail: `buy-in ${buyIn} exceeds available units`,
       });
     }
 
@@ -730,7 +795,7 @@ export class RoomRegistry {
         userId: principal.userId,
         displayName: principal.displayName,
         seat,
-        stack: room.record.startingStack,
+        stack: buyIn,
       });
     } catch (error) {
       await this.store.unseatMember(roomId, principal.userId).catch(() => undefined);
@@ -1012,4 +1077,4 @@ export function recordFromRow(room: roomsRepository.RoomRow): RoomRecord {
 }
 
 /** The persistable profile name for a bot seat. Re-exported so routes need one import. */
-export { persistableProfile };
+export { durableProfile };

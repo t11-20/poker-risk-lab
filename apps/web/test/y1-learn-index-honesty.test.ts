@@ -187,17 +187,18 @@ describe('the index and its loader cannot drift apart', () => {
     // `readerCallOptions()` is the one supported way a server render carries the reader's session
     // (src/lib/server-session.ts). Its presence is what would make `completed` mean something.
     const perReader = /readerCallOptions|cookie:/u.test(loadLessonList);
-    const claimed = /completionKnown:\s*true/u.test(page);
+    const hardcodedUnknown = /completionKnown:\s*false/u.test(page);
+    const usesCookie = /reader\.cookie|readerCallOptions/u.test(page);
+    assert.equal(perReader, true, 'loadLessonList must forward the reader so /learn can show their ticks.');
     assert.equal(
-      claimed,
-      perReader,
-      perReader
-        ? 'loadLessonList now forwards the reader’s session, so `completed` is finally this reader’s ' +
-            'answer — set `completionKnown: true` in app/learn/page.tsx so the index can use it, and ' +
-            'note that the route becomes a per-reader dynamic render.'
-        : 'loadLessonList forwards no session, so the API answers `completed: false` for everybody. ' +
-            'app/learn/page.tsx must pass `completionKnown: false`, or the index goes back to printing ' +
-            'that guess as a fact about the reader.',
+      hardcodedUnknown,
+      false,
+      'Do not hard-code completionKnown: false now that the loader identifies the reader.',
+    );
+    assert.equal(
+      usesCookie,
+      true,
+      'completionKnown must follow whether a session cookie was actually forwarded, not a constant true.',
     );
   });
 

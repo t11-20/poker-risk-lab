@@ -72,12 +72,12 @@ import type { FastifyPluginAsync } from 'fastify';
 import { requireSession, type SessionStore, sessionPlugin } from '../auth/session.ts';
 import { getSql } from '../db.ts';
 import { AppError } from '../errors.ts';
+import { durableProfile } from '../rooms/bot-profile.ts';
 import {
   botDisplayName,
   compareProfilesOnSpot,
   type HypotheticalSpot,
   MAX_COMPARE_TRIALS,
-  persistableProfile,
   planLegendSeats,
   resolveProfile,
   seedFor,
@@ -465,23 +465,29 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
 
         for (const seat of plan) {
           const user = await registry.store.createBotUser(seat.displayName);
+          const durable = {
+            profileId: durableProfile(seat.profileId),
+            difficulty: body.difficulty,
+            // Seeds the opponent's decisions, never the deal. See the file comment. The RESOLVED
+            // seed is what is stored, not `body.deterministicSeed`: it is the value the runner is
+            // given below, so a rehydrated seat reproduces this exact decision stream.
+            seed: seedFor(created.room.record.id, seat.seat, body.deterministicSeed),
+          };
+          // The full seat, durably. This used to write `persistableProfile(...)`, which answered
+          // `unknown` for seven of the twelve profiles — so a restart forgot which Legend the
+          // learner had chosen to play. Migration 0003 widened the column; this writes to it.
           await registry.store.addMember({
             roomId: created.room.record.id,
             userId: user.id,
             isBot: true,
-            // The CHECK on `room_members.bot_profile` predates this profile set, so the durable
-            // row says `unknown` and the live record holds the real id. See `bots.ts`.
-            botProfile: persistableProfile(seat.profileId),
+            bot: durable,
           });
           await registry.store.seatMember(created.room.record.id, user.id, seat.seat);
           await registry.seatBot(created.room.record.id, {
             userId: user.id,
             displayName: seat.displayName,
             seat: seat.seat,
-            profileId: seat.profileId,
-            difficulty: body.difficulty,
-            // Seeds the opponent's decisions, never the deal. See the file comment.
-            seed: seedFor(created.room.record.id, seat.seat, body.deterministicSeed),
+            ...durable,
           });
         }
 
@@ -596,23 +602,24 @@ async function seatRequestedBots(
       const profile = resolveProfile(entry.profile);
       const displayName = botDisplayName(profile.naming.id);
       const user = await registry.store.createBotUser(displayName);
+      // A table created through `POST /rooms` has no difficulty field, so its bots play the
+      // middle setting: the style as designed, with the sizing variation a real opponent shows.
+      const durable = {
+        profileId: durableProfile(profile.naming.id),
+        difficulty: 'realistic' as const,
+        seed: seedFor(room.record.id, seat, undefined),
+      };
+      // Persisted before the runner is told, and persisted in FULL: the durable row is what a
+      // restart reads, so a seat the row cannot describe is a seat the next process cannot put
+      // back. See `rooms/bot-profile.ts`.
       await registry.store.addMember({
         roomId: room.record.id,
         userId: user.id,
         isBot: true,
-        botProfile: persistableProfile(profile.naming.id),
+        bot: durable,
       });
       await registry.store.seatMember(room.record.id, user.id, seat);
-      await registry.seatBot(room.record.id, {
-        userId: user.id,
-        displayName,
-        seat,
-        profileId: profile.naming.id,
-        // A table created through `POST /rooms` has no difficulty field, so its bots play the
-        // middle setting: the style as designed, with the sizing variation a real opponent shows.
-        difficulty: 'realistic',
-        seed: seedFor(room.record.id, seat, undefined),
-      });
+      await registry.seatBot(room.record.id, { userId: user.id, displayName, seat, ...durable });
       seat += 1;
     }
   }

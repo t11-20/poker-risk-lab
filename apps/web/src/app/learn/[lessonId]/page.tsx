@@ -30,11 +30,12 @@
  * be a lie about what went wrong.
  */
 
+import { lessonsInReadingOrder } from '@prl/content';
 import { Callout, Chip, formatIndex, Panel, pluralise, withKeys } from '@prl/ui';
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import type { ReactElement } from 'react';
+import { NotFoundBody } from '@/app/not-found.tsx';
 import { LessonBlockRenderer } from '@/components/LessonBlockRenderer.tsx';
 import { LessonContents } from '@/components/LessonContents.tsx';
 import { LessonRead } from '@/components/LessonRead.tsx';
@@ -52,6 +53,13 @@ import { GLOSSARY_PATH, LEARN_PATH, lessonHref, loadLesson } from '@/lib/learn-d
 interface LessonPageProps {
   readonly params: Promise<{ readonly lessonId: string }>;
 }
+
+/** Known ids 404 at the router (full HTML) instead of via `notFound()` (empty Next 16 body). */
+export function generateStaticParams(): { lessonId: string }[] {
+  return lessonsInReadingOrder().map((lesson) => ({ lessonId: lesson.id }));
+}
+
+export const dynamicParams = false;
 
 /**
  * The tab title and description come from the lesson itself.
@@ -73,7 +81,7 @@ export async function generateMetadata({ params }: LessonPageProps): Promise<Met
 /** The page shown when the lesson is real but its text is not reachable. */
 function UnavailableLesson({ lessonId }: { readonly lessonId: string }): ReactElement {
   const summary = lessonSummaryFixture(lessonId);
-  if (summary === null) notFound();
+  if (summary === null) return <NotFoundBody />;
   return (
     <div className="prl-learn-lesson">
       <header className="prl-learn-lesson__head">

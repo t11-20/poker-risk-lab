@@ -72,7 +72,8 @@ export const metadata: Metadata = {
   title: 'Page not found',
 };
 
-export default function NotFound(): ReactElement {
+/** Shared 404 body so `notFound()`-avoiding pages still ship a real heading and nav. */
+export function NotFoundBody(): ReactElement {
   return (
     <section className="prl-container prl-section--tight">
       <p className="prl-label prl-label--strong">404</p>
@@ -99,4 +100,8 @@ export default function NotFound(): ReactElement {
       </nav>
     </section>
   );
+}
+
+export default function NotFound(): ReactElement {
+  return <NotFoundBody />;
 }

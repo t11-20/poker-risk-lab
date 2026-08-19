@@ -42,6 +42,7 @@ import {
   lessonResponseFixture,
 } from '@/fixtures/learn.ts';
 import { API_PATHS, apiGet, isApiUnavailable, isMissingResource, safeFetch } from './api.ts';
+import { readerCallOptions } from './server-session.ts';
 
 export const LEARN_PATH = '/learn';
 export const GLOSSARY_PATH = '/learn/glossary';
@@ -79,7 +80,10 @@ const GLOSSARY_FALLBACK =
   'The content service is not reachable, so these definitions are the bundled copy of the ' + 'glossary.';
 
 export async function loadLessonList(): Promise<LearnData<LessonListResponse>> {
-  const result = await safeFetch<LessonListResponse>(() => apiGet<LessonListResponse>(API_PATHS.lessons()));
+  const options = await readerCallOptions();
+  const result = await safeFetch<LessonListResponse>(() =>
+    apiGet<LessonListResponse>(API_PATHS.lessons(), options),
+  );
   if (result.ok) return live(result.data);
   if (!isApiUnavailable(result.error)) throw result.error;
   return sampled(LEARN_LESSON_LIST_FIXTURE, `${LESSONS_FALLBACK} (${result.error.message})`);

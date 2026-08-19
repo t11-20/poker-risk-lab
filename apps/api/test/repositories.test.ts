@@ -1100,16 +1100,25 @@ describe('rooms — against Postgres', dbOptions, () => {
         roomId: room.id,
         userId: botId,
         isBot: true,
-        botProfile: 'nit',
+        bot: { profileId: 'disciplined-specialist', difficulty: 'realistic', seed: 4_294_967_295 },
       });
       assert.equal(bot.is_bot, true);
-      assert.equal(bot.bot_profile, 'nit');
+      // The profile's own id, not a legacy range label — migration 0003. And the seed survives the
+      // full uint32 range: it is a `bigint` column precisely because a signed `int` would lose half
+      // of it, and postgres.js hands int8 back as a string, so this also pins the conversion.
+      assert.equal(bot.bot_profile, 'disciplined-specialist');
+      assert.equal(bot.bot_difficulty, 'realistic');
+      assert.equal(bot.bot_seed, 4_294_967_295);
 
       await rejectsWith(tx, 'invalid_request', (handle) =>
         rooms.addMember(handle, { roomId: room.id, userId: ownerId, isBot: true }),
       );
       await rejectsWith(tx, 'invalid_request', (handle) =>
-        rooms.addMember(handle, { roomId: room.id, userId: ownerId, botProfile: 'maniac' }),
+        rooms.addMember(handle, {
+          roomId: room.id,
+          userId: ownerId,
+          bot: { profileId: 'volume-grinder', difficulty: 'realistic', seed: 1 },
+        }),
       );
     });
   });

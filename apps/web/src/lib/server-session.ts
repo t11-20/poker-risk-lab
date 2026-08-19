@@ -54,20 +54,15 @@
 
 import { cookies } from 'next/headers';
 import type { ApiCallOptions } from './api.ts';
+import { SESSION_COOKIE_NAMES } from './session-cookie-names.ts';
 
 /**
- * The two names the API's session cookie can have.
- *
- * `__Host-prl_session` in production and `prl_session` outside it — the prefix is a browser-
- * enforced guarantee (exact host, `Secure`, `Path=/`, no `Domain`) that cannot be used over plain
- * HTTP, so development gets the unprefixed name. Ordered with the prefixed one first: if both are
- * somehow present, the one carrying the stronger guarantee is the one forwarded.
- *
- * Kept in step with `sessionCookieName()` in `apps/api/src/plugins/security.ts`, and asserted by
- * `apps/api/test/session-cookie-names.test.ts` so a rename on the server side fails a test rather
- * than silently signing every reader out of every server render.
+ * Re-exported so the forwarding rule below and its one list of names stay next to each other in a
+ * reader's mind. The declaration moved to `session-cookie-names.ts` — a leaf with no `next/headers`
+ * import — because the proxy's guest bootstrap needs the names and must not pull a server-only
+ * module into the Node runtime it runs in. That file explains the rest.
  */
-export const SESSION_COOKIE_NAMES = ['__Host-prl_session', 'prl_session'] as const;
+export { SESSION_COOKIE_NAMES } from './session-cookie-names.ts';
 
 /**
  * The reader's session cookie as a `name=value` pair, or null when they are not signed in.

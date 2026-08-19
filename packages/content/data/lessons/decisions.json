@@ -961,6 +961,15 @@
         "text": "ICM is a model with strong assumptions, not an oracle. It ignores position, blind levels, the fact that some players are better than others, and the possibility that the next hand is played badly by everybody. It is at its most trustworthy in the shape of its answers - risking elimination costs more than the chips suggest - and least trustworthy in the exact size of them. Quote the shape, not the decimal."
       },
       {
+        "kind": "liveCalculation",
+        "calculation": {
+          "kind": "icm",
+          "stacks": [300, 100],
+          "payouts": [70, 30]
+        },
+        "caption": "Two players, stacks 300 and 100, prizes 70 and 30. Chip share is 75 / 25. Prize equity is 60 / 40: the short stack is worth more than its chips, because busting the leader is how second place becomes first. Malmuth–Harville, computed here from the stacks and the ladder — not stored as a number."
+      },
+      {
         "kind": "heading",
         "text": "Measure your stack in big blinds"
       },

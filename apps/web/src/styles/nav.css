@@ -394,7 +394,7 @@
   inset-block-start: calc(var(--prl-pill-h) + var(--prl-space-3));
   inset-inline-end: 0;
   width: max-content;
-  max-width: var(--prl-measure);
+  max-width: min(var(--prl-measure), calc(100vw - 2 * var(--prl-space-6)));
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
   font-size: var(--prl-type-body-sm);
@@ -541,6 +541,31 @@
  */
 .prl-nav--pill .prl-nav__link[aria-current="page"]:focus-visible {
   outline-color: var(--prl-text-on-accent);
+}
+
+/**
+ * The call to action's own ring on `/play`, for the same reason and against a worse bug.
+ *
+ * Found by `scripts/keyboard-audit.mjs` tabbing to it in a real browser: on `/play` the Play pill
+ * looked EXACTLY THE SAME focused and unfocused. Not a low-contrast ring — no change at all.
+ *
+ * The cause is the specificity trap this stylesheet has already been caught by once (see the note
+ * on `.prl-stage__reveal` in `lab.css`). `.prl-pillbar__cta[aria-current="page"]` above sets a
+ * decorative `outline: 1px solid var(--prl-accent-fill)` to mark the current page, and it is
+ * (0,2,0). The focus ring in `base.css` is written as `:where(a, button, …):focus-visible`, and
+ * `:where()` contributes nothing, so that rule is (0,1,0) and LOSES. The decorative outline stayed
+ * put through focus, in the same colour as the pill's own fill, and a keyboard reader on `/play`
+ * had no way to tell where they were — on the one control the bar exists to lead them to.
+ *
+ * Restated here at (0,2,0) plus the pseudo-class, so it wins. `--prl-text-on-accent` is the token
+ * whose contrast against this fill is measured and enforced (6.97:1, `scripts/check-contrast.mjs`)
+ * and is already the label's colour, so the ring reads as part of the same mark. The offset is
+ * inset for the reason the rule above it is: an outset ring on a pill this close to the bar's edge
+ * is clipped by nothing but looks detached from it.
+ */
+.prl-pillbar__cta[aria-current="page"]:focus-visible {
+  outline: var(--prl-focus-width) solid var(--prl-text-on-accent);
+  outline-offset: calc(-1 * var(--prl-focus-offset));
 }
 
 /* ==========================================================================================

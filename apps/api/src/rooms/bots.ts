@@ -160,15 +160,17 @@ export function seedFor(roomId: string, seat: SeatIndex, base: number | undefine
  * The contract's five legacy bot names, mapped onto strategy profiles.
  *
  * `createRoomBodySchema` accepts `nit | tight-aggressive | loose-aggressive | calling-station |
- * maniac`, and `room_members.bot_profile` is CHECK-constrained to the same five plus `unknown`.
- * The Legends profile set is richer, so the two vocabularies have to meet somewhere, and a table
- * is the honest place: each legacy name picks the profile whose traits most nearly describe it,
- * and the mapping is visible rather than buried in a conditional.
+ * maniac`. The Legends profile set is richer, so the two vocabularies have to meet somewhere, and
+ * a table is the honest place: each legacy name picks the profile whose traits most nearly
+ * describe it, and the mapping is visible rather than buried in a conditional.
  *
- * The reverse direction matters too. A Legends profile seated at a table is persisted as
- * `unknown`, because the CHECK does not know these ids and changing a CHECK is a migration and a
- * review, not a convenience. The live registry keeps the real profile id, which is what
- * `RoomSummary.members[].botProfile` reports.
+ * This is now a ONE-WAY table, used only to read a request. It used to have a reverse direction
+ * as well — `persistableProfile`, which answered `unknown` for the seven profiles no legacy name
+ * could express, because `room_members.bot_profile` was CHECK-constrained to those five. That is
+ * the defect migration `0003` removes: the column holds the strategy profile's own id now, so
+ * nothing has to be squeezed back through this vocabulary to be written down. See
+ * `rooms/bot-profile.ts` for what replaced it and why an inexpressible id is now a refusal rather
+ * than a fallback.
  */
 export const LEGACY_PROFILE_IDS: Readonly<Record<string, string>> = {
   nit: 'disciplined-specialist',
@@ -177,34 +179,6 @@ export const LEGACY_PROFILE_IDS: Readonly<Record<string, string>> = {
   'calling-station': 'calling-station',
   maniac: 'volume-grinder',
 };
-
-/** The five names `room_members.bot_profile` will accept, plus the fallback. */
-export type PersistableBotProfile =
-  | 'nit'
-  | 'tight-aggressive'
-  | 'loose-aggressive'
-  | 'calling-station'
-  | 'maniac'
-  | 'unknown';
-
-/** The persistable name for a strategy profile id: its legacy alias, or `unknown`. */
-export function persistableProfile(profileId: string): PersistableBotProfile {
-  for (const [legacy, mapped] of Object.entries(LEGACY_PROFILE_IDS)) {
-    if (mapped === profileId && isPersistable(legacy)) return legacy;
-  }
-  return 'unknown';
-}
-
-function isPersistable(value: string): value is PersistableBotProfile {
-  return (
-    value === 'nit' ||
-    value === 'tight-aggressive' ||
-    value === 'loose-aggressive' ||
-    value === 'calling-station' ||
-    value === 'maniac' ||
-    value === 'unknown'
-  );
-}
 
 /** Resolves a legacy name or a strategy profile id to a profile. Throws `invalid_request`. */
 export function resolveProfile(name: string): StrategyProfile {
@@ -387,6 +361,17 @@ export class BotRunner {
 
   profileOf(userId: string): string | null {
     return this.bots.get(userId)?.spec.profileId ?? null;
+  }
+
+  /**
+   * The whole registered spec for a seat, or null when the seat is not a bot here.
+   *
+   * `profileOf` answers a third of the question. A seat is `(profile, difficulty, seed)` and all
+   * three change how it plays, so a restart that restored only the profile would look correct and
+   * play differently — which is exactly the class of bug this accessor exists to let a test catch.
+   */
+  specOf(userId: string): BotSeatSpec | null {
+    return this.bots.get(userId)?.spec ?? null;
   }
 
   /** Cancels every scheduled decision and stops listening. Called when the room closes. */

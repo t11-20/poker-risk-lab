@@ -2658,6 +2658,21 @@
   font-size: var(--prl-type-body-sm);
 }
 
+/*
+ * The idle line carries `tabindex="-1"` so that focus can be moved to it when the action controls
+ * it replaced were taken away under a keyboard user's hands (see `ActionBar.tsx`). That makes it
+ * match `:focus-visible`, and the ring belongs there: unlike `<main>`, this is a place focus
+ * arrives at unexpectedly, and a reader who has just folded needs to see where they now are.
+ *
+ * The offset is inset because the line is flush with the bar's edge and an outset ring would be
+ * drawn over the panel border rather than beside it.
+ */
+.prl-action-bar__idle:focus-visible {
+  outline: var(--prl-focus-width) solid var(--prl-focus-color);
+  outline-offset: calc(-1 * var(--prl-focus-offset));
+  border-radius: var(--prl-radius-2);
+}
+
 /**
  * The price strip: what is in the middle, and what it costs to continue.
  *

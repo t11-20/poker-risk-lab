@@ -52,6 +52,32 @@
  * Every bound is inclusive: 0, 1, and an error of exactly 100 points are all reachable and
  * all real.
  *
+ * ## Floating point, and why the bounds are not `<= 1` on the nose
+ *
+ * A bare `value <= 1` is the wrong domain for a number that was *computed*. Equity comes out
+ * of a Monte Carlo division, a rule-of-thumb estimate out of a multiplication, and a set of
+ * policy weights out of a normalisation — and `0.1 + 0.2 + 0.7` is `0.9999999999999999`,
+ * while a normalisation over the same three can land on `1.0000000000000002`. Neither is an
+ * impossible probability. Both would be refused by an exact bound, and a guard that refuses
+ * correct figures is a guard somebody deletes within the month.
+ *
+ * So the domain is `[-TOLERANCE, 1 + TOLERANCE]` and `normaliseProbability` SNAPS a value
+ * inside it to the real bound. That is not the clamp `format.ts` refuses to do: the tolerance
+ * is one part in a billion, which is smaller than any unit error, any stale-fixture error and
+ * any percent/fraction mix-up can possibly be. `1.6` is still refused. `36` is still refused.
+ * `1 + 1e-16` renders as `100.0%`, which is what it means.
+ *
+ * ## What "enforced at the data boundary" means here
+ *
+ * This module is the *definition* of the domain. Enforcing it is the job of whoever reads a
+ * value: a component that has a probability calls `formatProbability`, gets `null` for one
+ * that is not, and has to say something. What it must not do is hand the raw number to
+ * `formatPercent` — which will faithfully print `160.0%`, because a formatter cannot know
+ * which of the two it was given. Every render site in this repo that holds a value the
+ * contract types as a probability goes through here; the ones that hold a *pot fraction* (a
+ * bet size as a share of the pot, a bar's width) deliberately do not, because those are
+ * legitimately greater than 1 and refusing them would be the same conflation in reverse.
+ *
  * Pure, no React, no DOM — so `test/probability.test.ts` can exercise every branch.
  */
 
@@ -74,7 +100,54 @@ export const NOT_A_PROBABILITY = 'not a probability';
  * being compared as a number. `NaN` and both infinities fail with it.
  */
 export function isProbabilityFraction(value: number): boolean {
-  return Number.isFinite(value) && value >= 0 && value <= 1;
+  return normaliseProbability(value) !== null;
+}
+
+/**
+ * How far outside a bound a computed value may land and still be that bound.
+ *
+ * One part in a billion. Chosen to be enormous next to accumulated floating-point error — a few
+ * ULPs at this magnitude is around `1e-16` — and minute next to every real defect this guard
+ * exists to catch: a percent-for-fraction mix-up is off by a factor of 100, a stale fixture that
+ * said `1.6` is off by 0.6, and an impossible rule-of-thumb estimate is off by whole multiples.
+ * Nothing in that gap is a number anybody could be misled by.
+ */
+export const PROBABILITY_TOLERANCE = 1e-9;
+
+/**
+ * `value` snapped to `[low, high]` when it is within tolerance, or null when it is outside.
+ *
+ * `value + 0` on the way out normalises negative zero. `-0` is a legitimate result of subtracting
+ * two equal equities and it is the same probability as `0`, but it is not `Object.is`-equal to it,
+ * so a caller comparing the returned value would find `normaliseProbability(-0) !== 0` and have a
+ * genuinely puzzling afternoon.
+ */
+function snap(value: number, low: number, high: number): number | null {
+  if (!Number.isFinite(value)) return null;
+  if (value < low) return value >= low - PROBABILITY_TOLERANCE ? low : null;
+  if (value > high) return value <= high + PROBABILITY_TOLERANCE ? high : null;
+  return value + 0;
+}
+
+/**
+ * A probability as a number in `0..1`, or null when the value is not one.
+ *
+ * The single definition of the domain, and the function every other check here delegates to. A
+ * value a hair outside a bound comes back AS that bound, so a caller never has to decide whether
+ * `1.0000000000000002` was arithmetic or a bug — it was arithmetic, and it is 1.
+ */
+export function normaliseProbability(value: number): number | null {
+  return snap(value, 0, 1);
+}
+
+/** The same, for a difference of two probabilities: `-1..1`. */
+export function normaliseProbabilityDifference(value: number): number | null {
+  return snap(value, -1, 1);
+}
+
+/** The same, for a difference already scaled into percentage points: `-100..100`. */
+export function normaliseProbabilityPoints(value: number): number | null {
+  return snap(value, -100, 100);
 }
 
 /**
@@ -85,7 +158,7 @@ export function isProbabilityFraction(value: number): boolean {
  * checked with `isProbabilityFraction`.
  */
 export function isProbabilityDifference(value: number): boolean {
-  return Number.isFinite(value) && value >= -1 && value <= 1;
+  return normaliseProbabilityDifference(value) !== null;
 }
 
 /**
@@ -96,7 +169,7 @@ export function isProbabilityDifference(value: number): boolean {
  * for the former; sending a fraction through it would pass every value and check nothing.
  */
 export function isProbabilityPoints(value: number): boolean {
-  return Number.isFinite(value) && value >= -100 && value <= 100;
+  return normaliseProbabilityPoints(value) !== null;
 }
 
 /**
@@ -108,6 +181,10 @@ export function isProbabilityPoints(value: number): boolean {
  * let the caller carry on as though nothing happened.
  */
 export function formatProbability(fraction: number, options: PercentOptions = {}): string | null {
-  if (!isProbabilityFraction(fraction)) return null;
-  return formatPercent(fraction, options);
+  const normalised = normaliseProbability(fraction);
+  if (normalised === null) return null;
+  // The SNAPPED value is formatted, not the original. `1 + 1e-16` would print as `100.0%` either
+  // way at one decimal place, but at three it would not, and a figure that renders differently
+  // depending on how many decimals were asked for is a figure nobody can reason about.
+  return formatPercent(normalised, options);
 }

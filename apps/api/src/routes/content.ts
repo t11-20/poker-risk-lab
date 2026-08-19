@@ -82,6 +82,7 @@ import {
   evOfCall,
   evOfSemiBluff,
   exactRange,
+  icmEquity,
   judgeConsistency,
   maximumTo,
   minimumAggressiveTo,
@@ -503,6 +504,19 @@ function foldEquityFields(calculation: Extract<LiveCalculation, { kind: 'foldEqu
   };
 }
 
+function icmFields(calculation: Extract<LiveCalculation, { kind: 'icm' }>): FieldTable {
+  const result = icmEquity(calculation.stacks, calculation.payouts);
+  const pool = result.totalPrizePool;
+  const leader = result.equities[0] ?? 0;
+  const share = pool === 0 ? 0 : leader / pool;
+  return {
+    working: result.explanation,
+    fields: {
+      chipLeaderShare: { value: asPercent(share), unit: 'percent' },
+    },
+  };
+}
+
 function sprFields(calculation: Extract<LiveCalculation, { kind: 'spr' }>): FieldTable {
   const spr = stackToPotRatio(calculation.effectiveStack, calculation.pot);
   return {
@@ -643,8 +657,14 @@ function closedFormTable(calculation: Exclude<LiveCalculation, { kind: 'equity' 
       return varianceFields(calculation);
     case 'riskOfRuin':
       return riskOfRuinFields(calculation);
-    default:
+    case 'icm':
+      return icmFields(calculation);
+    case 'outs':
       return outsFields(calculation);
+    default: {
+      const unreachable: never = calculation;
+      return unreachable;
+    }
   }
 }
 
@@ -1279,6 +1299,7 @@ const contentRoutes: FastifyPluginAsync = (app) => {
       const consistency = consistencyOf(analysis, request.body.action, request.body.to, scenario.bigBlind);
 
       const userId = callerUserId(request);
+      let recorded = false;
       if (userId !== null) {
         // `matched_expected` stays NULL when the analysis does not single out one action — see the
         // route comment — and equally when it has no row for what the learner actually did, which
@@ -1291,10 +1312,12 @@ const contentRoutes: FastifyPluginAsync = (app) => {
           ...(request.body.to === undefined ? {} : { to: request.body.to }),
           matchedExpected: consistency.priced && consistency.claimsOneAction ? consistency.consistent : null,
         });
+        recorded = true;
       }
 
       return {
         consistentWithAnalysis: consistency.consistent,
+        recorded,
         reasoning: `${consistency.reasoning} ${scenario.reasoning}`,
         analysis,
         commonMistakes: scenario.commonMistakes,

@@ -1413,6 +1413,16 @@
         ]
       },
       {
+        "kind": "numeric",
+        "id": "icm-q6",
+        "prompt": "Two players remain. Stacks are 300 and 100. The prizes are 70 and 30. Under the independent chip model, what share of the prize pool does the 300-stack hold? Answer as a percentage.",
+        "calculation": { "kind": "icm", "stacks": [300, 100], "payouts": [70, 30] },
+        "field": "chipLeaderShare",
+        "unit": "percent",
+        "tolerance": 0.5,
+        "explanation": "Chip share is 75%. Prize equity is 60%. The short stack's chance of finishing first is 100/400 = 25%, so they take 25% of first plus 75% of second: 0.25×70 + 0.75×30 = 40. The leader holds the rest of a 100-unit pool. The 15-point gap between chip share and prize share is the curve the lesson is about."
+      },
+      {
         "kind": "multipleChoice",
         "id": "icm-q5",
         "prompt": "What does the independent chip model leave out?",

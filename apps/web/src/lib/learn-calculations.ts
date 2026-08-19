@@ -49,6 +49,7 @@ import {
   evOfCall,
   evOfSemiBluff,
   exactRange,
+  icmEquity,
   potOdds,
   projectResults,
   riskOfRuin,
@@ -56,7 +57,7 @@ import {
   stackToPotRatio,
 } from '@prl/poker-math';
 import type { MetricFormat } from '@prl/ui';
-import { formatChips, formatPercent, formatPoints, formatUnits } from '@prl/ui';
+import { formatChips, formatPoints, formatProbability, formatUnits, NOT_A_PROBABILITY } from '@prl/ui';
 
 /** What unit a computed figure is natively in. See the module comment. */
 export type CalculationScale = 'fraction' | 'points' | 'chips' | 'ratio' | 'count' | 'hands';
@@ -205,9 +206,20 @@ function equitySpec(calculation: Extract<LiveCalculation, { kind: 'equity' }>): 
   return { players, board: calculation.board === undefined ? [] : parseCards(calculation.board) };
 }
 
-/** A `%` figure written as a fraction, for the input list. */
+/**
+ * A probability, for the input list.
+ *
+ * Every caller passes one — an equity, an assumed fold chance, an equity-when-called — so this
+ * goes through the probability domain rather than through `formatPercent`. A lesson that stated
+ * "Equity assumed: 160.0%" and then computed an EV from it would be teaching arithmetic that
+ * cannot happen, in the one place in the product whose whole subject is that distinction.
+ *
+ * `formatProbability` returns null for a value outside 0..1 (with a floating-point tolerance), and
+ * the input is then labelled as refused rather than dropped: an EV whose inputs are not all shown
+ * is an EV a reader cannot check.
+ */
 function percentInput(label: string, fraction: number): CalculationInput {
-  return { label, text: formatPercent(fraction) };
+  return { label, text: formatProbability(fraction) ?? NOT_A_PROBABILITY };
 }
 
 function unitsInput(label: string, chips: number): CalculationInput {
@@ -427,6 +439,52 @@ function resolveFoldEquity(calculation: Extract<LiveCalculation, { kind: 'foldEq
       'Splitting the figure into these two sources is the point: a bet can be worth making on fold equity alone, and the same bet against a player who never folds can be worth nothing.',
     assumptions: breakdown.assumptions,
     detail: { kind: 'evTerms', terms: breakdown.terms },
+  };
+}
+
+function resolveIcm(calculation: Extract<LiveCalculation, { kind: 'icm' }>): CalculationResult {
+  const result = icmEquity(calculation.stacks, calculation.payouts);
+  const pool = result.totalPrizePool;
+  const leader = result.equities[0] ?? 0;
+  const share = pool === 0 ? 0 : leader / pool;
+  return {
+    kind: 'icm',
+    title: 'Prize equity, not chip share',
+    inputs: [
+      { label: 'Stacks', text: calculation.stacks.join(' / ') },
+      { label: 'Payouts', text: calculation.payouts.join(' / ') },
+    ],
+    figures: [
+      {
+        key: 'chipLeaderShare',
+        label: 'Largest stack’s prize share',
+        value: share,
+        scale: 'fraction',
+        emphasis: 'lead',
+        note: 'Malmuth–Harville. Not chip share, and not a cash-out.',
+      },
+      ...result.equities.map((equity, index) => ({
+        key: `equity${index}`,
+        label: `Stack ${calculation.stacks[index] ?? index} — expected prize`,
+        value: equity,
+        scale: 'chips' as const,
+        format: 'number' as const,
+        unit: null,
+        decimals: 1,
+        emphasis: 'support' as const,
+      })),
+    ],
+    method: CLOSED_FORM,
+    formula: {
+      expression: 'expected prize = sum over places of P(finish there) × prize(there)',
+      explanation:
+        'Chance of finishing first is your share of the chips. Later places apply the same rule to whoever is left. That is a model, not a cash-out.',
+    },
+    derivation: result.explanation,
+    caveat:
+      'ICM ignores position, skill and blind pressure. Trust the shape — chips won are worth less each than chips lost — not the decimal.',
+    assumptions: result.assumptions,
+    detail: null,
   };
 }
 
@@ -730,6 +788,8 @@ function resolve(calculation: LiveCalculation): CalculationResult {
       return resolveEquity(calculation);
     case 'outs':
       return resolveOuts(calculation);
+    case 'icm':
+      return resolveIcm(calculation);
     default: {
       const unreachable: never = calculation;
       return unreachable;

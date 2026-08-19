@@ -26,11 +26,25 @@
  *   6. The least-privilege runtime role exists and genuinely lacks CREATE/DROP/TRUNCATE.
  *   7. No aggregate quiz score column exists — quizzes must not be able to gate progress.
  *      (PRODUCT-GUARDRAILS §2)
+ *   8. room_members.bot_profile accepts EXACTLY the strategy profile ids @prl/poker-ai carries,
+ *      plus the pre-0003 'unknown' marker. The schema and the runtime drifting apart here is what
+ *      made seven of the twelve AI Legends unrecoverable across a restart.
  */
 
+import { PROFILES } from '@prl/poker-ai';
 import postgres from 'postgres';
 
 const SCHEMA = 'prl';
+
+/**
+ * Every value `room_members.bot_profile` must accept, derived from the runtime profile list.
+ *
+ * Mirrors `PERSISTABLE_BOT_PROFILES` in src/rooms/bot-profile.ts. Recomputed here rather than
+ * imported because this script is plain `.mjs` run by node with no TypeScript loader, and a
+ * second derivation from the same source is still a derivation — neither copy can be edited into
+ * agreement with a stale schema.
+ */
+const PERSISTABLE_BOT_PROFILES = [...PROFILES.map((profile) => profile.naming.id), 'unknown'];
 
 const url = process.env['DATABASE_URL'];
 if (url === undefined || url === '') {
@@ -165,6 +179,52 @@ try {
     const distinct = [...new Set(quoted)];
     if (distinct.length > 1) {
       fail('visibility constraint', `permits more than invite_only: ${distinct.join(', ')}`);
+    }
+  }
+
+  // ---- 8. The bot-seat vocabulary cannot drift from the runtime one --------------------
+  //
+  // This is the check the original defect needed and did not have. `room_members.bot_profile`
+  // was CHECK-constrained to five values that were never the strategy profile set, and nothing
+  // compared the two, so seven of the twelve Legends were silently written as `unknown` for as
+  // long as the mismatch went unnoticed. Comparing the live constraint against `PROFILES` makes
+  // adding or retiring a profile without a migration a failed gate rather than a lost identity.
+  // `pg_get_constraintdef` renders `IN (...)` as `= ANY (ARRAY['x'::text, ...])`, so the value
+  // list is matched by the quoted literals rather than by the source syntax.
+  const botProfileChecks = checks.filter(
+    (c) =>
+      c.table_name === 'room_members' &&
+      /\bbot_profile\b/i.test(c.definition) &&
+      /'[a-z0-9-]+'::text/.test(c.definition),
+  );
+  if (botProfileChecks.length === 0) {
+    fail(
+      'missing bot_profile constraint',
+      'room_members.bot_profile has no value CHECK. Without one the column can hold any string, ' +
+        'and a seat that names a profile no build carries cannot be refused at write time.',
+    );
+  } else {
+    const definition = botProfileChecks.map((c) => c.definition).join(' ');
+    const permitted = new Set([...definition.matchAll(/'([a-z0-9-]+)'::text/g)].map((m) => m[1]));
+    const expected = new Set(PERSISTABLE_BOT_PROFILES);
+    const missing = [...expected].filter((value) => !permitted.has(value));
+    const extra = [...permitted].filter((value) => !expected.has(value));
+    if (missing.length > 0) {
+      fail(
+        'bot_profile constraint',
+        `does not permit ${missing.join(', ')} — a seat with that profile cannot be persisted, so a ` +
+          'restart would forget which opponent the learner chose',
+      );
+    }
+    if (extra.length > 0) {
+      fail(
+        'bot_profile constraint',
+        `permits ${extra.join(', ')}, which @prl/poker-ai does not carry — a row naming one could ` +
+          'never be rehydrated',
+      );
+    }
+    if (missing.length === 0 && extra.length === 0) {
+      note(`bot_profile permits exactly the ${expected.size} runtime values`);
     }
   }
 

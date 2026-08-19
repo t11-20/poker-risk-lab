@@ -233,6 +233,31 @@ function validateGlossaryEntry(problems: Problems, path: string, raw: unknown): 
 // Live calculations
 // ---------------------------------------------------------------------------
 
+function validateIcmCalculation(
+  problems: Problems,
+  path: string,
+  raw: Record<string, unknown>,
+): Extract<LiveCalculation, { kind: 'icm' }> {
+  const stacksRaw = Array.isArray(raw['stacks']) ? raw['stacks'] : [];
+  const payoutsRaw = Array.isArray(raw['payouts']) ? raw['payouts'] : [];
+  if (!Array.isArray(raw['stacks'])) problems.add(`${path}.stacks`, 'expected an array of stacks');
+  if (!Array.isArray(raw['payouts'])) problems.add(`${path}.payouts`, 'expected an array of payouts');
+  if (stacksRaw.length < 2) problems.add(`${path}.stacks`, 'ICM needs at least two stacks');
+  if (stacksRaw.length > 9) problems.add(`${path}.stacks`, 'ICM is capped at 9 players');
+  if (payoutsRaw.length > stacksRaw.length) {
+    problems.add(`${path}.payouts`, 'cannot list more paid places than there are stacks');
+  }
+  return {
+    kind: 'icm',
+    stacks: stacksRaw.map((value, index) =>
+      requireInteger(problems, `${path}.stacks[${index}]`, value, { min: 0, max: 10_000_000 }),
+    ),
+    payouts: payoutsRaw.map((value, index) =>
+      requireInteger(problems, `${path}.payouts[${index}]`, value, { min: 0, max: 10_000_000 }),
+    ),
+  };
+}
+
 const CALCULATION_KINDS = [
   'equity',
   'outs',
@@ -243,6 +268,7 @@ const CALCULATION_KINDS = [
   'spr',
   'variance',
   'riskOfRuin',
+  'icm',
 ] as const;
 
 function validateLiveCalculation(problems: Problems, path: string, raw: unknown): LiveCalculation {
@@ -330,6 +356,8 @@ function validateLiveCalculation(problems: Problems, path: string, raw: unknown)
         ),
         hands: requireInteger(problems, `${path}.hands`, raw['hands'], { min: 1, max: 100_000_000 }),
       };
+    case 'icm':
+      return validateIcmCalculation(problems, path, raw);
     default:
       return {
         kind: 'riskOfRuin',

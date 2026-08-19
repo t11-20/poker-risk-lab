@@ -218,6 +218,9 @@ export function persistHand(options: PersistHandOptions): PersistedHand {
     config: asJson(config),
     commitment_root: state.commitment.root,
     commitment_context: state.commitment.context,
+    // What the fixture actually dealt from, not what a real table would. A review that claimed
+    // `csprng` over a stacked deck would be the one lie a hand review must never tell.
+    random_source_kind: state.randomSourceKind,
     board: state.board.map((card) => cardToString(card)),
     street: state.street,
     result: asJson(result),

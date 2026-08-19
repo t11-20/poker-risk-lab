@@ -106,19 +106,17 @@ describe('a deadline that expires is an outage, and never a missing resource', (
 describe('/review/[handId] answers 404 only when the API said 404', () => {
   const page = read(...REVIEW_PAGE);
 
-  it('reaches notFound() from the missing state and from nothing else', () => {
+  it('renders the 404 body from the missing state and from nothing else', () => {
     assert.match(
       page,
-      /data\.state === 'missing'\)\s*notFound\(\)/u,
+      /data\.state === 'missing'\) return <NotFoundBody \/>/u,
       'The not-found screen must be gated on the state that means the API itself answered 404.',
     );
     const calls = codeOnly(page).match(/notFound\(\)/gu) ?? [];
     assert.equal(
       calls.length,
-      1,
-      `notFound() is called ${String(calls.length)} times in this page. There is exactly one condition ` +
-        'that earns it — a 404 from the API about an id the reader supplied — and every extra call site ' +
-        'is a chance to tell a reader that something which exists does not.',
+      0,
+      'In-page notFound() produces empty HTML in Next 16. Missing hands render NotFoundBody instead.',
     );
   });
 
@@ -159,7 +157,7 @@ describe('/lab/[scenarioId] answers 404 only when the API said 404', () => {
   it('reaches its outage screen when the bundle does not carry the scenario', () => {
     assert.match(
       page,
-      /data\.state === 'missing'\)\s*notFound\(\)/u,
+      /data\.state === 'missing'\) return <NotFoundBody \/>/u,
       'The not-found screen must be gated on the API’s own 404.',
     );
     assert.doesNotMatch(
@@ -184,6 +182,6 @@ describe('/lab/[scenarioId] answers 404 only when the API said 404', () => {
     // A scenario whose seats or cards will not parse cannot be staged, and that IS a 404: the
     // alternative is a question asked without the situation it needs. Widening the first fix into
     // this one would be the opposite error.
-    assert.match(page, /if \(table === null\) notFound\(\);/u);
+    assert.match(page, /if \(table === null\) return <NotFoundBody \/>/u);
   });
 });

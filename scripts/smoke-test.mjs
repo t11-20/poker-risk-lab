@@ -14,6 +14,11 @@
  * critical journeys and, most importantly, asserts the confidentiality property that matters:
  * **one player must never receive another player's private cards or any undealt card.**
  *
+ * It also checks the WEB origin's security headers (§11), because the response headers of a
+ * rendered HTML page are another thing no in-process test can see: the app shipped with no
+ * Content-Security-Policy at all while a carefully maintained CSP hash sat unused in the source.
+ * `PRL_WEB_ORIGIN` says where that is; it defaults to the dev/compose address.
+ *
  * Usage:
  *     node scripts/smoke-test.mjs [--origin http://127.0.0.1:3001]
  *
@@ -685,8 +690,214 @@ section('9. Progress');
   }
 }
 
-// ---- 10. Rate limiting exists ----
-section('10. Rate limiting');
+// ---- 10. The HTML origin carries an effective CSP ----
+//
+// Not an API check, and here anyway, because this is the only script in the repo that speaks HTTP
+// to a RUNNING deployment. The defect it exists for was exactly the kind a unit test cannot see:
+// `THEME_BOOT_SCRIPT_CSP_HASH` was computed, kept accurate by a test, and never placed on a
+// response — `next.config.ts` had no `headers()` and there was no proxy file, so the page origin
+// served no policy at all. Only a real response can prove otherwise.
+//
+// `apps/web/test/csp-policy.test.ts` asserts the policy's SHAPE. This asserts it ARRIVED, and that
+// Next actually stamped the nonce on the scripts the policy admits — a policy whose nonce reaches
+// no script tag is a page that renders and never hydrates.
+section('10. Web origin security headers');
+{
+  let page = null;
+  try {
+    page = await fetch(`${WEB_ORIGIN}/learn`, { headers: { accept: 'text/html' } });
+  } catch (error) {
+    warn(
+      'web origin',
+      `${WEB_ORIGIN} is not reachable (${error instanceof Error ? error.message : 'error'})`,
+    );
+  }
+
+  if (page !== null) {
+    const policy = page.headers.get('content-security-policy');
+    if (policy === null) {
+      bad('content-security-policy', `${WEB_ORIGIN}/learn returned an HTML page with no policy at all`);
+    } else {
+      ok('content-security-policy is served on HTML', `${policy.length} chars`);
+
+      const nonce = /'nonce-([A-Za-z0-9+/=]+)'/.exec(policy)?.[1] ?? null;
+      if (nonce === null) bad('csp nonce', `script-src carries no nonce: ${policy}`);
+      else ok('csp carries a per-response nonce');
+
+      if (/script-src[^;]*'unsafe-inline'/.test(policy)) {
+        bad('csp script-src', "allows 'unsafe-inline' — an injected inline script would run");
+      } else {
+        ok("script-src does not allow 'unsafe-inline'");
+      }
+      if (/script-src[^;]*'unsafe-eval'/.test(policy)) {
+        bad('csp script-src', "allows 'unsafe-eval' — a development allowance reached production");
+      } else {
+        ok("script-src does not allow 'unsafe-eval'");
+      }
+      if (/script-src[^;]*'sha256-[A-Za-z0-9+/=]+'/.test(policy)) {
+        ok('the theme boot script is allowed by hash as well as nonce');
+      } else {
+        warn('csp script-src', 'carries no sha256 source — the theme boot hash is not being served');
+      }
+
+      const html = await page.text();
+      const tags = html.match(/<script\b[^>]*>/g) ?? [];
+      const unnonced = tags.filter((tag) => !tag.includes('nonce='));
+      if (tags.length === 0) {
+        bad('rendered scripts', 'the page carries no script tags at all, which cannot be right');
+      } else if (unnonced.length > 0) {
+        bad(
+          'rendered scripts',
+          `${unnonced.length} of ${tags.length} script tag(s) carry no nonce, so they are blocked: ` +
+            unnonced.slice(0, 2).join(' '),
+        );
+      } else {
+        ok('every rendered script tag carries the nonce', `${tags.length} tag(s)`);
+      }
+
+      if (nonce !== null && !html.includes(nonce)) {
+        bad('csp nonce', 'the policy nonce does not appear in the HTML, so nothing it allows is present');
+      }
+    }
+
+    for (const [header, expected] of [
+      ['x-content-type-options', 'nosniff'],
+      ['x-frame-options', 'DENY'],
+      ['referrer-policy', 'same-origin'],
+    ]) {
+      const value = page.headers.get(header);
+      if (value === expected) ok(`${header}: ${expected}`);
+      else bad(header, `expected ${expected}, got ${value === null ? '(absent)' : value}`);
+    }
+  }
+}
+
+// ---- 11. A first-time visitor to Learn gets a guest session (PROD-048) ----
+//
+// The product's copy is guest-first and nothing created the guest: `POST /auth/guest` had one
+// caller in the whole client, reached only by opening a table. A reader who came to Learn stayed
+// anonymous, so every lesson read answered `completedAt: null` and `/me/progress` answered 401 —
+// each honest on its own, and together a learner whose work was recorded nowhere.
+//
+// This walks it the way a browser does, with one cookie jar, because the fix lives in the web
+// origin's proxy and nothing in the API changed.
+section('11. Guest bootstrap on Learn');
+{
+  const jar = new Map();
+  const remember = (response) => {
+    for (const raw of response.headers.getSetCookie()) {
+      const pair = raw.split(';')[0] ?? '';
+      const name = pair.split('=')[0];
+      if (name !== undefined && name !== '') jar.set(name, pair);
+    }
+  };
+  const cookieHeader = () => [...jar.values()].join('; ');
+  const page = async (path) => {
+    const response = await fetch(`${WEB_ORIGIN}${path}`, {
+      headers: {
+        accept: 'text/html',
+        'sec-fetch-dest': 'document',
+        ...(jar.size === 0 ? {} : { cookie: cookieHeader() }),
+      },
+      redirect: 'manual',
+    });
+    const minted = response.headers.getSetCookie().length;
+    remember(response);
+    return { response, minted };
+  };
+
+  let reachable = true;
+  let first = null;
+  try {
+    first = await page('/learn');
+  } catch (error) {
+    reachable = false;
+    warn(
+      'web origin',
+      `${WEB_ORIGIN} is not reachable (${error instanceof Error ? error.message : 'error'})`,
+    );
+  }
+
+  if (reachable && first !== null) {
+    const sessionCookie = [...jar.keys()].find((name) => name.endsWith('prl_session'));
+    if (sessionCookie === undefined) {
+      bad('guest bootstrap', 'a fresh visitor to /learn was issued no session cookie');
+    } else {
+      ok('a fresh visitor to /learn is issued a session', sessionCookie);
+
+      // Who the guest is, asked of the API directly with the cookie the web origin just set.
+      const who = await fetch(`${ORIGIN}/api/v1/auth/session`, {
+        headers: { accept: 'application/json', origin: WEB_ORIGIN, cookie: cookieHeader() },
+      });
+      const body = await who.json().catch(() => null);
+      if (body?.user?.kind === 'guest') ok('the session is a real guest account', body.user.id);
+      else
+        bad(
+          'guest bootstrap',
+          `the cookie does not resolve to a guest: ${JSON.stringify(body?.user ?? null)}`,
+        );
+
+      // Idempotence. Navigating on, refreshing, and several requests at once must all reuse it.
+      const second = await page('/lab');
+      const third = await page('/learn');
+      const concurrent = await Promise.all([page('/learn'), page('/lab'), page('/record')]);
+      const extra = second.minted + third.minted + concurrent.reduce((sum, r) => sum + r.minted, 0);
+      if (extra === 0) ok('navigation, refresh and concurrent requests mint nothing further');
+      else bad('guest bootstrap', `${extra} further Set-Cookie header(s) after the session existed`);
+
+      const stillTheSame = [...jar.keys()].filter((name) => name.endsWith('prl_session'));
+      if (stillTheSame.length === 1) ok('the visitor keeps one identity across navigation');
+      else bad('guest bootstrap', `the jar now holds ${stillTheSame.length} session cookies`);
+
+      // A path outside the bootstrap set must not create an account for a passing crawler.
+      const anonymous = await fetch(`${WEB_ORIGIN}/legends`, {
+        headers: { accept: 'text/html', 'sec-fetch-dest': 'document' },
+      });
+      if (anonymous.headers.getSetCookie().length === 0)
+        ok('/legends mints nothing for an anonymous visitor');
+      else warn('guest bootstrap', '/legends issued a cookie; the bootstrap set is wider than intended');
+
+      // A prefetch must not create an account for a page nobody opened.
+      const prefetch = await fetch(`${WEB_ORIGIN}/learn`, {
+        headers: { accept: 'text/html', 'sec-fetch-dest': 'empty', rsc: '1', 'next-router-prefetch': '1' },
+      });
+      if (prefetch.headers.getSetCookie().length === 0) ok('a prefetch of /learn mints nothing');
+      else bad('guest bootstrap', 'a prefetch created an account for a page that was never opened');
+
+      // And the point of the whole thing: the reader's own work is now recorded.
+      const seed = await fetch(`${ORIGIN}/api/v1/auth/session`, {
+        headers: { accept: 'application/json', origin: WEB_ORIGIN, cookie: cookieHeader() },
+      });
+      remember(seed);
+      const token = (await seed.json().catch(() => ({}))).csrfToken;
+      const read = await fetch(`${ORIGIN}/api/v1/content/lessons/pot-odds/read`, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          origin: WEB_ORIGIN,
+          cookie: cookieHeader(),
+          'x-csrf-token': typeof token === 'string' ? token : '',
+        },
+        body: JSON.stringify({ completed: true }),
+      });
+      const recorded = await read.json().catch(() => null);
+      if (typeof recorded?.completedAt === 'string') {
+        ok('a lesson read by the bootstrapped guest is actually recorded', recorded.completedAt);
+      } else {
+        bad('guest bootstrap', `the lesson read was not recorded: ${JSON.stringify(recorded)}`);
+      }
+    }
+  }
+}
+
+// ---- 12. Rate limiting exists ----
+//
+// LAST, and it has to be: this section deliberately floods `POST /auth/guest` until the limiter
+// answers 429, and the limiter buckets by client key. Any later section that needs a new account —
+// §11 does — would then be measuring the flood rather than itself. It was moved here after exactly
+// that happened.
+section('12. Rate limiting');
 {
   const client = createClient('flood');
   const seed = await client.request('GET', '/api/v1/auth/session');

@@ -9,7 +9,7 @@
  * private and this page has no session to read it with" over a bundled fixture.
  *
  * The fix reads the cookie out of the incoming request and forwards it — and forwarding by name is
- * what makes it narrow. `apps/web/src/lib/server-session.ts` carries the list, deliberately, so
+ * what makes it narrow. `apps/web/src/lib/session-cookie-names.ts` carries the list, deliberately, so
  * that it forwards the session cookie and NOT the CSRF secret, not a third-party cookie, and not
  * the whole `Cookie` header. The cost of that narrowness is a literal on the client side of a name
  * the server owns: rename it here and every server render silently becomes signed-out again, with
@@ -39,17 +39,17 @@ const CLIENT_MODULE = resolve(
   'web',
   'src',
   'lib',
-  'server-session.ts',
+  'session-cookie-names.ts',
 );
 
 /**
- * The client module without `next/headers`.
+ * The client's list, read as source.
  *
- * `server-session.ts` imports `cookies()` from `next/headers`, which throws outside a request
- * scope and is not resolvable from this package at all. The constant is what is under test, so it
- * is read out of the source rather than by executing it — this file is asserting a fact about two
- * lists of strings, and booting a framework to do that would make the test fragile for reasons
- * unrelated to what it checks.
+ * It lives in `session-cookie-names.ts`, a leaf module with no imports at all — it moved out of
+ * `server-session.ts` so that the proxy's guest bootstrap could use the names without dragging
+ * `next/headers` into the Node runtime. Read rather than imported all the same: this package
+ * cannot resolve `@prl/web`'s module graph, and this file is asserting a fact about two lists of
+ * strings, which does not need a module loader.
  */
 async function clientCookieNames(): Promise<readonly string[]> {
   const source = await (await import('node:fs/promises')).readFile(CLIENT_MODULE, 'utf8');

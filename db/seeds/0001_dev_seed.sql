@@ -93,15 +93,26 @@ ON CONFLICT (id) DO NOTHING;
 -- the big blind, seat 3 raised to 6 and collected the 9 in the middle.
 -- 200 + 199 + 198 + 203 = 800, which is 4 x 200. Chips are conserved.
 -- -----------------------------------------------------------------------------
-INSERT INTO prl.room_members (id, room_id, user_id, seat, stack, is_bot, bot_profile, joined_at, left_at)
+--
+-- The two bot seats carry all three durable facts (migration 0003): the strategy
+-- profile's own id, the difficulty its traits are scaled by, and the decision
+-- seed. A seeded room whose bots could not be rehydrated would be a development
+-- fixture that exercises the refusal path rather than the working one.
+--
+-- The seeds are what `seedFor('room_devseed_home', <seat>, undefined)` produces,
+-- so this room's bots behave exactly as a freshly created one's would.
+INSERT INTO prl.room_members
+  (id, room_id, user_id, seat, stack, is_bot, bot_profile, bot_difficulty, bot_seed, joined_at, left_at)
 VALUES
-  ('mem_devseed_alice', 'room_devseed_home', 'usr_devseed_alice', 0, 200, false, NULL,
+  ('mem_devseed_alice', 'room_devseed_home', 'usr_devseed_alice', 0, 200, false, NULL, NULL, NULL,
    now() - interval '1 hour', NULL),
-  ('mem_devseed_borys', 'room_devseed_home', 'usr_devseed_borys', 1, 199, false, NULL,
+  ('mem_devseed_borys', 'room_devseed_home', 'usr_devseed_borys', 1, 199, false, NULL, NULL, NULL,
    now() - interval '1 hour', NULL),
-  ('mem_devseed_bot_nit', 'room_devseed_home', 'usr_devseed_bot_nit', 2, 198, true, 'nit',
+  ('mem_devseed_bot_nit', 'room_devseed_home', 'usr_devseed_bot_nit', 2, 198, true,
+   'disciplined-specialist', 'realistic', 656271975,
    now() - interval '1 hour', NULL),
-  ('mem_devseed_bot_tag', 'room_devseed_home', 'usr_devseed_bot_tag', 3, 203, true, 'tight-aggressive',
+  ('mem_devseed_bot_tag', 'room_devseed_home', 'usr_devseed_bot_tag', 3, 203, true,
+   'patient-technician', 'realistic', 639494356,
    now() - interval '1 hour', NULL)
 ON CONFLICT (id) DO NOTHING;
 

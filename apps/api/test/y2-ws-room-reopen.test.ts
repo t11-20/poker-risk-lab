@@ -112,6 +112,8 @@ function memberRow(userId: string, displayName: string, seat: number | null): Ro
     stack: 1_000,
     is_bot: false,
     bot_profile: null,
+    bot_difficulty: null,
+    bot_seed: null,
     joined_at: new Date('2026-08-17T12:00:00.000Z'),
     left_at: null,
   };

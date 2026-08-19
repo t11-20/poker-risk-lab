@@ -81,20 +81,65 @@ test('the usage text names `down` and `roles`', async () => {
   assert.match(stdout, /^\s*roles\s+/m);
 });
 
-test('every migration already in db/migrations passes the destructive-statement gate', async () => {
+/**
+ * Every shipped migration satisfies the gate `up` actually applies.
+ *
+ * ## What this used to assert, and why it was narrower than its own name
+ *
+ * It called `findIrreversibleStatements` alone and required the result to be empty for every file
+ * — i.e. that no migration in the repository is destructive at all. That is not the gate. The gate
+ * is `refuseUndeclaredIrreversible` in `migrate.mjs`, and it refuses a destructive migration
+ * **that does not say so**; a file carrying `-- prl:irreversible: <reason>` is applied, because the
+ * whole point of the marker is that some changes cannot be additive and the person writing one has
+ * to state what is lost.
+ *
+ * So the old body tested half the gate under the full gate's name, and it happened to pass for as
+ * long as every migration was additive. `0003_bot_seat_recovery.sql` is the first that cannot be:
+ * changing a CHECK constraint's predicate requires dropping it, there is no `ALTER CONSTRAINT` for
+ * that, and the constraint being replaced is the one that destroyed seven of the twelve AI Legends'
+ * identities on every write.
+ *
+ * Rewritten to the runner's real rule, plus the part that keeps the marker from becoming a rubber
+ * stamp: a file that declares itself irreversible must give a REASON, and `declaresIrreversible`
+ * already requires a non-empty one. A migration that is destructive and silent still fails here,
+ * which is the property worth having.
+ */
+test('every migration already in db/migrations satisfies the gate `up` applies', async () => {
   // The gate has to read code, not prose. 0001_initial.sql explains at length
   // that the runtime role holds no DROP and no TRUNCATE, and a naive scan of the
   // raw text flags a migration that does neither of those things.
   const names = (await readdir(MIGRATIONS_DIR)).filter((name) => name.endsWith('.sql')).sort();
   assert.ok(names.length > 0, 'expected migrations to exist');
 
-  const flagged = [];
+  const undeclared = [];
+  const declared = [];
   for (const name of names) {
     const sql = await readFile(join(MIGRATIONS_DIR, name), 'utf8');
     const found = findIrreversibleStatements(sql);
-    if (found.length > 0) flagged.push(`${name}: ${found.map((f) => f.snippet).join(', ')}`);
+    if (found.length === 0) continue;
+    if (declaresIrreversible(sql)) declared.push(`${name}: ${found.map((f) => f.snippet).join(', ')}`);
+    else undeclared.push(`${name}: ${found.map((f) => f.snippet).join(', ')}`);
   }
-  assert.deepEqual(flagged, [], `the gate fires on shipped migrations:\n  ${flagged.join('\n  ')}`);
+
+  assert.deepEqual(
+    undeclared,
+    [],
+    `these migrations destroy something and do not declare it, so \`up\` would refuse them:\n  ${undeclared.join('\n  ')}`,
+  );
+
+  // Not an assertion, a record: a reviewer reading this test's output should see which migrations
+  // are not additive without having to grep for the marker.
+  if (declared.length > 0) console.info(`  declared irreversible: ${declared.join('; ')}`);
+});
+
+test('a declaration without a reason is not a declaration', () => {
+  // The marker is only worth anything if it costs something to write. An empty one must not pass.
+  assert.equal(declaresIrreversible('-- prl:irreversible:\nDROP TABLE prl.thing;'), false);
+  assert.equal(declaresIrreversible('-- prl:irreversible:   \nDROP TABLE prl.thing;'), false);
+  assert.equal(
+    declaresIrreversible('-- prl:irreversible: the old CHECK is replaced\nALTER TABLE t DROP CONSTRAINT c;'),
+    true,
+  );
 });
 
 test('the gate fires on each kind of statement that cannot be rolled forward past', () => {

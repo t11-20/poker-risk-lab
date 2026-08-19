@@ -1,0 +1,700 @@
+{
+  "origin": "http://localhost:3000",
+  "record": [
+    {
+      "level": "pass",
+      "label": "Onboarding (home): 21 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Onboarding (home): the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Onboarding (home): every focusable control is reachable",
+      "detail": "21 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Onboarding (home): focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Onboarding (home): every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Onboarding (home): the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Onboarding (home): Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Onboarding (home): Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Learn index: 62 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Learn index: the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Learn index: every focusable control is reachable",
+      "detail": "62 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Learn index: focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Learn index: every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Learn index: the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Learn index: Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Learn index: Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Guided practice (lesson): 39 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Guided practice (lesson): the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Guided practice (lesson): every focusable control is reachable",
+      "detail": "39 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Guided practice (lesson): focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Guided practice (lesson): every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Guided practice (lesson): the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Guided practice (lesson): Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Guided practice (lesson): Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Guided practice (lesson): focus survives the update it triggered",
+      "detail": "on \"iWhat “units” means\""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab: 55 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab: the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab: every focusable control is reachable",
+      "detail": "55 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab: focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab: every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab: the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab: Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab: Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab (a spot): 20 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab (a spot): the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab (a spot): every focusable control is reachable",
+      "detail": "20 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab (a spot): focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab (a spot): every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab (a spot): the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab (a spot): Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Scenario Lab (a spot): Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends: 43 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends: the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends: every focusable control is reachable",
+      "detail": "43 checked"
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends: focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends: every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends: the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends: Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends: Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends (a profile): 31 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends (a profile): the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends (a profile): every focusable control is reachable",
+      "detail": "31 checked"
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends (a profile): focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends (a profile): every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends (a profile): the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends (a profile): Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "AI Legends (a profile): Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review: 20 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review: the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review: every focusable control is reachable",
+      "detail": "20 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review: focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review: every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review: the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review: Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review: Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review (demo): 25 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review (demo): the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review (demo): every focusable control is reachable",
+      "detail": "25 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review (demo): focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review (demo): every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review (demo): the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review (demo): Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review (demo): Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Legends hand review (demo): every card element carries text",
+      "detail": "28 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Poker table + Coach (decision): 31 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table + Coach (decision): the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table + Coach (decision): every focusable control is reachable",
+      "detail": "31 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Poker table + Coach (decision): focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table + Coach (decision): every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table + Coach (decision): the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table + Coach (decision): Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table + Coach (decision): Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table + Coach (decision): every poker action is in the tab order",
+      "detail": "Raise to 7070 units"
+    },
+    {
+      "level": "warn",
+      "label": "Poker table + Coach (decision): poker actions",
+      "detail": "every action control is disabled in this state"
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (live): 20 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (live): the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (live): every focusable control is reachable",
+      "detail": "20 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (live): focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (live): every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (live): the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (live): Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (live): Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "warn",
+      "label": "Poker table (live): poker actions",
+      "detail": "no action controls are on screen in this state"
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (hand complete): 21 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (hand complete): the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (hand complete): every focusable control is reachable",
+      "detail": "21 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (hand complete): focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (hand complete): every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (hand complete): the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (hand complete): Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (hand complete): Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Poker table (hand complete): every card element carries text",
+      "detail": "166 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Hand review: 28 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Hand review: the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Hand review: every focusable control is reachable",
+      "detail": "28 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Hand review: focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Hand review: every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Hand review: the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Hand review: Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Hand review: Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Your record: 19 control(s) reached by Tab",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Your record: the tab order cycles — no keyboard trap",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Your record: every focusable control is reachable",
+      "detail": "19 checked"
+    },
+    {
+      "level": "pass",
+      "label": "Your record: focus order follows the document",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Your record: every stop has a visible focus indicator",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Your record: the skip link is the first stop",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Your record: Enter on the skip link moves focus into <main>",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Your record: Shift+Tab moves backwards",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Narrow viewport: the menu trigger is on screen and focusable",
+      "detail": "aria-expanded=false"
+    },
+    {
+      "level": "pass",
+      "label": "Narrow viewport: Enter opens the sheet, and aria-expanded says so",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Narrow viewport: the sheet is a modal dialog",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Narrow viewport: focus moves into the sheet on open",
+      "detail": "on \"×Close menu\""
+    },
+    {
+      "level": "pass",
+      "label": "Narrow viewport: Tab is held inside the open sheet — the trap works",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Narrow viewport: Shift+Tab is held inside the sheet too",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Narrow viewport: Escape closes the sheet",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Narrow viewport: focus returns to the trigger that opened it",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Private table: \"Open the table\" reached and activated by keyboard",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Private table: the socket went live",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Private table: \"Take seat 1\" reached and activated by keyboard",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Private table: \"Deal the next hand\" reached and activated by keyboard",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Private table: the hand reached this seat",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Private table: every offered action is enabled and tabbable",
+      "detail": "Raise to 2015 units"
+    },
+    {
+      "level": "pass",
+      "label": "Private table: the size slider is named",
+      "detail": "\"Raise size slider\""
+    },
+    {
+      "level": "pass",
+      "label": "Private table: the slider declares its range",
+      "detail": "20..1000"
+    },
+    {
+      "level": "pass",
+      "label": "Private table: the slider has non-slider alternatives",
+      "detail": "1 number input(s), 5 preset(s)"
+    },
+    {
+      "level": "pass",
+      "label": "Private table: the slider moves with the arrow keys",
+      "detail": "20 → 23"
+    },
+    {
+      "level": "pass",
+      "label": "Private table: End reaches the maximum size",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Private table: Fold, pressed with Enter, was accepted by the server",
+      "detail": ""
+    },
+    {
+      "level": "pass",
+      "label": "Private table: focus survived the table update the action caused",
+      "detail": ""
+    }
+  ]
+}

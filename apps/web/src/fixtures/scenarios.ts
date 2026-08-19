@@ -1404,6 +1404,7 @@ export function scenarioAttemptFixture(
   const judgement = judgeConsistency(analysis, action, to, scenario.bigBlind);
   return {
     consistentWithAnalysis: judgement.consistent,
+    recorded: false,
     reasoning: scenario.reasoning,
     analysis,
     commonMistakes: scenario.commonMistakes,

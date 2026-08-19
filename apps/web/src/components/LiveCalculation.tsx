@@ -55,10 +55,11 @@ import {
   EquityBar,
   Formula,
   formatChips,
-  formatPercent,
+  formatProbability,
   formatUnits,
   Metric,
   type MetricProps,
+  NOT_A_PROBABILITY,
   Panel,
   pluralise,
 } from '@prl/ui';
@@ -273,7 +274,12 @@ function EvTermsDetail(props: {
               {props.detail.terms.map((term) => (
                 <tr key={term.label}>
                   <th scope="row">{term.label}</th>
-                  <td className="prl-number">{formatPercent(term.probability)}</td>
+                  {/*
+                    "How often" is a probability. Through the domain, so a weight outside 0..1 is
+                    named rather than printed — an EV table whose weights read 160% would be
+                    teaching arithmetic that cannot happen.
+                  */}
+                  <td className="prl-number">{formatProbability(term.probability) ?? NOT_A_PROBABILITY}</td>
                   <td className="prl-number">{formatUnits(term.value, { decimals: 1 })}</td>
                   <td className="prl-number">{formatUnits(term.contribution, { decimals: 1 })}</td>
                 </tr>

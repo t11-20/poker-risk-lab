@@ -69,13 +69,15 @@
  * answer for (1) and keeping (2).
  */
 
-import type { HandListResponse, HandReviewResponse, HandSort } from '@prl/contracts';
+import type { HandComparison, HandListResponse, HandReviewResponse, HandSort } from '@prl/contracts';
 import { DEFAULT_HAND_SORT, HAND_SORTS, PATTERNS } from '@prl/contracts';
+import { resolveNamingMode } from '@prl/poker-ai';
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { requireSession } from '../auth/session.ts';
 import { getSql } from '../db.ts';
 import { AppError } from '../errors.ts';
 import type { Db } from '../repositories/sql.ts';
+import { buildLegendComparison } from '../review/build-comparison.ts';
 import type { HandActionRow, HandRow, HandSeatRow } from '../review/build-review.ts';
 import { buildHandReview, toHandSummary } from '../review/build-review.ts';
 
@@ -405,6 +407,7 @@ async function findOwnHand(sql: Db, handId: string, userId: string): Promise<Han
            h.config,
            h.commitment_root,
            h.commitment_context,
+           h.random_source_kind,
            h.board,
            h.street,
            h.result,
@@ -631,7 +634,109 @@ const handsRoutes: FastifyPluginAsync = (app: FastifyInstance) => {
     },
   );
 
+  /**
+   * `GET /legends/hands/:handId/comparison` — one of the caller's own finished hands, decision by
+   * decision, beside the maths and beside what the modelled opponent did.
+   *
+   * ## Why it is registered here and not in the Legends module
+   *
+   * The path says Legends and the data is this file's. Every query a comparison needs —
+   * `findOwnHand`, `seatsOfHand` with its hole-card predicate, `actionsOfHand` — already exists
+   * above, written once and tested. Registering the route beside them means the SQL stays in one
+   * place; putting the route in `routes/legends.ts` would mean either exporting three queries or
+   * writing a second copy of them, and a second copy of `seatsOfHand` is a second chance to forget
+   * `user_id = :viewer OR showed_down`.
+   *
+   * ## Authorisation is the same rule, deliberately
+   *
+   * `findOwnHand` requires the caller to have HELD A SEAT in the hand. Not to be a member of the
+   * room, not to know the id. And the refusal is `hand_not_found` whether the hand does not exist
+   * or is somebody else's, for the reason the file header gives: a distinguishable answer confirms
+   * a hand id to anyone who cares to try, and hand ids appear in shared URLs.
+   *
+   * ## Why the expensive bucket
+   *
+   * It prices the actions that were NOT taken as well as the one that was, so it does strictly
+   * more Monte Carlo work than `GET /hands/:handId`, which already takes this limit.
+   */
+  app.get<{ Params: HandIdParams }>(
+    '/legends/hands/:handId/comparison',
+    {
+      schema: { params: { $ref: 'prl:handIdParams#' } },
+      config: app.expensiveRateLimit,
+    },
+    async (request): Promise<HandComparison> => {
+      const userId = callerId(request);
+      const sql = getSql();
+      const hand = await findOwnHand(sql, request.params.handId, userId);
+      if (hand === null) {
+        throw new AppError('hand_not_found', {
+          logDetail: 'hand does not exist, or the caller held no seat in it',
+        });
+      }
+
+      const [seats, actions, botProfiles] = await Promise.all([
+        seatsOfHand(sql, hand.id, userId),
+        actionsOfHand(sql, hand.id),
+        botProfilesOfRoom(sql, hand.room_id),
+      ]);
+
+      const outcome = buildLegendComparison({
+        hand,
+        seats,
+        actions,
+        viewerUserId: userId,
+        botProfiles,
+        namingMode: resolveNamingMode(),
+        budgetMs: Math.floor(app.appConfig.requestTimeoutMs / 2),
+        onAnalysisSkipped: (detail) => {
+          request.log.debug({ handId: hand.id, ...detail }, 'hand comparison skipped one analysis');
+        },
+      });
+
+      if (!outcome.ok) {
+        // Every refusal is a real, distinguishable state of a real hand, and none of them may
+        // become a bundled sample on the page. `hand_not_comparable` carries which one it was in
+        // the log; the client is told the code, and the screen turns it into a sentence.
+        request.log.info(
+          { handId: hand.id, refusal: outcome.refusal, detail: outcome.detail },
+          'hand comparison refused',
+        );
+        throw new AppError('hand_not_comparable', {
+          fields: { hand: outcome.refusal },
+          logDetail: outcome.detail,
+        });
+      }
+      return outcome.comparison;
+    },
+  );
+
   return Promise.resolve();
 };
+
+/**
+ * Which strategy profile played each bot seat in a room, by user id.
+ *
+ * `prl.hand_seats` records that a seat was a bot and not which model it was — the right shape for
+ * a hand log, where a seat is a seat — so the profile is joined in from the roster. Departed
+ * members are included (`left_at` is not filtered): a bot that has since been stood up still
+ * played the hand being reviewed, and dropping it would blank the opponent column of every
+ * finished hand the moment the table was cleared.
+ */
+async function botProfilesOfRoom(sql: Db, roomId: string): Promise<ReadonlyMap<string, string>> {
+  const rows = await sql<{ user_id: string; bot_profile: string | null }[]>`
+    select m.user_id, m.bot_profile
+      from prl.room_members m
+     where m.room_id = ${roomId} and m.is_bot = true and m.bot_profile is not null
+  `;
+  const profiles = new Map<string, string>();
+  for (const row of rows) {
+    // `'unknown'` is a row written before migration 0003 whose profile was destroyed at write
+    // time. It names no model, so it is left out and the seat is reported unnamed rather than
+    // guessed at — the same refusal `rehydrateBotSeat` makes when it reopens a table.
+    if (row.bot_profile !== null && row.bot_profile !== 'unknown') profiles.set(row.user_id, row.bot_profile);
+  }
+  return profiles;
+}
 
 export default handsRoutes;

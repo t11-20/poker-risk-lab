@@ -28,7 +28,14 @@
  * Server-render safe: no state, no effects.
  */
 
-import { cx, formatPercent, type StyleWithVars, withKeys } from '@prl/ui';
+import {
+  cx,
+  formatPercent,
+  formatProbability,
+  NOT_A_PROBABILITY,
+  type StyleWithVars,
+  withKeys,
+} from '@prl/ui';
 import type { ReactElement } from 'react';
 
 /** One action and the weight the policy gave it before sampling. */
@@ -145,10 +152,23 @@ export function ActionDistribution(props: ActionDistributionProps): ReactElement
               ) : null}
             </span>
             <span className="prl-legend-dist__probability">
-              {formatPercent(entry.probability, { decimals: SHARE_DECIMALS })}
+              {/*
+                A weight the model sampled from IS a probability, so it goes through the domain
+                rather than through the formatter. An entry outside 0..1 is named as such instead
+                of being printed as an impossible percentage — `formatPercent` would render 1.6 as
+                "160.0%", in the app's own authoritative voice, on the page that teaches how much
+                confidence a number deserves.
+              */}
+              {formatProbability(entry.probability, { decimals: SHARE_DECIMALS }) ?? NOT_A_PROBABILITY}
             </span>
             {entry.medianSizeToPotFraction === undefined || entry.medianSizeToPotFraction === null ? null : (
               <span className="prl-legend-dist__size">
+                {/*
+                  NOT a probability, and deliberately still `formatPercent`: a bet of one and a half
+                  times the pot is 150% of it and is an ordinary size. Sending this through the
+                  probability domain would refuse a correct figure, which is the same conflation as
+                  the one above, in reverse.
+                */}
                 {`Median size ${formatPercent(entry.medianSizeToPotFraction, { decimals: 0 })} of the pot`}
               </span>
             )}

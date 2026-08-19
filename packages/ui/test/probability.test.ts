@@ -21,6 +21,10 @@ import {
   isProbabilityFraction,
   isProbabilityPoints,
   NOT_A_PROBABILITY,
+  normaliseProbability,
+  normaliseProbabilityDifference,
+  normaliseProbabilityPoints,
+  PROBABILITY_TOLERANCE,
 } from '../src/probability.ts';
 
 /** Values that are not numbers at all but reach a component anyway, past a wire boundary. */
@@ -116,6 +120,112 @@ describe('formatProbability', () => {
   it('names the refusal as a rejection rather than as an absence', () => {
     // "—" and "n/a" both read as missing. This figure was not missing: it arrived, was read,
     // and was refused, and a bug reporter needs to be able to tell those apart.
+    assert.equal(NOT_A_PROBABILITY, 'not a probability');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The domain itself: every boundary, and the two sides of the tolerance
+// ---------------------------------------------------------------------------
+
+/**
+ * Added after the release audit left "impossible probability" PARTIAL: the Coach was guarded and
+ * `formatPercent` was not, so any probability-typed value that reached a render site directly
+ * still printed as an impossible percentage. The fix defined the domain once, with a stated
+ * floating-point tolerance, and moved every probability render site onto it.
+ *
+ * These are the cases the audit named — below zero, zero, near zero, one, a hair over one, well
+ * over one, and the non-finite values — plus the case a naive fix gets wrong in the other
+ * direction: a legitimately computed `1 + 1e-16` must NOT be refused, because refusing correct
+ * figures is how a guard loses its credibility and then its place in the codebase.
+ */
+describe('the probability domain and its tolerance', () => {
+  it('accepts the endpoints and everything between them, unchanged', () => {
+    for (const value of [0, -0, 1e-300, 1e-12, 0.5, 1 - 1e-12, 1]) {
+      assert.equal(normaliseProbability(value), value + 0, `${value} must pass through unchanged`);
+    }
+  });
+
+  it('snaps a value a hair outside a bound onto that bound', () => {
+    // The arithmetic that produces these is ordinary: a Monte Carlo division, a normalisation over
+    // a set of weights, a subtraction of two nearly equal numbers.
+    assert.equal(normaliseProbability(1 + Number.EPSILON), 1);
+    assert.equal(normaliseProbability(1.0000000000000002), 1);
+    assert.equal(normaliseProbability(-1e-17), 0);
+    assert.equal(normaliseProbability(1 + PROBABILITY_TOLERANCE), 1, 'the tolerance is inclusive');
+    assert.equal(normaliseProbability(-PROBABILITY_TOLERANCE), 0);
+  });
+
+  it('refuses anything materially outside, however small "materially" is', () => {
+    // Just past the tolerance. This is the assertion that keeps the snap from becoming a clamp.
+    assert.equal(normaliseProbability(1 + PROBABILITY_TOLERANCE * 10), null);
+    assert.equal(normaliseProbability(-PROBABILITY_TOLERANCE * 10), null);
+    assert.equal(normaliseProbability(1.0000001), null);
+    assert.equal(normaliseProbability(1.6), null, 'the stale fixture value the audit found');
+    assert.equal(normaliseProbability(36), null, 'the percentage-point unit error');
+    assert.equal(normaliseProbability(-0.5), null);
+  });
+
+  it('refuses every non-finite value', () => {
+    for (const value of NOT_NUMBERS) {
+      assert.equal(normaliseProbability(value), null, `${value} is not a probability`);
+      assert.equal(normaliseProbabilityDifference(value), null);
+      assert.equal(normaliseProbabilityPoints(value), null);
+    }
+  });
+
+  it('keeps the three ranges apart, tolerance and all', () => {
+    // The tolerance must not be a way to smuggle a value from one range into another: it is a
+    // billionth, and the ranges differ by whole factors.
+    assert.equal(normaliseProbabilityDifference(-1 - PROBABILITY_TOLERANCE), -1);
+    assert.equal(normaliseProbabilityDifference(-1.5), null);
+    assert.equal(normaliseProbabilityPoints(100 + PROBABILITY_TOLERANCE), 100);
+    assert.equal(normaliseProbabilityPoints(101), null);
+    // A fraction is not points and points are not a fraction, which is why there are three names.
+    assert.equal(normaliseProbability(36), null);
+    assert.equal(normaliseProbabilityPoints(36), 36);
+  });
+
+  it('formats the SNAPPED value, so the rendering does not depend on the decimal count', () => {
+    // `1 + 1e-16` at one decimal place prints as 100.0% either way. At six it would print as
+    // 100.000000% only if the snap happened first, and a figure that changes meaning with the
+    // precision asked for is one nobody can reason about.
+    assert.equal(formatProbability(1 + Number.EPSILON, { decimals: 6 }), '100.000000%');
+    assert.equal(formatProbability(-0, { decimals: 6 }), '0.000000%');
+    // Near-zero is a real probability and prints as one, rounded — not refused, and not "0".
+    assert.equal(formatProbability(1e-9, { decimals: 1 }), '0.0%');
+    assert.equal(formatProbability(1e-9, { decimals: 8 }), '0.00000010%');
+  });
+
+  it('agrees with its own predicates at every boundary', () => {
+    // The predicates delegate to the normalisers, so this is a guard against somebody
+    // reintroducing a second, subtly different bound in one of them.
+    for (const value of [
+      0,
+      1,
+      1 + PROBABILITY_TOLERANCE,
+      1 + PROBABILITY_TOLERANCE * 10,
+      -PROBABILITY_TOLERANCE,
+      1.6,
+      36,
+      Number.NaN,
+    ]) {
+      assert.equal(
+        isProbabilityFraction(value),
+        normaliseProbability(value) !== null,
+        `isProbabilityFraction and normaliseProbability disagree about ${value}`,
+      );
+      assert.equal(isProbabilityDifference(value), normaliseProbabilityDifference(value) !== null);
+      assert.equal(isProbabilityPoints(value), normaliseProbabilityPoints(value) !== null);
+    }
+  });
+
+  it('leaves formatPercent alone, because a formatter cannot know what it was given', () => {
+    // Restating the boundary the audit asked to be preserved. `formatPercent` still renders 1.6 as
+    // "160.0%" and that is correct behaviour for a function that might have been handed a growth
+    // rate. The fix is that no probability-typed value is handed to it any more — enforced by the
+    // render sites, and asserted here so the two rules are written down next to each other.
+    assert.equal(formatProbability(1.6), null);
     assert.equal(NOT_A_PROBABILITY, 'not a probability');
   });
 });

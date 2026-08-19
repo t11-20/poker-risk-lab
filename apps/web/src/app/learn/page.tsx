@@ -27,19 +27,10 @@
  * component in `@prl/ui` because of its count-up), and neither is on the critical path for
  * reading the page.
  *
- * `loadLessonList()` forwards no session cookie, so the `completed` flag the API returns is its
- * answer for an anonymous caller — `false` for all seventeen, for everybody. That is a deliberate
- * trade rather than an oversight: this is the most cacheable screen in the product, seventeen
- * summaries identical for every reader, and forwarding a session to personalise one chip per card
- * would make it a per-reader dynamic render. The trade is only defensible if the screen is honest
- * about it, and it was not: it printed "N of those are not marked read" on sixteen of seventeen
- * cards and picked a "start here" from the same non-answer, both stated as facts about the reader.
- *
- * So the page now tells `buildCurriculum` that completion is not known (`completionKnown: false`),
- * which turns those claims into `null` rather than `false`, and says once, in the lead, where
- * reading actually is recorded. `test/y1-learn-index-honesty.test.ts` couples the two: the moment
- * `loadLessonList` starts forwarding a session, that test fails and tells whoever did it to flip
- * this flag.
+ * `loadLessonList()` forwards the session cookie when the browser has one, so the `completed`
+ * flags are that reader's. Without a cookie the API still answers `false` for everybody, and
+ * the page treats that as unknown rather than unread. `test/y1-learn-index-honesty.test.ts`
+ * couples the loader and the flag so they cannot drift.
  *
  * ## Nine cards used to warn readers off nine working lessons
  *
@@ -67,6 +58,7 @@ import {
   DIFFICULTY_LABELS,
 } from '@/lib/learn-curriculum.ts';
 import { GLOSSARY_PATH, lessonHref, loadLessonList, READABLE_LESSON_IDS } from '@/lib/learn-data.ts';
+import { readerCallOptions } from '@/lib/server-session.ts';
 
 export const metadata: Metadata = {
   title: 'Learn',
@@ -149,16 +141,17 @@ function EntryCard({
 }
 
 export default async function LearnPage(): Promise<ReactElement> {
+  const reader = await readerCallOptions();
   const lessons = await loadLessonList();
   const curriculum = buildCurriculum(lessons.data.lessons, {
     // Fixture coverage, and only meaningful when the list itself is the fixture. Passed
     // unconditionally, it warned readers off the nine lessons whose bodies the bundle lacks — while
     // the API was serving all seventeen.
     ...(lessons.source === 'fixture' ? { readableIds: READABLE_LESSON_IDS } : {}),
-    // `loadLessonList()` forwards no session, so the `completed` flags below are the API's answer
-    // for an anonymous caller rather than this reader's record. Flip this the same day that
-    // changes; `test/y1-learn-index-honesty.test.ts` fails until somebody does.
-    completionKnown: false,
+    // `loadLessonList()` now forwards the session cookie, so `completed` is this reader's when
+    // one exists. Without a cookie the API still answers `false` for everybody — keep that as
+    // "unknown", not "unread". `test/y1-learn-index-honesty.test.ts` couples the two.
+    completionKnown: lessons.source === 'api' && reader.cookie !== undefined,
   });
   const start = curriculum.startHere;
 

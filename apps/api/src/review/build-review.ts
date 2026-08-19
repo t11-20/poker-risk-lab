@@ -81,7 +81,19 @@ import type {
   HandReviewSeat,
   HandSummary,
 } from '@prl/contracts';
-import type { Card, DeckCommitment, DeckReveal, RevealedCard } from '@prl/poker-engine';
+import type {
+  Action,
+  Card,
+  DeckCommitment,
+  DeckReveal,
+  LegalAction,
+  PlayerView,
+  RevealedCard,
+  SeatIndex,
+  SeatStatus,
+  SeatView,
+  TableConfig,
+} from '@prl/poker-engine';
 import {
   COMMITMENT_VERSION,
   cardToString,
@@ -130,6 +142,16 @@ export interface HandRow extends HandSummaryRow {
   readonly commitment_context: string;
   readonly street: string;
   readonly reveal: unknown;
+  /**
+   * Where this hand's cards came from: `csprng` for a real deal, and the two labels a fixed deck
+   * or a seeded generator is permanently marked with.
+   *
+   * Read because the Legends comparison rebuilds a `PlayerView` per decision and that type carries
+   * it. Stating the hand's actual provenance matters more here than anywhere else in the app: a
+   * review is where a learner would go to ask whether the cards were fair, and a view that claimed
+   * `csprng` over a fixed-deck hand would be the one answer they must never be given.
+   */
+  readonly random_source_kind: 'csprng' | 'deterministic-test-only' | 'fixed-deck-scenario';
 }
 
 /**
@@ -270,11 +292,27 @@ function cardsFromJson(value: unknown): { notation: readonly string[]; cards: re
   return { notation, cards };
 }
 
+/**
+ * The stored `config`, as the two readers of it need it.
+ *
+ * The first four are what the REPLAY needs, and a row missing any of them cannot be reconstructed
+ * at all. `actionTimeoutSeconds` is different and is deliberately nullable here: nothing in the
+ * hand-history review reads it, and only the Legends comparison does — it rebuilds a `TableConfig`
+ * per decision and that type requires one.
+ *
+ * Making it required would have coupled the two. A row whose timeout was somehow unreadable would
+ * then lose its entire hand-history analysis over a field that review never looks at, which is a
+ * strictly worse failure than the one it prevents. `hands_config_shape` requires the KEY on every
+ * row; it cannot require the value to be a positive integer, so this reads it and lets the
+ * comparison — the only caller that needs it — be the one to refuse.
+ */
 interface TableConfigFields {
   readonly smallBlind: number;
   readonly bigBlind: number;
   readonly ante: number;
   readonly maxSeats: number;
+  /** Null when the stored value is absent or unreadable. Only the comparison path cares. */
+  readonly actionTimeoutSeconds: number | null;
 }
 
 function configFromJson(value: unknown): TableConfigFields | null {
@@ -284,9 +322,16 @@ function configFromJson(value: unknown): TableConfigFields | null {
   const bigBlind = asInteger(record['bigBlind']);
   const ante = asInteger(record['ante']);
   const maxSeats = asInteger(record['maxSeats']);
+  const timeout = asInteger(record['actionTimeoutSeconds']);
   if (smallBlind === null || bigBlind === null || ante === null || maxSeats === null) return null;
   if (smallBlind <= 0 || bigBlind <= 0 || ante < 0 || maxSeats < 2 || maxSeats > 6) return null;
-  return { smallBlind, bigBlind, ante, maxSeats };
+  return {
+    smallBlind,
+    bigBlind,
+    ante,
+    maxSeats,
+    actionTimeoutSeconds: timeout !== null && timeout > 0 ? timeout : null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1060,6 +1105,288 @@ function buildDecisions(actions: readonly HandActionRow[], context: DecisionCont
   }
 
   return decisions;
+}
+
+// ---------------------------------------------------------------------------
+// The Legends comparison's view of the same replay
+// ---------------------------------------------------------------------------
+
+/**
+ * One decision, as `@prl/poker-ai`'s `buildHandComparison` needs it, plus its analysis.
+ *
+ * The comparison takes a `PlayerView` per decision — the picture the acting seat had — and checks
+ * it against the action taken. Nothing persists a `PlayerView`, so it is reconstructed here from
+ * the same replay `buildHandReview` uses, one street and one action at a time, read BEFORE the
+ * action is applied.
+ */
+export interface ComparisonDecisions {
+  readonly board: readonly Card[];
+  readonly decisions: readonly {
+    readonly sequence: number;
+    readonly seat: number;
+    readonly action: Action;
+    readonly view: PlayerView;
+    readonly decision: null;
+  }[];
+  /** The Coach report for each of the viewer's own analysable decisions, by sequence. */
+  readonly analysisBySequence: ReadonlyMap<number, CoachReport>;
+}
+
+/**
+ * Replays a stored hand into the views its seats acted on.
+ *
+ * Returns null when the rows do not describe a hand this module can reproduce — an unparsable
+ * config, a board it cannot read, or a betting sequence `openReplay` cannot anchor. `null` rather
+ * than a partial answer, because a comparison assembled from a reconstruction that drifted would
+ * be describing a situation that never happened, with numbers that look entirely reasonable.
+ *
+ * Exported for `build-comparison.ts` and for nothing else. The replay itself stays private: every
+ * step of it is only valid in the order this function walks it, and a second walk somewhere else
+ * would be a second reconstruction to keep correct.
+ */
+export function buildComparisonDecisions(input: {
+  readonly hand: HandRow;
+  readonly seats: readonly HandSeatRow[];
+  readonly actions: readonly HandActionRow[];
+  readonly viewerUserId: string;
+  readonly budgetMs: number;
+  readonly maxAnalysedDecisions?: number;
+  readonly equitySamples?: number;
+  readonly now?: () => number;
+  readonly onAnalysisSkipped?: (detail: SkippedAnalysis) => void;
+}): ComparisonDecisions | null {
+  const { hand } = input;
+  const config = configFromJson(hand.config);
+  const parsedBoard = cardsFromJson(hand.board);
+  if (config === null || parsedBoard === null) return null;
+  // Only this path needs it, and it needs a real one: `PlayerView.config` is a `TableConfig`, and
+  // inventing a turn clock for a hand whose record does not carry one would be putting a number
+  // into a review that nobody at the table ever played under.
+  const actionTimeoutSeconds = config.actionTimeoutSeconds;
+  if (actionTimeoutSeconds === null) return null;
+
+  const seats = input.seats.map((row) => toReviewSeat(row, input.viewerUserId));
+  const viewer = seats.find((seat) => seat.userId !== null && seat.userId === input.viewerUserId) ?? null;
+  const actions = [...input.actions].sort((a, b) => a.sequence - b.sequence);
+  const state = openReplay(hand, seats, config, actions);
+  if (state === null) return null;
+
+  const now = input.now ?? ((): number => performance.now());
+  const budget: AnalysisBudget = {
+    now,
+    deadline: now() + Math.max(0, input.budgetMs),
+    remaining: Math.max(0, input.maxAnalysedDecisions ?? MAX_ANALYSED_DECISIONS),
+    samples: input.equitySamples ?? REVIEW_EQUITY_SAMPLES,
+    onSkipped: input.onAnalysisSkipped ?? ((): void => undefined),
+  };
+
+  const decisions: ComparisonDecisions['decisions'][number][] = [];
+  const analysisBySequence = new Map<number, CoachReport>();
+  let previousPotAfter: number | null = null;
+
+  for (const row of actions) {
+    if (row.street !== state.street) closeStreet(state, row.street);
+    const persistedPotBefore = previousPotAfter ?? row.pot_after - row.amount_paid;
+    const situation = situationBefore(state, row);
+    const action = actionFromRow(row);
+
+    if (situation === null || action === null) return null;
+
+    const analysis = analysisFor(row, {
+      hand,
+      viewerSeat: viewer === null ? null : viewer.seat,
+      heroCards: viewer === null ? null : viewer.visibleCards,
+      board: parsedBoard.cards,
+      bigBlind: config.bigBlind,
+      situation,
+      persistedPotBefore,
+      budget,
+    });
+    if (analysis !== null) analysisBySequence.set(row.sequence, analysis);
+
+    decisions.push({
+      sequence: row.sequence,
+      seat: row.seat,
+      action,
+      view: viewAtDecision({
+        hand,
+        config,
+        actionTimeoutSeconds,
+        seats,
+        state,
+        situation,
+        row,
+        action,
+        board: parsedBoard.cards,
+      }),
+      // Permanently null: `prl.hand_actions` records what was done, never the distribution a policy
+      // sampled from. See the header of `build-comparison.ts`.
+      decision: null,
+    });
+
+    applyReplayAction(state, row);
+    previousPotAfter = row.pot_after;
+  }
+
+  return { board: parsedBoard.cards, decisions, analysisBySequence };
+}
+
+/** A stored action row as the engine's own `Action`. Null for an `action_type` it does not know. */
+function actionFromRow(row: HandActionRow): Action | null {
+  switch (row.action_type) {
+    case 'fold':
+      return { type: 'fold' };
+    case 'check':
+      return { type: 'check' };
+    case 'call':
+      return { type: 'call' };
+    case 'bet':
+    case 'raise':
+      // `action_to` is the street TOTAL the seat reached, which is what `Action` carries. A row
+      // that names a bet without one is malformed rather than defaulted: a size invented here
+      // would be priced by the comparison as though the player had chosen it.
+      return row.action_to === null ? null : { type: row.action_type, to: row.action_to };
+    default:
+      return null;
+  }
+}
+
+/**
+ * The board as it stood on one street.
+ *
+ * `prl.hands.board` holds the FINAL board. A preflop decision was made looking at none of it, and
+ * showing a flop decision the river card would be the single most misleading thing a review could
+ * do — so the stored board is truncated to the street's own length.
+ */
+function boardForStreet(board: readonly Card[], street: string): readonly Card[] {
+  const length = BOARD_LENGTH_BY_STREET[street];
+  return length === undefined ? board : board.slice(0, Math.min(length, board.length));
+}
+
+/**
+ * The view one seat acted on, rebuilt from the replay.
+ *
+ * ## What is faithful, and what is deliberately empty
+ *
+ * Faithful, because `buildHandComparison` reads them and a learner sees the result: `street`,
+ * `potTotal`, `amountToCall`, `betLevel`, `config`, `toAct`, `viewerSeat`, the board truncated to
+ * the street, and every seat's stack, commitment and status.
+ *
+ * Hole cards follow the same rule as everywhere else — the viewer's own, and any seat that showed
+ * down. `toReviewSeat` has already applied it and the SQL applied it before that; this only reads
+ * what survived both.
+ *
+ * Empty on purpose: `pots` (side-pot layers are settled at the end of the hand and were not
+ * recorded per action), `forcedBets` and `actions`. Nothing in the comparison reads them, and
+ * filling them with a plausible reconstruction would be inventing detail the rows do not contain.
+ * `result` is null for the same reason a live view's is: this view is the one held at the moment
+ * of the decision, when the hand had not finished.
+ *
+ * ## `legalActions`
+ *
+ * Derived from the situation by `deriveLegalActions`, exactly as `analyse` does — the engine's own
+ * set is not persisted. The action actually taken is then UNIONED in, and that is not a loophole:
+ * the row is evidence that the engine offered it on the night, and the derived rule is a
+ * conservative approximation that can legitimately miss a case (it counts an all-in opponent as a
+ * live opponent with a zero stack, so it withholds "raise" in spots the engine allowed). Trusting
+ * the recorded fact over the approximation is the honest direction; the reverse would refuse to
+ * review hands that really happened.
+ */
+function viewAtDecision(context: {
+  readonly hand: HandRow;
+  readonly config: TableConfigFields;
+  /** Resolved by the caller, which refuses the whole comparison when the row does not carry one. */
+  readonly actionTimeoutSeconds: number;
+  readonly seats: readonly ReviewSeat[];
+  readonly state: ReplayState;
+  readonly situation: Situation;
+  readonly row: HandActionRow;
+  readonly action: Action;
+  readonly board: readonly Card[];
+}): PlayerView {
+  const { config, situation, row, state } = context;
+
+  const derived = new Set<string>(
+    deriveLegalActions({
+      toCall: situation.toCall,
+      heroCommittedThisStreet: situation.committedThisStreet,
+      heroStack: situation.heroStack,
+      opponentStacks: situation.opponentStacks,
+    }),
+  );
+  derived.add(context.action.type);
+  const maxTo = situation.committedThisStreet + situation.heroStack;
+  const legalActions: LegalAction[] = [...derived].map((type) => {
+    if (type === 'bet' || type === 'raise') {
+      const minimum = Math.min(maxTo, state.betLevel + Math.max(config.bigBlind, state.betLevel));
+      return { type: type as Action['type'], minTo: minimum, maxTo, allInAtMax: true };
+    }
+    if (type === 'call') return { type: 'call', minTo: state.betLevel, costAtMin: situation.toCall };
+    return { type: type as Action['type'] };
+  });
+
+  return {
+    handId: context.hand.id,
+    roomId: context.hand.room_id,
+    handNumber: context.hand.hand_number,
+    config: {
+      smallBlind: config.smallBlind,
+      bigBlind: config.bigBlind,
+      ante: config.ante,
+      maxSeats: config.maxSeats,
+      actionTimeoutSeconds: context.actionTimeoutSeconds,
+    } satisfies TableConfig,
+    street: situation.street,
+    board: boardForStreet(context.board, situation.street),
+    buttonSeat: context.hand.button_seat as SeatIndex,
+    seats: context.seats.map((seat) => seatViewAt(seat, state, context.hand.button_seat, row.seat)),
+    toAct: row.seat as SeatIndex,
+    betLevel: state.betLevel,
+    minimumRaiseTo: Math.min(maxTo, state.betLevel + Math.max(config.bigBlind, state.betLevel)),
+    potTotal: situation.potBefore,
+    pots: [],
+    forcedBets: [],
+    actions: [],
+    actionSequence: row.sequence,
+    legalActions,
+    amountToCall: situation.toCall,
+    commitmentRoot: context.hand.commitment_root,
+    commitmentContext: context.hand.commitment_context,
+    result: null,
+    viewerSeat: row.seat as SeatIndex,
+    // The hand's own recorded provenance, never a default. See the column's note on `HandRow`.
+    randomSourceKind: context.hand.random_source_kind,
+    // `isSelf` on each seat below is relative to the ACTING seat, because that is whose view this
+    // is. A comparison built from somebody else's view is the exact thing `validateRecorded`
+    // refuses, and it refuses it by checking `viewerSeat` against the actor.
+  } satisfies PlayerView;
+}
+
+function seatViewAt(seat: ReviewSeat, state: ReplayState, buttonSeat: number, actingSeat: number): SeatView {
+  const tallied = state.seats.get(seat.seat);
+  const cards = seat.visibleCards;
+  return {
+    seat: seat.seat as SeatIndex,
+    playerId: seat.userId ?? `seat-${seat.seat}`,
+    stack: tallied?.stack ?? seat.startingStack,
+    committedThisStreet: tallied?.committedThisStreet ?? 0,
+    // The replay tracks the street, not the hand: a per-hand total would need a second tally and
+    // nothing in the comparison reads it, so the honest value is the one that is actually known.
+    committedTotal: tallied?.committedThisStreet ?? 0,
+    status: seatStatusFor(seat, tallied),
+    position: null,
+    holeCards: cards !== null && cards.length === 2 ? ([cards[0], cards[1]] as [Card, Card]) : null,
+    isSelf: seat.seat === actingSeat,
+    isButton: seat.seat === buttonSeat,
+    isToAct: seat.seat === actingSeat,
+  };
+}
+
+function seatStatusFor(seat: ReviewSeat, tallied: ReplaySeat | undefined): SeatStatus {
+  if (!seat.dealtIn) return 'sittingOut';
+  if (tallied?.folded === true) return 'folded';
+  if (tallied !== undefined && tallied.stack === 0) return 'allIn';
+  return 'active';
 }
 
 /**

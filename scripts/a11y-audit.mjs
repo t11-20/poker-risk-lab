@@ -83,8 +83,14 @@
  *     than guessed at, because a guessed role produces confident false positives.
  *
  * A passing run here means "no violation of the subset above was found in the
- * delivered HTML". It does not mean the app is accessible. Schedule a real
- * browser-based axe run plus manual keyboard and screen-reader testing.
+ * delivered HTML". It does not mean the app is accessible.
+ *
+ * The keyboard half of what this file cannot do is now covered:
+ * `scripts/keyboard-audit.mjs` (`pnpm run test:keyboard`) drives real Chrome over the
+ * DevTools Protocol and presses real Tab, Enter, Escape and arrow keys — focus order,
+ * focus visibility, keyboard traps, the modal sheet, the bet-size slider, and a whole
+ * hand folded from the keyboard at a live table. What remains outside both scripts is a
+ * screen-reader pass and a browser-based axe run.
  *
  * ## Route discovery
  *
@@ -1485,9 +1491,11 @@ try {
     tool: `a11y-audit.mjs (static) using axe-core ${axe.version} rule metadata and ARIA tables`,
     kind: 'static-html',
     coverageWarning:
-      'Static audit of server-rendered HTML. Does NOT cover colour contrast, focus order, ' +
-      'keyboard operability, CSS-dependent visibility, or anything rendered by client-side ' +
-      'JavaScript. A browser-based axe run plus manual testing is still required.',
+      'Static audit of server-rendered HTML. Does NOT cover colour contrast, CSS-dependent ' +
+      'visibility, or anything rendered by client-side JavaScript. Focus order, focus ' +
+      'visibility and keyboard operability are covered separately by scripts/keyboard-audit.mjs ' +
+      '(pnpm run test:keyboard), which drives a real browser. A screen-reader pass is still ' +
+      'required and is not automated anywhere.',
     baseUrl: options.baseUrl,
     wcagOnly: options.wcagOnly,
     generatedAt: new Date().toISOString(),
@@ -1516,7 +1524,8 @@ try {
   } else if (report.passed) {
     console.log(green(bold('\nPASS — no violation of the checked rules.')));
     console.log(dim('  Checked rules only. This is not a statement that the app is accessible;'));
-    console.log(dim('  colour contrast, focus order and keyboard use still need a browser run.\n'));
+    console.log(dim('  colour contrast still needs a browser run, and so does a screen reader.'));
+    console.log(dim('  Focus order and keyboard use: `pnpm run test:keyboard` (real Chrome).\n'));
   } else {
     console.log(red(bold('\nFAIL')));
     exitCode = 1;

@@ -40,9 +40,10 @@ import {
   Callout,
   Chip,
   formatChips,
-  formatPercent,
   formatPoints,
+  formatProbability,
   Metric,
+  NOT_A_PROBABILITY,
   Panel,
   pluralise,
   RadarChart,
@@ -50,11 +51,12 @@ import {
 } from '@prl/ui';
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import { Fragment, type ReactElement } from 'react';
+import { NotFoundBody } from '@/app/not-found.tsx';
 import { LegendSigil } from '@/components/LegendSigil.tsx';
 import { ProfileDisclaimers } from '@/components/ProfileDisclaimers.tsx';
 import { TraitBars } from '@/components/TraitBars.tsx';
+import { LEGEND_PROFILE_FIXTURES } from '@/fixtures/legends.ts';
 import {
   compareHref,
   findProfile,
@@ -74,6 +76,12 @@ const TRAIT_DECIMALS = 2;
 interface RouteParams {
   readonly profileId: string;
 }
+
+export function generateStaticParams(): { profileId: string }[] {
+  return LEGEND_PROFILE_FIXTURES.map((profile) => ({ profileId: profile.id }));
+}
+
+export const dynamicParams = false;
 
 const BEST_FOR_WORD: Readonly<Record<LegendProfileCardDto['bestFor'], string>> = {
   'heads-up': 'Best met heads-up',
@@ -195,7 +203,14 @@ function ObservedTable({
             {observedRows(observed).map((row) => (
               <tr key={row.label}>
                 <th scope="row">{row.label}</th>
-                <td className="prl-legend-table__figure">{formatPercent(row.value)}</td>
+                {/*
+                  A measured frequency out of a simulation: a probability, so it goes through the
+                  domain. A run that somehow published a rate above 1 must say so rather than
+                  print it beside a confidence interval as though it were a finding.
+                */}
+                <td className="prl-legend-table__figure">
+                  {formatProbability(row.value) ?? NOT_A_PROBABILITY}
+                </td>
                 <td className="prl-legend-table__figure">{`± ${halfWidth}`}</td>
                 <td>{row.note}</td>
               </tr>
@@ -258,7 +273,7 @@ export default async function ProfilePage({
   const profiles = await loadLegendProfiles();
   const profile = findProfile(profiles.data.profiles, profileId);
   const learn = await loadLearnFromProfile(profileId);
-  if (profile === null || learn === null) notFound();
+  if (profile === null || learn === null) return <NotFoundBody />;
 
   // After the existence check, deliberately: `notFound()` has to be reached before anything is sent,
   // and this call is what makes the "what it actually does" section real rather than a constant.

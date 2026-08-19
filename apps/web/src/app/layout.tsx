@@ -38,11 +38,15 @@
  * legitimately differ. The warning is suppressed on the one element where the difference is the
  * intended behaviour, and nowhere else.
  *
- * CSP: the script needs `script-src` to allow it, as either a hash of its exact bytes or a
- * per-response nonce on the tag. The hash is exported as `THEME_BOOT_SCRIPT_CSP_HASH` from
- * `src/lib/theme.ts` — import that constant rather than copying digits — and
- * `test/theme-csp-hash.test.ts` recomputes it over `THEME_BOOT_SCRIPT`, so it cannot go stale
- * without a test failing. The nonce route stays open for anyone who prefers it.
+ * CSP: the script is allowed twice over, and both are now actually served rather than merely
+ * documented. `src/proxy.ts` puts a per-response nonce in `script-src` and this layout reads
+ * it back through `next/headers` onto the tag; `src/lib/csp.ts` also lists
+ * `THEME_BOOT_SCRIPT_CSP_HASH`, so the exact bytes are permitted even if the nonce plumbing ever
+ * breaks. `test/theme-csp-hash.test.ts` recomputes the hash over `THEME_BOOT_SCRIPT`, so it cannot
+ * go stale without a test failing.
+ *
+ * Reading `headers()` makes this layout dynamic, which it already was — every page under it reads
+ * the session cookie — so nothing that was static became dynamic to get a policy.
  *
  * ## The shell, the skip link, and the one `main`
  *
@@ -73,6 +77,7 @@ import './globals.css';
 import '@/styles/nav.css';
 
 import type { Metadata, Viewport } from 'next';
+import { headers } from 'next/headers';
 import type { ReactElement, ReactNode } from 'react';
 import { BootSequence } from '@/components/BootSequence.tsx';
 import { SiteFooter } from '@/components/SiteFooter.tsx';
@@ -104,18 +109,41 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-export default function RootLayout({ children }: { readonly children: ReactNode }): ReactElement {
+export default async function RootLayout({
+  children,
+}: {
+  readonly children: ReactNode;
+}): Promise<ReactElement> {
+  // Set by `src/proxy.ts` on the forwarded request, alongside the policy itself. Absent only
+  // if this render somehow bypassed the middleware, in which case the tag carries no nonce and the
+  // script is allowed by its hash instead — which is exactly why the hash is in the policy too.
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
-        <script>{THEME_BOOT_SCRIPT}</script>
+        <script nonce={nonce}>{THEME_BOOT_SCRIPT}</script>
         <a className="prl-skip-link" href={`#${MAIN_ID}`}>
           Skip to main content
         </a>
         <BootSequence />
         <div className="prl-app">
           <SiteHeader fallbackUnits={STARTING_UNITS} />
-          <main className="prl-app__main" id={MAIN_ID}>
+          {/*
+            `tabIndex={-1}` is what makes the skip link actually skip.
+
+            Found by `scripts/keyboard-audit.mjs`, pressing Enter on the skip link in a real
+            browser: without it, activating the link set `location.hash` and moved the *sequential
+            focus navigation starting point*, but left `document.activeElement` on the link itself.
+            Chrome and Firefox honour that starting point so the next Tab does continue from here —
+            which is why it looked fine — but the focus ring stays behind at the top of the page,
+            a screen reader is not moved, and browsers that do not implement the starting point (or
+            a page that programmatically reads focus) get nothing at all.
+
+            `-1` and not `0`: this makes `<main>` focusable by SCRIPT and by a fragment link, and
+            deliberately does not put it in the tab order, where it would be a stop that does
+            nothing on the way to every page's real first control.
+          */}
+          <main className="prl-app__main" id={MAIN_ID} tabIndex={-1}>
             {children}
           </main>
           <SiteFooter />

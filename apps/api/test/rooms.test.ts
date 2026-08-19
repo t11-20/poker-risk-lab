@@ -18,6 +18,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ERROR_MESSAGES } from '@prl/contracts';
+import { PROFILES } from '@prl/poker-ai';
 import { createSecureRandom } from '@prl/poker-engine';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
@@ -26,7 +27,8 @@ import { type AppConfig, type EnvRecord, loadConfig } from '../src/config.ts';
 import type { DatabaseHandle } from '../src/db.ts';
 import { AppError, isAppError } from '../src/errors.ts';
 import type { RoomMemberRow, RoomRow } from '../src/repositories/rooms.ts';
-import { botDisplayName, persistableProfile, resolveProfile } from '../src/rooms/bots.ts';
+import { durableProfile, rehydrateBotSeat } from '../src/rooms/bot-profile.ts';
+import { botDisplayName, resolveProfile } from '../src/rooms/bots.ts';
 import {
   blindsFromLastHand,
   type HandArchive,
@@ -185,7 +187,9 @@ function fakeRoomStore(): FakeRoomStore {
         seat: null,
         stack: input.stack ?? row.starting_stack,
         is_bot: input.isBot ?? false,
-        bot_profile: input.isBot === true ? (input.botProfile ?? 'unknown') : null,
+        bot_profile: input.bot?.profileId ?? null,
+        bot_difficulty: input.bot?.difficulty ?? null,
+        bot_seed: input.bot?.seed ?? null,
         joined_at: new Date(),
         left_at: null,
       };
@@ -533,9 +537,45 @@ describe('bot profiles', () => {
     );
   });
 
-  it('persists a Legends profile the seat CHECK does not know as "unknown"', () => {
-    assert.equal(persistableProfile('calling-station'), 'calling-station');
-    assert.equal(persistableProfile('adaptive-exploiter'), 'unknown');
+  /**
+   * Rewritten, not adjusted. It used to read:
+   *
+   *     assert.equal(persistableProfile('adaptive-exploiter'), 'unknown');
+   *
+   * which asserted the defect. `room_members.bot_profile` was CHECK-constrained to five scenario
+   * range labels, so a Legends seat was written as the literal string `unknown` and the learner's
+   * chosen opponent was destroyed at write time. Migration 0003 widened the column; the write path
+   * now refuses an id it cannot name instead of flattening it, so the old expectation is not a
+   * behaviour to preserve — it is the bug.
+   */
+  it('persists every strategy profile under its own id, and refuses one it does not know', () => {
+    for (const profile of PROFILES) {
+      assert.equal(durableProfile(profile.naming.id), profile.naming.id);
+    }
+    assert.throws(
+      () => durableProfile('some-retired-legend'),
+      (error: unknown) => isAppError(error),
+      'an id no build carries must fail loudly rather than persist as something else',
+    );
+  });
+
+  it('refuses to rehydrate a seat it cannot reproduce, rather than substituting a style', () => {
+    const good = rehydrateBotSeat({
+      botProfile: 'adaptive-exploiter',
+      botDifficulty: 'expert',
+      botSeed: 12345,
+    });
+    assert.equal(good.ok, true);
+    assert.equal(good.ok && good.seat.profileId, 'adaptive-exploiter');
+
+    for (const row of [
+      { botProfile: 'unknown', botDifficulty: 'expert', botSeed: 1 },
+      { botProfile: 'a-retired-legend', botDifficulty: 'expert', botSeed: 1 },
+      { botProfile: 'adaptive-exploiter', botDifficulty: null, botSeed: 1 },
+      { botProfile: 'adaptive-exploiter', botDifficulty: 'expert', botSeed: null },
+    ]) {
+      assert.equal(rehydrateBotSeat(row).ok, false, `${JSON.stringify(row)} must be refused`);
+    }
   });
 
   it('keeps a bot’s seat plate inside the database’s display-name rule', () => {

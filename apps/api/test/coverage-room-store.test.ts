@@ -46,7 +46,7 @@ import type { RoomRow } from '../src/repositories/rooms.ts';
 import * as usersRepository from '../src/repositories/users.ts';
 import {
   type CreateRoomSpec,
-  persistableProfile,
+  durableProfile,
   postgresRoomStore,
   type RoomStore,
 } from '../src/rooms/registry.ts';
@@ -329,28 +329,43 @@ describe('postgresRoomStore — membership and seating', dbOptions, () => {
         roomId: room.id,
         userId: bot.id,
         isBot: true,
-        botProfile: persistableProfile('calling-station'),
+        bot: { profileId: durableProfile('calling-station'), difficulty: 'realistic', seed: 7 },
       });
       assert.equal(seated.is_bot, true);
       assert.equal(seated.bot_profile, 'calling-station');
 
-      // `room_members.bot_profile` predates the Legends profile set, so a profile it cannot name
-      // is stored as `unknown` rather than failing the write. This is the fallback working.
+      // Rewritten. This block used to assert that a Legends profile the CHECK could not name was
+      // stored as the literal string `unknown`, and called that "the fallback working". It was the
+      // defect: the learner's chosen opponent was destroyed at write time and no restart could
+      // recover it. Migration 0003 widened the column, so the id goes in verbatim.
       const legend = await store.createBotUser('Legend');
-      const fallback = persistableProfile('some-legends-profile-id');
-      assert.equal(fallback, 'unknown', 'an unrecognised profile persists as unknown');
       const legendMember = await store.addMember({
         roomId: room.id,
         userId: legend.id,
         isBot: true,
-        botProfile: fallback,
+        bot: { profileId: durableProfile('adaptive-exploiter'), difficulty: 'expert', seed: 99 },
       });
-      assert.equal(legendMember.bot_profile, 'unknown');
+      assert.equal(legendMember.bot_profile, 'adaptive-exploiter');
+      assert.equal(legendMember.bot_difficulty, 'expert');
+      assert.equal(legendMember.bot_seed, 99);
+
+      // An id no build carries never reaches the column: `durableProfile` refuses it first.
+      assert.throws(() => durableProfile('some-legends-profile-id'));
+
+      // A bot seat with no strategy configuration is refused — it could not be rehydrated.
+      const halfBot = await store.createBotUser('Half');
+      await rejectsWith(tx, 'invalid_request', () =>
+        store.addMember({ roomId: room.id, userId: halfBot.id, isBot: true }),
+      );
 
       // The other half of `room_members_bot_profile_iff_bot`: a human seat may not carry one.
       const human = await makeGuest(tx, 'Human');
       await rejectsWith(tx, 'invalid_request', () =>
-        store.addMember({ roomId: room.id, userId: human, botProfile: 'maniac' }),
+        store.addMember({
+          roomId: room.id,
+          userId: human,
+          bot: { profileId: 'volume-grinder', difficulty: 'realistic', seed: 1 },
+        }),
       );
     });
   });

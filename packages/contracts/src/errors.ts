@@ -45,6 +45,19 @@ export const ERROR_CODES = [
   'stale_action_sequence',
   'hand_not_active',
   'hand_not_found',
+  /**
+   * The hand exists and is the caller's, and a comparison of it cannot be built.
+   *
+   * Distinct from `hand_not_found` because it is a different answer to a different question, and
+   * collapsing the two would make the Legends hand-review screen say "no such hand" about a hand
+   * the reader can see in their own history. The three cases are: the hand is still in progress
+   * (a comparison discloses what each seat could see, so it is post-hand only), no seat in it was
+   * a modelled opponent this build can name, and the stored rows cannot be replayed into the
+   * views the seats acted on. `fields.hand` carries which.
+   *
+   * 409 rather than 404: the resource is there, its state is wrong for this representation.
+   */
+  'hand_not_comparable',
 
   // --- content ---
   'content_not_found',
@@ -114,6 +127,7 @@ export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
   stale_action_sequence: 409,
   hand_not_active: 409,
   hand_not_found: 404,
+  hand_not_comparable: 409,
 
   content_not_found: 404,
 
@@ -155,6 +169,7 @@ export const ERROR_MESSAGES: Readonly<Record<ErrorCode, string>> = {
   stale_action_sequence: 'The hand moved on while you were deciding. Have another look.',
   hand_not_active: 'That hand is no longer in progress.',
   hand_not_found: 'That hand could not be found.',
+  hand_not_comparable: 'That hand cannot be compared against a modelled style.',
 
   content_not_found: 'That lesson, quiz or scenario does not exist.',
 

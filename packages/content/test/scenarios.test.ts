@@ -314,6 +314,21 @@ test('quizzes have no score threshold or pass/fail language', () => {
   assert.deepEqual(offenders, [], `pass/fail language found in: ${offenders.join(', ')}`);
 });
 
+test('the tournament lesson computes ICM for the learner', () => {
+  const lesson = content().lessons.find((entry) => entry.id === 'tournament-chips-and-icm');
+  assert.ok(lesson, 'the tournament lesson exists');
+  const icmBlocks = lesson.blocks.filter(
+    (block) => block.kind === 'liveCalculation' && block.calculation.kind === 'icm',
+  );
+  assert.ok(icmBlocks.length >= 1, 'the lesson must embed a live ICM calculation, not only prose');
+  const quiz = content().quizzes.find((entry) => entry.id === 'quiz-tournament-chips-and-icm');
+  assert.ok(quiz);
+  const numeric = quiz.questions.filter(
+    (question) => question.kind === 'numeric' && question.calculation.kind === 'icm',
+  );
+  assert.ok(numeric.length >= 1, 'the tournament quiz must grade a computed ICM figure');
+});
+
 test('numeric quiz questions ask for a field their calculation can actually produce', () => {
   // A mismatch here is invisible until a learner opens the quiz and the app cannot compute
   // an expected answer, so it is worth pinning down at build time.
@@ -348,6 +363,9 @@ test('numeric quiz questions ask for a field their calculation can actually prod
     // `equity` returns players in an array, so the learner-facing scalar is named here.
     equity: ['heroEquity', 'trials'],
     outs: numericKeys(computeOuts({ heroCards, board, opponent: exactRange(parseCards('Qs Qd')) })),
+    // `icmEquity` returns per-player prizes in an array. The quiz grades the chip leader's
+    // share of the prize pool, which the Learn/API resolvers name `chipLeaderShare`.
+    icm: ['chipLeaderShare'],
   };
   const offenders: string[] = [];
   for (const quiz of content().quizzes) {

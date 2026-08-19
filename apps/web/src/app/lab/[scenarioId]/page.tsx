@@ -31,21 +31,28 @@
  * reachable only from a 404 the API itself sent about an id the reader supplied.
  */
 
+import { scenarios } from '@prl/content';
 import type { ScenarioResponse } from '@prl/contracts';
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
 import type { ReactElement } from 'react';
 import { ScenarioStage } from '../../../components/ScenarioStage.tsx';
 import { LAB_SCENARIO_SUMMARIES, scenarioFixture } from '../../../fixtures/scenarios.ts';
 import { API_PATHS, apiGet, isApiUnavailable, isMissingResource, safeFetch } from '../../../lib/api.ts';
 import { difficultyLabel, topicLabel } from '../../../lib/lab-labels.ts';
 import { scenarioToPlayerView } from '../../../lib/scenario-view.ts';
+import { NotFoundBody } from '../../not-found.tsx';
 import '../../../styles/page.css';
 import '../../../styles/lab.css';
 
 interface RouteParams {
   readonly scenarioId: string;
 }
+
+export function generateStaticParams(): { scenarioId: string }[] {
+  return scenarios().map((scenario) => ({ scenarioId: scenario.id }));
+}
+
+export const dynamicParams = false;
 
 type ScenarioState =
   /** The API answered. */
@@ -168,7 +175,7 @@ export default async function ScenarioPage({
   const { scenarioId } = await params;
   const data = await loadScenario(scenarioId);
   // The ONLY route to the not-found screen: the API itself said there is no such scenario.
-  if (data.state === 'missing') notFound();
+  if (data.state === 'missing') return <NotFoundBody />;
   if (data.state === 'unavailable') {
     return <ScenarioUnavailable scenarioId={scenarioId} detail={data.detail} />;
   }
@@ -177,7 +184,7 @@ export default async function ScenarioPage({
   const table = scenarioToPlayerView(scenario);
   // A scenario whose seats or cards will not parse cannot be staged. That is a content bug, and a
   // 404 is the honest outcome: the alternative is a question asked without the situation it needs.
-  if (table === null) notFound();
+  if (table === null) return <NotFoundBody />;
 
   const seatNames: Record<number, string> = {};
   for (const seat of scenario.seats) seatNames[seat.seat] = seat.label;

@@ -103,6 +103,23 @@
   padding-block-end: var(--prl-section-y);
 }
 
+/*
+ * `<main>` carries `tabindex="-1"` so the skip link can move focus into it (see the note in
+ * layout.tsx). That makes it match `:focus-visible` in `base.css`, which would draw a focus ring
+ * around the whole page body the first time somebody used the skip link — a ring the size of the
+ * viewport is not an indicator, it is a surprise.
+ *
+ * Removed here and nowhere else, and safe for exactly one reason: `<main>` is not in the tab order
+ * and cannot be reached by tabbing, so no keyboard user ever navigates TO it and needs to see where
+ * they are. They arrive by deliberate act, and the next Tab lands on a real control that does show
+ * its ring. This is the only outline removal in the app that is not conditional on
+ * `:focus-visible` being false.
+ */
+.prl-app__main:focus,
+.prl-app__main:focus-visible {
+  outline: none;
+}
+
 /* ==========================================================================================
    2. THE STICKY HEADER, AND THE SENTINEL THAT DRIVES IT
    ==========================================================================================

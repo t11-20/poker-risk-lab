@@ -274,7 +274,11 @@ describe('every path the web client can emit is a registered route', () => {
       // The shape errors, with the prefix corrected: these are what the client used to ask for.
       `${API_PREFIX}/scenarios`,
       `${API_PREFIX}/legends/${examples.profileId}/learn`,
-      `${API_PREFIX}/legends/hands/${examples.handId}/comparison`,
+      // `${API_PREFIX}/legends/hands/:handId/comparison` was in this list and has been removed,
+      // because it is no longer a wrong path: the Legends hand review used to render a bundled
+      // sample for every id, and the route the client had been written against genuinely did not
+      // exist. It does now, so it belongs in `API_PATH_PROBES` above, where it is asserted to
+      // route. Leaving it here would assert that a shipped endpoint is missing.
     ];
     for (const url of wrongGets) {
       const { status } = await probe('GET', url);

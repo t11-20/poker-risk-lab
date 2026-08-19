@@ -250,6 +250,8 @@ describe('a seat that is waiting for the big blind is visible on the wire', () =
           stack: 1_000,
           is_bot: false,
           bot_profile: null,
+          bot_difficulty: null,
+          bot_seed: null,
           joined_at: new Date('2026-08-18T12:00:00.000Z'),
           left_at: null,
         },

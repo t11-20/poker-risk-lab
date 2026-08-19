@@ -42,6 +42,8 @@ export function seatingOnlyStore(units = 10_000): RoomStore {
         stack: 1_000,
         is_bot: false,
         bot_profile: null,
+        bot_difficulty: null,
+        bot_seed: null,
         joined_at: new Date(),
         left_at: null,
       }),

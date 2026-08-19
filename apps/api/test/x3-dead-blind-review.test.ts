@@ -155,6 +155,7 @@ function deal(options: DealOptions): DealtHand {
     config: JSON.parse(JSON.stringify(config)) as unknown,
     commitment_root: state.commitment.root,
     commitment_context: state.commitment.context,
+    random_source_kind: state.randomSourceKind,
     board: state.board.map((card) => cardToString(card)),
     street: state.street,
     result: JSON.parse(JSON.stringify(state.result)) as unknown,

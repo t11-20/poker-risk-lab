@@ -141,7 +141,12 @@ interface Committed {
 type ServerVerdict =
   | { readonly state: 'pending' }
   | { readonly state: 'unavailable' }
-  | { readonly state: 'live'; readonly consistent: boolean; readonly reasoning: string };
+  | {
+      readonly state: 'live';
+      readonly consistent: boolean;
+      readonly reasoning: string;
+      readonly recorded: boolean;
+    };
 
 const ACTION_WORD: Readonly<Record<ScenarioAction, string>> = {
   fold: 'Fold',
@@ -187,7 +192,9 @@ function Verdict({
         </Chip>
         <span className="prl-note">
           {server.state === 'live'
-            ? 'This is the server’s own verdict on your action — the same one it recorded.'
+            ? server.recorded
+              ? 'This is the server’s own verdict on your action — the same one it recorded.'
+              : 'This is the server’s own verdict on your action. Nothing was recorded, because there is no session to attach it to.'
             : server.state === 'pending'
               ? 'Asking the server for its verdict. The figures below are the shared rule applied here, and the two agree.'
               : 'The server could not be reached, so this verdict is the shared rule applied in your browser. It is the same rule the server grades with.'}
@@ -287,6 +294,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
               state: 'live',
               consistent: attempt.data.consistentWithAnalysis,
               reasoning: attempt.data.reasoning,
+              recorded: attempt.data.recorded,
             }
           : { state: 'unavailable' },
       );

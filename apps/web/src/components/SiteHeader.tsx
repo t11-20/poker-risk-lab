@@ -312,7 +312,11 @@ export function SiteHeader(props: SiteHeaderProps): ReactElement {
             <span aria-hidden="true" className="prl-shell__brand-index prl-index">
               00
             </span>
-            <span className="prl-shell__brand-name">
+            {/* `display: none` on the visible name at 375 and 860–1279 removes it from the a11y
+                tree. The visually-hidden copy stays in the name so the home control is never
+                "00" with no words. */}
+            <span className="prl-visually-hidden">Poker Risk Lab, home</span>
+            <span className="prl-shell__brand-name" aria-hidden="true">
               Poker Risk<span className="prl-shell__brand-tail"> Lab</span>
             </span>
           </Link>

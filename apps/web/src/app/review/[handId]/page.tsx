@@ -42,7 +42,6 @@
 import type { HandReviewResponse } from '@prl/contracts';
 import { Chip, formatSignedUnits, formatUnits } from '@prl/ui';
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
 import type { ReactElement } from 'react';
 import { HandReplay } from '../../../components/HandReplay.tsx';
 import { handReviewFixture } from '../../../fixtures/review.ts';
@@ -58,6 +57,7 @@ import {
 import { buildHandReplay } from '../../../lib/hand-replay.ts';
 import { formatTimestamp } from '../../../lib/lab-labels.ts';
 import { readerCallOptions } from '../../../lib/server-session.ts';
+import { NotFoundBody } from '../../not-found.tsx';
 import '../../../styles/page.css';
 import '../../../styles/review.css';
 
@@ -214,7 +214,9 @@ export default async function HandReviewPage({
   const data = await loadReview(handId);
   // The ONLY route to the not-found screen: the API itself said 404 about this id. Every other way
   // of failing to produce a replay now has a screen that says what it was.
-  if (data.state === 'missing') notFound();
+  // Next 16 `notFound()` from a page returns empty HTML. Hand ids cannot be enumerated at
+  // build time, so render the same 404 body the routing-level page uses.
+  if (data.state === 'missing') return <NotFoundBody />;
   if (data.state === 'unavailable') {
     return <ReviewUnavailable handId={handId} cause={data.cause} detail={data.detail} />;
   }

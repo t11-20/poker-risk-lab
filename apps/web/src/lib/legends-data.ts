@@ -45,10 +45,14 @@ import {
 } from '@/fixtures/legends.ts';
 import {
   API_PATHS,
+  type ApiCallOptions,
+  ApiRequestError,
   apiGet,
   apiSend,
+  EXPENSIVE_READ_TIMEOUT_MS,
   isApiUnavailable,
   isMissingResource,
+  isSignedOut,
   safeFetch,
   serverCsrfHandshake,
 } from './api.ts';
@@ -291,24 +295,88 @@ export async function loadProfileStats(profileId: string): Promise<ProfileStatsD
   return { stats: null, unavailableReason: `${STATS_FALLBACK} (${result.error.message})` };
 }
 
-const HAND_FALLBACK =
-  'Per-hand comparison against a Legend profile is not served by the API yet, so this is a bundled ' +
-  'sample hand. It is a real worked example rather than one of yours.';
+/**
+ * Why one of the reader's own hands could not be shown. Never a reason to show somebody else's.
+ *
+ * ## The defect this replaced
+ *
+ * `loadHandComparison(_handId)` used to ignore its argument and return `HAND_COMPARISON_FIXTURE`
+ * for every hand id anybody asked for. Its comment said the API "has never registered" a per-hand
+ * comparison route, which was true — `buildHandComparison` existed in `@prl/poker-ai` with nothing
+ * in front of it. The screen was honest about being a sample and was not the feature.
+ *
+ * `GET /legends/hands/:handId/comparison` now exists. So this loader makes the request, and every
+ * way it can fail is a distinct sentence rather than a fall back to the worked example. The sample
+ * still exists and is still worth reading — it is reachable at `/legends/hand-review/demo`, which
+ * says demo in the URL. What must never happen again is a reader seeing somebody else's hand while
+ * believing they are looking at their own.
+ */
+export type HandComparisonProblem =
+  | { readonly kind: 'signed-out' }
+  | { readonly kind: 'not-found' }
+  | { readonly kind: 'not-comparable'; readonly reason: string }
+  | { readonly kind: 'unavailable'; readonly detail: string };
+
+export type HandComparisonResult =
+  | { readonly ok: true; readonly comparison: HandComparison }
+  | { readonly ok: false; readonly problem: HandComparisonProblem };
+
+/** The three states `hand_not_comparable` distinguishes, as sentences. */
+const NOT_COMPARABLE_REASONS: Readonly<Record<string, string>> = {
+  'hand-in-progress':
+    'This hand is still being played. A comparison shows what every seat could see at each ' +
+    'decision, so it can only be built once the hand is over.',
+  'no-legend-in-hand':
+    'No seat in this hand was played by one of the modelled styles, so there is nothing to compare ' +
+    'your decisions against. Start a table from an AI Legends profile and this page will have a ' +
+    'hand to review.',
+  'not-reproducible':
+    'The stored record of this hand cannot be replayed into the situations each seat acted on, so ' +
+    'no figure on this page could be trusted. Nothing is shown rather than something approximate.',
+};
 
 /**
- * The worked example on the hand-review page.
+ * One of the reader's own finished hands, or the reason it cannot be shown.
  *
- * There is no request here, and that is the honest state of this feature rather than an oversight.
- * This loader used to `GET /api/legends/hands/:id/comparison`, a path the API has never registered
- * — the server-side builder (`buildHandComparison`) has no route in front of it. A client that keeps
- * asking for a route nobody wrote gets a 404 forever, and with the fallback now narrowed to real
- * outages that 404 would surface as an error page on a working screen.
- *
- * So the screen renders the sample it has, and says so. `handId` is kept in the signature because
- * the page has one and the endpoint will need it; it is deliberately unused until then.
+ * The session travels with the request on a server render — `readerCallOptions` — because the
+ * route is scoped to a seat the caller held. Without it the API answers `not_authenticated`, which
+ * this reports as `signed-out` rather than as "no such hand": telling a reader their hand does not
+ * exist when the truth is that this render had no session is the failure `src/lib/server-session.ts`
+ * was written to end.
  */
-export function loadHandComparison(_handId: string): LegendData<HandComparison> {
-  return sampled(HAND_COMPARISON_FIXTURE, HAND_FALLBACK);
+export async function loadHandComparison(
+  handId: string,
+  options: ApiCallOptions = {},
+): Promise<HandComparisonResult> {
+  const result = await safeFetch<HandComparison>(() =>
+    apiGet<HandComparison>(API_PATHS.legendHandComparison(handId), {
+      ...options,
+      // The route prices every action that was not taken, so it is one of the expensive reads.
+      timeoutMs: EXPENSIVE_READ_TIMEOUT_MS,
+    }),
+  );
+  if (result.ok) return { ok: true, comparison: result.data };
+
+  const error = result.error;
+  if (isSignedOut(error)) return { ok: false, problem: { kind: 'signed-out' } };
+  if (isMissingResource(error)) return { ok: false, problem: { kind: 'not-found' } };
+  if (error instanceof ApiRequestError && error.code === 'hand_not_comparable') {
+    const named = error.fields?.['hand'];
+    const reason =
+      typeof named === 'string' ? (NOT_COMPARABLE_REASONS[named] ?? error.message) : error.message;
+    return { ok: false, problem: { kind: 'not-comparable', reason } };
+  }
+  return { ok: false, problem: { kind: 'unavailable', detail: error.message } };
+}
+
+/**
+ * The bundled worked example, for the explicit demo route and for nothing else.
+ *
+ * Reachable only from `/legends/hand-review/demo`. It is not a fallback and must not become one:
+ * a reader who asked for their own hand and got this one would have no way to tell.
+ */
+export function demoHandComparison(): HandComparison {
+  return HAND_COMPARISON_FIXTURE;
 }
 
 /**
@@ -322,9 +390,6 @@ export const DEFAULT_COMPARE_PROFILE_IDS: readonly string[] = [
   'patient-technician',
   'disciplined-specialist',
 ];
-
-/** The sample hand the worked-example route renders when the URL names none. */
-export const SAMPLE_HAND_ID = HAND_COMPARISON_FIXTURE.handId;
 
 /** Kept for the compare page's picker, which offers only profiles it can actually name. */
 export function profileLabel(profileId: string): string {

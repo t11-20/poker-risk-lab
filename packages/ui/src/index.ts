@@ -155,6 +155,10 @@ export {
   isProbabilityFraction,
   isProbabilityPoints,
   NOT_A_PROBABILITY,
+  normaliseProbability,
+  normaliseProbabilityDifference,
+  normaliseProbabilityPoints,
+  PROBABILITY_TOLERANCE,
 } from './probability.ts';
 // -- Chart geometry ----------------------------------------------------------
 // Pure, deterministic, and exported because the next polar chart should reuse these rather

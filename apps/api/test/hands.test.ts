@@ -567,6 +567,7 @@ describe('the hand summary', () => {
     config: null,
     commitment_root: '',
     commitment_context: '',
+    random_source_kind: 'csprng' as const,
     board: ['Qh', '7h', '2c'],
     street: 'complete',
     result: { endedByFold: true, pots: [{ amount: 12 }] },
