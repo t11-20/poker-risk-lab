@@ -710,3 +710,61 @@ describe('coachForView', () => {
     );
   });
 });
+
+describe('live Coach follows the match difficulty', () => {
+  async function withBot(
+    difficulty: 'educational' | 'expert',
+  ): Promise<{ test: Harness; recorded: Recorder; connection: ReturnType<WsRouter['open']> }> {
+    const test = await harness({ seated: false });
+    const room = test.registry.get(test.roomId);
+    assert.ok(room !== null);
+    await room.table.sit({ userId: 'usr_a', displayName: 'Ada', seat: 0, stack: 1_000 });
+    await test.registry.seatBot(test.roomId, {
+      userId: 'usr_bot',
+      displayName: 'Legend',
+      seat: 1,
+      profileId: 'adaptive-exploiter',
+      difficulty,
+      seed: 1,
+    });
+    const { recorded, connection } = connect(test, 'usr_a', 'Ada');
+    return { test, recorded, connection };
+  }
+
+  it('still answers at a table with no Expert bot', async () => {
+    const test = await harness();
+    const alpha = connect(test, 'usr_a', 'Ada');
+    const beta = connect(test, 'usr_b', 'Bo');
+    test.router.handleFrame(
+      alpha.connection,
+      JSON.stringify({ type: 'startHand', requestId: 'req-start-ed' }),
+    );
+    await settle();
+    const alphaView = lastOf(alpha.recorded, 'state')?.['view'] as
+      | { toAct: number | null; viewerSeat: number | null }
+      | undefined;
+    const actor = alphaView?.toAct === alphaView?.viewerSeat ? alpha : beta;
+    test.router.handleFrame(
+      actor.connection,
+      JSON.stringify({ type: 'requestCoach', requestId: 'req-coach-ed' }),
+    );
+    await settle();
+    const coach = lastOf(actor.recorded, 'coach');
+    assert.ok(coach !== null, 'a table without an Expert bot must still receive a Coach report');
+    await test.app.close();
+  });
+
+  it('refuses on expert, where the chip says Coach in review only', async () => {
+    const { test, recorded, connection } = await withBot('expert');
+    assert.equal(test.registry.get(test.roomId)?.bots.coachDuringHand(), false);
+    test.router.handleFrame(connection, JSON.stringify({ type: 'startHand', requestId: 'req-start-ex' }));
+    await settle();
+    test.router.handleFrame(connection, JSON.stringify({ type: 'requestCoach', requestId: 'req-coach-ex' }));
+    await settle();
+    assert.equal(lastOf(recorded, 'coach'), null, 'expert must not receive a live report');
+    const error = lastOf(recorded, 'error');
+    assert.ok(error !== null);
+    assert.equal((error['error'] as { code: string }).code, 'coach_not_available');
+    await test.app.close();
+  });
+});

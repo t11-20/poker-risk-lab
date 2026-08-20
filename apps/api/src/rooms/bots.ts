@@ -374,6 +374,23 @@ export class BotRunner {
     return this.bots.get(userId)?.spec ?? null;
   }
 
+  /** Every registered spec. Used to decide whether live Coach is offered at this table. */
+  specs(): readonly BotSeatSpec[] {
+    return [...this.bots.values()].map((bot) => bot.spec);
+  }
+
+  /**
+   * Whether the Coach panel may run *during* a hand at this table.
+   *
+   * Expert Legends advertises Coach in review only (`DIFFICULTY_SETTINGS.expert.coachAvailable`).
+   * The match writes that difficulty onto each bot seat, so the registered specs are the fact.
+   * A table with no bots, or only educational/realistic bots, keeps live Coach. One expert seat
+   * turns it off. Unrehydrated seats are not registered and do not flip this.
+   */
+  coachDuringHand(): boolean {
+    return this.specs().every((spec) => DIFFICULTY_SETTINGS[spec.difficulty].coachAvailable);
+  }
+
   /** Cancels every scheduled decision and stops listening. Called when the room closes. */
   stop(): void {
     this.stopped = true;

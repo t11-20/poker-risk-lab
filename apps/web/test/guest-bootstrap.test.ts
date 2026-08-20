@@ -27,6 +27,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import {
+  GUEST_MINT_TIMEOUT_MS,
   hasSessionCookie,
   isDocumentNavigation,
   mintGuestSession,
@@ -115,6 +116,11 @@ function stubApi(options: {
   // function. Returning `Promise.resolve(...)` says the same thing and keeps biome's
   // "async without await" rule meaningful for the code that really does need it.
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    if (init?.signal?.aborted) {
+      const error = new Error('The operation was aborted');
+      error.name = 'AbortError';
+      return Promise.reject(error);
+    }
     const url = String(input);
     calls.push({ url, method: init?.method ?? 'GET', headers: new Headers(init?.headers) });
 
@@ -195,6 +201,18 @@ describe('minting the session', () => {
     const minted = await mintGuestSession({ origin: 'https://lab.example' });
     assert.ok(minted !== null);
     assert.ok(minted.requestCookies.includes('__Host-prl_session=s2'));
+  });
+
+  it('returns null when the request is aborted, rather than throwing', async () => {
+    stubApi({});
+    assert.equal(
+      await mintGuestSession({ origin: 'http://localhost:3000', signal: AbortSignal.abort() }),
+      null,
+    );
+  });
+
+  it('caps the mint so a down API cannot stall the first Learn document', () => {
+    assert.ok(GUEST_MINT_TIMEOUT_MS >= 1_000 && GUEST_MINT_TIMEOUT_MS <= 8_000);
   });
 
   it('gives up rather than half-succeeding', async () => {

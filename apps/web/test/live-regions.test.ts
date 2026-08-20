@@ -120,6 +120,31 @@ describe('the Coach’s arrival is announced', () => {
     assert.equal(failed.coachProblem, 'the frame did not parse');
   });
 
+  it('turns live Coach off when the server refuses it for this difficulty', () => {
+    const asked = tableReducer(EMPTY_TABLE_STATE, {
+      kind: 'coachRequested',
+      requestId: 'coach-1',
+      key: '',
+    });
+    const refused = tableReducer(asked, {
+      kind: 'frame',
+      frame: {
+        type: 'error',
+        requestId: 'coach-1',
+        error: {
+          code: 'coach_not_available',
+          message:
+            'The Coach is available in review after the hand, not while it is being played at this difficulty.',
+          requestId: 'coach-1',
+        },
+      },
+    });
+    assert.equal(refused.coachDuringHand, false);
+    assert.equal(refused.coach, null);
+    assert.equal(refused.coachRequestId, null);
+    assert.match(refused.announcement, /review afterwards/u);
+  });
+
   it('says nothing for an answer to a request nobody made', () => {
     // A `coach` frame whose id does not match the outstanding one is dropped entirely; announcing
     // it would describe a panel that did not change.

@@ -137,19 +137,28 @@ export interface MintedGuest {
  * allowlist sees the same value a browser would send. Sending something else would either be
  * refused or, worse, quietly widen what that allowlist means.
  */
+/** Wall clock for the two CSRF calls. Long enough for a healthy API, short enough not to stall `/learn`. */
+export const GUEST_MINT_TIMEOUT_MS = 4_000;
+
 export async function mintGuestSession(options: {
   readonly origin: string;
   readonly signal?: AbortSignal;
 }): Promise<MintedGuest | null> {
   const base = apiOrigin();
-  const fetchOptions = options.signal === undefined ? {} : { signal: options.signal };
+  const signal = options.signal ?? AbortSignal.timeout(GUEST_MINT_TIMEOUT_MS);
+  const fetchOptions = { signal };
 
-  const seed = await fetch(`${base}${API_PATHS.session()}`, {
-    method: 'GET',
-    headers: { accept: 'application/json', origin: options.origin },
-    cache: 'no-store',
-    ...fetchOptions,
-  });
+  let seed: Response;
+  try {
+    seed = await fetch(`${base}${API_PATHS.session()}`, {
+      method: 'GET',
+      headers: { accept: 'application/json', origin: options.origin },
+      cache: 'no-store',
+      ...fetchOptions,
+    });
+  } catch {
+    return null;
+  }
   if (!seed.ok) return null;
 
   const seedCookies = seed.headers.getSetCookie();
@@ -159,19 +168,24 @@ export async function mintGuestSession(options: {
   // Only the pairs, never the attributes: this header is being sent, not stored.
   const csrfPairs = seedCookies.map(cookiePair).filter((pair): pair is string => pair !== null);
 
-  const created = await fetch(`${base}${API_PATHS.guest()}`, {
-    method: 'POST',
-    headers: {
-      accept: 'application/json',
-      'content-type': 'application/json',
-      origin: options.origin,
-      'x-csrf-token': csrfToken,
-      ...(csrfPairs.length === 0 ? {} : { cookie: csrfPairs.join('; ') }),
-    },
-    body: '{}',
-    cache: 'no-store',
-    ...fetchOptions,
-  });
+  let created: Response;
+  try {
+    created = await fetch(`${base}${API_PATHS.guest()}`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        origin: options.origin,
+        'x-csrf-token': csrfToken,
+        ...(csrfPairs.length === 0 ? {} : { cookie: csrfPairs.join('; ') }),
+      },
+      body: '{}',
+      cache: 'no-store',
+      ...fetchOptions,
+    });
+  } catch {
+    return null;
+  }
   if (!created.ok) return null;
 
   const guestCookies = created.headers.getSetCookie();

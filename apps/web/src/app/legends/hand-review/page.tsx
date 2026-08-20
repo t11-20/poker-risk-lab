@@ -70,10 +70,10 @@ export function HandReviewHeader(): ReactElement {
       </span>
       <h1 className="prl-legend-head__title prl-display-2">A finished hand, reviewed</h1>
       <p className="prl-legend-head__standfirst">
-        Every decision in one hand, in order: what was done, what the analysis priced at the time, what the
-        other actions were worth, and — for the model's decisions — the weights it sampled its action from.
-        The chip result and the decision quality are reported separately, and neither is used to explain the
-        other.
+        Every decision in one hand, in order: what was done, what the analysis priced at the time, and what
+        the other actions were worth. Stored hands record the action taken, not the distribution a model
+        sampled from, so live reviews do not invent those weights. The chip result and the decision quality
+        are reported separately, and neither is used to explain the other.
       </p>
       <nav aria-label="Legends navigation" className="prl-legend-nav">
         <Link href={LEGENDS_PATH}>All profiles</Link>

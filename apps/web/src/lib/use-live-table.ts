@@ -122,6 +122,11 @@ export interface TableState {
   readonly coachRequestId: string | null;
   /** Why there is no analysis, when the reason is something other than "none was asked for". */
   readonly coachProblem: string | null;
+  /**
+   * False when this table has turned live Coach off (Expert Legends, or a `coach_not_available`
+   * refusal). Default true: private tables and educational/realistic matches keep the panel.
+   */
+  readonly coachDuringHand: boolean;
   readonly pending: PendingDecision | null;
   readonly submission: TableSubmission | null;
   /** The server's own wording for the last refusal that was not about a decision. */
@@ -142,6 +147,7 @@ export const EMPTY_TABLE_STATE: TableState = {
   coach: null,
   coachRequestId: null,
   coachProblem: null,
+  coachDuringHand: true,
   pending: null,
   submission: null,
   notice: null,
@@ -269,6 +275,19 @@ function onAckFrame(state: TableState, frame: Extract<WsServerMessage, { type: '
 }
 
 function onErrorFrame(state: TableState, frame: Extract<WsServerMessage, { type: 'error' }>): TableState {
+  if (state.coachRequestId !== null && frame.requestId === state.coachRequestId) {
+    const reviewOnly = frame.error.code === 'coach_not_available';
+    return {
+      ...state,
+      coachRequestId: null,
+      coach: null,
+      coachProblem: reviewOnly ? null : frame.error.message,
+      coachDuringHand: reviewOnly ? false : state.coachDuringHand,
+      announcement: reviewOnly
+        ? 'The Coach is off during this hand. It is available in review afterwards.'
+        : `${COACH_FAILED_ANNOUNCEMENT} ${frame.error.message}`,
+    };
+  }
   const pending = state.pending;
   if (pending === null || pending.requestId !== frame.requestId) {
     return { ...state, notice: `${frame.error.message} (${frame.error.code})` };
@@ -425,6 +444,8 @@ export interface LiveTable {
   readonly report: CoachReport | null;
   /** Why the Coach panel is empty, when it is empty for a reason worth naming. */
   readonly coachProblem: string | null;
+  /** False on Expert Legends (and after a `coach_not_available` refusal). */
+  readonly coachDuringHand: boolean;
   readonly seatNames: Readonly<Record<number, string>>;
   readonly highlightedCards: readonly number[];
   readonly isMyTurn: boolean;
@@ -803,11 +824,14 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
    * Coach requests a minute the server allows. Asking before it is the reader's turn would price a
    * decision nobody is being asked to make.
    */
+  const coachDuringHand = options.legendMatch?.difficulty === 'expert' ? false : table.coachDuringHand;
+
   useEffect(() => {
+    if (!coachDuringHand) return;
     if (!isMyTurn || key === '') return;
     if (coachAskedRef.current === key) return;
     askCoach();
-  }, [isMyTurn, key, askCoach]);
+  }, [coachDuringHand, isMyTurn, key, askCoach]);
 
   const turn = useMemo<TurnClock | null>(() => {
     if (table.deadlineMs === null || table.room === null || table.betweenHands) return null;
@@ -834,6 +858,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     turn,
     report,
     coachProblem: table.coachProblem,
+    coachDuringHand,
     seatNames,
     highlightedCards,
     isMyTurn,

@@ -49,6 +49,7 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { CSP_HEADER, contentSecurityPolicy, SECURITY_HEADERS } from '@/lib/csp.ts';
 import {
+  GUEST_MINT_TIMEOUT_MS,
   hasSessionCookie,
   isDocumentNavigation,
   mintGuestSession,
@@ -107,7 +108,10 @@ async function bootstrapGuest(request: NextRequest, forwarded: Headers): Promise
   if (!isDocumentNavigation(request.headers)) return [];
 
   try {
-    const minted = await mintGuestSession({ origin: request.nextUrl.origin });
+    const minted = await mintGuestSession({
+      origin: request.nextUrl.origin,
+      signal: AbortSignal.timeout(GUEST_MINT_TIMEOUT_MS),
+    });
     if (minted === null) return [];
     const existing = forwarded.get('cookie');
     forwarded.set(

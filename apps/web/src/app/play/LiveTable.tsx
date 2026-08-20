@@ -44,6 +44,22 @@ import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
 import { type LiveTable as LiveTableModel, useLiveTable } from '@/lib/use-live-table.ts';
 
+const EXPERT_COACH_REASON =
+  'The Coach is available afterwards in review, not during this hand. Expert keeps the analysis off the table so the style is the thing you are reading.';
+
+function coachUnavailableProps(
+  live: LiveTableModel,
+): { readonly coachUnavailableReason: string } | Record<string, never> {
+  if (!live.coachDuringHand) return { coachUnavailableReason: EXPERT_COACH_REASON };
+  if (live.coachProblem === null) return {};
+  return {
+    coachUnavailableReason:
+      `The server sent an analysis this page could not read: ${live.coachProblem}. ` +
+      'It was refused rather than shown in part. The table itself is unaffected — it is drawn ' +
+      'from separate frames.',
+  };
+}
+
 /** One sentence per transport state, in the reader's terms rather than the protocol's. */
 const STATUS_LEDE: Readonly<Record<TableSocketStatus, string>> = {
   connecting: 'Opening a connection to the table.',
@@ -199,7 +215,7 @@ function ConnectionControls({ live }: ConnectionPanelProps): ReactElement {
         </Button>
       ) : null}
 
-      {isLive && seated && !table.betweenHands ? (
+      {isLive && seated && !table.betweenHands && live.coachDuringHand ? (
         <Button variant="ghost" onClick={live.askCoach}>
           Refresh the analysis
         </Button>
@@ -435,14 +451,7 @@ export function LiveTable({
         announcement={table.announcement}
         submission={table.submission}
         onAct={act}
-        {...(live.coachProblem === null
-          ? {}
-          : {
-              coachUnavailableReason:
-                `The server sent an analysis this page could not read: ${live.coachProblem}. ` +
-                'It was refused rather than shown in part. The table itself is unaffected — it is drawn ' +
-                'from separate frames.',
-            })}
+        {...coachUnavailableProps(live)}
         {...(highlighted.length === 0
           ? {}
           : { highlightedCards: highlighted, highlightLabel: 'part of the winning hand' })}

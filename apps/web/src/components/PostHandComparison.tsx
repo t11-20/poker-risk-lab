@@ -573,9 +573,9 @@ export function PostHandComparison(props: PostHandComparisonProps): ReactElement
       <section className="prl-legend-section">
         <h2>Decision by decision</h2>
         <p className="prl-prose">
-          Every decision in the hand, in order: what was done, what the analysis priced, and — for the model's
-          decisions — the weights it sampled its action from. Your decisions carry an accent edge and the word
-          "you"; the model's do not.
+          Every decision in the hand, in order: what was done and what the analysis priced. Your decisions
+          carry an accent edge and the word "you"; the model's do not. Sampled action weights appear only when
+          the record actually has them — the demo hand does, a stored hand from play does not.
         </p>
         <ol className="prl-legend-decisions">
           {comparison.decisions.map((decision) => (

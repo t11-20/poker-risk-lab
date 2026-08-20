@@ -537,13 +537,19 @@ export class WsRouter {
     message: WsClientMessage & { type: 'requestCoach' },
   ): Promise<void> {
     const roomId = this.requireRoom(connection);
+    const room = this.registry.require(roomId, connection.principal.userId);
+    // Expert Legends sells "Coach in review only". Refuse before spending a rate-limit token.
+    if (!room.bots.coachDuringHand()) {
+      throw new AppError('coach_not_available', {
+        logDetail: `live Coach refused in ${roomId}: a seated bot plays a difficulty that turns it off`,
+      });
+    }
     if (!this.takeCoachToken(connection)) {
       throw new AppError('rate_limited', {
         retryAfterSeconds: 5,
         logDetail: 'coach requests per minute exceeded on a socket',
       });
     }
-    const room = this.registry.require(roomId, connection.principal.userId);
     const view = room.table.viewFor(connection.principal.userId);
     if (view === null) throw new AppError('hand_not_active', { logDetail: 'no hand to analyse' });
     const report = coachForView(view, {

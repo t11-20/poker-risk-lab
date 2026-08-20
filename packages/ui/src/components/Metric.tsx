@@ -55,6 +55,7 @@ import type { ReactElement } from 'react';
 import { cx } from '../cx.ts';
 import { formatChips, formatOdds, formatPoints, formatUnits } from '../format.ts';
 import { useCountUp } from '../motion/useCountUp.ts';
+import { NOT_A_PROBABILITY, normaliseProbability } from '../probability.ts';
 
 /** How the number is rendered. The value itself is always a raw number. */
 export type MetricFormat = 'number' | 'percent' | 'units' | 'points' | 'odds';
@@ -76,12 +77,10 @@ export interface MetricProps {
   /**
    * A fraction in 0..1 for `percent`; otherwise the figure itself.
    *
-   * **Not range-checked here, deliberately.** A metric does not know whether its `percent` is a
-   * probability (0..1, and 1.6 is a defect) or a rate that may legitimately exceed 100%, so it
-   * renders what it is given — the same reasoning that keeps `format.ts` from rescuing a bad
-   * value and hiding the bug behind it. A caller rendering a *probability* must check first:
-   * `isProbabilityFraction` in `../probability.ts`, and see `CoachPanel` rule 5 for what to draw
-   * instead.
+   * `percent` is a probability. A value outside 0..1 (beyond the stated floating-point tolerance)
+   * renders as `not a probability` rather than as 160% — the same domain `probability.ts` defines,
+   * applied here because this component multiplies by 100 internally and never goes through
+   * `formatProbability`. Non-finite values keep the existing dash: that is "absent", not "refused".
    */
   readonly value: number;
   readonly format?: MetricFormat;
@@ -164,11 +163,26 @@ const SIZE_CLASS: Readonly<Record<MetricSize, string>> = {
  *
  * `percent` multiplies here rather than using `formatPercent`, because the `%` belongs to its
  * own element at label size — a metric shows `41.2` and `%` as two things, not one string.
+ * A value that is not a probability is not multiplied: it becomes `not a probability`.
  */
 function valueText(value: number, format: MetricFormat, decimals: number): string {
   if (format === 'odds') return formatOdds(value, { decimals });
-  if (format === 'percent') return formatChips(value * 100, { decimals });
+  if (format === 'percent') {
+    const normalised = normaliseProbability(value);
+    if (normalised === null) {
+      return Number.isFinite(value) ? NOT_A_PROBABILITY : formatChips(value, { decimals });
+    }
+    return formatChips(normalised * 100, { decimals });
+  }
   return formatChips(value, { decimals });
+}
+
+/** Hide `%` when the figure is a refusal or an absence, so we do not print "not a probability %". */
+function unitFor(props: FigureProps, text: string): string | null {
+  if (props.format === 'percent' && (text === NOT_A_PROBABILITY || !Number.isFinite(props.value))) {
+    return null;
+  }
+  return props.unit;
 }
 
 interface ResolvedDelta {
@@ -248,7 +262,7 @@ function StaticFigure(props: FigureProps): ReactElement {
   return (
     <span className="prl-metric__figure">
       <span className="prl-metric__value">{text}</span>
-      <Aside text={props.unit} hidden={false} variant="unit" />
+      <Aside text={unitFor(props, text)} hidden={false} variant="unit" />
       <Aside text={props.interval} hidden={false} variant="interval" />
     </span>
   );
@@ -262,15 +276,16 @@ function CountedFigure(props: FigureProps): ReactElement {
   const shown = useCountUp(props.value);
   const animated = valueText(shown, props.format, props.decimals);
   const real = valueText(props.value, props.format, props.decimals);
+  const unit = unitFor(props, real);
   return (
     <span className="prl-metric__figure">
       <span className="prl-metric__value prl-count" aria-hidden="true">
         {animated}
       </span>
-      <Aside text={props.unit} hidden={true} variant="unit" />
+      <Aside text={unit} hidden={true} variant="unit" />
       <Aside text={props.interval} hidden={true} variant="interval" />
       <span className="prl-visually-hidden" aria-live="polite" aria-atomic="true">
-        {spokenFigure(props, real)}
+        {spokenFigure({ ...props, unit }, real)}
       </span>
     </span>
   );

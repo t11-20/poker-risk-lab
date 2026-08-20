@@ -907,6 +907,24 @@ describe('the Legends endpoints', () => {
     assert.match(body.roomId, /^room_/);
     assert.equal(body.difficulty.id, 'educational');
     assert.equal(body.difficulty.coachAvailable, true);
+
+    const expert = await test.app.inject({
+      method: 'POST',
+      url: '/api/v1/legends/matches',
+      payload: {
+        profileIds: ['adaptive-exploiter'],
+        difficulty: 'expert',
+        startingStack: 1_000,
+        smallBlind: 5,
+        bigBlind: 10,
+      },
+      cookies: { ...learner.cookies, prl_csrf: cookie },
+      headers: { 'x-csrf-token': token, origin: ALLOWED_ORIGIN },
+    });
+    assert.equal(expert.statusCode, 201, expert.payload);
+    const expertBody = expert.json() as { difficulty: { id: string; coachAvailable: boolean } };
+    assert.equal(expertBody.difficulty.id, 'expert');
+    assert.equal(expertBody.difficulty.coachAvailable, false);
     assert.deepEqual(
       body.seats.map((seat) => seat.seat),
       [1, 2],

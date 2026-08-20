@@ -58,6 +58,14 @@ export const ERROR_CODES = [
    * 409 rather than 404: the resource is there, its state is wrong for this representation.
    */
   'hand_not_comparable',
+  /**
+   * Live Coach was asked for at a table whose difficulty turns it off during the hand.
+   *
+   * Expert Legends advertises "Coach in review only". The socket used to ignore that flag and
+   * answer anyway. 409: the table is there, this representation of it is not offered while the
+   * hand is in progress.
+   */
+  'coach_not_available',
 
   // --- content ---
   'content_not_found',
@@ -128,6 +136,7 @@ export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
   hand_not_active: 409,
   hand_not_found: 404,
   hand_not_comparable: 409,
+  coach_not_available: 409,
 
   content_not_found: 404,
 
@@ -170,6 +179,8 @@ export const ERROR_MESSAGES: Readonly<Record<ErrorCode, string>> = {
   hand_not_active: 'That hand is no longer in progress.',
   hand_not_found: 'That hand could not be found.',
   hand_not_comparable: 'That hand cannot be compared against a modelled style.',
+  coach_not_available:
+    'The Coach is available in review after the hand, not while it is being played at this difficulty.',
 
   content_not_found: 'That lesson, quiz or scenario does not exist.',
 
