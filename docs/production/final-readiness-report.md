@@ -19,7 +19,8 @@ one day behind the session date in some generated logs.
 
 The hardening work is substantial and the executable application tests are strong, but this is not a
 production approval. The exact final candidate does not yet have a same-SHA production artifact
-manifest, strict container-CVE clearance, delivered alerting, or real screen-reader certification.
+manifest, strict container-CVE clearance, delivered alerting, a standalone secret-scan result, or
+real screen-reader certification.
 
 ## Candidate and artifact identity
 
@@ -94,8 +95,8 @@ candidate change documentation only.
 | `pnpm run db:verify` | PASS, 123 columns, 41 indexes, 13 values/constraints/privileges checks |
 | `pnpm run db:roles` | PASS |
 | `node --test scripts/staging.test.mjs` | PASS; certificate renewal regression covered |
-| `pnpm run test:a11y` | PASS, 7 routes, 0 static violations |
-| `pnpm run test:keyboard` | PASS, 142 checks; one live-table route was N/A because it had no seat, while the real live journey completed |
+| `pnpm run test:a11y` | PASS, 10 routes, 0 static violations |
+| `pnpm run test:keyboard` | PASS, 142 checks; one live-table route was N/A because it had no seat, while the private live journey completed with a seat |
 | `pnpm run test:ax` | PASS, 46 computed-tree checks |
 | `pnpm run test:csp` | PASS, 11 browser enforcement/negative-control checks |
 | two strict smoke runs | PASS; immediate consecutive runs passed after bounded rate-limit wait, without weakening production limits |
@@ -128,6 +129,10 @@ expected with 60 HIGH/CRITICAL findings (30 per image, no available fix, no allo
 They are real Debian bookworm-slim findings, not ignored findings. The repository’s default policy
 does not block unfixable base-image findings, but production approval cannot call the images CVE-free;
 the base-image refresh is a release-blocking follow-up.
+
+No gitleaks, TruffleHog, or detect-secrets executable is present in the repository or host. The IOC
+sweep, log-redaction tests, and secret-shaped-key negative controls passed, but they are not a
+standalone secret scan; no secret-scan PASS is claimed.
 
 The security best-practice review found no demonstrated P0/P1 application exploit in the reviewed
 worker, poker, authorization, hidden-information, or logging paths. It did retain P2 observations:
@@ -217,7 +222,7 @@ the local image’s unfixed base-image CVEs are not clean.
 | Severity | Open findings |
 | --- | --- |
 | P0 catastrophic | 0 demonstrated |
-| P1 release-blocking | Real screen-reader certification unavailable; final candidate has no same-SHA image manifest; strict image scan reports 60 unfixed HIGH/CRITICAL findings; alert delivery/external production observability unavailable; registry-attested staging/rollback unavailable |
+| P1 release-blocking | Real screen-reader certification unavailable; final candidate has no same-SHA image manifest; strict image scan reports 60 unfixed HIGH/CRITICAL findings; standalone secret scan unavailable; alert delivery/external production observability unavailable; registry-attested staging/rollback unavailable |
 | P2 significant | Readiness is a warmup latch after startup; one in-flight DB request can remain held to its bound during outage; cold Coach sample is ~3 s before warmup; capacity is only measured on loopback |
 | P3 polish | None material to this verdict |
 
