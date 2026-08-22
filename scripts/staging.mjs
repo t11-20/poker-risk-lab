@@ -986,6 +986,18 @@ async function commandUp(options) {
     cross('could not start the stack', up.stderr.trim() || up.stdout.trim());
     return;
   }
+
+  // `staging init` can renew the certificate while this stack is already up. The
+  // certificate directory is a bind mount, but nginx reads the certificate only
+  // when it starts; an ordinary `compose up` sees no image/config change and keeps
+  // serving the old leaf. Recreate only the proxy so the API/web containers and
+  // their exact image digests are untouched, while every `staging up` actually
+  // tests the certificate generated for this run.
+  const proxyRefresh = compose(['up', '-d', '--force-recreate', 'proxy']);
+  if (proxyRefresh.status !== 0) {
+    cross('could not reload the TLS proxy', proxyRefresh.stderr.trim() || proxyRefresh.stdout.trim());
+    return;
+  }
   const healthy = await waitForHealthy(SERVICES, 180);
   if (!healthy.ok) {
     cross('the stack never became healthy', healthy.reason ?? 'unknown');
