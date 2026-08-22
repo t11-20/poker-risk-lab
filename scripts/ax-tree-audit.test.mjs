@@ -250,6 +250,46 @@ describe('NEGATIVE CONTROL — landmarks', () => {
     assert.ok(hit !== undefined, `a missing main must be reported: ${JSON.stringify(findings)}`);
     assert.match(hit.detail, /no main landmark/u);
   });
+
+  it('allows five uniquely named navigation landmarks — the /review list budget', () => {
+    const extra = [
+      node('navigation', 'Sort hand history'),
+      node('navigation', 'Hand history pages'),
+      node('navigation', 'Breadcrumb'),
+    ];
+    const { findings } = auditAxTree(wellFormedTree({ extraNodes: extra }));
+    assert.equal(
+      findings.filter((finding) => finding.check === 'landmark-count').length,
+      0,
+      `five uniquely named navs must be in budget: ${JSON.stringify(findings)}`,
+    );
+  });
+
+  it('fires on a sixth navigation landmark', () => {
+    const extra = [
+      node('navigation', 'Sort hand history'),
+      node('navigation', 'Hand history pages'),
+      node('navigation', 'Breadcrumb'),
+      node('navigation', 'Too many'),
+    ];
+    const { findings } = auditAxTree(wellFormedTree({ extraNodes: extra }));
+    const hit = findings.find((finding) => finding.check === 'landmark-count');
+    assert.ok(hit !== undefined, `six navs must be reported: ${JSON.stringify(findings)}`);
+    assert.match(hit.detail, /6 navigation landmarks/u);
+  });
+});
+
+describe('the verify gate actually starts an API', () => {
+  it('pnpm run test:ax passes --with-api, or lab scenarios are audited as error pages', () => {
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'));
+    assert.match(
+      pkg.scripts['test:ax'],
+      /--with-api/,
+      'without --with-api, --start only boots the web app; /lab/:id that is not in the six ' +
+        'fixtures renders "This scenario could not be loaded" and the gate scores an error page',
+    );
+    assert.match(pkg.scripts['test:ax'], /--start/);
+  });
 });
 
 describe('NEGATIVE CONTROL — live regions', () => {

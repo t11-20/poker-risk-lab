@@ -30,7 +30,7 @@
     "test:simulation": "pnpm --filter @prl/poker-ai test:simulation",
     "test:a11y": "node scripts/a11y-audit.mjs",
     "test:keyboard": "node scripts/keyboard-audit.mjs",
-    "test:ax": "PRL_WEB_ORIGIN=http://127.0.0.1:3456 node scripts/ax-tree-audit.mjs --start",
+    "test:ax": "PRL_WEB_ORIGIN=http://127.0.0.1:3456 node --env-file-if-exists=.env scripts/ax-tree-audit.mjs --start --with-api",
     "test:csp": "PRL_WEB_ORIGIN=http://127.0.0.1:3457 node scripts/csp-negative-control.mjs --start",
     "test:load": "node scripts/load-test.mjs",
     "test:drills": "node scripts/reliability-drills.mjs",

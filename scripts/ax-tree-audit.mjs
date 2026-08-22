@@ -327,7 +327,10 @@ export const NAMED_ROLES = new Set([
 /** Landmark roles this app must expose, with how many of each are expected. */
 export const REQUIRED_LANDMARKS = [
   { role: 'banner', min: 1, max: 1 },
-  { role: 'navigation', min: 1, max: 4 },
+  // `/review` with a hand list exposes site navigation plus uniquely named
+  // "Sort hand history" and "Hand history pages" navs. Uniqueness is checked
+  // below; this budget is the count, not a licence for two unnamed navs.
+  { role: 'navigation', min: 1, max: 5 },
   { role: 'main', min: 1, max: 1 },
   { role: 'contentinfo', min: 1, max: 1 },
 ];
@@ -1241,7 +1244,12 @@ async function main() {
           'api',
           ['--filter', '@prl/api', 'start'],
           new URL('/api/v1/health', options.apiUrl).toString(),
-          { NODE_ENV: 'production' },
+          // Inherit DATABASE_URL and the rest from the parent (verify loads
+          // `.env`). Do not force NODE_ENV=production: that refuses the
+          // development secrets in `.env` and the audit would then score the
+          // lab error page, which is how `--start` without an API went green
+          // whenever something leftover answered on :3001.
+          { PORT: portFromOrigin(options.apiUrl), HOST: '127.0.0.1' },
         );
         servers.push(api);
         console.log(dim('  starting the API...'));
