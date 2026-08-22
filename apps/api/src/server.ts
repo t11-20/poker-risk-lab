@@ -338,15 +338,16 @@ async function main(): Promise<void> {
     // Postgres archive. See `src/routes/index.ts` for why neither can be done per module. It has to
     // run after `configureDatabase` above, because the session store needs the pool.
     await registerApiRoutes(app);
-    // Fired, not awaited: `/health` can answer as soon as we listen, `/ready` stays 503 until
-    // every calculation thread has built its strength table. Awaiting here would delay
-    // liveness by the same ~3s the first Coach used to stall the event loop for.
-    void beginSharedPoolWarmup(config, {
+    // Complete the pre-warm before accepting application traffic. Starting to listen while every
+    // worker is occupied building its strength table creates a queue-time race: a calculation
+    // arriving in that window can consume its whole budget before a thread is available. The
+    // measured four-thread warmup is about 3.3s on the reference host, which is a bounded startup
+    // cost and buys a warm first Coach for every request after `listening`. `/ready` still reports
+    // degraded while this promise is pending for embedders/tests that begin it themselves.
+    await beginSharedPoolWarmup(config, {
       onWarn: (warning) => {
         app.log.warn({ poolEvent: warning.event, poolDetail: warning.detail }, 'calculation pool');
       },
-    }).catch((error: unknown) => {
-      app.log.error({ err: error }, 'calculation worker warmup failed');
     });
     const address = await app.listen({ port: config.port, host: config.host });
     app.log.info(
@@ -361,6 +362,7 @@ async function main(): Promise<void> {
     );
   } catch (error) {
     app.log.fatal({ err: error }, 'failed to start');
+    await closeSharedPool().catch(() => undefined);
     await closeDatabase(1_000);
     process.exit(EXIT_STARTUP_FAILED);
   }
