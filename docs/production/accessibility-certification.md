@@ -280,7 +280,7 @@ Set up: load `/play`, activate **"Open the table"**, wait for the connection, ac
 | 3.20 | **Provoke a failure**: stop the API, then reload `/play` and open the table | The error block **interrupts**: "Error — table unavailable", then the reason. At the same moment the polite status line must **not** be claiming the table is ready. | |
 | 3.21 | Narrow the window below 600px, Tab to "Show the analysis" | It announces as a button with its expanded state. Activating it announces the change of state. | |
 
-### Journey 4 — Scenario Lab · `/lab` then `/lab/preflop-open-cutoff`
+### Journey 4 — Scenario Lab · `/lab` then `/lab/fl-same-cards-under-the-gun`
 
 | # | Step (keys) | Assertion | Result |
 |---|---|---|---|

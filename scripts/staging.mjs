@@ -65,7 +65,16 @@
 
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -306,6 +315,39 @@ function capture(command, args) {
  */
 function compose(args, options = {}) {
   return run('docker', ['compose', '--env-file', ENV_FILE, '-f', COMPOSE_FILE, ...args], options);
+}
+
+/**
+ * Compose argv that restarts nginx so it re-reads the bind-mounted certificate.
+ *
+ * `staging init` can renew the leaf while this stack is already up. The cert
+ * directory is a bind mount, but nginx reads it only at start; a plain
+ * `compose up` sees no image or config change and keeps serving the old leaf.
+ * Recreate **only** the proxy: API/web containers and their digests stay put.
+ *
+ * Exported so the test can drive this path with a fake compose runner instead of
+ * grepping this file. Changing the service list here is what the test would
+ * catch — a comment would not.
+ */
+export const PROXY_REFRESH_COMPOSE_ARGS = Object.freeze(['up', '-d', '--force-recreate', 'proxy']);
+
+/**
+ * Recreate the TLS terminator. `runCompose` is `compose` in production and a
+ * recorder in tests. Returns the compose result so `staging up` can abort.
+ */
+export function refreshStagingProxy(runCompose) {
+  if (typeof runCompose !== 'function') {
+    throw new Error('refreshStagingProxy requires the compose runner this file uses in production');
+  }
+  const args = [...PROXY_REFRESH_COMPOSE_ARGS];
+  const services = args.filter((arg) => !arg.startsWith('-'));
+  // `up` is the command; everything after the flags is a service name. The only
+  // service this may name is `proxy`. Naming `api` or `web` would recreate the
+  // artefacts `staging up` just pinned by digest.
+  if (!args.includes('--force-recreate') || services[0] !== 'up' || services.slice(1).join() !== 'proxy') {
+    throw new Error(`proxy refresh must be \`up -d --force-recreate proxy\`; got ${JSON.stringify(args)}`);
+  }
+  return runCompose(args);
 }
 
 // --- the environment file -------------------------------------------------
@@ -987,13 +1029,7 @@ async function commandUp(options) {
     return;
   }
 
-  // `staging init` can renew the certificate while this stack is already up. The
-  // certificate directory is a bind mount, but nginx reads the certificate only
-  // when it starts; an ordinary `compose up` sees no image/config change and keeps
-  // serving the old leaf. Recreate only the proxy so the API/web containers and
-  // their exact image digests are untouched, while every `staging up` actually
-  // tests the certificate generated for this run.
-  const proxyRefresh = compose(['up', '-d', '--force-recreate', 'proxy']);
+  const proxyRefresh = refreshStagingProxy(compose);
   if (proxyRefresh.status !== 0) {
     cross('could not reload the TLS proxy', proxyRefresh.stderr.trim() || proxyRefresh.stdout.trim());
     return;
@@ -1256,97 +1292,117 @@ function commandPromote(options) {
 
 // --- run ------------------------------------------------------------------
 
-let options;
-try {
-  options = parseArgs(process.argv.slice(2));
-} catch (err) {
-  console.error(red(`staging — ${err.message}`));
-  process.exit(1);
+/**
+ * True when this file was started from the command line rather than imported.
+ * realpath on both sides so a checkout reached through a symlink still matches.
+ */
+function startedFromCommandLine() {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
 }
 
-if (options.help || options.command === null) {
-  console.log(HELP);
-  process.exit(options.command === null && !options.help ? 1 : 0);
-}
+async function main() {
+  let options;
+  try {
+    options = parseArgs(process.argv.slice(2));
+  } catch (err) {
+    console.error(red(`staging — ${err.message}`));
+    process.exit(1);
+  }
 
-if (capture('docker', ['version', '--format', '{{.Server.Version}}']) === null) {
-  console.error(red('\n  ✗ docker is not available, or its daemon is not running.\n'));
-  process.exit(1);
-}
+  if (options.help || options.command === null) {
+    console.log(HELP);
+    process.exit(options.command === null && !options.help ? 1 : 0);
+  }
 
-if (options.command !== 'init' && !existsSync(ENV_FILE)) {
-  console.error(
-    red('\n  ✗ deploy/staging/.env.staging does not exist.') +
-      dim('\n      Every variable in docker-compose.staging.yml is required and none has a default,\n') +
-      dim('      so no compose command against it will run without this file. Create it with:\n\n') +
-      dim('          pnpm run staging init\n'),
-  );
-  process.exit(1);
-}
+  if (capture('docker', ['version', '--format', '{{.Server.Version}}']) === null) {
+    console.error(red('\n  ✗ docker is not available, or its daemon is not running.\n'));
+    process.exit(1);
+  }
 
-switch (options.command) {
-  case 'init':
-    commandInit(options);
-    break;
-  case 'up':
-    await commandUp(options);
-    break;
-  case 'status':
-    commandStatus(options);
-    break;
-  case 'smoke': {
-    const entries = readEnvFile();
-    const origin = parseHttpsOrigin(entries.get('PRL_STAGING_PUBLIC_ORIGIN') ?? DEFAULTS.origin);
-    if ('problem' in origin) {
-      cross('PRL_STAGING_PUBLIC_ORIGIN is unusable', origin.problem);
+  if (options.command !== 'init' && !existsSync(ENV_FILE)) {
+    console.error(
+      red('\n  ✗ deploy/staging/.env.staging does not exist.') +
+        dim('\n      Every variable in docker-compose.staging.yml is required and none has a default,\n') +
+        dim('      so no compose command against it will run without this file. Create it with:\n\n') +
+        dim('          pnpm run staging init\n'),
+    );
+    process.exit(1);
+  }
+
+  switch (options.command) {
+    case 'init':
+      commandInit(options);
+      break;
+    case 'up':
+      await commandUp(options);
+      break;
+    case 'status':
+      commandStatus(options);
+      break;
+    case 'smoke': {
+      const entries = readEnvFile();
+      const origin = parseHttpsOrigin(entries.get('PRL_STAGING_PUBLIC_ORIGIN') ?? DEFAULTS.origin);
+      if ('problem' in origin) {
+        cross('PRL_STAGING_PUBLIC_ORIGIN is unusable', origin.problem);
+        break;
+      }
+      const smoke = run(process.execPath, ['scripts/smoke-test.mjs', '--origin', origin.origin, '--strict'], {
+        stream: true,
+        env: { ...process.env, PRL_WEB_ORIGIN: origin.origin, NODE_EXTRA_CA_CERTS: CA_CERT },
+      });
+      if (smoke.status !== 0) cross('the smoke test failed', `exit ${smoke.status}`);
+      else tick('the smoke test passed');
       break;
     }
-    const smoke = run(process.execPath, ['scripts/smoke-test.mjs', '--origin', origin.origin, '--strict'], {
-      stream: true,
-      env: { ...process.env, PRL_WEB_ORIGIN: origin.origin, NODE_EXTRA_CA_CERTS: CA_CERT },
-    });
-    if (smoke.status !== 0) cross('the smoke test failed', `exit ${smoke.status}`);
-    else tick('the smoke test passed');
-    break;
-  }
-  case 'logs': {
-    const args = ['logs', '--tail', String(options.tail)];
-    if (options.service !== null) args.push(options.service);
-    compose(args, { stream: true });
-    break;
-  }
-  case 'down': {
-    const args = ['down', '--remove-orphans'];
-    if (options.volumes) args.push('--volumes');
-    const result = compose(args, { stream: true });
-    if (result.status !== 0) cross('docker compose down failed', `exit ${result.status}`);
-    else {
-      tick(options.volumes ? 'the stack is down and its database volume is destroyed' : 'the stack is down');
-      // The attestation describes a stack that no longer exists. Leaving it in
-      // place would let `promote` vouch for something nobody can look at any more.
-      if (existsSync(ATTESTATION_FILE)) {
-        rmSync(ATTESTATION_FILE);
-        console.log(
-          dim('      removed deploy/staging/staging-verified.json — it attested to a running stack'),
-        );
-      }
+    case 'logs': {
+      const args = ['logs', '--tail', String(options.tail)];
+      if (options.service !== null) args.push(options.service);
+      compose(args, { stream: true });
+      break;
     }
-    break;
+    case 'down': {
+      const args = ['down', '--remove-orphans'];
+      if (options.volumes) args.push('--volumes');
+      const result = compose(args, { stream: true });
+      if (result.status !== 0) cross('docker compose down failed', `exit ${result.status}`);
+      else {
+        tick(
+          options.volumes ? 'the stack is down and its database volume is destroyed' : 'the stack is down',
+        );
+        // The attestation describes a stack that no longer exists. Leaving it in
+        // place would let `promote` vouch for something nobody can look at any more.
+        if (existsSync(ATTESTATION_FILE)) {
+          rmSync(ATTESTATION_FILE);
+          console.log(
+            dim('      removed deploy/staging/staging-verified.json — it attested to a running stack'),
+          );
+        }
+      }
+      break;
+    }
+    case 'promote':
+      commandPromote(options);
+      break;
+    default:
+      // Unreachable: parseArgs rejects anything outside COMMANDS. Present so the
+      // switch is total rather than relying on that from a distance.
+      console.error(red(`staging — unhandled command ${options.command}`));
+      process.exit(1);
   }
-  case 'promote':
-    commandPromote(options);
-    break;
-  default:
-    // Unreachable: parseArgs rejects anything outside COMMANDS. Present so the
-    // switch is total rather than relying on that from a distance.
-    console.error(red(`staging — unhandled command ${options.command}`));
+
+  if (failures.length > 0) {
+    console.log(red(bold(`\nFAIL — ${failures.length} problem(s):`)));
+    for (const failure of failures) console.log(red(`    - ${failure}`));
+    console.log('');
     process.exit(1);
+  }
+  console.log(green(bold(`\nstaging ${options.command}: OK\n`)));
 }
 
-if (failures.length > 0) {
-  console.log(red(bold(`\nFAIL — ${failures.length} problem(s):`)));
-  for (const failure of failures) console.log(red(`    - ${failure}`));
-  console.log('');
-  process.exit(1);
-}
-console.log(green(bold(`\nstaging ${options.command}: OK\n`)));
+if (startedFromCommandLine()) await main();
