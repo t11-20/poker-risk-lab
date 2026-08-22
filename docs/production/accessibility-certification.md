@@ -1,6 +1,6 @@
 # Screen-reader certification procedure
 
-**Candidate SHA:** `ef0edc7fb4d383dd936661062820e35b7181681f`
+**Candidate SHA:** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`
 
 **Status on this candidate (2026-08-23, this host): BLOCKED — UNVERIFIED.**
 Section 10 records exactly why, with the errors captured on this SHA. Nothing in this repository
@@ -415,9 +415,9 @@ readiness report. It could not be, and the reasons are specific rather
 than a matter of time. Recorded here in full so that nobody mistakes the existence of this document
 for its result.
 
-**Candidate SHA:** `ef0edc7fb4d383dd936661062820e35b7181681f`. The application evidence and its
+**Candidate SHA:** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`. The application evidence and its
 provenance are listed in the final readiness report; this manual certification remains unexecuted.
-**Capture:** `/var/folders/7s/l9fr0tyd4wn9vp8qhg9yv7g80000gn/T/grok-goal-843cf6607006/implementer/screen-reader-blocked.log` recaptured on this SHA at 2026-08-22T17:52:26Z.
+**Capture:** `/var/folders/7s/l9fr0tyd4wn9vp8qhg9yv7g80000gn/T/grok-goal-843cf6607006/implementer/screen-reader-blocked.log` recaptured on this SHA (`osascript` System Events **-1743**).
 **Host:** macOS 26.5.2 (build 25F84), Darwin, Apple silicon. Safari and VoiceOver.app are both
 present (`/System/Library/CoreServices/VoiceOver.app`). Google Chrome 151 is installed and is what
 `pnpm run test:ax` and `pnpm run test:keyboard` drive.
@@ -441,11 +441,11 @@ was emitted from, and still not the same claim as "a person could use this".
 Do not let the blockage above be read as "accessibility unknown". These were run here and their
 results are real:
 
-- `pnpm run test:ax` on this production tree — 46 passed, 0 failed (`verify.log` / ax gate).
-- `pnpm run test:keyboard` against `http://127.0.0.1:3458` — 130 passed, 1 warning: the private-table
-  live socket did not go live within 25s on `next start` (rewrite destination baked to
-  `http://localhost:3001`; production topology is the staging proxy). Capture:
-  `…/implementer/keyboard.log`.
+- `pnpm run test:ax` on this SHA — 46 passed, 0 failed (`verify.log`, `VERIFY_EXIT=0`). The gate now
+  starts an API (`--with-api`) so `/lab/fl-same-cards-under-the-gun` is not audited as an error page.
+- `pnpm run test:keyboard` against `http://127.0.0.1:3458` with API on `:3001` (the baked rewrite) —
+  142 passed, `KEYBOARD_EXIT=0`. One N/A: `/play` before sitting has no decision row (the seated
+  journey is the private-table path). Capture: `implementer/keyboard.log` in the goal scratch dir.
 - `pnpm run test:a11y` — static rules over delivered HTML, PASS in `verify.log`.
 - `pnpm run test:csp` — 11/0 PASS; the browser refused every injection.
 - `apps/web/test/a11y-contracts.test.ts`, `apps/web/test/live-regions.test.ts` and

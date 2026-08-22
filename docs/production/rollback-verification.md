@@ -1,33 +1,27 @@
 # Rollback verification
 
-This was a non-destructive local staging rehearsal. It changed containers only and did not drop,
-truncate, reset, or modify the database/volume.
+**Images SHA:** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`
+**Capture:** `{SCRATCH}/rollback.log` (host SHA at run time `53faed7`, docs-only vs the image SHA).
 
-Candidate pair:
+`{SCRATCH}`:
+`/var/folders/7s/l9fr0tyd4wn9vp8qhg9yv7g80000gn/T/grok-goal-843cf6607006/implementer`
 
-- API `sha256:9a8457e8ae427d64b7cd2aa4da65f2a978cc55ad347d1842c6822e8beba72abe`
-- Web `sha256:34ba79323e2e0be06a7f935351401a3cc6ae8b9b1561e371d1cfa05263dccbb2`
+---
 
-Previous local pair (older dirty development image, not a signed production release):
+## Digests
 
-- API `sha256:65299822f90c7ef247044cd0462ac54fef250386ea114bfdec4dcc1d6401d4ab`
-- Web `sha256:301dc58757d7c24a5f922ac9a36390f04d548bc5244c5f14f5ec3b31205d64ff`
+| Role | API | Web |
+| --- | --- | --- |
+| Candidate | `sha256:3854174f36184bb14cf2bf0b6912fbc199a804b230c392111c0a58943d92e36f` | `sha256:2bc457c546bf3b8edd379c610199b18f0c1b06ebc61bdb83183755df31a8bd88` |
+| Previous (`4a17e3cec3a6`) | `sha256:9a8457e8ae427d64b7cd2aa4da65f2a978cc55ad347d1842c6822e8beba72abe` | `sha256:34ba79323e2e0be06a7f935351401a3cc6ae8b9b1561e371d1cfa05263dccbb2` |
 
-## Sequence actually run
+---
 
-1. Candidate API/web were running and TLS `/api/v1/ready` returned 200 with database/workers ready.
-2. `docker compose ... stop api` made the same readiness probe fail.
-3. `up -d --no-deps` with the previous API/web digests recreated those containers; readiness returned
-   200 with the database check.
-4. The candidate pair was restored with the same no-build command; readiness returned 200 with both
-   database and workers checks.
-5. `docker inspect` showed the candidate pair exactly after restoration.
+## Sequence
 
-No migration, volume removal, or image rebuild occurred during this rehearsal.
+1. Candidate running. TLS `/ready` 200, database and workers ok.
+2. `compose stop api`. Origin `/api/v1/ready` → nginx **504 Gateway Time-out**.
+3. Env pointed at the previous pair; `compose up -d --no-deps api web`. Previous api image confirmed `sha256:9a8457e8…`. `/ready` 200.
+4. Env restored to the candidate pair. Recreated containers. `/ready` 200 with workers. `docker inspect`: candidate api and web digests. `staging status`: both match the manifest.
 
-## Limits
-
-Database rollback is roll-forward-only; an irreversible schema/data change requires a restore plan,
-not a pretend down migration. This proves local digest transition only. It does not prove a registry
-pull, signed previous production release, external secret/config rollback, or cross-machine RTO.
-The final candidate must first get a same-SHA artifact manifest and a real previous release digest.
+Local BuildKit rollback only. Not a registry pull. Migrations remain roll-forward (`failed-migration` drill).
