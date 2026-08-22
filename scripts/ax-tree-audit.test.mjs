@@ -36,6 +36,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -329,5 +330,18 @@ describe('the script itself', () => {
     assert.match(result.stderr, /no journey named "nope"/u);
     // The message must list what IS available, or the reader has to open the file to find out.
     assert.match(result.stderr, /learn, practice, table, lab, legends, review/u);
+  });
+
+  it('the Scenario Lab journey names a scenario that exists in the content bundle', () => {
+    const source = readFileSync(SCRIPT, 'utf8');
+    const match = /path: '\/lab\/([^']+)'/u.exec(source);
+    assert.ok(match?.[1], 'the lab journey must name a /lab/<id> route');
+    const id = match[1];
+    const dataDir = join(REPO_ROOT, 'packages', 'content', 'data', 'scenarios');
+    const ids = readdirSync(dataDir)
+      .filter((name) => name.endsWith('.json'))
+      .flatMap((name) => JSON.parse(readFileSync(join(dataDir, name), 'utf8')))
+      .map((row) => row.id);
+    assert.ok(ids.includes(id), `/lab/${id} is not a scenario in packages/content/data/scenarios`);
   });
 });

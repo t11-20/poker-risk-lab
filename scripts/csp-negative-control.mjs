@@ -741,6 +741,12 @@ async function startDisallowedOrigin() {
  * port, and an orphan makes the next run test a build nobody meant to test. Detached, signalled by
  * process group, ESRCH tolerated.
  */
+/** The port `next start` should bind, taken from the origin this control will probe. */
+function portFromOrigin(origin) {
+  const port = new URL(origin).port;
+  return port === '' ? '3000' : port;
+}
+
 class ManagedServer {
   constructor(label, args, readyUrl, env) {
     this.label = label;
@@ -1194,6 +1200,7 @@ async function main() {
       const web = new ManagedServer('web', ['--filter', '@prl/web', 'start'], options.baseUrl, {
         NODE_ENV: 'production',
         PRL_API_ORIGIN: options.apiUrl,
+        PORT: portFromOrigin(options.baseUrl),
       });
       servers.push(web);
       console.log(dim('  starting the web app...'));

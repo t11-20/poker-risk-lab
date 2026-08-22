@@ -1457,7 +1457,7 @@ export const ROUTES = [
   { title: 'Learn index', path: '/learn', extra: checkDisclosures },
   { title: 'Guided practice (lesson)', path: '/learn/pot-odds', extra: checkFocusSurvivesUpdate },
   { title: 'Scenario Lab', path: '/lab', extra: checkDisclosures },
-  { title: 'Scenario Lab (a spot)', path: '/lab/preflop-open-cutoff', extra: checkSliders },
+  { title: 'Scenario Lab (a spot)', path: '/lab/fl-same-cards-under-the-gun', extra: checkSliders },
   { title: 'AI Legends', path: '/legends', extra: checkDisclosures },
   { title: 'AI Legends (a profile)', path: '/legends/adaptive-exploiter' },
   { title: 'Legends hand review', path: '/legends/hand-review' },

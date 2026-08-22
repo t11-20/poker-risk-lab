@@ -130,7 +130,7 @@ const JOURNEYS = [
   {
     key: 'lab',
     title: 'Scenario Lab',
-    routes: [{ path: '/lab' }, { path: '/lab/preflop-open-cutoff' }],
+    routes: [{ path: '/lab' }, { path: '/lab/fl-same-cards-under-the-gun' }],
   },
   {
     key: 'legends',
@@ -812,6 +812,12 @@ async function withChrome(headful, run) {
  * wrapper, so killing the wrapper leaves the real server holding the port, and an orphan makes the
  * next run audit a build nobody meant to test. Detached, signalled by process group, ESRCH tolerated.
  */
+/** The port `next start` should bind, taken from the origin this audit will probe. */
+function portFromOrigin(origin) {
+  const port = new URL(origin).port;
+  return port === '' ? '3000' : port;
+}
+
 class ManagedServer {
   constructor(label, args, readyUrl, env) {
     this.label = label;
@@ -1209,6 +1215,7 @@ async function main() {
       const web = new ManagedServer('web', ['--filter', '@prl/web', 'start'], options.baseUrl, {
         NODE_ENV: 'production',
         PRL_API_ORIGIN: options.apiUrl,
+        PORT: portFromOrigin(options.baseUrl),
       });
       servers.push(web);
       console.log(dim('  starting the web app...'));

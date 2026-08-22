@@ -218,6 +218,32 @@ async function startServer(
   return { child, port, output: () => text, graceMs };
 }
 
+/**
+ * Waits until `/ready` is 200.
+ *
+ * Production pre-warms the calculation threads after listen, and `/ready` stays 503 until they
+ * are usable. A test that sends Coach or equity traffic the instant the process binds a port
+ * is not modelling a load balancer — it is racing the warmup and then blaming the drain for
+ * the wait. The first SIGTERM-with-in-flight-request case failed at 3084ms against a 1500ms
+ * budget for exactly that: the equity request queued behind two warmup tasks.
+ */
+async function waitUntilReady(port: number, timeoutMs = 20_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  let last = 'never reached';
+  while (performance.now() < deadline) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/v1/ready`).catch((error: unknown) => {
+      last = error instanceof Error ? error.message : String(error);
+      return null;
+    });
+    if (response !== null) {
+      last = `HTTP ${String(response.status)}`;
+      if (response.status === 200) return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`the server did not become ready within ${timeoutMs}ms (last: ${last})`);
+}
+
 interface Exit {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
@@ -297,6 +323,7 @@ function assertCleanExit(
 describe('SIGTERM with a request in flight on a keep-alive socket', () => {
   it('answers the request, exits 0, and does not wait out the grace', async () => {
     const server = await startServer();
+    await waitUntilReady(server.port);
     const { cookie, token } = await csrfCredentials(server.port);
 
     // Sent by hand rather than with fetch, because the defect is about a socket that is mid-request
@@ -350,6 +377,7 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
 
   it('exits 0 with a worker-thread calculation still running, and leaves no thread behind', async () => {
     const server = await startServer(COMPUTE_GRACE_MS);
+    await waitUntilReady(server.port);
     const { cookie, token } = await csrfCredentials(server.port);
 
     // A real Monte Carlo request on the worker pool: this is the path on which the four threads
@@ -367,7 +395,11 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
       },
       body: JSON.stringify({
         heroCards: 'AhAd',
-        opponents: ['top:40', 'top:40', 'top:40'],
+        board: '2s7dQh',
+        // Four ranges make this the largest sampled request the production work ceiling accepts
+        // (200,000 × five players = 1,000,000 evaluations), while the flop keeps each trial
+        // materially more expensive than the preflop smoke case.
+        opponents: ['top:40', 'top:40', 'top:40', 'top:40'],
         samples: 200_000,
       }),
     }).then(async (response) => {
@@ -378,12 +410,30 @@ describe('SIGTERM with a request in flight on a keep-alive socket', () => {
       answeredBeforeSignal = true;
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 120));
+    // Do not sleep a guessed number of milliseconds. After pre-warm a sampled run can finish
+    // inside 120ms, and a request the planner refuses finishes in one. Wait until the process's
+    // own gauges say a thread is busy, which is the state this test is about.
+    const busyDeadline = performance.now() + 5_000;
+    let sawBusy = false;
+    while (performance.now() < busyDeadline) {
+      const exposition = await fetch(`http://127.0.0.1:${server.port}/metrics`).then((response) =>
+        response.text(),
+      );
+      if (/prl_worker_pool_busy \d*[1-9]/u.test(exposition)) {
+        sawBusy = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(
+      sawBusy,
+      true,
+      'a thread must be busy before the signal, or this is not an in-flight calculation',
+    );
     assert.equal(
       answeredBeforeSignal,
       false,
-      'the calculation finished before the signal, so this run proved nothing about a request in ' +
-        'flight — raise `samples` or add opponents',
+      'the calculation finished before the signal, so this run proved nothing about a request in flight',
     );
 
     const exiting = terminate(server);
@@ -605,6 +655,7 @@ describe('SIGTERM with a WebSocket open', () => {
       // schema they are talking about even when `.env` names another.
       ...(TEST_DATABASE_URL === undefined ? {} : { DATABASE_URL: TEST_DATABASE_URL }),
     });
+    await waitUntilReady(server.port);
     const credentials = await guestSession(server.port);
     const roomId = await createRoom(server.port, credentials);
 
