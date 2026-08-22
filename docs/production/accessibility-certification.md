@@ -1,9 +1,12 @@
 # Screen-reader certification procedure
 
-**Status on the machine this was written on: BLOCKED — UNVERIFIED.** Section 10 records exactly
-why, with the errors. Nothing in this repository has ever heard this application read aloud, and no
-gate in it can. This document is the procedure that would settle that, written so that a person who
-has never seen this app can execute it on another machine and produce a defensible verdict.
+**Status on candidate `4a17e3cec3a6418be34ee7b3efd69cbfe84446b2` (2026-08-22, this host): BLOCKED — UNVERIFIED.**
+Section 10 records exactly why, with the errors captured on this SHA. Nothing in this repository
+has ever heard this application read aloud, and no gate in it can. This document is the procedure
+that would settle that, written so that a person who has never seen this app can execute it on
+another machine and produce a defensible verdict.
+
+Do not record a PASS here because `test:ax` or `test:keyboard` was green.
 
 ---
 
@@ -405,19 +408,24 @@ Anything else is recorded, referenced and scheduled. Record the verdict as **PAS
 
 ## 10. Status on the machine this document was written on: BLOCKED / UNVERIFIED
 
-This procedure **has not been executed**. It could not be, and the reasons are specific rather than
-a matter of time. Recorded here in full so that nobody mistakes the existence of this document for
-its result.
+This procedure **has not been executed** against candidate
+`4a17e3cec3a6418be34ee7b3efd69cbfe84446b2`. It could not be, and the reasons are specific rather
+than a matter of time. Recorded here in full so that nobody mistakes the existence of this document
+for its result.
 
-**Host:** macOS 26.5.2 (build 25F84), Apple silicon. Safari 26.5.2 and VoiceOver.app are both
-present at the expected paths. Google Chrome 151.0.7922.170 is installed and is what
+**Candidate SHA:** `4a17e3cec3a6418be34ee7b3efd69cbfe84446b2` (clean tree). Production code is
+identical to `8e569052154c260c47c7fe58019152f194d361fc`; the delta from that SHA is only
+`apps/api/test/security-audit-trail.test.ts`.
+**Capture:** `/var/folders/7s/l9fr0tyd4wn9vp8qhg9yv7g80000gn/T/grok-goal-843cf6607006/implementer/screen-reader-blocked.log` recaptured on this SHA at 2026-08-22T17:52:26Z.
+**Host:** macOS 26.5.2 (build 25F84), Darwin, Apple silicon. Safari and VoiceOver.app are both
+present (`/System/Library/CoreServices/VoiceOver.app`). Google Chrome 151 is installed and is what
 `pnpm run test:ax` and `pnpm run test:keyboard` drive.
 
 | Blocker | Evidence | Consequence |
 |---|---|---|
 | **Screen Recording is denied** to the executing process | Capture attempts fail with `could not create image from display` | No visual or audio-visual evidence of a session can be produced, so a claimed run could not be evidenced even if it happened |
-| **Apple Events are refused to System Events** | `osascript` returns **error -1743** (`Not authorized to send Apple events`) | The UI cannot be driven or inspected programmatically |
-| **Apple Events are refused to VoiceOver** | `osascript` returns **error -1743** for the VoiceOver target as well | VoiceOver cannot be started, configured, or read from by script — including its announcement history, which is the only machine-readable record of what was said |
+| **Apple Events are refused to System Events** | `osascript -e 'tell application "System Events" to get UI elements enabled'` returns **error -1743** (`Not authorised to send Apple events to System Events`) | The UI cannot be driven or inspected programmatically |
+| **VoiceOver cannot be enabled or driven** | VoiceOver.app is present; `tell application "VoiceOver" to get version` returned `10` without driving the reader; System Events remains `-1743` | VoiceOver cannot be started, configured, or read from by this agent — including its announcement history, which is the only machine-readable record of what was said |
 | **The permissions database cannot be edited** | `csrutil status` reports **System Integrity Protection: enabled**; `TCC.db` is SIP-protected | The refusals above cannot be cleared from inside this environment, and must not be: forged grants would make any result worthless |
 | **No Windows reader is present** | `command -v nvda` → not found; `command -v orca` → not found | The NVDA half of section 2.2 cannot be attempted at all. Orca is absent too, so there is no Linux substitute |
 
@@ -432,12 +440,13 @@ was emitted from, and still not the same claim as "a person could use this".
 Do not let the blockage above be read as "accessibility unknown". These were run here and their
 results are real:
 
-- `pnpm run test:ax` — the computed accessibility tree, walked in Chrome 151, per journey: computed
-  names on interactive nodes, one h1 and no skipped levels, uniquely named landmarks, live-region
-  politeness, no rank or suit in any face-down card's computed name or markup, and a real
-  interaction that changes an announcement region and leaves focus on a named node.
-- `pnpm run test:keyboard` — every journey driven by real key events in real Chrome.
-- `pnpm run test:a11y` — the static rules over delivered HTML.
+- `pnpm run test:ax` on this production tree — 46 passed, 0 failed (`verify.log` / ax gate).
+- `pnpm run test:keyboard` against `http://127.0.0.1:3458` — 130 passed, 1 warning: the private-table
+  live socket did not go live within 25s on `next start` (rewrite destination baked to
+  `http://localhost:3001`; production topology is the staging proxy). Capture:
+  `…/implementer/keyboard.log`.
+- `pnpm run test:a11y` — static rules over delivered HTML, PASS in `verify.log`.
+- `pnpm run test:csp` — 11/0 PASS; the browser refused every injection.
 - `apps/web/test/a11y-contracts.test.ts`, `apps/web/test/live-regions.test.ts` and
   `apps/web/test/route-announcer.test.ts` — the source-level contracts, each with a negative control.
 

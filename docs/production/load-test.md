@@ -2,118 +2,107 @@
 
 What was measured, in what environment, and — as importantly — what these numbers are not.
 
-Harness: `scripts/load-test.mjs` (`pnpm run test:load`). It drives the real user journey per virtual user: connect → join room → sit → play hands → request Coach analysis → disconnect → reconnect → complete the hand → open Hand Review. It scrapes `GET /metrics` before, during and after every concurrency level, so the server-side figures below are the server's own, not the generator's guesses.
+**Candidate SHA:** `4a17e3cec3a6418be34ee7b3efd69cbfe84446b2` (clean tree).
+**Harness:** `scripts/load-test.mjs`. Journey per virtual user: connect → join room → sit → play → request Coach → disconnect → reconnect → finish the hand → open Hand Review. Server-side figures are scraped from `GET /metrics` on the process under test.
+**Captures:** `{SCRATCH}/load-test.log` + `load-test.json` (ramp 1–12 tables), `{SCRATCH}/load-test-saturation.log` + `load-test-saturation.json` (ramp 16–32 tables), `{SCRATCH}/worker-tests-4a17e3c.log` (cold/warm Coach), `{SCRATCH}/metrics-3104.txt`.
+
+`{SCRATCH}` on this run:
+`/var/folders/7s/l9fr0tyd4wn9vp8qhg9yv7g80000gn/T/grok-goal-843cf6607006/implementer`
 
 ---
 
 ## Read this before quoting any number
 
-**A "player" here is a load shape, not a person.** It has **zero think time**, asks the Coach mid-hand, reconnects every two hands and opens Hand Review every two hands. A real learner spends minutes reading a Coach panel — the turn clock is 240 seconds precisely because the panel takes about four minutes to read. So one virtual player is worth many readers, by an unmeasured factor, and **these figures must not be converted into a population of learners**. Doing that is how a capacity number becomes a wrong promise.
+**A "player" here is a load shape, not a person.** Think time is **0 ms**. Each seat asks Coach mid-hand (paced), reconnects every two hands, and opens Hand Review every two hands. A real learner spends minutes reading a Coach panel. **Do not convert these figures into a population of learners.**
 
-**The environment is part of the measurement.** Detach the numbers from it and they mean nothing:
+**The environment is part of the measurement:**
 
 | | |
 | --- | --- |
-| Instances | one API process |
-| `NODE_ENV` | `development` (`LOG_LEVEL=warn`) |
-| Host | darwin/arm64, 10 logical CPUs, a laptop |
+| Instances | one API process (`node apps/api/src/server.ts`) on `http://127.0.0.1:3104` |
+| `NODE_ENV` | `development` (`LOG_LEVEL=warn`), asserted with `--server-env development` |
+| Host | darwin/arm64, 10 logical CPUs, 16 GiB, Node v24.18.0 |
 | Generator | **the same machine**, over loopback |
 | Transport | plaintext, **no proxy, no TLS** |
-| Database | compose Postgres, same machine |
-| Rate limits | raised deliberately (`RATE_LIMIT_MAX=100000`, `RATE_LIMIT_GUEST_MAX=10000`, `RATE_LIMIT_EXPENSIVE_MAX=10000`, `RATE_LIMIT_BAN_AFTER=0`) so the run measured the server rather than the limiter. `prl_rate_limit_events_total` was **0** at every level reported, so nothing was refused |
-| Other tenants | **yes** — other development servers were running on the same machine throughout, and are an uncontrolled variable |
+| Database | compose Postgres on the same machine |
+| Rate limits | raised on this process only (`RATE_LIMIT_MAX=100000`, `RATE_LIMIT_GUEST_MAX=10000`, `RATE_LIMIT_EXPENSIVE_MAX=10000`, `RATE_LIMIT_BAN_AFTER=0`) so the ramp measured the server rather than the limiter. `prl_rate_limit_events_total` was **0** at every level. Production and staging keep the shipped limits; the consecutive smokes did not raise them. |
+| Other tenants | competing APIs on :3000/:3001/:3101/:3458 were stopped before the ramp. Load average at start of the saturation hunt was already ~7. |
 
-A production deployment differs on every row: TLS and a proxy add latency, a separate database host adds network, and a generator that is not competing for the same CPUs changes the shape entirely.
+A production deployment differs on every row.
+
+The first ramp completed without crossing a stop criterion. The plan requires an **observed** saturation point, so a second ramp was run until one fired. Both harness invocations completed and emitted a full report.
 
 ---
 
 ## The measured result
 
-**One instance saturates between 12 and 18 concurrent zero-think virtual users, and it is event-loop bound.**
+**One instance saturates at 96 concurrent zero-think virtual users, stopped by error-rate. The highest level that still met every stop criterion is 72 seated players.**
 
-The range is not imprecision, it is the finding. Two runs at identical settings gave 12 players (p95 541.5 ms, p99 1433.4 ms) and 18 players (p99 267.4 ms, with 12 players passing at p99 76.1 ms). The variance is driven by **when Hand Review requests happen to land**, so any single number from this harness needs the range rather than the point.
+Saturation hunt (`--ramp 16,24,32 --seats 3 --hold 15`, 2026-08-22T18:02:52Z–18:03:42Z):
 
-At a level comfortably inside the envelope — 6 players, all criteria met:
+| Level | Seated players | Hands/min | Act/s | Action p50 / p95 / p99 | Coach p95 | Review p95 | Errors | Error rate |
+| --- | ---: | ---: | ---: | --- | --- | --- | ---: | --- |
+| 1 | 48 | 11,817 | 2,472 | 2.5 / 7.7 / 18.4 ms | 97.0 ms | 3,860 ms | 228 | 0.53% `service_unavailable` |
+| 2 | **72** | **12,862** | **2,696** | **3.4 / 8.4 / 12.7 ms** | — (n=0) | 2,636 ms | 368 | 0.78% `service_unavailable` |
+| 3 | 96 | 9,672 | 2,032 | 5.2 / 13.4 / 20.0 ms | — (n=0) | 2,638 ms | 513 | **1.37%** — stop |
 
-| Measure | Value |
+Envelope below that (`--ramp 1,2,4,8,12`, 2026-08-22T17:59:18Z–18:02:04Z), all five levels passing:
+
+| Level | Players | Hands/min | Act/s | p50 / p95 / p99 | Event-loop p99 | CPU cores | RSS | Errors |
+| --- | ---: | ---: | ---: | --- | --- | ---: | --- | ---: |
+| 1 | 3 | 1,637 | 334 | 0.1 / 0.3 / 0.6 ms | 1.5 ms | 0.16 | 376 MiB | 1 |
+| 2 | 6 | 12,432 | 1,669 | 0.2 / 0.6 / 1.2 ms | 2.7 ms | 1.03 | 516 MiB | 1 |
+| 3 | 12 | 5,982 | 974 | 0.4 / 1.3 / 2.6 ms | 3.8 ms | 0.98 | 511 MiB | 9 |
+| 4 | 24 | 6,534 | 1,262 | 0.9 / 3.0 / 5.8 ms | 5.1 ms | 1.59 | 581 MiB | 48 |
+| 5 | 36 | 7,770 | 1,603 | 2.3 / 7.3 / 13.9 ms | 18.9 ms | 2.91 | 610 MiB | 142 (all `service_unavailable`) |
+
+Reconnect consistency: **0 failures** on both runs (every reconnect resumed the same seat, hand, hole cards, non-decreasing action sequence and non-shrinking pot).
+
+---
+
+## Saturation point, bottleneck, recommended ceiling
+
+**Saturation:** 96 seated players, stopped by `error-rate` (1.37% of 37,477 operations). Every failed operation at that level was `service_unavailable` — the **bounded worker queue refusing** rather than growing.
+
+Classification signals at the failing level (not themselves stop criteria):
+
+| Signal | Observed | Threshold | Fired |
+| --- | --- | --- | --- |
+| event-loop p99 | 17.51 ms | 50 ms | no |
+| CPU | 4.16 cores | 0.9 cores | yes |
+| worker-pool queued | 12 tasks | 1 | yes |
+| db-probe p99 | 500 ms | 50 ms | yes |
+| rate-limit refusals | 0 | 1 | no |
+
+**Primary bottleneck:** the worker pool (queue depth 12, busy 4) plus this process competing with the generator for CPU. Action latency stayed well inside the 150/250 ms p95/p99 stop criteria even at 96 players. Hand Review p95 was 2.6–3.9 s: that is the expensive path, served off the main thread, which is why the event loop stayed quiet while the queue refused work.
+
+**Recommended operational ceiling, with headroom:** **36 zero-think virtual users on one instance** in this environment (error rate 0.43%, event-loop p99 18.9 ms, action p99 13.9 ms). 72 players still met the harness stop criteria but was already refusing 0.78% of operations and running 4+ CPU cores on a 10-core laptop that was also generating the load. A TLS proxy, a remote database, and non-zero think time all change this number; none of them were in this measurement.
+
+---
+
+## Cold vs warm Coach
+
+The load warmup on 3104 reported **first Coach n=0**: that process had already awaited worker warmup before `listen`, so the throwaway level never paid the cold strength-table cost. The harness footnote that still says "the first Coach analysis runs a Monte Carlo on the main thread" is **stale relative to this SHA** — Coach is on the worker pool.
+
+Measured on this SHA (`{SCRATCH}/worker-tests-4a17e3c.log`, 44/44 pass):
+
+| Observation | Value |
 | --- | --- |
-| Hands per minute | 5,192 |
-| Actions per second | 697 |
-| Action latency p50 / p95 / p99 | 0.1 ms / 0.3 ms / 0.6 ms |
-| Worker pool busy / queued | 0 / 0 |
-| Rate-limit events | 0 |
-
-Sub-millisecond action latency is what a loopback socket to an in-memory table costs, and it is the honest number for that path — it is also why the bottleneck is elsewhere.
+| Socket Coach including cold strength table | 3,002 ms |
+| Same analysis computed on the main thread (negative control) | blows the event-loop budget (2,969 ms of loop delay) |
+| Pre-warm: `/ready` 503 until workers usable, then a top:40 Coach is not the cold path | 3,037 ms for the whole case (warmup + assertion) |
+| Event-loop p99 during load warmup (warm process) | 1.1–1.2 ms |
+| First Hand Review (warm) | 21 ms |
 
 ---
 
-## The bottleneck, isolated by controlled comparison
+## What this did not measure
 
-Two paths ran heavy synchronous work on the **main thread**, which in this process means blocking every socket, every timer and every turn clock at once.
+- More than one API instance.
+- A real network, TLS, or the staging nginx proxy.
+- A production-sized database.
+- Browser clients.
+- Sustained running (holds are 15 s).
+- A cold start of the **process** under the ramp (`--skip-warmup` was not used for the saturation hunt; cold Coach is the worker-test figure above).
 
-### Hand Review — the dominant cause
-
-`GET /hands/:handId` replays and prices a hand. Measured at 6 players with 500 ms think time:
-
-| | With review | With `--no-review` |
-| --- | --- | --- |
-| Action p99 | 1,656 ms | **15.3 ms** |
-| Event-loop p99 | 943 ms | **61 ms** |
-| Review p95 | 2,876 ms | — |
-| Ramp cleared | (saturated) | **24 players at p99 77.8 ms** |
-
-Removing review from the mix moved the ceiling from 12–18 players to 24 with no criterion crossed. At higher levels review p95 reached 5.8 s and then 10.2 s, against a `REQUEST_TIMEOUT_MS` of 20,000 — so it was approaching the point where a review would simply be cut off.
-
-The worker pool sat at **0 busy, 0 queued** throughout. All that capacity was idle while the main thread was the constraint.
-
-### The WebSocket Coach path — a second, smaller cause
-
-`requestCoach` ran a synchronous 2,000-sample Monte Carlo on the main thread. Measured: **1,565 ms** for the first analysis on a fresh process (cold), 67–100 ms warm, and a coach p95 of **6,170 ms** under 24 near-simultaneous requests. The HTTP Coach path already went through the pool; the socket path did not.
-
-Both are now routed through the existing worker pool. See the final readiness report for the after-figures and whether the ceiling moved.
-
----
-
-## What the metrics said, and one trap in reading them
-
-Two honest caveats about the instrumentation itself, both found by using it rather than by reading it:
-
-1. **`prl_event_loop_delay_*` is written only when the native monitor's window has samples, and every scrape resets that window.** So a scrape taken moments after another renders the *previous* window's values unchanged. Two runs were initially misread because of this. The harness now spaces its scrapes; anyone reading `/metrics` by hand during an incident should know it too.
-
-2. **`prl_db_probe_duration_seconds` is timed inside the `/ready` handler**, so it includes time the process could not reach the event loop at all. Under event-loop blocking it reported a five-second `select 1` against a completely idle database. The metric's purpose is to isolate *pool queueing*, and under this specific failure it measures the loop instead. The harness prints an explicit caveat whenever the db-pool and event-loop signals fire together.
-
----
-
-## Errors observed
-
-Two, in roughly 45,000 operations at 6 players, neither attributable:
-
-- one `transport:close-4429` — the server closed a socket with `WS_CLOSE.rateLimited`;
-- one `illegal_action`.
-
-Both occurred during a level with **4,955 reconnects in 35 seconds**, which is far more socket churn than any real client produces. That is plausibly the harness brushing a real limit rather than a defect, and it is recorded as unexplained rather than dismissed.
-
----
-
-## What was NOT measured
-
-- **Anything at all under TLS, behind a proxy, or across a network.** Every figure is loopback and plaintext.
-- **Multiple instances.** A table lives in one process, so horizontal scaling spreads tables and this measurement says nothing about it.
-- **A production `NODE_ENV`.** The runs were `development`. Given that a P0 was found where the production guard changed behaviour (see the readiness report), that gap is worth naming rather than glossing.
-- **Sustained load.** These are ramps of minutes, not soak tests. Nothing here says anything about memory growth over days.
-- **A realistic think-time population.** The zero-think shape is deliberately hostile and deliberately unlike a learner.
-- **Beyond 24 sockets by default.** The default ramp reaches 24; 144 sockets (4/8/16/24 tables × 6 seats) ran with no refusals, so the ceiling there is the machine rather than the harness.
-
-## The default run currently fails, on purpose
-
-`pnpm run test:load` with shipped defaults exits **1** against a healthy local API, because the server genuinely exceeded the 150 ms p95 / 250 ms p99 stop criteria at 12 concurrent zero-think users. That is a real result, not a harness defect. It is left failing rather than loosened, because a stop criterion moved to fit the measurement is not a criterion.
-
-## Reproducing it
-
-```bash
-pnpm run test:load --help          # the ramp, the criteria, and every flag
-pnpm run test:load --json          # machine-readable, for a before/after diff
-pnpm run test:load --no-review     # the controlled comparison that isolated the cause
-```
-
-Quote the environment table above with any number taken from it. A capacity figure without its environment is a guess with a decimal point.
+The default `pnpm run test:load` exits 1 when a stop criterion fires. That is a capacity measurement, not a test to loosen. The saturation hunt exited 1 and wrote a complete JSON report; that is the intended outcome of finding the ceiling.
