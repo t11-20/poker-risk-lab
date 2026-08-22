@@ -70,8 +70,10 @@ request path and is paired with readiness gating.
 
 ## Executed verification
 
-The following were run on the committed application tree containing `348f75b`; the final commit after
-this report changes documentation only.
+The following were run against the frozen application/evidence candidate
+`f9747bda63ca65be6eb15d54b72809a8e0ba46ba`, whose application history includes `348f75b` and the
+import-safe staging test hardening in `b3d1f13`. The commits after that candidate change
+documentation only.
 
 | Gate | Result |
 | --- | --- |
@@ -79,7 +81,7 @@ this report changes documentation only.
 | `pnpm run lint` | PASS, 478 files |
 | `pnpm run typecheck` | PASS, 8 workspace projects |
 | `pnpm run test:unit` | PASS, web 340 tests plus package suites |
-| `pnpm run test:scripts` | PASS, 417/417; an earlier parallel invocation cancelled 3 SBOM tests because concurrent pnpm graph access failed, then the isolated rerun passed |
+| `pnpm run test:scripts` | PASS, 422/422, 82 suites; a sandboxed invocation cancelled 3 SBOM tests because SQLite could not open the pnpm store, then the elevated rerun passed with the existing store accessible |
 | `pnpm --filter @prl/api test` | PASS, 812/812 tests, 201 suites, 0 fail/cancel/skip |
 | `pnpm run test:exhaustive` | PASS, 2 tests; all 133,784,560 seven-card hands classified |
 | `pnpm run test:simulation` | PASS, 23 tests; 12 AI profiles and distribution checks |
