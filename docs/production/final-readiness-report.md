@@ -1,152 +1,232 @@
-# Final readiness report
+# Final production-readiness report
 
-**Candidate SHA:** `4a17e3cec3a6418be34ee7b3efd69cbfe84446b2`
-**Tree at freeze:** clean (`git status --porcelain` empty).
-**Recorded:** `{SCRATCH}/candidate-sha.txt`
-**Date:** 2026-08-22
-**Host:** Darwin 25.5.0 arm64, macOS 26.5.2 (25F84), Node v24.18.0, pnpm 11.10.0
+**Candidate SHA:** `FINAL_DOC_SHA_TO_BE_FILLED`
 
-`{SCRATCH}`:
-`/var/folders/7s/l9fr0tyd4wn9vp8qhg9yv7g80000gn/T/grok-goal-843cf6607006/implementer`
+**Tree status at final freeze:** required to be clean; verify with `git status --porcelain` after the
+final documentation commit.
 
-This SHA’s only delta from `fd20e8bfa2d476ff8e71953080d4812732ca79f2` (and from `8e569052154c260c47c7fe58019152f194d361fc`) is `apps/api/test/security-audit-trail.test.ts`: the suite timeout is now 20 s so a 15 s fire-and-forget audit poll is not killed by `node --test`’s 5 s default. **Production code, Dockerfiles, and web bundle are unchanged from `8e56905`.** Images were built from `4a17e3c`.
-
-Prior markdown PASS claims and earlier SHAs are not evidence. Numbers below cite `{SCRATCH}` captures from this freeze.
-
----
+**Host:** macOS/Darwin arm64, Node 24.18.0, pnpm 11.10.0, Docker server 29.6.1, local PostgreSQL
+Compose container. Dates in command output are retained as observed; the host/database clock was
+one day behind the session date in some generated logs.
 
 ## Verdict
 
-**PRODUCTION HARDENING COMPLETE — EXTERNAL ACCESSIBILITY CERTIFICATION REQUIRED**
+# RELEASE: FAIL
 
-Screen-reader certification is **UNVERIFIED** on this host (Apple Event `-1743` / TCC). Every other engineering gate that this environment can run was executed against this candidate and did not produce an unresolved P0 or P1. That is not `RELEASE CANDIDATE: PASS` and not `PRODUCTION READY: PASS` — both require a real spoken walk.
+The hardening work is substantial and the executable application tests are strong, but this is not a
+production approval. The exact final candidate does not yet have a same-SHA production artifact
+manifest, strict container-CVE clearance, delivered alerting, or real screen-reader certification.
 
----
+## Candidate and artifact identity
 
-## Images
+The hardening history inspected was:
 
-| Service | Digest (local BuildKit store, not registry-attested) |
-| --- | --- |
-| api | `sha256:9a8457e8ae427d64b7cd2aa4da65f2a978cc55ad347d1842c6822e8beba72abe` |
-| web | `sha256:34ba79323e2e0be06a7f935351401a3cc6ae8b9b1561e371d1cfa05263dccbb2` |
+- `f7a9253` — worker/operations/legal/prewarm hardening;
+- `f1c56ee` — startup warmup race fix;
+- `0a7b93f` — release test startup/shutdown hardening;
+- `68f733b`, `8e56905` — browser focus/diagnostic hardening;
+- `fd20e8b`, `4a17e3c` — security-audit test budget hardening;
+- `348f75b` — staging proxy certificate refresh fix;
+- this final documentation commit.
 
-`{SCRATCH}/digests.txt`. `commit.dirty=false`.
+The production image manifest currently available was built once from clean `4a17e3c`, before the
+staging-only fix:
 
----
-
-## Worker pool (Coach / Hand Review)
-
-Monte Carlo does not run on the Node main event loop. Shared pool recovers after close. Queue is bounded (`service_unavailable` rather than unbounded growth). Deadlines kill the overrunning thread. `close` leaves worker count 0. Crash surfaces a typed error.
-
-On this SHA, `server.ts` **awaits** `beginSharedPoolWarmup` before `listen`. `/ready` is 503 until required workers are usable when warmup was requested. `/health` is liveness only.
-
-`{SCRATCH}/worker-tests-4a17e3c.log`: 44 tests, 0 fail.
-
-| Measurement | Value |
-| --- | --- |
-| Socket Coach with cold strength table | 3,002 ms |
-| Same work on the main thread (negative control) | blows the event-loop budget |
-| Pre-warm then first top:40 Coach | not the ~3 s cold path |
-| Load-test event-loop p99 after warmup | 1.1–1.2 ms |
-
----
-
-## Gates (§3 / §6)
-
-Install path: `pnpm install --frozen-lockfile --ignore-scripts` — already up to date, `INSTALL_EXIT=0` (`{SCRATCH}/frozen-install.log`). Lifecycle scripts disabled in `pnpm-workspace.yaml`.
-
-`pnpm run verify` on the production-identical tree (`8e56905`, `{SCRATCH}/verify.log`): security:audit, hygiene, lint, build, typecheck, design:contrast, test:a11y, test:ax (46/0), test:csp (11/0), test:exhaustive, test:simulation, db:verify all PASS. **`test` FAIL** — `security-audit-trail.test.ts` killed at 5,026 ms by the runner default while waiting up to 15 s for a fire-and-forget row.
-
-Root cause: `node --test` default timeout 5 s < `AUDIT_DEADLINE_MS` 15 s. Fix: suite `timeout` = 20 s. Assertion unchanged. `pnpm run test` on the fixed SHA: **812 API + unit/script suites, fail 0** (`{SCRATCH}/test-after-timeout-fix.log`, `TEST_EXIT=0`).
-
-| Gate | Result | Capture |
+| Service | Immutable local digest | Manifest tag |
 | --- | --- | --- |
-| Frozen install | PASS | `frozen-install.log` |
-| `pnpm run test` | PASS (after timeout fix) | `test-after-timeout-fix.log` |
-| Worker tests | 44/0 | `worker-tests-4a17e3c.log` |
-| Keyboard | 130 passed, 1 warning (live socket on `next start`) | `keyboard.log` |
-| Two consecutive strict smokes | both 62/62, `SMOKE1_EXIT=0` `SMOKE2_EXIT=0`, isolation via `RATE_LIMIT_RESET_TOKEN` (refused in production) | `smoke-consecutive.log` |
-| Drills | 16/16 | `drills.log` |
-| Exhaustive / simulation | PASS in `verify.log` | `verify.log` |
-| CSP negative control | 11/0 | `csp.log` / `verify.log` |
-| Supply-chain (IOC, SBOM, OSV, policy, pinning) | PASS in `security:audit` | `verify.log` |
-| Container CVE | 0 blocking, 60 unfixable HIGH | `containers.log` |
-| Production builds | `release:artifacts` PASS | `containers-build.log` |
-| Backup create / verify --deep / restore | all PASS | `backup-restore.log` |
-| API on restored DB | `/ready` ready; guest 201; schema verify PASS | `backup-restore-app.log` |
-| Staging same-digest + TLS smoke | PASS, 61 checks, `promote` promotable | `staging.log`, `staging-verify.log` |
-| Rollback rehearsal | candidate → 504 → previous digest → candidate | `rollback.log` |
-| Screen-reader | **UNVERIFIED** (`-1743`) | `screen-reader-blocked.log` |
-| Alert **delivery** | **UNVERIFIED** (no Alertmanager in staging compose). Conditions observed. | `alert-fire.log` |
+| API | `sha256:9a8457e8ae427d64b7cd2aa4da65f2a978cc55ad347d1842c6822e8beba72abe` | `prl-api:4a17e3cec3a6` |
+| Web | `sha256:34ba79323e2e0be06a7f935351401a3cc6ae8b9b1561e371d1cfa05263dccbb2` | `prl-web:4a17e3cec3a6` |
 
-Browser E2E runner: this repo uses Chrome CDP harnesses (`test:ax`, `test:keyboard`, `test:csp`), not Playwright. Those ran.
+The manifest says `commit.dirty=false`, but its commit is `4a17e3c`, not the final SHA above. The
+staging fix is excluded from the runtime filesystem, and the exact pair was exercised successfully,
+but that does not make the manifest same-SHA provenance. A release operator must rebuild once from the
+final SHA, record new digests, rescan them, and repeat staging before promotion. No rebuild was done
+after the staging fix during this review.
 
----
+## Worker and performance hardening
+
+Verified by source review, API tests, load metrics, and safe drills:
+
+- Coach and Hand Review Monte Carlo work crosses into worker threads; negative controls show the
+  equivalent in-process computation blocks the event loop.
+- The shared pool has bounded queue capacity and returns typed `service_unavailable` when full.
+- Worker deadlines are enforced; an overrun terminates the worker and the pool replaces it.
+- Crash, timeout, close, and recreate paths reject safely and do not retain stale pool references.
+- Shutdown terminates workers; the API suite verified idle, in-flight, WebSocket, partial-TCP, and
+  worker-active SIGTERM behavior.
+- Startup awaits the required warmup before `listen`; readiness remains unavailable until the
+  required warmup is usable. Health is liveness-only.
+- The pool uses public/known calculation inputs only; no deck, salt, future deck, RNG secret, or
+  opponent hole cards cross the worker boundary.
+
+Observed cold/warm samples were approximately 2.97 s versus 4 ms for one top-strength Coach task,
+3.32 s for four concurrent cold tasks versus 4.5 ms warm, and 3.05 s for lifecycle prewarm. These
+are samples, not percentile claims. Prewarming is retained because it materially removes the cold
+request path and is paired with readiness gating.
+
+## Executed verification
+
+The following were run on the committed application tree containing `348f75b`; the final commit after
+this report changes documentation only.
+
+| Gate | Result |
+| --- | --- |
+| `pnpm install --frozen-lockfile --ignore-scripts` | PASS, up to date; scripts disabled |
+| `pnpm run lint` | PASS, 478 files |
+| `pnpm run typecheck` | PASS, 8 workspace projects |
+| `pnpm run test:unit` | PASS, web 340 tests plus package suites |
+| `pnpm run test:scripts` | PASS, 417/417; an earlier parallel invocation cancelled 3 SBOM tests because concurrent pnpm graph access failed, then the isolated rerun passed |
+| `pnpm --filter @prl/api test` | PASS, 812/812 tests, 201 suites, 0 fail/cancel/skip |
+| `pnpm run test:exhaustive` | PASS, 2 tests; all 133,784,560 seven-card hands classified |
+| `pnpm run test:simulation` | PASS, 23 tests; 12 AI profiles and distribution checks |
+| `pnpm run build` | PASS, production package/API/web builds; Next generated 82 pages |
+| `pnpm run fixtures:check` | PASS |
+| `pnpm run design:contrast` | PASS, token and rendered layers |
+| `pnpm run db:migrate:status` | PASS, 4 applied/matching, 0 pending |
+| `pnpm run db:verify` | PASS, 123 columns, 41 indexes, 13 values/constraints/privileges checks |
+| `pnpm run db:roles` | PASS |
+| `node --test scripts/staging.test.mjs` | PASS; certificate renewal regression covered |
+| `pnpm run test:a11y` | PASS, 7 routes, 0 static violations |
+| `pnpm run test:keyboard` | PASS, 142 checks; one live-table route was N/A because it had no seat, while the real live journey completed |
+| `pnpm run test:ax` | PASS, 46 computed-tree checks |
+| `pnpm run test:csp` | PASS, 11 browser enforcement/negative-control checks |
+| two strict smoke runs | PASS; immediate consecutive runs passed after bounded rate-limit wait, without weakening production limits |
+
+The exhaustive evaluator, poker-engine invariants/property tests, WebSocket, reconnect/idempotency,
+database, hidden-information, migration, shutdown, concurrency, 12-profile rehydration, and
+security-audit suites are included in the API/package/script results above.
+
+## Security, SBOM, and image scans
+
+Passed explicit gates:
+
+```text
+pnpm run security:policy
+pnpm run security:denylist
+pnpm run security:shapes
+pnpm run security:provenance
+pnpm run security:ioc
+pnpm run security:pinning
+pnpm run security:hygiene
+pnpm run deps:quarantine -- --help
+pnpm run security:osv          # 0 findings across 162 resolved versions
+pnpm run security:sbom         # 170 components, 171 dependency records
+pnpm run security:audit        # all repository policy gates pass
+pnpm run security:containers   # policy result: 0 blocking, 60 unfixable HIGH+
+```
+
+The stricter command `pnpm run security:containers -- --include-unfixed` was also run and failed as
+expected with 60 HIGH/CRITICAL findings (30 per image, no available fix, no allowlist entries).
+They are real Debian bookworm-slim findings, not ignored findings. The repository’s default policy
+does not block unfixable base-image findings, but production approval cannot call the images CVE-free;
+the base-image refresh is a release-blocking follow-up.
+
+The security best-practice review found no demonstrated P0/P1 application exploit in the reviewed
+worker, poker, authorization, hidden-information, or logging paths. It did retain P2 observations:
+the readiness worker check is a warmup latch rather than a live crash indicator, in-flight database
+work can remain held to its request bound during an outage, and the image healthcheck is liveness-only.
 
 ## Capacity
 
-See [`load-test.md`](load-test.md).
+The realistic load journey reached actual saturation. At 3 seated virtual players it measured 32.06
+actions/s, 156.25 hands/min, action p50/p95/p99 0.81/3.05/18.50 ms, Coach p95 102.83 ms, Review p95
+1,248.85 ms, event-loop p99 21.93 ms, CPU 0.72 cores, worker queue 0, and 125/125 consistent
+reconnects. At 6 players it measured 54.80 actions/s and 256.35 hands/min, but action p99 rose to
+66.22 ms, Coach returned 0/48 answers, Review p95 reached 10,695.78 ms, event-loop p99 68.51 ms,
+worker queue peaked at 12, and 15/1,193 operations returned `service_unavailable` (1.26%).
 
-Saturation **observed** at **96** zero-think seated players (error-rate 1.37%, all `service_unavailable` from the worker queue). Highest passing level: **72** players, 12,862 hands/min, 2,696 act/s, action p99 12.7 ms. Recommended ceiling with headroom in this environment: **36** virtual users. Rate-limit events: 0 (limits raised on the load process only). Reconnect consistency: 0 failures.
+The observed saturation point is **6 concurrent seated virtual players** for that one local instance
+and workload. A conservative ceiling for the measured environment is **3 concurrent seated virtual
+players**. This is not a cluster or production-population claim; see `load-test.md`.
 
----
+## Readiness and failure behavior
 
-## Backup / restore
+Verified:
 
-| Step | Result |
+- frozen DB: health stayed 200; readiness failed in about 612 ms with a bounded database error;
+- DB unpause/restart: readiness recovered 200 in about 25–38 ms;
+- API SIGTERM idle, active, worker-active, WebSocket, partial request, and silent TCP cases exited
+  cleanly and did not leave workers behind;
+- worker crash/timeout/closed-pool cases returned typed errors and recovered;
+- malformed WebSocket, duplicate, stale/out-of-order, reconnect, and idempotency cases were safe;
+- restart with active rooms rehydrated all 12 profiles without strategy substitution;
+- hidden-card/future-deck scans found no leak, and chip/state invariants held;
+- a stopped API failed through the staging proxy and the candidate digest restored readiness.
+
+## Backup and restore
+
+An actual non-destructive rehearsal used a new scratch archive directory and a fresh target database:
+
+- encrypted backup: 131.9 MiB, 13 tables, 826,152 rows;
+- archive signature, ciphertext, authenticated frame decryption, and `pg_restore --list`: PASS;
+- restore into new `prl_restore_rc_20260823020659`: PASS, 36.72 s restore, matching 13-table census;
+- restored schema verification: PASS;
+- API started against the restored DB: `/ready` 200 with database/workers and `/health` 200.
+
+The destructive `verify --deep` path was not run because it drops its scratch database. No WAL
+archiving exists; RPO is the backup schedule interval. The observed restore/RTO is local evidence,
+not a production SLA.
+
+## Staging and rollback
+
+The exact existing image digests were deployed to the local production-shaped stack with PostgreSQL,
+production cookies/secrets generated outside the image, TLS, nginx WebSocket forwarding, HSTS, CSP,
+health/readiness checks, and strict smoke. The first TLS failure exposed and led to the targeted proxy
+refresh fix; two post-fix runs passed. Full details are in `staging-verification.md`.
+
+A non-destructive candidate → API stop/failing readiness → previous local API/web digests → candidate
+restore rehearsal passed. It is local BuildKit evidence only; the previous pair was a dirty local image,
+not a signed previous production release. Full details are in `rollback-verification.md`.
+
+## Observability and alerting
+
+The API exports actionable families for HTTP latency/errors, WebSockets, rooms/hands, event-loop lag,
+worker utilization/queue depth, Coach latency, DB pressure/errors, auth failures, authorization
+failures, rate limits, restarts, and readiness. Drill and staging conditions produced readiness/error
+signals and logs were checked for tokens, secrets, unrevealed cards, future deck state, and RNG
+material; none was observed.
+
+There is no Prometheus/Alertmanager/paging destination in the available staging Compose stack. Metric
+conditions can be produced, but alert delivery and a real critical-alert notification are
+**UNVERIFIED**. This is a release blocker, not a documentation PASS.
+
+## Screen reader
+
+The genuine VoiceOver+Safari/NVDA+Chrome/Firefox procedure is in `accessibility-certification.md`.
+It was not executable on this host. AX, axe/static checks, contrast, and keyboard checks do not count
+as screen-reader certification. Status: **UNVERIFIED**.
+
+## Independent adversarial challenge
+
+A fresh read-only challenge was performed after the worker/staging changes. It found no demonstrated
+P0 such as hidden-card leakage, chip creation/destruction, auth bypass, or silent strategy
+substitution. It did identify the unresolved P1/release evidence gaps above and P2 items: readiness
+is not crash-aware after warmup, a frozen database can hold an in-flight request to its bound, and
+the local image’s unfixed base-image CVEs are not clean.
+
+## Finding classification
+
+| Severity | Open findings |
 | --- | --- |
-| create | 69.7 MiB encrypted, 16.93 s, `CREATE_EXIT=0` |
-| verify --deep | signature, checksums, decrypt, `pg_restore` TOC, scratch restore, `VERIFY_EXIT=0` |
-| restore `--target prl_restore_rc --drop-existing` | 19.86 s decrypt+restore, 432,258 rows, `RESTORE_EXIT=0` |
-| `verify-schema` against restored DB | PASS |
-| API on restored DB `:3103` | `/ready` `{database,workers}` ready; `POST /auth/guest` 201 |
+| P0 catastrophic | 0 demonstrated |
+| P1 release-blocking | Real screen-reader certification unavailable; final candidate has no same-SHA image manifest; strict image scan reports 60 unfixed HIGH/CRITICAL findings; alert delivery/external production observability unavailable; registry-attested staging/rollback unavailable |
+| P2 significant | Readiness is a warmup latch after startup; one in-flight DB request can remain held to its bound during outage; cold Coach sample is ~3 s before warmup; capacity is only measured on loopback |
+| P3 polish | None material to this verdict |
 
-**RPO:** the backup schedule interval. There is no WAL archiving.
-**RTO (this machine, this archive):** restore ~20 s + API warmup ~3 s before `/ready`. Not a contractual number.
+## Commands intentionally not run
 
----
+`pnpm run test:drills` and backup `verify --deep` were withheld because their implementation executes
+DROP/destructive cleanup prohibited by the operator’s hard rule. No result is inferred from their
+documentation. A safe subset and all non-destructive API/readiness/recovery gates are reported above.
 
-## Logs / secrets
+## Required before release approval
 
-API logs from smokes, drills and the load instance were grepped for session tokens, hole-card payloads, deck/cursor/salt and RNG secrets (`{SCRATCH}/log-secret-scan.log`). No hole-card or deck-secret payloads were found. Staging smoke asserted: no socket frame carried a deck, cursor or salt; no live frame carried another seat’s hole cards.
+1. Run the documented human screen-reader certification and attach spoken evidence.
+2. Rebuild production API/web artifacts exactly once from this final SHA, record new digests, scan
+   those digests, and rerun same-digest staging.
+3. Refresh/replace the base image or obtain security approval for every strict-scan finding; do not
+   silently expand the allowlist.
+4. Connect metrics to real alert rules and prove a critical notification reaches an operator.
+5. Repeat rollback with a signed previous production digest and external secret/configuration path.
 
-`RATE_LIMIT_RESET_TOKEN` is logged as a configuration warning when set; it is **refused at boot in production**.
-
----
-
-## Independent review
-
-Read-only adversarial review of `4a17e3c` by an agent that did not implement the fixes (`{SCRATCH}/challenge.md`).
-
-| Severity | Count | Notes |
-| --- | --- | --- |
-| P0 | **0** | No hidden-card leak, chip-conservation break, auth bypass, or silent strategy substitution proven |
-| P1 | **0** | |
-| P2 | several | `/ready` workers check is a warmup latch, not crash-aware; audit *absence* uses a 250 ms sleep; keyboard live-table warns and still exits 0; `next start` rewrite is frozen at build time; image HEALTHCHECK is `/health` only; warmup comments still describe fire-and-forget |
-| P3 | polish | `style-src-attr 'unsafe-inline'`; `skipOnError` on the in-memory limiter |
-
-No P0/P1 remediated because none were found. Guardrails: no real-money path, public matchmaking disabled at DB CHECK (`visibility = 'invite_only'`), server-authoritative actions, bot rehydrate refuses rather than substituting.
-
----
-
-## Residual risks
-
-1. **Screen-reader unspoken.** Procedure: [`accessibility-certification.md`](accessibility-certification.md). Must be executed on a machine with VoiceOver+Safari and/or NVDA+Chrome/Firefox and a person listening.
-2. **Alert delivery.** Metric families exist; `ApiDown`/`ApiNotReady` conditions were produced; nothing in `docker-compose.staging.yml` pages a human.
-3. **Keyboard live table** on `next start` without a proxy: 25 s socket warning. Production topology is the staging proxy; staging smoke completed a hand over `wss://`.
-4. **60 unfixable HIGH CVEs** in Debian bookworm-slim (trivy). Changing base image is the remediation.
-5. **Digests are local.** Cross-machine promotion needs a registry.
-6. **`/ready` after warmup** does not flip on later worker death (P2).
-7. **postgres-outage:** in-flight `GET /rooms` can hang for the freeze; `/ready` does not.
-
----
-
-## What was not done, and must not be read as done
-
-- A spoken VoiceOver or NVDA walk of Learn → Guided Practice → Table/Coach → Lab → Legends → Hand Review.
-- A paging Alertmanager notification.
-- A registry push or cross-machine rollback.
-- Cluster capacity, multi-day soak, or converting zero-think VUs into learners.
-- Weakening rate limits, CSP, or tests to go green. Load-test limits were raised on a **dedicated** process, documented, and not used for smokes or staging.
-
-PRODUCTION HARDENING COMPLETE — EXTERNAL ACCESSIBILITY CERTIFICATION REQUIRED
+RELEASE: FAIL
