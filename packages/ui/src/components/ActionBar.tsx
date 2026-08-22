@@ -298,6 +298,20 @@ function BetSizer(props: BetSizerProps): ReactElement {
   );
 }
 
+/**
+ * Whether the browser has dropped the caret onto the document rather than onto a control.
+ *
+ * Chrome does not always land on `document.body` after it blurs a control that just became
+ * `disabled`. Measured against `/play?state=decision` in Chrome 151: after Fold, `activeElement`
+ * was `<html>`, the computed tree named the focused node `RootWebArea`, and a rescue that only
+ * treated `body` as abandoned never ran. `<html>` and `null` are the same state: nothing the
+ * reader can be told about has focus.
+ */
+function browserAbandonedFocus(): boolean {
+  const active = document.activeElement;
+  return active === null || active === document.body || active === document.documentElement;
+}
+
 export function ActionBar(props: ActionBarProps): ReactElement {
   const {
     legalActions,
@@ -419,7 +433,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     if (!left || !hadFocus.current) return;
     // Only when the browser has actually given up on focus. If something else legitimately took it
     // — a Coach panel that re-rendered and restored its own — leave it alone.
-    if (document.activeElement !== document.body && document.activeElement !== null) return;
+    if (!browserAbandonedFocus()) return;
     idleRef.current?.focus();
     hadFocus.current = false;
   }, [acting]);
@@ -432,7 +446,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     if (taken) {
       if (!hadFocus.current) return;
       queueMicrotask(() => {
-        if (document.activeElement !== document.body && document.activeElement !== null) return;
+        if (!browserAbandonedFocus()) return;
         inFlightRef.current?.focus();
         parked.current = document.activeElement === inFlightRef.current;
       });

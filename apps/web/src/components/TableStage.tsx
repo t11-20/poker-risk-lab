@@ -423,7 +423,12 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
 
   useEffect(() => {
     if (submission === null || !hadFocus.current) return;
-    if (document.activeElement !== document.body && document.activeElement !== null) return;
+    // Chrome 151 after disabling a focused button: `activeElement` can be `<html>`, not
+    // `document.body`. Both mean the caret is on the document. See `browserAbandonedFocus` in
+    // `ActionBar.tsx` — this is the same check, kept local because this file cannot import from
+    // the UI package's unexported helper.
+    const active = document.activeElement;
+    if (active !== null && active !== document.body && active !== document.documentElement) return;
     acknowledgementRef.current?.focus();
     hadFocus.current = false;
   }, [submission]);

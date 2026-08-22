@@ -229,9 +229,7 @@ describe('where the caret is actually moved', () => {
     /queueMicrotask\(\(\) => \{/u.test(source) && /inFlightRef\.current\?\.focus\(\);/u.test(source);
 
   const yieldsToAnOuterRescue = (source: string): boolean =>
-    /queueMicrotask\(\(\) => \{\s*if \(document\.activeElement !== document\.body && document\.activeElement !== null\) return;/u.test(
-      source,
-    );
+    /queueMicrotask\(\(\) => \{\s*if \(!browserAbandonedFocus\(\)\) return;/u.test(source);
 
   const returnsTheCaret = (source: string): boolean =>
     /if \(!returned \|\| !parked\.current\) return;/u.test(source) && /control\.focus\(\);/u.test(source);

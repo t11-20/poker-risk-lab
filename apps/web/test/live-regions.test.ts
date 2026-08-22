@@ -466,7 +466,8 @@ describe('a refusal interrupts, and everything else is polite', () => {
     assert.match(stage, /if \(submission === null \|\| !hadFocus\.current\) return;/u);
     assert.match(
       stage,
-      /if \(document\.activeElement !== document\.body && document\.activeElement !== null\) return;/u,
+      /if \(active !== null && active !== document\.body && active !== document\.documentElement\) return;/u,
+      'the rescue must also recognise Chrome’s <html> activeElement as abandoned focus',
     );
   });
 
