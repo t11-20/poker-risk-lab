@@ -51,9 +51,14 @@ import { DB_SKIP_REASON, testConfig } from './helpers/hands-app.ts';
  * 5s deadline on this case timed out once after 811 other tests, then the same file passed in
  * 317ms on its own. Fifteen seconds still fails a write that never happens; it just does not
  * confuse pool wait with a missing call site.
+ *
+ * The suite timeout must exceed that poll. `node --test` defaults each `it` to 5s, which is
+ * why a 15s deadline still failed `pnpm run verify` at 5026ms: the runner killed the case
+ * before the poll could finish. The assertion is unchanged.
  */
 const AUDIT_DEADLINE_MS = 15_000;
 const AUDIT_POLL_MS = 50;
+const AUDIT_TEST_TIMEOUT_MS = AUDIT_DEADLINE_MS + 5_000;
 
 /**
  * A CSRF token and the cookie it is paired with.
@@ -112,7 +117,10 @@ async function waitForAuditRow(event: string, since: Date): Promise<AuditRow | n
   return null;
 }
 
-describe('the security audit trail is actually written', { skip: DB_SKIP_REASON }, () => {
+describe('the security audit trail is actually written', {
+  skip: DB_SKIP_REASON,
+  timeout: AUDIT_TEST_TIMEOUT_MS,
+}, () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
 
   before(async () => {
