@@ -1,6 +1,8 @@
 # Screen-reader certification procedure
 
-**Status on the final documentation candidate (2026-08-23, this host): BLOCKED — UNVERIFIED.**
+**Candidate SHA:** `f9747bda63ca65be6eb15d54b72809a8e0ba46ba`
+
+**Status on this candidate (2026-08-23, this host): BLOCKED — UNVERIFIED.**
 Section 10 records exactly why, with the errors captured on this SHA. Nothing in this repository
 has ever heard this application read aloud, and no gate in it can. This document is the procedure
 that would settle that, written so that a person who has never seen this app can execute it on
@@ -413,9 +415,8 @@ readiness report. It could not be, and the reasons are specific rather
 than a matter of time. Recorded here in full so that nobody mistakes the existence of this document
 for its result.
 
-**Candidate SHA:** recorded in `docs/production/final-readiness-report.md` after the final
-documentation commit. The application evidence and its provenance are listed there; this manual
-certification remains unexecuted.
+**Candidate SHA:** `f9747bda63ca65be6eb15d54b72809a8e0ba46ba`. The application evidence and its
+provenance are listed in the final readiness report; this manual certification remains unexecuted.
 **Capture:** `/var/folders/7s/l9fr0tyd4wn9vp8qhg9yv7g80000gn/T/grok-goal-843cf6607006/implementer/screen-reader-blocked.log` recaptured on this SHA at 2026-08-22T17:52:26Z.
 **Host:** macOS 26.5.2 (build 25F84), Darwin, Apple silicon. Safari and VoiceOver.app are both
 present (`/System/Library/CoreServices/VoiceOver.app`). Google Chrome 151 is installed and is what

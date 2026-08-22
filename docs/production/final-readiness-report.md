@@ -1,9 +1,13 @@
 # Final production-readiness report
 
-**Candidate SHA:** `FINAL_DOC_SHA_TO_BE_FILLED`
+**Frozen application/evidence candidate SHA:** `f9747bda63ca65be6eb15d54b72809a8e0ba46ba`
 
-**Tree status at final freeze:** required to be clean; verify with `git status --porcelain` after the
-final documentation commit.
+The final documentation publication below is docs-only; the application tree is unchanged from
+this frozen candidate. All executable evidence in this report is bounded to this candidate or to
+the explicitly identified earlier artifact source.
+
+**Tree status at final freeze:** clean after the documentation publication commit (`git status
+--porcelain` empty).
 
 **Host:** macOS/Darwin arm64, Node 24.18.0, pnpm 11.10.0, Docker server 29.6.1, local PostgreSQL
 Compose container. Dates in command output are retained as observed; the host/database clock was
