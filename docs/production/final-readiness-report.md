@@ -1,10 +1,10 @@
 # Final production-readiness report
 
-**Frozen application/evidence candidate SHA:** `f9747bda63ca65be6eb15d54b72809a8e0ba46ba`
+**Frozen application/evidence candidate SHA:** `ef0edc7fb4d383dd936661062820e35b7181681f`
 
-The final documentation publication below is docs-only; the application tree is unchanged from
-this frozen candidate. All executable evidence in this report is bounded to this candidate or to
-the explicitly identified earlier artifact source.
+The documentation publication commits after this candidate are docs-only; the application tree is
+unchanged from this frozen candidate. All executable evidence in this report is bounded to this
+candidate or to the explicitly identified earlier artifact source.
 
 **Tree status at final freeze:** clean after the documentation publication commit (`git status
 --porcelain` empty).
@@ -31,7 +31,9 @@ The hardening history inspected was:
 - `68f733b`, `8e56905` — browser focus/diagnostic hardening;
 - `fd20e8b`, `4a17e3c` — security-audit test budget hardening;
 - `348f75b` — staging proxy certificate refresh fix;
-- this final documentation commit.
+- `b3d1f13` — import-safe staging CLI and compose-runner regression coverage;
+- `ef0edc7` — API-backed accessibility-tree audit and named-landmark regression coverage;
+- later commits — documentation publication only.
 
 The production image manifest currently available was built once from clean `4a17e3c`, before the
 staging-only fix:
@@ -71,9 +73,9 @@ request path and is paired with readiness gating.
 ## Executed verification
 
 The following were run against the frozen application/evidence candidate
-`f9747bda63ca65be6eb15d54b72809a8e0ba46ba`, whose application history includes `348f75b` and the
-import-safe staging test hardening in `b3d1f13`. The commits after that candidate change
-documentation only.
+`ef0edc7fb4d383dd936661062820e35b7181681f`, whose application history includes `348f75b`,
+`b3d1f13`, and the accessibility audit hardening in this candidate. The commits after that
+candidate change documentation only.
 
 | Gate | Result |
 | --- | --- |
