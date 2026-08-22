@@ -31,15 +31,23 @@
  * that the attributes exist in exactly one place.
  */
 
-import type { webcrypto } from 'node:crypto';
+import { timingSafeEqual, type webcrypto } from 'node:crypto';
 import type { CookieSerializeOptions } from '@fastify/cookie';
 import cookie from '@fastify/cookie';
 import csrfProtection from '@fastify/csrf-protection';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest, FastifyServerOptions } from 'fastify';
+import type {
+  FastifyInstance,
+  FastifyPluginAsync,
+  FastifyReply,
+  FastifyRequest,
+  FastifyServerOptions,
+} from 'fastify';
 import type { AppConfig } from '../config.ts';
 import { AppError, apiErrorBody, rateLimitError } from '../errors.ts';
+import { recordSecurityAudit } from '../observability/telemetry.ts';
+import { ResettableRateLimitStore, resetAllRateLimitCounters } from './rate-limit-store.ts';
 import { clientKeyFor, hashWithKey } from './request-context.ts';
 
 /**
@@ -457,6 +465,103 @@ export function clientKeyedRateLimit(
 }
 
 // ---------------------------------------------------------------------------
+// The rate-limit reset control (never present in production)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the reset control lives when it exists at all.
+ *
+ * Under `/api/v1` like everything else, and under `_test/` so that the name says what it is
+ * at every place a path appears — an access log, a proxy rule, a WAF signature. A control
+ * named `/admin/` invites somebody to decide it is a legitimate operations endpoint and
+ * enable it somewhere real.
+ */
+export const RATE_LIMIT_RESET_PATH = '/api/v1/_test/rate-limit/reset';
+
+/**
+ * Compares two secrets without leaking their contents through timing.
+ *
+ * `===` on strings short-circuits at the first differing byte, so the time it takes reveals
+ * how many leading characters a guess got right — enough to recover a token one character at
+ * a time over a network. `timingSafeEqual` requires equal-length buffers and throws
+ * otherwise, so the lengths are compared first (which is not itself a secret worth hiding:
+ * an attacker can vary length freely and learn it from the response either way).
+ */
+function secretsMatch(expected: string, provided: string): boolean {
+  const a = Buffer.from(expected, 'utf8');
+  const b = Buffer.from(provided, 'utf8');
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Reads a bearer token from an `Authorization` header, or null. */
+function bearerToken(request: FastifyRequest): string | null {
+  const header = request.headers.authorization;
+  if (typeof header !== 'string') return null;
+  const prefix = 'Bearer ';
+  if (!header.startsWith(prefix)) return null;
+  const token = header.slice(prefix.length).trim();
+  return token === '' ? null : token;
+}
+
+/**
+ * Registers the reset control, when — and only when — a token is configured.
+ *
+ * Three properties this has to have, and they are the reason it is a function rather than
+ * four lines inline:
+ *
+ * 1. **Absent by default.** With no token the route is never added, so an unconfigured
+ *    process does not merely refuse the call, it has nowhere to make it. `config.ts` makes
+ *    a production process carrying the variable refuse to boot, so "no token" is the only
+ *    state production can be in.
+ * 2. **Authenticated, in constant time.** See `secretsMatch`.
+ * 3. **Loud.** Every accepted reset logs at `warn` with the number of counters discarded.
+ *    A control that empties a security mechanism must leave a trace even when it is used
+ *    exactly as intended, so that its use during an incident is visible in the same place
+ *    the incident is.
+ *
+ * The route is deliberately NOT exempt from the rate limit. It is authenticated, so the
+ * limit is not what protects it — but a caller who does not hold the token should not get an
+ * unlimited number of guesses, and an exemption on the one route that can clear the limiter
+ * would be a pleasing thing to find.
+ *
+ * ## ORDERING: this must be called AFTER `registerErrorHandlers`
+ *
+ * It used to be called from inside `securityPlugin`, which `app.ts` registers *before* the
+ * error handlers. Fastify binds a route's error handler at the moment the route is ADDED, so
+ * the reset route was bound to the framework's default handler and its own refusals came back
+ * in Fastify's shape — `{"statusCode":403,"error":"Forbidden",...}` — rather than the single
+ * `ApiError` shape every other endpoint returns. Nothing security-relevant leaked, and it was
+ * still wrong: the contract says there is exactly one error shape, and a route that quietly has
+ * a second one is how a client learns to parse two.
+ *
+ * Hence `app.ts` calls this, late, rather than the plugin calling it early.
+ */
+export function registerRateLimitResetRoute(app: FastifyInstance, config: AppConfig): void {
+  const token = config.rateLimitResetToken;
+  if (token === null) return;
+
+  // Synchronous: clearing the counters is a walk of in-memory maps, and nothing here waits
+  // on anything.
+  app.post(RATE_LIMIT_RESET_PATH, (request, reply) => {
+    const provided = bearerToken(request);
+    if (provided === null || !secretsMatch(token, provided)) {
+      request.log.warn({ path: RATE_LIMIT_RESET_PATH }, 'rate-limit reset refused: bad or missing token');
+      // `not_authenticated`, not `forbidden`: no credential was accepted, which is what 401
+      // means. The body is the same shape every other failure uses.
+      return reply.status(401).send(apiErrorBody('not_authenticated', request.id));
+    }
+    const cleared = resetAllRateLimitCounters();
+    request.log.warn({ cleared }, 'rate-limit counters were reset by the test control');
+    return reply.send({ cleared });
+  });
+
+  app.log.warn(
+    { path: RATE_LIMIT_RESET_PATH },
+    'the rate-limit reset control is registered; this process must not serve real users',
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Server options that belong to this layer
 // ---------------------------------------------------------------------------
 
@@ -635,10 +740,23 @@ export const securityPlugin: FastifyPluginAsync<SecurityPluginOptions> = async (
   });
 
   // --- rate limiting ---------------------------------------------------------
+  /**
+   * The counter store.
+   *
+   * Production gets the library's own — this is `undefined` there, because
+   * `config.rateLimitResetToken` cannot be set in production at all (`config.ts` refuses to
+   * start such a process). Only a development, test or CI process substitutes the resettable
+   * store, and it does so purely so `scripts/smoke-test.mjs` can run twice in a row without
+   * the first run's deliberate flood of the guest limiter breaking the second one. See
+   * `plugins/rate-limit-store.ts` for the whole argument.
+   */
+  const resettableStore = config.rateLimitResetToken === null ? undefined : ResettableRateLimitStore;
+
   await app.register(rateLimit, {
     global: true,
     max: config.rateLimit.globalMax,
     timeWindow: config.rateLimit.globalWindowMs,
+    ...(resettableStore === undefined ? {} : { store: resettableStore }),
     // Past this much over the limit the caller is blocked outright instead of merely
     // told to wait. It still answers `rate_limited` (the contract has no separate code),
     // but `onBanReach` records it.
@@ -659,6 +777,24 @@ export const securityPlugin: FastifyPluginAsync<SecurityPluginOptions> = async (
     },
     onBanReach: (request, key) => {
       request.log.warn({ rateLimitKey: key }, 'rate-limit ban threshold reached');
+      // Written to the audit log as well as logged and counted, because a ban is the one
+      // rate-limit outcome that is a security event rather than traffic: the caller went far
+      // past the limit while ignoring `Retry-After`, which is a script and not a person. The
+      // KEY IS NOT RECORDED — it is derived from the caller's address, and the audit log is not
+      // the place to keep a pseudonymous identifier for that. The route is, because the route
+      // is what an investigation starts from.
+      recordSecurityAudit(
+        { event: 'security.rate_limit.banned', detail: { route: request.routeOptions.url ?? null } },
+        (message, detail) => {
+          request.log.warn({ ...detail }, message);
+        },
+      );
+      // Counted as well as logged. A ban is the signal that somebody is ignoring
+      // `Retry-After` rather than merely being busy, which is the difference between a
+      // popular hour and an abusive client — and an alert can only be written against the
+      // counter. The key is NOT a metric label: it is derived from the caller's address and
+      // would be both unbounded and personally identifying. See `observability/metrics.ts`.
+      app.appMetrics.rateLimitEvents.inc({ kind: 'banned' });
     },
     // The 429 body is built by `errors.ts` from the same `AppError` shape as everything
     // else, so `retryAfterSeconds` and the `Retry-After` header come from one number.

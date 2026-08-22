@@ -1,0 +1,71 @@
+# Poker Risk Lab — the weekly verification and prune.
+#
+# Triggered by prl-backup-verify.timer. Installed to
+# /etc/systemd/system/prl-backup-verify.service.
+#
+# ## Why this is a separate unit from the backup
+#
+# Because it answers a different question, and it must be able to fail without stopping
+# tomorrow's backup. `create` answers "did we take a copy". This answers "is the copy we
+# took last week still one we could restore" — which is the question a backup system
+# actually exists to answer, and the one nobody asks until the day it matters.
+#
+# ## Why the order of the three steps is load-bearing
+#
+# Type=oneshot runs ExecStart lines in sequence and ABORTS on the first non-zero exit. So:
+#
+#   1. `verify --all`  — layers 1-3 over every archive, plus `pg_restore --list` on the
+#                        newest. Cheap, catches bit rot and truncation across the whole set.
+#   2. `verify --deep` — the newest archive is restored into a scratch database and dropped.
+#                        This is the only step that proves an archive is restorable.
+#   3. `prune --apply` — delete what the retention policy no longer keeps.
+#
+# Pruning LAST, and only if both verifications passed, is the point. A prune that runs
+# before verification can delete the last archive that would have restored, on the strength
+# of a newer one that would not.
+
+[Unit]
+Description=Poker Risk Lab backup verification and retention prune
+Documentation=file:///opt/poker-risk-lab/docs/production/backup-restore.md
+After=network-online.target
+Wants=network-online.target
+# A failure here means the backups cannot be trusted. That is an alert, not a log line.
+# OnFailure=prl-backup-alert.service
+
+[Service]
+Type=oneshot
+User=prl-backup
+Group=prl-backup
+WorkingDirectory=/opt/poker-risk-lab
+EnvironmentFile=/etc/poker-risk-lab/backup.env
+ExecStart=/usr/bin/node scripts/backup.mjs verify --all
+ExecStart=/usr/bin/node scripts/backup.mjs verify --deep
+ExecStart=/usr/bin/node scripts/backup.mjs prune --apply
+
+# Longer than the backup's: `verify --deep` restores the whole archive, which is the slow
+# half of an RTO (measured: 28.8s for a 287.8 MiB archive).
+TimeoutStartSec=7200
+UMask=0077
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# `prune --apply` deletes files here, so this needs write access for a second reason.
+ReadWritePaths=/var/backups/poker-risk-lab
+# See prl-backup.service for why MemoryDenyWriteExecute is deliberately not set.
+
+[Install]

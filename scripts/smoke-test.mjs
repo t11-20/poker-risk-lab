@@ -2,6 +2,8 @@
 /**
  * End-to-end smoke test against a RUNNING API.
  *
+ * Invoked by:  pnpm run test:smoke
+ *
  * This is deliberately not a unit test and does not import the application. It speaks HTTP to a
  * real server with a real database, the way a browser does, because the two most serious bugs
  * found in this codebase were both invisible to unit tests:
@@ -14,34 +16,402 @@
  * critical journeys and, most importantly, asserts the confidentiality property that matters:
  * **one player must never receive another player's private cards or any undealt card.**
  *
- * It also checks the WEB origin's security headers (§11), because the response headers of a
- * rendered HTML page are another thing no in-process test can see: the app shipped with no
+ * It also checks the WEB origin's security headers (section 10), because the response headers of
+ * a rendered HTML page are another thing no in-process test can see: the app shipped with no
  * Content-Security-Policy at all while a carefully maintained CSP hash sat unused in the source.
  * `PRL_WEB_ORIGIN` says where that is; it defaults to the dev/compose address.
  *
- * Usage:
- *     node scripts/smoke-test.mjs [--origin http://127.0.0.1:3001]
+ * ## Why this script now begins by isolating itself from its own previous run
  *
- * Exits non-zero on the first hard failure, so it is usable as a release gate.
+ * Section 12 proves the guest limiter exists by exhausting it: it floods `POST /auth/guest` until
+ * the first 429. That route is keyed on the caller's ADDRESS and not on the session — it has to
+ * be, because it ISSUES the session an address-free key would rotate (`clientKeyedRateLimit` in
+ * apps/api/src/plugins/security.ts) — so the bucket it drains is byte-for-byte the bucket the
+ * NEXT run needs. The window is fixed, not sliding: it is stamped by the first request and clears
+ * only once the whole window has elapsed. Section 12 is last, so a run ends with that counter over
+ * the limit and most of a window still to go.
+ *
+ * The consequence was a release gate that could not be run twice. Run 2 reached section 2 within
+ * seconds, was refused 429, and then sections 7, 8 and 9 all failed — for the unrelated reason
+ * that the run never had a session at all. The output blamed hand history and hidden information
+ * for a rate-limit window.
+ *
+ * Two mechanisms close that, in this order of preference:
+ *
+ *   1. **Reset the counters before the run.** `POST /api/v1/_test/rate-limit/reset` exists only
+ *      when the SERVER was started with `RATE_LIMIT_RESET_TOKEN`, and `loadConfig` refuses to
+ *      start a production process that sets it — so this is deterministic, costs nothing, and is
+ *      unavailable exactly where it must be. The harness reports what it cleared.
+ *   2. **Wait out the window it consumed.** When there is no reset control — a staging stack
+ *      running with `NODE_ENV=production` is the case that matters — a 429 on the first guest
+ *      creation is recovered from by reading `Retry-After` / `x-ratelimit-reset`, waiting exactly
+ *      that long (plus one second for the boundary), and retrying ONCE. The wait is bounded and
+ *      the run says out loud that it waited and why.
+ *
+ * Neither mechanism weakens a limit. The first empties a counter on a process that cannot be a
+ * production process; the second does nothing but wait.
+ *
+ * ## What it does NOT prove
+ *
+ * That the limiter is correctly configured for production traffic — section 12 proves a 429
+ * arrives, not that the number behind it is the right number. That the reset control is absent in
+ * production; that is `apps/api/test/rate-limit-isolation.test.ts`, which drives `loadConfig`
+ * directly. And nothing at all about the database's contents beyond the rows this run created.
+ *
+ * Usage:
+ *     node scripts/smoke-test.mjs [--origin http://127.0.0.1:3001] [--strict]
+ *     node scripts/smoke-test.mjs --reset-token "$RATE_LIMIT_RESET_TOKEN"
+ *     node scripts/smoke-test.mjs --no-reset            # exercise the wait-out fallback
+ *
+ * Exit codes: 0 pass, 1 any failure (or any warning under --strict), 0 for --help.
  */
 
-const args = process.argv.slice(2);
-const originFlag = args.indexOf('--origin');
-const ORIGIN =
-  originFlag >= 0 ? (args[originFlag + 1] ?? '') : (process.env['PRL_API_ORIGIN'] ?? 'http://127.0.0.1:3001');
-const WEB_ORIGIN = process.env['PRL_WEB_ORIGIN'] ?? 'http://localhost:3000';
+// ---------------------------------------------------------------------------
+// Options
+// ---------------------------------------------------------------------------
 
 /**
- * `--strict` promotes every warning to a failure.
+ * The fallbacks used when neither a flag nor an environment variable says otherwise.
  *
- * Warnings could not fail the run at all, and two of them are security properties: "no 429 after 60
- * guest creations" means rate limiting has silently stopped working, and "unknown hand returned 500
- * rather than 404" means an error path is leaking a server fault to a caller. Both printed a yellow
- * line and exited 0. CI passes `--strict`, so a warning there is a red build; a developer running it
- * by hand still gets the softer report, because a local run against a half-configured server should
- * not read as a catastrophe.
+ * `apiOrigin` is a LITERAL ADDRESS on purpose, and the reason is not cosmetic. The rate-limit
+ * bucket this run consumes is derived from the address the API sees the connection arrive from,
+ * and `::1` and `127.0.0.1` are deliberately NOT folded together (see `normaliseAddress` in
+ * apps/api/src/plugins/request-context.ts — they are genuinely different addresses on different
+ * stacks). A hostname would hand that choice to whatever DNS resolution order the machine
+ * happens to have, so two runs on one laptop could quietly land in two different buckets and the
+ * isolation this script now depends on would hold only by luck.
+ *
+ * It therefore differs, knowingly, from `apps/web/src/lib/guest-bootstrap.ts`, whose
+ * `PRL_API_ORIGIN` default is `http://localhost:3001`. That is the web server's own reach to the
+ * API and it is a different client from this one; section 11 drives it, so a run can consume TWO
+ * guest buckets and see only one of them. The isolation section prints that fact rather than
+ * leaving it to be discovered.
  */
-const STRICT = args.includes('--strict') || process.env['PRL_SMOKE_STRICT'] === '1';
+const DEFAULTS = {
+  apiOrigin: 'http://127.0.0.1:3001',
+  webOrigin: 'http://localhost:3000',
+  /**
+   * Bound on the wait-out fallback, in seconds.
+   *
+   * The shipped guest window is 60 s (`RATE_LIMIT_GUEST_WINDOW_MS`), so 90 s clears a full window
+   * plus the second of padding plus headroom for a run that stamped its window moments before
+   * finishing. The bound exists so that a deployment which raised the window to an hour fails in
+   * 90 seconds with a diagnosis rather than hanging a release gate for one.
+   */
+  maxWaitSeconds: 90,
+};
+
+const HELP = `Poker Risk Lab smoke test — walks the critical journeys against a running API.
+
+Usage:
+  node scripts/smoke-test.mjs [options]
+
+Options:
+  --origin <url>          API origin to test          (default ${DEFAULTS.apiOrigin}, env PRL_API_ORIGIN)
+  --web-origin <url>      Rendered web origin         (default ${DEFAULTS.webOrigin}, env PRL_WEB_ORIGIN)
+  --strict                Promote every warning to a failure   (env PRL_SMOKE_STRICT=1)
+  --reset-token <token>   Token for POST /api/v1/_test/rate-limit/reset
+                          (env PRL_RATE_LIMIT_RESET_TOKEN, then RATE_LIMIT_RESET_TOKEN)
+  --no-reset              Never call the reset control, even with a token, so the
+                          wait-out fallback is the thing under test
+  --max-wait <seconds>    Bound on the wait-out fallback       (default ${DEFAULTS.maxWaitSeconds})
+  -h, --help              Print this and exit 0
+
+Exit codes: 0 pass, 1 any failure (or any warning under --strict).
+`;
+
+const STRING_OPTIONS = new Map([
+  ['--origin', 'apiOrigin'],
+  ['--web-origin', 'webOrigin'],
+  ['--reset-token', 'resetToken'],
+]);
+
+const NUMERIC_OPTIONS = new Map([['--max-wait', 'maxWaitSeconds']]);
+
+const BOOLEAN_OPTIONS = new Map([
+  ['--strict', 'strict'],
+  ['--no-reset', 'noReset'],
+]);
+
+/** `scheme://host[:port]`, or throws the reason. Used for both origins so they cannot differ. */
+function requireHttpOrigin(flag, value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${flag} must be an absolute URL, got "${value}"`);
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`${flag} must be http or https, got "${url.protocol}//"`);
+  }
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+    throw new Error(`${flag} must be an origin with no path, query or fragment, got "${value}"`);
+  }
+  return url.origin;
+}
+
+/**
+ * Parses argv into a validated option set.
+ *
+ * Exported so `smoke-test.test.mjs` can assert the precedence and the refusals without a server.
+ * `env` is a parameter rather than a read of `process.env` for the same reason: a test that has
+ * to mutate the real environment to check a fallback is a test that leaks into its neighbours.
+ *
+ * Precedence, per the repository's script convention: explicit flag, then environment variable,
+ * then a default. The reset token reads `PRL_RATE_LIMIT_RESET_TOKEN` first and `RATE_LIMIT_RESET_TOKEN`
+ * second so that a developer whose local `.env` already carries the SERVER's variable gets
+ * isolation for free under `node --env-file-if-exists=.env`, while a caller who needs to point the
+ * harness at a different process can do so without editing the server's own configuration.
+ */
+export function parseArgs(argv, env = process.env) {
+  const options = {
+    apiOrigin: env['PRL_API_ORIGIN'] ?? DEFAULTS.apiOrigin,
+    apiOriginSource: env['PRL_API_ORIGIN'] === undefined ? 'default' : 'PRL_API_ORIGIN',
+    webOrigin: env['PRL_WEB_ORIGIN'] ?? DEFAULTS.webOrigin,
+    strict: env['PRL_SMOKE_STRICT'] === '1',
+    resetToken: env['PRL_RATE_LIMIT_RESET_TOKEN'] ?? env['RATE_LIMIT_RESET_TOKEN'] ?? '',
+    noReset: false,
+    maxWaitSeconds: Number(env['PRL_SMOKE_MAX_WAIT_SECONDS'] ?? DEFAULTS.maxWaitSeconds),
+    help: false,
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    // `pnpm run test:smoke -- --strict` forwards the `--` itself; absorb it rather than
+    // rejecting the conventional invocation as an unknown option.
+    if (arg === '--') continue;
+    if (arg === '-h' || arg === '--help') {
+      options.help = true;
+      continue;
+    }
+    if (BOOLEAN_OPTIONS.has(arg)) {
+      options[BOOLEAN_OPTIONS.get(arg)] = true;
+      continue;
+    }
+    const value = argv[i + 1];
+    if (STRING_OPTIONS.has(arg)) {
+      if (value === undefined) throw new Error(`${arg} needs a value`);
+      const key = STRING_OPTIONS.get(arg);
+      options[key] = value;
+      if (key === 'apiOrigin') options.apiOriginSource = '--origin';
+      i += 1;
+      continue;
+    }
+    if (NUMERIC_OPTIONS.has(arg)) {
+      if (value === undefined) throw new Error(`${arg} needs a value`);
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) throw new Error(`${arg} needs a number, got "${value}"`);
+      options[NUMERIC_OPTIONS.get(arg)] = parsed;
+      i += 1;
+      continue;
+    }
+    throw new Error(`unknown option ${arg} (try --help)`);
+  }
+
+  if (options.help) return options;
+
+  options.apiOrigin = requireHttpOrigin('--origin', options.apiOrigin);
+  options.webOrigin = requireHttpOrigin('--web-origin', options.webOrigin);
+  if (!Number.isInteger(options.maxWaitSeconds) || options.maxWaitSeconds < 0) {
+    // Names the environment variable as well as the flag, because the value can arrive from
+    // either and "got NaN" sends the reader looking at a command line that does not mention it.
+    throw new Error(
+      '--max-wait (or PRL_SMOKE_MAX_WAIT_SECONDS) must be a whole number of seconds, ' +
+        `got "${options.maxWaitSeconds}"`,
+    );
+  }
+  // 600 s is ten minutes. Past that the harness is no longer waiting out a rate-limit window; it
+  // is hanging a release gate on one, and the honest answer is to configure the reset control.
+  if (options.maxWaitSeconds > 600) {
+    throw new Error(
+      `--max-wait ${options.maxWaitSeconds}s exceeds 600s; a gate that waits longer than that ` +
+        'should be given RATE_LIMIT_RESET_TOKEN instead of a longer bound',
+    );
+  }
+  return options;
+}
+
+// ---------------------------------------------------------------------------
+// Rate-limit isolation: the decisions, kept pure
+// ---------------------------------------------------------------------------
+
+/**
+ * The API prefix and the reset control's path.
+ *
+ * Assembled from two constants rather than written as one `'/api/v1/_test/rate-limit/reset'`
+ * literal, and that is deliberate rather than a style choice. `apps/api/test/harness-paths.test.ts`
+ * extracts every `'/api/v1/...'` literal out of this file and asserts the running server routes
+ * each one — a guard that is right for every other path here and cannot be right for this one,
+ * because this route is ABSENT unless `RATE_LIMIT_RESET_TOKEN` is configured. Its absence is the
+ * shipped state and the entire point of the control, so a single literal would make that guard
+ * demand a route production must never serve.
+ *
+ * The drift that literal would have caught is caught better instead: `smoke-test.test.mjs` reads
+ * `RATE_LIMIT_RESET_PATH` out of apps/api/src/plugins/security.ts and asserts it equals this.
+ */
+const API_PREFIX = '/api/v1';
+export const RATE_LIMIT_RESET_PATH = `${API_PREFIX}/_test/rate-limit/reset`;
+
+/**
+ * One second of padding on every computed wait.
+ *
+ * The store restarts a window when `iterationStartMs + timeWindow <= now`, which is a boundary a
+ * wait of exactly the reported remaining time can land ON rather than past — and `Retry-After` is
+ * a whole number of seconds derived from a millisecond ttl, so it is already rounded. One second
+ * removes that race for a cost nobody will notice. It is not a fudge factor for clock skew: the
+ * harness and the server are different processes and there is no assumption here that their
+ * clocks agree, only that a ttl the server computed is a duration.
+ */
+export const RECOVERY_PADDING_SECONDS = 1;
+
+/**
+ * One `Retry-After` / `x-ratelimit-reset` header value as whole seconds, or null.
+ *
+ * Only the delta-seconds form is accepted. RFC 9110 also allows an HTTP-date, and this API never
+ * sends one — `@fastify/rate-limit` emits `Math.ceil(ttl / 1000)` — so a date here would mean a
+ * proxy rewrote the header, and turning a date into a duration requires trusting that two clocks
+ * agree. Reporting "there is nothing to wait for" is more useful than a wait computed from a
+ * disagreement, so a date returns null and the caller says so out loud.
+ *
+ * Anything that is not a run of digits is null, including a negative delta: `-5` is not a
+ * duration, and `Number('-5')` succeeding is exactly how a malformed header becomes an instant
+ * retry that fails again.
+ */
+export function parseDeltaSeconds(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const seconds = Number(trimmed);
+  return Number.isSafeInteger(seconds) ? seconds : null;
+}
+
+/**
+ * How long to wait before retrying, from every source a 429 carries, or null when none parse.
+ *
+ * The LARGEST candidate wins. `Retry-After` and `x-ratelimit-reset` are both derived from the
+ * same ttl and the library has historically rounded them in opposite directions; the harness gets
+ * exactly one retry, so spending it a second early because the smaller number was believed is the
+ * failure mode worth engineering against. Waiting a second too long costs a second.
+ *
+ * `bodySeconds` is `error.retryAfterSeconds` from the JSON body, which `errors.ts` builds from the
+ * same number as the header. It is read as a third source rather than assumed redundant, because a
+ * proxy that strips response headers cannot strip a body.
+ */
+export function recoveryWaitSeconds({ retryAfter, rateLimitReset, bodySeconds }) {
+  const candidates = [
+    parseDeltaSeconds(retryAfter),
+    parseDeltaSeconds(rateLimitReset),
+    typeof bodySeconds === 'number' && Number.isSafeInteger(bodySeconds) && bodySeconds >= 0
+      ? bodySeconds
+      : null,
+  ].filter((value) => value !== null);
+  return candidates.length === 0 ? null : Math.max(...candidates);
+}
+
+/**
+ * Whether a 429 on `POST /auth/guest` is leftover quota or the limiter doing its job.
+ *
+ * `attempt` is the 1-based count of guest creations THIS PROCESS has made when the 429 arrived;
+ * `limit` is the route's own `x-ratelimit-limit`. A run that has made no more requests than the
+ * limit allows cannot have exhausted the limit by itself, so the budget was spent by something
+ * else — in practice the previous run's section 12. Past the limit, the 429 is the control working
+ * exactly as documented and must never be waited out, because waiting would turn "this limit is
+ * too low for the harness to complete a single run" into a silent pause.
+ *
+ * The count is a LOWER BOUND, and that is the safe direction. Section 11 makes the web server
+ * create a guest of its own, which this process cannot see and does not count; the effect is to
+ * make a genuine 'working' look like 'leftover'. The cost of that error is one bounded wait and a
+ * retry that fails honestly. The opposite error — reading leftover quota as the limiter working —
+ * is the one that produces the wrong diagnosis, and undercounting cannot cause it.
+ */
+export function classifyGuestLimit({ attempt, limit }) {
+  if (!Number.isInteger(attempt) || attempt < 1) return 'indeterminate';
+  if (!Number.isInteger(limit) || limit < 1) return 'indeterminate';
+  return attempt <= limit ? 'leftover' : 'working';
+}
+
+/**
+ * What to do about a 429 that stopped this run getting a session.
+ *
+ * Returns `{ action, waitMs, reason }`. `reason` is a sentence, not a code: it is printed
+ * verbatim, and the whole point of this work is that the run says what happened rather than
+ * failing four sections later for something else.
+ *
+ * The four refusals, in order, because each makes the ones below it meaningless:
+ *
+ *  1. The limiter is working and this run spent the budget. Waiting would hide a limit set too
+ *     low for one run of this harness to finish — a real misconfiguration.
+ *  2. This run already waited once. A second exhaustion inside one run means something other
+ *     than the previous run is consuming the bucket (another harness, a shared address, a limit
+ *     of one), and a retry loop would only make the report later and less clear.
+ *  3. Nothing said how long to wait.
+ *  4. The wait exceeds the bound.
+ */
+export function planRecovery({ verdict, waitSeconds, maxWaitSeconds, alreadyWaited }) {
+  if (verdict === 'working') {
+    return {
+      action: 'abandon',
+      waitMs: 0,
+      reason:
+        'this run has itself made more guest creations than the route allows, so the 429 is the ' +
+        'limiter working as documented rather than quota left over from a previous run; the limit ' +
+        'is too low for one run of this harness to complete',
+    };
+  }
+  if (alreadyWaited === true) {
+    return {
+      action: 'abandon',
+      waitMs: 0,
+      reason:
+        'this run has already waited out one window; a second exhaustion means something other ' +
+        'than the previous run is consuming this address bucket',
+    };
+  }
+  if (waitSeconds === null || waitSeconds === undefined) {
+    return {
+      action: 'abandon',
+      waitMs: 0,
+      reason:
+        'the 429 carried no usable Retry-After, x-ratelimit-reset or retryAfterSeconds, so there ' +
+        'is no window length to wait out',
+    };
+  }
+  if (waitSeconds > maxWaitSeconds) {
+    return {
+      action: 'abandon',
+      waitMs: 0,
+      reason:
+        `the window has ${waitSeconds}s left, which exceeds the --max-wait bound of ` +
+        `${maxWaitSeconds}s; configure RATE_LIMIT_RESET_TOKEN rather than raising the bound`,
+    };
+  }
+  return {
+    action: 'wait',
+    waitMs: (waitSeconds + RECOVERY_PADDING_SECONDS) * 1_000,
+    reason: `the window has ${waitSeconds}s left, so this run waits it out and retries once`,
+  };
+}
+
+/**
+ * What an origin implies about which rate-limit bucket the run will consume.
+ *
+ * Stated rather than assumed, because it was the last untracked source of run-to-run variance
+ * once the counters could be reset: a hostname resolves to whatever the machine resolves it to,
+ * and the API keys `::1` and `127.0.0.1` separately on purpose.
+ */
+export function originBucketNote(origin) {
+  const host = new URL(origin).hostname;
+  const literal = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.startsWith('[');
+  return literal
+    ? `${host} is a literal address, so DNS resolution order cannot move this run between buckets`
+    : `${host} is a hostname; whichever address it resolves to decides the rate-limit bucket, and ` +
+        '::1 and 127.0.0.1 are deliberately separate buckets — pass --origin with a literal address ' +
+        'to pin it';
+}
+
+// ---------------------------------------------------------------------------
+// Output
+// ---------------------------------------------------------------------------
 
 /** The WebSocket protocol version this script speaks. Must match WS_PROTOCOL_VERSION. */
 const WS_PROTOCOL_VERSION = 1;
@@ -57,6 +427,16 @@ let passed = 0;
 const failures = [];
 const warnings = [];
 
+/**
+ * The run's options, set once by `main()`.
+ *
+ * Module-level and mutable, which is a departure worth naming: everything else in this file is
+ * either pure or takes what it needs. The alternative was to parse argv at module scope, and that
+ * makes the file unimportable — `node --test scripts/smoke-test.test.mjs` would hand its own argv
+ * to `parseArgs` and die on an unknown option before a single assertion ran.
+ */
+let options = null;
+
 const ok = (label, detail = '') => {
   passed += 1;
   console.log(`${GREEN}  ✓${RESET} ${label}${detail ? ` ${DIM}${detail}${RESET}` : ''}`);
@@ -66,13 +446,21 @@ const bad = (label, detail) => {
   console.log(`${RED}  ✗${RESET} ${label}\n${DIM}      ${detail}${RESET}`);
 };
 const warn = (label, detail) => {
-  if (STRICT) {
+  if (options?.strict === true) {
     bad(label, `${detail}  (a warning, promoted to a failure by --strict)`);
     return;
   }
   warnings.push(`${label} — ${detail}`);
   console.log(`${YELLOW}  !${RESET} ${label} ${DIM}${detail}${RESET}`);
 };
+/**
+ * An observation that is neither a pass nor a problem.
+ *
+ * Deliberately not `warn`: `--strict` turns a warning into a failure, and "there is no reset
+ * token, so the fallback will be used" must not fail a run whose whole purpose is to prove the
+ * fallback works. It is counted nowhere and printed always.
+ */
+const note = (detail) => console.log(`${DIM}  · ${detail}${RESET}`);
 const section = (name) => console.log(`\n${BOLD}${name}${RESET}`);
 
 /** A browser-like client: keeps cookies, sends Origin, echoes the CSRF token. */
@@ -80,15 +468,15 @@ function createClient(name) {
   const cookies = new Map();
   let csrfToken = null;
 
-  const request = async (method, path, body) => {
-    const headers = { origin: WEB_ORIGIN, accept: 'application/json' };
+  const request = async (method, path, body, extraHeaders = {}) => {
+    const headers = { origin: options.webOrigin, accept: 'application/json', ...extraHeaders };
     if (cookies.size > 0) {
       headers['cookie'] = [...cookies.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
     }
     if (body !== undefined) headers['content-type'] = 'application/json';
     if (csrfToken !== null && method !== 'GET') headers['x-csrf-token'] = csrfToken;
 
-    const response = await fetch(`${ORIGIN}${path}`, {
+    const response = await fetch(`${options.apiOrigin}${path}`, {
       method,
       headers,
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -137,6 +525,18 @@ function collectStrings(value, out = []) {
   return out;
 }
 
+/** Every key name anywhere in an object graph. */
+function collectKeys(value, out = new Set()) {
+  if (Array.isArray(value)) for (const item of value) collectKeys(item, out);
+  else if (value !== null && typeof value === 'object') {
+    for (const [key, item] of Object.entries(value)) {
+      out.add(key);
+      collectKeys(item, out);
+    }
+  }
+  return out;
+}
+
 /**
  * Sits at a room over a REAL WebSocket and plays one hand to completion against the seated bot.
  *
@@ -159,7 +559,7 @@ function collectStrings(value, out = []) {
  * than the whole script dying half way through.
  */
 async function playOneHandOverSocket(client, roomId, seat, timeoutMs = 30_000) {
-  const url = new URL('/api/v1/ws', ORIGIN);
+  const url = new URL('/api/v1/ws', options.apiOrigin);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   const observed = {
     welcomed: false,
@@ -183,7 +583,7 @@ async function playOneHandOverSocket(client, roomId, seat, timeoutMs = 30_000) {
     const timer = setTimeout(() => finish('timed out waiting for the hand to complete'), timeoutMs);
 
     const socket = new WebSocket(url, {
-      headers: { cookie: client.cookieHeader, origin: WEB_ORIGIN },
+      headers: { cookie: client.cookieHeader, origin: options.webOrigin },
     });
     let lastActedKey = null;
     const send = (message) => {
@@ -253,25 +653,134 @@ async function playOneHandOverSocket(client, roomId, seat, timeoutMs = 30_000) {
   return observed;
 }
 
-/** Every key name anywhere in an object graph. */
-function collectKeys(value, out = new Set()) {
-  if (Array.isArray(value)) for (const item of value) collectKeys(item, out);
-  else if (value !== null && typeof value === 'object') {
-    for (const [key, item] of Object.entries(value)) {
-      out.add(key);
-      collectKeys(item, out);
-    }
+// ---------------------------------------------------------------------------
+// Guest creation, counted and recoverable
+// ---------------------------------------------------------------------------
+
+/**
+ * How many guest creations this process has sent, and whether it has already waited out a window.
+ *
+ * The count is what `classifyGuestLimit` needs to tell leftover quota from a working limiter, so
+ * EVERY call to `POST /auth/guest` in this file goes through `postGuest` — including section 3's
+ * deliberately token-less probe, which is refused for CSRF but is counted by the limiter first
+ * (the rate-limit hook is `onRequest`, the CSRF check is `preValidation`).
+ */
+let guestAttempts = 0;
+let alreadyWaited = false;
+
+/**
+ * Not `async`, deliberately: the counter must be incremented BEFORE the request is sent, not when
+ * its promise settles, or two concurrent creations would both read the pre-increment value and the
+ * classifier would be told a smaller number than the server counted. Returning the promise from a
+ * plain function is also what the linter wants from a body with nothing to await.
+ */
+function postGuest(client, displayName) {
+  guestAttempts += 1;
+  return client.request('POST', '/api/v1/auth/guest', { displayName });
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Creates a guest session, recovering once from quota a previous run consumed.
+ *
+ * Returns the successful response, or exits the process with the real diagnosis. Exiting is the
+ * point: before this, a 429 here was reported as `bad('guest creation')` and the run carried on
+ * without a session, so sections 7, 8 and 9 failed for reasons that had nothing to do with rooms,
+ * hand history or progress. Four wrong diagnoses are worse than one right one.
+ */
+async function createGuestSession(client, displayName) {
+  const first = await postGuest(client, displayName);
+  if (first.status === 200 || first.status === 201) return first;
+
+  if (first.status !== 429) {
+    fatalGuestFailure(
+      client,
+      `expected 200 or 201, got ${first.status} ${first.text.slice(0, 200)}`,
+      'That status is not a rate limit, so the cause is upstream of this harness.',
+    );
   }
-  return out;
+
+  const limit = parseDeltaSeconds(first.headers.get('x-ratelimit-limit'));
+  const verdict = classifyGuestLimit({ attempt: guestAttempts, limit });
+  const waitSeconds = recoveryWaitSeconds({
+    retryAfter: first.headers.get('retry-after'),
+    rateLimitReset: first.headers.get('x-ratelimit-reset'),
+    bodySeconds: first.json?.error?.retryAfterSeconds,
+  });
+  const plan = planRecovery({
+    verdict,
+    waitSeconds,
+    maxWaitSeconds: options.maxWaitSeconds,
+    alreadyWaited,
+  });
+
+  if (plan.action === 'abandon') {
+    fatalGuestFailure(
+      client,
+      `429 rate_limited after ${guestAttempts} guest creation(s) this run, limit ${limit ?? 'unknown'}`,
+      plan.reason,
+    );
+  }
+
+  note(
+    `${client.name} was refused 429 on its first guest creation, which this run cannot have caused ` +
+      `(${guestAttempts} attempt(s) against a limit of ${limit ?? 'unknown'}). ${plan.reason}.`,
+  );
+  note(
+    "The cause is this harness's own previous run: section 12 floods the guest limiter on purpose " +
+      'and the window is fixed, not sliding. Set RATE_LIMIT_RESET_TOKEN on a non-production API to ' +
+      'make this instant.',
+  );
+  alreadyWaited = true;
+  await sleep(plan.waitMs);
+
+  const retry = await postGuest(client, displayName);
+  if (retry.status === 200 || retry.status === 201) {
+    ok(
+      `${client.name} obtained a session after waiting out the previous run's window`,
+      `${Math.round(plan.waitMs / 1_000)}s waited, one retry`,
+    );
+    return retry;
+  }
+  fatalGuestFailure(
+    client,
+    `the retry after waiting ${Math.round(plan.waitMs / 1_000)}s returned ${retry.status} ` +
+      `${retry.text.slice(0, 160)}`,
+    'The window was waited out in full and the budget was still spent, so something other than ' +
+      'this harness is driving that address bucket.',
+  );
+}
+
+/**
+ * Stops the run, mirroring section 1's behaviour for an unreachable API.
+ *
+ * A missing session is not a check that failed; it is the precondition for four later sections,
+ * and continuing past it manufactures failures that name the wrong subsystem.
+ */
+function fatalGuestFailure(client, detail, why) {
+  bad(`${client.name} could not obtain a guest session`, detail);
+  console.log(
+    `\n${RED}This run cannot continue: sections 7, 8 and 9 all need a session, and without one they ` +
+      `would fail for a reason that has nothing to do with what they test.${RESET}\n` +
+      `${DIM}  ${why}\n` +
+      '  Deterministic fix:  start the API with RATE_LIMIT_RESET_TOKEN set (never possible in\n' +
+      '                      production — loadConfig refuses to boot) and pass the same value as\n' +
+      '                      --reset-token, or leave it in .env and run with --env-file.\n' +
+      '  Fallback:           wait for the guest window to elapse and run again; this harness does\n' +
+      '                      that automatically when the wait is within --max-wait ' +
+      `(${options.maxWaitSeconds}s).${RESET}\n`,
+  );
+  process.exit(1);
 }
 
 // ---------------------------------------------------------------------------
+// Sections
+// ---------------------------------------------------------------------------
 
-section(`Poker Risk Lab smoke test  ${DIM}${ORIGIN}${RESET}`);
-
-// ---- 1. Liveness and readiness ----
-section('1. Health');
-{
+/** 1. Liveness and readiness. Exits the process when the API is not there at all. */
+async function sectionHealth() {
+  section('1. Health');
   const health = await createClient('probe').request('GET', '/api/v1/health');
   if (health.status === 200 && health.json?.status === 'ok') {
     ok('health responds', `version ${health.json.version}, protocol ${health.json.protocolVersion}`);
@@ -291,10 +800,74 @@ section('1. Health');
   }
 }
 
-// ---- 2. Guest session, CSRF, and the units framing ----
-section('2. Guest session');
-const alice = createClient('alice');
-{
+/**
+ * Empties the rate-limit counters, when this deployment has the control and the caller has its
+ * token. Unnumbered on purpose: the sections are referenced by number from three other files, and
+ * renumbering them to make room would have made those references wrong to fix a different defect.
+ *
+ * Runs after section 1 rather than before it so that an API which is simply not running produces
+ * section 1's "start it with pnpm run dev:api" rather than a confusing failure to reset something.
+ * Health and readiness spend no guest quota, so nothing has been consumed by the time this runs.
+ */
+async function sectionIsolation() {
+  section('Rate-limit isolation');
+  note(
+    `API origin ${options.apiOrigin} (from ${options.apiOriginSource}) — ${originBucketNote(options.apiOrigin)}`,
+  );
+  note(
+    `section 11 drives ${options.webOrigin}, whose server-side calls reach the API on its own ` +
+      'PRL_API_ORIGIN (default http://localhost:3001 in apps/web/src/lib/guest-bootstrap.ts). That ' +
+      'may be a different address bucket from this one, and this run cannot see it.',
+  );
+
+  if (options.noReset) {
+    note('--no-reset was passed, so the wait-out fallback is deliberately the mechanism under test.');
+    return;
+  }
+  if (options.resetToken === '') {
+    note(
+      'no reset token (--reset-token, PRL_RATE_LIMIT_RESET_TOKEN, RATE_LIMIT_RESET_TOKEN), so a ' +
+        `spent guest budget will be waited out instead, bounded at ${options.maxWaitSeconds}s.`,
+    );
+    return;
+  }
+
+  // The control is a POST, so it goes through the same CSRF check as every other mutating route —
+  // it is not exempt and must not be. One GET first to obtain the token and its cookie.
+  const client = createClient('isolation');
+  const seed = await client.request('GET', '/api/v1/auth/session');
+  if (typeof seed.json?.csrfToken === 'string') client.setCsrf(seed.json.csrfToken);
+
+  const reset = await client.request('POST', RATE_LIMIT_RESET_PATH, undefined, {
+    authorization: `Bearer ${options.resetToken}`,
+  });
+
+  if (reset.status === 200 && typeof reset.json?.cleared === 'number') {
+    ok('rate-limit counters reset before the run', `${reset.json.cleared} counter(s) cleared`);
+    return;
+  }
+  if (reset.status === 404) {
+    note(
+      `${RATE_LIMIT_RESET_PATH} is not registered on this server, so it was started without ` +
+        'RATE_LIMIT_RESET_TOKEN (a production process cannot have it at all). Falling back to ' +
+        'waiting out any window this harness consumed.',
+    );
+    return;
+  }
+  // A refused token is a failure and not a fallback: the caller asked for isolation with a
+  // credential the server did not accept, and quietly proceeding is how a control rots.
+  bad(
+    'rate-limit reset',
+    `the reset control answered ${reset.status} ${reset.text.slice(0, 160)} — the token this ` +
+      'harness holds is not the one the server was started with',
+  );
+}
+
+/** 2. Guest session, CSRF token, and the units framing. */
+async function sectionGuestSession() {
+  section('2. Guest session');
+  const alice = createClient('alice');
+
   const anon = await alice.request('GET', '/api/v1/auth/session');
   if (anon.status === 200 && anon.json?.user === null) {
     ok('an anonymous session read returns 200 with user:null', 'guest-first, not a 401');
@@ -303,43 +876,46 @@ const alice = createClient('alice');
   }
   if (typeof anon.json?.csrfToken === 'string') alice.setCsrf(anon.json.csrfToken);
 
-  const guest = await alice.request('POST', '/api/v1/auth/guest', { displayName: 'Alice' });
-  if (guest.status === 200 || guest.status === 201) {
-    const user = guest.json?.user;
-    ok('guest created', `${user?.displayName} with ${user?.units} units`);
-    if (typeof user?.units !== 'number' || user.units <= 0) {
-      bad('guest units', `expected a positive unit balance, got ${String(user?.units)}`);
-    }
-    if (typeof guest.json?.csrfToken === 'string') alice.setCsrf(guest.json.csrfToken);
-    if (!alice.cookieNames.some((name) => /session/i.test(name))) {
-      bad('session cookie', `no session cookie was set; got ${alice.cookieNames.join(', ')}`);
-    } else {
-      ok('session cookie set', alice.cookieNames.join(', '));
-    }
-    // No currency framing anywhere in the payload.
-    const strings = collectStrings(guest.json).join(' ');
-    if (/[$£€]|\bUSD\b|\bbalance\b/i.test(strings)) {
-      bad('units framing', 'the session payload uses currency or "balance" wording');
-    } else {
-      ok('no currency framing in the session payload');
-    }
+  const guest = await createGuestSession(alice, 'Alice');
+  const user = guest.json?.user;
+  ok('guest created', `${user?.displayName} with ${user?.units} units`);
+  if (typeof user?.units !== 'number' || user.units <= 0) {
+    bad('guest units', `expected a positive unit balance, got ${String(user?.units)}`);
+  }
+  if (typeof guest.json?.csrfToken === 'string') alice.setCsrf(guest.json.csrfToken);
+  if (!alice.cookieNames.some((name) => /session/i.test(name))) {
+    fatalGuestFailure(
+      alice,
+      `no session cookie was set; got ${alice.cookieNames.join(', ')}`,
+      'The account was created and the cookie was not returned, so this is a session-issuing ' +
+        'defect rather than a rate limit.',
+    );
+  }
+  ok('session cookie set', alice.cookieNames.join(', '));
+
+  // No currency framing anywhere in the payload.
+  const strings = collectStrings(guest.json).join(' ');
+  if (/[$£€]|\bUSD\b|\bbalance\b/i.test(strings)) {
+    bad('units framing', 'the session payload uses currency or "balance" wording');
   } else {
-    bad('guest creation', `got ${guest.status} ${guest.text.slice(0, 160)}`);
+    ok('no currency framing in the session payload');
   }
 
   const authed = await alice.request('GET', '/api/v1/auth/session');
   if (authed.json?.user?.id !== undefined) ok('the session persists across requests', authed.json.user.id);
   else bad('session persistence', `got ${authed.status} ${authed.text.slice(0, 120)}`);
+
+  return alice;
 }
 
-// ---- 3. CSRF is actually enforced ----
-section('3. CSRF');
-{
+/** 3. CSRF is actually enforced. */
+async function sectionCsrf() {
+  section('3. CSRF');
   const noToken = createClient('csrf-probe');
   const seed = await noToken.request('GET', '/api/v1/auth/session');
   // Deliberately do NOT set the csrf token.
   void seed;
-  const attempt = await noToken.request('POST', '/api/v1/auth/guest', { displayName: 'Mallory' });
+  const attempt = await postGuest(noToken, 'Mallory');
   if (attempt.status === 403 && attempt.json?.error?.code === 'csrf_failed') {
     ok('a mutating request without a CSRF token is rejected', 'csrf_failed');
   } else if (attempt.status === 403) {
@@ -349,9 +925,9 @@ section('3. CSRF');
   }
 }
 
-// ---- 4. Content, computed live ----
-section('4. Content');
-{
+/** 4. Content, computed live. */
+async function sectionContent(alice) {
+  section('4. Content');
   const lessons = await alice.request('GET', '/api/v1/content/lessons');
   const count = lessons.json?.lessons?.length ?? 0;
   if (lessons.status === 200 && count >= 12) ok('lessons served', `${count} lessons`);
@@ -396,9 +972,9 @@ section('4. Content');
   else bad('glossary', `expected >= 45, got ${terms}`);
 }
 
-// ---- 5. The calculation endpoints ----
-section('5. Calculation');
-{
+/** 5. The calculation endpoints, including their refusals. */
+async function sectionCalculation(alice) {
+  section('5. Calculation');
   const equity = await alice.request('POST', '/api/v1/math/equity', {
     heroCards: 'AhAd',
     opponents: ['KsKc'],
@@ -468,9 +1044,9 @@ section('5. Calculation');
   if (rejected === hostile.length) ok(`all ${hostile.length} hostile calculation inputs rejected`);
 }
 
-// ---- 6. AI Legends labelling ----
-section('6. AI Legends');
-{
+/** 6. AI Legends labelling. */
+async function sectionLegends(alice) {
+  section('6. AI Legends');
   const profiles = await alice.request('GET', '/api/v1/legends/profiles');
   const list = profiles.json?.profiles ?? [];
   if (profiles.status === 200 && list.length >= 11) {
@@ -501,16 +1077,15 @@ section('6. AI Legends');
   }
 }
 
-// ---- 7. Rooms, and the confidentiality property ----
-section('7. Rooms and hidden information');
-const bob = createClient('bob');
-{
+/** 7. Rooms, a real hand over a real socket, and the confidentiality property on the wire. */
+async function sectionRooms(alice) {
+  section('7. Rooms and hidden information');
+  const bob = createClient('bob');
   const seed = await bob.request('GET', '/api/v1/auth/session');
   if (typeof seed.json?.csrfToken === 'string') bob.setCsrf(seed.json.csrfToken);
-  const guest = await bob.request('POST', '/api/v1/auth/guest', { displayName: 'Bob' });
+  const guest = await createGuestSession(bob, 'Bob');
   if (typeof guest.json?.csrfToken === 'string') bob.setCsrf(guest.json.csrfToken);
-  if (guest.status === 200 || guest.status === 201) ok('a second guest session created', 'Bob');
-  else bad('second guest', `got ${guest.status} ${guest.text.slice(0, 140)}`);
+  ok('a second guest session created', 'Bob');
 
   // A bot takes seat 1 so that Alice can actually PLAY a hand below. Without an opponent there is
   // nothing to deal, the hand history stays empty, and section 8's confidentiality checks scan an
@@ -604,11 +1179,13 @@ const bob = createClient('bob');
     if (preShowdownLeak) bad('hidden information', "a live frame carried another seat's hole cards mid-hand");
     else if (played.frames.length > 0) ok("no live frame carried another seat's hole cards mid-hand");
   }
+
+  return bob;
 }
 
-// ---- 8. Hand history isolation ----
-section('8. Hand history isolation');
-{
+/** 8. Hand history isolation. */
+async function sectionHandHistory(alice, bob) {
+  section('8. Hand history isolation');
   const aliceHands = await alice.request('GET', '/api/v1/hands');
   const aliceRows = aliceHands.json?.hands ?? [];
   if (aliceHands.status === 200) {
@@ -675,9 +1252,9 @@ section('8. Hand history isolation');
   else warn('unknown hand', `status ${missing.status}`);
 }
 
-// ---- 9. Progress carries no score ----
-section('9. Progress');
-{
+/** 9. Progress carries no score. */
+async function sectionProgress(alice) {
+  section('9. Progress');
   const progress = await alice.request('GET', '/api/v1/me/progress');
   if (progress.status === 200) {
     ok('progress reads', `${progress.json?.handsPlayed ?? 0} hands played`);
@@ -690,99 +1267,104 @@ section('9. Progress');
   }
 }
 
-// ---- 10. The HTML origin carries an effective CSP ----
-//
-// Not an API check, and here anyway, because this is the only script in the repo that speaks HTTP
-// to a RUNNING deployment. The defect it exists for was exactly the kind a unit test cannot see:
-// `THEME_BOOT_SCRIPT_CSP_HASH` was computed, kept accurate by a test, and never placed on a
-// response — `next.config.ts` had no `headers()` and there was no proxy file, so the page origin
-// served no policy at all. Only a real response can prove otherwise.
-//
-// `apps/web/test/csp-policy.test.ts` asserts the policy's SHAPE. This asserts it ARRIVED, and that
-// Next actually stamped the nonce on the scripts the policy admits — a policy whose nonce reaches
-// no script tag is a page that renders and never hydrates.
-section('10. Web origin security headers');
-{
+/**
+ * 10. The HTML origin carries an effective CSP.
+ *
+ * Not an API check, and here anyway, because this is the only script in the repo that speaks HTTP
+ * to a RUNNING deployment. The defect it exists for was exactly the kind a unit test cannot see:
+ * `THEME_BOOT_SCRIPT_CSP_HASH` was computed, kept accurate by a test, and never placed on a
+ * response — `next.config.ts` had no `headers()` and there was no proxy file, so the page origin
+ * served no policy at all. Only a real response can prove otherwise.
+ *
+ * `apps/web/test/csp-policy.test.ts` asserts the policy's SHAPE. This asserts it ARRIVED, and that
+ * Next actually stamped the nonce on the scripts the policy admits — a policy whose nonce reaches
+ * no script tag is a page that renders and never hydrates.
+ */
+async function sectionWebHeaders() {
+  section('10. Web origin security headers');
   let page = null;
   try {
-    page = await fetch(`${WEB_ORIGIN}/learn`, { headers: { accept: 'text/html' } });
+    page = await fetch(`${options.webOrigin}/learn`, { headers: { accept: 'text/html' } });
   } catch (error) {
     warn(
       'web origin',
-      `${WEB_ORIGIN} is not reachable (${error instanceof Error ? error.message : 'error'})`,
+      `${options.webOrigin} is not reachable (${error instanceof Error ? error.message : 'error'})`,
     );
   }
+  if (page === null) return;
 
-  if (page !== null) {
-    const policy = page.headers.get('content-security-policy');
-    if (policy === null) {
-      bad('content-security-policy', `${WEB_ORIGIN}/learn returned an HTML page with no policy at all`);
+  const policy = page.headers.get('content-security-policy');
+  if (policy === null) {
+    bad('content-security-policy', `${options.webOrigin}/learn returned an HTML page with no policy at all`);
+  } else {
+    ok('content-security-policy is served on HTML', `${policy.length} chars`);
+
+    const nonce = /'nonce-([A-Za-z0-9+/=]+)'/.exec(policy)?.[1] ?? null;
+    if (nonce === null) bad('csp nonce', `script-src carries no nonce: ${policy}`);
+    else ok('csp carries a per-response nonce');
+
+    if (/script-src[^;]*'unsafe-inline'/.test(policy)) {
+      bad('csp script-src', "allows 'unsafe-inline' — an injected inline script would run");
     } else {
-      ok('content-security-policy is served on HTML', `${policy.length} chars`);
-
-      const nonce = /'nonce-([A-Za-z0-9+/=]+)'/.exec(policy)?.[1] ?? null;
-      if (nonce === null) bad('csp nonce', `script-src carries no nonce: ${policy}`);
-      else ok('csp carries a per-response nonce');
-
-      if (/script-src[^;]*'unsafe-inline'/.test(policy)) {
-        bad('csp script-src', "allows 'unsafe-inline' — an injected inline script would run");
-      } else {
-        ok("script-src does not allow 'unsafe-inline'");
-      }
-      if (/script-src[^;]*'unsafe-eval'/.test(policy)) {
-        bad('csp script-src', "allows 'unsafe-eval' — a development allowance reached production");
-      } else {
-        ok("script-src does not allow 'unsafe-eval'");
-      }
-      if (/script-src[^;]*'sha256-[A-Za-z0-9+/=]+'/.test(policy)) {
-        ok('the theme boot script is allowed by hash as well as nonce');
-      } else {
-        warn('csp script-src', 'carries no sha256 source — the theme boot hash is not being served');
-      }
-
-      const html = await page.text();
-      const tags = html.match(/<script\b[^>]*>/g) ?? [];
-      const unnonced = tags.filter((tag) => !tag.includes('nonce='));
-      if (tags.length === 0) {
-        bad('rendered scripts', 'the page carries no script tags at all, which cannot be right');
-      } else if (unnonced.length > 0) {
-        bad(
-          'rendered scripts',
-          `${unnonced.length} of ${tags.length} script tag(s) carry no nonce, so they are blocked: ` +
-            unnonced.slice(0, 2).join(' '),
-        );
-      } else {
-        ok('every rendered script tag carries the nonce', `${tags.length} tag(s)`);
-      }
-
-      if (nonce !== null && !html.includes(nonce)) {
-        bad('csp nonce', 'the policy nonce does not appear in the HTML, so nothing it allows is present');
-      }
+      ok("script-src does not allow 'unsafe-inline'");
+    }
+    if (/script-src[^;]*'unsafe-eval'/.test(policy)) {
+      bad('csp script-src', "allows 'unsafe-eval' — a development allowance reached production");
+    } else {
+      ok("script-src does not allow 'unsafe-eval'");
+    }
+    if (/script-src[^;]*'sha256-[A-Za-z0-9+/=]+'/.test(policy)) {
+      ok('the theme boot script is allowed by hash as well as nonce');
+    } else {
+      warn('csp script-src', 'carries no sha256 source — the theme boot hash is not being served');
     }
 
-    for (const [header, expected] of [
-      ['x-content-type-options', 'nosniff'],
-      ['x-frame-options', 'DENY'],
-      ['referrer-policy', 'same-origin'],
-    ]) {
-      const value = page.headers.get(header);
-      if (value === expected) ok(`${header}: ${expected}`);
-      else bad(header, `expected ${expected}, got ${value === null ? '(absent)' : value}`);
+    const html = await page.text();
+    const tags = html.match(/<script\b[^>]*>/g) ?? [];
+    const unnonced = tags.filter((tag) => !tag.includes('nonce='));
+    if (tags.length === 0) {
+      bad('rendered scripts', 'the page carries no script tags at all, which cannot be right');
+    } else if (unnonced.length > 0) {
+      bad(
+        'rendered scripts',
+        `${unnonced.length} of ${tags.length} script tag(s) carry no nonce, so they are blocked: ` +
+          unnonced.slice(0, 2).join(' '),
+      );
+    } else {
+      ok('every rendered script tag carries the nonce', `${tags.length} tag(s)`);
     }
+
+    if (nonce !== null && !html.includes(nonce)) {
+      bad('csp nonce', 'the policy nonce does not appear in the HTML, so nothing it allows is present');
+    }
+  }
+
+  for (const [header, expected] of [
+    ['x-content-type-options', 'nosniff'],
+    ['x-frame-options', 'DENY'],
+    ['referrer-policy', 'same-origin'],
+  ]) {
+    const value = page.headers.get(header);
+    if (value === expected) ok(`${header}: ${expected}`);
+    else bad(header, `expected ${expected}, got ${value === null ? '(absent)' : value}`);
   }
 }
 
-// ---- 11. A first-time visitor to Learn gets a guest session (PROD-048) ----
-//
-// The product's copy is guest-first and nothing created the guest: `POST /auth/guest` had one
-// caller in the whole client, reached only by opening a table. A reader who came to Learn stayed
-// anonymous, so every lesson read answered `completedAt: null` and `/me/progress` answered 401 —
-// each honest on its own, and together a learner whose work was recorded nowhere.
-//
-// This walks it the way a browser does, with one cookie jar, because the fix lives in the web
-// origin's proxy and nothing in the API changed.
-section('11. Guest bootstrap on Learn');
-{
+/**
+ * 11. A first-time visitor to Learn gets a guest session (PROD-048).
+ *
+ * The product's copy is guest-first and nothing created the guest: `POST /auth/guest` had one
+ * caller in the whole client, reached only by opening a table. A reader who came to Learn stayed
+ * anonymous, so every lesson read answered `completedAt: null` and `/me/progress` answered 401 —
+ * each honest on its own, and together a learner whose work was recorded nowhere.
+ *
+ * This walks it the way a browser does, with one cookie jar, because the fix lives in the web
+ * origin's proxy and nothing in the API changed. Note that the guest it mints is created by the
+ * WEB SERVER's call to the API, from the web server's address — a bucket this harness never sees
+ * and cannot reset. The isolation section prints that.
+ */
+async function sectionGuestBootstrap() {
+  section('11. Guest bootstrap on Learn');
   const jar = new Map();
   const remember = (response) => {
     for (const raw of response.headers.getSetCookie()) {
@@ -793,7 +1375,7 @@ section('11. Guest bootstrap on Learn');
   };
   const cookieHeader = () => [...jar.values()].join('; ');
   const page = async (path) => {
-    const response = await fetch(`${WEB_ORIGIN}${path}`, {
+    const response = await fetch(`${options.webOrigin}${path}`, {
       headers: {
         accept: 'text/html',
         'sec-fetch-dest': 'document',
@@ -806,123 +1388,185 @@ section('11. Guest bootstrap on Learn');
     return { response, minted };
   };
 
-  let reachable = true;
   let first = null;
   try {
     first = await page('/learn');
   } catch (error) {
-    reachable = false;
     warn(
       'web origin',
-      `${WEB_ORIGIN} is not reachable (${error instanceof Error ? error.message : 'error'})`,
+      `${options.webOrigin} is not reachable (${error instanceof Error ? error.message : 'error'})`,
     );
   }
+  if (first === null) return;
 
-  if (reachable && first !== null) {
-    const sessionCookie = [...jar.keys()].find((name) => name.endsWith('prl_session'));
-    if (sessionCookie === undefined) {
-      bad('guest bootstrap', 'a fresh visitor to /learn was issued no session cookie');
-    } else {
-      ok('a fresh visitor to /learn is issued a session', sessionCookie);
+  const sessionCookie = [...jar.keys()].find((name) => name.endsWith('prl_session'));
+  if (sessionCookie === undefined) {
+    bad('guest bootstrap', 'a fresh visitor to /learn was issued no session cookie');
+    return;
+  }
+  ok('a fresh visitor to /learn is issued a session', sessionCookie);
 
-      // Who the guest is, asked of the API directly with the cookie the web origin just set.
-      const who = await fetch(`${ORIGIN}/api/v1/auth/session`, {
-        headers: { accept: 'application/json', origin: WEB_ORIGIN, cookie: cookieHeader() },
-      });
-      const body = await who.json().catch(() => null);
-      if (body?.user?.kind === 'guest') ok('the session is a real guest account', body.user.id);
-      else
-        bad(
-          'guest bootstrap',
-          `the cookie does not resolve to a guest: ${JSON.stringify(body?.user ?? null)}`,
-        );
+  // Who the guest is, asked of the API directly with the cookie the web origin just set.
+  const who = await fetch(`${options.apiOrigin}/api/v1/auth/session`, {
+    headers: { accept: 'application/json', origin: options.webOrigin, cookie: cookieHeader() },
+  });
+  const body = await who.json().catch(() => null);
+  if (body?.user?.kind === 'guest') ok('the session is a real guest account', body.user.id);
+  else
+    bad('guest bootstrap', `the cookie does not resolve to a guest: ${JSON.stringify(body?.user ?? null)}`);
 
-      // Idempotence. Navigating on, refreshing, and several requests at once must all reuse it.
-      const second = await page('/lab');
-      const third = await page('/learn');
-      const concurrent = await Promise.all([page('/learn'), page('/lab'), page('/record')]);
-      const extra = second.minted + third.minted + concurrent.reduce((sum, r) => sum + r.minted, 0);
-      if (extra === 0) ok('navigation, refresh and concurrent requests mint nothing further');
-      else bad('guest bootstrap', `${extra} further Set-Cookie header(s) after the session existed`);
+  // Idempotence. Navigating on, refreshing, and several requests at once must all reuse it.
+  const second = await page('/lab');
+  const third = await page('/learn');
+  const concurrent = await Promise.all([page('/learn'), page('/lab'), page('/record')]);
+  const extra = second.minted + third.minted + concurrent.reduce((sum, r) => sum + r.minted, 0);
+  if (extra === 0) ok('navigation, refresh and concurrent requests mint nothing further');
+  else bad('guest bootstrap', `${extra} further Set-Cookie header(s) after the session existed`);
 
-      const stillTheSame = [...jar.keys()].filter((name) => name.endsWith('prl_session'));
-      if (stillTheSame.length === 1) ok('the visitor keeps one identity across navigation');
-      else bad('guest bootstrap', `the jar now holds ${stillTheSame.length} session cookies`);
+  const stillTheSame = [...jar.keys()].filter((name) => name.endsWith('prl_session'));
+  if (stillTheSame.length === 1) ok('the visitor keeps one identity across navigation');
+  else bad('guest bootstrap', `the jar now holds ${stillTheSame.length} session cookies`);
 
-      // A path outside the bootstrap set must not create an account for a passing crawler.
-      const anonymous = await fetch(`${WEB_ORIGIN}/legends`, {
-        headers: { accept: 'text/html', 'sec-fetch-dest': 'document' },
-      });
-      if (anonymous.headers.getSetCookie().length === 0)
-        ok('/legends mints nothing for an anonymous visitor');
-      else warn('guest bootstrap', '/legends issued a cookie; the bootstrap set is wider than intended');
+  // A path outside the bootstrap set must not create an account for a passing crawler.
+  const anonymous = await fetch(`${options.webOrigin}/legends`, {
+    headers: { accept: 'text/html', 'sec-fetch-dest': 'document' },
+  });
+  if (anonymous.headers.getSetCookie().length === 0) ok('/legends mints nothing for an anonymous visitor');
+  else warn('guest bootstrap', '/legends issued a cookie; the bootstrap set is wider than intended');
 
-      // A prefetch must not create an account for a page nobody opened.
-      const prefetch = await fetch(`${WEB_ORIGIN}/learn`, {
-        headers: { accept: 'text/html', 'sec-fetch-dest': 'empty', rsc: '1', 'next-router-prefetch': '1' },
-      });
-      if (prefetch.headers.getSetCookie().length === 0) ok('a prefetch of /learn mints nothing');
-      else bad('guest bootstrap', 'a prefetch created an account for a page that was never opened');
+  // A prefetch must not create an account for a page nobody opened.
+  const prefetch = await fetch(`${options.webOrigin}/learn`, {
+    headers: { accept: 'text/html', 'sec-fetch-dest': 'empty', rsc: '1', 'next-router-prefetch': '1' },
+  });
+  if (prefetch.headers.getSetCookie().length === 0) ok('a prefetch of /learn mints nothing');
+  else bad('guest bootstrap', 'a prefetch created an account for a page that was never opened');
 
-      // And the point of the whole thing: the reader's own work is now recorded.
-      const seed = await fetch(`${ORIGIN}/api/v1/auth/session`, {
-        headers: { accept: 'application/json', origin: WEB_ORIGIN, cookie: cookieHeader() },
-      });
-      remember(seed);
-      const token = (await seed.json().catch(() => ({}))).csrfToken;
-      const read = await fetch(`${ORIGIN}/api/v1/content/lessons/pot-odds/read`, {
-        method: 'POST',
-        headers: {
-          accept: 'application/json',
-          'content-type': 'application/json',
-          origin: WEB_ORIGIN,
-          cookie: cookieHeader(),
-          'x-csrf-token': typeof token === 'string' ? token : '',
-        },
-        body: JSON.stringify({ completed: true }),
-      });
-      const recorded = await read.json().catch(() => null);
-      if (typeof recorded?.completedAt === 'string') {
-        ok('a lesson read by the bootstrapped guest is actually recorded', recorded.completedAt);
-      } else {
-        bad('guest bootstrap', `the lesson read was not recorded: ${JSON.stringify(recorded)}`);
-      }
-    }
+  // And the point of the whole thing: the reader's own work is now recorded.
+  const seed = await fetch(`${options.apiOrigin}/api/v1/auth/session`, {
+    headers: { accept: 'application/json', origin: options.webOrigin, cookie: cookieHeader() },
+  });
+  remember(seed);
+  const token = (await seed.json().catch(() => ({}))).csrfToken;
+  const read = await fetch(`${options.apiOrigin}/api/v1/content/lessons/pot-odds/read`, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      origin: options.webOrigin,
+      cookie: cookieHeader(),
+      'x-csrf-token': typeof token === 'string' ? token : '',
+    },
+    body: JSON.stringify({ completed: true }),
+  });
+  const recorded = await read.json().catch(() => null);
+  if (typeof recorded?.completedAt === 'string') {
+    ok('a lesson read by the bootstrapped guest is actually recorded', recorded.completedAt);
+  } else {
+    bad('guest bootstrap', `the lesson read was not recorded: ${JSON.stringify(recorded)}`);
   }
 }
 
-// ---- 12. Rate limiting exists ----
-//
-// LAST, and it has to be: this section deliberately floods `POST /auth/guest` until the limiter
-// answers 429, and the limiter buckets by client key. Any later section that needs a new account —
-// §11 does — would then be measuring the flood rather than itself. It was moved here after exactly
-// that happened.
-section('12. Rate limiting');
-{
+/**
+ * 12. Rate limiting exists.
+ *
+ * LAST, and it has to be: this section deliberately floods `POST /auth/guest` until the limiter
+ * answers 429, and the limiter buckets by client key. Any later section that needs a new account —
+ * section 11 does — would then be measuring the flood rather than itself. It was moved here after
+ * exactly that happened.
+ *
+ * It leaves the bucket spent, which is the whole reason the isolation section at the top of this
+ * file exists. Nothing is reset afterwards on purpose: a reset here would clear the evidence that
+ * the next run needs to recover from, and would hide the very defect this design has to survive —
+ * a run that ends with a drained limiter and a next run that starts one second later.
+ */
+async function sectionRateLimiting() {
+  section('12. Rate limiting');
   const client = createClient('flood');
   const seed = await client.request('GET', '/api/v1/auth/session');
   if (typeof seed.json?.csrfToken === 'string') client.setCsrf(seed.json.csrfToken);
-  let limited = false;
-  for (let attempt = 0; attempt < 60 && !limited; attempt += 1) {
-    const response = await client.request('POST', '/api/v1/auth/guest', { displayName: `Flood${attempt}` });
-    if (response.status === 429) limited = true;
+  let limited = null;
+  for (let attempt = 0; attempt < 60 && limited === null; attempt += 1) {
+    const response = await postGuest(client, `Flood${attempt}`);
+    if (response.status === 429) limited = response;
   }
-  if (limited) ok('guest creation is rate limited', '429 after repeated attempts');
-  else warn('rate limiting', 'no 429 after 60 guest creations — check the limit for this route');
+  if (limited !== null) {
+    const seconds = recoveryWaitSeconds({
+      retryAfter: limited.headers.get('retry-after'),
+      rateLimitReset: limited.headers.get('x-ratelimit-reset'),
+      bodySeconds: limited.json?.error?.retryAfterSeconds,
+    });
+    ok(
+      'guest creation is rate limited',
+      `429 after ${guestAttempts} guest creation(s) this run, limit ` +
+        `${limited.headers.get('x-ratelimit-limit') ?? 'unstated'}, window ${seconds ?? '?'}s left`,
+    );
+    if (seconds === null) {
+      bad(
+        'rate limit headers',
+        'the 429 carried no Retry-After, x-ratelimit-reset or retryAfterSeconds, so a client — and ' +
+          'the next run of this harness — has nothing to back off against',
+      );
+    } else {
+      ok('the 429 says how long to wait', `Retry-After ${seconds}s`);
+    }
+  } else {
+    warn('rate limiting', 'no 429 after 60 guest creations — check the limit for this route');
+  }
 }
 
 // ---------------------------------------------------------------------------
+// The run
+// ---------------------------------------------------------------------------
 
-console.log(`\n${BOLD}Summary${RESET}`);
-console.log(`  ${GREEN}${passed} check(s) passed${RESET}`);
-if (warnings.length > 0) {
-  console.log(`  ${YELLOW}${warnings.length} warning(s)${RESET}`);
-  console.log(`  ${DIM}re-run with --strict (as CI does) to make these fail the run${RESET}`);
+async function main() {
+  try {
+    options = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    // The REASON, on one line, and no stack: a stack trace for a mistyped flag buries the one
+    // sentence that fixes it under twenty frames of Node internals.
+    console.error(`${RED}smoke-test — ${error.message}${RESET}`);
+    process.exit(1);
+  }
+  if (options.help) {
+    console.log(HELP);
+    return;
+  }
+
+  section(`Poker Risk Lab smoke test  ${DIM}${options.apiOrigin}${RESET}`);
+
+  await sectionHealth();
+  await sectionIsolation();
+  const alice = await sectionGuestSession();
+  await sectionCsrf();
+  await sectionContent(alice);
+  await sectionCalculation(alice);
+  await sectionLegends(alice);
+  const bob = await sectionRooms(alice);
+  await sectionHandHistory(alice, bob);
+  await sectionProgress(alice);
+  await sectionWebHeaders();
+  await sectionGuestBootstrap();
+  await sectionRateLimiting();
+
+  console.log(`\n${BOLD}Summary${RESET}`);
+  console.log(`  ${GREEN}${passed} check(s) passed${RESET}`);
+  if (warnings.length > 0) {
+    console.log(`  ${YELLOW}${warnings.length} warning(s)${RESET}`);
+    console.log(`  ${DIM}re-run with --strict (as CI does) to make these fail the run${RESET}`);
+  }
+  if (failures.length > 0) {
+    console.log(`  ${RED}${failures.length} failure(s)${RESET}`);
+    for (const failure of failures) console.log(`${RED}    - ${failure}${RESET}`);
+    console.log('');
+    process.exit(1);
+  }
+  console.log(`${GREEN}${BOLD}\nSmoke test passed.${RESET}`);
+  console.log(
+    `${DIM}A pass says these journeys work on THIS deployment, once. It is not a load test, not a\n` +
+      'correctness proof of the poker engine, and it says nothing about whether the rate limits are\n' +
+      'the right size — only that a 429 arrives. This run consumed the guest budget for the address\n' +
+      `${options.apiOrigin} resolves to; the next run resets it or waits it out.${RESET}\n`,
+  );
 }
-if (failures.length > 0) {
-  console.log(`  ${RED}${failures.length} failure(s)${RESET}`);
-  for (const failure of failures) console.log(`${RED}    - ${failure}${RESET}`);
-  console.log('');
-  process.exit(1);
-}
-console.log(`${GREEN}${BOLD}\nSmoke test passed.${RESET}\n`);
+
+if (import.meta.main) await main();

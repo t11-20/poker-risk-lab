@@ -1,0 +1,35 @@
+# Poker Risk Lab — when the nightly backup runs.
+#
+# Installed to /etc/systemd/system/prl-backup.timer, then:
+#   systemctl enable --now prl-backup.timer
+#
+# The RPO this schedule buys is 24 hours. That is a decision, with reasoning, in
+# docs/production/disaster-recovery.md — change the interval here and change it there.
+
+[Unit]
+Description=Nightly Poker Risk Lab encrypted backup
+Documentation=file:///opt/poker-risk-lab/docs/production/backup-restore.md
+
+[Timer]
+# 02:30 UTC. Late enough to be outside a learner's evening, early enough that a failure is
+# visible before the working day. systemd timers use the system timezone unless told
+# otherwise, and a backup that silently shifts by an hour twice a year makes "the 02:30
+# backup" a lie for half the year, so the timezone is stated rather than inherited.
+OnCalendar=*-*-* 02:30:00 UTC
+
+# Up to five minutes of jitter. On a host that also runs other 02:30 timers this stops
+# every one of them hitting the disk and the database at the same instant.
+RandomizedDelaySec=300
+
+# THE reason this is a systemd timer rather than a cron line. If the host is off, or
+# suspended, or rebooting at 02:30, cron simply skips the run and nothing says so — the day
+# with no backup is invisible until somebody needs it. Persistent=true records the last
+# trigger on disk and runs the job as soon as the machine is back.
+Persistent=true
+
+# One minute is ample for a nightly job, and it lets systemd batch the wakeup rather than
+# holding a high-resolution timer all night.
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

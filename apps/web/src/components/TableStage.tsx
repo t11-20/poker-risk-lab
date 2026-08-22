@@ -69,6 +69,27 @@
  * case, where a retry landed on a decision already applied), `rejected` when the server refused —
  * `stale_action_sequence`, `not_your_turn`, `illegal_action`. The message is passed through rather
  * than written here, so what the reader is told is what the server actually said.
+ *
+ * ## The three things this screen says out loud, and why they are three
+ *
+ * Every one of them is fed from a diff computed in `lib/use-live-table.ts`, never from a frame: see
+ * that file's header for why a whole-state protocol makes that mandatory.
+ *
+ *  1. **The table's narration** — `announcement`, polite, in `PokerTable`'s single region. Dealt,
+ *     bet, called, street, showdown, hand complete, and the echo of the reader's own decision.
+ *  2. **Whose decision it is** — `turnAnnouncement`, polite, in its own region beside the controls.
+ *     Separate from (1) because the two race: the `state` frame that makes it the reader's turn and
+ *     the `event` frame describing the action that got there arrive back to back, and one region
+ *     would let either overwrite the other. It carries the pot, the price, the stack and the legal
+ *     actions, because that is the whole of the decision.
+ *  3. **A refusal** — `role="alert"`, mounted only when the server rejects a decision. Assertive
+ *     because the reader has acted and the table did NOT move: they are waiting for something that
+ *     is not coming, and every other channel on this screen is polite. The accepted and pending
+ *     states are deliberately silent here — (1) already echoes the decision, and "the server applied
+ *     it at sequence 41" is a sentence nobody needs read to them.
+ *
+ * The error state's own `role="alert"` (see `TableRegion`) is the fourth, and it replaces the table
+ * rather than describing it.
  */
 
 import type { CoachReport } from '@prl/contracts';
@@ -78,14 +99,17 @@ import {
   CardRow,
   CoachPanel,
   formatChips,
-  formatUnits,
   type PlayerView,
   PokerTable,
   type StyleWithVars,
   type TableAction,
   type TurnClock,
 } from '@prl/ui';
-import { type FocusEvent, type PointerEvent, type ReactElement, useRef, useState } from 'react';
+import { type FocusEvent, type PointerEvent, type ReactElement, useEffect, useRef, useState } from 'react';
+// A value import from the module that holds this file's `TableSubmission` type. It is not a cycle:
+// that import is `import type`, which is erased before anything runs, and the sentence a decision
+// is announced with has to have exactly one definition or the live path and the fixture path drift.
+import { spokenDecision } from '@/lib/use-live-table.ts';
 
 /**
  * Two input-gesture constants.
@@ -130,6 +154,14 @@ export interface TableStageProps {
   readonly seatNames?: Readonly<Record<number, string>>;
   /** One sentence for the table's single polite live region. */
   readonly announcement?: string;
+  /**
+   * One sentence for the region that says the decision is the reader's, with the figures it needs.
+   *
+   * Empty whenever it is not. The caller diffs frames to produce it — see `turnAnnouncementFor` in
+   * `lib/use-live-table.ts` — because this component sees one frame at a time and cannot tell a
+   * turn that has just begun from a turn that is still running.
+   */
+  readonly turnAnnouncement?: string;
   /** Cards to ring, e.g. the five that made a hand. */
   readonly highlightedCards?: readonly number[];
   /** What the ring means, announced with each marked card. */
@@ -324,6 +356,7 @@ interface DecisionBandProps {
   readonly status: TableStageStatus;
   readonly view: PlayerView | null;
   readonly submission: TableSubmission | null;
+  readonly turnAnnouncement: string;
   readonly isLive: boolean;
   readonly onAct: (action: TableAction) => void;
 }
@@ -343,11 +376,70 @@ const SUBMISSION_TITLE: Readonly<Record<TableSubmission['status'], string>> = {
  * rather than the feature, and for the test that now holds that line.
  */
 function DecisionBand(props: DecisionBandProps): ReactElement {
-  const { status, view, submission, isLive, onAct } = props;
+  const { status, view, submission, turnAnnouncement, isLive, onAct } = props;
   const pending = submission?.status === 'pending';
+  const rejected = submission !== null && submission.status === 'rejected';
+
+  /**
+   * Where the caret goes the instant a decision is submitted.
+   *
+   * ## The defect, found by `scripts/ax-tree-audit.mjs`
+   *
+   * Pressing Fold sets `submission.status = 'pending'`, which disables every control in the
+   * `ActionBar` — correctly, the server has not answered yet. A browser blurs a focused control the
+   * moment it becomes disabled, and there is nothing else in the band for it to land on, so
+   * `document.activeElement` becomes the document. Read out of the computed accessibility tree that
+   * is a `RootWebArea` holding focus, named after the page title, which is what a reader actually
+   * gets: they press a button, and the next thing announced is the name of the page they were
+   * already on. Every remaining control is then a whole tab sequence away.
+   *
+   * `ActionBar` has its own rescue and it does not cover this: it fires when `legalActions` goes
+   * EMPTY, which happens when the server's next frame arrives. The gap is the whole round trip —
+   * and on the fixture path, where there is no server, it is permanent.
+   *
+   * ## Why the acknowledgement is the right destination
+   *
+   * It is the block that says what became of the decision — "Sent. The server is the only authority
+   * on a hand, so the controls stay disabled until it answers." — so a reader who is moved there is
+   * moved to the answer to the question they just asked. `tabIndex={-1}` makes it a target for
+   * script and deliberately not a tab stop: nobody tabbing through a table should have to pass a
+   * status line on the way to the buttons.
+   *
+   * Both guards are load-bearing, and they are the two `ActionBar` uses for the same reason. Focus
+   * moves only if it was inside this band, so a table that updates while the reader is in the Coach
+   * panel never yanks them back; and only if the browser has actually given up, so anything that
+   * legitimately took focus keeps it.
+   */
+  const acknowledgementRef = useRef<HTMLDivElement | null>(null);
+  const hadFocus = useRef(false);
+  const onFocusCapture = (): void => {
+    hadFocus.current = true;
+  };
+  const onBlurCapture = (event: FocusEvent<HTMLDivElement>): void => {
+    const next = event.relatedTarget;
+    // Null means the focused node was removed or disabled, not that the reader went elsewhere.
+    if (next !== null && !event.currentTarget.contains(next)) hadFocus.current = false;
+  };
+
+  useEffect(() => {
+    if (submission === null || !hadFocus.current) return;
+    if (document.activeElement !== document.body && document.activeElement !== null) return;
+    acknowledgementRef.current?.focus();
+    hadFocus.current = false;
+  }, [submission]);
 
   return (
-    <div className="prl-play__decision">
+    <div className="prl-play__decision" onBlurCapture={onBlurCapture} onFocusCapture={onFocusCapture}>
+      {/*
+        Announcement 2 of 3 (see the module comment). In the DOM from the first render and empty,
+        never conditionally mounted, because a polite region that arrives with its text is missed by
+        several screen readers. It sits beside the controls rather than at the top of the stage so
+        that a reader browsing the page meets the sentence where the decision is made.
+      */}
+      <div aria-atomic="true" aria-live="polite" className="prl-live-region" role="status">
+        {turnAnnouncement}
+      </div>
+
       {view === null ? null : <HeroReadout view={view} />}
 
       {view === null ? (
@@ -370,13 +462,53 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
         />
       )}
 
+      {/*
+        Announcement 3 of 3. The refusal is the one thing on this screen that has to interrupt.
+
+        The reader has pressed a button, the controls came back, and NOTHING happened — a stale
+        sequence, a spot that was not theirs, an amount the engine would not take. Before this, that
+        block was a `Callout` with no live-region ancestor at all: the whole message existed only as
+        pixels, and the polite regions beside it were busy narrating a table that had not moved.
+
+        Mounted ONLY in the rejected state, which is what makes it fire: an alert is announced on
+        insertion, and an always-present node whose text merely changes is announced far less
+        reliably. The accepted and pending states keep the plain `Callout` below, deliberately: the
+        table's own region already echoes the decision, and interrupting a reader to tell them their
+        fold worked is how an alert stops meaning anything.
+      */}
+      {/*
+        One wrapper for both fates, so the focus rescue above has a single destination whatever the
+        server said. `tabIndex={-1}` keeps it out of the tab order and lets script land on it.
+
+        `role="group"` with a label, rather than a bare focusable `<div>`, because a bare one has no
+        role that can carry a name — `aria-label` is ignored on a generic element, and a reader whose
+        caret has just been moved somewhere would be told nothing about where. Measured in Chrome
+        151: `<div tabindex="-1">` computes an EMPTY accessible name, `<div role="group"
+        aria-label="…">` computes the label. Chrome happens to synthesise a name from the contents
+        for the focused generic case, which is not specified behaviour and is not what Firefox or
+        Safari do, so it is not what this depends on.
+
+        Rendered only when there is something to say. An always-present labelled group would sit in
+        every reader's rotor announcing an empty container on a table where nothing has been decided.
+      */}
       {submission === null ? null : (
-        <Callout
-          tone={submission.status === 'rejected' || !isLive ? 'warning' : 'insight'}
-          title={isLive ? SUBMISSION_TITLE[submission.status] : 'Nothing was sent'}
-        >
-          {submission.message}
-        </Callout>
+        // biome-ignore lint/a11y/useSemanticElements: the rule points at <fieldset>, which is for form controls and would bring a required <legend> and a border with it. This is a labelled container for two sentences about a decision, and `group` is the role ARIA has for exactly that. `CardRow` in @prl/ui documents the same false positive from the same rule.
+        <div aria-label="What happened to your decision" ref={acknowledgementRef} role="group" tabIndex={-1}>
+          {rejected ? (
+            <div role="alert">
+              <Callout tone="warning" title={isLive ? SUBMISSION_TITLE.rejected : 'Nothing was sent'}>
+                {submission.message}
+              </Callout>
+            </div>
+          ) : (
+            <Callout
+              tone={isLive ? 'insight' : 'warning'}
+              title={isLive ? SUBMISSION_TITLE[submission.status] : 'Nothing was sent'}
+            >
+              {submission.message}
+            </Callout>
+          )}
+        </div>
       )}
     </div>
   );
@@ -495,15 +627,6 @@ function CoachSheet({ report, status, coachUnavailableReason }: CoachSheetProps)
   );
 }
 
-/** What a submitted decision adds to the table's one live region. */
-function spokenSubmission(action: TableAction | null): string {
-  if (action === null) return '';
-  if (action.type === 'bet' || action.type === 'raise') {
-    return `You chose to ${action.type} to ${formatUnits(action.to)}. `;
-  }
-  return `You chose to ${action.type}. `;
-}
-
 export function TableStage(props: TableStageProps): ReactElement {
   const {
     status,
@@ -512,6 +635,7 @@ export function TableStage(props: TableStageProps): ReactElement {
     turn = null,
     seatNames,
     announcement,
+    turnAnnouncement = '',
     highlightedCards,
     summary,
     errorMessage,
@@ -544,6 +668,23 @@ export function TableStage(props: TableStageProps): ReactElement {
     if (onAct !== undefined) onAct(action);
   };
 
+  /**
+   * What the table's polite region says.
+   *
+   * On the live path this is exactly what the caller sent, because the caller's reducer has already
+   * folded the reader's own decision into it as a state change. This used to CONCATENATE the
+   * decision echo onto the front of every announcement instead — and `role="status"` is atomic, so
+   * the region was re-read whole on every table event with "You chose to fold." stapled to the front
+   * of it until the submission cleared. One press, then a sentence repeated on every frame of the
+   * rest of the street.
+   *
+   * `pressed` is only ever non-null on the fixture path (see `submission` above), where there is no
+   * reducer to have done it, so the concatenation survives for exactly that case — and there the
+   * fixture's own announcement is a constant that has already been read.
+   */
+  const spoken =
+    pressed === null ? (announcement ?? '') : `${spokenDecision(pressed.action)} ${announcement ?? ''}`;
+
   return (
     <div className="prl-play__stage" data-state={status}>
       <div className="prl-play__main">
@@ -554,11 +695,18 @@ export function TableStage(props: TableStageProps): ReactElement {
           seatNames={seatNames}
           highlightedCards={highlightedCards}
           highlightLabel={highlightLabel}
-          announcement={`${spokenSubmission(submission?.action ?? null)}${announcement ?? ''}`}
+          announcement={spoken}
           summary={summary}
           errorMessage={errorMessage}
         />
-        <DecisionBand status={status} view={view} submission={submission} isLive={isLive} onAct={act} />
+        <DecisionBand
+          status={status}
+          view={view}
+          submission={submission}
+          turnAnnouncement={turnAnnouncement}
+          isLive={isLive}
+          onAct={act}
+        />
       </div>
 
       <CoachSheet report={report} status={status} coachUnavailableReason={props.coachUnavailableReason} />

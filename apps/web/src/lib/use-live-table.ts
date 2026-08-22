@@ -38,6 +38,20 @@
  * reconnects, `hello` goes out, `welcome` and a full `state` come back, and the table is right
  * again. `revision` is monotonic per socket, so a frame that arrives out of order is dropped; it
  * restarts at zero on each new socket, which is why `welcome` resets it here.
+ *
+ * ## Announcements are diffed here, because here is the only place the PREVIOUS frame exists
+ *
+ * ADR 0009 sends state whole: every `state` frame carries the entire table, changed or not. A live
+ * region fed from a whole-state frame therefore fires on every frame, and a screen reader that says
+ * "pot 300 units, your stack 950 units" four times a second is worse than one that says nothing —
+ * the reader turns it off, and then the announcements that mattered are gone too.
+ *
+ * So what is announced is computed by comparing the incoming frame with the state it replaces, and
+ * the reducer is the only place both exist at once. `turnAnnouncement` is the case that made this
+ * necessary: whose decision it is, is the single most important fact at a table (`Seat.tsx` marks it
+ * three ways visually) and it was announced by nothing at all. It is set on the EDGE — the frame
+ * where the decision becomes the reader's — and carried unchanged for as long as it stays theirs, so
+ * the region speaks once per turn rather than once per frame.
  */
 
 import type { CoachReport, CreateRoomRequest, RoomSummary, WsServerMessage } from '@prl/contracts';
@@ -116,6 +130,17 @@ export interface TableState {
   /** Monotonic per socket; resets on `welcome`. */
   readonly revision: number;
   readonly announcement: string;
+  /**
+   * One sentence for the region that announces the reader's OWN decision being due.
+   *
+   * Separate from `announcement`, which narrates the table, because the two are different kinds of
+   * news and they race: a `state` frame and the `event` frame describing the same change arrive back
+   * to back, in an order this client does not control, so a single field would let "seat 3 called 50
+   * units" overwrite "your turn" — or the reverse — depending on which landed second. Empty whenever
+   * it is not this seat's decision, which is what lets the same sentence be announced again next time
+   * round.
+   */
+  readonly turnAnnouncement: string;
   readonly summary: readonly string[];
   /** The report, with the decision it was computed for. Never rendered against a different one. */
   readonly coach: { readonly key: string; readonly report: CoachReport } | null;
@@ -143,6 +168,7 @@ export const EMPTY_TABLE_STATE: TableState = {
   serverTimeMs: 0,
   revision: 0,
   announcement: '',
+  turnAnnouncement: '',
   summary: [],
   coach: null,
   coachRequestId: null,
@@ -170,6 +196,102 @@ export function decisionKey(view: PlayerView | null): string {
 function seatFrom(room: RoomSummary, userId: string | null): number | null {
   if (userId === null) return null;
   return room.members.find((member) => member.userId === userId)?.seat ?? null;
+}
+
+/**
+ * Is the decision in this view the reader's?
+ *
+ * Exported and pure so the reducer, the hook and a test all decide it the same way. It used to be
+ * written out inline in the hook only, which is why the reducer had no way to notice the moment it
+ * became true — and that moment is the one thing a screen-reader user most needs to be told.
+ *
+ * `legalActions.length > 0` is part of the definition rather than a belt-and-braces extra: the
+ * server empties that list for everybody it is not currently asking, so a view where it is empty is
+ * a view with no decision in it whatever `toAct` says.
+ */
+export function isViewersTurn(view: PlayerView | null, betweenHands: boolean): boolean {
+  if (view === null || betweenHands) return false;
+  return view.viewerSeat !== null && view.toAct === view.viewerSeat && view.legalActions.length > 0;
+}
+
+/**
+ * A number of units, as it should be read aloud.
+ *
+ * A local formatter and not `formatUnits` from `@prl/ui`, and the reason is mechanical rather than
+ * stylistic: `@prl/ui` is consumed as SOURCE (its `exports` map points at `src/index.ts`, there is
+ * no build output) and that entry re-exports every component, including `.tsx` files. Node's
+ * type-stripping handles `.ts` and not `.tsx`, so one runtime import of `@prl/ui` anywhere in this
+ * module's graph makes the whole module unloadable under `node --test` with
+ * `ERR_UNKNOWN_FILE_EXTENSION`. `tableReducer` is driven for real by `test/live-regions.test.ts`,
+ * and a reducer that cannot be imported cannot be tested — which is a worse outcome than four lines
+ * of formatting living here.
+ *
+ * It is deliberately NOT a promise of byte-identical output with the panel's figures. What it owes
+ * is that the sentence reads correctly: a thousands separator so "1505" is not read as a digit
+ * string, and the singular where the plural would be wrong.
+ */
+function units(value: number): string {
+  const whole = Math.round(value);
+  return `${new Intl.NumberFormat('en-GB').format(whole)} ${Math.abs(whole) === 1 ? 'unit' : 'units'}`;
+}
+
+/** "fold, call or raise". No Oxford comma, because this is read aloud rather than printed. */
+function listActions(names: readonly string[]): string {
+  if (names.length === 0) return '';
+  if (names.length === 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} or ${names[names.length - 1] ?? ''}`;
+}
+
+/** How to name the street in a sentence. `preflop` is an adverb; the rest take an article. */
+function streetPhrase(street: PlayerView['street']): string {
+  if (street === 'preflop') return 'preflop';
+  if (street === 'showdown' || street === 'complete') return 'at the end of the hand';
+  return `on the ${street}`;
+}
+
+/**
+ * What the reader is told, once, when the decision becomes theirs.
+ *
+ * ## Why one sentence and not four regions
+ *
+ * What a screen-reader user needs at this moment is what the layout guarantees a sighted one
+ * (`TableStage`'s module comment, guarantees 1 to 4): the pot, the price, what they have behind, and
+ * what they may do. Four live regions for four figures would announce them in whatever order the
+ * regions happened to update, interleaved with the table's narration. One sentence, fired on the
+ * edge, arrives in the order a decision is actually made in.
+ *
+ * It deliberately does NOT include the hole cards. They are already in the accessibility tree with
+ * their full names, on the seat plate and in the decision band's own readout, and repeating them
+ * every turn makes the sentence long enough that a reader starts talking over it. The figures are
+ * what change from turn to turn; the cards are not.
+ *
+ * No equity figure either, for the reason given in the `coach` case of `onFrame`: a number read out
+ * of the Coach panel has left the assumptions it rests on behind.
+ */
+export function turnAnnouncementFor(view: PlayerView): string {
+  const hero = view.seats.find((seat) => seat.isSelf) ?? null;
+  const price = view.amountToCall > 0 ? `${units(view.amountToCall)} to call` : 'Nothing to call';
+  const stack = hero === null ? '' : `, your stack ${units(hero.stack)}`;
+  const actions = listActions(view.legalActions.map((action) => action.type));
+  const offer = actions === '' ? '' : ` You can ${actions}.`;
+  return `Your turn ${streetPhrase(view.street)}. ${price}. Pot ${units(view.potTotal)}${stack}.${offer}`;
+}
+
+/**
+ * The echo of the reader's own decision, for the table's polite region.
+ *
+ * It belongs in the reducer rather than beside the markup, and that is a fix rather than a tidy-up.
+ * `TableStage` used to PREFIX this phrase onto every announcement it passed down, so the region's
+ * text stayed "You chose to fold. …" for as long as the submission was on screen — and because
+ * `role="status"` is atomic, every subsequent table event was then read out with "You chose to
+ * fold." stapled to the front of it. Announced as a state change here, it is said once and replaced
+ * by whatever the table says next.
+ */
+export function spokenDecision(action: TableAction): string {
+  if (action.type === 'bet' || action.type === 'raise') {
+    return `You chose to ${action.type} to ${units(action.to)}.`;
+  }
+  return `You chose to ${action.type}.`;
 }
 
 /**
@@ -232,18 +354,26 @@ function onStateFrame(state: TableState, frame: Extract<WsServerMessage, { type:
   const view = frame.view ?? state.view;
   const key = decisionKey(view);
   const movedOn = key !== decisionKey(state.view);
+  // The server's own rule, mirrored exactly: `LiveTable.handInProgress` in `rooms/table.ts` is
+  // `street !== undefined && street !== 'complete'`. Reading it as "the frame carried no view"
+  // instead is wrong and was a real defect: a finished hand is still sent — with its cards, its
+  // pot and its result — so `view` stays non-null after the hand is over, and "Deal the next
+  // hand" stayed disabled forever from the first completed hand onwards.
+  const betweenHands = frame.view === null || frame.view.street === 'complete';
+  // The edge, not the level. Carried unchanged while the decision stays the reader's, so a burst of
+  // whole-state frames cannot re-announce a turn they are already in the middle of.
+  const wasTurn = isViewersTurn(state.view, state.betweenHands);
+  const nowTurn = isViewersTurn(view, betweenHands);
+  const turnAnnouncement =
+    nowTurn && view !== null ? (wasTurn ? state.turnAnnouncement : turnAnnouncementFor(view)) : '';
   return {
     ...state,
     revision: frame.revision,
     room: frame.room,
     seat: seatFrom(frame.room, state.userId),
     view,
-    // The server's own rule, mirrored exactly: `LiveTable.handInProgress` in `rooms/table.ts` is
-    // `street !== undefined && street !== 'complete'`. Reading it as "the frame carried no view"
-    // instead is wrong and was a real defect: a finished hand is still sent — with its cards, its
-    // pot and its result — so `view` stays non-null after the hand is over, and "Deal the next
-    // hand" stayed disabled forever from the first completed hand onwards.
-    betweenHands: frame.view === null || frame.view.street === 'complete',
+    turnAnnouncement,
+    betweenHands,
     deadlineMs: frame.deadlineMs,
     serverTimeMs: frame.serverTimeMs,
     // An analysis belongs to the spot it was computed for. The moment the spot changes it is
@@ -364,6 +494,13 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
       return {
         ...state,
         pending: event.pending,
+        // The echo, as a state change rather than a prefix. See `spokenDecision`.
+        //
+        // `turnAnnouncement` is deliberately left alone. Clearing it here would look tidy and would
+        // cost the reader the one case that matters: a decision the server REFUSES leaves the spot
+        // exactly as it was, and an emptied region has nothing left to re-announce it with. Carried
+        // as it is, the sentence does not change, so nothing is said twice either.
+        announcement: spokenDecision(event.pending.action),
         submission: {
           action: event.pending.action,
           status: 'pending',
@@ -800,12 +937,9 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   }, []);
 
   const view = table.view;
-  const isMyTurn =
-    view !== null &&
-    !table.betweenHands &&
-    view.viewerSeat !== null &&
-    view.toAct === view.viewerSeat &&
-    view.legalActions.length > 0;
+  // The same predicate the reducer diffs on, so "the buttons are live" and "the reader was told it
+  // is their turn" can never disagree.
+  const isMyTurn = isViewersTurn(view, table.betweenHands);
   const key = decisionKey(view);
 
   const askCoach = useCallback((): void => {

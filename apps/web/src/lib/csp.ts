@@ -119,7 +119,11 @@ export function contentSecurityPolicy(options: CspOptions): string {
     `'${THEME_BOOT_SCRIPT_CSP_HASH}'`,
     // Only a script this policy named may run, and only scripts THOSE load may run after it. It is
     // safe here because Next stamps the nonce on every tag it emits — verified, not assumed:
-    // `test/csp-runtime.test.ts` fetches a rendered page and fails if one script tag lacks it.
+    // `scripts/smoke-test.mjs` section 10 fetches a rendered page from a running server and fails
+    // if one script tag lacks the nonce. That citation used to name a `test/csp-runtime.test.ts`
+    // which has never existed, which is the same defect this file's own header condemns: a check
+    // that reads like a control and is not one. No pure test can do this — there is no server —
+    // so the only honest citation is the harness that speaks HTTP to a real deployment.
     "'strict-dynamic'",
     // React Refresh evaluates the modules it swaps in. Only ever under `next dev`.
     ...(development ? ["'unsafe-eval'"] : []),

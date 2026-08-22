@@ -134,7 +134,20 @@ export interface CoachTask {
   readonly seed: number;
 }
 
-export type WorkerTask = EquityTask | CoachTask;
+/**
+ * Forces this thread to build the preflop strength table.
+ *
+ * `topPercentRange` memoises a 169-class ordering that takes about three seconds the first
+ * time a thread is asked. Live Coach requests default to `top:40`, so a process that has never
+ * served one pays that cost on the first learner. The pool pre-warms every thread with this
+ * task at boot so `/ready` can stay false until that cost is behind us, and the first live
+ * request is a warm one.
+ */
+export interface WarmupTask {
+  readonly kind: 'warmup';
+}
+
+export type WorkerTask = EquityTask | CoachTask | WarmupTask;
 
 export interface WorkerRequest {
   /** Correlates a response with its request. Assigned by the pool. */
@@ -158,6 +171,7 @@ export interface WorkerFailure {
 export type WorkerResponse =
   | { readonly id: number; readonly ok: true; readonly kind: 'equity'; readonly result: EquityResult }
   | { readonly id: number; readonly ok: true; readonly kind: 'coach'; readonly report: CoachReport }
+  | { readonly id: number; readonly ok: true; readonly kind: 'warmup' }
   | { readonly id: number; readonly ok: false; readonly failure: WorkerFailure };
 
 // ---------------------------------------------------------------------------
@@ -255,10 +269,17 @@ function runCoach(task: CoachTask): CoachReport {
  */
 function respond(request: WorkerRequest, port: MessagePort): void {
   try {
-    const reply: WorkerResponse =
-      request.task.kind === 'equity'
-        ? { id: request.id, ok: true, kind: 'equity', result: runEquity(request.task) }
-        : { id: request.id, ok: true, kind: 'coach', report: runCoach(request.task) };
+    let reply: WorkerResponse;
+    if (request.task.kind === 'equity') {
+      reply = { id: request.id, ok: true, kind: 'equity', result: runEquity(request.task) };
+    } else if (request.task.kind === 'coach') {
+      reply = { id: request.id, ok: true, kind: 'coach', report: runCoach(request.task) };
+    } else {
+      // The percent is the live Coach default. Any value would build the same table; this one
+      // is the table the first real request will actually look up.
+      topPercentRange(40);
+      reply = { id: request.id, ok: true, kind: 'warmup' };
+    }
     port.postMessage(reply);
   } catch (error) {
     // Caught and reported rather than thrown, so one rejected request does not cost the

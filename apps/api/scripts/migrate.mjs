@@ -110,7 +110,7 @@
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import postgres from 'postgres';
 
@@ -748,19 +748,151 @@ function planMigrations(files, applied, { allowMissing }) {
 // Commands.
 // ---------------------------------------------------------------------------
 
-async function applyFile(sql, file, recordInLedger) {
+// ---------------------------------------------------------------------------
+// Failure reporting.
+//
+// A migration that fails has to say WHICH ONE. Before this existed, `applyFile`
+// let the raw driver error through and the top-level handler printed only its
+// message — so with four files in db/migrations an operator saw `relation "users"
+// already exists` and nothing at all naming the file, the line, or even which
+// command had been running. At 3am that is the difference between a two-minute
+// fix and an hour of `git log` on a schema.
+// ---------------------------------------------------------------------------
+
+/** The longest source line this will echo. Beyond it, a window around the fault. */
+const MAX_ECHOED_LINE = 140;
+
+/**
+ * Maps PostgreSQL's `position` — a 1-based index into the statement it was given —
+ * onto the file, because the statement it was given IS the file: `applyFile` sends
+ * the whole `.sql` through one `.unsafe()` call.
+ *
+ * Returns null when there is no usable position, which is the common case: a great
+ * many errors (`42P07 relation already exists`, every constraint violation) carry
+ * no cursor at all, and inventing one would point at the wrong place with total
+ * confidence.
+ *
+ * The caveat, stated because it is real and small: PostgreSQL counts characters and
+ * JavaScript indexes UTF-16 code units, so a migration containing an astral-plane
+ * character before the fault would report a column one too far for each. Every file
+ * in db/migrations is ASCII, and a column that is off by one still names the right
+ * line.
+ *
+ * @returns {{line: number, column: number, text: string} | null}
+ */
+export function locateInSource(sql, position) {
+  const index = Number(position);
+  if (!Number.isInteger(index) || index < 1 || index > sql.length + 1) return null;
+  const before = sql.slice(0, index - 1);
+  const lineStart = before.lastIndexOf('\n') + 1;
+  const newline = sql.indexOf('\n', lineStart);
+  return {
+    line: before.split('\n').length,
+    column: index - lineStart,
+    text: sql.slice(lineStart, newline === -1 ? sql.length : newline),
+  };
+}
+
+/** The source line and a caret under the fault, windowed so one long line cannot fill a terminal. */
+function pointAtFault(spot) {
+  const start = Math.max(0, spot.column - 1 - Math.floor(MAX_ECHOED_LINE / 2));
+  const windowed = spot.text.slice(start, start + MAX_ECHOED_LINE);
+  const prefix = start === 0 ? '' : '...';
+  return [
+    `    ${prefix}${windowed}`,
+    // The caret is built from spaces only, so it lines up under the echoed text above.
+    `    ${' '.repeat(prefix.length + (spot.column - 1 - start))}^`,
+  ];
+}
+
+/**
+ * The diagnostic fields worth putting in front of a person, as label/value pairs.
+ *
+ * A deliberate subset of what `inspectError` dumps under PRL_DEBUG. `file` and
+ * `line` are absent because they are PostgreSQL's own C source location, which
+ * looks exactly like the migration's file and line and is never what the reader
+ * wants; `severity` and `routine` are absent for the same "true but not useful"
+ * reason. `code` stays, because a SQLSTATE is the one thing that makes an error
+ * searchable.
+ */
+const REPORTED_FIELDS = [
+  ['code', 'code'],
+  ['detail', 'detail'],
+  ['hint', 'hint'],
+  ['where', 'context'],
+  ['constraint_name', 'constraint'],
+  ['table_name', 'table'],
+  ['column_name', 'column'],
+];
+
+/**
+ * Turns whatever a file's transaction threw into an error that names the file.
+ *
+ * The whole message goes through `redact()` on its way out like every other line
+ * this script prints, so a driver error that quoted a connection string cannot
+ * reach a terminal or a CI log through here.
+ */
+function displayPath(path) {
+  // Repository-relative when the file is inside the checkout, which is every real run;
+  // absolute otherwise, because `../../../../var/folders/...` is worse than the truth.
+  const inside = relative(REPO_ROOT, path);
+  return inside === '' || inside.startsWith('..') ? path : inside;
+}
+
+function applyFailure(file, label, error) {
+  const path = displayPath(file.path);
+  const lines = [
+    `${label} ${file.version} failed. Nothing it contained was applied.`,
+    '',
+    `  file:   ${path}`,
+    `  error:  ${error?.message ?? String(error)}`,
+  ];
+
+  const spot = locateInSource(file.sql, error?.position);
+  if (spot !== null) {
+    lines.push(`  at:     ${path}:${spot.line}:${spot.column}`, ...pointAtFault(spot));
+  }
+  for (const [field, shown] of REPORTED_FIELDS) {
+    const value = error?.[field];
+    if (value === undefined || value === null || value === '') continue;
+    lines.push(`  ${`${shown}:`.padEnd(7)} ${String(value)}`);
+  }
+
+  lines.push(
+    '',
+    'Each file is applied inside one transaction, so that transaction has been rolled back and ' +
+      'this database is exactly as it was before the run started. Fix the file and run again; ' +
+      'files that had already been applied are recorded in the ledger and will not be repeated.',
+  );
+  return new MigrateError(lines.join('\n'));
+}
+
+/**
+ * Applies one file inside one transaction, and names it if anything goes wrong.
+ *
+ * Exported for the same reason `stripSqlComments` and `findIrreversibleStatements` are: a
+ * failure message an operator depends on at 3am is a behaviour, and a behaviour with no test
+ * is a claim. `apps/api/scripts/migrate.test.mjs` drives this with a stub handle and a real
+ * broken `.sql` file, which needs no database — see the note at the top of that file for what
+ * that does and does not prove.
+ */
+export async function applyFile(sql, file, recordInLedger, label) {
   const startedAt = Date.now();
-  await sql.begin(async (tx) => {
-    // SET takes no parameters, so this is the parameterised way to set one.
-    await tx`select set_config('lock_timeout', ${STATEMENT_LOCK_TIMEOUT}, true)`;
-    await tx.unsafe(file.sql);
-    if (recordInLedger) {
-      await tx`
-        insert into prl.schema_migrations (version, checksum)
-        values (${file.version}, ${file.checksum})
-      `;
-    }
-  });
+  try {
+    await sql.begin(async (tx) => {
+      // SET takes no parameters, so this is the parameterised way to set one.
+      await tx`select set_config('lock_timeout', ${STATEMENT_LOCK_TIMEOUT}, true)`;
+      await tx.unsafe(file.sql);
+      if (recordInLedger) {
+        await tx`
+          insert into prl.schema_migrations (version, checksum)
+          values (${file.version}, ${file.checksum})
+        `;
+      }
+    });
+  } catch (error) {
+    throw applyFailure(file, label, error);
+  }
   return Date.now() - startedAt;
 }
 
@@ -792,7 +924,7 @@ async function commandUp(sql, options) {
 
     line(`${bold('Applying')} ${pending.length} migration(s)`);
     for (const file of pending) {
-      const elapsed = await applyFile(sql, file, true);
+      const elapsed = await applyFile(sql, file, true, 'migration');
       ok(`${file.version} ${dim(`(${elapsed} ms, ${shortChecksum(file.checksum)})`)}`);
     }
     await alignLedgerOwnership(sql);
@@ -892,7 +1024,7 @@ async function commandRoles(sql, options) {
 
   await withLock(sql, options.lockWaitMs, async () => {
     for (const file of files) {
-      const elapsed = await applyFile(sql, file, false);
+      const elapsed = await applyFile(sql, file, false, 'role file');
       ok(`${file.version} ${dim(`(${elapsed} ms)`)}`);
     }
   });
@@ -936,7 +1068,7 @@ async function commandSeed(sql, options) {
   await withLock(sql, options.lockWaitMs, async () => {
     line(`${bold('Seeding')} ${files.length} file(s)`);
     for (const file of files) {
-      const elapsed = await applyFile(sql, file, false);
+      const elapsed = await applyFile(sql, file, false, 'seed file');
       ok(`${file.version} ${dim(`(${elapsed} ms)`)}`);
     }
     note('seeds are not recorded in the ledger; they are written to be safe to re-run');

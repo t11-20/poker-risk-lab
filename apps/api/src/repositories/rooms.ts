@@ -65,7 +65,17 @@ export type RoomStatus = 'open' | 'playing' | 'closed';
 export interface RoomRow {
   readonly id: string;
   readonly name: string;
-  readonly owner_user_id: string;
+  /**
+   * Null once the creator has erased their account.
+   *
+   * `db/migrations/0004_account_deletion.sql` made this column nullable and `ON DELETE SET NULL`
+   * rather than `RESTRICT`, because a room holds other learners' hand history and cascading it
+   * would delete their hands. The deletion path closes every room it detaches, so an ownerless
+   * room is always a closed one — but the TYPE has to admit the value the column can hold, or
+   * every reader is one `row.owner_user_id.slice()` away from a runtime error on a row nobody
+   * expected to exist.
+   */
+  readonly owner_user_id: string | null;
   readonly max_seats: number;
   readonly small_blind: number;
   readonly big_blind: number;

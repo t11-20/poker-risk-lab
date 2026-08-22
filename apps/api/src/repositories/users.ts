@@ -43,7 +43,8 @@ import { randomBytes } from 'node:crypto';
 import type { UserKind } from '@prl/contracts';
 import { AppError } from '../errors.ts';
 import { newUserId } from './ids.ts';
-import { type Db, violationError } from './sql.ts';
+import { revokeAllForUser } from './sessions.ts';
+import { type Db, isForeignKeyViolation, sqlViolation, violationError } from './sql.ts';
 
 /**
  * Units a learner has when they are not sitting at any table.
@@ -282,6 +283,233 @@ export async function rename(sql: Db, userId: string, displayName: string): Prom
     if (mapped !== null) throw mapped;
     throw error;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Erasure
+// ---------------------------------------------------------------------------
+
+/**
+ * What an account deletion actually did, counted table by table.
+ *
+ * Returned rather than assumed. Every figure below is read back from the database AFTER the
+ * delete has run, inside the same transaction, so this is a report on the state that is about to
+ * be committed and not a prediction made before it. That matters because most of the work is done
+ * by referential actions rather than by statements in this function: `deleteAccount` issues one
+ * DELETE and PostgreSQL decides what happens to the other seven tables. A summary composed from
+ * what the code intended would be exactly as wrong as the schema, and it is the schema that was
+ * wrong before migration 0004.
+ */
+export interface AccountDeletionSummary {
+  /** The account that went. Kept so a caller logging this cannot attribute it to the wrong id. */
+  readonly userId: string;
+  /**
+   * Sessions explicitly revoked before the row was removed.
+   *
+   * Always equal to the number of LIVE sessions, which is at most `deleted.sessions` — the rest
+   * were already revoked or expired. See the note on the revocation step for why it happens at
+   * all when the rows are about to be deleted anyway.
+   */
+  readonly sessionsRevoked: number;
+  /** Tables this learner created, closed before their ownership was detached. */
+  readonly roomsClosed: number;
+  /** Rows that no longer exist. Each described this learner and nobody else. */
+  readonly deleted: {
+    readonly sessions: number;
+    readonly lessonsCompleted: number;
+    readonly quizAttempts: number;
+    readonly scenarioAttempts: number;
+    readonly roomMemberships: number;
+  };
+  /** Rows that still exist and no longer name this learner. */
+  readonly anonymised: {
+    readonly handSeats: number;
+    readonly auditEvents: number;
+    readonly roomsCreated: number;
+  };
+}
+
+/** The `::int` casts are the same precaution `readUnits` documents: `count(*)` is a bigint. */
+interface AccountFootprintRow {
+  readonly sessions: number;
+  readonly lesson_progress: number;
+  readonly quiz_attempts: number;
+  readonly scenario_attempts: number;
+  readonly room_members: number;
+  readonly hand_seats: number;
+  readonly audit_events: number;
+  readonly rooms_owned: number;
+}
+
+/**
+ * Counts every row in the schema that names this learner.
+ *
+ * One statement rather than eight round trips, and one shape used both before the delete (to
+ * report what went) and after it (to prove it went). Sharing the query is what makes the second
+ * call a real check: a table the first call forgot would be missing from both, and a table added
+ * to the count later is checked automatically.
+ */
+async function accountFootprint(sql: Db, userId: string): Promise<AccountFootprintRow> {
+  const rows = await sql<AccountFootprintRow[]>`
+    select
+      (select count(*) from prl.sessions           where user_id = ${userId})::int as sessions,
+      (select count(*) from prl.lesson_progress    where user_id = ${userId})::int as lesson_progress,
+      (select count(*) from prl.quiz_attempts      where user_id = ${userId})::int as quiz_attempts,
+      (select count(*) from prl.scenario_attempts  where user_id = ${userId})::int as scenario_attempts,
+      (select count(*) from prl.room_members       where user_id = ${userId})::int as room_members,
+      (select count(*) from prl.hand_seats         where user_id = ${userId})::int as hand_seats,
+      (select count(*) from prl.audit_log          where user_id = ${userId})::int as audit_events,
+      (select count(*) from prl.rooms  where owner_user_id = ${userId})::int as rooms_owned
+  `;
+  const row = rows[0];
+  if (row === undefined) {
+    throw new AppError('internal_error', { logDetail: 'account footprint aggregate returned no row' });
+  }
+  return row;
+}
+
+/**
+ * Erases an account: the learner's own record goes, everybody else's record of them survives with
+ * their identity detached.
+ *
+ * ## The policy, because a reader here should not have to open the migration
+ *
+ *   REMOVED     `prl.sessions`, `prl.lesson_progress`, `prl.quiz_attempts`,
+ *               `prl.scenario_attempts` and `prl.room_members` — every seat at every table, live
+ *               or long departed.
+ *   DETACHED    `prl.hand_seats.user_id`, `prl.audit_log.user_id` and
+ *               `prl.rooms.owner_user_id` become NULL. The hand, its actions, its board, its
+ *               commitment root and its reveal proofs are untouched.
+ *   KEPT        every hand, in full. A hand is a shared record: the other seats are other
+ *               people's history, and `prl.hands` cascades from `prl.rooms`, so destroying either
+ *               would edit records that are not this learner's to destroy.
+ *
+ * `db/migrations/0004_account_deletion.sql` is where that is argued at length, including why
+ * `rooms.owner_user_id` is SET NULL rather than CASCADE (the latter would delete other players'
+ * hands) or RESTRICT (which is what made this operation impossible in the first place).
+ *
+ * ## Almost none of the work is in this function, deliberately
+ *
+ * Five of the eight foreign keys referencing `prl.users` do their half by themselves — four
+ * CASCADE, three SET NULL — and PostgreSQL executes a referential action with the CONSTRAINT
+ * owner's privileges rather than the connected role's. So the erasure removes rows from tables
+ * `prl_app` holds no DELETE on (`prl.quiz_attempts`, `prl.scenario_attempts`, `prl.room_members`)
+ * and nulls a column in a table it holds no UPDATE on (`prl.audit_log`) without any of those
+ * grants being made. Writing the deletes out by hand here would have required exactly those
+ * grants, and would then have let any other request path remove any other learner's rows.
+ *
+ * The consequence is that the schema, not this function, decides what erasure means — which is
+ * why the summary is verified rather than composed, and why
+ * `apps/api/scripts/verify-schema.mjs` check 9 asserts the eight referential actions.
+ *
+ * ## Why it insists on a transaction handle
+ *
+ * `Db` is `Sql | TransactionSql`, and on the pool each statement below would commit on its own:
+ * a failure between the room closures and the DELETE would leave a learner whose tables are shut
+ * and whose account still exists, with no record anywhere of a half-finished erasure. There is no
+ * partial state that is acceptable here, so the handle is checked rather than trusted. The test
+ * for it is the same one `insideSavepoint` uses in `sql.ts`: `TransactionSql` declares
+ * `savepoint`, `Sql` does not.
+ *
+ * Returns null when the id names no account. Not an error: a client retrying a deletion whose
+ * response it never saw should be able to reach "there is no such account" rather than a failure.
+ */
+export async function deleteAccount(sql: Db, userId: string): Promise<AccountDeletionSummary | null> {
+  if (!('savepoint' in sql)) {
+    throw new AppError('internal_error', {
+      logDetail: 'deleteAccount was given a pool handle; it must run inside withTransaction',
+    });
+  }
+
+  // `for update` rather than a bare select. Two deletions of the same account racing would
+  // otherwise both count a full footprint and both report having removed everything, and a
+  // deletion racing a hand settlement would count rows the other transaction is still writing.
+  // The lock is taken on the account row, which every statement below is reached through.
+  const locked = await sql<{ id: string }[]>`
+    select id from prl.users where id = ${userId} for update
+  `;
+  if (locked[0] === undefined) return null;
+
+  const before = await accountFootprint(sql, userId);
+
+  // Closed BEFORE the delete, while `owner_user_id` still says who these tables belong to.
+  //
+  // A room whose owner has been erased has no owner and no way to acquire one: `rooms.close`
+  // authorises on `owner_user_id`, and nothing in the product transfers ownership. Left open, it
+  // would stay joinable by its invite code for ever with nobody able to shut it. Closing it is
+  // also what keeps a NULL owner off the live-table wire, since a closed room is never re-opened.
+  const closed = await sql<{ id: string }[]>`
+    update prl.rooms
+       set status = 'closed', closed_at = now()
+     where owner_user_id = ${userId}
+       and status <> 'closed'
+    returning id
+  `;
+
+  // Unconditional, and not made redundant by the CASCADE that is about to remove these rows.
+  // Two reasons. The revocation is what makes the sessions unusable at the instant this
+  // transaction commits, whatever a later migration decides `sessions` should do on delete. And
+  // it leaves `revoked_at` set on the rows for however long the delete takes, so a concurrent
+  // request that resolved a token a moment ago cannot slide its expiry against a row that is
+  // about to stop existing.
+  const sessionsRevoked = await revokeAllForUser(sql, userId);
+
+  try {
+    await sql`delete from prl.users where id = ${userId}`;
+  } catch (error) {
+    // A foreign-key violation on THIS statement can only mean one thing: some table still holds
+    // the account back, which is what `ON DELETE RESTRICT` on `prl.rooms.owner_user_id` and
+    // `prl.room_members.user_id` did before migration 0004 and what a ninth reference added
+    // without a clause would do again. It is decided here rather than in `VIOLATION_CODES`
+    // because the same constraint names also refuse an INSERT that points at a user who does not
+    // exist, and that is a caller bug with a completely different answer.
+    if (isForeignKeyViolation(error)) {
+      // The constraint name goes to the log and never to the client, for the reason
+      // `violationError` states: a body naming a constraint is a free schema diagram.
+      const constraint = sqlViolation(error)?.constraint;
+      throw new AppError('account_deletion_blocked', {
+        logDetail:
+          'deleting an account: the row is still referenced by ' +
+          `${constraint === undefined || constraint === '' ? 'an unnamed foreign key' : constraint}`,
+        cause: error,
+      });
+    }
+    const mapped = violationError(error, 'deleting an account');
+    if (mapped !== null) throw mapped;
+    throw error;
+  }
+
+  // The verification, and the reason the summary is worth anything. Reading the same counts back
+  // proves the referential actions did what the policy says they do, rather than assuming it —
+  // and it fails INSIDE the transaction, so a schema that half-erased an account rolls the whole
+  // thing back instead of reporting a deletion that did not happen.
+  const after = await accountFootprint(sql, userId);
+  const stillPresent = Object.entries(after)
+    .filter(([, count]) => count > 0)
+    .map(([table, count]) => `${table}=${String(count)}`);
+  if (stillPresent.length > 0) {
+    throw new AppError('internal_error', {
+      logDetail: `account erasure left rows behind, so nothing was committed: ${stillPresent.join(', ')}`,
+    });
+  }
+
+  return {
+    userId,
+    sessionsRevoked,
+    roomsClosed: closed.length,
+    deleted: {
+      sessions: before.sessions,
+      lessonsCompleted: before.lesson_progress,
+      quizAttempts: before.quiz_attempts,
+      scenarioAttempts: before.scenario_attempts,
+      roomMemberships: before.room_members,
+    },
+    anonymised: {
+      handSeats: before.hand_seats,
+      auditEvents: before.audit_events,
+      roomsCreated: before.rooms_owned,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

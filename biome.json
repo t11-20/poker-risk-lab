@@ -11,6 +11,9 @@
       "!**/*.tsbuildinfo",
       "!apps/web/next-env.d.ts",
       "!docs/sbom/*.json",
+      "!deploy/staging/release-manifest.json",
+      "!deploy/staging/staging-verified.json",
+      "!deploy/staging/tls",
       "!pnpm-lock.yaml"
     ]
   },

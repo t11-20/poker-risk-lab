@@ -142,6 +142,7 @@ export {
   commitToDeck,
   commitToKnownDeck,
   createDeterministicRandomForTests,
+  createSamplingRandom,
   createSecureRandom,
   RandomnessError,
   type RandomSource,

@@ -1,0 +1,26 @@
+{
+  "$comment": [
+    "Exceptions to the container image CVE gate (scripts/supply-chain/container-scan.mjs).",
+    "Empty by design. Every entry MUST carry a reason, an approver and an expiry date;",
+    "the gate fails on an entry missing any of them, fails on an entry whose `expires` is",
+    "not a valid ISO date, and fails again once that date passes — so an exception cannot",
+    "quietly become permanent. It is the same shape and the same rules as",
+    "scripts/supply-chain/osv-allowlist.json, deliberately: two allowlists that behave",
+    "differently is how somebody learns the wrong rule.",
+    "",
+    "An entry here suppresses a finding the gate would otherwise BLOCK on. It does not",
+    "suppress the finding from the report: an allowed CVE is still printed, still counted",
+    "and still named with its expiry, because an exception nobody can see is an exception",
+    "nobody reviews.",
+    "",
+    "This is NOT where unfixable base-image CVEs go. The gate already declines to block on",
+    "a finding with no available fix (see `--include-unfixed` in container-scan.mjs) and",
+    "reports them in their own section, because the only remediation for one is changing",
+    "base image and a list of thirty entries nobody reads is worse than a number somebody",
+    "does. Use this for a finding that IS fixable and that you are deliberately shipping",
+    "anyway, for a stated reason, until a stated date.",
+    "",
+    "Schema: { id, package?, image?, reason, expires (ISO date), approvedBy }"
+  ],
+  "allow": []
+}

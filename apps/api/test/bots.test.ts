@@ -347,6 +347,24 @@ describe('a bot-driven hand', () => {
     // Two loose styles, so hands reach later streets rather than ending on the first fold every
     // time. The loop plays until one has, because a hand that ends preflop proves the deal and the
     // settlement but never exercises a street transition or a showdown.
+    //
+    // ## Why the cap is 80 and not 20
+    //
+    // The deck comes from the real CSPRNG, so whether a given hand reaches a flop is genuinely
+    // random: heads-up, the small blind acting first can simply fold, and that ends the hand with
+    // no board. The loop stops at the FIRST hand that sees one, so in practice it plays one to
+    // three hands and the cap is never approached — but the cap is what decides how often the
+    // guard below fires on a run where nothing was wrong.
+    //
+    // It fired once, at 20, on a full-suite run: twenty consecutive preflop endings, with chip
+    // conservation and every reveal verifying on all twenty. Eight isolated re-runs afterwards
+    // could not reproduce it. That is the signature of an unlucky sample, not a defect — and a
+    // guard that fails for luck teaches the next reader to re-run instead of to look.
+    //
+    // Raising the cap attacks it at the right exponent: the false-failure probability is p^n for
+    // a per-hand preflop-fold rate p, so quadrupling n squares it twice over. It costs nothing on
+    // a normal run, and it does not weaken a single assertion — every hand played still asserts
+    // conservation, the reveal, and the exact set of proved positions.
     const harness = await botTable({
       stack: 500,
       profiles: ['calling-station', 'reading-pressure-specialist'],
@@ -355,7 +373,7 @@ describe('a bot-driven hand', () => {
     let handsWithABoard = 0;
     let handsPlayed = 0;
 
-    for (let hand = 0; hand < 20 && handsWithABoard === 0; hand += 1) {
+    for (let hand = 0; hand < 80 && handsWithABoard === 0; hand += 1) {
       const playable = harness.table.snapshot().seats.filter((seat) => seat.stack > 0);
       if (playable.length < 2) break;
       await harness.table.startHand();
@@ -394,7 +412,11 @@ describe('a bot-driven hand', () => {
 
     assert.ok(
       handsWithABoard > 0,
-      `${handsPlayed} hands all ended before the flop, so no street transition was exercised`,
+      `${handsPlayed} hands all ended before the flop, so no street transition was exercised. ` +
+        'Every one of them still conserved chips and produced a verifying reveal, so this is a ' +
+        'coverage failure rather than a correctness one: either the deal is astonishingly unlucky, ' +
+        'or both bots have started folding preflop unconditionally. Check `harness.problems` and ' +
+        'whether the policies are erroring into their fold fallback before assuming luck.',
     );
     assert.deepEqual(harness.problems, [], 'a clean run reports no problems');
     harness.table.close();

@@ -56,6 +56,7 @@ import {
   type HandActionRow,
   type HandRow,
   type HandSeatRow,
+  type ReviewAnalyser,
 } from './build-review.ts';
 
 /** Why a hand cannot be compared. Each becomes a distinct sentence on the page. */
@@ -89,10 +90,27 @@ export interface BuildLegendComparisonInput {
   readonly namingMode: NamingMode;
   /** Wall-clock budget for the analysis, in milliseconds. */
   readonly budgetMs: number;
+  /**
+   * Where each decision's Coach report is computed — a calculator thread, in the server.
+   *
+   * A comparison prices the actions that were NOT taken as well as the one that was, so it does
+   * strictly more Monte Carlo work than a hand review, and a hand review was measured as the
+   * single largest contributor to event-loop saturation in this process before the same change.
+   * Passing the seam rather than defaulting it means no caller can accidentally get the version
+   * that computes here.
+   */
+  readonly analyse: ReviewAnalyser;
   readonly onAnalysisSkipped?: (detail: { readonly sequence: number; readonly reason: string }) => void;
 }
 
-export function buildLegendComparison(input: BuildLegendComparisonInput): ComparisonOutcome {
+/**
+ * Asynchronous because the analyses are.
+ *
+ * Everything else in here — the refusals, the profile lookup, `buildHandComparison` itself — is
+ * the same synchronous work it always was. The `await` is the up-to-eight Coach reports being
+ * computed somewhere that is not the event loop.
+ */
+export async function buildLegendComparison(input: BuildLegendComparisonInput): Promise<ComparisonOutcome> {
   if (input.hand.completed_at === null || input.hand.street !== 'complete') {
     return {
       ok: false,
@@ -131,12 +149,13 @@ export function buildLegendComparison(input: BuildLegendComparisonInput): Compar
     };
   }
 
-  const built = buildComparisonDecisions({
+  const built = await buildComparisonDecisions({
     hand: input.hand,
     seats: input.seats,
     actions: input.actions,
     viewerUserId: input.viewerUserId,
     budgetMs: input.budgetMs,
+    analyse: input.analyse,
     ...(input.onAnalysisSkipped === undefined ? {} : { onAnalysisSkipped: input.onAnalysisSkipped }),
   });
   if (built === null) {

@@ -44,6 +44,20 @@
  * `app.expensiveRateLimit`, the same bucket the equity endpoints use, because it does the same
  * kind of work.
  *
+ * ## The analysis happens on a calculator thread, and the rows are fetched here
+ *
+ * It is the same work `POST /math/coach` does, so it goes to the same place: the shared pool in
+ * `workers/pool.ts`. That split is not negotiable in either direction. The DATA has to be read on
+ * this thread — a review needs three queries and a worker must never hold a database handle, which
+ * is what makes `worker.terminate()` safe. The COMPUTATION has to leave it: measured before this
+ * change, one review was 156 ms of uninterruptible Monte Carlo on the event loop, and a load test
+ * at six concurrent players reported action p99 of 948 ms with Hand Review in the journey against
+ * 29 ms without it on the same process.
+ *
+ * What crosses to the thread is a `CoachTask` per decision — hero's own two cards, the board as of
+ * that street, the pot and the stacks. The hole-card rule has already been applied twice by then
+ * (in the SQL, and again in `toReviewSeat`), so a task cannot carry a card its viewer may not see.
+ *
  * ## Where the queries live, and the duplication that is deliberately still here
  *
  * As local functions in this file, taking the `Db` handle first, exactly as `src/repositories/*`
@@ -76,10 +90,16 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastif
 import { requireSession } from '../auth/session.ts';
 import { getSql } from '../db.ts';
 import { AppError } from '../errors.ts';
+import {
+  bindCalculationPoolMetrics,
+  observeAnalysis,
+  workerTaskOutcomeFor,
+} from '../observability/telemetry.ts';
 import type { Db } from '../repositories/sql.ts';
 import { buildLegendComparison } from '../review/build-comparison.ts';
-import type { HandActionRow, HandRow, HandSeatRow } from '../review/build-review.ts';
-import { buildHandReview, toHandSummary } from '../review/build-review.ts';
+import type { HandActionRow, HandRow, HandSeatRow, ReviewAnalyser } from '../review/build-review.ts';
+import { buildHandReviewOn, toHandSummary } from '../review/build-review.ts';
+import { closeSharedPool, getSharedPool, type PoolWarning, peekSharedPool } from '../workers/pool.ts';
 
 // ---------------------------------------------------------------------------
 // Paging
@@ -573,6 +593,57 @@ function cursorFor(raw: string | undefined, sort: HandSort): HandCursor | null {
  * a missing one. Returning an already-resolved promise says the same thing to Fastify.
  */
 const handsRoutes: FastifyPluginAsync = (app: FastifyInstance) => {
+  const config = app.appConfig;
+  const metrics = app.appMetrics;
+  /**
+   * The same shared pool `routes/calc.ts` and `routes/content.ts` take, for the same reason.
+   *
+   * A review is Monte Carlo work with a database read in front of it: the rows are fetched here,
+   * on this thread, and only the arithmetic crosses to a calculator thread — a worker is never
+   * given a database handle, and `equity-worker.ts` imports nothing that could hold one.
+   *
+   * `getSharedPool` memoises, so whichever module registers first sizes the pool and installs the
+   * `onWarn` sink; registering it here as well means a deployment that serves hand history without
+   * the calculator endpoints still gets threads, gauges and a clean shutdown.
+   */
+  const poolHooks = {
+    onWarn: (warning: PoolWarning) => {
+      app.log.warn({ poolEvent: warning.event, poolDetail: warning.detail }, 'calculation pool');
+      metrics.workerTasks.inc({ outcome: workerTaskOutcomeFor(warning.event) });
+    },
+  };
+  bindCalculationPoolMetrics(peekSharedPool, metrics);
+  app.addHook('onClose', async () => {
+    await closeSharedPool();
+  });
+
+  /**
+   * One decision's analysis, on a thread, timed like every other analysis in the process.
+   *
+   * ## The pool is looked up per request, not captured at registration
+   *
+   * `closeSharedPool()` closes the process-wide pool AND drops the memo, so the next
+   * `getSharedPool` builds a fresh one. A module that captured the instance at registration keeps
+   * a reference to the closed one, and every task it submits afterwards is refused with
+   * `service_unavailable` for the life of the process. That is not hypothetical: one Fastify
+   * instance closing while another is still serving is exactly what `test/hands.test.ts` does —
+   * the rate-limit suite builds a second app and closes it — and it turned every analysis in the
+   * still-running app into `analysis: null`. Asking the memo each time costs a property read and
+   * cannot go stale.
+   *
+   * No explicit deadline: the pool's own `coachTimeoutMs` applies, which is the budget every
+   * other Coach task in the process runs under. The review has a second, longer budget of its own
+   * (`budgetMs` below) covering the whole set, and the two do different jobs — one bounds a task,
+   * the other bounds a request.
+   *
+   * `observeAnalysis` records it under `kind="coach"` because that is what it is: the same task
+   * type, on the same threads, as `POST /math/coach`. An operator watching that histogram is
+   * asking "how long does a Coach analysis take here", and a review's eight are not a different
+   * answer to that question.
+   */
+  const analyseOnThread: ReviewAnalyser = (task) =>
+    observeAnalysis('coach', () => getSharedPool(config, poolHooks).runCoach(task), metrics);
+
   app.get<{ Querystring: ListQueryString }>(
     '/hands',
     { schema: { querystring: { $ref: 'prl:handListQuery#' } } },
@@ -618,18 +689,21 @@ const handsRoutes: FastifyPluginAsync = (app: FastifyInstance) => {
         actionsOfHand(sql, hand.id),
       ]);
 
-      return buildHandReview(
+      return await buildHandReviewOn(
         { hand, seats, actions, viewerUserId: userId, maxPotAfter: hand.max_pot_after },
         {
           // Half the request budget. A review can then never be the reason a request times out,
           // and shortening `REQUEST_TIMEOUT_MS` tightens this automatically rather than leaving a
           // second number to remember.
-          budgetMs: Math.floor(app.appConfig.requestTimeoutMs / 2),
+          budgetMs: Math.floor(config.requestTimeoutMs / 2),
           onAnalysisSkipped: (detail) => {
-            // Server-side only: the response says `analysis: null` and nothing about why.
+            // Server-side only: the response says `analysis: null` and nothing about why. This is
+            // also where a pool refusal lands — a full queue or an overrun costs this decision its
+            // figure and nothing else, which is the same trade the wall-clock budget makes.
             request.log.debug({ handId: hand.id, ...detail }, 'hand review skipped one analysis');
           },
         },
+        analyseOnThread,
       );
     },
   );
@@ -681,14 +755,15 @@ const handsRoutes: FastifyPluginAsync = (app: FastifyInstance) => {
         botProfilesOfRoom(sql, hand.room_id),
       ]);
 
-      const outcome = buildLegendComparison({
+      const outcome = await buildLegendComparison({
         hand,
         seats,
         actions,
         viewerUserId: userId,
         botProfiles,
         namingMode: resolveNamingMode(),
-        budgetMs: Math.floor(app.appConfig.requestTimeoutMs / 2),
+        budgetMs: Math.floor(config.requestTimeoutMs / 2),
+        analyse: analyseOnThread,
         onAnalysisSkipped: (detail) => {
           request.log.debug({ handId: hand.id, ...detail }, 'hand comparison skipped one analysis');
         },

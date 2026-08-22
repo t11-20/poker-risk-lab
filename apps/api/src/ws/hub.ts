@@ -48,6 +48,8 @@ import { WS_CLOSE, WS_LIMITS, wsClientMessageSchema } from '@prl/contracts';
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { type SessionStore, sessionPlugin } from '../auth/session.ts';
 import { getSql } from '../db.ts';
+import type { AppMetrics } from '../observability/metrics.ts';
+import { recordSecurityAudit } from '../observability/telemetry.ts';
 import { isAllowedOrigin } from '../plugins/security.ts';
 import { type RoomRegistry, roomRegistry } from '../rooms/registry.ts';
 import { systemClock } from '../rooms/timers.ts';
@@ -73,8 +75,65 @@ export const WS_PATH = '/ws';
  */
 const LIBRARY_PAYLOAD_CEILING = WS_LIMITS.maxMessageBytes * 4;
 
+/**
+ * `ws`'s own code for a frame that went past `maxPayload`.
+ *
+ * Matched on `code` rather than on the message, because the message is prose the library is
+ * free to reword and the code is documented API (`ws`'s "Error codes" section; it is set in
+ * `lib/receiver.js` and in `lib/permessage-deflate.js`, which are the two places the ceiling is
+ * enforced). A `code` comparison also cannot be fooled by a `RangeError` from anywhere else.
+ */
+const WS_LIBRARY_OVERSIZE_CODE = 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH';
+
+/** True when `ws` refused a frame for being larger than `LIBRARY_PAYLOAD_CEILING`. */
+export function isOversizedFrameError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === WS_LIBRARY_OVERSIZE_CODE
+  );
+}
+
 /** A socket that missed this many heartbeats is gone. */
 const MISSED_HEARTBEATS_ALLOWED = 2;
+
+/**
+ * Why an upgrade was refused, as a CLOSED set.
+ *
+ * These three values are the label on `prl_websocket_refused_total`, and the three of them are
+ * three different incidents: a burst of `bad_origin` is somebody pointing a page at this API,
+ * a burst of `unauthenticated` is a broken client or an expired-cookie stampede, and
+ * `rate_limited` is one session opening sockets in a loop. Collapsing them into one counter
+ * would mean an alert could fire without saying which of those was happening.
+ *
+ * Separate from the human `reason` that goes back to the client in the close frame, because that
+ * string is prose and this one is a label — see `observability/registry.ts` on why a label value
+ * must never be free text.
+ */
+export type WsRefusalReason = 'bad_origin' | 'unauthenticated' | 'rate_limited';
+
+/**
+ * The close codes this service will label a closed socket with.
+ *
+ * Every code the *server* sends comes from `WS_CLOSE`, so that part is bounded by the contract.
+ * The rest of this set is the codes a PEER can produce — 1001 when a tab navigates away, 1005
+ * when it closes with no status, 1006 for a dropped connection, 1009 from `ws`'s own payload
+ * ceiling, 1011 for an internal error. Anything else becomes `other`: a close code is two bytes
+ * chosen by the client, and 65,536 of them is 65,536 time series that one caller can mint.
+ */
+const KNOWN_CLOSE_CODES: ReadonlySet<number> = new Set<number>([
+  ...Object.values(WS_CLOSE),
+  1001,
+  1005,
+  1006,
+  1009,
+  1011,
+]);
+
+/** The bounded `code` label for a closed socket. */
+export function closeCodeLabel(code: number): string {
+  return KNOWN_CLOSE_CODES.has(code) ? String(code) : 'other';
+}
 
 /**
  * How long a peer gets to answer a close frame before its socket is dropped.
@@ -121,6 +180,8 @@ export interface WsHubOptions {
   readonly sessionStore?: SessionStore;
   /** Test seam: lets a test reach the router without opening a socket. */
   readonly onRouterReady?: (router: WsRouter) => void;
+  /** Defaults to the process-wide metrics. A test that wants isolation passes its own. */
+  readonly metrics?: AppMetrics;
 }
 
 /**
@@ -178,6 +239,52 @@ function originOf(request: FastifyRequest): string | null {
 }
 
 /**
+ * Writes the refused upgrade to `prl.audit_log`.
+ *
+ * ## Why this event and not the whole socket lifecycle
+ *
+ * The audit log is for security-relevant events, not for traffic. An accepted upgrade is a
+ * signed-in member opening their own table, which is ordinary and is already in the request log
+ * and in `prl_websocket_opened_total`. A REFUSED one is the other thing: this is the endpoint
+ * that CORS and the CSRF token do not protect (see the banner at the top of this file), so the
+ * `Origin` check is the only control standing between a page on another site and a socket
+ * carrying this learner's cookies. A record of every time that control fired is precisely what an
+ * incident responder needs and what nothing else keeps.
+ *
+ * ## What goes in the row, and what cannot
+ *
+ * The refusal reason (one of three constants), the account when there was one, and the origin —
+ * which is the evidence for a `bad_origin` refusal and the only caller-supplied value here.
+ * `redactDetail` clamps it to 200 characters and strips control characters. The address and the
+ * user agent are deliberately absent: `audit_log_detail_has_no_forbidden_keys` refuses both, and
+ * they are already in the request log line, correlated by request id, where retention is governed.
+ *
+ * ## Why it cannot fail the refusal
+ *
+ * `recordSecurityAudit` swallows and logs. Refusing an upgrade and then throwing because the
+ * *record* of the refusal could not be written would turn a working security control into an
+ * outage — and this is the one call in this file that touches the database.
+ *
+ * ## Why one row per refusal is affordable
+ *
+ * The upgrade route carries no `rateLimit: false`, so it is governed by the same global limiter
+ * as everything else: a caller cannot turn a refused handshake into an unbounded stream of
+ * INSERTs, because they run out of requests first. If that route is ever exempted, this write
+ * needs a bound of its own.
+ */
+function auditRefusal(request: FastifyRequest, refusal: WsRefusalReason, userId: string | null): void {
+  const origin = originOf(request);
+  recordSecurityAudit(
+    {
+      event: 'ws.upgrade.refused',
+      userId,
+      detail: { refusal, ...(origin === null ? {} : { origin }) },
+    },
+    (message, detail) => request.log.warn({ ...detail }, message),
+  );
+}
+
+/**
  * The upgrade decision, as a pure function.
  *
  * Separated from the socket so the two refusals that matter most can be tested directly:
@@ -189,15 +296,24 @@ export function evaluateUpgrade(input: {
   readonly origin: string | null;
   readonly userId: string | null;
   readonly socketsForSession: number;
-}): { readonly ok: true } | { readonly ok: false; readonly code: number; readonly reason: string } {
+}):
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly code: number;
+      /** For the close frame and the log line. Prose; never a metric label. */
+      readonly reason: string;
+      /** For the counter and the audit row. One of three values; see `WsRefusalReason`. */
+      readonly refusal: WsRefusalReason;
+    } {
   if (input.origin === null || !isAllowedOrigin(input.origin)) {
-    return { ok: false, code: WS_CLOSE.badOrigin, reason: 'origin not allowed' };
+    return { ok: false, code: WS_CLOSE.badOrigin, reason: 'origin not allowed', refusal: 'bad_origin' };
   }
   if (input.userId === null) {
-    return { ok: false, code: WS_CLOSE.unauthenticated, reason: 'no session' };
+    return { ok: false, code: WS_CLOSE.unauthenticated, reason: 'no session', refusal: 'unauthenticated' };
   }
   if (input.socketsForSession >= WS_LIMITS.maxSocketsPerSession) {
-    return { ok: false, code: WS_CLOSE.rateLimited, reason: 'too many sockets' };
+    return { ok: false, code: WS_CLOSE.rateLimited, reason: 'too many sockets', refusal: 'rate_limited' };
   }
   return { ok: true };
 }
@@ -212,6 +328,11 @@ export function evaluateUpgrade(input: {
 export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
   return async (app) => {
     const registry = options.registry ?? roomRegistry();
+    // The assembled server owns one metrics registry per Fastify instance. Keep the explicit
+    // option for isolated hub tests, but make the default follow that instance rather than the
+    // process-global fallback: otherwise the default route factory silently drops WebSocket
+    // observations from an app built with an injected registry.
+    const metrics = options.metrics ?? app.appMetrics;
     const store =
       options.sessionStore ??
       (app.hasRequestDecorator('session') ? null : createAuthStore(getSql()).sessions);
@@ -247,8 +368,10 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
       registry,
       clock: systemClock,
       validate: compileFrameValidator(app),
+      config: app.appConfig,
       nextRequestId: () => `ws-${randomUUID()}`,
       onProblem: (message, detail) => app.log.warn({ ...detail }, message),
+      metrics,
     });
     options.onRouterReady?.(router);
 
@@ -264,6 +387,13 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
      * `server.close()` will wait for.
      */
     const live = new Map<string, { readonly connection: WsConnection; readonly heartbeat: Heartbeat }>();
+
+    // Read at scrape time from the map that already holds the answer, never incremented and
+    // decremented alongside it. A mirrored count drifts the first time a socket leaves by a path
+    // somebody forgot to instrument — the heartbeat's `terminate`, the shutdown drain, a refused
+    // upgrade — and this hub has four of them. `Gauge.setFrom` in `observability/registry.ts` sets
+    // out why a drifting gauge is worse than an absent one.
+    metrics.wsConnections.setFrom(() => live.size);
 
     /** Read once: `appConfig` is frozen, and every close in this plugin is bounded by the same value. */
     const closeGraceMs = closeHandshakeGraceMs(app.appConfig.shutdownGraceMs);
@@ -351,6 +481,53 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
         schema: { querystring: { type: 'object', additionalProperties: false, properties: {} } },
       },
       (socket, request) => {
+        /**
+         * Takes over the socket's `error` handling from the library, for every socket — refused
+         * upgrades included, because a refused socket is still a real WebSocket that can be sent
+         * a frame before its close handshake finishes.
+         *
+         * ## The defect
+         *
+         * `@fastify/websocket` attaches `socket.on('error', (error) => fastify.log.error(error))`
+         * inside its `handleUpgrade`, before this handler runs. So a frame larger than
+         * `LIBRARY_PAYLOAD_CEILING` — which any client can send at will, without a session and
+         * from any origin — put a full `RangeError: Max payload size exceeded` stack from
+         * `Receiver.haveLength` into the log at level 50. That is noise on the level operators
+         * page on, and it is a small amplification primitive: a few bytes of request turns into
+         * a multi-line error record. The router's own oversize path (`WS_LIMITS.maxMessageBytes`)
+         * has always handled the same event correctly — count it, close, log one line — and this
+         * makes the library's path match.
+         *
+         * ## Why `removeAllListeners` rather than living alongside it
+         *
+         * An `error` event with a listener is not throwable, so both listeners would simply fire
+         * and the level-50 line would still be written. The listener being removed logs and does
+         * nothing else, and the one installed here logs everything it did — so nothing is lost,
+         * and there is no window in which the socket has no `error` listener at all.
+         */
+        socket.removeAllListeners('error');
+        socket.on('error', (error: Error) => {
+          if (!isOversizedFrameError(error)) {
+            request.log.warn({ err: error }, 'websocket error');
+            return;
+          }
+          // The same label the router uses for its own ceiling: one metric answers "how many
+          // oversized frames", whichever limit caught it. The two limits differ by design (see
+          // `LIBRARY_PAYLOAD_CEILING`); the incident does not.
+          metrics.wsFramesRejected.inc({ reason: 'too_large' });
+          // No `err` field, so pino writes one line rather than a stack, and the size that was
+          // exceeded rather than the caller's — a client-chosen byte count is a value this
+          // process has no reason to echo.
+          request.log.warn({ ceilingBytes: LIBRARY_PAYLOAD_CEILING }, 'websocket frame over the ceiling');
+          // Normally a no-op: `ws` calls `websocket.close(1009)` from `receiverOnError` BEFORE it
+          // emits this event, and a close on an already-closing socket is ignored — which is why
+          // `1009` is in `KNOWN_CLOSE_CODES` and why this cannot re-code the frame. It is here
+          // for the branch where `ws` only emits (`receiverOnError` skips its close when the
+          // socket has already been detached), so that the socket is never left open with a
+          // client that has proved it will oversend.
+          socket.close(WS_CLOSE.rateLimited, 'frame too large');
+        });
+
         const session = request.session;
         const sessionId = session?.sessionId ?? '';
         const decision = evaluateUpgrade({
@@ -378,6 +555,8 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
           // Logged with the reason, answered with only a close code. Nothing about the session or
           // the origin goes back to the client.
           request.log.warn({ wsRefusal: decision.reason }, 'websocket upgrade refused');
+          metrics.wsRefused.inc({ reason: decision.refusal });
+          auditRefusal(request, decision.refusal, session?.user.id ?? null);
           refuse(decision.code, decision.reason);
           return;
         }
@@ -385,6 +564,7 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
           // Unreachable: `evaluateUpgrade` refuses a null user id, so an accepted decision implies a
           // session. Closing rather than returning means that if the two ever disagree, the socket
           // is shut instead of left open with nobody attached to it.
+          metrics.wsRefused.inc({ reason: 'unauthenticated' });
           refuse(WS_CLOSE.unauthenticated, 'no session');
           return;
         }
@@ -394,6 +574,7 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
           displayName: session.user.displayName,
           sessionId,
         });
+        metrics.wsOpened.inc();
         bySession.set(sessionId, (bySession.get(sessionId) ?? 0) + 1);
         live.set(connection.id, {
           connection,
@@ -406,10 +587,11 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
         socket.on('pong', () => {
           connection.missedHeartbeats = 0;
         });
-        socket.on('error', (error: Error) => {
-          request.log.warn({ err: error }, 'websocket error');
-        });
-        socket.on('close', () => {
+        socket.on('close', (code: number) => {
+          // Labelled through `closeCodeLabel`, so a peer cannot mint a series per invented code.
+          // Compared against `prl_websocket_opened_total`, this is what distinguishes a client
+          // reconnecting after a deploy (4503) from one being dropped by the network (1006).
+          metrics.wsClosed.inc({ code: closeCodeLabel(code) });
           router.handleClose(connection);
           live.delete(connection.id);
           const remaining = (bySession.get(sessionId) ?? 1) - 1;

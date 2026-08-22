@@ -37,14 +37,22 @@
  *
  * ## Announcements
  *
- * A polite live region carries the step change. Focus is never moved by this component: the timeline
- * moves focus in response to the reader's own key press and nothing else. A scrub that yanked the
- * caret would make the replay unusable with a keyboard.
+ * A polite live region carries the step change. Focus is never moved by this component *except* to
+ * rescue it: the timeline moves focus in response to the reader's own key press and nothing else,
+ * and a scrub that yanked the caret would make the replay unusable with a keyboard.
+ *
+ * The exception is the transport pair, and it is a real defect rather than a hypothetical one.
+ * "Previous decision" is `disabled` at step 0 and "Next decision" is `disabled` at the last step, so
+ * a keyboard reader stepping through a hand with Enter loses focus the moment they reach either end:
+ * the browser blurs a control that becomes disabled, and there is nothing to blur it to but
+ * `<body>`. Having read a whole hand they are silently returned to the top of the document. The
+ * effect below moves the caret to whichever of the two survived, and only when the browser has in
+ * fact given up on it — the same two conditions `ActionBar` uses in `@prl/ui` for the same reason.
  */
 
 import type { HandReviewResponse } from '@prl/contracts';
 import { Button, CoachPanel, formatUnits, Metric, Panel, PokerTable, pluralise } from '@prl/ui';
-import { type ReactElement, useId, useState } from 'react';
+import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
 import type { HandReplay as Replay, ReplayStep } from '../lib/hand-replay.ts';
 import { CommitmentVerifier } from './CommitmentVerifier.tsx';
 import { DecisionTimeline, type TimelineMarker, type TimelineStreet } from './DecisionTimeline.tsx';
@@ -195,6 +203,28 @@ function ResultRow({
 export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
   const [stepIndex, setStepIndex] = useState(0);
   const instructionsId = useId();
+  /**
+   * The transport row, so the rescue below can find whichever button is still enabled.
+   *
+   * A `ref` on the buttons themselves would be tidier and is not available: `Button` in `@prl/ui` is
+   * a plain function component that does not declare one, and adding it there is a change to a
+   * shared package for a problem this container owns. Querying inside a row that holds exactly two
+   * buttons is unambiguous.
+   */
+  const transportRef = useRef<HTMLDivElement | null>(null);
+  /** Which transport control the reader last pressed, so a scrub from the timeline moves nothing. */
+  const pressed = useRef<'previous' | 'next' | null>(null);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `stepIndex` is the TRIGGER, not a value read here — the effect asks the DOM what survived rather than deriving anything from the index. Without it, focus is never rescued at either end of the hand.
+  useEffect(() => {
+    const which = pressed.current;
+    pressed.current = null;
+    if (which === null) return;
+    // Only when the browser has actually dropped focus, which is what it does to a control that
+    // becomes disabled. If the pressed button is still enabled it still has the caret.
+    if (document.activeElement !== document.body && document.activeElement !== null) return;
+    transportRef.current?.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus();
+  }, [stepIndex]);
 
   const markers = buildMarkers(replay);
   const streets = buildStreets(replay);
@@ -235,12 +265,15 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
         instructionsId={instructionsId}
       />
 
-      <div className="prl-replay__transport">
+      <div className="prl-replay__transport" ref={transportRef}>
         <Button
           variant="secondary"
           size="sm"
           disabled={step.index === 0}
-          onClick={() => setStepIndex(step.index - 1)}
+          onClick={() => {
+            pressed.current = 'previous';
+            setStepIndex(step.index - 1);
+          }}
         >
           Previous decision
         </Button>
@@ -252,7 +285,10 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
           variant="secondary"
           size="sm"
           disabled={step.index === total - 1}
-          onClick={() => setStepIndex(step.index + 1)}
+          onClick={() => {
+            pressed.current = 'next';
+            setStepIndex(step.index + 1);
+          }}
         >
           Next decision
         </Button>

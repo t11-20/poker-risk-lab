@@ -35,10 +35,33 @@
  * bounds are the server's `minTo`/`maxTo`. Sitting, standing, dealing and acting are all intents:
  * this component asks, and draws whatever comes back. The Coach's numbers are computed server-side
  * from the reader's own redacted view and arrive as a whole `CoachReport`.
+ *
+ * ## Where the keyboard caret goes when a control disappears
+ *
+ * Every control in this panel is conditional on a phase or a socket state, so pressing one usually
+ * unmounts it: "Open the table" is replaced by "Take seat 1", which is replaced by "Deal the next
+ * hand". The browser's only response to the focused node being removed is to drop focus to `<body>`,
+ * which puts a keyboard user back at the top of the document after every single step of setting a
+ * table up, and tells a screen-reader user nothing at all.
+ *
+ * `ConnectionControls` therefore lands focus on this panel's status line when — and only when — the
+ * caret was inside the row and the browser has actually given up on it. That is the same shape, and
+ * the same two conditions, as `ActionBar`'s idle line in `@prl/ui`, and the conditions are the
+ * design: focus must not be pulled back here because a socket state changed while the reader was
+ * somewhere else entirely.
  */
 
 import { Button, Callout, Panel, type TableAction } from '@prl/ui';
-import { type FormEvent, type ReactElement, useId, useState } from 'react';
+import {
+  type FocusEvent,
+  type FormEvent,
+  type ReactElement,
+  type RefObject,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react';
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
@@ -151,23 +174,79 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
           {closed.detail}
         </Callout>
       )}
+      {/*
+        `role="alert"`, and mounted only when there is a notice.
+
+        This is the server refusing something the reader asked for that was not a decision — a seat
+        that had gone, a hand somebody else already started, a rate limit. It was a plain `Callout`
+        with no live-region ancestor, so the refusal existed only as pixels: the reader pressed a
+        button, nothing happened, and the panel's polite status line went on describing a healthy
+        socket. An alert fires on insertion, which is why the node is conditional rather than
+        always-present-and-empty — the opposite of the rule for a polite region.
+      */}
       {table.notice === null ? null : (
-        <Callout tone="warning" title="The server refused something">
-          {table.notice}
-        </Callout>
+        <div role="alert">
+          <Callout tone="warning" title="The server refused something">
+            {table.notice}
+          </Callout>
+        </div>
       )}
     </>
   );
 }
 
-/** The controls, each shown only where it is the thing to do. */
-function ConnectionControls({ live }: ConnectionPanelProps): ReactElement {
+/**
+ * The controls, each shown only where it is the thing to do.
+ *
+ * `signature` is what the focus effect watches: the set of controls currently on screen, as a
+ * string. Watching a phase or a status instead would miss the case that actually bites — "Take
+ * seat 1" being replaced by "Deal the next hand" happens inside a single `ready`/`live` pair, so
+ * neither of those values changes at the moment the focused button is removed.
+ */
+function ConnectionControls({
+  live,
+  fallbackRef,
+}: ConnectionPanelProps & { readonly fallbackRef: RefObject<HTMLParagraphElement | null> }): ReactElement {
   const { phase, closed, table } = live;
   const isLive = live.status === 'live';
   const seated = table.seat !== null;
 
+  const signature = [
+    phase,
+    live.status ?? 'none',
+    closed?.action ?? 'none',
+    seated ? 'seated' : 'standing',
+    live.readerSeat === null ? 'full' : 'free',
+    table.betweenHands ? 'between' : 'in-hand',
+    live.coachDuringHand ? 'coach' : 'no-coach',
+  ].join('/');
+
+  /**
+   * `hadFocus` stays true through the unmount deliberately: `focusout` fires as the button is
+   * removed with a null `relatedTarget`, and reading that as "the reader went elsewhere" would clear
+   * the flag one tick before the effect needs it.
+   */
+  const hadFocus = useRef(false);
+  const onFocusCapture = (): void => {
+    hadFocus.current = true;
+  };
+  const onBlurCapture = (event: FocusEvent<HTMLParagraphElement>): void => {
+    const next = event.relatedTarget;
+    if (next !== null && !event.currentTarget.contains(next)) hadFocus.current = false;
+  };
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `signature` is the TRIGGER — the set of controls on screen, as a string. Nothing in the body reads it; removing it would run this effect once and leave every keyboard reader on <body> after each step of setting a table up.
+  useEffect(() => {
+    if (!hadFocus.current) return;
+    // Only when the browser has actually given up. If anything else legitimately holds focus — the
+    // reader tabbed on while the socket was opening — it keeps it.
+    if (document.activeElement !== document.body && document.activeElement !== null) return;
+    fallbackRef.current?.focus();
+    hadFocus.current = false;
+  }, [signature, fallbackRef]);
+
   return (
-    <p className="prl-btn-row">
+    <p className="prl-btn-row" onBlurCapture={onBlurCapture} onFocusCapture={onFocusCapture}>
       {phase === 'idle' || phase === 'failed' ? (
         <Button variant="primary" onClick={live.start}>
           {phase === 'failed' ? 'Try again' : 'Open the table'}
@@ -366,6 +445,15 @@ function JoinByInviteCode({ live }: ConnectionPanelProps): ReactElement {
 /** The setup half: session, room, socket — and every reason one of them is not there. */
 function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
   const room = live.table.room;
+  /**
+   * Where the caret lands when the control it was on is taken away.
+   *
+   * The status line, because it is the sentence that says what just changed — a reader who pressed
+   * "Take seat 1" and is put here hears "Live. Everything on this screen is the server's own view…"
+   * rather than silence at the top of the document. `tabIndex={-1}` makes it a focus target for
+   * script without adding a tab stop that does nothing on the way to the real controls.
+   */
+  const statusRef = useRef<HTMLParagraphElement | null>(null);
 
   return (
     <Panel
@@ -393,15 +481,25 @@ function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
         Nothing is hidden or shortened by that — see section 1.1 there.
       */}
       <div className="prl-play__connection-lines">
-        <p role="status" className="prl-note">
+        <p role="status" className="prl-note" ref={statusRef} tabIndex={-1}>
           {statusSentence(live)}
         </p>
 
+        {/*
+          Not a live region, and that is a decision rather than an omission.
+
+          Making it one is the obvious next step and it is wrong: `hintSentence` flips between "it is
+          your decision" and "waiting for another seat to act" on every action at the table, so a
+          live region here would announce a sentence carrying no figures once per seat per street,
+          on top of the table's narration. `TableStage`'s turn region already says the same thing
+          with the pot, the price, the stack and the legal actions in it. Two regions for one fact,
+          one of them empty of content, is how a reader learns to tune the useful one out.
+        */}
         <p className="prl-note">{hintSentence(live)}</p>
       </div>
 
       <ConnectionNotices live={live} />
-      <ConnectionControls live={live} />
+      <ConnectionControls live={live} fallbackRef={statusRef} />
 
       {live.inviteCode === null ? null : <InviteCode code={live.inviteCode} />}
 
@@ -449,6 +547,7 @@ export function LiveTable({
         seatNames={live.seatNames}
         turn={live.turn}
         announcement={table.announcement}
+        turnAnnouncement={table.turnAnnouncement}
         submission={table.submission}
         onAct={act}
         {...coachUnavailableProps(live)}

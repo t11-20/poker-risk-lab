@@ -314,6 +314,35 @@ const HOSTILE_CHANGES: readonly HostileChange[] = [
     },
   },
   {
+    /**
+     * The exact regression `db/migrations/0004_account_deletion.sql` exists to prevent.
+     *
+     * `room_members.user_id` was `ON DELETE RESTRICT`, and a foreign key has no predicate — so a
+     * membership a learner ended months ago restricted their erasure exactly as hard as one they
+     * were sitting in. Every learner who had ever joined a table was undeletable, and the failure
+     * arrived as a bare `23503` that nothing mapped. Putting the constraint back the old way here
+     * proves the check that now catches it can actually fail.
+     */
+    what: 'a foreign key to prl.users that would make an account undeletable again',
+    expect: /user reference: room_members: room_members_user_id_fkey is ON DELETE RESTRICT/,
+    apply: async (sql) => {
+      await sql`alter table prl.room_members drop constraint room_members_user_id_fkey`;
+      await sql`
+        alter table prl.room_members
+          add constraint room_members_user_id_fkey
+          foreign key (user_id) references prl.users (id) on delete restrict
+      `;
+    },
+    revert: async (sql) => {
+      await sql`alter table prl.room_members drop constraint room_members_user_id_fkey`;
+      await sql`
+        alter table prl.room_members
+          add constraint room_members_user_id_fkey
+          foreign key (user_id) references prl.users (id) on delete cascade
+      `;
+    },
+  },
+  {
     what: 'the invite-only constraint removed, which is how public matchmaking would ship',
     expect: /missing visibility constraint/,
     apply: async (sql) => {

@@ -759,6 +759,71 @@ describe('users — against Postgres', dbOptions, () => {
       assert.equal(reset.units, 200, 'reset is always available and never penalised');
     });
   });
+
+  /**
+   * The case the schema used to refuse outright.
+   *
+   * Before migration 0004, `prl.rooms.owner_user_id` and `prl.room_members.user_id` were both
+   * `ON DELETE RESTRICT`, so this exact learner — one who had created a table and sat at
+   * somebody else's — could not be deleted at all, and the failure arrived as a raw 23503 that
+   * nothing mapped. `test/account-deletion.test.ts` proves the whole policy table by table; this
+   * is the same fact where the rest of the users repository is tested.
+   */
+  it('deletes a learner who created a table and joined another, which RESTRICT used to refuse', async () => {
+    await inRollback(async (tx) => {
+      const leaverId = await makeGuest(tx, 'Leaver');
+      const strangerId = await makeGuest(tx, 'Stranger');
+
+      const own = await makeRoom(tx, leaverId);
+      await rooms.addMember(tx, { roomId: own.room.id, userId: leaverId });
+      const theirs = await makeRoom(tx, strangerId);
+      await rooms.addMember(tx, { roomId: theirs.room.id, userId: strangerId });
+      await rooms.addMember(tx, { roomId: theirs.room.id, userId: leaverId });
+      await sessions.create(tx, { userId: leaverId, ipHash: null, userAgentHash: null });
+
+      const summary = await users.deleteAccount(tx, leaverId);
+      assert.ok(summary !== null, 'the account existed, so the deletion must report on it');
+      assert.equal(summary.userId, leaverId);
+      assert.equal(summary.deleted.sessions, 1);
+      assert.equal(summary.deleted.roomMemberships, 2, 'their own table and the one they joined');
+      assert.equal(summary.anonymised.roomsCreated, 1);
+      assert.equal(summary.roomsClosed, 1, 'a table with no owner must not be left open');
+
+      assert.equal(await users.byId(tx, leaverId), null);
+      // The other learner is untouched, including their table and their seat at it.
+      assert.equal((await users.byId(tx, strangerId))?.id, strangerId);
+      const theirRoom = await rooms.byId(tx, theirs.room.id);
+      assert.equal(theirRoom?.owner_user_id, strangerId);
+      assert.equal(theirRoom?.status, 'open', 'a table belonging to somebody else stays open');
+    });
+  });
+
+  it('answers null for an id that names no account, so a retried deletion is not an error', async () => {
+    await inRollback(async (tx) => {
+      assert.equal(await users.deleteAccount(tx, generateId('user')), null);
+    });
+  });
+
+  /**
+   * The guard, and the reason it is worth a test.
+   *
+   * `deleteAccount` issues several statements and relies on five referential actions. On the
+   * pool each one commits separately, so a failure part-way through would leave a learner whose
+   * tables are shut and whose account still exists, with nothing recording that an erasure was
+   * ever attempted. The function refuses the pool rather than trusting its caller.
+   *
+   * The id deliberately names no account, which is what makes the assertion sharp: with the
+   * guard removed, this call would find no row and answer `null`, so a rejection can only be the
+   * guard firing. Nothing is written on the pool either way.
+   */
+  it('refuses a pool handle outright, because a half-applied erasure has no acceptable state', async () => {
+    assert.ok(client !== null, 'this case needs the pool handle itself, not a transaction');
+    await assert.rejects(
+      users.deleteAccount(client, generateId('user')),
+      (error: unknown) => error instanceof AppError && error.code === 'internal_error',
+      'a pool handle must be refused, not silently used',
+    );
+  });
 });
 
 describe('sessions — against Postgres', dbOptions, () => {

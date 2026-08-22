@@ -1,0 +1,20 @@
+# Everything `scripts/staging.mjs` generates. None of it is source, all of it is
+# either credential material or a per-machine build record, and a nested
+# .gitignore is used rather than an entry in the repository root's so that the
+# rule lives next to the files it is about.
+#
+#   tls/                    a local CA, its key, the staging leaf and the leaf's key
+#   .env.staging            the session secret, the database password, the image digests
+#   release-manifest.json   which image digests this machine built, and from what
+#   staging-verified.json   which digests a verified staging run attested to
+#
+# Committing any of them would put a private key in the repository (tls/), a
+# secret in the repository (.env.staging), or a machine-local record that changes
+# on every build into every diff (the two JSON files). The two JSON files are also
+# the reason a committed one would be actively harmful rather than merely noisy:
+# `staging promote` trusts staging-verified.json, so a committed one would let a
+# promotion inherit somebody else's machine's verdict.
+tls/
+.env.staging
+release-manifest.json
+staging-verified.json

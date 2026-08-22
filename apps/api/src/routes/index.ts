@@ -45,8 +45,8 @@
 import type { FastifyInstance } from 'fastify';
 import { type RouteModule, registerRoutes } from '../app.ts';
 import { sessionPlugin } from '../auth/session.ts';
-import { getConfig } from '../config.ts';
 import { getSql } from '../db.ts';
+import { recordProblem } from '../observability/telemetry.ts';
 import { postgresArchive, roomRegistry } from '../rooms/registry.ts';
 import wsHub from '../ws/hub.ts';
 import authRoutes, { createAuthStore } from './auth.ts';
@@ -83,17 +83,31 @@ export const API_ROUTE_MODULES: readonly RouteModule[] = [
  * before the first module asks for it.
  */
 export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
+  // The process-wide instance, the same one `buildApp` gave the HTTP hook and the `/metrics`
+  // route. Read once here rather than inside the hook so that every notice from every table in
+  // this process lands on one registry.
+  const metrics = app.appMetrics;
+
   // Lazily bound: `postgresArchive` takes a getter, so building the registry never touches the
   // pool. A failed write then surfaces as a logged archive failure on a live table rather than
   // as a crash at boot.
   roomRegistry({
+    metrics,
     archive: postgresArchive(getSql),
     // A lone learner at a table of bots gets this long to act, so the Coach panel can actually be
     // read before the clock folds them. Threaded from config rather than read inside `LiveTable`,
     // so a test constructing a table directly can still vary it.
-    learnerTurnSeconds: getConfig().learnerTurnSeconds,
+    learnerTurnSeconds: app.appConfig.learnerTurnSeconds,
     onProblem: (message, detail) => {
+      // Logged first and unchanged: the log line is where the room id, the seat and the underlying
+      // error live, and it is the thing somebody reads once an alert has fired.
       app.log.warn({ ...detail }, message);
+      // Then counted, by the typed `event` rather than by the prose. `recordProblem` decides which
+      // events are seat-actor failures and which are already counted at their source — see
+      // `classifyProblem` in `observability/telemetry.ts` for why each one is in the class it is.
+      // Doing the classification there rather than with a switch here keeps one list of events,
+      // exhaustively checked by the compiler, instead of two that can disagree.
+      recordProblem(detail.event, metrics);
     },
   });
 

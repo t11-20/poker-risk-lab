@@ -33,7 +33,7 @@ import { buildApp } from './app.ts';
 import { type AppConfig, ConfigError, getConfig } from './config.ts';
 import { closeDatabase, configureDatabase } from './db.ts';
 import { API_ROUTE_MODULES, registerApiRoutes } from './routes/index.ts';
-import { closeSharedPool } from './workers/pool.ts';
+import { beginSharedPoolWarmup, closeSharedPool } from './workers/pool.ts';
 
 /** Exit codes, so a supervisor's logs mean something. */
 const EXIT_CONFIG_INVALID = 78; // sysexits.h EX_CONFIG
@@ -338,6 +338,16 @@ async function main(): Promise<void> {
     // Postgres archive. See `src/routes/index.ts` for why neither can be done per module. It has to
     // run after `configureDatabase` above, because the session store needs the pool.
     await registerApiRoutes(app);
+    // Fired, not awaited: `/health` can answer as soon as we listen, `/ready` stays 503 until
+    // every calculation thread has built its strength table. Awaiting here would delay
+    // liveness by the same ~3s the first Coach used to stall the event loop for.
+    void beginSharedPoolWarmup(config, {
+      onWarn: (warning) => {
+        app.log.warn({ poolEvent: warning.event, poolDetail: warning.detail }, 'calculation pool');
+      },
+    }).catch((error: unknown) => {
+      app.log.error({ err: error }, 'calculation worker warmup failed');
+    });
     const address = await app.listen({ port: config.port, host: config.host });
     app.log.info(
       {

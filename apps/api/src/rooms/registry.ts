@@ -40,6 +40,8 @@ import type { BlindPositions, LoggedAction, RandomSource, TableConfig } from '@p
 import { createSecureRandom, orderFrom } from '@prl/poker-engine';
 import { getSql } from '../db.ts';
 import { AppError } from '../errors.ts';
+import { type AppMetrics, appMetrics } from '../observability/metrics.ts';
+import type { ProblemHook } from '../observability/telemetry.ts';
 import * as handsRepository from '../repositories/hands.ts';
 import { newHandId } from '../repositories/ids.ts';
 import * as roomsRepository from '../repositories/rooms.ts';
@@ -64,7 +66,8 @@ import { type Clock, systemClock } from './timers.ts';
 export interface RoomRecord {
   readonly id: string;
   readonly name: string;
-  readonly ownerUserId: string;
+  /** Null once the creator erased their account; see `RoomRow.owner_user_id`. */
+  readonly ownerUserId: string | null;
   readonly config: TableConfig;
   /** Chips a seat starts with. Also the buy-in checked against a learner's units. */
   readonly startingStack: number;
@@ -323,6 +326,7 @@ export class LiveRoom {
   readonly table: LiveTable;
   readonly bots: BotRunner;
   private readonly members = new Map<string, RoomMemberRecord>();
+  private readonly metrics: AppMetrics;
   /** Serialises archive writes, so `hands.start` lands before the first action row. */
   private archiveQueue: Promise<void> = Promise.resolve();
   private unsubscribe: (() => void) | null = null;
@@ -332,11 +336,13 @@ export class LiveRoom {
     readonly table: LiveTable;
     readonly bots: BotRunner;
     readonly archive: HandArchive;
-    readonly onProblem: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+    readonly onProblem: ProblemHook;
+    readonly metrics: AppMetrics;
   }) {
     this.record = options.record;
     this.table = options.table;
     this.bots = options.bots;
+    this.metrics = options.metrics;
     this.unsubscribe = this.table.subscribe((notice) => {
       this.archiveNotice(notice, options.archive, options.onProblem);
     });
@@ -370,6 +376,13 @@ export class LiveRoom {
   }
 
   close(): void {
+    // A hand still in progress when the room closes can never reach a settled result: the deck
+    // and the commitment salts live only in this process's memory (see the file header) and go
+    // with it. Counted here rather than inferred from the gap between `handsStarted` and
+    // `handsCompleted`, because that gap also contains every hand currently being played.
+    if (this.table.snapshot().handInProgress) {
+      this.metrics.handsFailed.inc({ reason: 'room_closed' });
+    }
     this.record.closed = true;
     this.bots.stop();
     this.table.close();
@@ -384,11 +397,16 @@ export class LiveRoom {
    * already moved on and the players are already looking at the new state. A rejected write is
    * logged and the chain continues — see the file comment for why that is the right direction.
    */
-  private archiveNotice(
-    notice: TableNotice,
-    archive: HandArchive,
-    onProblem: (message: string, detail?: Readonly<Record<string, unknown>>) => void,
-  ): void {
+  private archiveNotice(notice: TableNotice, archive: HandArchive, onProblem: ProblemHook): void {
+    // The hand lifecycle is counted here rather than inside `LiveTable`, because this is the one
+    // subscription every notice passes through and because the table is a component the tests
+    // construct directly — instrumenting it there would make every one of them a metrics test.
+    // Both conditions fire exactly once per hand: `handStarted` is the reason of a single notice,
+    // and `handCompleted` is set by `settleIfComplete`, which returns true once per hand by
+    // design so that a subscriber cannot double-count.
+    if (notice.reason === 'handStarted') this.metrics.handsStarted.inc();
+    if (notice.handCompleted) this.metrics.handsCompleted.inc();
+
     const handId = notice.handId;
     const deal = notice.reason === 'handStarted' ? this.table.archivedDeal() : null;
     const street = notice.events.some((event) => event.kind === 'street') ? notice.street : null;
@@ -416,7 +434,16 @@ export class LiveRoom {
         if (roomStatus !== null) await archive.roomStatusChanged(this.record.id, roomStatus);
       })
       .catch((error: unknown) => {
-        onProblem('a hand could not be archived', { roomId: this.record.id, error: String(error) });
+        // Not a failed hand — play continued and the players got a result — so this has its own
+        // counter rather than `handsFailed`. Incremented here, at the write, because it is the
+        // only place that knows an archive write is what failed; the consumer of `onProblem`
+        // deliberately does not count `archive-write` again.
+        this.metrics.archiveFailures.inc();
+        onProblem('a hand could not be archived', {
+          event: 'archive-write',
+          roomId: this.record.id,
+          error: String(error),
+        });
       });
   }
 }
@@ -444,7 +471,16 @@ export interface RoomRegistryOptions {
   /** Bots' thinking delay. Legibility only; see `bots.ts`. */
   readonly botThinkingDelayMs?: number;
   readonly nextHandId?: () => string;
-  readonly onProblem?: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+  /**
+   * Non-fatal problems from this registry, its tables and its bots.
+   *
+   * `ProblemHook` requires a typed `event` on the detail, which is what lets the consumer in
+   * `routes/index.ts` count "a bot could not act" separately from "a hand could not be
+   * archived" instead of matching on prose. See `observability/telemetry.ts`.
+   */
+  readonly onProblem?: ProblemHook;
+  /** Defaults to the process-wide metrics. A test that wants isolation passes its own. */
+  readonly metrics?: AppMetrics;
 }
 
 /** Who is asking. The subset of `ResolvedSession['user']` every room operation needs. */
@@ -473,7 +509,8 @@ export class RoomRegistry {
   private readonly archive: HandArchive;
   private readonly botThinkingDelayMs: number | undefined;
   private readonly nextHandId: () => string;
-  private readonly onProblem: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+  private readonly onProblem: ProblemHook;
+  private readonly metrics: AppMetrics;
   readonly store: RoomStore;
 
   constructor(options: RoomRegistryOptions = {}) {
@@ -485,6 +522,17 @@ export class RoomRegistry {
     this.botThinkingDelayMs = options.botThinkingDelayMs;
     this.nextHandId = options.nextHandId ?? newHandId;
     this.onProblem = options.onProblem ?? ((): void => undefined);
+    this.metrics = options.metrics ?? appMetrics();
+    // Read at scrape time from the map itself, never mirrored on open and close: a mirror drifts
+    // the first time somebody adds a path that removes a room and forgets the decrement, and a
+    // gauge that is quietly wrong during an incident is worse than no gauge (see `Gauge.setFrom`).
+    //
+    // The caveat, stated rather than hidden: a collector is one function, so if a process built
+    // several registries against the same metrics the last one would win. A server builds exactly
+    // one — `roomRegistry()` is a process-wide singleton — and a test that builds several passes
+    // its own `metrics`, which gives each registry its own gauge. Same caveat, same shape, as
+    // `getSharedPool` and the origin allowlist.
+    this.metrics.roomsLive.setFrom(() => this.rooms.size);
   }
 
   /** Opens a live table for a room, or returns the one already open. */
@@ -495,6 +543,9 @@ export class RoomRegistry {
     // Nothing in this process holds a table for this room yet, so any hand still open in the
     // database belongs to a process that is gone and can never finish it. Closed here, before the
     // table exists, so the reconciliation can never race a hand this process is about to deal.
+    //
+    // The returned count is not read here on purpose: it is logged and counted against
+    // `handsFailed` inside, which is the only place that cannot be forgotten by a future caller.
     await this.reconcileInterruptedHands(request.record.id);
 
     // Seeded from the database so a room re-opened after a restart cannot collide with a hand
@@ -511,6 +562,7 @@ export class RoomRegistry {
       // A room that will not open is worse than one that opens with a fresh rotation, so both
       // reads fail soft. The cost of the second one failing is one repeated big blind.
       this.onProblem('could not read the played hand count or the last deal', {
+        event: 'room-open-read',
         roomId: request.record.id,
         error: String(error),
       });
@@ -539,6 +591,7 @@ export class RoomRegistry {
       bots,
       archive: this.archive,
       onProblem: this.onProblem,
+      metrics: this.metrics,
     });
     for (const member of request.members ?? []) room.addMember(member);
     this.rooms.set(request.record.id, room);
@@ -566,14 +619,25 @@ export class RoomRegistry {
     try {
       const abandoned = await this.archive.abandonInterruptedHands(roomId);
       if (abandoned.length > 0) {
+        // These are hands that were dealt and never settled, which is exactly what
+        // `handsFailed` counts — and the count is what every caller used to throw away. Recorded
+        // here rather than at the call sites so that a future caller (a startup sweep over rooms
+        // nobody re-opens) cannot forget to, and by `abandoned.length` rather than by one,
+        // because one reconciliation can close several hands.
+        this.metrics.handsFailed.inc({ reason: 'interrupted_by_restart' }, abandoned.length);
         this.onProblem('closed hands that were interrupted and can never complete', {
+          event: 'hands-interrupted',
           roomId,
           hands: abandoned.map((hand) => hand.handId),
         });
       }
       return abandoned.length;
     } catch (error) {
-      this.onProblem('could not reconcile interrupted hands', { roomId, error: String(error) });
+      this.onProblem('could not reconcile interrupted hands', {
+        event: 'reconcile-read',
+        roomId,
+        error: String(error),
+      });
       return 0;
     }
   }
@@ -661,6 +725,7 @@ export class RoomRegistry {
         });
       } catch (error) {
         this.onProblem('a recorded seat could not be re-taken', {
+          event: 'seat-retake',
           roomId,
           seat: member.seat,
           error: String(error),
@@ -689,6 +754,7 @@ export class RoomRegistry {
     });
     if (!rehydrated.ok) {
       this.onProblem('a bot seat could not be restored and will not act', {
+        event: 'bot-rehydrate',
         roomId: room.record.id,
         seat,
         botProfile: member.bot_profile,

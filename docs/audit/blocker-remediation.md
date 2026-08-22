@@ -226,6 +226,26 @@ The inline-handler form is the negative control that works: a `<script>` element
 extension's isolated world is exempt from the page's policy and would have produced a false pass,
 whereas an event-handler attribute is compiled by the page and is governed by the page's policy.
 
+**This manual check is no longer the evidence.** `pnpm run test:csp`
+(`scripts/csp-negative-control.mjs`) automates it and goes further, and it is in the `verify` gate
+list. It intercepts the top-level document response over CDP and splices attack markup in before
+`</body>`, so the browser parses and enforces the deployment's OWN policy and OWN per-response
+nonce against markup the application never served — which is the only way to reach the
+parser-inserted cases at all.
+
+That distinction turned out to matter more than this section knew. Under `'strict-dynamic'`, a
+`<script>` created with `document.createElement` and appended is exempt **even from page context**,
+because that is precisely what `strict-dynamic` means: a trusted script may create further scripts.
+So the DOM-insertion form produces a false pass for a second reason beyond the isolated world, and
+`innerHTML` produces one for a third (HTML says such scripts never run, whatever the policy). The
+event-handler form recorded above is genuinely governed, and remains one of the seven cases.
+
+The automated control asserts five refusals with their violated directive, that the disallowed
+origin was never contacted at all, and four positive controls — including that the page's own
+nonce'd bundles hydrated, which under `'strict-dynamic'` is end-to-end proof of the nonce
+mechanism. It was itself falsified: putting a proxy in front that added `'unsafe-eval'` and
+`script-src-attr 'unsafe-inline'` flipped exactly those two cases and exited 1.
+
 Also confirmed from the **production container image**:
 
 ```

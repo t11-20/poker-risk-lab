@@ -840,9 +840,18 @@ restored database tells you which release it belongs to.
 > restored with `prl` owned by `prl_migrator` and `db:verify` exit 0; and the repair above took the
 > broken restore to `db:verify` exit 0 with `prl_app` reading rows again.
 >
-> **No gate enforces any of this.** `db:verify` runs inside `pnpm run verify` against the
-> *development* database, which proves the checks work; nothing in the repository restores a dump.
-> The rehearsal in §11.7's checklist is a human step and stays one.
+> **This is no longer only a human step, as of the production-hardening pass.**
+> `scripts/backup.mjs` (`pnpm run backup`) creates, verifies, restores, lists and prunes encrypted
+> archives, and `deploy/backup/prl-backup-verify.timer` restores one into a scratch database
+> weekly and reports the result. The RPO and RTO — both measured, not aspirational — the retention
+> policy, the encryption design and the evidence from an actual restore are in
+> [docs/production/backup-restore.md](production/backup-restore.md); the scenarios and what this
+> architecture genuinely cannot recover are in
+> [docs/production/disaster-recovery.md](production/disaster-recovery.md).
+>
+> What is still true: `db:verify` inside `pnpm run verify` runs against the *development*
+> database, so the `verify` gate proves the checks work rather than proving any particular dump
+> restores. The weekly timer is what proves that, and only where it is installed.
 
 ### 11.5 Logs
 
@@ -886,12 +895,19 @@ log driver, or a sidecar. Points that matter when you configure it:
 - [ ] Any destructive migration in this release carries `-- prl:irreversible: <reason>` and was a
       deliberate decision, not a marker pasted in to get past the gate (§11.3)
 - [ ] Backups scheduled **and a restore rehearsed** — rehearsed means `pnpm run db:verify` exited 0
-      against the restored database, not that `pg_restore` exited 0 (§11.4)
+      against the restored database, not that `pg_restore` exited 0 (§11.4). `pnpm run backup
+      restore` does this, and [docs/production/backup-restore.md](production/backup-restore.md)
+      holds the measured RPO/RTO and the evidence from a real restore
+- [ ] The scheduled *verification* is installed too, not only the scheduled backup
+      (`deploy/backup/prl-backup-verify.timer`). A backup nobody restores is a directory of files
+      with an encouraging name
 - [ ] The restore rehearsal used the real procedure: `migrate.mjs roles` first, **no**
       `--no-owner`/`--no-privileges`, `--exit-on-error`, restoring identity a member of
       `prl_migrator` (§11.4)
-- [ ] Schema ownership on the restored database checked **by hand** — `db:verify` does not look at
-      it and exits 0 on a database whose tables the runtime role owns (§11.4)
+- [ ] Schema ownership on the restored database checked. `verify-schema.mjs` check 6b now asserts
+      schema and relation ownership itself, so `db:verify` covers this — the hand queries in §11.4
+      remain as belt and braces, and as the way to see WHICH relation is misowned when it fails.
+      (This item used to say `db:verify` did not look at ownership. It did not, until check 6b.)
 - [ ] `pg_dumpall --globals-only` retained alongside the dumps — the login roles and their
       passwords are cluster-wide and are in neither the dump nor `migrate.mjs roles` (§11.4)
 - [ ] Logs shipped somewhere with retention set

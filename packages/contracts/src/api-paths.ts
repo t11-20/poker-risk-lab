@@ -169,6 +169,26 @@ export const API_PATHS = {
   unitsReset: (): string => `${API_PREFIX}/me/units/reset`,
 
   /**
+   * `POST`. Erase the reader's account and everything in it that describes only them.
+   *
+   * A `POST` rather than a `DELETE`, and that is a decision rather than an oversight. The request
+   * carries a confirmation phrase in its body — the whole point being that this cannot be fired by
+   * accident — and a `DELETE` with a required body is a shape proxies, caches and client libraries
+   * treat inconsistently. Every other mutation in this API is a `POST` for the same reason.
+   *
+   * Takes no argument, like `progress` and `unitsReset`: the account is the one the session names,
+   * and a user id in a path is a user id in every access log and `Referer` between here and the
+   * server. It would also be the wrong shape — an id in the URL invites a route that deletes
+   * somebody else's account.
+   *
+   * What it does is not symmetrical with what it deletes, and the response says so: sessions,
+   * progress, attempts and table memberships go, while hands, audit events and the tables the
+   * reader created survive with the reader's identity detached from them. See
+   * `DeleteAccountResponse` and `db/migrations/0004_account_deletion.sql`.
+   */
+  accountDelete: (): string => `${API_PREFIX}/me/delete`,
+
+  /**
    * The WebSocket upgrade path — the *path only*, because the scheme and host are the page's own.
    *
    * A client composes `ws(s)://<its own host>` in front of this: the session cookie is
@@ -260,5 +280,6 @@ export const API_PATH_PROBES: Readonly<Record<ApiPathName, ApiPathProbe>> = {
   roomJoin: { methods: ['POST'], build: () => API_PATHS.roomJoin() },
   progress: { methods: ['GET'], build: () => API_PATHS.progress() },
   unitsReset: { methods: ['POST'], build: () => API_PATHS.unitsReset() },
+  accountDelete: { methods: ['POST'], build: () => API_PATHS.accountDelete() },
   ws: { methods: ['UPGRADE'], build: () => API_PATHS.ws() },
 };

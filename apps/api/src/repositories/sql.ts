@@ -144,6 +144,25 @@ export function isCheckViolation(error: unknown, constraint?: string): boolean {
 }
 
 /**
+ * True when `error` is a foreign-key violation, optionally of one named constraint.
+ *
+ * The predicate a caller needs because `VIOLATION_CODES` deliberately carries no foreign key:
+ * see the note above it. The statement that raised the error is what decides what the violation
+ * means, and only the call site knows the statement.
+ *
+ * The concrete case this exists for: `deleteAccount` in `users.ts`. Eight foreign keys reference
+ * `prl.users`, and two of them were `ON DELETE RESTRICT` before migration 0004 — so on a database
+ * that has not had it applied, deleting an account raises 23503 and the honest answer is
+ * `account_deletion_blocked` rather than a 500 that leaves a learner unable to tell whether their
+ * record still exists.
+ */
+export function isForeignKeyViolation(error: unknown, constraint?: string): boolean {
+  const violation = sqlViolation(error);
+  if (violation === null || violation.sqlState !== SQL_STATE.foreignKeyViolation) return false;
+  return constraint === undefined || violation.constraint === constraint;
+}
+
+/**
  * Serialises a value for a `jsonb` parameter, refusing the one thing `jsonb` cannot hold.
  *
  * ############################################################################
@@ -216,6 +235,20 @@ export function jsonbText(value: unknown, field: string): string {
  *   the schema refuses. The repositories validate these before writing, so reaching one is
  *   a caller bug; `invalid_request` still beats a 500, and the log line names the
  *   constraint.
+ *
+ * ## No foreign key is in this table, and that is not an oversight
+ *
+ * A constraint name is enough to decide the answer for a unique or a check violation: there
+ * is one way to break `room_members_live_seat_key`, and it means one thing. A foreign key is
+ * not like that, because the SAME constraint fires from both ends. `room_members_user_id_fkey`
+ * refuses an INSERT naming a user who does not exist — a caller bug, and a loud 500 — and it
+ * also refuses a DELETE of a user who still has a seat, which under `ON DELETE RESTRICT` is
+ * `account_deletion_blocked`. One name, two truthful answers, and this table can only give
+ * one. Mapping it here would make every mis-wired insert tell the caller their account could
+ * not be deleted, which is the wrong-reason failure this file exists to prevent.
+ *
+ * So foreign keys are decided at the call site, where the statement is known, with
+ * `isForeignKeyViolation` below. `repositories/users.ts` is the only caller today.
  *
  * Deliberately absent: `sessions_token_hash_key`, `rooms_invite_code_hash_key` and
  * `hand_seats_hand_seat_key`. A digest collision on a freshly generated 256-bit token means

@@ -24,6 +24,24 @@ export const ERROR_CODES = [
   'oidc_state_mismatch',
   'oidc_exchange_failed',
   'oidc_not_configured',
+  /**
+   * The account exists, the caller is who they say they are, and the database still refuses to
+   * let the account go.
+   *
+   * Only one thing produces it: a foreign key referencing `prl.users` that is `ON DELETE
+   * RESTRICT` or `NO ACTION`, which is the state every database was in before migration 0004 —
+   * a learner who had ever created or joined a table could not be deleted at all. It is a real,
+   * reachable answer rather than a defensive one: an API rolled ahead of its migration, a
+   * restore of an older dump, or a later migration that adds a ninth reference without deciding
+   * what an erasure does to it.
+   *
+   * 409 rather than 500, because nothing went wrong and nothing was half-done — the deletion
+   * runs in one transaction, so the account is exactly as it was. It is deliberately NOT
+   * `internal_error`: a learner asking to leave is owed a truthful answer about whether they
+   * have, and "something went wrong on our side" would leave them unable to tell whether their
+   * data is gone.
+   */
+  'account_deletion_blocked',
 
   // --- authorisation ---
   'forbidden',
@@ -115,6 +133,7 @@ export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
   oidc_state_mismatch: 400,
   oidc_exchange_failed: 502,
   oidc_not_configured: 501,
+  account_deletion_blocked: 409,
 
   forbidden: 403,
   not_room_member: 403,
@@ -160,6 +179,9 @@ export const ERROR_MESSAGES: Readonly<Record<ErrorCode, string>> = {
   oidc_state_mismatch: 'The sign-in attempt could not be verified. Please start again.',
   oidc_exchange_failed: 'The identity provider could not complete sign-in. Please try again.',
   oidc_not_configured: 'Sign-in with an external account is not enabled on this server.',
+  account_deletion_blocked:
+    'Your account could not be deleted, and nothing was removed. This is a fault on our side, not ' +
+    'something you did — please try again shortly.',
 
   forbidden: 'You do not have access to that.',
   not_room_member: 'You are not a member of that table.',

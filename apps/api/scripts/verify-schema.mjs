@@ -29,6 +29,11 @@
  *   8. room_members.bot_profile accepts EXACTLY the strategy profile ids @prl/poker-ai carries,
  *      plus the pre-0003 'unknown' marker. The schema and the runtime drifting apart here is what
  *      made seven of the twelve AI Legends unrecoverable across a restart.
+ *   9. Every foreign key that references prl.users carries EXACTLY the referential action the
+ *      account-deletion policy depends on. This is the check migration 0004 needed and did not
+ *      have: two of these keys were ON DELETE RESTRICT, which made every learner who had ever
+ *      created or joined a table permanently undeletable, and nothing anywhere compared the
+ *      schema's answer to the policy's requirement.
  */
 
 import { PROFILES } from '@prl/poker-ai';
@@ -45,6 +50,61 @@ const SCHEMA = 'prl';
  * agreement with a stale schema.
  */
 const PERSISTABLE_BOT_PROFILES = [...PROFILES.map((profile) => profile.naming.id), 'unknown'];
+
+/**
+ * `pg_constraint.confdeltype`, spelled out. A one-letter catalogue code in a failure message is a
+ * puzzle rather than a finding.
+ */
+const DELETE_ACTIONS = {
+  a: 'NO ACTION',
+  r: 'RESTRICT',
+  c: 'CASCADE',
+  n: 'SET NULL',
+  d: 'SET DEFAULT',
+};
+
+/**
+ * What every foreign key referencing `prl.users` must do when an account is deleted, and why.
+ *
+ * This table IS the account-deletion policy, restated where the database can be asked about it.
+ * Written out by constraint name rather than derived, for the reason every list in this script is
+ * written out: a list read from the thing it is checking cannot detect a change to it.
+ *
+ * A key that is absent here fails as loudly as one with the wrong action, and deliberately so. A
+ * ninth foreign key added by a later migration is a table nobody has decided about; if it defaults
+ * to NO ACTION (which is what `REFERENCES prl.users (id)` with no clause means) it silently
+ * reinstates exactly the defect 0004 removed - a learner who cannot leave - and the failure would
+ * surface as an unexplained 23503 on their deletion attempt rather than here.
+ */
+const USER_REFERENCE_ACTIONS = [
+  ['sessions_user_id_fkey', 'c', 'a session is a credential for one learner and nothing else'],
+  ['lesson_progress_user_id_fkey', 'c', 'what one learner has read is their record alone'],
+  ['quiz_attempts_user_id_fkey', 'c', 'an attempt is that learner answering, and nobody else'],
+  ['scenario_attempts_user_id_fkey', 'c', 'as quiz_attempts'],
+  [
+    'room_members_user_id_fkey',
+    'c',
+    'a seat describes one learner. RESTRICT here, with no predicate for left_at, made a membership ' +
+      'the learner ended months ago block their deletion as hard as a live one',
+  ],
+  [
+    'hand_seats_user_id_fkey',
+    'n',
+    'the hand belongs to everybody who was in it. The seat survives with its identity detached; ' +
+      'CASCADE here would delete the record other players hold of a hand they played',
+  ],
+  [
+    'audit_log_user_id_fkey',
+    'n',
+    'the security event happened. Deleting the row would let an account erase its own audit trail',
+  ],
+  [
+    'rooms_owner_user_id_fkey',
+    'n',
+    'a room cascades to its hands, so CASCADE here would destroy the hand history of everybody ' +
+      'who ever played at that table; RESTRICT made every learner who had created one undeletable',
+  ],
+];
 
 const url = process.env['DATABASE_URL'];
 if (url === undefined || url === '') {
@@ -68,6 +128,21 @@ const fail = (check, detail) => failures.push(`${check}: ${detail}`);
 const note = (text) => notes.push(text);
 
 try {
+  /**
+   * Who this run connected as, printed with the counts below.
+   *
+   * `information_schema` is FILTERED BY PRIVILEGE: it shows only what the current role may
+   * touch. `prl_app` is granted nothing on `prl.schema_migrations`, so a run as the runtime
+   * login counts 12 tables and 120 columns while a run as the owner counts 13 and 123 — the
+   * same database, two different true answers.
+   *
+   * That cost real time once: two captured transcripts of this script, taken from two different
+   * identities, were read as evidence that a restored database had lost a table. Neither number
+   * was wrong; neither said which role produced it. Printing the role makes two transcripts
+   * comparable, which is the only thing that made the numbers worth printing in the first place.
+   */
+  const [identity] = await sql`select current_user as role`;
+  const role = identity?.role ?? 'unknown';
   // ---- 1 & 2. Forbidden columns -------------------------------------------------------
   const columns = await sql`
     select table_name, column_name, data_type
@@ -75,7 +150,7 @@ try {
     where table_schema = ${SCHEMA}
     order by table_name, ordinal_position
   `;
-  note(`${columns.length} columns across the ${SCHEMA} schema`);
+  note(`${columns.length} columns across the ${SCHEMA} schema, as ${role}`);
 
   // A deck or a salt must not be storable. Matched on the column NAME, because that is what a
   // future maintainer would reach for, and deliberately broad.
@@ -228,6 +303,57 @@ try {
     }
   }
 
+  // ---- 9. What happens to everything an account points at, when the account goes --------
+  //
+  // Asked of `pg_constraint` rather than of the migration text, because the migration is a claim
+  // and the catalogue is the fact. A restored dump, a hand-applied hotfix or a later migration
+  // that re-created one of these keys without its clause would all leave the prose in
+  // db/migrations/0004_account_deletion.sql saying one thing and the database doing another.
+  const userReferences = await sql`
+    select con.conname, rel.relname as on_table, con.confdeltype
+    from pg_constraint con
+    join pg_class rel on rel.oid = con.conrelid
+    join pg_class referenced on referenced.oid = con.confrelid
+    join pg_namespace nsp on nsp.oid = rel.relnamespace
+    where nsp.nspname = ${SCHEMA} and con.contype = 'f' and referenced.relname = 'users'
+    order by rel.relname
+  `;
+  if (userReferences.length === 0) {
+    fail(
+      'user references',
+      'no foreign key references prl.users at all. Either the schema is not migrated or the ' +
+        'account-deletion policy has nothing left to hold, and neither is a database this check ' +
+        'can pass over in silence.',
+    );
+  } else {
+    const found = new Map(userReferences.map((row) => [row.conname, row]));
+    for (const [name, expected, why] of USER_REFERENCE_ACTIONS) {
+      const row = found.get(name);
+      found.delete(name);
+      if (row === undefined) {
+        fail('user reference', `${name} does not exist, so the rule it carried is not enforced: ${why}`);
+        continue;
+      }
+      if (row.confdeltype !== expected) {
+        fail(
+          'user reference',
+          `${row.on_table}: ${name} is ON DELETE ${DELETE_ACTIONS[row.confdeltype] ?? row.confdeltype}, ` +
+            `expected ${DELETE_ACTIONS[expected]} — ${why}`,
+        );
+      }
+    }
+    for (const row of found.values()) {
+      fail(
+        'user reference',
+        `${row.on_table}.${row.conname} references prl.users and is not in the account-deletion ` +
+          `policy (it is ON DELETE ${DELETE_ACTIONS[row.confdeltype] ?? row.confdeltype}). Decide what ` +
+          'an erasure does to that table, write it into the policy, and add it to ' +
+          'USER_REFERENCE_ACTIONS in this script.',
+      );
+    }
+    note(`checked the delete action of ${userReferences.length} foreign key(s) referencing users`);
+  }
+
   // ---- 6. Least privilege --------------------------------------------------------------
   const roles = await sql`select rolname, rolsuper, rolcreatedb, rolcreaterole from pg_roles`;
   const appRole = roles.find((role) => role.rolname === 'prl_app');
@@ -276,7 +402,7 @@ try {
       `;
       if (privilege?.can_truncate === true) fail('prl_app', `can TRUNCATE ${table}`);
     }
-    note(`checked ${tables.length} tables for prl_app privileges`);
+    note(`checked ${tables.length} tables for prl_app privileges, as seen by ${role}`);
   }
 
   // ---- 6b. The schema and everything in it is owned by the migrator ---------------------

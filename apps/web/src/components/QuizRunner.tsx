@@ -67,6 +67,20 @@
  * the new question's heading — that is navigation, and leaving focus on a button whose label
  * just changed is worse. Answering, by contrast, moves nothing: the feedback is announced by an
  * `aria-live` region, because a reader who is mid-sentence should not be dragged elsewhere.
+ *
+ * The heading carries the position as visually-hidden text — "Question 2 of 5." before the prompt —
+ * precisely because focus lands there. Without it, pressing "Next question" announced the new prompt
+ * and nothing else: a reader had no way to tell whether they had advanced one question or five, and
+ * the `01 / 05` counter that answers it is in the panel's action slot, which focus never visits. The
+ * counter stays where it is for a reader who is browsing rather than being moved.
+ *
+ * ## The verdict regions are `role="status"`, not a bare `aria-live`
+ *
+ * Both of them hold two pieces of text: the comparison, and the sentence saying who made it
+ * (`VERDICT_SOURCE_NOTE`). With `aria-live="polite"` alone the region is not atomic, so a change
+ * announces only the text node that changed — a learner could hear "Nothing was recorded, because
+ * you are not signed in." with no verdict in front of it. `role="status"` carries an implicit
+ * `aria-atomic="true"`, which is what makes the whole sentence arrive as one message.
  */
 
 import type { ContentId, Quiz, QuizQuestion } from '@prl/contracts';
@@ -184,8 +198,10 @@ function MultipleChoice(props: {
         its text. A region that arrives at the same moment as its content is missed by several
         screen readers, which is the difference between feedback being announced and being
         silently added below the fold.
+
+        `role="status"` for the atomic half — see the module comment.
       */}
-      <p className="prl-learn-quiz__verdict" aria-live="polite">
+      <p aria-live="polite" className="prl-learn-quiz__verdict" role="status">
         {verdict}
         {answered ? ` ${VERDICT_SOURCE_NOTE[resolved.source]}` : ''}
       </p>
@@ -424,7 +440,8 @@ function NumericQuestion(props: {
         ) : null}
       </div>
 
-      <p className="prl-learn-quiz__verdict" aria-live="polite">
+      {/* Empty from the first render, and `role="status"` for the atomic half. See the module comment. */}
+      <p aria-live="polite" className="prl-learn-quiz__verdict" role="status">
         {verdict}
         {submitted === null ? '' : ` ${VERDICT_SOURCE_NOTE[resolved.source]}`}
       </p>
@@ -671,6 +688,10 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
       }
     >
       <h3 className="prl-learn-quiz__heading" ref={headingRef} tabIndex={-1}>
+        {/* Where the caret lands on every step change, so this is where the position has to be
+            said. Hidden rather than drawn: the panel already shows `01 / 05` beside the title, and
+            printing it twice would be noise for everybody who can see it. */}
+        <span className="prl-visually-hidden">{`Question ${String(step + 1)} of ${String(total)}. `}</span>
         {question.prompt}
       </h3>
 

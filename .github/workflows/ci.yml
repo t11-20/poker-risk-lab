@@ -38,6 +38,20 @@
 # is safe. The audit runs first and every other job `needs:` it, so a
 # compromised or newly-vulnerable dependency stops the run at step one.
 #
+# ## Why every install passes `--ignore-scripts`
+#
+# pnpm-workspace.yaml already sets `ignoreScripts: true`, so the flag changes
+# nothing about what these jobs do today. It changes what they DEPEND ON. Both
+# Dockerfiles pass the flag explicitly and say why in a comment — "the build does
+# not depend on that file continuing to say so" — and every install in this
+# workflow depended on exactly that. One edit to pnpm-workspace.yaml, in a diff
+# about something else entirely, would have re-enabled arbitrary install-time code
+# execution in all nine CI jobs while the release images stayed safe. Install-time
+# lifecycle hooks are the campaign's Pattern A delivery mechanism
+# (docs/security/shai-hulud-snapshot-2026-08-17.md), and the gate that watches for
+# them (`dep-shapes.mjs`) runs AFTER the install that would already have executed
+# them. Recorded as residual SUP-020; the flag is the fix.
+#
 # ## Why there is no dependency cache
 #
 # Deliberate. A restored `actions/cache` entry is a mutable artifact that is
@@ -145,7 +159,10 @@ jobs:
       - name: Install
         # --frozen-lockfile, never --no-frozen-lockfile: CI must fail when the
         # lockfile and the manifests disagree, not quietly resolve a new graph.
-        run: pnpm install --frozen-lockfile
+        # --ignore-scripts: see the header. Every install in this file carries it,
+        # and it must stay on all of them — one job without it is one job that runs
+        # a compromised dependency's postinstall.
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Audit
         run: pnpm run security:audit
@@ -197,7 +214,7 @@ jobs:
         run: corepack enable
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Lint
         run: pnpm run lint
@@ -231,7 +248,7 @@ jobs:
         run: corepack enable
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build packages
         # Not optional. Each `packages/*` publishes its public surface as
@@ -299,7 +316,7 @@ jobs:
         run: corepack enable
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build packages
         run: pnpm run build:packages
@@ -388,7 +405,7 @@ jobs:
         run: corepack enable
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Enumerate every seven-card hand
         # No build step: the exhaustive suite imports `../../src/*.ts` directly
@@ -467,7 +484,7 @@ jobs:
         run: corepack enable
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build packages
         run: pnpm run build:packages
@@ -588,7 +605,7 @@ jobs:
         run: corepack enable
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Simulate
         run: pnpm run test:simulation
@@ -616,7 +633,7 @@ jobs:
         run: corepack enable
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build
         run: pnpm run build
@@ -722,7 +739,7 @@ jobs:
         run: corepack enable
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build
         run: pnpm run build

@@ -1,0 +1,375 @@
+# ---------------------------------------------------------------------------
+# The staging stack: production, on one machine, from the artefacts production
+# will get.
+#
+# `docker-compose.yml` is a developer's laptop and says so in its own header —
+# plaintext on loopback, dev credentials in plain sight, `NODE_ENV=development`,
+# and a `build:` section that produces a new image every time somebody types
+# `up --build`. Every one of those is wrong for a rehearsal of a deployment, and
+# the last one is the important one: a stack that builds its own images cannot
+# tell you anything about the image production will run, because it is not that
+# image.
+#
+# So this file has **no `build:` anywhere**. Both application services name an
+# image by **content digest**, supplied from the release manifest that
+# `pnpm run release:artifacts` wrote. `pnpm run staging up` reads that manifest,
+# writes the digests into deploy/staging/.env.staging, and then verifies after the
+# fact that the containers docker actually started are running those exact
+# digests. `pnpm run staging promote` refuses to promote a digest that staging did
+# not test. That chain — build once, record the digest, deploy the digest, verify
+# the digest, promote the same digest — is the whole point of the file.
+#
+# ## How to run it
+#
+#     pnpm run staging init      # generate the local CA, the leaf and the secrets
+#     pnpm run release:artifacts # build both images ONCE and record their digests
+#     pnpm run staging up        # bring the stack up on those digests and smoke it
+#     pnpm run staging status
+#     pnpm run staging down      # add --volumes to destroy the database too
+#
+# See deploy/staging/README.md for the whole procedure, including what promotion
+# checks and what it deliberately does not.
+#
+# Raw compose commands work too, but ONLY with the environment file, because every
+# variable below is required and has no default:
+#
+#     docker compose --env-file deploy/staging/.env.staging \
+#       -f docker-compose.staging.yml ps
+#
+# ## Why every variable is `${...:?}` and none has a default
+#
+# Compose interpolation is **file-wide**, not service-scoped. That is a real trap
+# and it has already bitten this repository once: `docker-compose.yml` gives the
+# api service `${SESSION_COOKIE_SECRET:?...}`, and because the substitution is
+# file-wide, `pnpm run db:up` — which starts postgres and nothing else — failed
+# with "required variable SESSION_COOKIE_SECRET is missing" even though postgres
+# has never read that variable.
+#
+# The trap is not reintroduced here, it is embraced, and the difference is that
+# this file is a deployment manifest rather than a development convenience. There
+# is no subset of it that is meaningful without the secrets: an operator who runs
+# `ps` against a staging stack whose session secret they do not have is an
+# operator who cannot deploy it either. Every command therefore takes the same
+# `--env-file`, and `scripts/staging.mjs` passes it to every compose invocation it
+# makes, `down` and `logs` included.
+#
+# A default would be worse than the trap. A defaulted secret is a secret in a
+# public repository that works, which is how a placeholder becomes a production
+# credential.
+#
+# ## RATE_LIMIT_RESET_TOKEN is absent, and that is deliberate
+#
+# `NODE_ENV=production` here, and `apps/api/src/config.ts` **refuses to boot** when
+# `RATE_LIMIT_RESET_TOKEN` is set in production — the token empties the rate
+# limiter, which for its holder is equivalent to turning rate limiting off. That
+# refusal exists precisely for the realistic failure: a `.env` copied from staging
+# to production with one variable nobody re-read. Staging is a production
+# environment for that purpose. The cost is that the smoke test cannot reset the
+# limiter between phases here and waits out the window instead; that is slower and
+# it is honest.
+#
+# ## The one thing staging cannot rehearse
+#
+# `apps/api/src/rooms/registry.ts` keeps authoritative hand state in process
+# memory, so `deploy.replicas: 1` below is a correctness constraint, not a sizing
+# choice (ADR 0001, RUNBOOK §11.1). Two API processes serving one room deal two
+# different hands. Staging runs one replica because production must; nothing here
+# tests a second one, because there must not be a second one.
+# ---------------------------------------------------------------------------
+
+name: poker-risk-lab-staging
+
+services:
+  # -------------------------------------------------------------------------
+  # postgres — the only durable state in the stack.
+  # -------------------------------------------------------------------------
+  postgres:
+    # postgres:16-bookworm, the same digest docker-compose.yml, ci.yml and the
+    # test service containers use. "Production-compatible version" is not a
+    # version number here, it is the same bytes: staging finding a planner or
+    # collation difference that production would not have is staging wasting
+    # somebody's afternoon.
+    image: postgres:16-bookworm@sha256:60f4761b9035e0b8d5218f701a8c3382f641bf12b1604822574cf5be3baeb537
+    restart: unless-stopped
+    init: true
+    # uid/gid 999 is the `postgres` user in the official image. Without this the
+    # entrypoint starts as root and drops privileges with gosu, which leaves a
+    # root-owned PID 1 in the container; with it, no process in this container is
+    # ever root. A fresh named volume inherits the ownership of the image's
+    # /var/lib/postgresql/data (postgres:postgres), so initdb can write.
+    #
+    # The consequence to know: a volume created by an EARLIER stack that ran as
+    # root is owned by root and this container will not start against it. That is
+    # a `docker compose ... down --volumes` away, and staging data is disposable
+    # by definition.
+    user: '999:999'
+    environment:
+      POSTGRES_USER: ${PRL_STAGING_DB_SUPERUSER:?set it in deploy/staging/.env.staging (pnpm run staging init writes one)}
+      POSTGRES_PASSWORD: ${PRL_STAGING_DB_SUPERUSER_PASSWORD:?set it in deploy/staging/.env.staging (pnpm run staging init generates one)}
+      POSTGRES_DB: ${PRL_STAGING_DB_NAME:?set it in deploy/staging/.env.staging}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=scram-sha-256
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    ports:
+      # Loopback only, and on a port that is deliberately NOT 5432: the developer
+      # stack publishes 5432 and the two must be able to run side by side, because
+      # the whole point of staging is to compare it against something.
+      #
+      # It is published at all because migrations run from OUTSIDE the serving
+      # container (RUNBOOK §11.3, and Dockerfile.api omits apps/api/scripts on
+      # purpose), so `scripts/staging.mjs` needs a route to the database from the
+      # host. That is the same shape as the "one-shot job at the release commit"
+      # a real deployment uses.
+      - '127.0.0.1:${PRL_STAGING_DB_PORT:?set it in deploy/staging/.env.staging}:5432'
+    volumes:
+      - staging-postgres-data:/var/lib/postgresql/data
+    read_only: true
+    tmpfs:
+      - /var/run/postgresql:mode=1777
+      - /tmp:mode=1777
+    healthcheck:
+      test:
+        ['CMD-SHELL', 'pg_isready --quiet --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      start_period: 60s
+      retries: 30
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # -------------------------------------------------------------------------
+  # api — the Fastify server, by digest.
+  # -------------------------------------------------------------------------
+  api:
+    # No `build:`. The digest comes from deploy/staging/release-manifest.json via
+    # deploy/staging/.env.staging; `scripts/staging.mjs` refuses a value that is
+    # not a `name@sha256:<64 hex>` reference, and after `up` it compares the
+    # running container's image against the manifest and fails if they differ.
+    image: ${PRL_API_IMAGE:?the API image DIGEST. Run `pnpm run release:artifacts`, then `pnpm run staging up`}
+    # `never`, because there is no registry: the image exists only because it was
+    # built on this machine, and a pull attempt would reach out to Docker Hub for a
+    # repository named `prl-api` that belongs to somebody else. With a registry in
+    # play this becomes `always` and the digest still guarantees identity — a
+    # digest pull cannot return different bytes.
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # One. See the header, ADR 0001 and RUNBOOK §11.1: this is a correctness
+    # constraint. Two processes holding "the" HandState for one room deal two
+    # different hands and nothing detects it.
+    deploy:
+      replicas: 1
+    environment:
+      # Production, genuinely: https origins, Secure cookies, no rate-limit reset
+      # token, and every refusal in config.ts armed.
+      NODE_ENV: production
+      PORT: '3001'
+      LOG_LEVEL: ${PRL_STAGING_LOG_LEVEL:?set it in deploy/staging/.env.staging}
+      # HOST is 0.0.0.0 from the image's own ENV (Dockerfile.api). Do not set it
+      # here without reading that file's comment: config.ts defaults it to
+      # 127.0.0.1, which in a container means "healthy and unreachable".
+      #
+      # The API connects as `prl_api`, a login role that is a MEMBER of `prl_app`
+      # and holds no privilege of its own. `scripts/staging.mjs` creates it with
+      # the password below the way a deployment does (RUNBOOK §5) — the
+      # development seed that creates it with a known password refuses to run with
+      # NODE_ENV=production, which is exactly right and is why staging does it in
+      # SQL with a generated value instead.
+      DATABASE_URL: postgres://${PRL_STAGING_API_DB_USER:?set it in deploy/staging/.env.staging}:${PRL_STAGING_API_DB_PASSWORD:?set it in deploy/staging/.env.staging (pnpm run staging init generates one)}@postgres:5432/${PRL_STAGING_DB_NAME:?set it in deploy/staging/.env.staging}
+      # The origin the BROWSER uses: the proxy's published https origin. Not the
+      # API's, not web's — neither of which a browser ever sees. It is matched
+      # EXACTLY on CSRF checks and on every WebSocket upgrade, so a wrong value
+      # here presents as "every socket closes 4406".
+      PUBLIC_WEB_ORIGIN: ${PRL_STAGING_PUBLIC_ORIGIN:?set it in deploy/staging/.env.staging}
+      SESSION_COOKIE_SECRET: ${PRL_STAGING_SESSION_COOKIE_SECRET:?set it in deploy/staging/.env.staging (pnpm run staging init generates one)}
+      # True here, false in the dev stack, and the difference is the reason this
+      # line has a comment. With it false behind a reverse proxy, `request.ip` is
+      # the PROXY's address for every browser in the world, so every caller lands
+      # in one address-keyed bucket: the entire deployment shares ten guest
+      # sign-ups a minute and one script exhausts it for everybody. That is a
+      # self-inflicted denial of service that looks, in the logs, exactly like the
+      # limiter working.
+      #
+      # It is only safe because two things are true together: the API publishes no
+      # port (there is no route to it except through the proxy) and
+      # deploy/staging/nginx.conf SETS X-Forwarded-For from $$remote_addr rather
+      # than appending to it, so a client cannot choose its own bucket.
+      # `pnpm run staging up` proves the second one by sending a forged header and
+      # asserting the API did not believe it.
+      TRUST_PROXY: 'true'
+      # Not set: COOKIE_SECURE defaults to true when NODE_ENV=production, and
+      # config.ts refuses `false` there outright. Writing it down would only create
+      # somewhere for it to be turned off.
+      #
+      # The shutdown pair. SHUTDOWN_GRACE_MS is how long the process gives ITSELF
+      # to drain after SIGTERM — answer in-flight requests, send every WebSocket a
+      # `4503` serverShuttingDown close frame, close the pool and the workers.
+      # `stop_grace_period` below is how long DOCKER waits before SIGKILL. Both
+      # default to 10 s, and a tie is not a margin: whichever timer the scheduler
+      # reaches first ends the process, so the app's own diagnosable exit races a
+      # 137. The container's must stay comfortably ABOVE the process's. Change one
+      # and you must change the other.
+      SHUTDOWN_GRACE_MS: '10000'
+      # Metrics are on in staging, because an environment you cannot observe
+      # cannot rehearse an incident. The route is NOT reachable from the public
+      # origin: /metrics is not under /api/, so the proxy sends it to the page
+      # server, which 404s. Scrape it from inside the network:
+      #   docker compose ... exec api node -e "fetch('http://127.0.0.1:3001/metrics',{headers:{authorization:'Bearer '+process.env.METRICS_TOKEN}}).then(r=>r.text()).then(console.log)"
+      METRICS_TOKEN: ${PRL_STAGING_METRICS_TOKEN:?set it in deploy/staging/.env.staging (pnpm run staging init generates one)}
+    stop_grace_period: 30s
+    # No `ports`. The API is reachable only through the proxy, which is what makes
+    # TRUST_PROXY=true above defensible.
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,noexec,nosuid,size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      # Both probes, in one command, because they answer different questions and
+      # staging is where the difference matters: /api/v1/health is liveness and
+      # touches nothing, /api/v1/ready opens a pooled connection and returns 503
+      # while the database is unreachable. `depends_on: service_healthy` on the
+      # proxy therefore means "the API can actually serve", not "a process exists".
+      #
+      # `node -e` rather than curl or wget: neither is in bookworm-slim and adding
+      # a package to run a probe is a package in the runtime image for nothing. The
+      # probe targets the container's own network address, not 127.0.0.1, so a
+      # server bound to loopback fails it instead of passing it.
+      #
+      # Written with string concatenation rather than a template literal on
+      # purpose: `${...}` inside a compose VALUE is interpolated by compose before
+      # docker ever sees it, so a template literal here would reach the container
+      # as `http://:/api/v1/health`. Escaping it as `$${...}` would work and would
+      # be one more thing for a reader to decode; having no `$` in the probe at all
+      # is simply safer.
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          const b='http://'+require('node:os').hostname()+':'+(process.env.PORT||3001);
+          Promise.all([fetch(b+'/api/v1/health'),fetch(b+'/api/v1/ready')])
+          .then((r)=>process.exit(r.every((x)=>x.ok)?0:1)).catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 5s
+      start_period: 45s
+      retries: 5
+
+  # -------------------------------------------------------------------------
+  # web — the Next page server, by digest.
+  # -------------------------------------------------------------------------
+  web:
+    image: ${PRL_WEB_IMAGE:?the web image DIGEST. Run `pnpm run release:artifacts`, then `pnpm run staging up`}
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    depends_on:
+      api:
+        # Healthy, not started. web renders pages that call the API during a
+        # server render; starting it first means the first page renders an error
+        # state, and a staging smoke run that hits that window reports a product
+        # bug that is really a start-up race.
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      HOSTNAME: 0.0.0.0
+      # Server-side only, on the private network, read at runtime on every boot.
+      # It is NOT `NEXT_PUBLIC_` and must never become one: a NEXT_PUBLIC_
+      # variable is inlined into the client bundle by `next build`, which is the
+      # defect that froze the API's address into an image. The browser gets no API
+      # address at all — it sends relative /api/* to its own origin and the proxy
+      # routes it.
+      #
+      # `PRL_API_REWRITE_ORIGIN` is deliberately absent. next.config.ts REFUSES to
+      # start a production server if it is present, because there it would be a
+      # silent no-op.
+      PRL_API_ORIGIN: http://api:3001
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,noexec,nosuid,size=64m
+      # `next start` writes ISR revalidation output and optimised images to
+      # .next/cache. The image ships without that directory on purpose (it is
+      # build state), so it comes back as a tmpfs: it is cache, so losing it on
+      # restart is correct rather than merely tolerable. uid/gid 1000 is `node`.
+      - /app/apps/web/.next/cache:mode=0700,uid=1000,gid=1000,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # -------------------------------------------------------------------------
+  # proxy — TLS termination and the single published origin.
+  #
+  # The routing, the TLS settings, the WebSocket upgrade handling and the reason
+  # this is nginx rather than Caddy are all in deploy/staging/nginx.conf, which is
+  # mounted read-only below.
+  # -------------------------------------------------------------------------
+  proxy:
+    # nginxinc/nginx-unprivileged 1.29.8-alpine, the same digest the development
+    # stack uses. It runs as uid 101, binds a high port, and carries no file
+    # capabilities, so it starts with `cap_drop: ALL` — which the official nginx
+    # and caddy images do not, because their binaries have cap_net_bind_service
+    # and Linux refuses to exec a file whose permitted capabilities are outside
+    # the process's bounding set.
+    image: nginxinc/nginx-unprivileged:1.29.8-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
+    restart: unless-stopped
+    init: true
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    volumes:
+      # Read-only, and NOT a source mount: these are deployment inputs, not code.
+      # Nothing in this stack mounts a source tree — the whole file exists to run
+      # what was built, and a bind-mounted src/ would make the images decorative.
+      - ./deploy/staging/nginx.conf:/etc/nginx/nginx.conf:ro
+      # The local CA's leaf, its chain and its key, generated by
+      # `pnpm run staging init` into a directory that is gitignored and
+      # dockerignored. No certificate material is committed and none is baked into
+      # an image.
+      - ./deploy/staging/tls:/etc/nginx/tls:ro
+    # The image's own entrypoint templates files into /etc/nginx, which a
+    # read-only root filesystem refuses. Exec form, so nginx is PID 1's child and
+    # receives SIGTERM directly rather than through a shell that ignores it.
+    entrypoint: ['nginx', '-c', '/etc/nginx/nginx.conf', '-g', 'daemon off;']
+    ports:
+      # THE published origin, and the only one. Loopback: staging is a rehearsal
+      # on somebody's machine, not a service on their network.
+      - '127.0.0.1:${PRL_STAGING_HTTPS_PORT:?set it in deploy/staging/.env.staging}:8443'
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      # Through itself, over TLS, to the API's liveness route: an end-to-end
+      # statement ("a browser would reach the API") rather than "a listener
+      # exists". `--no-check-certificate` because the chain is issued by the local
+      # CA and busybox wget has no way to be handed one — the certificate is
+      # verified properly by the smoke test, which runs with NODE_EXTRA_CA_CERTS
+      # pointing at that CA, so this probe is not the place that check lives.
+      test:
+        - CMD-SHELL
+        - >-
+          wget --quiet --tries=1 --timeout=4 --no-check-certificate -O /dev/null
+          "https://$$(hostname):8443/api/v1/health" || exit 1
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+volumes:
+  # Named, so `down` keeps the data and `down --volumes` is the explicit act that
+  # destroys it. Staging data is disposable, but "disposable" and "disposed of by
+  # accident on every restart" are different things.
+  staging-postgres-data:

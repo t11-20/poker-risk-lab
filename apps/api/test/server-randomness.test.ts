@@ -10,9 +10,19 @@
  * The rules:
  *
  *   1. `Math.random` never appears in code. Cards, tokens and invite codes come from a CSPRNG.
- *   2. `createDeterministicRandomForTests` is never imported by server source. It exists for tests
- *      and for reproducible teaching hands; a hand dealt from it is permanently labelled
+ *   2. `createDeterministicRandomForTests` is never imported by anything a request can reach —
+ *      neither `apps/api/src` nor the pure-core packages it calls into. It exists for tests and
+ *      for reproducible teaching hands; a hand dealt from it is permanently labelled
  *      `deterministic-test-only`, and no request path may reach it.
+ *
+ *      This rule used to scan `apps/api/src` alone, and that gap cost a production outage:
+ *      `monteCarloEquity` in `packages/poker-math` called the test-only generator, which throws
+ *      when `NODE_ENV === 'production'`, so every sampled equity estimate failed on a real server
+ *      — the Coach could not answer and a bot needing a sampled estimate never acted, so the
+ *      table simply stopped. The scan passed the whole time because the call was one package
+ *      away. It now follows the request path into the packages; see `PACKAGE_SRC_DIRS` and the
+ *      two exemptions below, and `packages/poker-math/test/production-sampling.test.ts` for the
+ *      behavioural half of the same fix.
  *   3. `.unsafe(` never appears. The `postgres` driver parameterises by construction, and that
  *      property is the whole SQL-injection defence here. The one legitimate caller — the migration
  *      runner — lives in `apps/api/scripts/`, outside the tree this scans.
@@ -37,6 +47,55 @@ import { fileURLToPath } from 'node:url';
 
 const API_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC_DIR = join(API_DIR, 'src');
+const REPO_ROOT = join(API_DIR, '..', '..');
+
+/**
+ * The pure-core packages a request actually reaches, scanned for rule 2 alongside `src/`.
+ *
+ * Not every package: `content` and `ui` hold no randomness, and scanning them would only make
+ * the exemption list below look shorter than the risk it manages. These three are the ones a
+ * live hand and a live analysis pass through.
+ */
+const PACKAGE_SRC_DIRS = [
+  join(REPO_ROOT, 'packages', 'poker-engine', 'src'),
+  join(REPO_ROOT, 'packages', 'poker-math', 'src'),
+  join(REPO_ROOT, 'packages', 'poker-ai', 'src'),
+];
+
+/**
+ * The two files that may name the test-only generator, and why each one is not a request path.
+ *
+ * An allowlist is a liability, so it is deliberately tiny and each entry carries the reason it
+ * cannot become a live call — a reason a reader can check, not a promise.
+ *
+ *   rng.ts       declares the function. It cannot avoid naming it, and it is the file that
+ *                carries the `NODE_ENV === 'production'` refusal.
+ *   simulate.ts  the offline profile harness behind `pnpm run test:simulation` and the fixture
+ *                generator. Nothing in `apps/api/src` calls its exports, which is asserted
+ *                below rather than assumed — that assertion is what keeps this exemption honest.
+ */
+const DETERMINISTIC_GENERATOR_EXEMPTIONS: readonly string[] = [
+  join('packages', 'poker-engine', 'src', 'rng.ts'),
+  join('packages', 'poker-ai', 'src', 'simulate.ts'),
+];
+
+/**
+ * Removes `export ... from '...'` re-export statements.
+ *
+ * A barrel that re-exports a banned symbol NAMES it without being able to CALL it, and
+ * `packages/poker-engine/src/index.ts` legitimately does exactly that so tests can import the
+ * generator from the package root. Exempting the whole barrel by path would have worked and
+ * would have been worse: an exemption is a promise that a file stays harmless, and a barrel is
+ * a file somebody eventually puts a line of logic into.
+ *
+ * Stripping the re-export instead keeps the rule pointed at what matters — an actual reference
+ * in executable position — and generalises to every barrel added later without another entry in
+ * the list above. A `call` inside a barrel is still caught, which the companion detector test
+ * asserts rather than assumes.
+ */
+function stripReExports(code: string): string {
+  return code.replace(/export\s*(?:\*|\{[^}]*\})\s*(?:as\s+\w+\s*)?from\s*['"][^'"]+['"]\s*;?/g, '');
+}
 
 /** Every `.ts` file under `src/`, recursively. */
 function sourceFiles(dir: string = SRC_DIR): string[] {
@@ -130,18 +189,55 @@ describe('server source obeys the randomness and SQL rules', () => {
     );
   });
 
-  it('never imports the deterministic test generator', () => {
+  it('never imports the deterministic test generator, in the API or in the packages it calls', () => {
+    const scanned = [...files, ...PACKAGE_SRC_DIRS.flatMap((dir) => sourceFiles(dir))];
+    // The scan is only meaningful if it reached the packages at all; a mistyped path would
+    // otherwise make this the same API-only check it used to be, silently.
+    assert.ok(
+      scanned.length > files.length + 20,
+      `expected the package sources to be scanned too, found only ${scanned.length} files`,
+    );
+
     const offences: Offence[] = [];
-    for (const file of files) {
-      const code = stripComments(readFileSync(file, 'utf8'));
+    for (const file of scanned) {
+      const path = relative(REPO_ROOT, file);
+      if (DETERMINISTIC_GENERATOR_EXEMPTIONS.includes(path)) continue;
+      const code = stripReExports(stripComments(readFileSync(file, 'utf8')));
       if (code.includes('createDeterministicRandomForTests')) {
-        offences.push({ file: relative(API_DIR, file), detail: 'reaches the deterministic generator' });
+        offences.push({ file: path, detail: 'reaches the deterministic generator' });
       }
     }
     assert.deepEqual(
       offences,
       [],
-      `no request path may deal from a seeded generator:\n${describeOffences(offences)}`,
+      'no request path may reach a test-only generator — it throws under NODE_ENV=production, ' +
+        `and \`createSamplingRandom\` is the production-legal source for estimation:\n${describeOffences(offences)}`,
+    );
+  });
+
+  it('keeps the simulate.ts exemption honest: no API source calls its exports', () => {
+    // The exemption above rests entirely on `simulate.ts` being offline-only. If an API module
+    // ever imports one of its exports, the exemption stops being true and this fails — which is
+    // the whole point of writing the reason down as an assertion rather than as a comment.
+    const simulate = readFileSync(join(REPO_ROOT, 'packages', 'poker-ai', 'src', 'simulate.ts'), 'utf8');
+    const exported = [...simulate.matchAll(/^export (?:function|const|class) ([A-Za-z][A-Za-z0-9_]*)/gm)].map(
+      (match) => match[1] ?? '',
+    );
+    assert.ok(exported.length > 3, `expected to find simulate.ts exports, found ${exported.length}`);
+
+    const offences: Offence[] = [];
+    for (const file of files) {
+      const code = stripComments(readFileSync(file, 'utf8'));
+      for (const name of exported) {
+        if (new RegExp(`\\b${name}\\b`).test(code)) {
+          offences.push({ file: relative(API_DIR, file), detail: `calls simulate.ts export ${name}` });
+        }
+      }
+    }
+    assert.deepEqual(
+      offences,
+      [],
+      `simulate.ts is exempt from the generator rule only because no request path reaches it:\n${describeOffences(offences)}`,
     );
   });
 
@@ -185,6 +281,22 @@ describe('the detectors can actually fail', () => {
     assert.ok(!stripComments('/* mentions Math.random in a block */').includes('Math.random'));
     // The guard that stops the line-comment rule eating a URL, and with it the rest of the line.
     assert.ok(stripComments('const u = "https://x.test"; const y = Math.random();').includes('Math.random'));
+  });
+
+  it('drops a re-export of the generator but still catches a call to it', () => {
+    const barrel = "export { createDeterministicRandomForTests, createSecureRandom } from './rng.ts';";
+    assert.ok(
+      !stripReExports(barrel).includes('createDeterministicRandomForTests'),
+      'a plain re-export names the symbol without reaching it, and must not be an offence',
+    );
+    assert.ok(!stripReExports("export * from './rng.ts';").includes('rng.ts'));
+    // The half that matters: stripping re-exports must not become a way to hide a real call.
+    const smuggled =
+      "export { createSecureRandom } from './rng.ts';\nconst r = createDeterministicRandomForTests(1);";
+    assert.ok(
+      stripReExports(smuggled).includes('createDeterministicRandomForTests'),
+      'a call in a barrel must still be caught',
+    );
   });
 
   it('catches the deterministic generator and .unsafe() in code but not in prose', () => {

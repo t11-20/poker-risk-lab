@@ -98,6 +98,23 @@ export interface RateLimitConfig {
   readonly expensiveMax: number;
   readonly expensiveWindowMs: number;
   /**
+   * Guest-session creation, per window. Address-keyed rather than session-keyed — see the
+   * long note above `clientKeyedRateLimit` in `plugins/security.ts` for why a route that
+   * *issues* a session cannot be limited by that session.
+   *
+   * Configurable rather than a literal because it is the one limit whose correct value
+   * genuinely differs by deployment: a public instance wants the shipped default, while a
+   * CI job or a staging smoke run drives the same address far harder than any person does
+   * and has no abuse risk to speak of. Before this was configurable, `RATE_LIMIT_MAX` in CI
+   * raised only the global bucket and had no effect here, so the one limit a test run
+   * actually hits was the one it could not tune.
+   */
+  readonly guestMax: number;
+  readonly guestWindowMs: number;
+  /** OIDC start and callback, per window. Address-keyed for the same reason as guests. */
+  readonly oidcMax: number;
+  readonly oidcWindowMs: number;
+  /**
    * How far past the limit a caller may go before being blocked outright rather than
    * merely told to slow down. Blunts a script that ignores `retryAfterSeconds`.
    */
@@ -172,6 +189,29 @@ export interface AppConfig {
    * this process is genuinely unreachable except through a proxy you control.
    */
   readonly trustProxy: boolean;
+
+  /**
+   * Bearer token required to scrape `GET /metrics`, or null when the endpoint is off.
+   *
+   * A metrics endpoint is an information disclosure surface: route names, error-code
+   * frequencies, live connection counts and process uptime together describe both the shape
+   * of the deployment and how loaded it is. So it is authenticated, and it is authenticated
+   * with a token rather than a session because the caller is a scraper, not a person.
+   *
+   * Absent means the route is never registered at all in production — not registered and
+   * answering 403, which would still confirm the service is this application. In development
+   * the route is registered without a token, and a boot warning says so.
+   */
+  readonly metricsToken: string | null;
+
+  /**
+   * Token that enables the rate-limit reset control, or null.
+   *
+   * Test isolation, and nothing else. See `RATE_LIMIT_RESET_PATH` in `plugins/security.ts`
+   * for what it does and `readRateLimitResetToken` below for why a production process
+   * carrying this variable REFUSES TO START rather than warning.
+   */
+  readonly rateLimitResetToken: string | null;
 
   /** Largest request body accepted, in bytes. */
   readonly bodyLimitBytes: number;
@@ -461,6 +501,105 @@ function readSessionCookieSecret(env: EnvRecord, nodeEnv: NodeEnv, collect: Coll
   return value;
 }
 
+/**
+ * Checks an operator-supplied secret that is optional but, when present, must be real.
+ *
+ * Shares the rules `readSessionCookieSecret` applies in production — length, distinct
+ * characters, no placeholder words — because a token that guards a scrape endpoint or a
+ * test control is not less of a credential than a cookie key. It is a separate function
+ * rather than a refactor of that one because the two differ in the case that matters: a
+ * missing `SESSION_COOKIE_SECRET` is fatal in production and substituted elsewhere, while a
+ * missing value here simply means the feature is off.
+ *
+ * Applied in EVERY environment, not just production. The session secret is lenient outside
+ * production so that a fixed literal can be used in tests; these tokens have no such need,
+ * and a weak one in development is a weak one in the staging environment that copied the
+ * `.env` from it.
+ */
+function readOptionalSecret(env: EnvRecord, key: string, collect: Collector): string | null {
+  const value = trimmed(env, key);
+  if (value === undefined) return null;
+  if (value.length < MIN_SECRET_LENGTH) {
+    collect.problems.push(
+      `${key} must be at least ${MIN_SECRET_LENGTH} characters when set, got ${value.length}`,
+    );
+  }
+  const lowered = value.toLowerCase();
+  const forbidden = FORBIDDEN_SECRET_SUBSTRINGS.find((needle) => lowered.includes(needle));
+  if (forbidden !== undefined) {
+    collect.problems.push(
+      `${key} looks like a placeholder (it contains "${forbidden}"); generate a real one`,
+    );
+  }
+  if (new Set(value).size < MIN_SECRET_DISTINCT_CHARS) {
+    collect.problems.push(
+      `${key} has only ${new Set(value).size} distinct characters, so its length is padding rather than entropy`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Reads the rate-limit reset token, and refuses to start production if one is present.
+ *
+ * ## Why this is a refusal and not a warning
+ *
+ * The control this token unlocks empties the rate limiter's counters. Anyone holding the
+ * token can therefore issue unlimited guest sessions, unlimited Monte Carlo requests and
+ * unlimited sign-in attempts, by resetting between bursts — which is to say the token is
+ * equivalent to turning rate limiting off, for its holder, everywhere.
+ *
+ * A control with that reach cannot be governed by an operator's intention to keep it out of
+ * production. It has to be *impossible* there, because the realistic failure is not somebody
+ * deciding to enable it: it is a `.env` copied from staging to production with one variable
+ * nobody re-read. So the check is at boot, it is fatal, and there is deliberately no
+ * override variable — an escape hatch with an escape hatch is just a warning again.
+ *
+ * The cost is real and accepted: a production-`NODE_ENV` staging deployment cannot use this
+ * control, and the smoke harness there falls back to waiting out the window it consumed
+ * (`scripts/smoke-test.mjs`). That fallback is slower and it is honest, which is the right
+ * trade against a token that can disable a security control in production.
+ */
+function readRateLimitResetToken(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): string | null {
+  const value = readOptionalSecret(env, 'RATE_LIMIT_RESET_TOKEN', collect);
+  if (value === null) return null;
+  if (nodeEnv === 'production') {
+    collect.problems.push(
+      'RATE_LIMIT_RESET_TOKEN must not be set in production: it unlocks a control that empties ' +
+        'the rate limiter, which is equivalent to disabling rate limiting for whoever holds it. ' +
+        'Remove the variable from this environment.',
+    );
+    return null;
+  }
+  collect.warnings.push(
+    'RATE_LIMIT_RESET_TOKEN is set: the rate-limit reset control is enabled on this process. ' +
+      'It is for test isolation only and this process must not serve real users.',
+  );
+  return value;
+}
+
+/**
+ * Reads the metrics scrape token.
+ *
+ * Unset is a supported posture — see `metricsToken` on `AppConfig` — so this warns rather
+ * than refusing, and only in production, where the consequence is real: no `/metrics` route
+ * at all, and therefore no latency, error rate, socket count or event-loop lag to look at
+ * during an incident. Outside production the endpoint is served openly, which is the
+ * expected development behaviour and not worth a line on every boot; a minimal valid
+ * configuration is supposed to start silently.
+ */
+function readMetricsToken(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): string | null {
+  const value = readOptionalSecret(env, 'METRICS_TOKEN', collect);
+  if (value !== null) return value;
+  if (nodeEnv === 'production') {
+    collect.warnings.push(
+      'METRICS_TOKEN is not set, so GET /metrics is not served. This process exports no metrics: ' +
+        'latency, error rate, socket count and event-loop lag will be unavailable during an incident.',
+    );
+  }
+  return null;
+}
+
 function readDatabase(env: EnvRecord, collect: Collector): DatabaseConfig {
   const url = requireString(env, 'DATABASE_URL', collect);
   if (url !== '' && !url.startsWith('postgres://') && !url.startsWith('postgresql://')) {
@@ -563,11 +702,43 @@ export function loadConfig(env: EnvRecord): AppConfig {
     );
   }
 
+  // Hoisted out of the config literal below because two checks need it before the object
+  // exists: the proxy warning here, and the literal itself.
+  const host = trimmed(env, 'HOST') ?? '127.0.0.1';
+
   const trustProxy = readBoolean(env, 'TRUST_PROXY', false, collect);
   if (trustProxy) {
     collect.warnings.push(
       'TRUST_PROXY is enabled: X-Forwarded-For is believed. Ensure this process is ' +
         'only reachable through a proxy that overwrites that header.',
+    );
+  }
+
+  /**
+   * The other half of the proxy decision, which is easy to get wrong in the safe-looking
+   * direction.
+   *
+   * `TRUST_PROXY=false` is the right default because a forged `X-Forwarded-For` defeats
+   * address-based rate limiting. But behind a reverse proxy it produces a different failure
+   * with the same shape: `request.ip` is then the *proxy's* address for every browser in the
+   * world, so every caller lands in one bucket. The routes that key on the address rather
+   * than the session — guest creation and OIDC, see `clientKeyedRateLimit` — are exactly the
+   * ones that stop working: the whole deployment shares ten guest sign-ups per minute, and
+   * one script exhausts it for everybody. That is a self-inflicted denial of service that
+   * looks, in the logs, like the limiter working correctly.
+   *
+   * A process that binds every interface is almost always containerised behind something.
+   * The heuristic is not proof, so this is a warning rather than a refusal — but a boot line
+   * naming the consequence is worth far more than the sentence in a deployment document that
+   * nobody reads at 3am.
+   */
+  const bindsAllInterfaces = host === '0.0.0.0' || host === '::';
+  if (!trustProxy && bindsAllInterfaces) {
+    collect.warnings.push(
+      'TRUST_PROXY is off while HOST binds every interface. If a reverse proxy is in front of ' +
+        'this process, every client shares one address-keyed rate-limit bucket, so guest sign-in ' +
+        'and OIDC are limited for the whole deployment at once. Set TRUST_PROXY=true and make the ' +
+        'proxy overwrite X-Forwarded-For, or bind a loopback address.',
     );
   }
 
@@ -579,8 +750,8 @@ export function loadConfig(env: EnvRecord): AppConfig {
     port: readInt(env, 'PORT', { min: 1, max: 65_535, fallback: 3001 }, collect),
     // 127.0.0.1 rather than 0.0.0.0: binding every interface by default is how a
     // development server ends up reachable from the local network. Deployments that
-    // need it (containers) set HOST explicitly.
-    host: trimmed(env, 'HOST') ?? '127.0.0.1',
+    // need it (containers) set HOST explicitly, and get the proxy warning above.
+    host,
     logLevel: readLogLevel(env, nodeEnv, collect),
 
     webOrigins,
@@ -636,8 +807,28 @@ export function loadConfig(env: EnvRecord): AppConfig {
         { min: 1_000, max: 3_600_000, fallback: 60_000 },
         collect,
       ),
+      // The shipped defaults are the values these limits have always had as literals in
+      // `routes/auth.ts`; making them configurable changed nothing about what a deployment
+      // that sets neither variable does.
+      guestMax: readInt(env, 'RATE_LIMIT_GUEST_MAX', { min: 1, max: 10_000, fallback: 10 }, collect),
+      guestWindowMs: readInt(
+        env,
+        'RATE_LIMIT_GUEST_WINDOW_MS',
+        { min: 1_000, max: 3_600_000, fallback: 60_000 },
+        collect,
+      ),
+      oidcMax: readInt(env, 'RATE_LIMIT_OIDC_MAX', { min: 1, max: 10_000, fallback: 15 }, collect),
+      oidcWindowMs: readInt(
+        env,
+        'RATE_LIMIT_OIDC_WINDOW_MS',
+        { min: 1_000, max: 3_600_000, fallback: 60_000 },
+        collect,
+      ),
       banAfter: readInt(env, 'RATE_LIMIT_BAN_AFTER', { min: 0, max: 100_000, fallback: 200 }, collect),
     },
+
+    metricsToken: readMetricsToken(env, nodeEnv, collect),
+    rateLimitResetToken: readRateLimitResetToken(env, nodeEnv, collect),
 
     trustProxy,
 

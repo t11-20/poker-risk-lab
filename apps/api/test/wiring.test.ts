@@ -33,11 +33,13 @@ import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { buildApp, EXPECTED_ROUTE_MODULES } from '../src/app.ts';
+import { buildApp, EXPECTED_ROUTE_MODULES, registerRoutes } from '../src/app.ts';
 import { type AppConfig, loadConfig } from '../src/config.ts';
 import { closeDatabase, configureDatabase, type DatabaseHandle } from '../src/db.ts';
+import { AppMetrics } from '../src/observability/metrics.ts';
 import { API_ROUTE_MODULES, registerApiRoutes } from '../src/routes/index.ts';
 import { closeSharedPool } from '../src/workers/pool.ts';
+import { createWsHub } from '../src/ws/hub.ts';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -74,6 +76,7 @@ const EXPECTED_ROUTES: readonly { readonly method: 'GET' | 'POST'; readonly url:
   { method: 'GET', url: '/api/v1/auth/oidc/start' },
   { method: 'GET', url: '/api/v1/auth/oidc/callback' },
   { method: 'POST', url: '/api/v1/me/units/reset' },
+  { method: 'POST', url: '/api/v1/me/delete' },
 
   { method: 'GET', url: '/api/v1/content/lessons' },
   { method: 'GET', url: '/api/v1/content/lessons/:id' },
@@ -106,11 +109,13 @@ const EXPECTED_ROUTES: readonly { readonly method: 'GET' | 'POST'; readonly url:
 ];
 
 let app: FastifyInstance;
+let metrics: AppMetrics;
 
 before(async () => {
   const config = testConfig();
   configureDatabase(config);
-  app = await buildApp({ config, database: stubDatabase });
+  metrics = new AppMetrics();
+  app = await buildApp({ config, database: stubDatabase, metrics });
   await registerApiRoutes(app);
   await app.ready();
 });
@@ -229,7 +234,11 @@ describe('the security layer still applies to the registered modules', () => {
   );
 
   it('refuses every mutating route with no CSRF token', async () => {
-    assert.ok(mutating.length >= 13, `expected the whole mutating surface, got ${mutating.length}`);
+    // Raised from 13 with `POST /me/delete`. The floor is what stops this sweep from quietly
+    // becoming a sweep of nothing: a filter that matched no route would still report zero
+    // mismatches, and the one destructive endpoint in the product is the last one that should be
+    // allowed to fall out of the CSRF assertion without anybody noticing.
+    assert.ok(mutating.length >= 14, `expected the whole mutating surface, got ${mutating.length}`);
     const wrong: string[] = [];
     for (const url of mutating) {
       const response = await app.inject({ method: 'POST', url, payload: {} });
@@ -249,5 +258,23 @@ describe('the security layer still applies to the registered modules', () => {
     });
     assert.equal(response.statusCode, 403);
     assert.equal(errorCodeOf(response.payload), 'forbidden');
+  });
+});
+
+describe('assembled observability wiring', () => {
+  it('uses the app-owned metrics registry for the default WebSocket hub', async () => {
+    // The default route factory has no options object to carry metrics through. Capture the
+    // router's private dependency at the factory seam: it must be the exact decoration installed
+    // by buildApp rather than the process-global fallback. The assembled app above exercises the
+    // same default factory through API_ROUTE_MODULES; this small probe makes the identity visible.
+    const probeMetrics = new AppMetrics();
+    const probe = await buildApp({ config: testConfig(), database: stubDatabase, metrics: probeMetrics });
+    let routerMetrics: unknown;
+    await registerRoutes(probe, [
+      createWsHub({ onRouterReady: (router) => (routerMetrics = Reflect.get(router, 'metrics')) }),
+    ]);
+    await probe.ready();
+    assert.equal(routerMetrics, probeMetrics);
+    await probe.close();
   });
 });

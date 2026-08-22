@@ -41,6 +41,7 @@ import type {
   RouteHandlerMethod,
 } from 'fastify';
 import { withoutControlCharacters } from './logging.ts';
+import { recordApiError } from './observability/metrics.ts';
 
 /** Extra detail an `AppError` may carry. Everything is optional. */
 export interface AppErrorDetail {
@@ -333,6 +334,11 @@ export function classifyThrown(error: unknown): Classification {
  * holding on to that and replaying it to somebody else is a small leak with no upside.
  */
 function sendApiError(reply: FastifyReply, code: ErrorCode, requestId: string, extras: ApiErrorExtras): void {
+  // Counted here rather than in the metrics plugin's `onResponse` hook, because the HTTP
+  // status cannot distinguish the cases that matter: `not_room_member` and `room_full` are
+  // both 403, and only one of them is somebody walking room ids. This is the one place every
+  // contract error leaves the process, so it is the one place the count can be complete.
+  recordApiError(code);
   reply.header('cache-control', 'no-store');
   if (extras.retryAfterSeconds !== undefined) {
     reply.header('retry-after', String(extras.retryAfterSeconds));

@@ -333,6 +333,53 @@ async function resolveSession(request: FastifyRequest, store: SessionStore): Pro
   };
 }
 
+/**
+ * Records a refused cookie at a level somebody will actually see.
+ *
+ * ## Why this is not `debug`
+ *
+ * It was, and that made the whole class invisible: `LOG_LEVEL` defaults to `info`, so a wave of
+ * forged or dead cookies — the shape of both a credential-replay attempt and a botched secret
+ * rotation — produced nothing at all in a production log. A security control whose activations
+ * are unobservable is a control nobody can tell is working.
+ *
+ * ## The two rejections, and why both are `warn`
+ *
+ * `malformed` is a cookie whose HMAC this server did not produce. Page script cannot forge one,
+ * so it is either a tampered value, a cookie from another deployment, or this deployment after a
+ * `SESSION_COOKIE_SECRET` rotation. None of those is ordinary traffic.
+ *
+ * `unknown` is a cookie this server DID sign that no longer resolves to a live session. Ordinary
+ * expiry lands here, and ordinary expiry is exactly the thing that should stay at `debug` — but
+ * there is nothing to attach that rule to: `SessionStore.findValidByToken` returns `null` for
+ * expired, revoked and fictional alike, deliberately (see its doc comment), so `unknown` is the
+ * union of all three and this module cannot tell them apart. Splitting them means returning the
+ * reason from `src/repositories/sessions.ts`, which is a change to a different file.
+ *
+ * So `unknown` is kept at `warn`, and the reason it does not drown the signal is a property of
+ * the code above rather than an assumption: the cookie is CLEARED on refusal, so one dead cookie
+ * produces one line and never another, and `maxAge` tracks the session's own expiry, so a
+ * compliant browser stops sending an expired cookie without ever reaching this hook. What is left
+ * is one line per genuinely dead cookie — a burst of which is the signal, not the noise.
+ *
+ * The cost, stated: a secret rotation or a guest-account sweep produces a burst of these once.
+ * That is a burst an operator should see.
+ *
+ * The two are logged under different messages rather than distinguished only by a field, so a
+ * log query can separate "somebody is presenting cookies we never signed" from "somebody is
+ * presenting dead ones" without knowing this module's field names.
+ */
+// `rejection` is typed nullable because `Resolution` is, but `clear` is only ever set alongside a
+// rejection — see `refused` — so the null case is unreachable today and lands on the general
+// branch, which is the safe reading if that ever changes.
+function logRefusedCookie(request: FastifyRequest, rejection: SessionRejection | null): void {
+  if (rejection === 'malformed') {
+    request.log.warn({ sessionRejection: rejection }, 'session cookie refused: signature is not ours');
+    return;
+  }
+  request.log.warn({ sessionRejection: rejection }, 'session cookie refused: no live session');
+}
+
 export interface SessionPluginOptions {
   readonly store: SessionStore;
 }
@@ -383,7 +430,7 @@ export const sessionPlugin: FastifyPluginAsync<SessionPluginOptions> = (app, opt
       // Clearing matters: a browser holding a dead cookie would otherwise resend it on every
       // request forever, and every one of those costs a lookup.
       clearSessionCookie(reply, request.server.appConfig);
-      request.log.debug({ sessionRejection: outcome.rejection }, 'session cookie refused');
+      logRefusedCookie(request, outcome.rejection);
       return;
     }
 

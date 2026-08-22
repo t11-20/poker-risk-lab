@@ -86,16 +86,33 @@ function apiRequestTimeoutMs(): number {
  */
 function reviewAnalysisBudgetMs(requestTimeoutMs: number): number {
   const source = readRepo('apps', 'api', 'src', 'routes', 'hands.ts');
-  const match = /budgetMs:\s*Math\.floor\(\s*app\.appConfig\.requestTimeoutMs\s*\/\s*(\d+)\s*\)/u.exec(
-    source,
-  );
+  // The receiver is deliberately loose — the route has spelled it `app.appConfig.requestTimeoutMs`
+  // and `config.requestTimeoutMs` at different times and the two mean the same thing. What this
+  // check actually depends on is the DIVISOR, so that is the only part pinned tightly.
+  const matches = [
+    ...source.matchAll(/budgetMs:\s*Math\.floor\(\s*[A-Za-z.]*requestTimeoutMs\s*\/\s*(\d+)\s*\)/gu),
+  ];
   assert.ok(
-    match?.[1] !== undefined,
+    matches.length > 0,
     'Could not find the analysis budget GET /hands/:handId gives itself in apps/api/src/routes/hands.ts. ' +
       'The web client’s deadline for that endpoint is derived from it and must stay above it; if the ' +
       'route now expresses its budget differently, update the pattern here rather than deleting the check.',
   );
-  const divisor = asInteger(match[1], 'the hand-review budget divisor');
+
+  // There is more than one review-shaped route (the hand review and the Legends comparison), and
+  // the web client applies ONE deadline to both. If they ever disagree, the client's deadline is
+  // right for one of them and wrong for the other — and it would be wrong silently, which is the
+  // whole failure mode this file exists to prevent. So the check is that they agree, not that the
+  // first one found is acceptable.
+  const divisors = new Set(matches.map((match) => asInteger(match[1] ?? '', 'a review budget divisor')));
+  assert.equal(
+    divisors.size,
+    1,
+    `apps/api/src/routes/hands.ts states ${divisors.size} different analysis budgets ` +
+      `(divisors ${[...divisors].join(', ')}). The web client has one deadline for these routes, so ` +
+      'it cannot be correct for all of them. Make them agree, or give the client a deadline per route.',
+  );
+  const divisor = [...divisors][0] ?? 0;
   return Math.floor(requestTimeoutMs / divisor);
 }
 

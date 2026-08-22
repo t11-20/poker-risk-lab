@@ -32,12 +32,33 @@
  * gets the policy, because "the page that got a policy" and "the page an attacker aims at" must
  * not be different sets.
  *
- * ## Two jobs, one function
+ * ## Three jobs, one function
  *
- * This file also mints the guest session Learn and the Scenario Lab need. That is not an unrelated
- * errand bolted on: setting a cookie on a document response is something only the proxy can do in
- * the App Router, so both of the things this app has to decide before a page renders live here.
- * The guest logic itself is in `src/lib/guest-bootstrap.ts`, which is where its reasoning is.
+ * This file also mints the guest session Learn and the Scenario Lab need, and applies the age gate.
+ * Neither is an unrelated errand bolted on: setting a cookie on a document response, and redirecting
+ * before a page renders, are things only the proxy can do in the App Router — so everything this app
+ * has to decide before a render lives here. The logic itself does not: it is in
+ * `src/lib/guest-bootstrap.ts` and `src/lib/age-gate.ts`, which are where the reasoning for each is.
+ *
+ * The gate runs FIRST, and returns before the guest bootstrap when it redirects. A reader who has
+ * not passed the age check must not have an account created for them on the way to being told so.
+ *
+ * ## Why the gate fires on router navigations and the guest bootstrap does not
+ *
+ * `isDocumentNavigation` answers "is this a top-level document request", and that is the right
+ * question for minting an account: the several requests one page view makes must not each create a
+ * row, and a prefetch must not create one for a page nobody opened.
+ *
+ * It is the wrong question for a gate, by one case. A reader already on `/learn` who clicks through
+ * to `/play` does not make a document request at all — the router fetches an RSC payload, which
+ * `isDocumentNavigation` correctly reports as not a document. A gate that skipped it would be walked
+ * around by a single in-app click, which is not a gate. So the gate also fires on an RSC request
+ * that is a NAVIGATION, and on nothing else: a prefetch is still excluded, because redirecting one
+ * puts a redirect into the router's cache for a page the reader never asked for.
+ *
+ * If Next ever declined to follow a middleware redirect on an RSC request, the failure mode is the
+ * client falling back to a hard navigation — which arrives here as a document request and is gated
+ * again. There is no path through this that renders a gated page.
  *
  * ## Nonce generation
  *
@@ -47,6 +68,7 @@
  */
 
 import { type NextRequest, NextResponse } from 'next/server';
+import { decideAgeGate, readAgeGateConfig } from '@/lib/age-gate.ts';
 import { CSP_HEADER, contentSecurityPolicy, SECURITY_HEADERS } from '@/lib/csp.ts';
 import {
   GUEST_MINT_TIMEOUT_MS,
@@ -55,6 +77,7 @@ import {
   mintGuestSession,
   pathNeedsGuest,
 } from '@/lib/guest-bootstrap.ts';
+import { publicOriginFor } from '@/lib/public-origin.ts';
 
 /** 128 bits of randomness, base64 — comfortably past the length CSP recommends. */
 function newNonce(): string {
@@ -78,6 +101,31 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
   forwarded.set('x-nonce', nonce);
   forwarded.set(CSP_HEADER, policy);
 
+  // The age gate, before anything that could create state: a reader who has not passed it must not
+  // have an account minted on the way to being told so. See the header note for why the navigation
+  // test is wider here than the one the guest bootstrap uses.
+  const gate = decideAgeGate({
+    pathname: request.nextUrl.pathname,
+    search: request.nextUrl.search,
+    cookieHeader: request.headers.get('cookie'),
+    navigation: isGateableNavigation(request),
+    secure: isSecureRequest(request),
+    config: readAgeGateConfig(),
+  });
+  if (gate.kind !== 'allow') {
+    // 303, not 302: "the answer is at this other URL, fetch it with GET". Correct for the
+    // declaration, which is a form submission, and correct for the challenge, which is not one.
+    // Neither is cacheable by default, which matters — a cached redirect for `/play` would outlive
+    // the declaration that was supposed to end it.
+    const redirect = NextResponse.redirect(new URL(gate.location, request.nextUrl.origin), 303);
+    // A redirect is a response the browser handles and it still gets the full header set. A policy
+    // applied only to responses that carry HTML is a policy with a hole in it.
+    redirect.headers.set(CSP_HEADER, policy);
+    for (const [name, value] of SECURITY_HEADERS) redirect.headers.set(name, value);
+    if (gate.kind === 'accepted') redirect.headers.append('set-cookie', gate.setCookie);
+    return redirect;
+  }
+
   // The other thing this file does: give a first-time visitor to Learn or the Lab the guest
   // session the product's own copy promises them. See `src/lib/guest-bootstrap.ts` for why it
   // happens here and nowhere else, and for exactly what "idempotent" means for it.
@@ -90,6 +138,45 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
   for (const [name, value] of SECURITY_HEADERS) response.headers.set(name, value);
   for (const cookie of minted) response.headers.append('set-cookie', cookie);
   return response;
+}
+
+/**
+ * True for a request the age gate may act on: a document navigation, or a router navigation.
+ *
+ * `isDocumentNavigation` is reused rather than reimplemented — it is the same judgement, and two
+ * copies of "what counts as a navigation" would drift. What is added is the one case it correctly
+ * excludes and the gate needs: an RSC request that is a NAVIGATION rather than a prefetch. See the
+ * header note for why leaving that out is a gate a single in-app click walks around.
+ *
+ * A prefetch is excluded twice over — by `isDocumentNavigation` and by the explicit test here —
+ * because the second branch would otherwise let one through.
+ */
+function isGateableNavigation(request: NextRequest): boolean {
+  const prefetch =
+    request.headers.get('next-router-prefetch') !== null || request.headers.get('purpose') === 'prefetch';
+  if (prefetch) return false;
+  if (isDocumentNavigation(request.headers)) return true;
+  return request.headers.get('rsc') !== null;
+}
+
+/**
+ * Whether this request reached us over TLS, which decides the declaration cookie's name.
+ *
+ * Getting this WRONG in one direction is a redirect loop and not a subtlety: a `__Host-` cookie
+ * carries `Secure`, a browser silently discards a `Secure` cookie delivered over plain HTTP, and a
+ * declaration that never sticks means the gate asks again on every request for ever. So the test is
+ * conservative — the connection says https, or a proxy in front says exactly `https` — and the
+ * failure it errs towards is the harmless one: an unprefixed cookie on a TLS deployment whose proxy
+ * forwards no protocol header.
+ *
+ * `x-forwarded-proto` is trusted here in a way the API deliberately does not trust it for rate
+ * limiting, and the difference is what a lie buys: forging it costs the forger their own gate
+ * cookie and gains them nothing, whereas forging an address there would move somebody else's rate
+ * limit.
+ */
+function isSecureRequest(request: NextRequest): boolean {
+  if (request.nextUrl.protocol === 'https:') return true;
+  return request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() === 'https';
 }
 
 /**
@@ -109,7 +196,15 @@ async function bootstrapGuest(request: NextRequest, forwarded: Headers): Promise
 
   try {
     const minted = await mintGuestSession({
-      origin: request.nextUrl.origin,
+      // The PUBLIC origin, not this process's own. Behind a proxy the two differ, the API
+      // exact-matches this header against its allowlist, and sending the container's listening
+      // address made every guest mint a 403 on every real deployment. See `lib/public-origin.ts`
+      // for the measurement and the order of preference.
+      origin: publicOriginFor({
+        env: process.env,
+        headers: request.headers,
+        requestOrigin: request.nextUrl.origin,
+      }),
       signal: AbortSignal.timeout(GUEST_MINT_TIMEOUT_MS),
     });
     if (minted === null) return [];

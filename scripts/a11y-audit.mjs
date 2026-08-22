@@ -100,6 +100,37 @@
  * actually links to. A route that does not return 2xx fails the run instead of
  * being audited, because auditing an error page produces both false findings and
  * false confidence.
+ *
+ * ## The age gate, and why crawling made it dangerous
+ *
+ * `apps/web/src/lib/age-gate.ts` can be configured to put an interstitial in front
+ * of `/play` (`PRL_AGE_GATE=on`) or in front of the whole site
+ * (`PRL_AGE_GATE_SCOPE=site`). `fetch` follows the 303 by default, so without the
+ * two measures below this audit would have fetched `/play`, been handed
+ * `/age-check`, found no violations in a short and perfectly accessible
+ * interstitial, and reported **PASS for a route it never saw** — while the crawl
+ * harvested the interstitial's links instead of the table's. That is the same class
+ * of defect as a check that cannot fire, and it is worse here because the output
+ * still names the route.
+ *
+ *   1. **A declaration cookie is sent with every request.** Its value is
+ *      `AGE_GATE_MINIMUM_CEILING`, the highest threshold the gate can be configured
+ *      with (anything larger is clamped down to it), so one cookie satisfies any
+ *      deployment. This is chosen over running the server with `PRL_AGE_GATE=off`
+ *      because `--no-start` points this audit at a server whose environment it does
+ *      not own — staging, a container — and because it audits the deployment as it
+ *      is actually configured. The cookie is not a bypass: the gate is a
+ *      self-declaration that any reader makes by pressing its button, and nothing
+ *      about it is verified anywhere.
+ *   2. **Where the response actually came from is checked anyway.** A cookie can be
+ *      refused — a threshold raised past the ceiling, a `__Host-` name over plain
+ *      HTTP — and a route that answered from `/age-check` is recorded as
+ *      UNAUDITABLE with the gate named, which fails the run. It is never audited
+ *      under the name of the route that was asked for.
+ *
+ * What is given up by seeding the cookie: this audit no longer sees what an
+ * undeclared reader sees. The interstitial is a real page with a real control, so
+ * audit it as itself — `--routes /age-check` — rather than by accident.
  */
 
 import { spawn } from 'node:child_process';
@@ -107,6 +138,16 @@ import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The gate's own constants rather than copies of them. `age-gate.ts` imports nothing and says in
+// its header that this is deliberate, so that things outside the Next runtime can read it; a second
+// copy of a cookie name in a harness is a harness that seeds one name while the proxy reads
+// another, and passes. `scripts/regenerate-web-fixtures.mjs` is the precedent for a script
+// importing application TypeScript by path.
+import {
+  AGE_GATE_COOKIE_NAMES,
+  AGE_GATE_MINIMUM_CEILING,
+  AGE_GATE_PATH,
+} from '../apps/web/src/lib/age-gate.ts';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -1287,6 +1328,40 @@ class ManagedServer {
 }
 
 // ===========================================================================
+// The age gate
+// ===========================================================================
+
+/**
+ * The `Cookie` header sent with every page request: a declaration against the highest threshold
+ * the gate can hold.
+ *
+ * Both names, unconditionally. The proxy accepts either and takes the LOWER value when both are
+ * present, so sending both is correct over HTTP and over HTTPS — this is a request header being
+ * composed by a client, not a `Set-Cookie` being stored, so the `__Host-` prefix rules (which
+ * constrain how a cookie may be SET) do not apply to it.
+ */
+const AGE_DECLARATION_COOKIE = AGE_GATE_COOKIE_NAMES.map(
+  (name) => `${name}=${String(AGE_GATE_MINIMUM_CEILING)}`,
+).join('; ');
+
+/**
+ * True when a request came back from the gate's interstitial instead of from the route asked for.
+ *
+ * Segment matching, never `includes`, for the reason `age-gate.ts` gives at its own `matchesPrefix`:
+ * `/age-checkers` is not the gate. That function is private to that module and this is a different
+ * question — not "does this path need the gate" but "did my request land on it" — so the four lines
+ * live here and in `scripts/keyboard-audit.mjs`, which asks the same question of a browser rather
+ * than of a response.
+ *
+ * The second half, that the REQUEST was not for the gate, is what lets `--routes /age-check` audit
+ * the interstitial as itself.
+ */
+function landedOnAgeGate(requestedPath, landedPath) {
+  const isGate = (path) => path === AGE_GATE_PATH || path.startsWith(`${AGE_GATE_PATH}/`);
+  return isGate(landedPath) && !isGate(requestedPath);
+}
+
+// ===========================================================================
 // Route discovery
 // ===========================================================================
 
@@ -1366,6 +1441,31 @@ try {
     console.log(dim(`  auditing the server already running at ${options.baseUrl}\n`));
   }
 
+  // --- is there a gate in front of this deployment? ---
+  //
+  // Asked once, before the first route, with the redirect NOT followed and no declaration sent —
+  // which is the only way to see the gate rather than the page behind it. A run that reached its
+  // pages past a gate is a different run from one where there was no gate, and the reader of the
+  // report has to be told which one they are holding. `/play` is the probe because it is gated
+  // under both scopes, so one request answers for either configuration.
+  const gateProbe = await fetch(new URL('/play', options.baseUrl), {
+    headers: { accept: 'text/html' },
+    redirect: 'manual',
+  }).catch(() => null);
+  const ageGateOn =
+    gateProbe !== null &&
+    gateProbe.status >= 300 &&
+    gateProbe.status < 400 &&
+    landedOnAgeGate('/play', new URL(gateProbe.headers.get('location') ?? '/', options.baseUrl).pathname);
+  if (ageGateOn) {
+    console.log(yellow(`  The age gate is ON at this origin: ${AGE_GATE_PATH} stands in front of /play.`));
+    console.log(
+      yellow(`  Every request below carries a declaration (${AGE_DECLARATION_COOKIE}), so the routes`),
+    );
+    console.log(yellow('  audited are the pages themselves and not the interstitial.'));
+    console.log(dim(`  The interstitial is a page too: audit it with --routes ${AGE_GATE_PATH}.\n`));
+  }
+
   // --- fetch and audit, discovering routes as we go ---
   const queue = options.routes.map((route) => ({ route, depth: 0 }));
   const seen = new Set(options.routes);
@@ -1379,7 +1479,9 @@ try {
     let html;
     try {
       response = await fetch(pageUrl, {
-        headers: { accept: 'text/html' },
+        // The declaration cookie goes on every request, so a gated deployment serves the pages
+        // themselves rather than the interstitial. See "The age gate" in the file header.
+        headers: { accept: 'text/html', cookie: AGE_DECLARATION_COOKIE },
         signal: AbortSignal.timeout(options.requestTimeoutSeconds * 1000),
       });
       html = await response.text();
@@ -1391,6 +1493,22 @@ try {
       // Not audited on purpose: an error page is not the markup this app ships,
       // and findings from it would be noise attributed to a real route.
       fetchFailures.push({ route, reason: `HTTP ${response.status}` });
+      continue;
+    }
+    // WHERE the body came from, not what it says. `fetch` follows the gate's 303 silently, so a
+    // 200 here is no evidence that this is the route that was asked for — and an interstitial
+    // audited under the name of `/play` is a PASS for a page nobody looked at. The landing URL is
+    // the only thing that can tell the two apart.
+    const landedPath = new URL(response.url === '' ? pageUrl : response.url).pathname;
+    if (landedOnAgeGate(new URL(pageUrl).pathname, landedPath)) {
+      fetchFailures.push({
+        route,
+        reason:
+          `the age gate answered with ${landedPath}. This route was NOT audited: the interstitial ` +
+          'is not the page. The declaration cookie this audit sends was refused — check ' +
+          `PRL_AGE_GATE_MINIMUM_AGE against ${String(AGE_GATE_MINIMUM_CEILING)}. To audit the gate ` +
+          `itself, run with --routes ${AGE_GATE_PATH}.`,
+      });
       continue;
     }
     const contentType = response.headers.get('content-type') ?? '';
@@ -1498,6 +1616,10 @@ try {
       'required and is not automated anywhere.',
     baseUrl: options.baseUrl,
     wcagOnly: options.wcagOnly,
+    // Recorded, not just printed: "these routes were reached past an age gate, with a declaration
+    // this harness supplied" is a fact about how the run was obtained, and a report that omits it
+    // cannot be told apart from one taken against an ungated deployment.
+    ageGate: { detected: ageGateOn, declarationSent: AGE_DECLARATION_COOKIE },
     generatedAt: new Date().toISOString(),
     routes: results.map((result) => ({
       route: result.route,

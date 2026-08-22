@@ -1,0 +1,42 @@
+# Poker Risk Lab — the cron FALLBACK for hosts without systemd.
+#
+# The supported scheduler is systemd (prl-backup.timer / prl-backup-verify.timer). Use this
+# only where systemd is genuinely not available, and read what you are giving up first.
+#
+# Install with:  crontab -u prl-backup deploy/backup/crontab.example
+#
+# ## What cron does not give you, concretely
+#
+#  * NO CATCH-UP FOR A MISSED RUN. If the host is off, suspended, or rebooting at 02:30, cron
+#    skips the run entirely and says nothing. The day with no backup is invisible until
+#    somebody needs it. `Persistent=true` on a systemd timer is precisely this, and it is the
+#    single biggest reason the timer is the supported path.
+#  * NO PER-RUN RECORD. `journalctl -u prl-backup` shows every run, its output, its exit code
+#    and how long it took. Cron writes to a mail spool that on most modern hosts goes nowhere
+#    at all, which is why the redirection below is not optional.
+#  * NO FAILURE HOOK. There is no cron equivalent of `OnFailure=`. Whatever you use to notice
+#    a failure has to be built into the command line, and the `|| ...` below is a placeholder
+#    for it, not an implementation.
+#  * NO SANDBOX. Every hardening directive in prl-backup.service — ProtectSystem, PrivateTmp,
+#    NoNewPrivileges, the syscall filter — has no cron equivalent.
+#  * NO OVERLAP PROTECTION. systemd will not start a oneshot unit that is still running. Cron
+#    will happily start a second backup on top of a first one that is stuck, hence flock.
+#  * A NEARLY EMPTY ENVIRONMENT. Cron does not read the shell profile. PATH is minimal, and
+#    nothing sets DATABASE_URL or PRL_BACKUP_KEY, hence the explicit `set -a; . file`.
+
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MAILTO=""
+
+# Nightly backup, 02:30. flock refuses to start a second run while one is in flight; without
+# --nonblock it would queue instead, and tomorrow's backup would begin the moment today's
+# stuck one was killed.
+30 2 * * * flock --nonblock /var/lock/prl-backup.lock sh -c 'set -a; . /etc/poker-risk-lab/backup.env; set +a; cd /opt/poker-risk-lab && node scripts/backup.mjs create' >> /var/log/prl-backup.log 2>&1 || logger -t prl-backup -p daemon.err 'nightly backup FAILED'
+
+# Weekly verification and prune, Sunday 04:00. The three steps are chained with && so a
+# failure stops the sequence: pruning after a failed verification can delete the last archive
+# that would have restored.
+0 4 * * 0 flock --nonblock /var/lock/prl-backup.lock sh -c 'set -a; . /etc/poker-risk-lab/backup.env; set +a; cd /opt/poker-risk-lab && node scripts/backup.mjs verify --all && node scripts/backup.mjs verify --deep && node scripts/backup.mjs prune --apply' >> /var/log/prl-backup.log 2>&1 || logger -t prl-backup -p daemon.err 'weekly backup verification FAILED'
+
+# /var/log/prl-backup.log needs its own logrotate entry, or the thing that was supposed to
+# protect the disk eventually fills it.

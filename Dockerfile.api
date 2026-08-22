@@ -80,8 +80,9 @@
 # What that tree contains besides node_modules: the workspace package.json files
 # (Node needs them for `"type": "module"` and the `exports` maps), the lockfile,
 # pnpm-workspace.yaml and .npmrc. No secrets — .npmrc holds only registry URLs,
-# and .dockerignore excludes `.env` and `.env.*` from the build context entirely
-# (verified against the committed .dockerignore).
+# and .dockerignore excludes `.env` and `.env.*` from the build context entirely —
+# at every directory depth, not just the context root. That distinction used to
+# matter: the root-anchored spelling let `apps/*/.env` through. See that file.
 #
 # ## What is deliberately NOT in the image
 #
@@ -118,9 +119,9 @@ RUN corepack enable
 # ---------------------------------------------------------------------------
 # source: the whole build context.
 #
-# .dockerignore already keeps node_modules, dist, .next, coverage, .git, docs,
-# *.md and — importantly — .env and .env.* out of it, so this is source plus
-# manifests and nothing sensitive. Verified against the committed .dockerignore.
+# .dockerignore already keeps node_modules, dist, .next, coverage, .git, deploy,
+# docs, markdown and — importantly — .env and .env.* out of it, at every depth, so
+# this is source plus manifests and nothing sensitive.
 # ---------------------------------------------------------------------------
 FROM toolchain AS source
 COPY . .
@@ -141,11 +142,20 @@ RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@prl/api...
 # package.json stay, because Node needs them to resolve `"type": "module"` and the
 # `exports` maps. `packages/content/data` also stays — the compiled content
 # package reads its authored JSON from disk at runtime.
+# The markdown lines are belt and braces over .dockerignore, which is where the
+# real fix lives. `*.md` there was anchored to the context root, so it removed
+# README.md and nothing else, and apps/web/AGENTS.md and apps/web/CLAUDE.md — the
+# repository's instructions to coding agents — shipped inside the web image.
+# .dockerignore now excludes markdown at every depth; this repeats the claim
+# inside the build so that a future change to the ignore file cannot quietly put
+# prose back into a layer without also passing this line.
 RUN rm -rf \
       apps/*/src apps/*/test apps/*/scripts apps/*/public \
       packages/*/src packages/*/test \
       apps/*/tsconfig.json packages/*/tsconfig.json tsconfig.base.json \
-      biome.json db .github scripts Dockerfile.api Dockerfile.web docker-compose.yml
+      biome.json db .github scripts Dockerfile.api Dockerfile.web \
+      docker-compose.yml docker-compose.staging.yml deploy \
+      ./*.md apps/*/*.md packages/*/*.md
 
 # ---------------------------------------------------------------------------
 # build: full install, then compile.
@@ -203,6 +213,37 @@ FROM base AS runtime
 ENV NODE_ENV=production \
     PORT=3001 \
     HOST=0.0.0.0
+
+# ---------------------------------------------------------------------------
+# Remove npm and corepack from the RUNTIME image.
+#
+# The official Node image ships npm at /usr/local/lib/node_modules/npm with its
+# own bundled dependency tree, and corepack beside it. This project uses neither
+# at runtime: the API's command is `node apps/api/dist/server.js`, the web app's
+# is a pnpm-generated bin shim that execs node, and the header of this file
+# explains at length why running pnpm at container start would fail anyway.
+#
+# Two reasons to delete them, one measured and one structural.
+#
+# **Measured.** `trivy image` against the previous build reported eight HIGH and
+# CRITICAL vulnerabilities whose package path was
+# `usr/local/lib/node_modules/npm/node_modules/...` — brace-expansion, ip-address,
+# tar and undici, all bundled inside npm, all with fixes available upstream and
+# none of them reachable from anything this image runs. They were, at the time,
+# the ONLY findings in the image with an available fix; everything else was a
+# Debian package Debian has marked `fix_deferred` or `will_not_fix`. Deleting a
+# package manager nothing uses removed every actionable finding.
+#
+# **Structural.** A package manager in a production container is a downloader and
+# an arbitrary-code executor sitting next to the application, and this image runs
+# with a read-only root filesystem precisely because we do not want either.
+#
+# `npm` and `npx` under /usr/local/bin are symlinks into the directory above, so
+# they are removed by name rather than left dangling. Run before `USER node`
+# because /usr/local is root-owned; nothing after this line needs either tool.
+# ---------------------------------------------------------------------------
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 
 COPY --from=prod-deps --chown=node:node /app /app
 # Two directory-wide copies, not a per-package list. COPY merges into an existing

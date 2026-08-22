@@ -88,11 +88,17 @@ export const IOC_PATHS = [
  *
  * The campaign injects `.github/workflows/codeql.yml` — a name-squat on a
  * workflow people expect to see — to mint publish tokens from CI. A repository
- * with exactly two known workflows can say so, and an unexpected third file is
- * then a failure rather than a warning nobody reads. `ci-pinning.mjs` enforces
- * this; adding a workflow means adding it here, in a reviewed diff.
+ * that knows its own workflows can say so, and an undeclared file is then a
+ * failure rather than a warning nobody reads. `ci-pinning.mjs` enforces this;
+ * adding a workflow means adding it here, in a reviewed diff. That two-file diff
+ * IS the control — a workflow that could add itself is not declared, it is
+ * announced.
+ *
+ * `release.yml` is the build-once / promote-the-same-digest pipeline. It is the
+ * one workflow here that will ever hold a deployment credential, so its arrival
+ * in this list is exactly the reviewed diff this mechanism exists to force.
  */
-export const EXPECTED_WORKFLOWS = new Set(['ci.yml', 'supply-chain.yml']);
+export const EXPECTED_WORKFLOWS = new Set(['ci.yml', 'release.yml', 'supply-chain.yml']);
 
 /** Byte-level markers. Any hit is treated as a confirmed compromise, not a warning. */
 export const IOC_STRINGS = [

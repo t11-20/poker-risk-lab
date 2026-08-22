@@ -38,7 +38,39 @@ const CHECK_EXTENSIONS = new Set([
   '.md',
   '.sh',
   '.html',
+  // Proxy and server configuration. `deploy/staging/nginx.conf` is the file that
+  // decides how TLS terminates and how X-Forwarded-For is set; it is first-party
+  // source in every sense that matters here.
+  '.conf',
 ]);
+
+/**
+ * First-party files whose NAME, not extension, is what identifies them.
+ *
+ * `extensionOf` splits on the last dot, so `Dockerfile.api` has extension `.api`
+ * and `Dockerfile` has none. Neither is in the set above, which meant the two
+ * files describing the artefact this project actually ships were never
+ * encoding-checked by this gate — a bidi override or a NUL inside a `RUN` line
+ * would have passed it, in exactly the files where a hidden character is most
+ * consequential and least likely to be noticed. `.dockerignore`, the file that
+ * decides what enters the build context, was invisible for the same reason: its
+ * "extension" is `.dockerignore`.
+ *
+ * Compose files need no entry: they end in `.yml`/`.yaml` under either the v1 or
+ * the v2 naming convention and were already covered.
+ */
+const CHECK_NAMES = /^(?:Dockerfile(?:\..+)?|\.dockerignore|Caddyfile)$/;
+
+/**
+ * Is this path one this gate is responsible for?
+ *
+ * Both separators, because `walk` yields native paths and the rest of this file
+ * normalises to `/` only when it prints one.
+ */
+function isChecked(path) {
+  const name = path.split(/[\\/]/).pop() ?? path;
+  return CHECK_NAMES.test(name) || CHECK_EXTENSIONS.has(extensionOf(path));
+}
 
 /** Tab, LF and CR are the only C0 controls allowed in source. */
 const ALLOWED_C0 = new Set([0x09, 0x0a, 0x0d]);
@@ -94,11 +126,48 @@ function positionOf(buf, offset) {
   return `${line}:${col}`;
 }
 
+/**
+ * Proves the file selector can tell the files it is responsible for from the ones
+ * it is not, before it is used to claim a clean repository.
+ *
+ * The gate's own principle is "a scan of nothing proves nothing", and a selector
+ * that silently stopped matching `Dockerfile.api` would produce exactly that: a
+ * green light over a file it never opened. That is not hypothetical — it is what
+ * this gate did, for both Dockerfiles and for `.dockerignore`, until the
+ * name-based rule above was added.
+ */
+function checkFileSelector(gate) {
+  for (const path of [
+    'Dockerfile',
+    'Dockerfile.api',
+    'apps/api/src/app.ts',
+    '.dockerignore',
+    'a/nginx.conf',
+  ]) {
+    if (isChecked(path)) continue;
+    gate.fail(
+      `the file selector no longer matches ${path}`,
+      'this gate would pass over it without reading it',
+    );
+  }
+  for (const path of ['docs/sbom/report.pdf', 'deploy/staging/tls/staging-key.pem', 'notes.rtf']) {
+    if (!isChecked(path)) continue;
+    gate.fail(
+      `the file selector matches ${path}, which is not first-party text`,
+      'a selector that matches binaries and generated key material will fail the gate for the wrong reason',
+    );
+  }
+}
+
 await runGate(gate, () => {
   let checked = 0;
+  let containerFiles = 0;
+
+  checkFileSelector(gate);
 
   for (const full of walk(REPO_ROOT)) {
-    if (!CHECK_EXTENSIONS.has(extensionOf(full))) continue;
+    if (!isChecked(full)) continue;
+    if (CHECK_NAMES.test(full.split(/[\\/]/).pop() ?? '')) containerFiles += 1;
     if (statSync(full).size > 4 * 1024 * 1024) continue;
     const rel = relative(REPO_ROOT, full).split('\\').join('/');
     const buf = readFileSync(full);
@@ -166,6 +235,20 @@ await runGate(gate, () => {
   }
 
   gate.note(`checked ${checked} first-party source files for encoding and hidden-character defects`);
+
+  // Stated as a lower bound rather than an equality so adding a Dockerfile does
+  // not fail the gate, but losing one does — a container file that drops out of
+  // the scan is precisely the defect the name rule above was written for. Three
+  // today: Dockerfile.api, Dockerfile.web and .dockerignore.
+  if (containerFiles < 3) {
+    gate.fail(
+      `only ${containerFiles} container file(s) were encoding-checked`,
+      'Dockerfile.api, Dockerfile.web and .dockerignore all describe the artefact that ships and all ' +
+        'used to be invisible to this gate. Fewer than three means one has stopped being read.',
+    );
+  } else {
+    gate.note(`${containerFiles} container file(s) (Dockerfiles, .dockerignore) were among them`);
+  }
 
   checkRandomnessBan(gate);
 });

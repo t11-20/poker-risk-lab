@@ -17,16 +17,51 @@
  *
  * No database is needed: nothing here connects, which is itself part of what is
  * being asserted about `down`.
+ *
+ * ## The second thing these tests carry: a failure that names the file
+ *
+ * `applyFile` used to let the raw driver error through, and the top-level handler
+ * printed only its `message`. With four files in db/migrations that meant an
+ * operator saw `relation "users" already exists` and nothing naming the file, the
+ * line, or even which command had been running.
+ *
+ * The tests for that drive the REAL `applyFile` with a real broken `.sql` file on
+ * disk and a stub connection handle whose `unsafe` rejects with the exact shape
+ * postgres.js produces. What that proves: the production call path turns a driver
+ * failure into a message naming the file, the line, the column, the statement and
+ * the SQLSTATE. What it does NOT prove, stated plainly: that a live PostgreSQL
+ * populates `position` the way the fixtures here do. That half was checked by hand
+ * against a scratch database — `select 1` followed by `creat table` through
+ * `sql.unsafe` returns `code 42601` with `position: '25'` as a STRING, which
+ * `locateInSource` maps to line 4 column 1 — and a `migrate up` re-run against an
+ * emptied ledger produced `migration 0001_initial.sql failed ... type
+ * "prefixed_id" already exists ... code: 42710`. Neither run lives here, because a
+ * test that needs a database has no business in a file whose whole point is that it
+ * needs none.
+ *
+ * ## Would these fail if the behaviour broke?
+ *
+ * Yes, and it is checked rather than asserted: `assertNamesTheFile` is run a second
+ * time against the message the OLD code produced — the bare driver `message` — and
+ * required to throw. A message that stopped naming the file would fail the first
+ * call for the same reason the old one fails the second.
  */
 
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { declaresIrreversible, findIrreversibleStatements, stripSqlComments } from './migrate.mjs';
+import {
+  applyFile,
+  declaresIrreversible,
+  findIrreversibleStatements,
+  locateInSource,
+  stripSqlComments,
+} from './migrate.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIGRATE = join(HERE, 'migrate.mjs');
@@ -203,6 +238,211 @@ test('stripSqlComments removes comments without moving anything else', () => {
   assert.equal(stripped.length, sql.length);
   // Nested block comments are one comment, not one and a half.
   assert.doesNotMatch(stripSqlComments('/* a /* b */ c */ SELECT 3;'), /[abc]\s/);
+});
+
+// ---------------------------------------------------------------------------
+// A migration that fails says WHICH ONE.
+// ---------------------------------------------------------------------------
+
+/** Temp directories this file made, removed once whatever happened has happened. */
+const scratchDirs = [];
+
+after(async () => {
+  for (const dir of scratchDirs) await rm(dir, { recursive: true, force: true });
+});
+
+/**
+ * Writes a real `.sql` file and returns it in the shape `readSqlDir` produces.
+ *
+ * A real file rather than a string literal, because half of what is being asserted is that the
+ * message can point an operator at something they can open: the path, and a line number inside
+ * it that matches what an editor will show.
+ */
+async function brokenMigration(name, sql) {
+  const dir = await mkdtemp(join(tmpdir(), 'prl-migrate-test-'));
+  scratchDirs.push(dir);
+  const path = join(dir, name);
+  await writeFile(path, sql, 'utf8');
+  const written = await readFile(path, 'utf8');
+  assert.equal(written, sql, 'the fixture file must be on disk before it is used');
+  return { version: name, number: name.slice(0, 4), path, sql: written, checksum: 'sha256:fixture' };
+}
+
+/**
+ * A driver error shaped the way postgres.js throws one.
+ *
+ * The fields are the ones PostgreSQL's ErrorResponse carries and the driver copies onto the
+ * error (`Object.assign(this, x)` in its `errors.js`), so this is the real shape rather than a
+ * convenient one. `position` is a 1-based index into the statement, which for this runner is the
+ * whole file.
+ */
+function driverError(message, fields = {}) {
+  return Object.assign(new Error(message), { name: 'PostgresError', severity: 'ERROR', ...fields });
+}
+
+/**
+ * A connection handle that gets as far as the file and then fails on it.
+ *
+ * `begin` runs the callback rather than short-circuiting, so the assertions below are made about
+ * the real `applyFile` path — the `lock_timeout` statement runs, the file is sent through
+ * `unsafe`, and only then does anything go wrong. `calls` is what proves the path was exercised
+ * rather than a rejection arriving from somewhere earlier.
+ */
+function handleThatFailsOnTheFile(error, calls) {
+  const tx = Object.assign(
+    (strings) => {
+      calls.push(
+        `tagged:${String(strings?.raw?.[0] ?? '')
+          .trim()
+          .slice(0, 17)}`,
+      );
+      return Promise.resolve([]);
+    },
+    {
+      unsafe: (text) => {
+        calls.push(`unsafe:${text.length}`);
+        return Promise.reject(error);
+      },
+    },
+  );
+  return { begin: (fn) => fn(tx) };
+}
+
+/**
+ * The error a rejected call produced, rather than the fact that it rejected.
+ *
+ * `assert.rejects` resolves to `undefined`, and every assertion here is about what the message
+ * SAYS. A test that only knew the call had rejected would pass against the defect.
+ */
+async function rejectionOf(fn) {
+  const outcome = await fn().then(
+    () => null,
+    (error) => error,
+  );
+  assert.ok(outcome instanceof Error, 'the call was expected to reject and did not');
+  return outcome;
+}
+
+/**
+ * The property: this text is enough to find the file and the fault without a second question.
+ *
+ * Written as a function because it is used twice — once on the message the runner produces now,
+ * and once, in `assert.throws`, on the message it produced before. That second call is the
+ * negative control: if these assertions were satisfiable by any old error text, they would prove
+ * nothing about the change.
+ */
+function assertNamesTheFile(text, file, expected) {
+  assert.match(text, new RegExp(file.version.replace(/\./g, '\\.')), 'the message must name the file');
+  assert.match(text, /file:/, 'the message must show a path to open');
+  assert.match(text, new RegExp(file.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), 'the path must be real');
+  if (expected.line !== undefined) {
+    assert.match(text, new RegExp(`:${expected.line}:${expected.column}\\b`), 'line and column');
+    assert.ok(text.includes(expected.statement), `the offending statement must be echoed: ${text}`);
+    assert.match(text, /\^/, 'a caret must point at the column');
+  }
+  if (expected.code !== undefined) assert.match(text, new RegExp(`code:\\s+${expected.code}`));
+}
+
+test('a migration that fails names the file, the line, the statement and the SQLSTATE', async () => {
+  // `creat` rather than `create`: a typo is the failure this reporting exists for, and it is the
+  // one kind that carries a cursor position, so it exercises the whole message.
+  const sql = [
+    '-- A deliberately broken migration.',
+    'create table prl.first (id text primary key);',
+    '',
+    'creat table prl.second (id text primary key);',
+    '',
+  ].join('\n');
+  const file = await brokenMigration('0099_deliberately_broken.sql', sql);
+  const position = sql.indexOf('creat table') + 1;
+  assert.ok(position > 1, 'the fixture must actually contain the broken statement');
+
+  const calls = [];
+  const handle = handleThatFailsOnTheFile(
+    driverError('syntax error at or near "creat"', { code: '42601', position: String(position) }),
+    calls,
+  );
+
+  const thrown = await rejectionOf(() => applyFile(handle, file, true, 'migration'));
+  const message = String(thrown?.message ?? thrown);
+
+  // The path was exercised: the transaction opened, the lock timeout was set, and the whole file
+  // went through `unsafe`. Without this, a rejection thrown before any of that would satisfy
+  // every assertion below.
+  assert.deepEqual(calls, ['tagged:select set_config', `unsafe:${sql.length}`]);
+
+  assertNamesTheFile(message, file, {
+    line: 4,
+    column: 1,
+    statement: 'creat table prl.second',
+    code: '42601',
+  });
+  assert.match(message, /rolled back|as it was before/i, 'an operator must be told what state they are in');
+
+  // NEGATIVE CONTROL. This is the message the runner printed before this change — the bare driver
+  // `message`, which is exactly what the top-level handler used to reach for. Every assertion
+  // above must fail against it, or they are not assertions about anything.
+  assert.throws(
+    () =>
+      assertNamesTheFile('syntax error at or near "creat"', file, {
+        line: 4,
+        column: 1,
+        statement: 'creat table prl.second',
+        code: '42601',
+      }),
+    /must name the file/,
+    'the old message named nothing, and this check has to be able to say so',
+  );
+});
+
+test('a failure with no cursor position still names the file', async () => {
+  // The defect's own example. `42P07` carries no `position`, so this is the case where a message
+  // that only knew how to point at a character would have had nothing to say at all.
+  const sql = 'create table prl.users (id text primary key);\n';
+  const file = await brokenMigration('0001_initial.sql', sql);
+  const calls = [];
+  const handle = handleThatFailsOnTheFile(
+    driverError('relation "users" already exists', { code: '42P07' }),
+    calls,
+  );
+
+  const thrown = await rejectionOf(() => applyFile(handle, file, true, 'migration'));
+  const message = String(thrown?.message ?? thrown);
+  assert.ok(calls.length === 2, `the file must have been sent before it failed, saw ${calls.join(', ')}`);
+
+  assertNamesTheFile(message, file, { code: '42P07' });
+  assert.match(message, /relation "users" already exists/, 'the driver’s own words are still shown');
+  // No position means no caret, rather than a caret pointing confidently at character one.
+  assert.doesNotMatch(message, /\^/);
+
+  assert.throws(
+    () => assertNamesTheFile('relation "users" already exists', file, { code: '42P07' }),
+    /must name the file/,
+    'the negative control: the old message is the defect, verbatim',
+  );
+});
+
+test('a role file and a seed file are named by their own labels, not as migrations', async () => {
+  // `roles` and `seed` share `applyFile`, and a message that called a seed failure a "migration"
+  // sends an operator to db/migrations to look for a file that is not there.
+  const file = await brokenMigration('0001_reference_data.sql', 'insert into prl.thing values (1);\n');
+  const handle = handleThatFailsOnTheFile(driverError('boom', { code: '42601' }), []);
+  const thrown = await rejectionOf(() => applyFile(handle, file, false, 'seed file'));
+  assert.match(String(thrown?.message), /^seed file 0001_reference_data\.sql failed/);
+});
+
+test('locateInSource maps a cursor onto the line an editor would show', () => {
+  const sql = 'alpha\nbeta\ngamma\n';
+  assert.deepEqual(locateInSource(sql, 1), { line: 1, column: 1, text: 'alpha' });
+  // The first character of line 2: 'alpha' is 5 characters plus the newline.
+  assert.deepEqual(locateInSource(sql, 7), { line: 2, column: 1, text: 'beta' });
+  assert.deepEqual(locateInSource(sql, 10), { line: 2, column: 4, text: 'beta' });
+  assert.deepEqual(locateInSource(sql, 12), { line: 3, column: 1, text: 'gamma' });
+
+  // Everything that is not a usable cursor is null, rather than a confident guess at line 1.
+  for (const absent of [undefined, null, '', '0', 'NaN', -1, sql.length + 2, 1.5]) {
+    assert.equal(locateInSource(sql, absent), null, `should not locate ${String(absent)}`);
+  }
 });
 
 test('an irreversible migration declares itself with a reason, not a bare marker', () => {

@@ -1,0 +1,708 @@
+# ---------------------------------------------------------------------------
+# The release pipeline: commit → gates → tests → ONE build → scan → staging →
+# staging verification → controlled promotion → production → post-deploy checks.
+#
+# ## Read this first: what this workflow can and cannot do today
+#
+# **There is no container registry and no production environment in this project.**
+# Nothing here can push an image or deploy one, and this file does not pretend
+# otherwise. Every step that cannot execute is marked `NOT WIRED`, is guarded by
+# an `if:` on a repository variable that does not exist yet, and FAILS LOUDLY
+# rather than passing silently when that variable is set but the surrounding
+# configuration is absent. A pipeline whose deploy step is a green tick over an
+# `echo` is worse than no pipeline: it is a rehearsal that teaches everyone the
+# deploy works.
+#
+# What DOES execute here, on a real runner, today:
+#
+#   * every supply-chain gate, the full test suite, the typecheck and the lint;
+#   * one build of each image, by `pnpm run release:artifacts`, with the digests
+#     recorded to a manifest that every later job consumes;
+#   * `trivy` against those exact images;
+#   * the whole staging stack — postgres, api, web and a TLS-terminating proxy —
+#     brought up on those digests, migrated, smoke-tested over https including a
+#     real WebSocket, and checked for the X-Forwarded-For overwrite;
+#   * the promotion check, which refuses a digest staging did not test.
+#
+# What does not: the push, the production deploy, and the post-deploy verification
+# against a live production origin. Those are `NOT WIRED`.
+#
+# ## Build once. This is the whole architecture.
+#
+# `build` runs `pnpm run release:artifacts`, which builds each Dockerfile exactly
+# once and writes `deploy/staging/release-manifest.json`. That manifest is
+# uploaded as an artifact and every later job downloads it. No later job has a
+# `docker build` in it and none may gain one: the moment a second build exists,
+# "staging tested this" stops being a statement about bytes.
+#
+# The runner-to-runner problem is real and is handled honestly. GitHub gives each
+# job a fresh machine, so the images built in `build` do not exist in `staging`.
+# With a registry the answer is a push and a digest pull. Without one, `build`
+# saves the images with `docker save` and `staging` loads them with `docker load`,
+# and `scripts/staging.mjs` then re-verifies that the loaded images have the
+# manifest's digests — so a tarball that arrived corrupted or truncated fails the
+# identity check rather than being deployed. `docker save`/`load` preserves the
+# digest; the staging job proves it did rather than assuming it.
+#
+# ## Rollback
+#
+# Written out in the `rollback-plan` job, which runs on every release and prints
+# the plan with the actual digests in it. It is a job rather than a comment
+# because a rollback plan nobody has read is a rollback plan nobody can execute at
+# 3am, and because the previous digest has to be captured BEFORE the new one is
+# promoted or it is not available when it is needed.
+#
+# The short version, and it is unusual enough to state here as well:
+#
+#   * **Application rollback: yes.** Redeploy the previous image digest. The
+#     images are immutable and content-addressed, so this is exact.
+#   * **Schema rollback: NO. There is none.** `apps/api/scripts/migrate.mjs down`
+#     refuses, deliberately and with an explanation (docs/RUNBOOK.md §11.3). The
+#     recovery for a bad schema change is the NEXT migration; the recovery for
+#     lost data is a restore from backup. This is why `up` also refuses to apply a
+#     pending migration containing an undeclared destructive statement, and why a
+#     destructive change is always two releases.
+#   * **Therefore the application must roll back onto the NEWER schema.**
+#     Migrations are additive-first precisely so that the previous release runs
+#     against the schema the current one applied. A release that breaks that
+#     property is a release that cannot be rolled back at all, which is a decision
+#     to be made deliberately and not discovered.
+#
+# ## Permissions
+#
+# `contents: read` at the top and nothing more. No job here needs a token: nothing
+# publishes, nothing comments, nothing pushes. When a registry appears, the push
+# job — and only the push job — gets `packages: write`, or `id-token: write` for
+# OIDC-federated credentials, which is the better answer because it stores no
+# long-lived secret in this repository at all.
+#
+# ## Pinning
+#
+# Every `uses:` is a full 40-character commit SHA with the version in a trailing
+# comment, and every `runs-on` names an explicit runner version. This is enforced
+# by `scripts/supply-chain/ci-pinning.mjs`, which also refuses any workflow file
+# not declared in `EXPECTED_WORKFLOWS` — so this file's existence is itself a
+# two-file diff. See the ci.yml header for how the SHAs were obtained.
+# ---------------------------------------------------------------------------
+
+name: Release
+
+on:
+  # Tag-driven, so a release is a deliberate act with a name, and never a
+  # side-effect of a push to a branch.
+  push:
+    tags:
+      - 'v*'
+  # And on demand, for a rehearsal against a branch. `dry_run` defaults to true so
+  # that the dangerous default is the safe one: somebody who clicks Run without
+  # reading gets a full build, scan and staging verification, and no promotion.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Verify only; do not promote or deploy'
+        type: boolean
+        default: true
+        required: false
+
+permissions:
+  contents: read
+
+# A release must never race another release of the same ref, and — unlike CI —
+# an in-flight one must NOT be cancelled: a half-finished deploy is worse than a
+# queued one.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+  NPM_CONFIG_UPDATE_NOTIFIER: 'false'
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1. The gates. Nothing is built until the dependency graph has been audited
+  #    and the suite is green, because building means executing the graph.
+  # -------------------------------------------------------------------------
+  gates:
+    name: Supply-chain, lint and typecheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack (pins pnpm via the packageManager integrity hash)
+        run: corepack enable
+
+      - name: Install
+        # --ignore-scripts: this job installs a dependency graph in order to decide
+        # whether it is safe, so it must not run that graph's install-time hooks
+        # first. See the ci.yml header.
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Supply-chain audit
+        # The container-image gate inside this audit reports itself as "not
+        # applicable" here, because the images do not exist yet — they are built in
+        # the next job. That is not a skipped scan: the `container-scan` job below
+        # runs it against the real artefacts as a mandatory step, and the audit
+        # says out loud in its summary that its own scope excluded them.
+        run: pnpm run security:audit
+
+      - name: Base-image digest freshness
+        # A REPORT, not a gate: it exits 0 whatever it finds. Its job is to make a
+        # base image that has been rebuilt upstream — usually for a security patch —
+        # visible in the release log, so that refreshing the pinned digest is a
+        # decision somebody makes rather than one nobody knows is available.
+        run: node scripts/supply-chain/ci-pinning.mjs --freshness
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Build workspace packages
+        run: pnpm run build:packages
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+  # -------------------------------------------------------------------------
+  # 2. The tests, against a real database, as the least-privileged identity.
+  # -------------------------------------------------------------------------
+  tests:
+    name: Tests
+    needs: gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        # postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:60f4761b9035e0b8d5218f701a8c3382f641bf12b1604822574cf5be3baeb537
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: poker_risk_lab_release
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username postgres --dbname poker_risk_lab_release"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # The job default is the runtime identity, so a missing GRANT fails the
+      # release rather than the deployment. See the ci.yml header for the full
+      # explanation of the two-role model.
+      DATABASE_URL: postgres://prl_ci_app:prl-ci-not-a-secret@127.0.0.1:5432/poker_risk_lab_release
+      DATABASE_URL_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_release
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build packages
+        run: pnpm run build:packages
+
+      - name: Wait for PostgreSQL
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
+        run: pnpm run db:wait
+
+      - name: Migrate
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
+        run: pnpm run db:migrate
+
+      - name: Grant a login identity membership of prl_app
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql --host 127.0.0.1 --username postgres --dbname poker_risk_lab_release \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'prl_ci_app') THEN
+              CREATE ROLE prl_ci_app LOGIN PASSWORD 'prl-ci-not-a-secret';
+            END IF;
+          END
+          $$;
+          GRANT prl_app TO prl_ci_app;
+          GRANT CONNECT ON DATABASE poker_risk_lab_release TO prl_ci_app;
+          SQL
+
+      - name: Verify the live schema's security properties
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
+        run: pnpm run db:verify
+
+      - name: Test
+        run: pnpm run test
+
+  # -------------------------------------------------------------------------
+  # 3. BUILD ONCE.
+  #
+  # The only `docker build` in this workflow, and it is inside
+  # `release-artifacts.mjs` rather than in a `run:` here so that the same command
+  # a developer types locally is the command that produces the release. The
+  # manifest and the image tarballs are the only things that leave this job.
+  # -------------------------------------------------------------------------
+  build:
+    name: Build immutable artefacts
+    needs: tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Build both images once and record their digests
+        # No install step: this script imports nothing outside node: builtins, on
+        # purpose, so the release build does not depend on a dependency tree being
+        # present on the machine that produces it.
+        run: node scripts/release-artifacts.mjs --verbose
+
+      - name: Save the images for the jobs that consume them
+        # `docker save` of the DIGEST reference, not the tag. With a registry this
+        # step becomes a push and the next job pulls by digest; the identity check
+        # in `staging` is written so that either transport produces the same
+        # assertion — the loaded image must have the manifest's digest.
+        run: |
+          set -euo pipefail
+          mkdir -p release-images
+          api="$(node -e "process.stdout.write(require('./deploy/staging/release-manifest.json').images.api.reference)")"
+          web="$(node -e "process.stdout.write(require('./deploy/staging/release-manifest.json').images.web.reference)")"
+          docker save "$api" -o release-images/api.tar
+          docker save "$web" -o release-images/web.tar
+          ls -l release-images
+
+      - name: Upload the release manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-manifest
+          path: deploy/staging/release-manifest.json
+          # `error`, not `warn`: every job below reads this file, and a missing
+          # manifest must stop the release here rather than three jobs later with a
+          # confusing message.
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload the images
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-images
+          path: release-images
+          if-no-files-found: error
+          retention-days: 30
+
+  # -------------------------------------------------------------------------
+  # 4. Scan the artefacts that were just built. Not "an image like them".
+  # -------------------------------------------------------------------------
+  container-scan:
+    name: Container image CVEs
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the release manifest
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-manifest
+          path: deploy/staging
+
+      - name: Download the images
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-images
+          path: release-images
+
+      - name: Load the images
+        run: |
+          docker load -i release-images/api.tar
+          docker load -i release-images/web.tar
+
+      - name: Install trivy
+        # Pinned to an exact version and verified against its published checksum,
+        # for the same reason every other dependency in this repository is pinned:
+        # a scanner installed from a moving `latest` is a moving dependency in the
+        # job that decides whether the release is safe.
+        env:
+          TRIVY_VERSION: '0.72.0'
+        run: |
+          set -euo pipefail
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          curl --fail --silent --show-error --location -o trivy.tar.gz \
+            "${base}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl --fail --silent --show-error --location -o checksums.txt \
+            "${base}/trivy_${TRIVY_VERSION}_checksums.txt"
+          # The published checksum file names the archive; grep it out and verify.
+          grep "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" checksums.txt > expected.txt
+          sha256sum --check expected.txt
+          tar -xzf trivy.tar.gz trivy
+          sudo install -m 0755 trivy /usr/local/bin/trivy
+          trivy --version
+
+      - name: Scan
+        # No `continue-on-error`. A blocking finding stops the release; the gate's
+        # own policy decides what blocks (fixable at or above HIGH), and the
+        # unfixable count is in the report below.
+        run: pnpm run security:containers -- --out container-scan.json
+
+      - name: Upload the scan report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: container-scan-report
+          path: container-scan.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  # -------------------------------------------------------------------------
+  # 5. Deploy to staging and verify it. This is the job that decides whether a
+  #    digest may be promoted.
+  # -------------------------------------------------------------------------
+  staging:
+    name: Staging deploy and verification
+    needs: container-scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        # The smoke test and the migration runner are run from the checkout, not
+        # from inside the API image: Dockerfile.api deliberately omits
+        # apps/api/scripts so that the serving container cannot change the schema
+        # (docs/RUNBOOK.md §11.3). This install is what provides them.
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Download the release manifest
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-manifest
+          path: deploy/staging
+
+      - name: Download the images
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-images
+          path: release-images
+
+      - name: Load the images
+        run: |
+          docker load -i release-images/api.tar
+          docker load -i release-images/web.tar
+
+      - name: Initialise staging (local CA, leaf certificate, generated secrets)
+        # Nothing here is a repository secret and nothing needs to be: staging is
+        # ephemeral, its certificate is issued by a CA created for this run, and
+        # its session key and database passwords are generated on the runner and
+        # destroyed with it. A real staging environment injects them from a secret
+        # manager, which is the same variable names and a different source.
+        run: node scripts/staging.mjs init
+
+      - name: Bring the stack up on the manifest's digests and verify it
+        # This step is the release's evidence. It:
+        #   * refuses a manifest whose references are not content digests;
+        #   * migrates the database from OUTSIDE the serving container;
+        #   * creates the runtime login identity and proves it is bounded;
+        #   * waits for /api/v1/health AND /api/v1/ready;
+        #   * asserts the RUNNING containers carry the manifest's digests;
+        #   * verifies the TLS chain against the generated CA;
+        #   * proves the proxy overwrites X-Forwarded-For rather than appending;
+        #   * runs the smoke test over https, including a real WebSocket upgrade
+        #     and a hand played to completion, with --strict.
+        run: node scripts/staging.mjs up
+
+      - name: Staging logs
+        if: always()
+        run: node scripts/staging.mjs logs --tail 200 || true
+
+      - name: Upload the staging attestation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: staging-verified
+          path: deploy/staging/staging-verified.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Tear the stack down
+        if: always()
+        # `--volumes`, because staging data is disposable by definition and a
+        # runner is destroyed anyway; naming it makes the intent explicit rather
+        # than relying on the machine going away.
+        run: node scripts/staging.mjs down --volumes || true
+
+  # -------------------------------------------------------------------------
+  # 6. The promotion decision.
+  #
+  # `environment:` is what makes this "controlled": configure the `production`
+  # environment in the repository settings with required reviewers and this job
+  # waits for a human. That is the approval gate, and it is deliberately GitHub's
+  # rather than a bespoke one — an approval mechanism nobody can audit is not an
+  # approval mechanism.
+  #
+  # Until that environment exists the job still runs the digest comparison, which
+  # is the part that has to be right. It is the deploy step below that is gated.
+  # -------------------------------------------------------------------------
+  promote:
+    name: Promotion check (digest identity)
+    needs: staging
+    if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Uncomment once a `production` environment with required reviewers exists.
+    # Left commented rather than present-and-unconfigured on purpose: an
+    # `environment:` naming one that does not exist is created implicitly with NO
+    # protection rules, which looks like an approval gate in the workflow file and
+    # is not one anywhere else.
+    #   environment:
+    #     name: production
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the release manifest
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-manifest
+          path: deploy/staging
+
+      - name: Download the staging attestation
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: staging-verified
+          path: deploy/staging
+
+      - name: The digest going to production must be the digest staging tested
+        # `staging.mjs promote` prints BOTH digests and exits non-zero when they
+        # differ. It does not deploy — see its header — and there is nothing here
+        # that could.
+        run: node scripts/staging.mjs promote
+
+      - name: Record the digests being promoted
+        run: |
+          {
+            echo '### Promoted digests'
+            echo ''
+            echo '```'
+            node -e "const m=require('./deploy/staging/release-manifest.json');
+              for (const [name, image] of Object.entries(m.images)) console.log(name.padEnd(4), image.reference);
+              console.log('commit', m.commit.sha);"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -------------------------------------------------------------------------
+  # 7. Production. NOT WIRED.
+  #
+  # Guarded on `vars.PRODUCTION_DEPLOY_TARGET`, a repository variable that does
+  # not exist. With it unset the job is skipped and the release ends after the
+  # promotion check, which is the honest end of this pipeline today. With it set
+  # but the rest of the configuration missing, the job FAILS — it does not
+  # improvise, and it does not echo a success.
+  #
+  # What has to exist before this can be written for real, in the order it has to
+  # be built:
+  #
+  #   1. A registry, and a push step in `build` that records the REGISTRY digest
+  #      alongside the local one. Cross-machine promotion needs a digest a
+  #      registry vouches for; the local BuildKit digest this pipeline uses is
+  #      content-addressed but nothing signed it.
+  #   2. Credentials, ideally OIDC-federated so this repository stores no
+  #      long-lived secret. `permissions: id-token: write` on THIS job alone.
+  #   3. A migration step that runs from OUTSIDE the serving container, at this
+  #      commit, as `prl_deployer` (docs/RUNBOOK.md §5, §11.3) — BEFORE the
+  #      application rolls, because migrations are additive-first so that the old
+  #      release keeps working against the new schema during the roll.
+  #   4. A rollout that respects `deploy: replicas: 1` (ADR 0001, RUNBOOK §11.1)
+  #      or implements room affinity. Two API processes serving one room deal two
+  #      different hands and nothing detects it.
+  #
+  # And one rule that is not negotiable and is therefore stated as a rule rather
+  # than a step: **this pipeline never auto-runs a destructive database change.**
+  # `migrate.mjs up` refuses to apply a pending migration containing a DROP, a
+  # TRUNCATE, a DELETE, a column/constraint drop or a rename unless the file
+  # carries `-- prl:irreversible: <reason>`. A release that needs one is a release
+  # somebody has decided to make irreversible, and it happens in two releases:
+  # ship the additive half, roll onto it, remove in the next.
+  # -------------------------------------------------------------------------
+  production:
+    name: Production deploy (NOT WIRED)
+    needs: promote
+    if: ${{ vars.PRODUCTION_DEPLOY_TARGET != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Refuse to improvise a deployment
+        # Reached only when somebody has set PRODUCTION_DEPLOY_TARGET. Failing here
+        # is the point: the variable is a statement that a target exists, and this
+        # file has no implementation to match it. A step that printed "deployed" and
+        # exited 0 would be a lie told by a green tick.
+        run: |
+          echo "PRODUCTION_DEPLOY_TARGET is set to '${{ vars.PRODUCTION_DEPLOY_TARGET }}', but this"
+          echo "workflow has no deployment implementation. See the header of this job for the four"
+          echo "things that must exist first, in order. Failing rather than pretending."
+          exit 1
+
+  # -------------------------------------------------------------------------
+  # 8. Post-deploy verification. NOT WIRED, for the same reason.
+  #
+  # When there is a production origin, this job runs the SAME smoke test the
+  # staging job ran, against it, with --strict — the point being that the check
+  # which cleared the release is the check that confirms it landed:
+  #
+  #     PRL_WEB_ORIGIN=https://<origin> node scripts/smoke-test.mjs \
+  #       --origin https://<origin> --strict
+  #
+  # It would also assert the readiness probe, that `/metrics` is NOT reachable
+  # from the public origin (it is not under /api/, so the proxy sends it to the
+  # page server), and that the deployed digest matches the promoted one.
+  #
+  # A failure here is a ROLLBACK TRIGGER, not a retry. See `rollback-plan`.
+  # -------------------------------------------------------------------------
+  post-deploy:
+    name: Post-deploy verification (NOT WIRED)
+    needs: production
+    if: ${{ vars.PRODUCTION_ORIGIN != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Refuse to claim a verification that did not happen
+        run: |
+          echo "PRODUCTION_ORIGIN is set to '${{ vars.PRODUCTION_ORIGIN }}', but no deployment"
+          echo "happened, so there is nothing to verify. Failing rather than reporting success."
+          exit 1
+
+  # -------------------------------------------------------------------------
+  # 9. The rollback plan, printed with this release's actual digests in it.
+  #
+  # It runs on every release, whatever happened above (`if: always()`), because
+  # the moment you need it is the moment the pipeline is red.
+  # -------------------------------------------------------------------------
+  rollback-plan:
+    name: Rollback plan
+    needs: [build, staging]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the previous release tag is what the previous digest is
+          # identified by, and a shallow clone has no tags.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the release manifest
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-manifest
+          path: deploy/staging
+        continue-on-error: true
+
+      - name: Write the plan
+        run: |
+          set -uo pipefail
+          previous_tag="$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || echo '(none)')"
+          {
+            echo '## Rollback plan for this release'
+            echo ''
+            echo '### The digests'
+            echo ''
+            if [ -f deploy/staging/release-manifest.json ]; then
+              echo '```'
+              node -e "const m=require('./deploy/staging/release-manifest.json');
+                for (const [name, image] of Object.entries(m.images)) console.log('new  ' + name.padEnd(4), image.reference);
+                console.log('from commit', m.commit.sha);" 2>/dev/null || echo '(manifest unreadable)'
+              echo '```'
+            else
+              echo 'No manifest: the build did not complete, so nothing was deployed and there is'
+              echo 'nothing to roll back.'
+            fi
+            echo ''
+            echo "Previous release tag: \`${previous_tag}\`. The digests it deployed are in that"
+            echo 'run'"'"'s `release-manifest` artifact — that artifact IS the rollback target, which'
+            echo 'is why its retention is 90 days.'
+            echo ''
+            echo '### Decision criteria — roll back when ANY of these is true'
+            echo ''
+            echo '* `/api/v1/ready` returns 503 for more than 2 minutes after the roll settles.'
+            echo '* The error rate (`prl_api_errors_total`) or 5xx share is materially above the'
+            echo '  pre-deploy baseline. Use `/metrics`; that is what it is for.'
+            echo '* WebSocket sessions are closing with 1006 rather than 4503. 1006 means a hard'
+            echo '  kill, which points at the orchestrator grace period being at or below'
+            echo '  `SHUTDOWN_GRACE_MS` (RUNBOOK §10) rather than at the release.'
+            echo '* Hand history stops being written. This is the one silent failure that matters:'
+            echo '  the product'"'"'s central promise is that a hand is verifiable afterwards.'
+            echo '* The smoke test fails against the production origin.'
+            echo ''
+            echo '### How to roll back'
+            echo ''
+            echo '1. **Application: redeploy the previous digest.** Exact, because the images are'
+            echo '   content-addressed. Take it from the previous release run'"'"'s manifest artifact.'
+            echo '2. **Schema: DO NOT.** There is no `down`. `apps/api/scripts/migrate.mjs down`'
+            echo '   refuses and explains why (RUNBOOK §11.3): a down script has by construction'
+            echo '   never run against the database it is asked to save, and it cannot restore data'
+            echo '   a forward migration removed. The previous release runs against the NEWER'
+            echo '   schema — migrations are additive-first so that this is true.'
+            echo '3. **If the schema itself is wrong**, the fix is the NEXT migration, never an'
+            echo '   edit to an applied one. Applied files are checksummed and immutable.'
+            echo '4. **If data is gone**, it is a restore from backup (RUNBOOK §11.4), and the'
+            echo '   restore procedure is specific: `migrate.mjs roles` first, no `--no-owner`, no'
+            echo '   `--no-privileges`, `--exit-on-error`, restoring identity a member of'
+            echo '   `prl_migrator`. `pg_restore` exiting 0 is NOT the test; `pnpm run db:verify`'
+            echo '   exiting 0 is.'
+            echo ''
+            echo '### What makes a release un-rollbackable'
+            echo ''
+            echo 'A migration in this release that is NOT additive — one carrying'
+            echo '`-- prl:irreversible: <reason>`. The previous application cannot run against that'
+            echo 'schema. If this release contains one, the rollback path is a restore, and that'
+            echo 'should have been a deliberate decision before the release rather than a discovery'
+            echo 'during the incident.'
+          } >> "$GITHUB_STEP_SUMMARY"

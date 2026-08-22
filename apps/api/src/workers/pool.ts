@@ -11,9 +11,13 @@
  * Starting a worker costs a new V8 isolate plus the import of `@prl/poker-math` and
  * `@prl/poker-engine` — tens of milliseconds, comfortably more than a typical calculation.
  * Worse, the preflop strength table that `top:NN` needs is memoised *per thread* and takes
- * about three seconds to build, so a thread-per-request pool would rebuild it every time. The
- * pool therefore creates threads lazily — a deployment that never calls these endpoints never
- * pays for one — and then keeps them.
+ * about three seconds to build, so a thread-per-request pool would rebuild it every time.
+ *
+ * Production therefore pre-warms every thread at boot (`WorkerPool.warm`, driven from
+ * `server.ts`) and `/ready` stays 503 until that finishes. A deployment that never serves
+ * Coach still pays the three seconds once, at startup, rather than on the first learner. Tests
+ * that never call `beginSharedPoolWarmup` keep the old lazy behaviour: no threads, and `/ready`
+ * does not wait for them.
  *
  * ## The deadline is wall-clock, and it starts when the request is submitted
  *
@@ -52,6 +56,7 @@ import { AppError } from '../errors.ts';
 import type {
   CoachTask,
   EquityTask,
+  WarmupTask,
   WireSpec,
   WorkerFailure,
   WorkerRequest,
@@ -81,6 +86,16 @@ const QUEUE_SLOTS_PER_WORKER = 3;
  * which this file already handles.
  */
 const WORKER_HEAP_MB = 256;
+
+/**
+ * Wall-clock budget for pre-warming one pool.
+ *
+ * The strength table is about three seconds on the reference machine; twelve seconds is the
+ * allowance live Coach requests already get (`STRENGTH_TABLE_ALLOWANCE_MS` in `calc/parse.ts`).
+ * Fifteen leaves a little more for a cold isolate on a slower box without approaching the
+ * 20-second request timeout that would otherwise cut the process off mid-boot.
+ */
+const WARMUP_TIMEOUT_MS = 15_000;
 
 /** A worker reply that carries a result, i.e. everything except a failure. */
 type SuccessResponse = Extract<WorkerResponse, { ok: true }>;
@@ -244,6 +259,25 @@ export class WorkerPool {
    * Never sharded: `buildCoachReport` produces one report from one equity figure, and two
    * halves of a report could not be combined into anything meaningful.
    */
+  /**
+   * Spawns every thread and builds the preflop strength table on each of them.
+   *
+   * One warmup task per slot, submitted together, so a pool of four does the three-second
+   * table build four times in parallel rather than four times in sequence. After this
+   * resolves, a live `top:NN` Coach request on any of those threads is a warm lookup.
+   */
+  async warm(timeoutMs?: number): Promise<void> {
+    const tasks: WarmupTask[] = Array.from({ length: this.size }, () => ({ kind: 'warmup' }));
+    const responses = await this.runBatch(tasks, timeoutMs ?? WARMUP_TIMEOUT_MS);
+    for (const response of responses) {
+      if (response.kind !== 'warmup') {
+        throw new AppError('internal_error', {
+          logDetail: 'calculation thread returned a non-warmup reply for a warmup task',
+        });
+      }
+    }
+  }
+
   async runCoach(task: CoachTask, timeoutMs?: number): Promise<CoachReport> {
     const [response] = await this.runBatch([task], timeoutMs);
     if (response === undefined || response.kind !== 'coach') {
@@ -629,6 +663,42 @@ function failureToAppError(failure: WorkerFailure): AppError {
 
 let shared: WorkerPool | null = null;
 
+type WarmupState = 'idle' | 'pending' | 'ready' | 'failed';
+
+let warmupRequired = false;
+let warmupState: WarmupState = 'idle';
+let warmupError: string | undefined;
+let warmupPromise: Promise<void> | null = null;
+
+function dropClosedShared(): void {
+  if (shared?.stats().closed) {
+    shared = null;
+    // The finished warmup described the dead pool. Drop the promise so a later
+    // `beginSharedPoolWarmup` actually starts threads again instead of joining a resolved no-op.
+    warmupPromise = null;
+    if (warmupRequired && warmupState !== 'failed') warmupState = 'pending';
+  }
+}
+
+function resetWarmup(): void {
+  warmupRequired = false;
+  warmupState = 'idle';
+  warmupError = undefined;
+  warmupPromise = null;
+}
+
+/**
+ * The process-wide pool, or `null` when none exists or the memo still points at a closed one.
+ *
+ * Metrics scrape this rather than calling `getSharedPool`, so a Prometheus poll cannot be the
+ * thing that creates four threads. A closed leftover is treated as absent: `close()` without
+ * `closeSharedPool()` used to leave the memo pointing at a pool that refused every task.
+ */
+export function peekSharedPool(): WorkerPool | null {
+  dropClosedShared();
+  return shared;
+}
+
 /**
  * The pool every route module shares.
  *
@@ -636,11 +706,17 @@ let shared: WorkerPool | null = null;
  * client in `db.ts`, the first caller's configuration wins for the life of the process — which
  * is right for a server (it builds one app) and something a test building several apps has to
  * know about: `closeSharedPool()` drops the memo.
+ *
+ * A memo that still points at a *closed* pool is dropped too. Capturing the instance and calling
+ * `.close()` on it, or a hook that closed without going through `closeSharedPool`, used to make
+ * every later `getSharedPool` return the dead leftover and refuse work for the life of the
+ * process.
  */
 export function getSharedPool(
   config: AppConfig,
   hooks: { readonly onWarn?: (warning: PoolWarning) => void } = {},
 ): WorkerPool {
+  dropClosedShared();
   shared ??= new WorkerPool({
     size: config.monteCarloWorkers,
     timeoutMs: config.coachTimeoutMs,
@@ -649,9 +725,68 @@ export function getSharedPool(
   return shared;
 }
 
+/**
+ * What `/ready` should report about the calculation threads.
+ *
+ * `required` is false until something in this process has asked for a warmup — tests that
+ * never boot the production entry point, and so never call `beginSharedPoolWarmup`, keep the
+ * historical `/ready` body (database only). Once warmup is required, `/ready` is 503 until
+ * every thread has built its strength table, and 503 again if that failed.
+ */
+export function sharedPoolReadiness(): {
+  readonly required: boolean;
+  readonly ok: boolean;
+  readonly detail?: string;
+} {
+  if (!warmupRequired) return { required: false, ok: true };
+  if (warmupState === 'ready' && peekSharedPool() !== null) return { required: true, ok: true };
+  if (warmupState === 'failed') {
+    return {
+      required: true,
+      ok: false,
+      detail: warmupError ?? 'calculation workers failed to start',
+    };
+  }
+  return { required: true, ok: false, detail: 'calculation workers are still starting' };
+}
+
+/**
+ * Pre-warms the shared pool and makes `/ready` wait until it is usable.
+ *
+ * Safe to call more than once: a warmup already in flight is joined, a finished one is a
+ * no-op, a failed one can be retried. `server.ts` fires this before `listen` and does not
+ * await it — liveness starts answering immediately, readiness waits.
+ */
+export function beginSharedPoolWarmup(
+  config: AppConfig,
+  hooks: { readonly onWarn?: (warning: PoolWarning) => void } = {},
+): Promise<void> {
+  dropClosedShared();
+  warmupRequired = true;
+  if (warmupState === 'ready' && peekSharedPool() !== null) return Promise.resolve();
+  if (warmupPromise !== null) return warmupPromise;
+
+  warmupState = 'pending';
+  warmupError = undefined;
+  const pool = getSharedPool(config, hooks);
+  warmupPromise = pool
+    .warm()
+    .then(() => {
+      warmupState = 'ready';
+    })
+    .catch((error: unknown) => {
+      warmupState = 'failed';
+      warmupError = error instanceof Error ? error.message : 'calculation workers failed to start';
+      warmupPromise = null;
+      throw error;
+    });
+  return warmupPromise;
+}
+
 /** Closes and forgets the shared pool. Idempotent, so several `onClose` hooks may call it. */
 export async function closeSharedPool(): Promise<void> {
   const pool = shared;
   shared = null;
+  resetWarmup();
   if (pool !== null) await pool.close();
 }

@@ -99,9 +99,20 @@ import type { ResolvedSession } from '../auth/session.ts';
 import { DEFAULT_WORK_LIMITS, type EquityPlan, parseEquityRequest, type WorkLimits } from '../calc/parse.ts';
 import { getSql } from '../db.ts';
 import { AppError } from '../errors.ts';
+import {
+  bindCalculationPoolMetrics,
+  observeAnalysis,
+  workerTaskOutcomeFor,
+} from '../observability/telemetry.ts';
 import { recordQuizAttempt, recordScenarioAttempt, upsertLessonProgress } from '../repositories/progress.ts';
 import type { CoachTask, WireRange } from '../workers/equity-worker.ts';
-import { closeSharedPool, getSharedPool, type WorkerPool } from '../workers/pool.ts';
+import {
+  closeSharedPool,
+  getSharedPool,
+  type PoolWarning,
+  peekSharedPool,
+  type WorkerPool,
+} from '../workers/pool.ts';
 
 /**
  * Five minutes for the immutable half.
@@ -384,7 +395,11 @@ const reports = new Map<string, CoachReport>();
 async function reportFor(pool: WorkerPool, scenario: Scenario): Promise<CoachReport> {
   const cached = reports.get(scenario.id);
   if (cached !== undefined) return cached;
-  const report = await pool.runCoach(coachTaskFor(scenario));
+  // Only the uncached call is timed, which is the honest thing to measure: a memo hit is not an
+  // analysis, and counting it as a very fast one would make the histogram report a latency the
+  // worker pool never achieves. The observed count therefore tracks scenarios computed, not
+  // scenarios served.
+  const report = await observeAnalysis('coach', () => pool.runCoach(coachTaskFor(scenario)));
   if (report.assumptions.length === 0) {
     throw new AppError('internal_error', {
       logDetail: `scenario ${scenario.id} produced a report with no assumptions; refusing to serve it`,
@@ -622,7 +637,7 @@ async function equityFields(
       cause: error,
     });
   }
-  const result = await pool.runEquity(plan.request);
+  const result = await observeAnalysis('equity', () => pool.runEquity(plan.request));
   const hero = result.players[0];
   if (hero === undefined) {
     throw new AppError('internal_error', { logDetail: 'content equity produced no players' });
@@ -1092,14 +1107,37 @@ function requirePayableSizing(scenario: Scenario, body: ScenarioAttemptRequest):
 // route below is attached synchronously and the linter is right to reject the other shape.
 const contentRoutes: FastifyPluginAsync = (app) => {
   const config = app.appConfig;
+  const metrics = app.appMetrics;
   const limits: WorkLimits = { ...DEFAULT_WORK_LIMITS, maxSamplesPerRequest: config.monteCarloMaxSamples };
-  const pool = getSharedPool(config, {
-    onWarn: (warning) => {
+  const poolHooks = {
+    onWarn: (warning: PoolWarning) => {
       app.log.warn({ poolEvent: warning.event, poolDetail: warning.detail }, 'calculation pool');
+      // Mapped rather than labelled directly; see `workerTaskOutcomeFor`. Only one of these two
+      // `onWarn` closures is ever installed — `getSharedPool` memoises the pool, so the first
+      // module registered wins — which is why both of them count, and why the counter is the
+      // shared instance rather than anything module-scoped.
+      metrics.workerTasks.inc({ outcome: workerTaskOutcomeFor(warning.event) });
     },
-  });
+  };
+
+  /**
+   * The pool, looked up per request rather than held from registration.
+   *
+   * `closeSharedPool()` closes the process-wide pool AND drops the memo, so the next
+   * `getSharedPool` builds a fresh one. A module that captured the instance at registration keeps
+   * a reference to the CLOSED one, and every task it submits afterwards is refused with
+   * `service_unavailable` for the life of the process — for one Fastify instance closing while
+   * another still serves, which is what the rate-limit suites do when they build a second app.
+   * `routes/hands.ts` hit it first; this module had the same bug.
+   *
+   * Asking the memo each time costs a property read and cannot go stale.
+   */
+  const currentPool = (): WorkerPool => getSharedPool(config, poolHooks);
   // Idempotent, and registered here as well as in `routes/calc.ts` so that whichever modules a
-  // deployment happens to register, the threads still go away with the instance.
+  // deployment happens to register, the gauges and the threads both exist. `bindCalculationPoolMetrics`
+  // is a no-op for a pool already bound to these metrics, so registering both modules does not
+  // install the collector twice.
+  bindCalculationPoolMetrics(peekSharedPool, metrics);
   app.addHook('onClose', async () => {
     await closeSharedPool();
   });
@@ -1156,7 +1194,7 @@ const contentRoutes: FastifyPluginAsync = (app) => {
     if (scenario === null) {
       throw new AppError('content_not_found', { logDetail: `no scenario ${request.params.id}` });
     }
-    return sendImmutable(request, reply, await scenarioPayload(pool, scenario));
+    return sendImmutable(request, reply, await scenarioPayload(currentPool(), scenario));
   });
 
   /** The whole glossary. Identical for everybody. */
@@ -1246,7 +1284,7 @@ const contentRoutes: FastifyPluginAsync = (app) => {
         throw new AppError('content_not_found', { logDetail: `no quiz ${request.params.id}` });
       }
       const question = questionIn(quiz, request.body.questionId);
-      const grade = await gradeQuestion(question, request.body.answer, { pool, limits });
+      const grade = await gradeQuestion(question, request.body.answer, { pool: currentPool(), limits });
 
       const userId = callerUserId(request);
       if (userId === null) {
@@ -1295,7 +1333,7 @@ const contentRoutes: FastifyPluginAsync = (app) => {
       // Before anything is judged: a size hero could not have paid is not a decision to grade.
       // See `requirePayableSizing` for the runtime measurement that made this necessary.
       requirePayableSizing(scenario, request.body);
-      const analysis = await reportFor(pool, scenario);
+      const analysis = await reportFor(currentPool(), scenario);
       const consistency = consistencyOf(analysis, request.body.action, request.body.to, scenario.bigBlind);
 
       const userId = callerUserId(request);

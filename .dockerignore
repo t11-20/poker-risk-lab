@@ -1,10 +1,78 @@
+# ---------------------------------------------------------------------------
+# What never enters the Docker build context.
+#
+# Both Dockerfiles do `COPY . .` into their `source` stage — see the header of
+# Dockerfile.api for why a hand-written per-package COPY list was rejected — so
+# this file, and only this file, decides what the build can see. Everything below
+# is either useless in an image (host build output), harmful in an image (secrets,
+# deployment material) or embarrassing in an image (repository prose).
+#
+# ## Patterns are matched against the WHOLE relative path
+#
+# BuildKit matches each pattern against the path relative to the context root, so
+# a pattern with no separator in it matches only files at that root. `*.md` is one
+# path segment and matched `README.md` alone; `apps/web/AGENTS.md` and
+# `apps/web/CLAUDE.md` sailed straight past it into the context, past
+# Dockerfile.web's prune (a deny list of source directories, which does not name
+# markdown), and into the published web image through
+# `COPY --from=build /app/apps/web /app/apps/web`. The repository's agent
+# instructions shipped to anyone who pulled it.
+#
+# Every rule here that must hold at depth therefore carries a `**/` twin. The
+# unqualified spelling is kept beside it rather than replaced: `**/x` is the wider
+# claim, and keeping both makes it obvious that the root case was considered.
+#
+# Verify a change to this file the way the defect above was found, which needs no
+# application build:
+#
+#     printf 'FROM busybox:latest\nWORKDIR /ctx\nCOPY . .\n' > /tmp/ctx.Dockerfile
+#     docker build -q -f /tmp/ctx.Dockerfile -t prl-ctxprobe .
+#     docker run --rm --entrypoint sh prl-ctxprobe -c 'find /ctx -name "*.md" -o -name ".env*"'
+#
+# `pnpm run release:artifacts` makes the same check against the BUILT image on
+# every release build, which is the check that matters: this file could be right
+# and a Dockerfile could still copy something in.
+#
+# ## What is NOT excluded, on purpose
+#
+# `scripts/`, `.github/`, `db/`, tsconfigs and the test trees all still enter the
+# context and are removed inside the images by the prune stages. That duplication
+# is deliberate: the prunes are deny lists whose worst failure is a fat image,
+# while an exclusion here is invisible at build time and its worst failure is a
+# `COPY` that silently copies nothing. Only the things that must never be in a
+# layer at all are listed here.
+# ---------------------------------------------------------------------------
+
+# Host build output and installed dependencies. Every stage installs from the
+# lockfile; a macOS node_modules copied into a Linux image is worse than useless.
 **/node_modules
 **/dist
 **/.next
 **/coverage
 **/*.tsbuildinfo
+
+# Version-control history, which carries every secret anyone ever committed and
+# then removed.
 .git
+
+# Secrets. `.env` and `.env.*` are one path segment each and so covered only the
+# repository root; a developer's `apps/api/.env` would have entered the context
+# and, through the wholesale `COPY /app/apps/web`, shipped. Same defect as the
+# `*.md` entry below, one directory deeper.
 .env
 .env.*
+**/.env
+**/.env.*
+
+# Deployment inputs. `scripts/staging.mjs` writes a local CA, a leaf certificate,
+# its private key and an environment file holding the session secret under
+# deploy/staging/. None of that is build input and all of it is credential
+# material; deploy/staging/.gitignore keeps it out of git, and this keeps it out
+# of every image layer.
+deploy
+
+# Prose, including the agent instruction files this rule exists for. `docs` is a
+# root-level directory; the two markdown patterns are the root and the depth case.
 docs
 *.md
+**/*.md

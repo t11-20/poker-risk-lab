@@ -72,6 +72,36 @@
  * report. The budget is a backstop rather than a routine cutoff — with the default cap it should
  * never fire — because a learner re-reading a hand must see the same numbers every time, and a
  * time-based cutoff makes the output depend on how busy the machine was.
+ *
+ * ## WHERE THE WORK HAPPENS, AND WHY THIS FILE IS SPLIT IN TWO
+ *
+ * Bounded is not the same as cheap, and this was measured rather than assumed. Reviewing one
+ * three-handed showdown hand on the reference machine (Node 24, Apple silicon):
+ *
+ *   - everything except the Coach reports — parsing the jsonb, the replay walk, verifying the
+ *     reveal's Merkle proofs, assembling the response: **0.2 ms**;
+ *   - the four Coach reports that hand earns: **156 ms**, of which the single flop report is
+ *     133 ms, because the outs breakdown re-runs an equity calculation per candidate card.
+ *
+ * So 99.9% of a review is Monte Carlo, and until this change all of it ran on the event loop. A
+ * load test at six concurrent players measured action p99 at 948 ms with Hand Review in the
+ * journey and 29 ms with `--no-review` on the same warm process; the process could not get back
+ * to its own event loop, and every turn clock in it stopped for as long as somebody's review took.
+ *
+ * The fix is not to compute less. It is to compute it on a thread, which is what
+ * `workers/pool.ts` exists for and what `POST /math/coach` has always done. That splits this
+ * module in two along one line:
+ *
+ *   - **deciding** what to analyse — whose seat it was, whether the replay reconstructs, whether
+ *     the pot agrees, which street, how many opponents — needs the replay, is microseconds, and
+ *     stays here (`planAnalysis`);
+ *   - **computing** the report needs only a description of the spot, is hundreds of milliseconds,
+ *     and leaves (`coachTaskFor`, then `ReviewAnalyser`).
+ *
+ * `buildHandReview` still runs both halves in this process and is still what the fixture
+ * generator and the tests use; `buildHandReviewOn` is what the API serves. The hidden-information
+ * rules are unchanged by the move: a task carries hero's own two cards, the public board and the
+ * chip counts, and a calculator thread holds no database handle, no logger and no `HandState`.
  */
 
 import type {
@@ -103,8 +133,23 @@ import {
   parseCard,
   verifyDeckReveal,
 } from '@prl/poker-engine';
-import type { Street as BettingStreetName, ParsedRange } from '@prl/poker-math';
+import type { Street as BettingStreetName, CoachAction, ParsedRange } from '@prl/poker-math';
 import { buildCoachReport, deriveLegalActions, parseRange } from '@prl/poker-math';
+import type { CoachTask } from '../workers/equity-worker.ts';
+
+/**
+ * Where one decision's Coach report is computed.
+ *
+ * A function rather than a `WorkerPool`, so this module keeps its promise that nothing in it talks
+ * to a database, a pool or a Fastify instance — `routes/hands.ts` passes `(task) => pool.runCoach(task)`
+ * and a test passes whatever it needs to provoke a refusal. `import type` above is what keeps the
+ * protocol here and the calculator out: `equity-worker.ts` throws on sight if it is ever loaded on
+ * the main thread, and a type-only import emits nothing at all.
+ *
+ * It may reject, and every rejection the pool can produce is handled at the call site rather than
+ * propagated: see `failed`.
+ */
+export type ReviewAnalyser = (task: CoachTask) => Promise<CoachReport>;
 
 // ---------------------------------------------------------------------------
 // The persisted rows this module reads
@@ -894,6 +939,7 @@ function reviewRangeAssumption(opponentCount: number): string {
   );
 }
 
+/** One decision the review has decided to analyse, and everything that analysis needs. */
 interface AnalysisRequest {
   readonly handId: string;
   readonly sequence: number;
@@ -904,6 +950,96 @@ interface AnalysisRequest {
   readonly samples: number;
 }
 
+/**
+ * The legal set for a replayed decision.
+ *
+ * A review replays stored rows; it never holds the `HandState` those rows came from, so the
+ * engine's own `legalActions` is not available and the set is derived from the situation. This is
+ * the surface where the derived rule bites most often: `situation` counts an all-in opponent as a
+ * live opponent with a stack of 0 — correctly, they can still win the pot — and a review that
+ * offered "raise" against a table of all-in opponents would be telling a learner they missed a
+ * line the server would have rejected on the night.
+ *
+ * One function rather than two call sites, because the derived set now has to be identical in the
+ * task a thread runs and in the report this module computes for itself, and "identical" is not a
+ * property two copies of four lines keep for long.
+ */
+function legalActionsFor(situation: Situation): readonly CoachAction[] {
+  return deriveLegalActions({
+    toCall: situation.toCall,
+    heroCommittedThisStreet: situation.committedThisStreet,
+    heroStack: situation.heroStack,
+    opponentStacks: situation.opponentStacks,
+  });
+}
+
+/**
+ * One decision's analysis as a task for a calculator thread.
+ *
+ * The opponents are sent as RANGE DESCRIPTORS — the notation string, not its expansion — because
+ * that is what the wire protocol carries and because `equity-worker.ts` expands it with exactly
+ * the same call this module would have made: `parseRange(notation, blockers)` against hero's cards
+ * and the board. `REVIEW_OPPONENT_RANGE` is written-out notation rather than a top percentage
+ * precisely so that expanding it is microseconds wherever it happens.
+ *
+ * Nothing that crosses this boundary is anything the viewer may not already see: their own two
+ * cards, the public board as of that street, and the chip counts. No deck, no salt, no other
+ * seat's cards — the review's own hole-card rule (`toReviewSeat`) has already been applied to the
+ * rows this is built from, and a task carries no seat but hero's.
+ */
+function coachTaskFor(request: AnalysisRequest): CoachTask {
+  const { situation } = request;
+  return {
+    kind: 'coach',
+    spec: {
+      heroLabel: 'you',
+      heroCards: request.heroCards,
+      board: request.board,
+      opponents: situation.opponentStacks.map((_stack, index) => ({
+        kind: 'notation',
+        label: `opponent ${index + 1}`,
+        notation: REVIEW_OPPONENT_RANGE,
+      })),
+    },
+    street: situation.street,
+    pot: situation.potBefore,
+    toCall: situation.toCall,
+    heroCommittedThisStreet: situation.committedThisStreet,
+    heroStack: situation.heroStack,
+    opponentStacks: situation.opponentStacks,
+    bigBlind: request.bigBlind,
+    legalActions: legalActionsFor(situation),
+    samples: request.samples,
+    seed: seedFor(request.handId, request.sequence),
+  };
+}
+
+/**
+ * The review's own assumption, appended to whatever the Coach reported.
+ *
+ * Appended, never replaced: `assumptions` is the list of everything the numbers depend on, and the
+ * review's choice of opponent range is one of those things. Adding to it can only make the report
+ * more honest, which is the direction this list is allowed to move in.
+ *
+ * Applied here rather than inside the analysis so that a report computed on a thread and a report
+ * computed in this process end up carrying the same list. The thread knows nothing about reviews.
+ */
+function withReviewAssumption(report: CoachReport, opponentCount: number): CoachReport {
+  return { ...report, assumptions: [...report.assumptions, reviewRangeAssumption(opponentCount)] };
+}
+
+/**
+ * Runs one decision's analysis on the calling thread.
+ *
+ * Kept, and kept honest, for the same reason `coachForView` is in `ws/router.ts`: it is the
+ * reference implementation. `buildHandReview` — the entry point `scripts/regenerate-web-fixtures.mjs`
+ * and five test files use — runs it directly, and `test/event-loop-budget.test.ts` asserts that a
+ * review built through a real worker pool is deep-equal to one built through this function. So the
+ * two constructions cannot drift without a test saying so.
+ *
+ * It is deliberately NOT what `GET /hands/:handId` calls. A flop analysis here measured 133 ms on
+ * the reference machine, and eight of them is the event loop stopped for most of a second.
+ */
 function analyse(request: AnalysisRequest): CoachReport {
   const { situation } = request;
   const blockers = [...request.heroCards, ...request.board];
@@ -924,27 +1060,12 @@ function analyse(request: AnalysisRequest): CoachReport {
     heroStack: situation.heroStack,
     opponentStacks: situation.opponentStacks,
     bigBlind: request.bigBlind,
-    // A review replays stored rows; it never holds the `HandState` those rows came from,
-    // so the engine's own `legalActions` is not available and the set is derived from the
-    // situation. This is the surface where the derived rule bites most often: `situation`
-    // counts an all-in opponent as a live opponent with a stack of 0 — correctly, they can
-    // still win the pot — and a review that offered "raise" against a table of all-in
-    // opponents would be telling a learner they missed a line the server would have
-    // rejected on the night.
-    legalActions: deriveLegalActions({
-      toCall: situation.toCall,
-      heroCommittedThisStreet: situation.committedThisStreet,
-      heroStack: situation.heroStack,
-      opponentStacks: situation.opponentStacks,
-    }),
+    legalActions: legalActionsFor(situation),
     samples: request.samples,
     seed: seedFor(request.handId, request.sequence),
   });
 
-  // Appended, never replaced: `assumptions` is the list of everything the numbers depend on, and
-  // the review's choice of opponent range is one of those things. Adding to it can only make the
-  // report more honest, which is the direction this list is allowed to move in.
-  return { ...report, assumptions: [...report.assumptions, reviewRangeAssumption(opponents.length)] };
+  return withReviewAssumption(report, opponents.length);
 }
 
 // ---------------------------------------------------------------------------
@@ -979,14 +1100,27 @@ interface AnalysisBudget {
 }
 
 /**
- * Decides whether this decision gets a report, and produces one if so.
+ * Decides whether this decision gets a report, and describes the analysis if so.
  *
  * Every `null` here is a deliberate refusal, and each has its own recorded reason: not the
  * viewer's seat, no cards the server may use, a street that is not a decision point, a board that
  * does not match the street, an opponent count the Coach does not handle, a replay that disagreed
  * with the persisted pot, or a limit reached.
+ *
+ * ## Why this decides and does not compute
+ *
+ * It used to call `analyse` itself, which is what made the whole walk synchronous and made
+ * `GET /hands/:handId` the largest single contributor to event-loop saturation in the process.
+ * Deciding is microseconds and needs the replay, which only exists during the walk; computing is
+ * hundreds of milliseconds and needs a thread. Splitting them at exactly this line is what lets
+ * the same rules serve both, with no second copy of them to keep in step.
+ *
+ * The cap is spent HERE, when the analysis is planned, so the "first eight of the viewer's
+ * decisions" rule is a property of the walk rather than of how fast the threads answered. The
+ * wall-clock deadline is checked at the other end (`runAnalysis`), because it is time that has to
+ * have passed before it can be observed.
  */
-function analysisFor(
+function planAnalysis(
   action: HandActionRow,
   context: {
     readonly hand: HandRow;
@@ -998,7 +1132,7 @@ function analysisFor(
     readonly persistedPotBefore: number;
     readonly budget: AnalysisBudget;
   },
-): CoachReport | null {
+): AnalysisRequest | null {
   const { budget, situation } = context;
   // Not the viewer's seat: no analysis, and no recorded reason either, because this is the rule
   // rather than a failure. It holds even for a seat that showed down and whose cards are therefore
@@ -1029,24 +1163,111 @@ function analysisFor(
     );
   }
   if (budget.remaining <= 0) return skip('the per-review analysis cap was reached');
-  if (budget.now() >= budget.deadline) return skip('the analysis budget was exhausted');
 
   budget.remaining -= 1;
+  return {
+    handId: context.hand.id,
+    sequence: action.sequence,
+    heroCards: context.heroCards,
+    // The board as it stood on that street, never the final one. See `boardForStreet`.
+    board: context.board.slice(0, expectedBoard),
+    situation,
+    bigBlind: context.bigBlind,
+    samples: budget.samples,
+  };
+}
+
+/**
+ * The two things both runners do around the analysis itself, so neither can forget one.
+ *
+ * `admits` is the wall-clock backstop, checked immediately before the work rather than during the
+ * walk: with the default cap it should never fire (see the header), and when it does the review
+ * degrades to `analysis: null` for the rest of the hand instead of running past the request's
+ * budget.
+ *
+ * `failed` turns a thrown analysis into one null decision rather than a failed review — including
+ * the three an off-thread run can throw that an in-process one cannot: a full queue
+ * (`service_unavailable`), an overrun (`computation_timeout`) and a dead thread. That is the same
+ * judgement the budget makes: a review is a page of decisions, and losing one figure on it is
+ * enormously better than losing the page. The reason reaches the caller's log; the client is
+ * simply told there is no analysis for this decision.
+ */
+function admits(request: AnalysisRequest, budget: AnalysisBudget): boolean {
+  if (budget.now() < budget.deadline) return true;
+  budget.onSkipped({ sequence: request.sequence, reason: 'the analysis budget was exhausted' });
+  return false;
+}
+
+function failed(request: AnalysisRequest, budget: AnalysisBudget, error: unknown): null {
+  budget.onSkipped({
+    sequence: request.sequence,
+    reason: `the analysis threw: ${error instanceof Error ? error.name : 'unknown error'}`,
+  });
+  return null;
+}
+
+/** Runs a planned analysis on this thread. The fixture generator's path, and the tests'. */
+function runAnalysis(request: AnalysisRequest, budget: AnalysisBudget): CoachReport | null {
+  if (!admits(request, budget)) return null;
   try {
-    return analyse({
-      handId: context.hand.id,
-      sequence: action.sequence,
-      heroCards: context.heroCards,
-      board: context.board.slice(0, expectedBoard),
-      situation,
-      bigBlind: context.bigBlind,
-      samples: budget.samples,
-    });
+    return analyse(request);
   } catch (error) {
-    // A Coach report that cannot be produced is one null decision, not a failed review. The reason
-    // goes to the caller's log; the client is simply told there is no analysis for this decision.
-    return skip(`the analysis threw: ${error instanceof Error ? error.name : 'unknown error'}`);
+    return failed(request, budget, error);
   }
+}
+
+/**
+ * Runs a planned analysis somewhere else. The server's path.
+ *
+ * The report crossing back is the worker's, so the review's own assumption is appended here — the
+ * calculator thread knows nothing about reviews and must not have to.
+ */
+async function runAnalysisOn(
+  request: AnalysisRequest,
+  budget: AnalysisBudget,
+  analyseOffThread: ReviewAnalyser,
+): Promise<CoachReport | null> {
+  if (!admits(request, budget)) return null;
+  try {
+    const report = await analyseOffThread(coachTaskFor(request));
+    return withReviewAssumption(report, request.situation.opponentStacks.length);
+  } catch (error) {
+    return failed(request, budget, error);
+  }
+}
+
+/**
+ * Runs every planned analysis off this thread, ONE AT A TIME, and collects them by sequence.
+ *
+ * Sequential rather than `Promise.all`, and both halves of that matter:
+ *
+ * 1. The pool's queue is bounded at three slots per thread and `runBatch` admits a whole set or
+ *    none of it, so a review submitting eight tasks at once would be refused outright on a
+ *    four-thread pool with anything else already queued — and refused as a whole, losing every
+ *    figure on the page rather than one of them.
+ * 2. One review would otherwise occupy every thread in the process for the length of its slowest
+ *    analysis. The point of moving this work was to stop one reader's page costing everybody else
+ *    their turn clock; handing it every thread would swap one queue for another.
+ *
+ * The cost, stated: a review's wall clock is the SUM of its analyses plus queueing, which is no
+ * better than the old inline version and is slightly worse under load. That is the trade made on
+ * purpose — the number that got worse is one reader's page load, and the number it bought is
+ * every other player's action latency.
+ *
+ * The deadline is re-read before each one (`admits`), so a set that has already spent the
+ * request's budget stops rather than queueing more work nobody will wait for.
+ */
+async function runPlannedAnalyses(
+  planned: readonly AnalysisRequest[],
+  budget: AnalysisBudget,
+  analyseOffThread: ReviewAnalyser,
+): Promise<ReadonlyMap<number, CoachReport>> {
+  const reports = new Map<number, CoachReport>();
+  for (const request of planned) {
+    const report = await runAnalysisOn(request, budget, analyseOffThread);
+    if (report !== null) reports.set(request.sequence, report);
+  }
+  return reports;
 }
 
 interface DecisionContext {
@@ -1060,16 +1281,32 @@ interface DecisionContext {
 }
 
 /**
- * Walks the action log in sequence order, reporting each action and analysing the viewer's own.
+ * One decision as it will be reported, plus the analysis it is owed.
+ *
+ * `decision.analysis` is null in a plan and stays null unless the analysis produces a report.
+ * Carrying the two side by side — rather than a second list keyed by sequence — is what makes
+ * "every decision is reported, some of them with a report attached" a shape the type states.
+ */
+interface PlannedDecision {
+  readonly decision: HandReviewDecision;
+  readonly request: AnalysisRequest | null;
+}
+
+/**
+ * Walks the action log in sequence order, reporting each action and planning the viewer's own.
  *
  * The replay advances alongside the walk: a street change sweeps the previous street's bets into
  * the middle, the situation is read *before* the action is applied, and then the action is applied.
  * Reading before applying is the whole point — a decision is described by what the player faced,
  * not by what they left behind.
+ *
+ * Measured cost of this walk on the reference machine, over a three-handed showdown hand: 0.2 ms,
+ * against 156 ms for the same hand's four Coach reports. That ratio is why the walk stays on the
+ * calling thread and only the reports leave it.
  */
-function buildDecisions(actions: readonly HandActionRow[], context: DecisionContext): HandReviewDecision[] {
+function planDecisions(actions: readonly HandActionRow[], context: DecisionContext): PlannedDecision[] {
   const { state } = context;
-  const decisions: HandReviewDecision[] = [];
+  const planned: PlannedDecision[] = [];
   let previousPotAfter: number | null = null;
 
   for (const action of actions) {
@@ -1079,16 +1316,19 @@ function buildDecisions(actions: readonly HandActionRow[], context: DecisionCont
     // authoritative figure, and the replay is checked against it before anything is analysed.
     const persistedPotBefore = previousPotAfter ?? action.pot_after - action.amount_paid;
 
-    decisions.push({
-      sequence: action.sequence,
-      street: action.street,
-      seat: action.seat,
-      action: action.action_type,
-      to: action.action_to,
-      amountPaid: action.amount_paid,
-      potBefore: persistedPotBefore,
-      wasAutomatic: action.was_automatic,
-      analysis: analysisFor(action, {
+    planned.push({
+      decision: {
+        sequence: action.sequence,
+        street: action.street,
+        seat: action.seat,
+        action: action.action_type,
+        to: action.action_to,
+        amountPaid: action.amount_paid,
+        potBefore: persistedPotBefore,
+        wasAutomatic: action.was_automatic,
+        analysis: null,
+      },
+      request: planAnalysis(action, {
         hand: context.hand,
         viewerSeat: context.viewer === null ? null : context.viewer.seat,
         heroCards: context.viewer === null ? null : context.viewer.visibleCards,
@@ -1104,7 +1344,12 @@ function buildDecisions(actions: readonly HandActionRow[], context: DecisionCont
     previousPotAfter = action.pot_after;
   }
 
-  return decisions;
+  return planned;
+}
+
+/** A planned decision with whatever its analysis produced. `null` leaves the decision as it was. */
+function withAnalysis(planned: PlannedDecision, report: CoachReport | null): HandReviewDecision {
+  return report === null ? planned.decision : { ...planned.decision, analysis: report };
 }
 
 // ---------------------------------------------------------------------------
@@ -1143,18 +1388,25 @@ export interface ComparisonDecisions {
  * Exported for `build-comparison.ts` and for nothing else. The replay itself stays private: every
  * step of it is only valid in the order this function walks it, and a second walk somewhere else
  * would be a second reconstruction to keep correct.
+ *
+ * Asynchronous because the analyses are, and for no other reason: the walk itself is the same
+ * synchronous reconstruction it always was, and every `await` in it is a Coach report being
+ * computed on a calculator thread. A comparison prices the actions that were NOT taken as well as
+ * the one that was, so it does strictly more of that work than a hand review does.
  */
-export function buildComparisonDecisions(input: {
+export async function buildComparisonDecisions(input: {
   readonly hand: HandRow;
   readonly seats: readonly HandSeatRow[];
   readonly actions: readonly HandActionRow[];
   readonly viewerUserId: string;
   readonly budgetMs: number;
+  /** Where a decision's Coach report is computed. See `ReviewAnalyser`. */
+  readonly analyse: ReviewAnalyser;
   readonly maxAnalysedDecisions?: number;
   readonly equitySamples?: number;
   readonly now?: () => number;
   readonly onAnalysisSkipped?: (detail: SkippedAnalysis) => void;
-}): ComparisonDecisions | null {
+}): Promise<ComparisonDecisions | null> {
   const { hand } = input;
   const config = configFromJson(hand.config);
   const parsedBoard = cardsFromJson(hand.board);
@@ -1181,7 +1433,7 @@ export function buildComparisonDecisions(input: {
   };
 
   const decisions: ComparisonDecisions['decisions'][number][] = [];
-  const analysisBySequence = new Map<number, CoachReport>();
+  const planned: AnalysisRequest[] = [];
   let previousPotAfter: number | null = null;
 
   for (const row of actions) {
@@ -1192,7 +1444,10 @@ export function buildComparisonDecisions(input: {
 
     if (situation === null || action === null) return null;
 
-    const analysis = analysisFor(row, {
+    // Planned during the walk, run after it. `situationBefore` returns a snapshot rather than a
+    // window onto the mutable replay, so a request stays valid once the walk has moved past it —
+    // which is what makes deferring the arithmetic safe at all.
+    const request = planAnalysis(row, {
       hand,
       viewerSeat: viewer === null ? null : viewer.seat,
       heroCards: viewer === null ? null : viewer.visibleCards,
@@ -1202,7 +1457,7 @@ export function buildComparisonDecisions(input: {
       persistedPotBefore,
       budget,
     });
-    if (analysis !== null) analysisBySequence.set(row.sequence, analysis);
+    if (request !== null) planned.push(request);
 
     decisions.push({
       sequence: row.sequence,
@@ -1228,6 +1483,7 @@ export function buildComparisonDecisions(input: {
     previousPotAfter = row.pot_after;
   }
 
+  const analysisBySequence = await runPlannedAnalyses(planned, budget, input.analyse);
   return { board: parsedBoard.cards, decisions, analysisBySequence };
 }
 
@@ -1390,16 +1646,23 @@ function seatStatusFor(seat: ReviewSeat, tallied: ReplaySeat | undefined): SeatS
 }
 
 /**
- * Builds the whole review.
+ * Everything a review is, except the arithmetic.
  *
  * The response is assembled member by member from the values above. Nothing is spread in from a
  * database row, so a column that gains a field cannot carry it to a client — the same fail-closed
  * construction `redactFor` uses in the engine, for the same reason.
+ *
+ * Both entry points below go through this, so a review served by the API and a review built by the
+ * fixture generator differ in exactly one thing: where the Coach reports were computed.
  */
-export function buildHandReview(
-  input: BuildHandReviewInput,
-  options: BuildHandReviewOptions = {},
-): HandReviewResponse {
+interface PlannedReview {
+  readonly planned: readonly PlannedDecision[];
+  readonly budget: AnalysisBudget;
+  /** The response with every `analysis` still null; `assemble` fills them in. */
+  readonly assemble: (decisions: readonly HandReviewDecision[]) => HandReviewResponse;
+}
+
+function planHandReview(input: BuildHandReviewInput, options: BuildHandReviewOptions): PlannedReview {
   const { hand } = input;
   const now = options.now ?? (() => performance.now());
   const budget: AnalysisBudget = {
@@ -1418,7 +1681,7 @@ export function buildHandReview(
   // actually posted, and it has to be the same first action the walk below starts from.
   const actions = [...input.actions].sort((a, b) => a.sequence - b.sequence);
 
-  const decisions = buildDecisions(actions, {
+  const planned = planDecisions(actions, {
     hand,
     viewer,
     board: board === null ? [] : board.cards,
@@ -1429,16 +1692,67 @@ export function buildHandReview(
 
   const revealCheck = checkReveal(hand);
   return {
-    hand: toHandSummary({
-      hand,
-      heroNet: viewer === null ? null : viewer.netResult,
-      maxPotAfter: input.maxPotAfter,
+    planned,
+    budget,
+    assemble: (decisions) => ({
+      hand: toHandSummary({
+        hand,
+        heroNet: viewer === null ? null : viewer.netResult,
+        maxPotAfter: input.maxPotAfter,
+      }),
+      commitmentRoot: hand.commitment_root,
+      commitmentContext: hand.commitment_context,
+      reveal: revealCheck.reveal,
+      verification: revealCheck.verification,
+      seats: seats.map((seat) => toResponseSeat(seat)),
+      decisions: [...decisions],
     }),
-    commitmentRoot: hand.commitment_root,
-    commitmentContext: hand.commitment_context,
-    reveal: revealCheck.reveal,
-    verification: revealCheck.verification,
-    seats: seats.map((seat) => toResponseSeat(seat)),
-    decisions,
   };
+}
+
+/**
+ * Builds the whole review, computing every analysis on the calling thread.
+ *
+ * This is the reference construction and the offline one. `scripts/regenerate-web-fixtures.mjs`
+ * uses it to produce the fixtures `apps/web` renders, and five API test files use it to state what
+ * a review contains without a pool or a thread anywhere in the picture.
+ *
+ * It is NOT what the API serves. `GET /hands/:handId` calls `buildHandReviewOn` instead, because
+ * the analyses in here measured 156 ms for one three-handed hand on the reference machine and
+ * `test/event-loop-budget.test.ts` holds the route to a budget far below that. The two are
+ * asserted deep-equal in that same test, which is what makes this function's numbers the served
+ * numbers rather than merely similar to them.
+ */
+export function buildHandReview(
+  input: BuildHandReviewInput,
+  options: BuildHandReviewOptions = {},
+): HandReviewResponse {
+  const review = planHandReview(input, options);
+  return review.assemble(
+    review.planned.map((entry) =>
+      withAnalysis(entry, entry.request === null ? null : runAnalysis(entry.request, review.budget)),
+    ),
+  );
+}
+
+/**
+ * Builds the whole review, computing every analysis somewhere else.
+ *
+ * What `GET /hands/:handId` serves. The walk, the replay and the reveal check all still happen
+ * here — they are 0.2 ms and they need the rows — and only the Coach reports leave, one at a time
+ * (see `runPlannedAnalyses`).
+ */
+export async function buildHandReviewOn(
+  input: BuildHandReviewInput,
+  options: BuildHandReviewOptions,
+  analyseOffThread: ReviewAnalyser,
+): Promise<HandReviewResponse> {
+  const review = planHandReview(input, options);
+  const requests = review.planned.flatMap((entry) => (entry.request === null ? [] : [entry.request]));
+  const reports = await runPlannedAnalyses(requests, review.budget, analyseOffThread);
+  return review.assemble(
+    review.planned.map((entry) =>
+      withAnalysis(entry, entry.request === null ? null : (reports.get(entry.request.sequence) ?? null)),
+    ),
+  );
 }

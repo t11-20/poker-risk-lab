@@ -1,0 +1,78 @@
+# Poker Risk Lab — the nightly encrypted backup.
+#
+# Triggered by prl-backup.timer. Installed to /etc/systemd/system/prl-backup.service.
+# See deploy/backup/README.md for why this is a systemd unit and not a compose sidecar,
+# and docs/production/backup-restore.md for the procedure it implements.
+
+[Unit]
+Description=Poker Risk Lab encrypted PostgreSQL backup
+Documentation=file:///opt/poker-risk-lab/docs/production/backup-restore.md
+# The database is reachable over the network in every deployment shape this project
+# supports (a managed instance, or a container on a private network), so a backup that
+# starts before the network is configured fails for a reason that has nothing to do with
+# backups.
+After=network-online.target
+Wants=network-online.target
+# Point this at a unit that tells a human. Without it, a backup that has been failing for
+# six weeks looks exactly like one that has been succeeding: silence.
+# OnFailure=prl-backup-alert.service
+
+[Service]
+Type=oneshot
+# A dedicated unprivileged account. It is NOT the account the API runs as: the backup
+# identity needs to read every table and to create a database (for `verify --deep`), which
+# is strictly more authority than the request path has, and docs/RUNBOOK.md §5 exists to
+# keep those apart.
+User=prl-backup
+Group=prl-backup
+WorkingDirectory=/opt/poker-risk-lab
+# Holds DATABASE_URL, PRL_BACKUP_KEY and PRL_BACKUP_DIR. Must be 0600 and owned by root:
+# it is the file that decides whether the archives are readable, and systemd reads it as
+# root before dropping to User=.
+EnvironmentFile=/etc/poker-risk-lab/backup.env
+ExecStart=/usr/bin/node scripts/backup.mjs create
+
+# An hour is far longer than a backup of this database needs (measured: 12.2s for a 1.26 GB
+# database, docs/production/backup-restore.md). It is a ceiling on a hung connection or a
+# stalled network mount, not a target — without it a wedged pg_dump holds the unit
+# "activating" forever and every subsequent trigger is skipped as already-running.
+TimeoutStartSec=3600
+
+# Files 0600 and directories 0700, regardless of what the host's default umask is. An
+# encrypted archive that is world-readable is still an archive somebody can walk away with
+# and grind on offline.
+UMask=0077
+
+# --- Sandbox ---------------------------------------------------------------
+# The backup process reads a database over a socket and writes files into one directory.
+# Everything else is closed off, so a compromise of pg_dump or of this script does not
+# become a compromise of the host.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# ProtectSystem=strict makes the whole filesystem read-only; this is the one hole, and it
+# must match PRL_BACKUP_DIR in backup.env.
+ReadWritePaths=/var/backups/poker-risk-lab
+# DELIBERATELY ABSENT: MemoryDenyWriteExecute=yes. It is a good hardening directive and it
+# is incompatible with V8, which allocates writable-then-executable pages for JIT code.
+# Setting it makes node fail at startup with a SIGSEGV or a bus error and no explanation,
+# which is a spectacularly confusing way for a backup to stop happening.
+
+[Install]
+# No WantedBy: this unit is started by its timer, never enabled directly. `systemctl enable
+# prl-backup.service` would attempt a backup at every boot, which is not what the schedule
+# says and is a surprising amount of I/O during a recovery.

@@ -170,6 +170,7 @@ async function harness(
     registry,
     clock,
     validate: compileFrameValidator(app),
+    config: app.appConfig,
     nextRequestId: () => 'req-fixed',
   });
   return { app, router, registry, clock, roomId };
@@ -202,6 +203,31 @@ function connect(
 /** Lets the table's queued mutations settle. */
 async function settle(): Promise<void> {
   for (let turn = 0; turn < 6; turn += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * Waits for a frame of `type` to arrive, rather than for a fixed number of macrotask turns.
+ *
+ * `settle()` is right for everything the router answers synchronously, which was once everything.
+ * The Coach is no longer one of those: it is submitted to the worker pool (`workers/pool.ts`), so
+ * the reply arrives after a thread has spawned, imported the engine and run a Monte Carlo — tens
+ * of milliseconds at best, seconds on a cold thread, and never within six `setImmediate` turns.
+ *
+ * Polling for the frame rather than sleeping a fixed time is what keeps this honest in both
+ * directions: it returns the instant the frame lands, so the suite does not get slower, and it
+ * fails with a NAMED timeout rather than a confusing "no frame arrived" if the reply never comes.
+ * The deadline is generous because the first analysis in a process pays for the preflop strength
+ * table on that thread; a tighter one would be a flake on a loaded machine, which is worse than
+ * a slow test.
+ */
+async function waitForFrame(recorded: Recorder, type: string, timeoutMs = 20_000): Promise<Frame> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const frame = lastOf(recorded, type);
+    if (frame !== null) return frame;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail(`no "${type}" frame arrived within ${timeoutMs} ms`);
 }
 
 // ---------------------------------------------------------------------------
@@ -748,8 +774,9 @@ describe('live Coach follows the match difficulty', () => {
       actor.connection,
       JSON.stringify({ type: 'requestCoach', requestId: 'req-coach-ed' }),
     );
-    await settle();
-    const coach = lastOf(actor.recorded, 'coach');
+    // Not `settle()`: the Coach now runs on a worker thread, so the reply cannot arrive within a
+    // fixed number of macrotask turns. See `waitForFrame`.
+    const coach = await waitForFrame(actor.recorded, 'coach');
     assert.ok(coach !== null, 'a table without an Expert bot must still receive a Coach report');
     await test.app.close();
   });

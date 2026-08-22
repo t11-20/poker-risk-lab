@@ -42,7 +42,18 @@ import {
   type WorkLimits,
 } from '../calc/parse.ts';
 import { AppError } from '../errors.ts';
-import { closeSharedPool, getSharedPool } from '../workers/pool.ts';
+import {
+  bindCalculationPoolMetrics,
+  observeAnalysis,
+  workerTaskOutcomeFor,
+} from '../observability/telemetry.ts';
+import {
+  closeSharedPool,
+  getSharedPool,
+  type PoolWarning,
+  peekSharedPool,
+  type WorkerPool,
+} from '../workers/pool.ts';
 
 /**
  * A note appended to a sampled figure's assumptions.
@@ -91,6 +102,11 @@ function summarise(result: EquityResult): EquitySummary {
  */
 const calcRoutes: FastifyPluginAsync = (app) => {
   const config = app.appConfig;
+  // The process-wide instance, as in `errors.ts` and `plugins/security.ts`. A route module has no
+  // way to be handed one — `buildApp`'s `metrics` option reaches the HTTP hook and the `/metrics`
+  // route, not the modules registered afterwards — and two instruments reading different
+  // registries would be worse than one reading the shared one.
+  const metrics = app.appMetrics;
   const limits: WorkLimits = { ...DEFAULT_WORK_LIMITS, maxSamplesPerRequest: config.monteCarloMaxSamples };
   /**
    * The wall-clock budget for one request.
@@ -101,13 +117,45 @@ const calcRoutes: FastifyPluginAsync = (app) => {
    */
   const budgetFor = (allowanceMs: number): number => config.coachTimeoutMs + allowanceMs;
 
-  const pool = getSharedPool(config, {
-    onWarn: (warning) => {
+  const poolHooks = {
+    onWarn: (warning: PoolWarning) => {
       // The pool cannot log for itself — it must not import the logger, because the worker it
       // manages must not either. So it reports and this file logs.
       app.log.warn({ poolEvent: warning.event, poolDetail: warning.detail }, 'calculation pool');
+      // And counts. `warning.event` is the pool's own four-value union, mapped to the counter's
+      // outcome vocabulary rather than used as a label directly, so the two can be reworded
+      // independently. `outcome="completed"` never arrives here: the pool warns only about
+      // failures, and the successes are in `prl_analysis_total` — see `workerTaskOutcomeFor`.
+      metrics.workerTasks.inc({ outcome: workerTaskOutcomeFor(warning.event) });
     },
-  });
+  };
+
+  /**
+   * The pool, looked up per request rather than held from registration.
+   *
+   * `closeSharedPool()` closes the process-wide pool AND drops the memo, so the next
+   * `getSharedPool` builds a fresh one. A module that captured the instance at registration keeps
+   * a reference to the CLOSED one, and every task it submits afterwards is refused with
+   * `service_unavailable` for the life of the process. That is not hypothetical — one Fastify
+   * instance closing while another is still serving is what `test/hands.test.ts` does, and it
+   * turned every analysis in the surviving app into a refusal. `routes/hands.ts` hit it first;
+   * this is the same fix, because this module had the same bug.
+   *
+   * Asking the memo each time costs a property read and cannot go stale.
+   */
+  const currentPool = (): WorkerPool => getSharedPool(config, poolHooks);
+
+  /**
+   * The pool's depth gauges, read at scrape time.
+   *
+   * `WorkerPool.stats()` was fully implemented and had no production reader, so the one number
+   * that says whether the Coach is slow because of queueing or because of the work — `queued`
+   * against `busy` against `size` — existed and was visible to nobody. Idempotent, because
+   * `routes/content.ts` takes the same shared pool and binds it too, for the same reason both
+   * modules register the `onClose` hook below: whichever modules a deployment registers, the
+   * instrumentation still exists.
+   */
+  bindCalculationPoolMetrics(peekSharedPool, metrics);
 
   /**
    * Every thread is terminated when the instance closes.
@@ -133,7 +181,11 @@ const calcRoutes: FastifyPluginAsync = (app) => {
     async (request): Promise<EquityResponse> => {
       const plan = parseEquityRequest(request.body, limits);
       const started = performance.now();
-      const result = await pool.runEquity(plan.request, budgetFor(plan.timeoutAllowanceMs));
+      const result = await observeAnalysis(
+        'equity',
+        () => currentPool().runEquity(plan.request, budgetFor(plan.timeoutAllowanceMs)),
+        metrics,
+      );
       const assumptions =
         result.method === 'monte-carlo'
           ? [...result.assumptions, REPRODUCIBILITY_NOTE]
@@ -169,7 +221,11 @@ const calcRoutes: FastifyPluginAsync = (app) => {
     { config: app.expensiveRateLimit, schema: { body: { $ref: 'prl:coachBody#' } } },
     async (request): Promise<CoachResponse> => {
       const plan = parseCoachRequest(request.body, limits);
-      const report = await pool.runCoach(plan.task, budgetFor(plan.timeoutAllowanceMs));
+      const report = await observeAnalysis(
+        'coach',
+        () => currentPool().runCoach(plan.task, budgetFor(plan.timeoutAllowanceMs)),
+        metrics,
+      );
       if (report.assumptions.length === 0) {
         throw new AppError('internal_error', {
           logDetail: 'buildCoachReport returned a report with no assumptions; refusing to serve it',

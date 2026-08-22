@@ -89,7 +89,13 @@ jobs:
         # The point of this workflow is to audit the lockfile as committed, so a
         # lockfile that no longer matches the manifests must fail here rather
         # than be resolved into something new and then audited.
-        run: pnpm install --frozen-lockfile
+        #
+        # --ignore-scripts for the reason spelled out in the ci.yml header: this
+        # job installs a dependency graph in order to find out whether it is safe,
+        # so it must not execute that graph's install-time hooks first. It relied
+        # on pnpm-workspace.yaml's `ignoreScripts: true` to avoid that, which is a
+        # setting one unrelated diff away from changing.
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Audit
         run: pnpm run security:audit

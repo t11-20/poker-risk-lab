@@ -29,8 +29,13 @@ export interface RandomSource {
   nextInt(boundExclusive: number): number;
   /** `count` random bytes. */
   bytes(count: number): Uint8Array;
-  /** Describes the source, recorded in each hand's audit trail. */
-  readonly kind: 'csprng' | 'deterministic-test-only';
+  /**
+   * Describes the source, recorded in each hand's audit trail.
+   *
+   * `deterministic-sampling` is the one value that may NOT deal: `shuffledDeck` refuses it.
+   * See `createSamplingRandom` for why a third value exists at all.
+   */
+  readonly kind: 'csprng' | 'deterministic-test-only' | 'deterministic-sampling';
 }
 
 const POOL_WORDS = 256;
@@ -110,8 +115,22 @@ export function shuffleInPlace<T>(items: T[], random: RandomSource): void {
   }
 }
 
-/** A freshly shuffled 52-card deck. */
+/**
+ * A freshly shuffled 52-card deck.
+ *
+ * This is the single place a deck order comes into existence, which is why the refusal below
+ * is here and not spread across the callers. A `deterministic-sampling` source exists so that
+ * Monte Carlo estimation can be reproducible (see `createSamplingRandom`); a deck ordered from
+ * one would be a hand whose cards a client could predict from a seed it can guess. The two uses
+ * are separated by type, so the mistake is not available rather than merely discouraged.
+ */
 export function shuffledDeck(random: RandomSource): Card[] {
+  if (random.kind === 'deterministic-sampling') {
+    throw new RandomnessError(
+      'a deterministic-sampling source must never order a deck; it exists for Monte Carlo ' +
+        'estimation only, and a hand dealt from it would be predictable from its seed',
+    );
+  }
   const deck = orderedDeck();
   shuffleInPlace(deck, random);
   return deck;
@@ -159,9 +178,61 @@ export function createDeterministicRandomForTests(seed: number): RandomSource {
   if (process.env['NODE_ENV'] === 'production') {
     throw new RandomnessError('createDeterministicRandomForTests must never be used in production');
   }
+  return splitMix32(seed, 'deterministic-test-only');
+}
+
+/**
+ * A deterministic generator for STATISTICAL SAMPLING. Legal in production; may never deal.
+ *
+ * ## The incident this exists to close
+ *
+ * `monteCarloEquity` used `createDeterministicRandomForTests`. That function throws when
+ * `NODE_ENV === 'production'`, so every sampled equity estimate failed on a production server —
+ * which meant the Coach could not answer and, worse, a bot whose policy needed a sampled
+ * estimate never produced an action, so the hand never completed and the table simply stopped.
+ * It was invisible for three reasons worth naming, because each one is a lesson:
+ *
+ *   - every test suite runs with `NODE_ENV` set to `test` or `development`;
+ *   - the *exact* enumeration path is unaffected, so the smoke test's equity check passed
+ *     while a real hand did not;
+ *   - the source scan that forbids the test-only generator (`server-randomness.test.ts`)
+ *     scanned `apps/api/src` only, and the call was in `packages/poker-math`.
+ *
+ * It was found by playing a hand in a production-configured staging stack, which is the only
+ * thing that could have found it.
+ *
+ * ## Why sampling deserves a deterministic source at all
+ *
+ * Monte Carlo equity is documented as reproducible for a given seed, and that property is
+ * load-bearing rather than cosmetic: the worker pool shards one estimate across threads by
+ * seed and combines the results, and a learner who re-opens the same analysis must not be
+ * shown a different number. Sampling is estimation over a known distribution — it decides
+ * nothing about what cards exist — so a predictable stream is not a weakness there.
+ *
+ * ## Why it is a separate function rather than a flag
+ *
+ * The two uses have opposite safety requirements, and a boolean parameter would put them one
+ * typo apart. Instead they differ by *type*: this source reports `kind: 'deterministic-sampling'`
+ * and `shuffledDeck` refuses that kind outright, so a deck can never be ordered from it. The
+ * mistake is unavailable rather than discouraged, and `kind` is recorded in the hand's audit
+ * trail, so a hand could not be silently mislabelled either.
+ *
+ * The algorithm is identical to the test-only generator's — same SplitMix32, same stream for a
+ * given seed — so no existing expected value changes.
+ */
+export function createSamplingRandom(seed: number): RandomSource {
+  return splitMix32(seed, 'deterministic-sampling');
+}
+
+/**
+ * SplitMix32, shared by the two deterministic sources above.
+ *
+ * Small, well-distributed, counter-based. Not secure, and not claimed to be. Factored out so
+ * that the two callers cannot drift into producing different streams for the same seed — which
+ * would be a silent change to every recorded equity figure.
+ */
+function splitMix32(seed: number, kind: RandomSource['kind']): RandomSource {
   if (!Number.isInteger(seed)) throw new RandomnessError('seed must be an integer');
-  // SplitMix32: small, well-distributed, counter-based. Not secure, and not
-  // claimed to be.
   let state = seed >>> 0;
   const nextUint32 = (): number => {
     state = (state + 0x9e3779b9) >>> 0;
@@ -171,7 +242,7 @@ export function createDeterministicRandomForTests(seed: number): RandomSource {
     return (z ^ (z >>> 15)) >>> 0;
   };
   return {
-    kind: 'deterministic-test-only',
+    kind,
     nextInt(boundExclusive: number): number {
       return unbiasedInt(nextUint32, boundExclusive);
     },

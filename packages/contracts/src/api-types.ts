@@ -404,7 +404,20 @@ export interface CreateRoomResponse {
 export interface RoomSummary {
   readonly id: string;
   readonly name: string;
-  readonly ownerUserId: string;
+  /**
+   * The learner who created this table, or null once that account has been erased.
+   *
+   * Null since migration 0004. `prl.rooms.owner_user_id` is `ON DELETE SET NULL` so that a table
+   * survives its creator's departure with every hand played at it intact — cascading the room
+   * would have destroyed the hand history of everybody else who sat there. Null confers nothing:
+   * no session id ever equals it, so the two owner checks in the API (`routes/rooms.ts`,
+   * `ws/router.ts`) refuse a detached room to everybody who is not a member of it, which is the
+   * correct answer.
+   *
+   * A detached room is always closed — the deletion path closes it in the same transaction — so
+   * this is null only on a room that can no longer be joined or played.
+   */
+  readonly ownerUserId: string | null;
   readonly maxSeats: number;
   readonly smallBlind: number;
   readonly bigBlind: number;
@@ -545,6 +558,68 @@ export interface ProgressResponse {
 
 export interface ResetUnitsResponse {
   readonly units: number;
+}
+
+// ---------------------------------------------------------------------------
+// Account deletion
+// ---------------------------------------------------------------------------
+
+/**
+ * The exact text `POST /me/delete` requires in `confirm`, and nothing else is accepted.
+ *
+ * Published here rather than written at either end because both ends have to agree on it
+ * character for character: `deleteAccountBodySchema` refuses anything else at the API boundary,
+ * and the web control compares what the reader typed against the same constant before it enables
+ * the button. A phrase spelled two ways is a control that can never be operated.
+ *
+ * A typed phrase rather than a boolean, because the operation is irreversible and a boolean is
+ * something a mis-wired client, a replayed request or a double submit can produce by accident. A
+ * sentence somebody has to reproduce cannot be sent by mistake. Lower case throughout so the
+ * client can compare after trimming and folding case without the contract having to say so.
+ */
+export const ACCOUNT_DELETE_CONFIRMATION = 'delete my account';
+
+export interface DeleteAccountRequest {
+  /** Must equal `ACCOUNT_DELETE_CONFIRMATION`. Anything else is `invalid_request`. */
+  readonly confirm: string;
+}
+
+/**
+ * What the erasure actually did, counted table by table.
+ *
+ * The counts are the point rather than decoration. A learner who has just asked for their record
+ * to be destroyed is owed a specific answer, and "your account has been deleted" is not one: it
+ * does not say whether the hands they played are gone, and the honest answer is that they are
+ * not. Two named groups say which is which, in the same shape the policy is written in
+ * (`db/migrations/0004_account_deletion.sql`).
+ *
+ * Every figure is verified against the database inside the deleting transaction before it is
+ * returned, so it is a report rather than an expectation.
+ */
+export interface DeleteAccountResponse {
+  /** Rows that no longer exist. Every one of them described this learner and nobody else. */
+  readonly deleted: {
+    readonly sessions: number;
+    readonly lessonsCompleted: number;
+    readonly quizAttempts: number;
+    readonly scenarioAttempts: number;
+    /** Seats at tables, live and departed alike. The tables themselves are not deleted. */
+    readonly roomMemberships: number;
+  };
+  /**
+   * Rows that still exist and no longer name this learner.
+   *
+   * These are shared records: a hand belongs to everybody who was in it, an audit event is a
+   * record of something that happened, and a table holds other people's hands. Destroying them
+   * would edit somebody else's history, so the identity is removed and the record is kept.
+   */
+  readonly anonymised: {
+    /** Seats in played hands. The hand, its actions and its commitment proof are untouched. */
+    readonly handSeats: number;
+    readonly auditEvents: number;
+    /** Tables this learner created. Each is closed and its creator is detached. */
+    readonly roomsCreated: number;
+  };
 }
 
 // ---------------------------------------------------------------------------

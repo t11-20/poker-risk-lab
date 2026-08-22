@@ -28,8 +28,14 @@
  *
  * The figures are the reader's own, so this is a per-reader render carrying their session cookie
  * (`lib/server-session.ts`), which also makes the route dynamic — correct, because a private record
- * must never be prerendered or cached. Only the reset is a client component, because a mutation
- * needs the CSRF token that only a browser holds.
+ * must never be prerendered or cached. Only the two controls — the reset and the deletion — are
+ * client components, because a mutation needs the CSRF token that only a browser holds.
+ *
+ * ## Why the way out is on this page and not somewhere quieter
+ *
+ * This is the page that shows a reader what the product holds about them, so it is the page where
+ * "and here is how to have none of it held" belongs. Anywhere else would be a deletion control
+ * that has to be gone looking for.
  */
 
 import { Callout, Metric, Panel, pluralise } from '@prl/ui';
@@ -45,14 +51,15 @@ import {
   type RecordFigureName,
 } from '@/lib/record-data.ts';
 import { readerCallOptions } from '@/lib/server-session.ts';
+import { DeleteAccount } from './DeleteAccount.tsx';
 import { UnitsReset } from './UnitsReset.tsx';
 import '../../styles/page.css';
 
 export const metadata: Metadata = {
   title: 'Your record',
   description:
-    'What you have read, tried, answered and played, counted and never scored — and the control ' +
-    'that resets your practice units to the starting amount.',
+    'What you have read, tried, answered and played, counted and never scored — the control that ' +
+    'resets your practice units to the starting amount, and the one that deletes your account.',
 };
 
 /**
@@ -82,6 +89,42 @@ function ResetPanel(): ReactElement {
         rewrote a finished table’s numbers would be editing the record instead of clearing the board.
       </p>
       <UnitsReset />
+    </Panel>
+  );
+}
+
+/**
+ * The way out, and it is deliberately the last thing on the page.
+ *
+ * Below the reset rather than beside it, because the two are opposites and a reader skimming for
+ * "put my units back" must not land on "erase everything" by muscle memory. The panel index
+ * continues the page's numbering so the visual order and the reading order agree.
+ *
+ * Shown whenever there is an account to delete, which is every state except `signedOut` — a reader
+ * whose record could not be FETCHED still has one, and a page that hid the way out whenever it
+ * could not draw a figure would make leaving conditional on the API being healthy. The caller
+ * below is where that condition lives, with the reasoning next to it.
+ *
+ * The panel's own copy is the summary; the control expands into the full list of what goes and
+ * what stays before anything can be pressed. Everything true about that list is enforced in
+ * `db/migrations/0004_account_deletion.sql` and proved in `apps/api/test/account-deletion.test.ts`,
+ * which is what stops these sentences from becoming a claim nobody checks.
+ */
+function DeletePanel(): ReactElement {
+  return (
+    <Panel title="Delete your account" eyebrow="Irreversible" index={3} headingLevel={2}>
+      <p className="prl-prose">
+        You can close this account and take your record with you. Your sign-ins, the lessons you have marked
+        as read, your quiz answers, your scenario decisions and your seat at every table are deleted outright
+        — there is no recovery and no grace period.
+      </p>
+      <p className="prl-prose">
+        Two things are kept rather than deleted, with your name removed from them: the hands you have played,
+        and any table you created. A hand belongs to everybody who was in it — deleting it would erase it from
+        their history too — so the seat stays and stops naming anybody. Tables you created are closed and
+        detached for the same reason: the hands played at them would go with them.
+      </p>
+      <DeleteAccount />
     </Panel>
   );
 }
@@ -118,58 +161,64 @@ export default async function RecordPage(): Promise<ReactElement> {
       ) : null}
 
       {record.state === 'ready' ? (
-        <>
-          <Panel title="What you have covered" eyebrow="Counted, not scored" index={1} headingLevel={2}>
-            <div className="prl-metric-row">
-              {RECORD_FIGURES.map((name) => (
-                <Metric
-                  key={name}
-                  label={RECORD_LABELS[name]}
-                  value={
-                    name === 'lessonsCompleted'
-                      ? record.progress.lessonsCompleted.length
-                      : name === 'scenariosAttempted'
-                        ? record.progress.scenariosAttempted.length
-                        : record.progress[name]
-                  }
-                  format={formatOf(name)}
-                  size="md"
-                  note={RECORD_EXPLANATIONS[name]}
-                />
-              ))}
-            </div>
+        <Panel title="What you have covered" eyebrow="Counted, not scored" index={1} headingLevel={2}>
+          <div className="prl-metric-row">
+            {RECORD_FIGURES.map((name) => (
+              <Metric
+                key={name}
+                label={RECORD_LABELS[name]}
+                value={
+                  name === 'lessonsCompleted'
+                    ? record.progress.lessonsCompleted.length
+                    : name === 'scenariosAttempted'
+                      ? record.progress.scenariosAttempted.length
+                      : record.progress[name]
+                }
+                format={formatOf(name)}
+                size="md"
+                note={RECORD_EXPLANATIONS[name]}
+              />
+            ))}
+          </div>
 
-            <dl className="prl-stat__pair">
-              <dt className="prl-label">Topics touched</dt>
-              <dd>
-                {record.progress.topicsTouched.length === 0
-                  ? 'None yet — a topic appears here once you finish a lesson or try a scenario in it.'
-                  : record.progress.topicsTouched.join(', ')}
-              </dd>
-              <dt className="prl-label">Lessons finished</dt>
-              <dd>
-                {record.progress.lessonsCompleted.length === 0
-                  ? 'None yet.'
-                  : record.progress.lessonsCompleted.join(', ')}
-              </dd>
-              <dt className="prl-label">Scenarios tried</dt>
-              <dd>
-                {record.progress.scenariosAttempted.length === 0
-                  ? 'None yet.'
-                  : record.progress.scenariosAttempted.join(', ')}
-              </dd>
-            </dl>
+          <dl className="prl-stat__pair">
+            <dt className="prl-label">Topics touched</dt>
+            <dd>
+              {record.progress.topicsTouched.length === 0
+                ? 'None yet — a topic appears here once you finish a lesson or try a scenario in it.'
+                : record.progress.topicsTouched.join(', ')}
+            </dd>
+            <dt className="prl-label">Lessons finished</dt>
+            <dd>
+              {record.progress.lessonsCompleted.length === 0
+                ? 'None yet.'
+                : record.progress.lessonsCompleted.join(', ')}
+            </dd>
+            <dt className="prl-label">Scenarios tried</dt>
+            <dd>
+              {record.progress.scenariosAttempted.length === 0
+                ? 'None yet.'
+                : record.progress.scenariosAttempted.join(', ')}
+            </dd>
+          </dl>
 
-            <p className="prl-note">
-              {`Topics are derived from the content bundle when this page is read, not stored against your record — so a lesson that is retired contributes no topic rather than breaking the count. ${pluralise(record.progress.topicsTouched.length, 'topic')} so far.`}
-            </p>
-          </Panel>
+          <p className="prl-note">
+            {`Topics are derived from the content bundle when this page is read, not stored against your record — so a lesson that is retired contributes no topic rather than breaking the count. ${pluralise(record.progress.topicsTouched.length, 'topic')} so far.`}
+          </p>
+        </Panel>
+      ) : null}
 
-          <ResetPanel />
-        </>
-      ) : (
-        <ResetPanel />
-      )}
+      <ResetPanel />
+
+      {/*
+        Hidden for a reader with no session, and shown in both of the other states.
+
+        Not a tidiness rule: there is no account to delete when nobody is signed in, so the control
+        could only ever produce a 401, and offering an irreversible action that cannot work is worse
+        than not offering it. `unavailable` is a different case and keeps the panel — that reader
+        has an account, and whether they can leave must not depend on whether their figures loaded.
+      */}
+      {record.state === 'signedOut' ? null : <DeletePanel />}
 
       <p className="prl-page-nav">
         <Link href={LEARN_PATH}>Back to the curriculum</Link>

@@ -40,6 +40,29 @@
  * `maxMessageBytes` (drop and close), `messagesPerSecond` with `burstAllowance` (a token bucket),
  * and `coachRequestsPerMinute` (the analysis is not free to compute). `maxSocketsPerSession` is
  * the hub's, because it is a property of the upgrade rather than of a message.
+ *
+ * ## The Coach analysis happens on a thread, and that is not an optimisation
+ *
+ * `requestCoach` used to call `coachForView` — a 2,000-sample Monte Carlo, plus the preflop
+ * strength table the default `top:NN` range needs — inline, on the event loop. Measured on this
+ * machine before the change: 3,034 ms for the first analysis in a fresh process (the strength
+ * table), 56-84 ms warm, and the event loop's own p99 for that window was 3,029 ms. Every socket,
+ * every turn clock and every timer in the process stopped for exactly that long, which is the
+ * thing `workers/pool.ts` exists to prevent and which the REST Coach path already avoided.
+ *
+ * So the socket now builds a `CoachTask` here — validation, redaction and the numbers read off
+ * the view, all of which are microseconds — and hands it to the same shared pool
+ * `routes/calc.ts` uses. Three consequences are deliberate and are handled rather than hoped
+ * about, in `onCoach`: a full queue answers `service_unavailable` immediately, an overrun
+ * answers `computation_timeout`, and a socket that closes while its analysis is in flight has
+ * the result dropped.
+ *
+ * The cost, stated plainly: the answer is no longer computed in the same tick the request
+ * arrived in, so it describes the spot AS IT STOOD WHEN THE REQUEST WAS ACCEPTED. A player who
+ * acts while the analysis is running gets a report about the decision they have just made. That
+ * is the same report they would have got before — the analysis was always of the view at request
+ * time — but it can now arrive after the fact, and the frame carries the `requestId` so a client
+ * can tell which question it answers.
  */
 
 import type {
@@ -51,14 +74,20 @@ import type {
   WsServerMessage,
 } from '@prl/contracts';
 import { ERROR_MESSAGES, WS_CLOSE, WS_LIMITS, WS_PROTOCOL_VERSION } from '@prl/contracts';
-import type { Card, PlayerView } from '@prl/poker-engine';
-import { buildCoachReport, type CoachAction } from '@prl/poker-math';
+import type { Card, PlayerView, SeatView } from '@prl/poker-engine';
+import { type Street as BettingStreetName, buildCoachReport, type CoachAction } from '@prl/poker-math';
+import { STRENGTH_TABLE_ALLOWANCE_MS } from '../calc/parse.ts';
+import type { AppConfig } from '../config.ts';
 import { AppError, isAppError } from '../errors.ts';
+import { type AppMetrics, appMetrics } from '../observability/metrics.ts';
+import { observeAnalysis, type ProblemHook } from '../observability/telemetry.ts';
 import { assumedRange, DEFAULT_ASSUMED_RANGE_PERCENT } from '../rooms/bots.ts';
 import type { LiveRoom, RoomRegistry } from '../rooms/registry.ts';
 import { toRoomSummary } from '../rooms/registry.ts';
 import type { TableNotice } from '../rooms/table.ts';
 import type { Clock, ScheduledTask } from '../rooms/timers.ts';
+import type { CoachTask, WireRange } from '../workers/equity-worker.ts';
+import { getSharedPool } from '../workers/pool.ts';
 
 /** The two things this module needs from a socket. */
 export interface SocketSink {
@@ -113,18 +142,98 @@ export type FrameValidation =
 
 export type FrameValidator = (value: unknown) => FrameValidation;
 
+/**
+ * Why an inbound frame was refused, as a CLOSED set.
+ *
+ * This is a metric label (`prl_websocket_frames_rejected_total`), and a metric label whose value
+ * comes from the caller is an unbounded in-process memory leak that anybody with a socket can
+ * reach — the failure `observability/registry.ts` opens by describing. So the reason is chosen
+ * from this union at the rejection site and NEVER derived from the frame: not from the schema
+ * error, not from the message type the client claimed, not from the JSON parser's complaint.
+ *
+ * Snake_case because these are label values, not `ProblemEvent`s; the two vocabularies are
+ * deliberately spelled differently so one cannot be passed where the other is expected.
+ */
+export type WsFrameRejection =
+  /** Over `WS_LIMITS.maxMessageBytes`. Dropped unparsed; the socket is closed. */
+  | 'too_large'
+  /** The per-socket token bucket was empty. The socket is closed. */
+  | 'rate_limited'
+  /** Not JSON at all. */
+  | 'not_json'
+  /** Valid JSON, but not a message the contract's schema accepts. */
+  | 'schema'
+  /** A schema-valid message whose `type` this router has no branch for. */
+  | 'unknown_type'
+  /** An intent arrived before `hello` had joined a room. */
+  | 'before_handshake'
+  /** A second `hello` on a socket that has already sent one. */
+  | 'duplicate_hello'
+  /** `hello` named a protocol version this server does not speak. */
+  | 'bad_protocol_version';
+
 export interface WsRouterOptions {
   readonly registry: RoomRegistry;
   readonly clock: Clock;
   readonly validate: FrameValidator;
+  /** The app-owned calculator budget and pool size; never read from process-global config. */
+  readonly config: AppConfig;
   /** A request id for the error bodies. Fastify's per-request id is not available on a frame. */
   readonly nextRequestId?: () => string;
-  readonly onProblem?: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+  /** Non-fatal problems, with a typed `event`. See `observability/telemetry.ts`. */
+  readonly onProblem?: ProblemHook;
+  /** Defaults to the process-wide metrics. A test that wants isolation passes its own. */
+  readonly metrics?: AppMetrics;
   /**
    * Monte Carlo samples for a Coach answer over a socket. Lower than a REST Coach request on
    * purpose: this one is answered while a player is waiting on their own clock.
    */
   readonly coachSamples?: number;
+  /**
+   * Where a Coach task is computed. Defaults to the process-wide calculator pool.
+   *
+   * A seam rather than a hard-wired `getSharedPool(...)` call for the reason every other
+   * collaborator here is one: a test that wants to drive the refusals — a full queue, a
+   * deadline, a thread that died — needs to produce them without arranging real thread
+   * exhaustion first. The DEFAULT is the pool, not an in-process call, so that a deployment
+   * which forgets to pass anything still keeps the analysis off the event loop; the defect this
+   * closes was precisely a path that quietly computed on the main thread.
+   */
+  readonly analyseCoach?: CoachAnalyser;
+}
+
+/**
+ * Runs one Coach task somewhere that is not this thread, and answers with the report.
+ *
+ * Rejections are `AppError`s and reach the socket through `guard`, so the four the pool can
+ * produce — `service_unavailable` for a full queue or a closed pool, `computation_timeout` for
+ * an overrun, `computation_rejected` for maths that refused the task, `internal_error` for a
+ * thread that died — arrive as error frames carrying the contract's own wording.
+ */
+export type CoachAnalyser = (task: CoachTask) => Promise<CoachReport>;
+
+/**
+ * The default: the shared pool, under the configured Coach budget.
+ *
+ * The allowance is the same one `routes/calc.ts` applies and for the same reason: a `top:NN`
+ * range cannot be expanded without the preflop strength table, which is about three seconds on
+ * the first request a thread serves and memoised per thread afterwards. Without the allowance
+ * the very first live Coach request in a process would be terminated for overrunning
+ * `coachTimeoutMs`, taking the half-built table with it — and the next one would start cold and
+ * fail in exactly the same way. See `STRENGTH_TABLE_ALLOWANCE_MS`.
+ *
+ * The app config is passed in by `ws/hub.ts`, so the WebSocket path uses the same timeout and
+ * worker-pool sizing as the REST calculation routes. Reading process-global configuration here
+ * would make isolated app instances impossible to test and would let the first unrelated config
+ * parse decide the socket budget.
+ */
+function pooledCoachAnalyser(config: AppConfig): CoachAnalyser {
+  return (task) => {
+    const allowanceMs = task.spec.opponents.some((range) => range.kind === 'topPercent')
+      ? STRENGTH_TABLE_ALLOWANCE_MS
+      : 0;
+    return getSharedPool(config).runCoach(task, config.coachTimeoutMs + allowanceMs);
+  };
 }
 
 /**
@@ -142,8 +251,10 @@ export class WsRouter {
   private readonly clock: Clock;
   private readonly validate: FrameValidator;
   private readonly nextRequestId: () => string;
-  private readonly onProblem: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+  private readonly onProblem: ProblemHook;
+  private readonly metrics: AppMetrics;
   private readonly coachSamples: number;
+  private readonly analyseCoach: CoachAnalyser;
   /** Sockets by room, and one table subscription per room rather than per socket. */
   private readonly byRoom = new Map<string, Set<WsConnection>>();
   private readonly subscriptions = new Map<string, () => void>();
@@ -155,7 +266,9 @@ export class WsRouter {
     this.validate = options.validate;
     this.nextRequestId = options.nextRequestId ?? ((): string => `ws-${this.nextCount()}`);
     this.onProblem = options.onProblem ?? ((): void => undefined);
+    this.metrics = options.metrics ?? appMetrics();
     this.coachSamples = options.coachSamples ?? DEFAULT_COACH_SAMPLES;
+    this.analyseCoach = options.analyseCoach ?? pooledCoachAnalyser(options.config);
   }
 
   /** A monotonic counter for socket ids and fallback request ids. */
@@ -253,10 +366,12 @@ export class WsRouter {
     if (bytes > WS_LIMITS.maxMessageBytes) {
       // Dropped without being parsed — the point of a size cap is to refuse before doing work —
       // and the socket is closed, because a client that oversends once will do it again.
+      this.rejectFrame('too_large');
       this.closeConnection(connection, WS_CLOSE.rateLimited, 'frame too large');
       return;
     }
     if (!this.takeToken(connection)) {
+      this.rejectFrame('rate_limited');
       this.closeConnection(connection, WS_CLOSE.rateLimited, 'too many messages');
       return;
     }
@@ -266,12 +381,17 @@ export class WsRouter {
     try {
       parsed = JSON.parse(text);
     } catch {
+      this.rejectFrame('not_json');
       this.sendError(connection, null, 'invalid_request');
       return;
     }
 
     const validated = this.validate(parsed);
     if (!validated.ok) {
+      // `validated.problem` is deliberately not the label. It is a sentence, and one that a
+      // future validator could easily start deriving from the frame — which is how a caller
+      // starts minting time series.
+      this.rejectFrame('schema');
       this.sendError(connection, null, 'invalid_request');
       return;
     }
@@ -280,6 +400,7 @@ export class WsRouter {
     if (connection.roomId === null && message.type !== 'hello') {
       // Not a close: an honest client that raced its own `hello` deserves to be told rather than
       // dropped, and the handshake timer is still running.
+      this.rejectFrame('before_handshake');
       this.sendError(connection, requestIdOf(message), 'invalid_request');
       return;
     }
@@ -309,9 +430,24 @@ export class WsRouter {
         void this.guard(connection, message.requestId, () => this.onCoach(connection, message));
         return;
       default:
+        // Unreachable while the schema and this switch agree: the validator has already narrowed
+        // the frame to one of the contract's message types. It stays because the two can drift —
+        // a message added to the contract and not handled here would otherwise be silently
+        // ignored — and this counter is how that drift becomes visible.
+        this.rejectFrame('unknown_type');
         this.sendError(connection, null, 'invalid_request');
         return;
     }
+  }
+
+  /**
+   * Counts one refused frame against a reason from the closed set above.
+   *
+   * One method rather than eight `inc` calls so that the label can only ever be a
+   * `WsFrameRejection` — a call site cannot pass a string that happens to be handy.
+   */
+  private rejectFrame(reason: WsFrameRejection): void {
+    this.metrics.wsFramesRejected.inc({ reason });
   }
 
   /**
@@ -329,7 +465,10 @@ export class WsRouter {
         this.sendError(connection, requestId, error.code);
         return;
       }
-      this.onProblem('a socket intent failed unexpectedly', { error: String(error) });
+      this.onProblem('a socket intent failed unexpectedly', {
+        event: 'socket-intent',
+        error: String(error),
+      });
       this.sendError(connection, requestId, 'internal_error');
     }
   }
@@ -364,10 +503,14 @@ export class WsRouter {
     // twice and leaving `noteSocket` one increment over, so a member who has disconnected still
     // shows as connected at the table. Set synchronously, before anything can suspend.
     if (connection.roomId !== null || connection.joining) {
+      this.rejectFrame('duplicate_hello');
       this.sendError(connection, null, 'invalid_request');
       return;
     }
     if (message.protocolVersion !== WS_PROTOCOL_VERSION) {
+      // The version itself is not the label. It is a number the client chose, so labelling by it
+      // would let one caller mint a series per integer it feels like sending.
+      this.rejectFrame('bad_protocol_version');
       this.sendError(connection, null, 'unsupported_protocol_version');
       this.closeConnection(connection, WS_CLOSE.protocolMismatch, 'protocol version');
       return;
@@ -531,6 +674,24 @@ export class WsRouter {
    * Built from the caller's own redacted view and nothing else, which is what makes it safe: the
    * view carries that seat's own cards (and nobody else's), so answering it needs no new exit from
    * the trust zone. A report for somebody else's decision is not representable here.
+   *
+   * ## The order of the four gates is load-bearing
+   *
+   * Difficulty, then the rate limit, then the hand, then the pool. The two refusals that cost
+   * nothing come first, so an Expert table — which sells "Coach in review only" — never queues a
+   * task it is going to refuse, and a socket over its minute limit never occupies a thread. That
+   * ordering was already here for the rate-limit token; it matters more now that what follows it
+   * is a queue slot rather than a stretch of this thread's time.
+   *
+   * ## What crosses to the thread, and what comes back
+   *
+   * A `CoachTask`: two cards the caller already holds, the public board, the pot, the stacks, the
+   * street, the engine's own `legalActions` and a range DESCRIPTOR. No `HandState`, no deck, no
+   * salt, no other seat's cards — the calculator could not leak one if it wanted to, because it
+   * is never given one (see `equity-worker.ts`). What comes back is a `CoachReport`, and
+   * `WorkerPool.runCoach` checks it against the task's own legal set before it returns, so the
+   * socket path now gets the guarantee `assertReportStaysInsideItsLegalSet` was written for and
+   * previously only the REST path had.
    */
   private async onCoach(
     connection: WsConnection,
@@ -538,7 +699,8 @@ export class WsRouter {
   ): Promise<void> {
     const roomId = this.requireRoom(connection);
     const room = this.registry.require(roomId, connection.principal.userId);
-    // Expert Legends sells "Coach in review only". Refuse before spending a rate-limit token.
+    // Expert Legends sells "Coach in review only". Refuse before spending a rate-limit token,
+    // and — since the analysis moved to a thread — before anything is queued.
     if (!room.bots.coachDuringHand()) {
       throw new AppError('coach_not_available', {
         logDetail: `live Coach refused in ${roomId}: a seated bot plays a difficulty that turns it off`,
@@ -552,12 +714,24 @@ export class WsRouter {
     }
     const view = room.table.viewFor(connection.principal.userId);
     if (view === null) throw new AppError('hand_not_active', { logDetail: 'no hand to analyse' });
-    const report = coachForView(view, {
+    // Everything that can refuse this request from the view alone happens here, on this thread,
+    // in microseconds: no seat, no cards, no decision to make, an unreadable range. A task is
+    // only built once the answer is known to be worth computing.
+    const task = coachTaskForView(view, {
       samples: this.coachSamples,
       ...(message.opponentRange === undefined ? {} : { opponentRange: message.opponentRange }),
     });
+    // Timed and counted like the REST analyses. `scripts/load-test.mjs` states in its own header
+    // that the socket Coach feeds no server-side histogram and has to be measured client-side;
+    // it does now, under the same `kind="coach"` label, because it is the same work on the same
+    // threads and an operator asking "is the Coach slow?" should not have to know which transport
+    // asked for it.
+    const report = await observeAnalysis('coach', () => this.analyseCoach(task), this.metrics);
+    // The socket may have gone while the thread was working. Dropping the report is the whole
+    // handling: `send` would refuse it anyway, and saying so here is what stops a future reader
+    // adding a "deliver it somewhere" branch for a connection that no longer exists.
+    if (connection.closed) return;
     this.send(connection, { type: 'coach', requestId: message.requestId, report });
-    await Promise.resolve();
   }
 
   // -----------------------------------------------------------------------
@@ -624,7 +798,7 @@ export class WsRouter {
     } catch (error) {
       // A send that throws means the socket is gone; the close event will follow. Recorded rather
       // than rethrown, because a dead socket must not fail the action that triggered the frame.
-      this.onProblem('a socket send failed', { error: String(error) });
+      this.onProblem('a socket send failed', { event: 'socket-send', error: String(error) });
     }
   }
 
@@ -646,7 +820,7 @@ export class WsRouter {
     try {
       connection.sink.close(code, reason);
     } catch (error) {
-      this.onProblem('a socket close failed', { error: String(error) });
+      this.onProblem('a socket close failed', { event: 'socket-close', error: String(error) });
     }
     this.handleClose(connection);
   }
@@ -704,12 +878,42 @@ export interface CoachForViewOptions {
 }
 
 /**
- * A Coach report built from one redacted view.
+ * The seed every live Coach analysis runs under.
+ *
+ * `1` is not arbitrary: it is the seed `monteCarloEquity` falls back to when no caller names one,
+ * which is what this path has always used because `coachForView` never passed one. `CoachTask`
+ * requires the field — a task is a complete description of a reproducible computation — so it is
+ * written down here rather than defaulted somewhere invisible. Changing this number changes every
+ * live Coach figure in the product, which is the reason it is a named constant and not a literal.
+ */
+const COACH_SEED = 1;
+
+/**
+ * Everything a Coach answer needs from one redacted view, with every refusal already made.
+ *
+ * Extracted so that the two things built from a view — the task the thread runs, and the report
+ * `coachForView` computes here — cannot disagree about WHO may ask, WHAT is refused, or WHICH
+ * numbers are read off the view. Only the range differs between them, and it differs in exactly
+ * one way: a task carries a range descriptor for the thread to expand, where the in-process path
+ * expands it itself.
+ */
+interface CoachSituation {
+  readonly own: SeatView;
+  readonly heroCards: readonly Card[];
+  readonly street: BettingStreetName;
+  readonly opponents: readonly SeatView[];
+  readonly legalActions: readonly CoachAction[];
+  /** Hero's cards and the board: what no opponent can be holding. */
+  readonly dead: readonly Card[];
+  /** The range the caller named, or the default. Still a string: `top:NN` must not expand here. */
+  readonly notation: string;
+}
+
+/**
+ * Reads one view, or refuses it.
  *
  * Deliberately a function of the view: the caller's own cards are in it, nobody else's are, and
- * therefore there is no way to ask this for an analysis of an opponent's decision. The range is
- * an assumption and the report says so — `buildCoachReport` puts every assumption in
- * `assumptions`, which the contract makes non-optional.
+ * therefore there is no way to ask this for an analysis of an opponent's decision.
  *
  * ## The view's own `legalActions` is passed straight through
  *
@@ -725,7 +929,7 @@ export interface CoachForViewOptions {
  * act — and that is refused here rather than answered with a report whose every candidate the
  * table would reject.
  */
-export function coachForView(view: PlayerView, options: CoachForViewOptions): CoachReport {
+function readCoachSituation(view: PlayerView, options: CoachForViewOptions): CoachSituation {
   const own = view.seats.find((seat) => seat.isSelf);
   const heroCards = own?.holeCards ?? null;
   if (own === undefined || heroCards === null) {
@@ -753,30 +957,124 @@ export function coachForView(view: PlayerView, options: CoachForViewOptions): Co
           : `a Coach request arrived for seat ${own.seat} while seat ${String(view.toAct)} is to act`,
     });
   }
-
-  const dead: Card[] = [...heroCards, ...view.board];
-  const notation = options.opponentRange ?? DEFAULT_COACH_RANGE;
-  return buildCoachReport({
+  return {
+    own,
     heroCards,
-    board: view.board,
     street,
-    // The same assumed range for each opponent. A per-seat range would need a read this endpoint
-    // does not have, and pretending otherwise would put false precision in front of a learner.
-    opponents: opponents.slice(0, 5).map((seat) => ({
-      label: `seat ${seat.seat}`,
-      range: assumedRange(notation, dead),
-    })),
+    opponents,
+    legalActions,
+    dead: [...heroCards, ...view.board],
+    notation: options.opponentRange ?? DEFAULT_COACH_RANGE,
+  };
+}
+
+/**
+ * The assumed range as a DESCRIPTOR for a calculator thread, having been checked here.
+ *
+ * The check and the expansion are separated on purpose, and the split is the whole point of this
+ * function. A `top:NN` range can only be expanded by building the preflop strength ordering —
+ * about three seconds, memoised per thread — so expanding it on this thread is the stall that
+ * made the live Coach a defect in the first place. The percentage is therefore validated
+ * (`1..100`, which is what `assumedRange` checks before it expands) and sent as a number.
+ *
+ * Notation is different: `parseRange` is microseconds, and running it here is what turns a range
+ * this server cannot read into a `400` with a named field instead of a thread that dies of a
+ * `RangeParseError` and a caller told `internal_error`. The expansion it produces is discarded —
+ * the thread parses the same string again against the same blockers and must, because the
+ * expansion is not a thing the wire protocol carries — so the cost of the check is one parse of a
+ * few hundred combinations and the benefit is an honest refusal.
+ */
+function coachRangeFor(situation: CoachSituation, label: string): WireRange {
+  const percent = /^top:(\d{1,3})$/.exec(situation.notation.trim());
+  if (percent !== null) {
+    const value = Number(percent[1]);
+    if (!Number.isInteger(value) || value < 1 || value > 100) {
+      throw new AppError('invalid_request', {
+        fields: { opponentRange: 'a top percentage must be between 1 and 100' },
+        logDetail: `rejected range "${situation.notation}"`,
+      });
+    }
+    return { kind: 'topPercent', label, percent: value };
+  }
+  assumedRange(situation.notation, situation.dead);
+  return { kind: 'notation', label, notation: situation.notation };
+}
+
+/**
+ * One redacted view, as the task a calculator thread runs.
+ *
+ * This is what `requestCoach` sends to the pool. Everything expensive is described rather than
+ * computed: the range is a descriptor (see `coachRangeFor`), and the arithmetic is the thread's.
+ * Everything cheap — the refusals, the redaction rule, the numbers read off the view — has
+ * already happened by the time this returns.
+ */
+export function coachTaskForView(view: PlayerView, options: CoachForViewOptions): CoachTask {
+  const situation = readCoachSituation(view, options);
+  return {
+    kind: 'coach',
+    spec: {
+      heroLabel: 'you',
+      heroCards: situation.heroCards,
+      board: view.board,
+      // The same assumed range for each opponent. A per-seat range would need a read this
+      // endpoint does not have, and pretending otherwise would put false precision in front of a
+      // learner. Five is `buildCoachReport`'s own ceiling; a six-max table cannot exceed it.
+      opponents: situation.opponents.slice(0, 5).map((seat) => coachRangeFor(situation, `seat ${seat.seat}`)),
+    },
+    street: situation.street,
     pot: view.potTotal,
     toCall: view.amountToCall,
     // Both taken from the view rather than derived: `to` is a total street commitment,
     // and the minimum is the engine's own, so no size the Coach publishes here can be
     // one this table would refuse.
-    heroCommittedThisStreet: own.committedThisStreet,
-    heroStack: own.stack,
-    opponentStacks: opponents.map((seat) => seat.stack),
+    heroCommittedThisStreet: situation.own.committedThisStreet,
+    heroStack: situation.own.stack,
+    opponentStacks: situation.opponents.map((seat) => seat.stack),
     bigBlind: view.config.bigBlind,
     minimumRaiseTo: view.minimumRaiseTo,
-    legalActions,
+    legalActions: situation.legalActions,
     samples: options.samples,
+    seed: COACH_SEED,
+  };
+}
+
+/**
+ * The same analysis, computed on the calling thread.
+ *
+ * ## Why this still exists now that the socket uses a thread
+ *
+ * It is the reference implementation, and it is load-bearing as one. `coachTaskForView` describes
+ * a computation that happens somewhere else, in a process this file cannot see; the only way to
+ * know that the description still means what it used to mean is to run the analysis both ways and
+ * compare the reports. `test/event-loop-budget.test.ts` does exactly that — same view, same
+ * samples, same seed, one report from here and one from a real worker thread, asserted equal — so
+ * a future edit to either side that changes a figure fails a test instead of quietly changing what
+ * a learner is told. `test/ws-router.test.ts` uses it for the same reason: it is the definition of
+ * the analysis, with no pool to arrange.
+ *
+ * The range is expanded here, which means a `top:NN` range builds the preflop strength table on
+ * THIS thread. That is the cost this function is not allowed to pay in production and is why no
+ * production path calls it any more.
+ */
+export function coachForView(view: PlayerView, options: CoachForViewOptions): CoachReport {
+  const situation = readCoachSituation(view, options);
+  return buildCoachReport({
+    heroCards: situation.heroCards,
+    board: view.board,
+    street: situation.street,
+    opponents: situation.opponents.slice(0, 5).map((seat) => ({
+      label: `seat ${seat.seat}`,
+      range: assumedRange(situation.notation, situation.dead),
+    })),
+    pot: view.potTotal,
+    toCall: view.amountToCall,
+    heroCommittedThisStreet: situation.own.committedThisStreet,
+    heroStack: situation.own.stack,
+    opponentStacks: situation.opponents.map((seat) => seat.stack),
+    bigBlind: view.config.bigBlind,
+    minimumRaiseTo: view.minimumRaiseTo,
+    legalActions: situation.legalActions,
+    samples: options.samples,
+    seed: COACH_SEED,
   });
 }

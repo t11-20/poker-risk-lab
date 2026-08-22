@@ -173,6 +173,7 @@ import {
 } from '@prl/poker-engine';
 import { DEFAULT_LEARNER_TURN_SECONDS } from '../config.ts';
 import { AppError } from '../errors.ts';
+import type { ProblemHook } from '../observability/telemetry.ts';
 import { type Clock, type TurnExpiry, TurnTimer } from './timers.ts';
 
 /** The wire event payload, without the envelope the hub adds. */
@@ -338,8 +339,14 @@ export interface LiveTableOptions {
    * else is a bot — which `turnSecondsFor` sets out at length.
    */
   readonly learnerTurnSeconds?: number;
-  /** Non-fatal problems: a subscriber that threw, a rejected timeout. Never given a card. */
-  readonly onProblem?: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+  /**
+   * Non-fatal problems: a subscriber that threw, a rejected timeout. Never given a card.
+   *
+   * `ProblemHook` requires a typed `event` on the detail, so each of the five failures below is
+   * countable separately rather than being one prose string an operator has to grep for. See
+   * `observability/telemetry.ts`.
+   */
+  readonly onProblem?: ProblemHook;
 }
 
 /** How many applied `actionId`s one hand remembers. A legal hand cannot produce this many. */
@@ -406,7 +413,7 @@ export class LiveTable {
   private readonly clock: Clock;
   private readonly random: RandomSource;
   private readonly nextHandId: () => string;
-  private readonly onProblem: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+  private readonly onProblem: ProblemHook;
   /** The floor a person's turn clock is never allowed below. See `turnSecondsFor`. */
   private readonly learnerTurnSeconds: number;
   private readonly timer: TurnTimer;
@@ -450,7 +457,10 @@ export class LiveTable {
         // Queued, never applied inline: the timer fires from the event loop and has to take its
         // turn behind whatever mutation is already in flight.
         this.enqueue(() => this.applyTimeout(expiry)).catch((error: unknown) => {
-          this.onProblem('turn timeout could not be applied', { error: String(error) });
+          this.onProblem('turn timeout could not be applied', {
+            event: 'turn-timeout',
+            error: String(error),
+          });
         });
       },
     });
@@ -872,7 +882,11 @@ export class LiveTable {
     } catch (error) {
       // The engine's message names seats, bet levels and amounts: useful in a log, never on the
       // wire. `logDetail` and `cause` are server-side only — see errors.ts.
-      this.onProblem('the engine rejected an action', { seat, error: String(error) });
+      this.onProblem('the engine rejected an action', {
+        event: 'engine-rejection',
+        seat,
+        error: String(error),
+      });
       return null;
     }
 
@@ -920,7 +934,11 @@ export class LiveTable {
       try {
         applied = applyAction(before, toAct, { type: 'fold' }, { automatic: true, actionId: null });
       } catch (error) {
-        this.onProblem('could not fold a seat that had left', { seat: toAct, error: String(error) });
+        this.onProblem('could not fold a seat that had left', {
+          event: 'departed-seat-fold',
+          seat: toAct,
+          error: String(error),
+        });
         return;
       }
       live.state = applied.state;
@@ -947,7 +965,10 @@ export class LiveTable {
       extraEvents: [{ kind: 'seatTimedOut', seat: expiry.seat }],
     });
     if (applied === null) {
-      this.onProblem('the engine rejected a timeout action', { seat: expiry.seat });
+      this.onProblem('the engine rejected a timeout action', {
+        event: 'timeout-rejection',
+        seat: expiry.seat,
+      });
     }
   }
 
@@ -1088,7 +1109,11 @@ export class LiveTable {
       } catch (error) {
         // A subscriber that throws must not take the table with it, and must not stop the other
         // subscribers from being told.
-        this.onProblem('a table subscriber threw', { error: String(error), reason: notice.reason });
+        this.onProblem('a table subscriber threw', {
+          event: 'subscriber-throw',
+          error: String(error),
+          reason: notice.reason,
+        });
       }
     }
   }

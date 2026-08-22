@@ -30,19 +30,109 @@
  * anything not in `EXPECTED_WORKFLOWS` fails, whatever it is called. Adding a
  * workflow is then a two-file diff, which is the point.
  *
+ * ## Discovery is recursive, and that is a fix rather than a tidy-up
+ *
+ * This gate used to find its container files with a NON-recursive
+ * `readdirSync(REPO_ROOT)` matching `/^Dockerfile(\..+)?$/` and
+ * `/^docker-compose(\..+)?\.ya?ml$/`. Two whole classes of file were therefore
+ * invisible to all nine gates:
+ *
+ *   * anything in a subdirectory — `deploy/staging/compose.yml`, a Dockerfile
+ *     under `docker/`, an overlay under `k8s/`;
+ *   * anything using Compose v2's filenames — `compose.yml`, `compose.yaml`,
+ *     `compose.override.yml`, which is the spelling `docker compose` has
+ *     preferred since v2 and which every new file is likely to use.
+ *
+ * An `image: postgres:16` in either of those passed the release audit in silence:
+ * not "was checked and allowed", but "was never read". The walk below is
+ * recursive and matches both naming conventions, and
+ * `ci-pinning.test.mjs` feeds it a nested `compose.yml` with an unpinned image to
+ * prove it now fires.
+ *
+ * ## The one thing an `image:` may be other than a digest
+ *
+ * `docker-compose.staging.yml` deploys the two application images **by digest**,
+ * and those digests are produced per build by `pnpm run release:artifacts`. They
+ * cannot be literals in a committed file. The value is therefore a compose
+ * interpolation that is REQUIRED and has NO default —
+ * `${PRL_API_IMAGE:?the API image DIGEST...}` — and that exact shape is accepted
+ * here, for a reason worth stating precisely:
+ *
+ *   * `${VAR:-postgres:16}` is REJECTED. The default is a committed mutable tag,
+ *     which is exactly what this gate exists to forbid, and it is the shape a
+ *     reader is most likely to reach for.
+ *   * `${VAR}` is REJECTED. Compose substitutes empty and fails obscurely, and
+ *     nothing about the value is constrained.
+ *   * `${VAR:?message}` is ACCEPTED. Nothing mutable is committed, and compose
+ *     refuses to run at all without a value.
+ *
+ * What this gate cannot see is whether the injected value is itself a digest. That
+ * is checked where it can be: `scripts/staging.mjs` refuses a manifest whose
+ * references are not `name@sha256:<64 hex>`, and after `up` it compares the
+ * running containers' images against the manifest and fails on a difference. The
+ * split is deliberate — a static gate should not pretend to know a runtime value —
+ * and it is recorded here so the exception is not read as a loophole.
+ *
+ * ## `--freshness`: a reporter, not a gate
+ *
+ * Passing `--freshness` re-resolves every pinned tag against its registry and
+ * reports which digests have moved upstream. It exits 0 whatever it finds, and
+ * that is deliberate rather than lax: a base image rebuilt for a security patch
+ * must be VISIBLE, but failing the build on it would make every offline or
+ * rate-limited run red and would put a network dependency in the middle of an
+ * otherwise hermetic gate. Drift is a prompt to review and refresh a digest, in a
+ * reviewed diff, which is the whole point of pinning.
+ *
  * The checks are pure functions over file text so
  * `scripts/supply-chain/ci-pinning.test.mjs` can feed them the real attacks.
+ *
+ * Usage:
+ *     node scripts/supply-chain/ci-pinning.mjs               the gate
+ *     node scripts/supply-chain/ci-pinning.mjs --freshness   the drift report
+ *     node scripts/supply-chain/ci-pinning.mjs --freshness --json
+ *
+ * Exit codes: 0 pass (and 0 from --freshness whatever it finds), 1 a gate failure
+ * or a bad argument.
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { EXPECTED_WORKFLOWS } from './denied-packages.mjs';
-import { Gate, REPO_ROOT, runGate } from './lib.mjs';
+import { bold, dim, Gate, green, REPO_ROOT, red, runGate, yellow } from './lib.mjs';
 
 /** A full git commit SHA. Anything shorter is ambiguous and anything else is a moving pointer. */
 const COMMIT_SHA = /^[0-9a-f]{40}$/;
 /** An OCI content digest. */
 const IMAGE_DIGEST = /@sha256:[0-9a-f]{64}$/;
+
+/**
+ * A compose value that is entirely a required interpolation with no default:
+ * `${VAR:?message}` or `${VAR?message}`. See the header for why this shape, and
+ * only this shape, is an acceptable `image:`.
+ */
+const REQUIRED_INTERPOLATION = /^\$\{[A-Za-z_][A-Za-z0-9_]*:?\?[^}]*\}$/;
+
+/** Directories that never contain first-party container files. */
+const SKIP_DIRS = new Set([
+  '.git',
+  'node_modules',
+  'dist',
+  '.next',
+  'coverage',
+  '.pnpm-store',
+  '.turbo',
+  'sbom',
+]);
+
+/** `Dockerfile`, `Dockerfile.api`, `Dockerfile.web`. */
+const DOCKERFILE_NAME = /^Dockerfile(\..+)?$/;
+/**
+ * Compose v1 (`docker-compose.yml`, `docker-compose.staging.yml`) and Compose v2
+ * (`compose.yaml`, `compose.override.yml`). The `docker-` prefix is optional
+ * because v2 dropped it, and a file named `compose.yml` matched neither of the
+ * old patterns — so an unpinned image in one was invisible to every gate.
+ */
+const COMPOSE_NAME = /^(?:docker-)?compose(\..+)?\.ya?ml$/;
 
 /**
  * Strips YAML/Dockerfile line comments so prose *about* an unpinned reference is
@@ -91,6 +181,25 @@ export function checkWorkflowInventory(gate, present) {
   if (present.length === 0) {
     gate.fail('no workflow files found', 'this gate examined nothing — a scan of nothing proves nothing');
   }
+}
+
+/**
+ * Reads the value of an `image:` line.
+ *
+ * Takes the rest of the line rather than the first whitespace-delimited token,
+ * because a required compose interpolation carries a human-readable message and
+ * therefore contains spaces: `image: ${PRL_API_IMAGE:?the API image DIGEST...}`.
+ * A `\S+` capture read that as `${PRL_API_IMAGE:?the` and judged a fragment.
+ */
+function imageValue(line) {
+  const match = /^\s*image:\s*(.+?)\s*$/.exec(line);
+  if (match === null) return null;
+  const raw = match[1] ?? '';
+  // A quoted value is the same value; compose and Actions both accept either.
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    return raw.slice(1, -1);
+  }
+  return raw;
 }
 
 /**
@@ -149,15 +258,15 @@ export function checkWorkflowPinning(gate, label, text) {
       continue;
     }
 
-    const image = /^\s*image:\s*(\S+)/.exec(line);
-    if (image) {
-      const reference = image[1] ?? '';
-      if (!IMAGE_DIGEST.test(reference)) {
-        gate.fail(
-          `service container is not digest-pinned at ${at}: ${reference}`,
-          'a tag is mutable; pin image:tag@sha256:<64 hex> with the tag kept in a comment',
-        );
-      }
+    const image = imageValue(line);
+    if (image !== null && !IMAGE_DIGEST.test(image)) {
+      // A workflow is not interpolated by compose, so the required-interpolation
+      // exception below deliberately does not apply here: a service container
+      // reference is either a digest or it is mutable.
+      gate.fail(
+        `service container is not digest-pinned at ${at}: ${image}`,
+        'a tag is mutable; pin image:tag@sha256:<64 hex> with the tag kept in a comment',
+      );
     }
   }
   return judged;
@@ -203,8 +312,9 @@ export function checkDockerfilePinning(gate, label, text) {
 }
 
 /**
- * Check: every `image:` in a compose file carries a digest. Services built from
- * a local Dockerfile have no `image:` and are covered by the Dockerfile check.
+ * Check: every `image:` in a compose file carries a digest, or is a required
+ * interpolation with no default. Services built from a local Dockerfile have no
+ * `image:` and are covered by the Dockerfile check.
  *
  * @param {Gate} gate
  * @param {string} label
@@ -215,29 +325,57 @@ export function checkComposePinning(gate, label, text) {
   let judged = 0;
   for (const [index, rawLine] of text.split('\n').entries()) {
     const line = uncomment(rawLine);
-    const image = /^\s*image:\s*(\S+)/.exec(line);
-    if (!image) continue;
+    const reference = imageValue(line);
+    if (reference === null) continue;
     judged += 1;
-    const reference = image[1] ?? '';
-    if (!IMAGE_DIGEST.test(reference)) {
-      gate.fail(
-        `compose image is not digest-pinned at ${label}:${index + 1}: ${reference}`,
-        'pin image:tag@sha256:<64 hex>; a tag is mutable and this is the artefact that ships',
-      );
-    }
+    if (IMAGE_DIGEST.test(reference)) continue;
+    if (REQUIRED_INTERPOLATION.test(reference)) continue;
+    gate.fail(
+      `compose image is not digest-pinned at ${label}:${index + 1}: ${reference}`,
+      'pin image:tag@sha256:<64 hex>; a tag is mutable and this is the artefact that ships. The only ' +
+        'other accepted form is a compose interpolation that is REQUIRED and has no default — the ' +
+        'colon-question-mark form, as in PRL_API_IMAGE:?why — because nothing mutable is then ' +
+        'committed and compose refuses to run at all without a value. The colon-dash form is not ' +
+        'that: its default is a committed mutable tag.',
+    );
   }
   return judged;
 }
 
-/** Root-level files the pinning rules apply to, in the order they are reported. */
-function containerFiles() {
-  const names = readdirSync(REPO_ROOT, { withFileTypes: true })
-    .filter((e) => e.isFile())
-    .map((e) => e.name);
-  return {
-    dockerfiles: names.filter((n) => /^Dockerfile(\..+)?$/.test(n)).sort(),
-    composeFiles: names.filter((n) => /^docker-compose(\..+)?\.ya?ml$/.test(n)).sort(),
+/**
+ * Every Dockerfile and compose file in the repository, recursively.
+ *
+ * Exported so the tests discover exactly what the gate discovers; a test that
+ * re-implements the walk is a test that cannot catch a walk that stopped walking.
+ *
+ * @param {string} root
+ * @returns {{dockerfiles: string[], composeFiles: string[]}} repo-relative paths
+ */
+export function discoverContainerFiles(root) {
+  const dockerfiles = [];
+  const composeFiles = [];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        walk(full);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const rel = relative(root, full).split('\\').join('/');
+      if (DOCKERFILE_NAME.test(entry.name)) dockerfiles.push(rel);
+      else if (COMPOSE_NAME.test(entry.name)) composeFiles.push(rel);
+    }
   };
+  walk(root);
+  return { dockerfiles: dockerfiles.sort(), composeFiles: composeFiles.sort() };
 }
 
 export function runCiPinningGate() {
@@ -253,9 +391,12 @@ export function runCiPinningGate() {
       actionRefs += checkWorkflowPinning(gate, relative(REPO_ROOT, path), readFileSync(path, 'utf8'));
     }
 
-    const { dockerfiles, composeFiles } = containerFiles();
+    const { dockerfiles, composeFiles } = discoverContainerFiles(REPO_ROOT);
     if (dockerfiles.length === 0) {
       gate.fail('no Dockerfile found', 'the base-image pinning check examined nothing');
+    }
+    if (composeFiles.length === 0) {
+      gate.fail('no compose file found', 'the compose image check examined nothing');
     }
     let baseImages = 0;
     for (const name of dockerfiles) {
@@ -274,4 +415,219 @@ export function runCiPinningGate() {
   });
 }
 
-if (import.meta.main) await runCiPinningGate();
+// ---------------------------------------------------------------------------
+// --freshness: is a pinned digest still what its tag points at?
+// ---------------------------------------------------------------------------
+
+/**
+ * Splits `registry/name:tag@sha256:...` into its parts.
+ *
+ * The awkward case is a registry with a port (`localhost:5000/x:1`), where the
+ * first colon is not the tag separator. The rule used is the one the reference
+ * grammar uses: a colon introduces a tag only if what follows it contains no `/`.
+ *
+ * @returns {{name: string, tag: string|null, digest: string} | null}
+ */
+export function parsePinnedReference(reference) {
+  const at = reference.lastIndexOf('@');
+  if (at === -1) return null;
+  const digest = reference.slice(at + 1);
+  if (!/^sha256:[0-9a-f]{64}$/.test(digest)) return null;
+  const left = reference.slice(0, at);
+  const colon = left.lastIndexOf(':');
+  if (colon === -1 || left.slice(colon + 1).includes('/')) return { name: left, tag: null, digest };
+  return { name: left.slice(0, colon), tag: left.slice(colon + 1), digest };
+}
+
+/**
+ * Every digest-pinned image reference in the repository's container and workflow
+ * files, with where it was found.
+ *
+ * Reads the same files the gate reads, through the same discovery, so a reference
+ * the gate judges is a reference this can re-check — and one it cannot see is one
+ * neither of them sees, which is a single failure rather than two.
+ */
+export function collectPinnedImages(root) {
+  const found = [];
+  const add = (file, index, reference) => {
+    const parsed = parsePinnedReference(reference);
+    if (parsed !== null) found.push({ ...parsed, reference, at: `${file}:${index + 1}` });
+  };
+
+  const workflowDir = join(root, '.github', 'workflows');
+  for (const name of listWorkflowFiles(workflowDir)) {
+    const rel = `.github/workflows/${name}`;
+    for (const [index, rawLine] of readFileSync(join(workflowDir, name), 'utf8').split('\n').entries()) {
+      const line = uncomment(rawLine);
+      const image = imageValue(line);
+      if (image !== null) add(rel, index, image);
+      const uses = /^\s*-?\s*uses:\s*docker:\/\/(\S+)/.exec(line);
+      if (uses) add(rel, index, uses[1] ?? '');
+    }
+  }
+
+  const { dockerfiles, composeFiles } = discoverContainerFiles(root);
+  for (const rel of dockerfiles) {
+    for (const [index, rawLine] of readFileSync(join(root, rel), 'utf8').split('\n').entries()) {
+      const line = uncomment(rawLine);
+      const from = /^\s*FROM\s+(.+)$/i.exec(line);
+      if (!from) continue;
+      const words = (from[1] ?? '')
+        .trim()
+        .split(/\s+/)
+        .filter((p) => !p.startsWith('--'));
+      add(rel, index, words[0] ?? '');
+    }
+  }
+  for (const rel of composeFiles) {
+    for (const [index, rawLine] of readFileSync(join(root, rel), 'utf8').split('\n').entries()) {
+      const image = imageValue(uncomment(rawLine));
+      if (image !== null) add(rel, index, image);
+    }
+  }
+
+  // Deduplicated by reference, keeping every place it appears: the same base image
+  // is pinned in both Dockerfiles and the report should say so once.
+  const byReference = new Map();
+  for (const entry of found) {
+    const existing = byReference.get(entry.reference);
+    if (existing === undefined) byReference.set(entry.reference, { ...entry, at: [entry.at] });
+    else existing.at.push(entry.at);
+  }
+  return [...byReference.values()];
+}
+
+/**
+ * Re-resolves one tag against Docker Hub and returns the digest it points at now.
+ *
+ * Only Docker Hub is supported, and a reference to any other registry is reported
+ * as unchecked rather than assumed current — an "everything is fine" that came
+ * from not looking is the failure mode this whole file exists to avoid.
+ *
+ * The two `Accept` headers matter: without them the registry returns a
+ * single-platform manifest for the daemon's architecture and its digest is NOT
+ * the digest a multi-arch tag resolves to, so every multi-arch pin would look
+ * like it had drifted.
+ */
+async function resolveTagDigest(name, tag) {
+  if (name.includes('.') || name.startsWith('localhost')) {
+    return { digest: null, why: 'not on Docker Hub; this reporter only speaks to registry-1.docker.io' };
+  }
+  const repository = name.includes('/') ? name : `library/${name}`;
+  try {
+    const tokenResponse = await fetch(
+      `https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repository}:pull`,
+      { signal: AbortSignal.timeout(15_000) },
+    );
+    if (!tokenResponse.ok) return { digest: null, why: `token endpoint answered ${tokenResponse.status}` };
+    const token = (await tokenResponse.json()).token;
+    if (typeof token !== 'string') return { digest: null, why: 'the token endpoint returned no token' };
+
+    const manifest = await fetch(`https://registry-1.docker.io/v2/${repository}/manifests/${tag}`, {
+      method: 'HEAD',
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: [
+          'application/vnd.oci.image.index.v1+json',
+          'application/vnd.docker.distribution.manifest.list.v2+json',
+          'application/vnd.oci.image.manifest.v1+json',
+          'application/vnd.docker.distribution.manifest.v2+json',
+        ].join(', '),
+      },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!manifest.ok) return { digest: null, why: `the registry answered ${manifest.status} for :${tag}` };
+    const digest = manifest.headers.get('docker-content-digest');
+    return digest === null ? { digest: null, why: 'no docker-content-digest header' } : { digest, why: null };
+  } catch (err) {
+    return { digest: null, why: err?.message ?? String(err) };
+  }
+}
+
+/**
+ * The drift report. Always exits 0 — see the header for why that is deliberate.
+ *
+ * @param {boolean} asJson
+ */
+async function runFreshnessReport(asJson) {
+  const pinned = collectPinnedImages(REPO_ROOT);
+  const results = [];
+  for (const entry of pinned) {
+    if (entry.tag === null) {
+      results.push({
+        ...entry,
+        state: 'no-tag',
+        current: null,
+        why: 'pinned by digest with no tag to re-resolve',
+      });
+      continue;
+    }
+    const resolved = await resolveTagDigest(entry.name, entry.tag);
+    if (resolved.digest === null) {
+      results.push({ ...entry, state: 'unresolved', current: null, why: resolved.why });
+    } else if (resolved.digest === entry.digest) {
+      results.push({ ...entry, state: 'current', current: resolved.digest, why: null });
+    } else {
+      results.push({ ...entry, state: 'drifted', current: resolved.digest, why: null });
+    }
+  }
+
+  if (asJson) {
+    console.log(JSON.stringify({ checkedAt: new Date().toISOString(), images: results }, null, 2));
+    return;
+  }
+
+  console.log(bold('\nBase-image digest freshness'));
+  for (const result of results) {
+    const where = result.at.join(', ');
+    if (result.state === 'current') {
+      console.log(`${green('  ✓')} ${result.name}:${result.tag}`);
+      console.log(dim(`      still ${result.digest}  (${where})`));
+    } else if (result.state === 'drifted') {
+      console.log(`${yellow('  !')} ${result.name}:${result.tag} ${bold('has been rebuilt upstream')}`);
+      console.log(dim(`      pinned  ${result.digest}`));
+      console.log(dim(`      now     ${result.current}`));
+      console.log(dim(`      at      ${where}`));
+    } else {
+      console.log(
+        `${yellow('  !')} ${result.name}${result.tag === null ? '' : `:${result.tag}`} not checked`,
+      );
+      console.log(dim(`      ${result.why}  (${where})`));
+    }
+  }
+
+  const drifted = results.filter((r) => r.state === 'drifted');
+  const unresolved = results.filter((r) => r.state === 'unresolved');
+  console.log(bold('\nSummary'));
+  console.log(`  pinned references  ${results.length}`);
+  console.log(`  still current      ${results.length - drifted.length - unresolved.length}`);
+  console.log(`  drifted            ${drifted.length === 0 ? green('0') : yellow(String(drifted.length))}`);
+  console.log(`  not checked        ${unresolved.length}`);
+  console.log(
+    drifted.length === 0
+      ? green(bold('\nNo drift: every pinned tag still resolves to the digest beside it.\n'))
+      : yellow(bold(`\n${drifted.length} pinned tag(s) now resolve elsewhere.\n`)),
+  );
+  console.log(
+    dim(
+      '  This is a REPORT, not a gate: it exits 0 whatever it finds. Drift is usually a base-OS\n' +
+        '  security rebuild and is a reason to refresh the digest in a reviewed diff — which is the\n' +
+        '  point of pinning. Failing the build on it would make every offline run red and would put\n' +
+        '  a network call in the middle of a hermetic gate.\n' +
+        '\n' +
+        '  It also proves nothing about the CONTENT of the new image. A moved digest says the bytes\n' +
+        '  changed, not that they are safe; review the upstream release notes before repinning.\n',
+    ),
+  );
+}
+
+if (import.meta.main) {
+  const argv = process.argv.slice(2);
+  const unknown = argv.filter((arg) => arg !== '--' && arg !== '--freshness' && arg !== '--json');
+  if (unknown.length > 0) {
+    console.error(red(`ci-pinning — unknown option ${unknown[0]} (try --freshness or no arguments)`));
+    process.exit(1);
+  }
+  if (argv.includes('--freshness')) await runFreshnessReport(argv.includes('--json'));
+  else await runCiPinningGate();
+}

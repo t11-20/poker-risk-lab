@@ -34,8 +34,8 @@
  *    and inventing one here would produce a header nothing reads.
  */
 
-import type { ApiError, ErrorCode, SessionResponse } from '@prl/contracts';
-import { API_PATHS } from '@prl/contracts';
+import type { ApiError, DeleteAccountResponse, ErrorCode, SessionResponse } from '@prl/contracts';
+import { ACCOUNT_DELETE_CONFIRMATION, API_PATHS } from '@prl/contracts';
 
 /**
  * Every path this client can emit, re-exported from the wire contract.
@@ -530,6 +530,38 @@ export async function safeFetch<T>(run: () => Promise<T>): Promise<SafeResult<T>
  */
 export function fetchSession(options: ApiCallOptions = {}): Promise<SafeResult<SessionResponse>> {
   return safeFetch<SessionResponse>(() => apiGet<SessionResponse>(API_PATHS.session(), options));
+}
+
+/**
+ * Erases the reader's account, and answers with what actually went and what was kept.
+ *
+ * ## Why the confirmation phrase is supplied HERE and not by the screen
+ *
+ * The API refuses this request unless the body carries `ACCOUNT_DELETE_CONFIRMATION` exactly, and
+ * the point of that rule is that a mis-wired client cannot erase an account by accident. A screen
+ * that assembled the body itself could send a phrase that had drifted from the contract — which
+ * would not be a security hole (the API would refuse it) but WOULD be a delete button that
+ * silently stopped working, which for this feature is the same defect wearing a different hat.
+ *
+ * The reader's own confirmation is a separate thing and stays where it belongs: the control in
+ * `app/record/DeleteAccount.tsx` will not call this at all until the reader has reproduced the
+ * phrase. This function is the wire format; that component is the consent.
+ *
+ * Non-throwing, like `fetchSession`, because every outcome here is a screen the reader has to be
+ * shown rather than an exception: 401 means the session went while they were reading, 409 means
+ * nothing was removed, and a transport failure means nobody knows yet.
+ *
+ * A `POST` and not a `DELETE`, which is the API's decision and is argued at `API_PATHS.accountDelete`.
+ */
+export function deleteAccount(csrfToken: string): Promise<SafeResult<DeleteAccountResponse>> {
+  return safeFetch<DeleteAccountResponse>(() =>
+    apiSend<DeleteAccountResponse>(
+      'POST',
+      API_PATHS.accountDelete(),
+      { confirm: ACCOUNT_DELETE_CONFIRMATION },
+      { csrfToken },
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------

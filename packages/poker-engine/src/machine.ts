@@ -211,9 +211,28 @@ export function startHand(options: StartHandOptions): StartedHand {
   let commitment: DeckCommitment;
   let secret: DeckSecret;
   let sourceKind: HandState['randomSourceKind'];
+  /**
+   * A sampling source may estimate; it may never deal.
+   *
+   * `shuffledDeck` refuses this kind too, so by the time control reaches `commitToDeck` the
+   * outcome would already be an exception. The check is repeated here for two reasons that are
+   * not redundancy: it is what narrows `random.kind` to the three values a hand may be LABELLED
+   * with (`HandState['randomSourceKind']`), so the assignment below needs no cast — and a cast
+   * is precisely how a fourth kind would one day be recorded silently. And it refuses before the
+   * commitment is built rather than part-way through it, so the failure names the real cause.
+   *
+   * See `createSamplingRandom` in `rng.ts` for why a third kind of source exists at all.
+   */
+  const random = options.random;
+  if (random.kind === 'deterministic-sampling') {
+    throw new HandStateError(
+      'a deterministic-sampling source must never deal a hand; it exists for Monte Carlo ' +
+        'estimation only, and a hand dealt from it would be predictable from its seed',
+    );
+  }
   if (options.fixedDeck === undefined) {
-    ({ commitment, secret } = commitToDeck(context, options.random));
-    sourceKind = options.random.kind;
+    ({ commitment, secret } = commitToDeck(context, random));
+    sourceKind = random.kind;
   } else {
     assertDistinctCards(options.fixedDeck, 'fixedDeck');
     if (options.fixedDeck.length !== DECK_SIZE) {
@@ -221,7 +240,7 @@ export function startHand(options: StartHandOptions): StartedHand {
         `fixedDeck must contain all ${DECK_SIZE} cards, got ${options.fixedDeck.length}`,
       );
     }
-    ({ commitment, secret } = commitToKnownDeck(context, options.fixedDeck, options.random));
+    ({ commitment, secret } = commitToKnownDeck(context, options.fixedDeck, random));
     sourceKind = 'fixed-deck-scenario';
   }
 

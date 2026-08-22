@@ -227,6 +227,7 @@ async function afterRestart(options: { readonly status?: RoomRow['status'] } = {
     registry,
     clock,
     validate: compileFrameValidator(app),
+    config: app.appConfig,
     nextRequestId: () => 'req-fixed',
   });
   return { app, router, registry, clock, reads };

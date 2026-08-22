@@ -1,0 +1,276 @@
+/**
+ * The legal, responsible-use and age-check screens: every class those four routes use.
+ *
+ * ## Why this file exists rather than rules in `globals.css`
+ *
+ * `globals.css` owns the app shell — the header, the two navigations, the theme control, the
+ * footer — and says at the top that a route's own patterns belong in a stylesheet the route
+ * imports, "so that two people editing two features are never editing the same file". A document
+ * column and a placeholder marker are route patterns. Everything here is namespaced `.prl-legal-*`
+ * or `.prl-gate-*` and is imported by the four routes that use it, so the blast radius of an edit
+ * is one feature.
+ *
+ * `SessionDuration` is the deliberate exception in the other direction: it renders inside the
+ * footer on every page, so it uses the footer's own classes and adds nothing here. A stylesheet
+ * imported from `src/components` would be a global import from outside the `app` directory, which
+ * is not the shape Next documents.
+ *
+ * ## The rules this file is written against
+ *
+ *  - **Every value is a `--prl-*` token.** No hex, no ms, no bezier. The exceptions are the ones
+ *    `components.css` and `globals.css` already document: geometry with no design content (`100%`,
+ *    `1fr`), `1px` exclusively as a hairline, and media-query lengths, since `var()` is invalid in
+ *    a media feature. There are no additions.
+ *  - **No shadows.** Depth is one step on the surface ramp plus a hairline.
+ *  - **A border that carries meaning uses `--prl-line-strong`, `--prl-caution` or the accent.**
+ *    `--prl-line-subtle` measures 1.44:1 and is decoration only, so it never marks a state.
+ *  - **Nothing animates.** These are documents.
+ *
+ * ## The one rule here that is load-bearing rather than cosmetic
+ *
+ * `.prl-legal-flag` marks a passage that a lawyer has not written yet, and it is the single most
+ * important distinction on these pages. It is therefore drawn three ways at once — an uppercase
+ * word, a caution-coloured rule down the inline start, and an inset surface — so that it survives
+ * a reader with any form of colour-vision deficiency, a forced-colors mode that discards the fill,
+ * and a stylesheet that fails to load entirely. `docs/PRODUCT-GUARDRAILS.md` §6 forbids colour as
+ * the sole carrier of meaning; here the WORD is the carrier and the colour is the reinforcement.
+ * If the rule below is ever reduced to a colour, a reader can mistake a placeholder for a reviewed
+ * term, which is the exact failure the marker exists to prevent.
+ */
+
+/* ==========================================================================================
+   1. THE DOCUMENT COLUMN
+   ==========================================================================================
+   A legal document is read, not scanned, so it is one column at the reading measure rather than
+   the multi-column grids the rest of the app uses. `--prl-measure` is the system's own line-length
+   ceiling; anything wider is where a reader loses their place between lines.
+   ========================================================================================== */
+
+.prl-legal {
+  display: grid;
+  gap: var(--prl-space-10);
+  max-width: var(--prl-measure);
+  padding-block: var(--prl-space-10);
+}
+
+.prl-legal__section {
+  display: grid;
+  gap: var(--prl-space-5);
+}
+
+.prl-legal__section h2 {
+  margin: 0;
+}
+
+.prl-legal__section h3 {
+  margin-block: var(--prl-space-6) 0;
+}
+
+/** Paragraph rhythm inside a document, matching `.prl-prose` without inheriting its width rules. */
+.prl-legal__section p {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-legal__section li {
+  color: var(--prl-text-secondary);
+  line-height: var(--prl-leading-body);
+}
+
+/* ==========================================================================================
+   2. THE DOCUMENT'S OWN METADATA
+   ==========================================================================================
+   Revision, drafting date, effective date, operator. At the TOP rather than the foot: a reader
+   deciding how much weight to give a document needs to know it is a draft before they read it,
+   not after.
+   ========================================================================================== */
+
+.prl-legal__meta {
+  display: grid;
+  gap: var(--prl-space-3) var(--prl-space-6);
+  margin: 0;
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-raised);
+}
+
+.prl-legal__meta dt {
+  color: var(--prl-text-faint);
+  font-size: var(--prl-type-label-sm);
+  font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-label-sm);
+  text-transform: uppercase;
+}
+
+.prl-legal__meta dd {
+  margin: 0;
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-snug);
+}
+
+/** Two columns once there is room for a label and a value side by side; one below that. */
+@media (min-width: 600px) {
+  .prl-legal__meta {
+    grid-template-columns: auto 1fr;
+    align-items: baseline;
+  }
+}
+
+/* ==========================================================================================
+   3. THE "NOT REVIEWED" BANNER
+   ==========================================================================================
+   One per page, above the first heading. Louder than `.prl-legal-flag` because it qualifies the
+   whole document rather than one clause: a full caution border rather than a single rule.
+   ========================================================================================== */
+
+.prl-legal__banner {
+  display: grid;
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-7);
+  border: 1px solid var(--prl-caution);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-legal__banner-mark {
+  color: var(--prl-caution);
+}
+
+.prl-legal__banner p {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  line-height: var(--prl-leading-body);
+}
+
+/* ==========================================================================================
+   4. THE CLAUSE MARKER
+   ==========================================================================================
+   See the header note: this is the load-bearing rule in the file.
+   ========================================================================================== */
+
+.prl-legal-flag {
+  display: grid;
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-6);
+  border: var(--prl-hairline);
+  /* The rule at the inline start is `--prl-space-1` wide, matching `.prl-callout`, so a flagged
+     clause and a lesson's callout read as the same kind of object at the same weight. */
+  border-inline-start: var(--prl-space-1) solid var(--prl-caution);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-legal-flag__mark {
+  color: var(--prl-caution);
+}
+
+.prl-legal-flag p {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  line-height: var(--prl-leading-body);
+}
+
+/* ==========================================================================================
+   5. THE DATA INVENTORY
+   ==========================================================================================
+   A description list rather than a table: each entry is one table's name and a sentence about what
+   is in it, which is a term and its definition. A `<table>` would promise columns that do not
+   exist and would need a horizontal scroll on a phone to deliver them.
+   ========================================================================================== */
+
+.prl-legal__inventory {
+  display: grid;
+  gap: var(--prl-space-6);
+  margin: 0;
+}
+
+.prl-legal__inventory dt {
+  color: var(--prl-text);
+  font-family: var(--prl-font-mono);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-medium);
+}
+
+.prl-legal__inventory dd {
+  margin-block-start: var(--prl-space-3);
+  margin-inline-start: 0;
+  color: var(--prl-text-secondary);
+  line-height: var(--prl-leading-body);
+}
+
+/* ==========================================================================================
+   6. THE AGE CHECK
+   ==========================================================================================
+   One panel, at the reading measure, holding the question and two answers. It is a page rather
+   than an overlay, so it needs no scrim, no trap and no z-index.
+   ========================================================================================== */
+
+.prl-gate {
+  display: grid;
+  gap: var(--prl-space-6);
+  max-width: var(--prl-measure);
+  margin-block: var(--prl-space-9);
+  padding: var(--prl-space-9);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-panel);
+}
+
+.prl-gate__title {
+  margin: 0;
+  font-size: var(--prl-type-display-3);
+  line-height: var(--prl-leading-tight);
+}
+
+.prl-gate p {
+  margin: 0;
+  line-height: var(--prl-leading-body);
+}
+
+/**
+ * The two honesty paragraphs.
+ *
+ * Inset and ruled rather than set in small print, because they say what the control below them does
+ * NOT do, and every age gate on the internet puts that sentence where it will not be read.
+ */
+.prl-gate__caveat {
+  padding: var(--prl-space-5) var(--prl-space-6);
+  border-inline-start: var(--prl-focus-width) solid var(--prl-line-strong);
+  background-color: var(--prl-surface-inset);
+  color: var(--prl-text);
+}
+
+.prl-gate__form {
+  margin: 0;
+}
+
+/**
+ * The decline control is a link, not a button, because it declares nothing — but it has to be the
+ * same size and weight as the button beside it. A smaller or quieter "no" is the manipulation this
+ * whole screen is written to avoid.
+ */
+.prl-gate__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--prl-target-min);
+  padding-inline: var(--prl-space-5);
+  font-size: var(--prl-type-body);
+  font-weight: var(--prl-weight-medium);
+}
+
+.prl-gate__problems {
+  display: grid;
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-6);
+  border: 1px solid var(--prl-caution);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-gate__problems ul {
+  margin: 0;
+  padding-inline-start: var(--prl-space-7);
+}

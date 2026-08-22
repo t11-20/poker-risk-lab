@@ -95,6 +95,7 @@ import {
   topPercentRange,
 } from '@prl/poker-math';
 import { AppError } from '../errors.ts';
+import type { ProblemHook } from '../observability/telemetry.ts';
 import type { LiveTable, TableNotice } from './table.ts';
 import type { Clock, ScheduledTask } from './timers.ts';
 
@@ -301,7 +302,12 @@ export interface BotRunnerOptions {
   readonly clock: Clock;
   /** Legibility only. See the file comment. */
   readonly thinkingDelayMs?: number;
-  readonly onProblem?: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+  /**
+   * Non-fatal problems. Typed `event` on the detail, so "a bot could not decide" and "the engine
+   * refused a bot's action" are two counters rather than two sentences — see
+   * `observability/telemetry.ts`.
+   */
+  readonly onProblem?: ProblemHook;
   /** Test seam: lets a test capture the exact `PolicyInput` a bot was given. */
   readonly onDecision?: (input: PolicyInput, decision: PolicyDecision) => void;
 }
@@ -319,7 +325,7 @@ export class BotRunner {
   private readonly table: LiveTable;
   private readonly clock: Clock;
   private readonly thinkingDelayMs: number;
-  private readonly onProblem: (message: string, detail?: Readonly<Record<string, unknown>>) => void;
+  private readonly onProblem: ProblemHook;
   private readonly onDecision: ((input: PolicyInput, decision: PolicyDecision) => void) | null;
   private readonly bots = new Map<string, BotSeatState>();
   private unsubscribe: (() => void) | null = null;
@@ -425,6 +431,7 @@ export class BotRunner {
         bot.model.observeAction(event);
       } catch (error) {
         this.onProblem('an opponent model refused a public action', {
+          event: 'opponent-model',
           seat: bot.spec.seat,
           error: String(error),
         });
@@ -441,6 +448,7 @@ export class BotRunner {
       bot.model.observe(view);
     } catch (error) {
       this.onProblem('an opponent model refused a completed hand', {
+        event: 'opponent-model',
         seat: bot.spec.seat,
         error: String(error),
       });
@@ -492,7 +500,11 @@ export class BotRunner {
       });
       decision = decide(input);
     } catch (error) {
-      this.onProblem('a bot policy failed to decide', { seat: bot.spec.seat, error: String(error) });
+      this.onProblem('a bot policy failed to decide', {
+        event: 'bot-policy',
+        seat: bot.spec.seat,
+        error: String(error),
+      });
       return;
     }
     this.onDecision?.(input, decision);
@@ -506,7 +518,11 @@ export class BotRunner {
         expectedSequence: view.actionSequence,
       });
     } catch (error) {
-      this.onProblem('a bot action was rejected', { seat: bot.spec.seat, error: String(error) });
+      this.onProblem('a bot action was rejected', {
+        event: 'bot-action-rejected',
+        seat: bot.spec.seat,
+        error: String(error),
+      });
     }
   }
 }

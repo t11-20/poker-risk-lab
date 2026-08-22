@@ -64,12 +64,41 @@ export function hashWithKey(secret: string, domain: string, value: string): stri
   return createHmac('sha256', secret).update(`${domain}:${value}`).digest('hex').slice(0, CLIENT_KEY_LENGTH);
 }
 
+/**
+ * The IPv4-mapped IPv6 prefix. `::ffff:203.0.113.4` and `203.0.113.4` are the same host.
+ *
+ * Node reports the mapped spelling whenever the listening socket is dual-stack (`HOST=::`,
+ * which is what a container uses) and the plain spelling when it is bound to an IPv4
+ * address. So the *same client* produces two different strings depending only on how this
+ * process was started — and, worse, one client can produce both within a single deployment
+ * if anything in front of it resolves differently. Two spellings mean two rate-limit
+ * buckets and two client keys in the logs for one caller, which is a limit that quietly
+ * counts to half of what it says and an investigation that finds half the requests.
+ *
+ * Only this one transform is applied. `::1` and `127.0.0.1` are NOT folded together: they
+ * are genuinely different addresses on different stacks, and treating them as one would be
+ * inventing an equivalence rather than removing a spelling.
+ */
+const IPV4_MAPPED_PREFIX = '::ffff:';
+
+/**
+ * One canonical spelling per address.
+ *
+ * Lower-cased because IPv6 is hexadecimal and `::FFFF:` and `::ffff:` are the same address;
+ * a case difference would fork the bucket exactly as the mapped prefix does.
+ */
+export function normaliseAddress(ip: string): string {
+  const lowered = ip.toLowerCase();
+  return lowered.startsWith(IPV4_MAPPED_PREFIX) ? lowered.slice(IPV4_MAPPED_PREFIX.length) : lowered;
+}
+
 /** The client key for a request. Falls back to a constant when there is no address. */
 export function clientKeyFor(secret: string, ip: string | undefined): string {
   // A missing address happens with injected requests and with unix sockets. Bucketing
   // them together under one key is the right call: they are all "no address", and
   // inventing a unique key per request would silently disable rate limiting for them.
-  return hashWithKey(secret, 'client', ip === undefined || ip === '' ? 'unknown' : ip);
+  const address = ip === undefined || ip === '' ? 'unknown' : normaliseAddress(ip);
+  return hashWithKey(secret, 'client', address);
 }
 
 export interface RequestContextOptions {

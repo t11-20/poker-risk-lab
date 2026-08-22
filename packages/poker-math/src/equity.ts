@@ -33,7 +33,7 @@
 
 import {
   type Card,
-  createDeterministicRandomForTests,
+  createSamplingRandom,
   DECK_SIZE,
   evaluate,
   type HandScore,
@@ -570,7 +570,13 @@ export function monteCarloEquity(spec: EquitySpec, options: EquityOptions = {}):
   const samples = validateSampling(options);
   const started = performance.now();
   const seed = options.seed ?? 1;
-  const random = createDeterministicRandomForTests(seed);
+  // `createSamplingRandom`, NOT `createDeterministicRandomForTests`. The two produce the same
+  // stream for a given seed, so no estimate changes — but the test-only one refuses to exist
+  // under `NODE_ENV=production`, which made every sampled estimate on a production server throw
+  // and stopped any table whose bot needed one. See the note on `createSamplingRandom` in
+  // `@prl/poker-engine`'s `rng.ts` for the whole incident and why sampling is legitimately
+  // deterministic while dealing is not.
+  const random = createSamplingRandom(seed);
 
   const playerCount = spec.players.length;
   const tally = new Tally(playerCount);

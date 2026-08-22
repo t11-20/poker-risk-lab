@@ -1,7 +1,8 @@
 /**
- * The authentication routes: guest sessions, the session read, sign-out, OIDC, unit reset.
+ * The authentication routes: guest sessions, the session read, sign-out, OIDC, unit reset, and
+ * the erasure of an account.
  *
- * Six endpoints, and the interesting thing about them is how differently they treat "not signed
+ * Seven endpoints, and the interesting thing about them is how differently they treat "not signed
  * in":
  *
  * - `GET /auth/session` never fails for it. A reader who has never signed in is the *normal* case
@@ -15,6 +16,10 @@
  *   never penalised, no cooldown, no confirmation gate. That is a product guardrail
  *   (`docs/PRODUCT-GUARDRAILS.md` §1), not a nicety — a reset that is grudging is how a
  *   play-money app starts behaving like a paid one.
+ * - `POST /me/delete` is the opposite of the reset in every respect, and deliberately so. It
+ *   needs a session, a confirmation phrase in the body and a rate-limit budget of its own,
+ *   because it is the one request in this product that cannot be undone. Friction on a reset is
+ *   a dark pattern; friction on an erasure is the feature.
  *
  * ## Where the SQL is
  *
@@ -36,7 +41,7 @@
 
 import { randomBytes } from 'node:crypto';
 import type { CookieSerializeOptions } from '@fastify/cookie';
-import type { ResetUnitsResponse, SessionResponse, SessionUser } from '@prl/contracts';
+import type { DeleteAccountResponse, ResetUnitsResponse, SessionResponse, SessionUser } from '@prl/contracts';
 import { PROTOCOL_VERSION } from '@prl/contracts';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { OidcRelyingParty } from '../auth/oidc.ts';
@@ -62,6 +67,7 @@ import type { AppConfig } from '../config.ts';
 import type { Sql } from '../db.ts';
 import { getSql } from '../db.ts';
 import { AppError } from '../errors.ts';
+import { recordSecurityAudit } from '../observability/telemetry.ts';
 import { clientKeyedRateLimit, sessionCookieOptions } from '../plugins/security.ts';
 import { hashOidcSecret, timingSafeEquals } from '../repositories/hashing.ts';
 import * as sessionsRepository from '../repositories/sessions.ts';
@@ -72,7 +78,7 @@ import * as usersRepository from '../repositories/users.ts';
 // Limits
 // ---------------------------------------------------------------------------
 
-/**
+/*
  * Guest creation, rate limited hard.
  *
  * This is the one unauthenticated endpoint that writes a row, so it is the one a script would
@@ -89,17 +95,44 @@ import * as usersRepository from '../repositories/users.ts';
  * `clientKeyedRateLimit` ignores the cookie and keys on the hashed address instead. The NAT
  * trade-off is accepted knowingly: a classroom of thirty sharing an account-creation budget will
  * occasionally be told to wait, which is much better than unbounded account creation.
+ *
+ * The numbers themselves live in `config.rateLimit.guestMax` / `guestWindowMs` rather than
+ * here. They were literals until a smoke run proved why that was wrong: this is the limit a
+ * test run actually hits, `RATE_LIMIT_MAX` in CI raises only the global bucket, and so the
+ * one limit that needed tuning for an automated caller was the one that could not be tuned.
+ * The shipped defaults are unchanged (10 per 60 s).
+ *
+ * Sign-in starts and callbacks are limited the same way and just as tightly: each start writes
+ * an attempt row, and each callback can cost two outbound requests to the identity provider.
+ * Address-keyed for the same reason as guest creation — the callback completes by issuing a
+ * session. Configured by
+ * `config.rateLimit.oidcMax` / `oidcWindowMs`; the shipped defaults are 15 per 60 s.
  */
-const GUEST_RATE_LIMIT_MAX = 10;
-const GUEST_RATE_LIMIT_WINDOW_MS = 60_000;
 
 /**
- * Sign-in starts and callbacks, also tight: each start writes an attempt row, and each callback
- * can cost two outbound requests to the identity provider. Address-keyed for the same reason as
- * guest creation — the callback completes by issuing a session.
+ * `POST /me/delete`, rate limited on its own budget.
+ *
+ * Not because a loop could delete the account more than once — the first request removes the row
+ * and the session with it, so the second is `not_authenticated`. The budget is for the requests
+ * that FAIL: a wrong confirmation phrase costs nothing to send, and without a limit this becomes
+ * a free way to make a signed-in victim's session grind through a locking transaction (the
+ * deletion takes `for update` on the account row) for as long as an attacker who has stolen a
+ * CSRF token and a cookie cares to keep sending them.
+ *
+ * Five in fifteen minutes. A person deciding to leave presses the button once, twice if they
+ * mistyped; five is far more than that and far less than a loop. The limit inherits the default
+ * key generator, which prefers the session cookie — correct here, unlike on `POST /auth/guest`,
+ * because this route consumes a session rather than issuing one, so the key cannot rotate under
+ * it.
+ *
+ * The numbers are literals rather than `config.rateLimit.*` entries, unlike the guest and OIDC
+ * limits beside them. Those moved into configuration because an automated caller genuinely needs
+ * to raise them; nothing in CI or in a smoke run deletes accounts in a loop, so a knob here would
+ * be a setting that exists only to be turned down. If that changes, they belong in `config.ts`
+ * with the others rather than being edited here.
  */
-const OIDC_RATE_LIMIT_MAX = 15;
-const OIDC_RATE_LIMIT_WINDOW_MS = 60_000;
+const ACCOUNT_DELETE_MAX = 5;
+const ACCOUNT_DELETE_WINDOW_MS = 15 * 60 * 1_000;
 
 /** Display-name shape, mirroring `DISPLAY_NAME_SCHEMA` in `@prl/contracts`. */
 const DISPLAY_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 '._-]{0,22}[A-Za-z0-9]$/;
@@ -128,6 +161,18 @@ export interface UserStore {
   ) => Promise<SessionAccount>;
   readonly readUnits: (userId: string) => Promise<number>;
   readonly resetUnits: (userId: string) => Promise<number>;
+  /**
+   * Erases the account and everything that describes only it, in ONE transaction.
+   *
+   * `null` means the id named no account, which a client retrying a deletion whose response it
+   * never saw can legitimately reach. Every other failure throws.
+   *
+   * The whole operation is one port method rather than several, because it has to be one
+   * transaction: a half-applied erasure is a learner whose tables are shut and whose account
+   * still exists, with nothing recording that anything was attempted. `createAuthStore` opens
+   * the transaction; the repository refuses a pool handle outright.
+   */
+  readonly deleteAccount: (userId: string) => Promise<DeleteAccountResponse | null>;
 }
 
 /** The `prl.oidc_login_attempts` operations, with `sql` already bound. */
@@ -375,10 +420,18 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
      * a learner and the first lesson for no security benefit, because there is nothing of value
      * attached to the account to protect.
      */
-    // Address-keyed, not session-keyed: see GUEST_RATE_LIMIT_MAX above for why the default
+    // Address-keyed, not session-keyed: see the guest-limit note above for why the default
     // key is unusable on a route that issues a session.
-    const guestRateLimit = clientKeyedRateLimit(config, GUEST_RATE_LIMIT_MAX, GUEST_RATE_LIMIT_WINDOW_MS);
-    const oidcRateLimit = clientKeyedRateLimit(config, OIDC_RATE_LIMIT_MAX, OIDC_RATE_LIMIT_WINDOW_MS);
+    const guestRateLimit = clientKeyedRateLimit(
+      config,
+      config.rateLimit.guestMax,
+      config.rateLimit.guestWindowMs,
+    );
+    const oidcRateLimit = clientKeyedRateLimit(
+      config,
+      config.rateLimit.oidcMax,
+      config.rateLimit.oidcWindowMs,
+    );
     app.post<{ Body: GuestBody | undefined }>(
       '/auth/guest',
       { config: guestRateLimit, schema: { body: { $ref: 'prl:createGuestBody#' } } },
@@ -387,6 +440,13 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
         // a legitimate payload and the parser may leave it absent altogether.
         const account = await store.users.createGuest(sanitiseDisplayName(request.body?.displayName));
         await issueSession(reply, account);
+        // The one unauthenticated endpoint that writes a user row, so it is the one a script
+        // would point at to fill the users table. The rate limit is what stops that; this is what
+        // makes it investigable afterwards. NO DISPLAY NAME is recorded — it is text the learner
+        // typed, and `redactDetail` would censor it anyway.
+        recordSecurityAudit({ event: 'auth.guest.created', userId: account.id }, (message, detail) => {
+          request.log.warn({ ...detail }, message);
+        });
         reply.status(201);
         return sessionResponse(reply, account, store.users, config);
       },
@@ -407,8 +467,18 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
      * 204 whether or not there was anything to revoke. A client that has lost its cookie, or is
      * retrying after a timeout, has to be able to reach "signed out" without interpreting an error.
      */
-    app.post('/auth/logout', async (_request, reply) => {
+    app.post('/auth/logout', async (request, reply) => {
+      // Read before the session is destroyed; afterwards there is nothing to attribute it to.
+      const userId = request.session === null ? null : request.session.user.id;
       await destroySession(reply);
+      // Only when there was a session to end. A logout by a caller who had none is idempotent by
+      // design (see above) and is not an event — recording it would fill the audit log with the
+      // retries and lost cookies it exists to make legible.
+      if (userId !== null) {
+        recordSecurityAudit({ event: 'auth.session.revoked', userId }, (message, detail) => {
+          request.log.warn({ ...detail }, message);
+        });
+      }
       // `send()` with no argument rather than returning `null`: a 204 must carry no body, and a
       // `null` return value would serialise the four characters "null".
       return reply.status(204).send();
@@ -528,6 +598,88 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
       const body: ResetUnitsResponse = { units: await store.users.resetUnits(session.user.id) };
       return body;
     });
+
+    /**
+     * `POST /me/delete` — the learner leaves, and takes their record with them.
+     *
+     * ## What this does, exactly, and what it deliberately does not
+     *
+     *   DELETED       every session; every lesson marked read; every quiz attempt; every
+     *                 scenario attempt; every seat at every table, live or long departed.
+     *   ANONYMISED    the learner's seat in every hand they played, the audit-log entries
+     *                 naming them, and the tables they created. The identity is removed; the
+     *                 row stays.
+     *   RETAINED      every hand, in full — the actions, the board, the commitment root and the
+     *                 reveal proofs. A hand is a shared record. The other seats belong to other
+     *                 people, it is in their history, and deleting it would edit theirs. This is
+     *                 the one thing a learner might not expect, so the response says so in
+     *                 counts and `apps/web/src/app/record/DeleteAccount.tsx` says so in words
+     *                 BEFORE they confirm rather than after.
+     *   TABLES        a table the learner created is closed and loses its owner. It is not
+     *                 deleted: `prl.hands` cascades from `prl.rooms`, so deleting the table
+     *                 would delete everybody else's hands with it.
+     *
+     * That is a description of engineering behaviour and not a legal conclusion; nothing here
+     * should be read as one. `db/migrations/0004_account_deletion.sql` argues each choice.
+     *
+     * ## The shape of the request
+     *
+     * A confirmation phrase in the body, checked by `prl:deleteAccountBody` before this handler
+     * runs, because the operation cannot be undone and a bare `POST` is something a mis-wired
+     * client, a replayed submission or a double-tapped button can produce by accident. The CSRF
+     * layer already covers the cross-site case; this covers our own client.
+     *
+     * ## The order of the three steps, which is the part worth reading
+     *
+     *   1. `requireSession` — 401 before anything else, and it is what identifies WHOSE account
+     *      is at stake. There is no user id in the path or the body, so this route cannot be
+     *      aimed at somebody else.
+     *   2. the erasure, in one transaction, which revokes every session as part of itself.
+     *   3. `destroySession` — clears the cookie. It runs AFTER the transaction has committed,
+     *      never before: clearing first would leave a browser signed out of an account that a
+     *      failed transaction had left completely intact.
+     *
+     * `destroySession` also tries to revoke the caller's session row, which by now does not
+     * exist; `sessions.revoke` answers false for a row it cannot find, so that is a no-op rather
+     * than an error. The cookie is cleared regardless, which is the half that matters here.
+     */
+    app.post(
+      '/me/delete',
+      {
+        config: { rateLimit: { max: ACCOUNT_DELETE_MAX, timeWindow: ACCOUNT_DELETE_WINDOW_MS } },
+        schema: { body: { $ref: 'prl:deleteAccountBody#' } },
+      },
+      async (request, reply) => {
+        const session = requireSession(request);
+        const deleted = await store.users.deleteAccount(session.user.id);
+        // Null means the row had already gone — a retry of a request whose answer never arrived,
+        // or a guest swept between the session read and this statement. The cookie is still
+        // cleared and the answer is still 401, because "there is no such account" and "you are
+        // not signed in" are the same fact from out here, and inventing a success with zero
+        // counts would tell the learner an erasure ran when none did.
+        if (deleted === null) {
+          await destroySession(reply);
+          throw new AppError('not_authenticated', {
+            logDetail: 'account deletion found no such account; the session outlived its user row',
+          });
+        }
+        // No user id, no display name, no counts. The counts are the learner's own and belong in
+        // the response; a log line saying how many hands somebody had played on their way out is
+        // a record of the person who asked to have no record.
+        request.log.info({ userKind: session.user.kind }, 'account erased at the learner request');
+        // Recorded with a NULL user id, and that is the whole point rather than an oversight.
+        // `audit_log.user_id` is ON DELETE SET NULL, so the row would be detached a moment later
+        // anyway; writing it detached from the start means the audit log never briefly holds a
+        // pointer to an account that asked to stop existing. What survives is that an erasure
+        // happened and when — which is what an operator needs to answer "did it run?" — and
+        // nothing that names who asked.
+        recordSecurityAudit({ event: 'auth.account.deleted', userId: null }, (message, detail) => {
+          request.log.warn({ ...detail }, message);
+        });
+        await destroySession(reply);
+        return deleted;
+      },
+    );
   };
 }
 
@@ -612,6 +764,45 @@ export function createAuthStore(sql: Sql): AuthStore {
 
       readUnits: async (userId) => (await usersRepository.readUnits(sql, userId)).units,
       resetUnits: async (userId) => (await usersRepository.resetUnits(sql, userId)).units,
+
+      /**
+       * The only binding here that opens a transaction, because it is the only one that has to.
+       *
+       * `sql.begin` rather than `withTransaction` from `db.ts`: that helper reaches for the
+       * process-wide pool through `getSql()`, and every other method in this store runs on the
+       * `sql` handle it was given. A store bound to one handle that quietly used a different one
+       * for its most destructive operation would be a trap for whoever next writes a test against
+       * a transaction of their own.
+       *
+       * The boxing is the same trick `withTransaction` documents at length: `begin` is typed
+       * `UnwrapPromiseArray<T>`, so a callback returning an array comes back with a different
+       * type from one returning an object, and wrapping the value makes the return type
+       * unconditional.
+       */
+      deleteAccount: async (userId) => {
+        const boxed = await sql.begin(async (tx) => ({
+          value: await usersRepository.deleteAccount(tx, userId),
+        }));
+        const summary = boxed.value;
+        if (summary === null) return null;
+        // Re-shaped rather than returned whole: the repository's summary also carries the user
+        // id, the number of sessions revoked and the number of tables closed, and none of those
+        // are the learner's business. The wire type is the contract, and it is narrower.
+        return {
+          deleted: {
+            sessions: summary.deleted.sessions,
+            lessonsCompleted: summary.deleted.lessonsCompleted,
+            quizAttempts: summary.deleted.quizAttempts,
+            scenarioAttempts: summary.deleted.scenarioAttempts,
+            roomMemberships: summary.deleted.roomMemberships,
+          },
+          anonymised: {
+            handSeats: summary.anonymised.handSeats,
+            auditEvents: summary.anonymised.auditEvents,
+            roomsCreated: summary.anonymised.roomsCreated,
+          },
+        };
+      },
     },
 
     oidcAttempts: {

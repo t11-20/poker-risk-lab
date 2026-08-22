@@ -19,9 +19,17 @@
  * exchange itself against a stub. These are the parts that decide whether an account is created,
  * so they are the parts a regression would land in.
  *
- * Elsewhere: `scripts/smoke-test.mjs` §12 drives a real production server — fresh jar to `/learn`,
- * assert a session cookie comes back, navigate again and assert nothing new is minted, and confirm
- * the reader's own progress is then readable. A stub cannot prove the cookie reaches the browser.
+ * Elsewhere: `scripts/smoke-test.mjs` **§11 "Guest bootstrap on Learn"** drives a real production
+ * server — fresh jar to `/learn`, assert a session cookie comes back, assert it resolves to a guest
+ * account, navigate and refresh and fire three concurrent requests and assert nothing further is
+ * minted, assert a prefetch mints nothing, and finally record a lesson read as that guest and
+ * assert the server stored it. A stub cannot prove the cookie reaches the browser.
+ *
+ * The section number is checked here rather than remembered: it was cited as §12 for two releases,
+ * and §12 is the rate-limit flood, which deliberately runs LAST and drains the limiter's bucket. A
+ * reader sent there to see the guest walk would have found a section whose whole purpose is to make
+ * `POST /auth/guest` answer 429. Sending somebody to the wrong evidence is the same defect as
+ * having none.
  */
 
 import assert from 'node:assert/strict';

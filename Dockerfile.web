@@ -83,8 +83,10 @@ ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     NPM_CONFIG_UPDATE_NOTIFIER=false
 RUN corepack enable
 
-# .dockerignore keeps node_modules, dist, .next, coverage, .git, docs, *.md and
-# .env* out of the context, so this is source and manifests only.
+# .dockerignore keeps node_modules, dist, .next, coverage, .git, deploy, docs,
+# markdown and .env* out of the context, so this is source and manifests only. The
+# markdown and .env rules are anchored at every depth; before they were, this
+# image shipped apps/web/AGENTS.md and apps/web/CLAUDE.md.
 FROM toolchain AS source
 COPY . .
 
@@ -96,11 +98,16 @@ RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@prl/web...
 # `packages/ui/src` goes here with everything else and is put back from the build
 # stage below — @prl/ui is consumed as source, so keeping the prune uniform and
 # restoring the one exception is better than a hand-maintained package list.
+# See the identical markdown lines in Dockerfile.api: .dockerignore is the real
+# fix and these are the second line of defence, because THIS image is the one that
+# shipped apps/web/AGENTS.md and apps/web/CLAUDE.md.
 RUN rm -rf \
       apps/*/src apps/*/test apps/*/scripts \
       packages/*/src packages/*/test \
       apps/*/tsconfig.json packages/*/tsconfig.json tsconfig.base.json \
-      biome.json db .github scripts Dockerfile.api Dockerfile.web docker-compose.yml
+      biome.json db .github scripts Dockerfile.api Dockerfile.web \
+      docker-compose.yml docker-compose.staging.yml deploy \
+      ./*.md apps/*/*.md packages/*/*.md
 
 FROM source AS build
 RUN pnpm install --frozen-lockfile --ignore-scripts --filter "@prl/web..."
@@ -145,7 +152,11 @@ RUN pnpm --filter "@prl/web..." run build
 # day the app gains a dependency on a workspace package nobody adds to it, the image
 # builds cleanly and dies at startup with ERR_MODULE_NOT_FOUND. That is not
 # hypothetical — it happened to Dockerfile.api with @prl/poker-ai.
+# `apps/web/*.md` is the line that matters most in this file. The runtime stage
+# copies /app/apps/web as one directory, so anything left here is published; that
+# is exactly how AGENTS.md and CLAUDE.md got into the image.
 RUN rm -rf apps/web/node_modules apps/web/src apps/web/tsconfig.json apps/web/.next/cache \
+      apps/web/*.md packages/*/*.md \
       packages/*/node_modules packages/*/test packages/*/tsconfig.json \
  && for pkg in packages/*/; do [ "$pkg" = 'packages/ui/' ] || rm -rf "${pkg}src"; done
 
@@ -158,6 +169,18 @@ FROM base AS runtime
 ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
+
+# npm and corepack are removed for the reasons written out at length in the same
+# place in Dockerfile.api: measured, they were the source of every HIGH/CRITICAL
+# finding in this image that had an available fix (all inside
+# /usr/local/lib/node_modules/npm); structurally, a package manager next to a
+# production application is a downloader and an arbitrary-code executor in a
+# container whose whole posture is a read-only root and a non-root user.
+#
+# The CMD below is /app/apps/web/node_modules/.bin/next, a pnpm-written shim that
+# execs node directly. It does not go near npm.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 
 COPY --from=prod-deps --chown=node:node /app /app
 # Every workspace package's dist/ — whichever they are today — plus

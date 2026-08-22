@@ -21,7 +21,7 @@
 import assert from 'node:assert/strict';
 import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { describe, it } from 'node:test';
-import type { UserKind } from '@prl/contracts';
+import type { DeleteAccountResponse, UserKind } from '@prl/contracts';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, registerRoutes } from '../src/app.ts';
 import type { Jwk, OidcRelyingParty, VerifiedIdToken } from '../src/auth/oidc.ts';
@@ -183,6 +183,44 @@ function createFakeStore(): FakeStore {
     return user.units;
   }
 
+  /**
+   * Mirrors `usersRepository.deleteAccount`, and mirrors it *behaviourally* rather than
+   * returning a fixed object.
+   *
+   * A stub that answered with zeroes and left the maps alone would let this harness pass
+   * every assertion about the route while the account it claimed to erase was still here —
+   * and "the fake said it worked" is exactly the shape of evidence this repository refuses
+   * elsewhere. So the user is removed, and every session that pointed at them goes with it,
+   * which is what makes the follow-up assertion "the caller's session no longer resolves"
+   * mean something.
+   *
+   * What is NOT modelled here: hand seats, audit rows and owned rooms. This harness has no
+   * such tables, and inventing them would be modelling the database rather than the route.
+   * The anonymisation half of the policy is proved against real Postgres in
+   * `test/account-deletion.test.ts`; this counts what it can actually observe and reports
+   * zero for the rest.
+   */
+  function deleteAccount(userId: string): DeleteAccountResponse | null {
+    if (!users.has(userId)) return null;
+    let revoked = 0;
+    for (const [token, session] of sessions) {
+      if (session.userId !== userId) continue;
+      sessions.delete(token);
+      revoked += 1;
+    }
+    users.delete(userId);
+    return {
+      deleted: {
+        sessions: revoked,
+        lessonsCompleted: 0,
+        quizAttempts: 0,
+        scenarioAttempts: 0,
+        roomMemberships: 0,
+      },
+      anonymised: { handSeats: 0, auditEvents: 0, roomsCreated: 0 },
+    };
+  }
+
   /** Mirrors `findValidByToken`: revoked and expired sessions resolve to nothing, in one answer. */
   function findValid(token: string): StoredSession | null {
     const session = sessions.get(token);
@@ -273,6 +311,7 @@ function createFakeStore(): FakeStore {
       Promise.resolve(findOrCreateOidc(issuer, subject, displayName)),
     readUnits: (userId) => Promise.resolve(users.get(userId)?.units ?? DEFAULT_UNIT_ALLOWANCE),
     resetUnits: (userId) => Promise.resolve(resetUnits(userId)),
+    deleteAccount: (userId) => Promise.resolve(deleteAccount(userId)),
   };
 
   const attemptStore: OidcAttemptStore = {

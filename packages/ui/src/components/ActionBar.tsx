@@ -110,7 +110,13 @@ export interface ActionBarProps {
   readonly toCall: number;
   /** This seat's commitment so far this street. `to` amounts are totals, not increments. */
   readonly committedThisStreet: number;
-  /** Disables every control, e.g. while an action is in flight. */
+  /**
+   * Disables every control, e.g. while an action is in flight.
+   *
+   * Setting this takes the focused control away from whoever was standing on it, so this component
+   * also renders somewhere for the caret to go and puts it there. See the focus block in
+   * `ActionBar` — the behaviour is part of what this prop means, not a detail of it.
+   */
   readonly disabled?: boolean;
   /** Shown when there are no legal actions. */
   readonly idleText?: string;
@@ -311,9 +317,9 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   const [draft, setDraft] = useState<BetDraft | null>(null);
 
   /**
-   * Where focus goes when the controls it was on are taken away.
+   * Where focus goes when the controls it was on are taken away, in the TWO ways that happens.
    *
-   * ## The defect
+   * ## The first defect: the turn ends
    *
    * Found by `scripts/keyboard-audit.mjs` folding a real hand with the keyboard: pressing Enter on
    * Fold unmounts every button in this bar — correctly, it is no longer this seat's turn — and the
@@ -322,30 +328,89 @@ export function ActionBar(props: ActionBarProps): ReactElement {
    * tab past the whole page to get back to the table. A screen-reader user is worse off again:
    * nothing was announced at all, because focus did not land on anything that says something.
    *
-   * ## The fix, and its limits
+   * ## The second defect: the whole round trip before that
    *
-   * The idle line takes `tabIndex={-1}` and focus moves to it, but ONLY when focus was inside this
-   * bar when the controls went away. That condition is the whole design: a table where the
-   * opponent acts while the reader is halfway down the Coach panel must not have focus yanked back
-   * here, which would be a worse bug than the one being fixed and is how "manage focus" usually
-   * goes wrong.
+   * `disabled` goes true the instant a decision is sent, and a browser blurs the focused element
+   * the moment it becomes disabled. So the caret sat on `<body>` for the ENTIRE server round trip —
+   * every action, every time — and the rescue above did not cover it, because it fires when
+   * `legalActions` goes empty and that only happens when the server's next frame arrives. On a
+   * fixture path, where no frame ever arrives, it was permanent.
    *
-   * `hadFocus` stays true through the unmount on purpose. `focusout` fires as the button is
-   * removed with a null `relatedTarget`, and treating that as "focus left the bar" would clear the
-   * flag a moment before the effect needs to read it.
+   * ## What was chosen, and what was rejected
+   *
+   * **Rejected: `aria-disabled` with a no-op handler.** It is the only option that keeps the caret
+   * exactly where the reader put it, and it was very nearly the answer. Two costs sank it. The
+   * control then *looks* operable — `:disabled` is what `components.css` styles, and nothing in
+   * this repository styles `[aria-disabled]`, so the whole row would keep its enabled colours,
+   * hover and pointer while doing nothing; a player pressing Fold twice at a table because it
+   * looked live is a worse failure than a lost caret. And a control that is in the tab order but
+   * inert makes `disabled` mean two different things to the harnesses that read it.
+   *
+   * **Rejected: keeping the button focused while disabled.** A disabled control is removed from
+   * the accessibility tree by some combinations of browser and screen reader, so the caret would be
+   * on a node the reader is told nothing about — the same silence, in a different place.
+   *
+   * **Chosen: a named place inside the bar, and the reader is put back afterwards.** The controls
+   * stay natively `disabled`, so nothing about how they look or how they are read changes. A line
+   * mounts while `disabled` holds, carrying `role="group"` and an `aria-label` — measured in Chrome
+   * 151 by `TableStage.tsx`: a bare focusable `<div>` computes an EMPTY name, and `group` is the
+   * role that can carry one — and the caret goes there, so what the reader hears is where their
+   * decision went. When the answer arrives the line unmounts and the caret is returned to the exact
+   * control it came from, which is the half that makes this a fix rather than a relocation: a
+   * refusal leaves the reader on the button they pressed, ready to press it again.
+   *
+   * The honest cost: for the length of the round trip the reader is somewhere they did not choose
+   * to be, and pressing Tab from it moves on rather than back. That is the price of `disabled`
+   * being real, and it is paid on purpose.
+   *
+   * ## Why the rescue yields for a microtask first
+   *
+   * A caller may already handle this from outside, and `apps/web/src/components/TableStage.tsx`
+   * does: it moves the caret to the acknowledgement that says what became of the decision, which
+   * carries more than this bar can know. Effects run child-first inside one commit, so an
+   * unconditional rescue here would win that race every time and quietly replace a better
+   * destination. `queueMicrotask` runs after the whole passive-effect flush — after any parent's
+   * rescue — and the re-check of `document.activeElement` then stands down if anybody else has
+   * taken it. No paint happens in between, so nothing is announced twice.
+   *
+   * ## The guards, which are load-bearing
+   *
+   * Focus moves only when it was inside this bar to begin with: a table where the opponent acts
+   * while the reader is halfway down the Coach panel must not have focus yanked back here, which
+   * would be a worse bug than the one being fixed and is how "manage focus" usually goes wrong. And
+   * only when the browser has actually given up on focus, so anything that legitimately holds it
+   * keeps it.
+   *
+   * `hadFocus` stays true through a disable or an unmount on purpose. `focusout` fires with a null
+   * `relatedTarget` in both cases, and treating that as "focus left the bar" would clear the flag a
+   * moment before the effect needs to read it.
    */
   const idleRef = useRef<HTMLParagraphElement>(null);
+  const inFlightRef = useRef<HTMLParagraphElement>(null);
   const hadFocus = useRef(false);
+  /** The control the reader was on, so it can be given back when the decision comes home. */
+  const lastControl = useRef<HTMLElement | null>(null);
+  /** True only while the caret is on the in-flight line because this component put it there. */
+  const parked = useRef(false);
   const wasActing = useRef(false);
+  const wasDisabled = useRef(disabled);
   const acting = legalActions.length > 0;
 
-  const onFocusCapture = (): void => {
+  const onFocusCapture = (event: ReactFocusEvent<HTMLDivElement>): void => {
     hadFocus.current = true;
+    // The in-flight line is not somewhere to be returned to, and arriving there is not the reader
+    // choosing to leave it. Everything else inside the bar is both.
+    if (event.target === inFlightRef.current) return;
+    parked.current = false;
+    lastControl.current = event.target;
   };
   const onBlurCapture = (event: ReactFocusEvent<HTMLDivElement>): void => {
     const next = event.relatedTarget;
-    // Null means the focused node was removed, not that the reader went elsewhere.
-    if (next !== null && !event.currentTarget.contains(next)) hadFocus.current = false;
+    // Null means the focused node was removed or disabled, not that the reader went elsewhere.
+    if (next !== null && !event.currentTarget.contains(next)) {
+      hadFocus.current = false;
+      parked.current = false;
+    }
   };
 
   useEffect(() => {
@@ -358,6 +423,32 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     idleRef.current?.focus();
     hadFocus.current = false;
   }, [acting]);
+
+  useEffect(() => {
+    const taken = disabled && !wasDisabled.current;
+    const returned = !disabled && wasDisabled.current;
+    wasDisabled.current = disabled;
+
+    if (taken) {
+      if (!hadFocus.current) return;
+      queueMicrotask(() => {
+        if (document.activeElement !== document.body && document.activeElement !== null) return;
+        inFlightRef.current?.focus();
+        parked.current = document.activeElement === inFlightRef.current;
+      });
+      return;
+    }
+
+    if (!returned || !parked.current) return;
+    parked.current = false;
+    const control = lastControl.current;
+    // `isConnected` because the whole row may have been replaced by the server's next frame, in
+    // which case the turn is over and the rescue above owns what happens next; and the disabled
+    // check because a control that came back still disabled is not somewhere to leave a reader.
+    if (control === null || !control.isConnected) return;
+    if (control instanceof HTMLButtonElement && control.disabled) return;
+    control.focus();
+  }, [disabled]);
 
   const sized = resolveSizedAction(legalActions);
   const canFold = legalActions.some((action) => action.type === 'fold');
@@ -476,6 +567,36 @@ export function ActionBar(props: ActionBarProps): ReactElement {
           />
         )}
       </div>
+
+      {/*
+        The caret's home for the length of the round trip, mounted only while there is one.
+
+        Not always present: a labelled group that is always there sits in every reader's rotor
+        announcing an empty container on a table where nothing has been sent. `TableStage` reached
+        the same conclusion about its acknowledgement for the same reason.
+
+        It borrows `prl-action-bar__idle`, which is the other line in this bar that exists to be
+        landed on and is the one place in `components.css` with a `:focus-visible` ring drawn for
+        exactly that — "unlike <main>, this is a place focus arrives at unexpectedly, and a reader
+        who has just folded needs to see where they now are". Sharing it means the two lines cannot
+        drift apart visually; it costs a class name that says `idle` on a line that is not idle at
+        all, and this comment is the whole of the mitigation for that.
+
+        The label and the sentence deliberately do not say the same thing: the label is announced as
+        the name of the place the caret arrived at, and the sentence is what is on the screen.
+      */}
+      {disabled ? (
+        // biome-ignore lint/a11y/useSemanticElements: the rule points at <fieldset>, which is for form controls and would bring a required <legend> and a border with it. This is one sentence that the caret is moved to, and `group` is the role ARIA has for a named container of exactly that kind. `TableStage` in apps/web documents the same false positive from the same rule, for the same markup and the same reason.
+        <p
+          aria-label="Your decision is with the server"
+          className="prl-action-bar__idle"
+          ref={inFlightRef}
+          role="group"
+          tabIndex={-1}
+        >
+          {'Waiting for the server.'}
+        </p>
+      ) : null}
 
       <p className="prl-action-bar__note">
         {'Folding costs nothing and gives up any claim on the pot. '}

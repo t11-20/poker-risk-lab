@@ -23,6 +23,8 @@
  * Monte Carlo request for 10^12 samples, a board with a thousand cards.
  */
 
+import { ACCOUNT_DELETE_CONFIRMATION } from './api-types.ts';
+
 const CARD_PATTERN = '^(?:10|[2-9TJQKAtjqka])[cdhsCDHS]$';
 const CARDS_PATTERN = '^\\s*(?:(?:10|[2-9TJQKAtjqka])[cdhsCDHS]\\s*,?\\s*)+$';
 /** Range notation, exact cards, or "top:NN". Parsed strictly downstream. */
@@ -66,6 +68,33 @@ export const oidcStartQuerySchema = {
     // open-redirect vulnerability, and the sign-in flow is exactly where it gets
     // used to phish.
     redirectAfter: { type: 'string', maxLength: 256, pattern: '^/(?![/\\\\])[A-Za-z0-9/_\\-?=&.]*$' },
+  },
+} as const;
+
+/**
+ * The body of `POST /me/delete`.
+ *
+ * `const` rather than `type: 'boolean'`, and that is the security property rather than a
+ * formatting preference. This endpoint destroys a learner's record and cannot be undone, so the
+ * request has to be one nothing can send by accident: a boolean is producible by a mis-wired
+ * client, a replayed form post, a double-submitted button or a JSON body assembled from a partial
+ * object. A phrase somebody has to reproduce exactly is not.
+ *
+ * The phrase itself lives in `api-types.ts` so that the validator here and the control in
+ * `apps/web` compare against one string. `maxLength` is stated as well as `const`, so a caller
+ * sending megabytes is refused on length before the comparison rather than after it.
+ *
+ * This is deliberately NOT the whole defence. The CSRF layer already stops a cross-site caller
+ * reaching this route at all, and the session cookie decides whose account is at stake; the
+ * confirmation is what stops OUR OWN client firing it by mistake.
+ */
+export const deleteAccountBodySchema = {
+  $id: 'prl:deleteAccountBody',
+  type: 'object',
+  additionalProperties: false,
+  required: ['confirm'],
+  properties: {
+    confirm: { type: 'string', minLength: 1, maxLength: 64, const: ACCOUNT_DELETE_CONFIRMATION },
   },
 } as const;
 
@@ -407,6 +436,7 @@ export const wsClientMessageSchema = {
 export const ALL_SCHEMAS = [
   createGuestBodySchema,
   oidcStartQuerySchema,
+  deleteAccountBodySchema,
   oidcCallbackQuerySchema,
   contentIdParamsSchema,
   quizAttemptBodySchema,

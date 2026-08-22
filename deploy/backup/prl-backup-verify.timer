@@ -1,0 +1,21 @@
+# Poker Risk Lab — when the weekly verification and prune run.
+#
+# Installed to /etc/systemd/system/prl-backup-verify.timer, then:
+#   systemctl enable --now prl-backup-verify.timer
+
+[Unit]
+Description=Weekly Poker Risk Lab backup verification and retention prune
+Documentation=file:///opt/poker-risk-lab/docs/production/backup-restore.md
+
+[Timer]
+# Sunday 04:00 UTC: after the night's backup has been taken, and on the quietest day, since
+# `verify --deep` restores the whole archive and competes with the live database for I/O.
+OnCalendar=Sun *-*-* 04:00:00 UTC
+RandomizedDelaySec=600
+# Same reason as the backup timer: a week the host was down must not be a week the archives
+# went unverified without anybody noticing.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

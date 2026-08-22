@@ -58,6 +58,15 @@
  * on the server on purpose: an overlay that mounts on the client fades IN over a shell the reader
  * can already read, which is worse than no overlay at all.
  *
+ * ## The route announcer, and why it is mounted here
+ *
+ * `RouteAnnouncer` is the app's only route-level live region, so it has to live above every route
+ * and outlive every navigation — anywhere inside `{children}` it would unmount and remount on each
+ * one, which resets the "what have I already announced" state it depends on and re-announces the
+ * page a reader is already on. It is deliberately OUTSIDE `<main>`: a live region inside the skip
+ * link's target is a region a reader can land on, and this one has nothing to read on arrival. Its
+ * own header records what it does about the announcer Next 16 ships, and why.
+ *
  * ## Why `data-theme` is not written here
  *
  * `tokens.css` has three theme states and the third is the default: an explicit `data-theme` wins,
@@ -80,6 +89,7 @@ import type { Metadata, Viewport } from 'next';
 import { headers } from 'next/headers';
 import type { ReactElement, ReactNode } from 'react';
 import { BootSequence } from '@/components/BootSequence.tsx';
+import { RouteAnnouncer } from '@/components/RouteAnnouncer.tsx';
 import { SiteFooter } from '@/components/SiteFooter.tsx';
 import { SiteHeader } from '@/components/SiteHeader.tsx';
 import { STARTING_UNITS } from '@/fixtures/session.ts';
@@ -126,6 +136,7 @@ export default async function RootLayout({
           Skip to main content
         </a>
         <BootSequence />
+        <RouteAnnouncer />
         <div className="prl-app">
           <SiteHeader fallbackUnits={STARTING_UNITS} />
           {/*

@@ -72,7 +72,25 @@ const TEXT_EXTENSIONS = new Set([
   '.html',
   '.css',
   '.sql',
+  // Proxy and server configuration: `deploy/staging/nginx.conf` is executable
+  // policy, and a config file is a perfectly good place to hide a fetch to a C2
+  // host in an `add_header` or a `proxy_pass`.
+  '.conf',
 ]);
+
+/**
+ * Text files whose NAME identifies them rather than their extension.
+ *
+ * `extensionOf('Dockerfile.api')` is `.api` and `extensionOf('.dockerignore')` is
+ * `.dockerignore`; neither is in the set above, so the sweep skipped both. That is
+ * a real gap rather than a tidy-up: a `RUN curl … | sh` line pointing at a
+ * campaign host, or a `.dockerignore` edited to stop excluding `.env` so that
+ * credentials ship in an image layer, are both exactly the kind of change this
+ * sweep is meant to notice, and both live in files it could not read. The bare
+ * `Dockerfile` and `Caddyfile` were already covered only by the extensionless
+ * fallback below, which is luck rather than intent.
+ */
+const TEXT_NAMES = /^(?:Dockerfile(?:\..+)?|\.dockerignore|Caddyfile)$/;
 
 const MAX_SCAN_BYTES = 8 * 1024 * 1024;
 
@@ -131,6 +149,13 @@ function extensionOf(path) {
 export function sweepForMarkers({ repoRoot, trees }) {
   let filesScanned = 0;
   let bytesScanned = 0;
+  /**
+   * Counted separately and reported by the gate, because "0 container files
+   * swept" and "the container files are clean" printed identically for as long as
+   * `TEXT_NAMES` did not exist, and a coverage number is the only thing that tells
+   * those two apart from the outside.
+   */
+  let containerFilesScanned = 0;
   const stringHits = [];
   const hashHits = [];
 
@@ -146,7 +171,11 @@ export function sweepForMarkers({ repoRoot, trees }) {
     if (size > MAX_SCAN_BYTES) return;
 
     const ext = extensionOf(full);
-    const isText = TEXT_EXTENSIONS.has(ext) || ext === '';
+    const name = full.split(/[\\/]/).pop() ?? full;
+    // The extensionless fallback stays: a shell script or a config file with no
+    // suffix is still text, and the campaign's own artefacts do not advertise
+    // themselves with a helpful extension.
+    const isText = TEXT_EXTENSIONS.has(ext) || TEXT_NAMES.test(name) || ext === '';
     if (!isText) return;
 
     let buf;
@@ -157,6 +186,7 @@ export function sweepForMarkers({ repoRoot, trees }) {
     }
     filesScanned += 1;
     bytesScanned += buf.length;
+    if (TEXT_NAMES.test(name) || ext === '.conf') containerFilesScanned += 1;
 
     const sha256 = createHash('sha256').update(buf).digest('hex');
     const knownHash = IOC_HASHES.get(sha256);
@@ -173,7 +203,7 @@ export function sweepForMarkers({ repoRoot, trees }) {
       scanFile(full);
     }
   }
-  return { filesScanned, bytesScanned, stringHits, hashHits };
+  return { filesScanned, bytesScanned, containerFilesScanned, stringHits, hashHits };
 }
 
 /**
@@ -215,7 +245,7 @@ export function runIocScanGate() {
     const trees = [{ dir: REPO_ROOT }];
     if (storePresent) trees.push({ dir: store, includeNodeModules: true });
 
-    const { filesScanned, bytesScanned, stringHits, hashHits } = sweepForMarkers({
+    const { filesScanned, bytesScanned, containerFilesScanned, stringHits, hashHits } = sweepForMarkers({
       repoRoot: REPO_ROOT,
       trees,
     });
@@ -275,6 +305,21 @@ export function runIocScanGate() {
     gate.note(
       `swept ${filesScanned} files (${(bytesScanned / 1_048_576).toFixed(1)} MiB) for ${IOC_STRINGS.length} string markers, ${IOC_HASHES.size} hashes, ${IOC_PATHS.length} artefact paths`,
     );
+
+    // Three today: Dockerfile.api, Dockerfile.web and .dockerignore, plus the
+    // proxy configuration. A lower bound rather than an equality, for the same
+    // reason repo-hygiene states one: adding a Dockerfile must not fail the gate,
+    // but losing one from the sweep is the defect this count exists to catch.
+    if (containerFilesScanned < 3) {
+      gate.fail(
+        `only ${containerFilesScanned} container/config file(s) were swept`,
+        'Dockerfile.api, Dockerfile.web and .dockerignore were invisible to this sweep until the ' +
+          'name-based rule was added, and they are where a build-time fetch to a campaign host would ' +
+          'live. Fewer than three means one has dropped out again.',
+      );
+    } else {
+      gate.note(`${containerFilesScanned} of those were Dockerfiles, .dockerignore or proxy configuration`);
+    }
   });
 }
 

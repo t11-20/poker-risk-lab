@@ -16,11 +16,17 @@
  * every directive an injection would need is closed.
  *
  * It cannot prove the policy reaches a browser — a pure test has no server. Two other things do:
- * `scripts/smoke-test.mjs` §11 fetches a rendered HTML response from a running production server
+ * `scripts/smoke-test.mjs` §10 fetches a rendered HTML response from a running production server
  * and asserts the header, the nonce, and that every `<script>` tag carries it; and
  * `docs/audit/blocker-remediation.md` records the manual browser verification, including the
  * negative control (an inline `onclick` attribute refused with a `script-src-attr` violation while
  * the page stayed fully interactive).
+ *
+ * That was §11 in an earlier version of the harness and has been §10 since the guest-bootstrap
+ * walk took the number. A citation that points at the wrong section is the same class of defect as
+ * the hash that nobody served: it reads like a reference and sends the next reader to the wrong
+ * place. `apps/web/src/lib/csp.ts` carried the worse version of it — a citation to a file that has
+ * never existed at all — and now names this harness section too.
  */
 
 import assert from 'node:assert/strict';

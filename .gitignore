@@ -21,3 +21,11 @@ docs/sbom/*.json
 # A quarantine candidate lockfile written by `pnpm run deps:quarantine` for review.
 # It is a proposal, never the source of truth, and must not be committed.
 pnpm-lock.yaml.new
+
+# Belt and braces. `scripts/backup.mjs` defaults PRL_BACKUP_DIR to
+# /var/backups/poker-risk-lab, deliberately outside the repository, and a test
+# asserts that default is not inside it. This entry covers the one case the
+# default cannot: somebody pointing PRL_BACKUP_DIR at ./backups during a
+# rehearsal and then running `git add -A`, which would commit an encrypted copy
+# of every learner's account.
+backups/

@@ -445,7 +445,11 @@ function isRoomSummary(value: unknown): value is WsWelcome['room'] {
   return (
     isString(value['id']) &&
     isString(value['name']) &&
-    isString(value['ownerUserId']) &&
+    // Null once the creator has erased their account. `RoomSummary.ownerUserId` is
+    // `string | null` in the contract, and a guard that insisted on a string would reject the
+    // whole welcome frame for such a room — turning "the person who made this table has left"
+    // into "this table does not exist" for everybody still sitting at it.
+    (value['ownerUserId'] === null || isString(value['ownerUserId'])) &&
     isInteger(value['maxSeats']) &&
     isNumber(value['smallBlind']) &&
     isNumber(value['bigBlind']) &&

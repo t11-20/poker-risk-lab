@@ -1,5 +1,20 @@
 /**
- * The footer: the site map, the product statement, and where the maths comes from.
+ * The footer: the site map, the product statement, where the maths comes from, and the documents.
+ *
+ * ## The documents are here and not in the navigation, deliberately
+ *
+ * Terms of use, the data inventory and the responsible-use notes are real pages with real content,
+ * and none of them is in `NAV_DESTINATIONS`. `/record` is the precedent: the five numbered
+ * destinations are an argument about learning order, and an entry that is not a step in that
+ * argument blunts it. A document is something a reader goes looking for rather than a place the
+ * product sends them, and the foot of every page is where people look. The list itself is
+ * `DOCUMENT_DESTINATIONS` in `lib/nav.ts`, so the footer and any other surface that needs it cannot
+ * disagree about a route.
+ *
+ * Its landmark is labelled `Documents`. The site map above is `Sections`, the header's is `Primary`
+ * and the mobile sheet's is `All sections` — four navigation landmarks with four names, because two
+ * that share one is the `landmark-unique` failure and a rotor listing the same word twice tells a
+ * reader nothing about which is which.
  *
  * ## What is deliberately NOT hidden down here
  *
@@ -40,8 +55,9 @@
 import { formatIndex } from '@prl/ui';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
-import { NAV_DESTINATIONS } from '@/lib/nav.ts';
+import { DOCUMENT_DESTINATIONS, NAV_DESTINATIONS } from '@/lib/nav.ts';
 import { RECORD_PATH } from '@/lib/record-data.ts';
+import { SessionDuration } from './SessionDuration.tsx';
 import { ThemeToggle } from './ThemeToggle.tsx';
 
 export function SiteFooter(): ReactElement {
@@ -110,13 +126,41 @@ export function SiteFooter(): ReactElement {
         </div>
 
         {/*
-          The theme control's permanent home.
+          The documents. Not indexed: the `01…05` motif belongs to the numbered argument above, and
+          numbering these would say they are the next steps in it.
+        */}
+        <nav aria-label="Documents" className="prl-footer__map">
+          <p className="prl-footer__heading prl-label">Documents</p>
+          <ul className="prl-footer__list">
+            {DOCUMENT_DESTINATIONS.map((destination) => (
+              <li className="prl-footer__item" key={destination.href}>
+                <Link className="prl-footer__link" href={destination.href}>
+                  <span className="prl-footer__link-label">{destination.label}</span>
+                </Link>
+                <span className="prl-footer__summary">{destination.summary}</span>
+              </li>
+            ))}
+          </ul>
+        </nav>
 
-          It is in the pill bar as well above 1280px, and in the navigation sheet below 860px, but
-          only this copy is on every page at every width — which is what makes "where do I change
-          the theme" answerable without a caveat. All three render the same `ThemeToggle`: three
-          real radios in a named group, subscribed to `<html data-theme>` rather than to local
-          state, so no two copies can ever disagree about which theme is on.
+        {/*
+          The sitting clock. A client island in an otherwise static footer, and the only reason it is
+          here rather than on one screen is that "how long have I been here" has the same answer
+          everywhere, so the control has to be everywhere too. It renders nothing until it has
+          mounted and read `sessionStorage`, which the server cannot see.
+        */}
+        <SessionDuration />
+
+        {/*
+          The theme control's permanent home, and — above the navigation breakpoint — its only one.
+
+          This comment used to say the control was also in the pill bar above 1280px. It is not:
+          `SiteHeader.tsx` renders no `ThemeToggle` at any width. There are exactly two copies, this
+          one and the one in `MobileNav`'s sheet, and the sheet is `display: none` above 860px — so
+          for most readers this is the only theme control in the product, which is what makes "where
+          do I change the theme" answerable without a caveat. Both render the same `ThemeToggle`:
+          three real radios in a named group, subscribed to `<html data-theme>` rather than to local
+          state, so the two copies cannot disagree about which theme is on.
         */}
         <div className="prl-footer__appearance">
           <p className="prl-footer__heading prl-label">Appearance</p>
