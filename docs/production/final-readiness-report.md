@@ -211,11 +211,12 @@ as screen-reader certification. Status: **UNVERIFIED**.
 
 ## Independent adversarial challenge
 
-A fresh read-only challenge was performed after the worker/staging changes. It found no demonstrated
-P0 such as hidden-card leakage, chip creation/destruction, auth bypass, or silent strategy
-substitution. It did identify the unresolved P1/release evidence gaps above and P2 items: readiness
-is not crash-aware after warmup, a frozen database can hold an in-flight request to its bound, and
-the local image’s unfixed base-image CVEs are not clean.
+A fresh read-only challenge was performed after the final candidate’s exact-candidate reruns. It
+found no demonstrated P0 or new P1 in worker failure handling, poker correctness, hidden-card
+boundaries, auth, staging-script scope, or the API-backed accessibility audit. It did confirm the
+unresolved P1/release evidence gaps above and P2 items: readiness is not crash-aware after warmup,
+a frozen database can hold an in-flight request to its bound, and the local image’s unfixed
+base-image CVEs are not clean.
 
 ## Finding classification
 
