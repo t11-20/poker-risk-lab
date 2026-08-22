@@ -82,6 +82,7 @@ import {
   type FocusEvent as ReactFocusEvent,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from 'react';
@@ -366,9 +367,11 @@ export function ActionBar(props: ActionBarProps): ReactElement {
    *
    * **Chosen: a named place inside the bar, and the reader is put back afterwards.** The controls
    * stay natively `disabled`, so nothing about how they look or how they are read changes. A line
-   * mounts while `disabled` holds, carrying `role="group"` and an `aria-label` — measured in Chrome
-   * 151 by `TableStage.tsx`: a bare focusable `<div>` computes an EMPTY name, and `group` is the
-   * role that can carry one — and the caret goes there, so what the reader hears is where their
+   * mounts while `disabled` holds, carrying `role="status"` and an `aria-label` — a focused
+   * `role="group"` is not reported as the focused accessibility-tree node in Chrome 151 (the
+   * tree keeps `RootWebArea` focused while `document.activeElement` is the group), so a reader
+   * would hear the page title. `status` is exposed as focused and can carry a name. The caret
+   * goes there, so what the reader hears is where their
    * decision went. When the answer arrives the line unmounts and the caret is returned to the exact
    * control it came from, which is the half that makes this a fix rather than a relocation: a
    * refusal leaves the reader on the button they pressed, ready to press it again.
@@ -438,18 +441,19 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     hadFocus.current = false;
   }, [acting]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const taken = disabled && !wasDisabled.current;
     const returned = !disabled && wasDisabled.current;
     wasDisabled.current = disabled;
 
     if (taken) {
       if (!hadFocus.current) return;
-      queueMicrotask(() => {
-        if (!browserAbandonedFocus()) return;
-        inFlightRef.current?.focus();
-        parked.current = document.activeElement === inFlightRef.current;
-      });
+      // Layout, not a microtask: the disabled button is already blurred by this point, and a
+      // delayed rescue can lose to Chrome parking the caret on `<html>` with nobody watching.
+      // A parent (TableStage) that wants a better destination runs its own layout effect after
+      // this one, because layout effects run child-then-parent, and overwrites the caret.
+      inFlightRef.current?.focus();
+      parked.current = document.activeElement === inFlightRef.current;
       return;
     }
 
@@ -477,12 +481,25 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   const isAllIn = sized !== null && to >= bounds.max && bounds.max > bounds.min;
   const callCost = call?.costAtMin ?? toCall;
 
+  /**
+   * A press on a control in this bar is presence in this bar.
+   *
+   * `onFocusCapture` is the usual way we know, and it is not enough: Chrome's input pipeline
+   * can deliver the activating Enter without a prior `focus` event that React saw, which is
+   * exactly how `/play?state=decision` folded, disabled the button, and left the caret on
+   * `RootWebArea`. A click (or the Enter that synthesises one) is itself the evidence.
+   */
+  const actFromBar = (action: TableAction): void => {
+    hadFocus.current = true;
+    onAct(action);
+  };
+
   const commitSized = (): void => {
     if (sized === null) return;
     // Re-clamped here rather than trusted from state: there must be no path, including a future
     // one, on which an unclamped number reaches `onAct`.
     const safe = clampBetTo(to, bounds);
-    onAct(sized.kind === 'bet' ? { type: 'bet', to: safe } : { type: 'raise', to: safe });
+    actFromBar(sized.kind === 'bet' ? { type: 'bet', to: safe } : { type: 'raise', to: safe });
   };
 
   if (legalActions.length === 0) {
@@ -542,7 +559,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
             cost={formatUnits(0)}
             spoken={`fold, costs ${formatUnits(0)}, gives up the hand and any claim on the pot`}
             disabled={disabled}
-            onClick={() => onAct({ type: 'fold' })}
+            onClick={() => actFromBar({ type: 'fold' })}
           />
         ) : null}
 
@@ -552,7 +569,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
             cost={formatUnits(0)}
             spoken={`check, costs ${formatUnits(0)}, stays in the hand and passes the decision on`}
             disabled={disabled}
-            onClick={() => onAct({ type: 'check' })}
+            onClick={() => actFromBar({ type: 'check' })}
           />
         ) : null}
 
@@ -562,7 +579,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
             cost={formatUnits(callCost)}
             spoken={`call ${formatUnits(callCost)}`}
             disabled={disabled}
-            onClick={() => onAct({ type: 'call' })}
+            onClick={() => actFromBar({ type: 'call' })}
           />
         )}
 
@@ -585,7 +602,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
       {/*
         The caret's home for the length of the round trip, mounted only while there is one.
 
-        Not always present: a labelled group that is always there sits in every reader's rotor
+        Not always present: a labelled status that is always there sits in every reader's rotor
         announcing an empty container on a table where nothing has been sent. `TableStage` reached
         the same conclusion about its acknowledgement for the same reason.
 
@@ -600,12 +617,11 @@ export function ActionBar(props: ActionBarProps): ReactElement {
         the name of the place the caret arrived at, and the sentence is what is on the screen.
       */}
       {disabled ? (
-        // biome-ignore lint/a11y/useSemanticElements: the rule points at <fieldset>, which is for form controls and would bring a required <legend> and a border with it. This is one sentence that the caret is moved to, and `group` is the role ARIA has for a named container of exactly that kind. `TableStage` in apps/web documents the same false positive from the same rule, for the same markup and the same reason.
         <p
           aria-label="Your decision is with the server"
           className="prl-action-bar__idle"
           ref={inFlightRef}
-          role="group"
+          role="status"
           tabIndex={-1}
         >
           {'Waiting for the server.'}

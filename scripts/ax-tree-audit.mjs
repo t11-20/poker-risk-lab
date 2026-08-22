@@ -1080,11 +1080,47 @@ async function actAtTheTable(page, label) {
     takes the caret with it.
   */
   if (/^(rootwebarea|webarea|document)$/iu.test(focusedRole)) {
+    /*
+      Chrome 151's full AX tree keeps `focused` on RootWebArea after a `tabindex="-1"` landing
+      place is focused. Measured: document.activeElement was the named acknowledgement
+      (`role="status" aria-label="Your decision is with the server"`) while getFullAXTree still
+      named RootWebArea as focused. `Accessibility.getPartialAXTree` on the active element
+      reports the real computed name. A RootWebArea failure is reserved for when the DOM caret
+      is ALSO on the document.
+    */
+    const abandoned = await page.evaluate(
+      `(() => {
+        const el = document.activeElement;
+        return el === null || el === document.body || el === document.documentElement;
+      })()`,
+    );
+    if (abandoned) {
+      bad(
+        `${label}: interaction`,
+        'after acting, focus is on the document itself. The control the reader pressed disabled ' +
+          'itself and the browser blurred it, so a keyboard reader is returned to the top of the ' +
+          'page and a screen-reader user is told nothing about what their decision did',
+      );
+      return;
+    }
+    await page.evaluate(
+      `document.activeElement && document.activeElement.setAttribute('data-prl-ax-focus', '1')`,
+    );
+    const partial = await page.axFor('[data-prl-ax-focus="1"]');
+    const landed = partial[0]?.node ?? null;
+    const landedName = (landed?.name?.value ?? '').toString().trim();
+    const landedRole = (landed?.role?.value ?? '').toString();
+    if (landed !== null && landedName.length > 0) {
+      ok(
+        `${label}: the focused node still has a computed name`,
+        `${landedRole}: "${landedName}" (caret on a tabindex=-1 landing; full tree kept RootWebArea focused)`,
+      );
+      return;
+    }
     bad(
       `${label}: interaction`,
-      'after acting, focus is on the document itself. The control the reader pressed disabled ' +
-        'itself and the browser blurred it, so a keyboard reader is returned to the top of the ' +
-        'page and a screen-reader user is told nothing about what their decision did',
+      'document.activeElement is not the document, but it has no computed accessible name, so a ' +
+        'reader whose caret was moved there would be told nothing about where they now are',
     );
     return;
   }

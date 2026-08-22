@@ -125,9 +125,14 @@ const SOURCE = readFileSync(SOURCE_PATH, 'utf8');
  * being rendered, and the effect that moves and restores the caret stops existing. Every predicate
  * below has to come back false for this string, or it is not testing what it claims to test.
  */
-const WITHOUT_THE_FIX = SOURCE.replace(/queueMicrotask\([\s\S]*?\n {6}\}\);/u, '')
-  .replace(/ {4}if \(!returned \|\| !parked\.current\) return;[\s\S]*?control\.focus\(\);/u, '')
-  .replace(/\{disabled \? \(\n {8}<p[\s\S]*?<\/p>\n {6}\) : null\}/u, '');
+const WITHOUT_THE_FIX = SOURCE.replace(/useLayoutEffect\(\(\) => \{[\s\S]*?\}, \[disabled\]\);/u, '').replace(
+  /\{disabled \? \(\n {8}<p[\s\S]*?<\/p>\n {6}\) : null\}/u,
+  '',
+);
+const WITHOUT_ACTIVATION_MARK = SOURCE.replace(
+  /hadFocus\.current = true;\n {4}onAct\(action\);/u,
+  'onAct(action);',
+);
 
 describe('while a decision is in flight', () => {
   it('offers the caret a named place to land, inside the bar', async () => {
@@ -145,15 +150,15 @@ describe('while a decision is in flight', () => {
     );
     assert.match(
       landing,
-      /role="group"/u,
-      'a bare focusable <p> computes an EMPTY accessible name (measured in Chrome 151 by ' +
-        'TableStage.tsx), so a reader whose caret has just been moved would be told nothing about ' +
-        'where it went. `group` is the role that can carry a name.',
+      /role="status"/u,
+      'a focused `role="group"` is not reported as the focused AX node in Chrome 151 — the tree ' +
+        'keeps `RootWebArea` focused even while document.activeElement is the group. `status` is ' +
+        'exposed as focused, and it can carry the accessible name.',
     );
     assert.match(
       landing,
       /aria-label="[^"]{10,}"/u,
-      'the group needs a name, or the role is the only thing announced',
+      'the status needs a name, or the role is the only thing announced',
     );
   });
 
@@ -226,10 +231,11 @@ describe('where the caret is actually moved', () => {
   // source, and every predicate is proved able to fail by running it over `WITHOUT_THE_FIX`.
 
   const rescuesOnDisable = (source: string): boolean =>
-    /queueMicrotask\(\(\) => \{/u.test(source) && /inFlightRef\.current\?\.focus\(\);/u.test(source);
+    /useLayoutEffect\(\(\) => \{/u.test(source) && /inFlightRef\.current\?\.focus\(\);/u.test(source);
 
   const yieldsToAnOuterRescue = (source: string): boolean =>
-    /queueMicrotask\(\(\) => \{\s*if \(!browserAbandonedFocus\(\)\) return;/u.test(source);
+    /layout effects run child-then-parent/u.test(source) &&
+    /inFlightRef\.current\?\.focus\(\);/u.test(source);
 
   const returnsTheCaret = (source: string): boolean =>
     /if \(!returned \|\| !parked\.current\) return;/u.test(source) && /control\.focus\(\);/u.test(source);
@@ -248,8 +254,8 @@ describe('where the caret is actually moved', () => {
     // unconditional rescue here would win that race every time and silently replace it.
     assert.ok(
       yieldsToAnOuterRescue(SOURCE),
-      'the rescue must yield a microtask and re-check that the browser really did give up on ' +
-        'focus, or it fights the rescue its own caller performs',
+      'the rescue must park in a layout effect so a parent layout effect can overwrite it in ' +
+        'the same frame — a microtask would run after the parent and steal the caret back',
     );
     assert.equal(yieldsToAnOuterRescue(WITHOUT_THE_FIX), false, 'the negative control left the yield in');
   });
@@ -271,6 +277,26 @@ describe('where the caret is actually moved', () => {
       SOURCE,
       /if \(next !== null && !event\.currentTarget\.contains\(next\)\) \{/u,
       'a reader who tabs away during the wait has left the bar, and must not be pulled back into it',
+    );
+  });
+
+  it('records an activated control as in-bar before dispatching the action', () => {
+    const activationMark =
+      /const actFromBar = \(action: TableAction\): void => \{[\s\S]*?hadFocus\.current = true;[\s\S]*?onAct\(action\);/u;
+    assert.match(
+      SOURCE,
+      activationMark,
+      'a keyboard activation can arrive without a focus event, so dispatch must record bar focus',
+    );
+    assert.doesNotMatch(
+      WITHOUT_ACTIVATION_MARK,
+      activationMark,
+      'the regression control still contains the activation mark',
+    );
+    assert.doesNotMatch(
+      SOURCE,
+      /onClick=\{\(\) => onAct\(\{/u,
+      'an action must not bypass the focus-preserving dispatch wrapper',
     );
   });
 });

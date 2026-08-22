@@ -424,9 +424,7 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
   useEffect(() => {
     if (submission === null || !hadFocus.current) return;
     // Chrome 151 after disabling a focused button: `activeElement` can be `<html>`, not
-    // `document.body`. Both mean the caret is on the document. See `browserAbandonedFocus` in
-    // `ActionBar.tsx` — this is the same check, kept local because this file cannot import from
-    // the UI package's unexported helper.
+    // `document.body`. Both mean the caret is on the document. A real control or panel must win.
     const active = document.activeElement;
     if (active !== null && active !== document.body && active !== document.documentElement) return;
     acknowledgementRef.current?.focus();
@@ -454,7 +452,10 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
       ) : (
         <ActionBar
           legalActions={view.legalActions}
-          onAct={onAct}
+          onAct={(action) => {
+            hadFocus.current = true;
+            onAct(action);
+          }}
           pot={view.potTotal}
           toCall={view.amountToCall}
           committedThisStreet={view.seats.find((seat) => seat.isSelf)?.committedThisStreet ?? 0}
@@ -485,20 +486,17 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
         One wrapper for both fates, so the focus rescue above has a single destination whatever the
         server said. `tabIndex={-1}` keeps it out of the tab order and lets script land on it.
 
-        `role="group"` with a label, rather than a bare focusable `<div>`, because a bare one has no
-        role that can carry a name — `aria-label` is ignored on a generic element, and a reader whose
-        caret has just been moved somewhere would be told nothing about where. Measured in Chrome
-        151: `<div tabindex="-1">` computes an EMPTY accessible name, `<div role="group"
-        aria-label="…">` computes the label. Chrome happens to synthesise a name from the contents
-        for the focused generic case, which is not specified behaviour and is not what Firefox or
-        Safari do, so it is not what this depends on.
+        `role="status"` with a label, rather than a bare focusable `<div>` or a `role="group"`.
+        A bare one has no role that can carry a name. A focused `group` computes a name but is
+        NOT reported as the focused accessibility-tree node in Chrome 151 — the tree keeps
+        `RootWebArea` focused, so a screen reader is told the page title. `status` is exposed as
+        focused and can carry the label.
 
-        Rendered only when there is something to say. An always-present labelled group would sit in
+        Rendered only when there is something to say. An always-present labelled status would sit in
         every reader's rotor announcing an empty container on a table where nothing has been decided.
       */}
       {submission === null ? null : (
-        // biome-ignore lint/a11y/useSemanticElements: the rule points at <fieldset>, which is for form controls and would bring a required <legend> and a border with it. This is a labelled container for two sentences about a decision, and `group` is the role ARIA has for exactly that. `CardRow` in @prl/ui documents the same false positive from the same rule.
-        <div aria-label="What happened to your decision" ref={acknowledgementRef} role="group" tabIndex={-1}>
+        <div aria-label="What happened to your decision" ref={acknowledgementRef} role="status" tabIndex={-1}>
           {rejected ? (
             <div role="alert">
               <Callout tone="warning" title={isLive ? SUBMISSION_TITLE.rejected : 'Nothing was sent'}>

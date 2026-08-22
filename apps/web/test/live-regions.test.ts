@@ -5,7 +5,7 @@
  *
  * The release audit's hardest finding on this client was on the live table's error path. The block
  * that replaces the table when it cannot be reached was an unlabelled `<div class="prl-error">`
- * with **no `role="alert"` and no live-region ancestor**, while the page's only `role="status"`
+ * with **no `role="alert"` and no live-region ancestor**, while the connection status region
  * simultaneously announced **"Ready to connect."** A screen-reader user was told the opposite of
  * what the screen said, on the most consequential error path in the product. WCAG 2.2 SC 4.1.3
  * (AA), on a page that had been reviewed repeatedly.
@@ -473,12 +473,12 @@ describe('a refusal interrupts, and everything else is polite', () => {
 
   it('gives the caret somewhere with a name to land on', () => {
     // A bare focusable `<div>` computes an EMPTY accessible name (measured in Chrome 151), so a
-    // reader whose caret has just been moved is told nothing about where it went. `role="group"` is
-    // the role that can carry one.
+    // reader whose caret has just been moved is told nothing about where it went. `role="status"`
+    // is exposed as the focused node in the tested browser and can carry the label.
     const stage = withoutComments(read('components', 'TableStage.tsx'));
     assert.match(
       stage,
-      /aria-label="What happened to your decision" ref=\{acknowledgementRef\} role="group" tabIndex=\{-1\}/u,
+      /aria-label="What happened to your decision" ref=\{acknowledgementRef\} role="status" tabIndex=\{-1\}/u,
     );
   });
 
