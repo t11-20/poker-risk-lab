@@ -43,8 +43,16 @@ import { resetAppMetricsForTests } from '../src/observability/metrics.ts';
 import authRoutes from '../src/routes/auth.ts';
 import { DB_SKIP_REASON, testConfig } from './helpers/hands-app.ts';
 
-/** How long a fire-and-forget write may take before the test calls it missing. */
-const AUDIT_DEADLINE_MS = 5_000;
+/**
+ * How long a fire-and-forget write may take before the test calls it missing.
+ *
+ * Five seconds is plenty for a single INSERT on an idle pool. This suite shares the process-wide
+ * database client with every other API test, and under `pnpm run test` that pool is busy: a
+ * 5s deadline on this case timed out once after 811 other tests, then the same file passed in
+ * 317ms on its own. Fifteen seconds still fails a write that never happens; it just does not
+ * confuse pool wait with a missing call site.
+ */
+const AUDIT_DEADLINE_MS = 15_000;
 const AUDIT_POLL_MS = 50;
 
 /**
