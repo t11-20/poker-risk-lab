@@ -68,7 +68,7 @@ const DOC = join(REPO_ROOT, 'docs', 'production', 'accessibility-certification.m
 const RESULT = join(REPO_ROOT, 'docs', 'production', 'accessibility-certification-result.json');
 
 const NO_COLOR = process.env.NO_COLOR !== undefined || !process.stdout.isTTY;
-const paint = (code, s) => (NO_COLOR ? s : `[${code}m${s}[0m`);
+const paint = (code, s) => (NO_COLOR ? s : `\u001b[${code}m${s}\u001b[0m`);
 const bold = (s) => paint('1', s);
 const dim = (s) => paint('2', s);
 const red = (s) => paint('31', s);
