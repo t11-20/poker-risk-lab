@@ -1,11 +1,12 @@
 {
   "schema": "prl.release-signatures.v1",
-  "signedAt": "2026-08-25T10:25:34.748Z",
+  "posture": "key",
+  "signedAt": "2026-08-25T16:37:36.605Z",
   "cosignVersion": "v3.1.3",
   "registry": "127.0.0.1:5001",
   "commit": {
-    "sha": "5e2753a1c934df864c99e5d462feb1f8ad1ae13d",
-    "shortSha": "5e2753a1c934",
+    "sha": "6677dfcc2ae7e9c93b5d6183a47d35d604f48931",
+    "shortSha": "6677dfcc2ae7",
     "branch": "production-hardening-2",
     "dirty": false
   },
@@ -17,18 +18,18 @@
     "used": false,
     "why": "signed with --tlog-upload=false and verified with --insecure-ignore-tlog. Rekor is a public log and this is a loopback registry holding a lab artefact. The cost, stated rather than implied: there is no third-party record that these signatures existed at a time, so key compromise is not detectable after the fact and a signature cannot be shown to predate a revocation."
   },
-  "provenanceLimit": "These signatures prove possession of the key whose public half is committed at deploy/signing/cosign.pub. They do NOT identify a builder, a source tree or a build environment: that needs keyless/OIDC signing from a CI workload identity, which this repository does not have. Do not quote this file as SLSA provenance.",
+  "provenanceLimit": "These signatures prove possession of the key whose public half is committed at deploy/signing/cosign.pub. They do NOT identify a builder, a source tree or a build environment: that needs keyless/OIDC signing from a CI workload identity, which this record is not in. Do not quote this file as SLSA provenance.",
   "images": {
     "api": {
       "service": "api",
       "repository": "prl-api",
-      "buildDigest": "sha256:97c9a3f8b5b52cf83fc5ba55d6692891a28074d1b445bd6976871a8c8b9615af",
-      "registryDigest": "sha256:97c9a3f8b5b52cf83fc5ba55d6692891a28074d1b445bd6976871a8c8b9615af",
-      "reference": "127.0.0.1:5001/prl-api@sha256:97c9a3f8b5b52cf83fc5ba55d6692891a28074d1b445bd6976871a8c8b9615af",
-      "tag": "127.0.0.1:5001/prl-api:5e2753a1c934",
+      "buildDigest": "sha256:787fad9744648da61a0b9d5c89d1777792ab6c918371b8054bbcfa5d1c20c168",
+      "registryDigest": "sha256:787fad9744648da61a0b9d5c89d1777792ab6c918371b8054bbcfa5d1c20c168",
+      "reference": "127.0.0.1:5001/prl-api@sha256:787fad9744648da61a0b9d5c89d1777792ab6c918371b8054bbcfa5d1c20c168",
+      "tag": "127.0.0.1:5001/prl-api:6677dfcc2ae7",
       "tiedBy": "manifest-digest",
       "signed": true,
-      "signedAt": "2026-08-25T10:25:32.493Z",
+      "signedAt": "2026-08-25T16:37:33.196Z",
       "attestation": {
         "components": 103,
         "specVersion": "1.7",
@@ -38,13 +39,13 @@
     "web": {
       "service": "web",
       "repository": "prl-web",
-      "buildDigest": "sha256:3099cf67919c882853898f2456590b00a4816bcabffa120f73ac43bd9ac37ea0",
-      "registryDigest": "sha256:3099cf67919c882853898f2456590b00a4816bcabffa120f73ac43bd9ac37ea0",
-      "reference": "127.0.0.1:5001/prl-web@sha256:3099cf67919c882853898f2456590b00a4816bcabffa120f73ac43bd9ac37ea0",
-      "tag": "127.0.0.1:5001/prl-web:5e2753a1c934",
+      "buildDigest": "sha256:bd94e7c3bce32e19324813afb0d6e018adbfca4fe2ac9dd070fe1e625c26741d",
+      "registryDigest": "sha256:bd94e7c3bce32e19324813afb0d6e018adbfca4fe2ac9dd070fe1e625c26741d",
+      "reference": "127.0.0.1:5001/prl-web@sha256:bd94e7c3bce32e19324813afb0d6e018adbfca4fe2ac9dd070fe1e625c26741d",
+      "tag": "127.0.0.1:5001/prl-web:6677dfcc2ae7",
       "tiedBy": "manifest-digest",
       "signed": true,
-      "signedAt": "2026-08-25T10:25:34.747Z",
+      "signedAt": "2026-08-25T16:37:36.605Z",
       "attestation": {
         "components": 61,
         "specVersion": "1.7",
