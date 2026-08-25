@@ -40,6 +40,9 @@ What is *not* at stake removes whole categories of threat, and the absence is de
 | CI actions pinned by SHA, least-privilege `permissions:` | `security:pinning` |
 | Container image CVE scan | `security:containers` (trivy) |
 | Repository hygiene — no NUL, no C0 controls, no bidi overrides, no zero-width characters, no CRLF | `security:hygiene` |
+| No credential material in a tracked file | `security:secrets` |
+| An ignore rule exists for every path an operator is told to write a secret to | `security:secrets` |
+| No credential in git history | `security:secrets --history` (opt-in; see below) |
 
 `pnpm run security:audit` chains the gates and is release-blocking. `supply-chain.yml` re-runs them daily, so a package that becomes bad after it was vetted is caught without a commit.
 
@@ -177,7 +180,15 @@ The `rooms_visibility_invite_only` CHECK constraint keeps public matchmaking off
 
 Every operator-supplied secret is validated at boot for length (≥32 characters), distinct-character count (so a "long" secret is not a short one repeated), and placeholder substrings — `change`, `example`, `insecure`, `password`, `secret`, `default`, `todo`, `test` and the rest. A secret that ships in an example file is public knowledge the moment it is written down.
 
-Secrets are injected externally, never baked into an image, never defaulted in a compose file. `.env` is gitignored and `security:hygiene` enforces it. Three overlapping log-redaction layers censor anything whose key name looks sensitive, and the censor string is a fixed literal so it is greppable.
+Secrets are injected externally, never baked into an image, never defaulted in a compose file.
+
+`.env` is gitignored, and until recently this sentence said `security:hygiene` enforced that. It did not: that gate reads source files for hidden characters and has never looked at an ignore rule. The claim was true about the ignore rule and false about the gate, which is the exact shape this document's own opening paragraph warns about — a control is real only because a named gate asserts it.
+
+`security:secrets` now asserts it, and asserts it for the whole set rather than for `.env` alone: `.env`, `.env.local`, `deploy/staging/.env.staging`, the staging CA and leaf private keys, the Prometheus scrape token, and `deploy/backup/backup.env`. It asks git — `git check-ignore --no-index` — rather than reading `.gitignore`, so the answer is what git will actually do, and it asks whether or not the file exists on the machine running the gate.
+
+**That check found a real hole.** `deploy/backup/backup.env` is the file `deploy/backup/README.md` instructs an operator to create, and it holds `PRL_BACKUP_KEY` — the key that decrypts every archive ever taken with it — and the backup role's database password. No ignore rule matched it. On a backup host, one `git add -A` would have committed it, and no working-tree scan anywhere could have found it first, because on every machine that runs the gates that file does not exist. The rule is now in `.gitignore` and the gate asserts it.
+
+The content half of the gate reads every tracked file for provider token shapes, credentialed URLs pointing at hosts somebody else can reach, and high-entropy literals assigned to credential-shaped names. Findings are printed redacted — first four characters and a length — because a scanner that prints what it found has published it a second time into logs that are kept longer than the file was. `--history` scans every blob reachable from every ref and is deliberately **not** part of `security:audit`: its only remedy is a history rewrite plus rotation, which a release gate cannot demand on the day it first notices, and a permanently red gate is a gate somebody turns off. It is clean on this repository today. Three overlapping log-redaction layers censor anything whose key name looks sensitive, and the censor string is a fixed literal so it is greppable.
 
 Rotation procedures and their blast radii: [`runbooks/leaked-secret.md`](runbooks/leaked-secret.md).
 
@@ -217,7 +228,7 @@ Stated rather than closed. Each is a real limitation.
 | 6 | Live table state is in-process | A crash mid-hand drops the hand. Accepted architecture (`docs/adr/0001`), not a hidden defect. |
 | 7 | DB pool pressure is inferred, not measured | postgres.js exposes no wait counter; reaching into its internals would break silently on a patch release. Inferred from the timed readiness probe and verified by a drill. |
 | 8 | Container base digests age | Pinned by digest, so they do not drift — which also means they do not receive upstream security rebuilds. A freshness check reports drift; acting on it is a deliberate bump. |
-| 9 | OIDC flow not exercised in this environment | No identity provider is configured here. The code paths are unit-tested; the live flow is not verified. |
+| 9 | OIDC flow not exercised against a real provider | No identity provider is configured here, so the live round trip is still unverified. It is materially narrower than it was: the callback schema was `additionalProperties: false` over `code`/`state`/`error` only, which with `removeAdditional: false` made **every** real provider callback a 400 before the handler ran — Google appends `scope`/`authuser`/`prompt`/`hd`, Keycloak `session_state`, Microsoft `client_info`, and RFC 9207 requires `iss`. That is fixed, the parameters are enumerated rather than allowed wholesale, and `iss` is now **validated against the configured issuer** (RFC 9207 mix-up defence) rather than merely tolerated. `apps/api/test/auth.test.ts` drives a callback carrying all of them, and refuses one whose issuer is wrong while asserting the legitimate attempt survives. |
 | 10 | Attributed AI Legend naming | `PRL_LEGEND_NAMING=attributed` must not be enabled without written legal review of name and likeness. Production default is `archetype`. |
 
 ---
@@ -226,6 +237,7 @@ Stated rather than closed. Each is a real limitation.
 
 ```bash
 pnpm run security:audit          # every supply-chain gate, release-blocking
+pnpm run security:secrets        # committed credentials + the ignore rules that prevent them
 pnpm run security:containers     # image CVE scan (trivy)
 pnpm run security:sbom           # CycloneDX 1.6 for the current graph
 pnpm run test                    # includes the security and hidden-information suites

@@ -51,7 +51,7 @@ positions.
 corepack enable                      # Node 24.18.0 and pnpm 11.10.0 required
 
 pnpm install --frozen-lockfile
-pnpm run security:audit              # 9 supply-chain gates — run this first
+pnpm run security:audit              # 11 supply-chain gates — run this first
 
 cp .env.example .env
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
@@ -165,13 +165,17 @@ have to be designed together.
 This repo was built during the **Mini Shai-Hulud** campaign — a self-propagating npm/PyPI
 worm that compromised on the order of 1,300 package versions, steals CI and developer
 credentials, and forges Sigstore provenance attestations. So the dependency policy is
-release-blocking and enforced by nine gates:
-lifecycle scripts disabled, registry-only resolutions, a 7-day release-age cooldown, exact
-versions, lockfile hashes cross-checked against the registry, a family deny-list, an OSV
-scan, an on-disk IOC sweep, a CycloneDX SBOM, and — added after the release audit —
-**pinning of the pipeline's own dependencies**: every GitHub Action by 40-hex commit SHA and
-every container base image by `@sha256:` digest, because `actions/cache@v4` is a pointer its
-owner can repoint at code that then runs inside this repository's CI.
+release-blocking and enforced by **eleven gates**, which between them assert: the policy is
+in effect, lifecycle scripts disabled, registry-only resolutions, a 7-day release-age
+cooldown, exact versions, source-encoding hygiene, lockfile hashes cross-checked against the
+registry, a family deny-list, an OSV scan, an on-disk IOC sweep, **no committed
+credentials**, a CycloneDX SBOM, **a trivy CVE scan of the built container images**, and —
+added after the release audit — **pinning of the pipeline's own dependencies**: every GitHub
+Action by 40-hex commit SHA and every container base image by `@sha256:` digest, because
+`actions/cache@v4` is a pointer its owner can repoint at code that then runs inside this
+repository's CI. (This paragraph said "nine gates" and listed ten things; the count and the
+list are both taken from the `GATES` array in `scripts/supply-chain/audit.mjs`, which has
+gained a secret scan and a container-image scan since.)
 
 The footgun: **pnpm 11 reads only auth and registry settings from `.npmrc`.** A policy
 written there is *silently ignored* — the repo looks hardened while being wide open. That

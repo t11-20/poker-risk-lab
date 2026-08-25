@@ -402,8 +402,11 @@ is enforced rather than documented.
 
 ## 10. Supply chain
 
-`pnpm run security:audit` — **9 gates, all passing**. Every figure below is from the run of
-2026-08-19 and was copied out of that run's output, not carried forward:
+`pnpm run security:audit` — **11 gates**. Figures below are from the run of 2026-08-19 and
+were copied out of that run's output, not carried forward, **except the rows that carry their
+own later date**, which were re-captured because the gate list had grown and the pinning
+figures had gone stale. This section said "9 gates" for both reasons at once: `secret-scan` and
+`container-scan` had been added to the `GATES` array and no row here named them.
 
 | Gate | Result |
 | --- | --- |
@@ -412,20 +415,25 @@ is enforced rather than documented.
 | Denied packages | 0 found across **162 resolved package versions** (104 on disk; 58 are platform-skipped optional deps, inspected from the registry by the integrity gate) |
 | Dependency shapes | lockfile v9; 162 resolutions and 49 importer edges; registry-only; **0 install-time lifecycle hooks** across 104 installed manifests; every version exact |
 | IOC sweep | **10,540 files / 125.4 MiB** swept for 9 string markers, 2 hashes, 6 artefact paths — clean |
-| CI + container pinning | 2 workflows, **24 action references** all 40-hex commit SHAs; 2 Dockerfiles with 2 external base images and 1 compose file with 2 image references, all `@sha256:` digests; no undeclared workflow |
+| Committed credentials | *2026-08-25:* **621 tracked files read** of 622 tracked; 7 secret-bearing paths checked against the ignore rules. Working tree only — `--history` is opt-in and is not part of the audit |
+| CI + container pinning | *2026-08-25:* **3 workflows, 46 action references** all 40-hex commit SHAs; 2 Dockerfiles with 2 external base images and **3 compose files with 8 image references**, all `@sha256:` digests; no undeclared workflow. (Was recorded as 2 workflows / 24 actions / 1 compose file / 2 images, measured 2026-08-19) |
 | Integrity + release age | **all 162 lockfile hashes match the registry**; every version clears the 7-day cooldown |
 | OSV | **0 advisories** across 162 versions |
-| SBOM | CycloneDX 1.6, **170 components, 171 dependency records**, content-derived serial |
+| SBOM | *2026-08-25:* CycloneDX 1.6, **170 components, 171 dependency records**, content-derived serial |
+| Container image CVEs | trivy at the HIGH floor against the built release images. Not run by a commit-time audit — on a checkout with no release images the gate reports **not applicable** and the summary says so. Last measured against the candidate digests 2026-08-24 (trivy 0.72.0): **0 blocking, 60 unfixable, 0 allowed**; see `docs/production/staging-verification.md` for the CRITICAL/HIGH breakdown |
 
-The eight-gate figure this table used to give is what the ninth gate was added to fix: the
+The eight-gate figure this table used to give is what the pinning gate was added to fix: the
 repository's *own* dependencies were held to "no mutable references" by six gates, while the
 **pipeline's** dependencies — GitHub Actions and container base images — were held to it by
 header comments. `uses: actions/cache@v4` added tomorrow would have passed all eight, and that
 is a pointer its owner can repoint at code which then runs here with this repository's secrets.
 
-`--offline` skips *integrity + release age* and *OSV* and then **exits 2** rather than 0, because
-an audit that did not run two of its gates has not passed and a pipeline reading only the exit
-code could not previously tell the difference.
+`--offline` skips *integrity + release age*, *OSV* and *container image CVEs* — **three** gates,
+not the two this paragraph used to name — and then **exits 2** rather than 0, because an audit
+that did not run three of its gates has not passed and a pipeline reading only the exit code
+could not previously tell the difference. The container gate is skipped rather than reported
+not-applicable under `--offline` because `audit.mjs` tests the offline branch first, which is
+what makes the run exit 2 instead of 0 on a machine that has no release images either way.
 
 ### A finding worth recording
 
@@ -473,7 +481,7 @@ The honest section.
 | **Accessibility, fully** | The audit is static (server-rendered HTML) because a headless browser needs install scripts the supply-chain policy forbids. It reports exactly what it covers. THREAT-MODEL G5 |
 | **Load behaviour at scale** | The harness measures a local dev server, not production capacity, and says so in its output |
 | **Container image digests** | *Presence* is now verified and gated: every base image and every GitHub Action is `@sha256:`/40-hex pinned and `ci-pinning` fails the release otherwise (2026-08-19). What is **not** verified is that any pinned artefact was benign when its digest was taken — a digest pins bytes, not trustworthiness. This row used to say digests were partly absent; that is no longer true, and it is recorded here rather than deleted |
-| **A pinned digest staying safe** | Nothing re-checks it. The OSV gate queries the `npm` ecosystem only, so an advisory against `node:24.18.0-bookworm-slim` or against a pinned action reaches this repository through a human reading an advisory feed |
+| **A pinned digest staying safe** | Nothing re-checks it. The OSV gate queries the `npm` ecosystem only, so an advisory against `node:24.18.0-alpine3.24` or against a pinned action reaches this repository through a human reading an advisory feed |
 | **The backup and restore procedure** (`RUNBOOK` §11.4) | Rehearsed by hand on 2026-08-19 — dump, `migrate.mjs roles`, `pg_restore --exit-on-error`, `db:verify` exit 0, `db:migrate:status` exit 0 — and **enforced by nothing**. No gate restores a dump. `db:verify` runs inside `verify` against the *development* database, which proves the checks work, not that a restore produces a database they would pass |
 | **Who owns schema `prl`** | **Now checked.** It was not, and that gap was found by breaking it: `verify-schema.mjs` check 6 asserts `prl_app` owns no relation and holds no `CREATE`, but never asked who *did* own the schema. Restoring a dump as `prl_api` without `--exit-on-error` leaves all relations in `prl` owned by `prl_api` — which then holds `CREATE` and can `DROP` every table it serves — and `db:verify` exited **0** over it. Check 6b now asserts `pg_namespace.nspowner` and every `pg_class.relowner` in `prl` is `prl_migrator`. It earned its place immediately: on first run it failed the shared development database, whose migration ledger was still owned by the bootstrapping superuser, and `pnpm run db:migrate` repaired it. |
 | **That `up` actually calls the destructive-statement gate** | The gate's logic is well covered — `apps/api/scripts/migrate.test.mjs`, 10 tests, run inside `test:scripts`: `down` refuses without a database, the scanner fires on each destructive kind, ignores a `DROP` that is only mentioned in prose, catches one hidden in a `DO` block, and rejects a bare `-- prl:irreversible:` with no reason. What no test covers is the **wiring** — that `up` consults it before applying — because that needs a live database and a deliberately-bad pending migration |
@@ -483,16 +491,18 @@ The honest section.
 
 ### What the release gate actually enforces
 
-`pnpm run verify` runs eleven gates, reports each, and exits non-zero if any failed. Every section of
-this document is mapped onto it here, because "we check that" and "the release checks that" are
-different sentences and this project has confused them before.
+`pnpm run verify` runs **thirteen** gates, reports each, and exits non-zero if any failed. Every
+section of this document is mapped onto it here, because "we check that" and "the release checks
+that" are different sentences and this project has confused them before. (This said *eleven*, which
+was the count before `test:ax` and `test:csp` joined the loop in `package.json`; read the count off
+that loop, not off this sentence.)
 
 | This document's claim | Enforced by |
 | --- | --- |
 | §2.1 five-card enumeration, §3 betting, §4 side pots, §5 whole-hand invariants, §6 hidden information, §7 randomness and commitment, §8 mathematics, §9 content | `test` (via `test:unit`) |
 | §2.2 the 133,784,560-hand exhaustive check | `test:exhaustive` — **added to the gate 2026-08-18**; it was in neither `test` nor `verify` before that |
 | AI profile axes (`REPORT.md` §7) | `test:simulation` — also added to the gate 2026-08-18 |
-| §10 supply chain | `security:audit` (nine gates, including `ci-pinning` since 2026-08-19), `security:hygiene` |
+| §10 supply chain | `security:audit` (eleven gates, including `ci-pinning` since 2026-08-19 and `secret-scan`/`container-scan` since), `security:hygiene` |
 | The roll-forward-only migration policy (`RUNBOOK` §11.3) | `test` (via `test:scripts` → `apps/api/scripts/migrate.test.mjs`). The scanner is gated; the wiring into `up` is not — see the table above |
 | That `apps/web/src/fixtures/**` still equals what the engine computes | `test` (via `test:integration` → `apps/api/test/web-fixture-figures.test.ts`). `pnpm run fixtures:check` is the operator-facing form of the same computation and `pnpm run fixtures:regenerate` is the remedy — which the repository did **not** contain until 2026-08-18, which is how a rule-of-2-and-4 estimate of `1.6` shipped and rendered as "160.0%" |
 | The live schema's security properties | `db:verify` — present in the gate before, but as the last link of a `&&` chain, so a failure anywhere earlier skipped it. It had never run inside `verify` |
@@ -507,7 +517,7 @@ different sentences and this project has confused them before.
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm run security:audit        # 9 gates
+pnpm run security:audit        # 11 gates
 pnpm run test                  # builds the packages first, then unit + integration + scripts
 pnpm run test:exhaustive       # all 133,784,560 seven-card hands (~7 s)
 pnpm run test:simulation       # AI profile axes (~2 min)

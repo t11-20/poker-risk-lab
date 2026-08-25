@@ -70,6 +70,10 @@
  * `stale_action_sequence`, `not_your_turn`, `illegal_action`. The message is passed through rather
  * than written here, so what the reader is told is what the server actually said.
  *
+ * The other two statuses are about frames the server never saw, and they exist because reporting
+ * those as `pending` was a defect: `held` when there is no connection and the caller will replay the
+ * decision on reconnect, `not-sent` when the caller itself refused to send it. See `TableSubmission`.
+ *
  * ## The three things this screen says out loud, and why they are three
  *
  * Every one of them is fed from a diff computed in `lib/use-live-table.ts`, never from a frame: see
@@ -82,11 +86,13 @@
  *     the `event` frame describing the action that got there arrive back to back, and one region
  *     would let either overwrite the other. It carries the pot, the price, the stack and the legal
  *     actions, because that is the whole of the decision.
- *  3. **A refusal** — `role="alert"`, mounted only when the server rejects a decision. Assertive
- *     because the reader has acted and the table did NOT move: they are waiting for something that
- *     is not coming, and every other channel on this screen is polite. The accepted and pending
- *     states are deliberately silent here — (1) already echoes the decision, and "the server applied
- *     it at sequence 41" is a sentence nobody needs read to them.
+ *  3. **A refusal** — `role="alert"`, mounted only when a decision was refused and the reader has to
+ *     act again: the server rejected it, or this page never sent it. Assertive because the reader
+ *     has acted and the table did NOT move: they are waiting for something that is not coming, and
+ *     every other channel on this screen is polite. The accepted, pending and held states are
+ *     deliberately silent here — (1) already echoes the decision, "the server applied it at sequence
+ *     41" is a sentence nobody needs read to them, and a held decision is one the reader can do
+ *     nothing about and does not need to.
  *
  * The error state's own `role="alert"` (see `TableRegion`) is the fourth, and it replaces the table
  * rather than describing it.
@@ -132,13 +138,30 @@ export type TableStageStatus = 'loading' | 'ready' | 'error' | 'complete';
 /**
  * A decision the caller has sent to a server, and what became of it.
  *
- * Only meaningful alongside `onAct`. `pending` is the only status that disables the controls: once
- * the server has answered, the next `state` frame decides whether it is this seat's turn again, and
- * that answer is `view.legalActions`, not a flag held here.
+ * Only meaningful alongside `onAct`. `pending` and `held` are the statuses that disable the
+ * controls: once the server has answered, the next `state` frame decides whether it is this seat's
+ * turn again, and that answer is `view.legalActions`, not a flag held here.
+ *
+ * ## Why "sent" and "not sent" are five statuses rather than three
+ *
+ * `pending` used to cover every decision the caller had dispatched, whether or not the frame
+ * actually left the browser, and the caller announced a rate limit separately when it had not. A
+ * reader who pressed Fold during a reconnect therefore got "Decision sent" and "The decision was
+ * not sent" at once, in two different live regions, with the wrong cause attached to the second.
+ * See `SUBMISSION_FOR` in `lib/use-live-table.ts`.
+ *
+ * The two new members are the two honest answers that were missing:
+ *
+ *  - `held` — nothing was sent, and nothing is lost. The connection is down and the decision is
+ *    replayed, unchanged, when it returns. The controls stay disabled, because it IS going to be
+ *    applied.
+ *  - `not-sent` — nothing was sent and nothing is holding it: this page refused it (its own rate
+ *    limiter, or a frame it could not put on the wire). The reader decides again, so the controls
+ *    come back and the message is an alert rather than a status.
  */
 export interface TableSubmission {
   readonly action: TableAction;
-  readonly status: 'pending' | 'accepted' | 'rejected';
+  readonly status: 'pending' | 'held' | 'accepted' | 'rejected' | 'not-sent';
   /** What the reader is told. The server's own wording where the server had any. */
   readonly message: string;
 }
@@ -361,12 +384,40 @@ interface DecisionBandProps {
   readonly onAct: (action: TableAction) => void;
 }
 
-/** The heading and tone for each fate a decision can meet. */
+/**
+ * The heading for each fate a decision can meet.
+ *
+ * Each names WHO decided. "Decision sent" and "The server refused it" are about the server; "Held —
+ * no connection to the table" and "This page did not send it" are about this browser, and saying so
+ * is the difference between a reader waiting for a reconnect and a reader deciding again. A title
+ * that blamed the server for a frame the server never saw was the defect here.
+ */
 const SUBMISSION_TITLE: Readonly<Record<TableSubmission['status'], string>> = {
   pending: 'Decision sent',
+  held: 'Held — no connection to the table',
   accepted: 'Decision applied',
   rejected: 'The server refused it',
+  'not-sent': 'This page did not send it',
 };
+
+/**
+ * The fates that need interrupting for, and the ones that do not.
+ *
+ * A refusal the reader has to act on is an alert; "sent", "held" and "applied" are a polite status,
+ * because the reader has nothing to do about any of them and interrupting to confirm that a fold
+ * worked is how an alert stops meaning anything. `not-sent` is here with `rejected` for one reason:
+ * the controls are live again and nothing else on screen says the decision has gone.
+ */
+const SUBMISSION_ALERTS: ReadonlySet<TableSubmission['status']> = new Set<TableSubmission['status']>([
+  'rejected',
+  'not-sent',
+]);
+
+/** The statuses that keep the controls disabled: something is still going to happen to the decision. */
+const SUBMISSION_IN_FLIGHT: ReadonlySet<TableSubmission['status']> = new Set<TableSubmission['status']>([
+  'pending',
+  'held',
+]);
 
 /**
  * Your own figures, the controls, and the price — the last block in the table column.
@@ -377,8 +428,8 @@ const SUBMISSION_TITLE: Readonly<Record<TableSubmission['status'], string>> = {
  */
 function DecisionBand(props: DecisionBandProps): ReactElement {
   const { status, view, submission, turnAnnouncement, isLive, onAct } = props;
-  const pending = submission?.status === 'pending';
-  const rejected = submission !== null && submission.status === 'rejected';
+  const pending = submission !== null && SUBMISSION_IN_FLIGHT.has(submission.status);
+  const rejected = submission !== null && SUBMISSION_ALERTS.has(submission.status);
 
   /**
    * Where the caret goes the instant a decision is submitted.
@@ -476,11 +527,14 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
         block was a `Callout` with no live-region ancestor at all: the whole message existed only as
         pixels, and the polite regions beside it were busy narrating a table that had not moved.
 
-        Mounted ONLY in the rejected state, which is what makes it fire: an alert is announced on
-        insertion, and an always-present node whose text merely changes is announced far less
-        reliably. The accepted and pending states keep the plain `Callout` below, deliberately: the
-        table's own region already echoes the decision, and interrupting a reader to tell them their
-        fold worked is how an alert stops meaning anything.
+        Mounted ONLY in the states that need acting on — `SUBMISSION_ALERTS` — which is what makes it
+        fire: an alert is announced on insertion, and an always-present node whose text merely
+        changes is announced far less reliably. `not-sent` is in that set beside `rejected` because
+        it has the same shape from the reader's side: the controls are live again and nothing was
+        applied. The accepted, pending and held states keep the plain `Callout` below, deliberately:
+        the table's own region already echoes the decision, and interrupting a reader to tell them
+        their fold worked — or that it is queued behind a reconnect they can do nothing about — is
+        how an alert stops meaning anything.
       */}
       {/*
         One wrapper for both fates, so the focus rescue above has a single destination whatever the
@@ -499,13 +553,24 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
         <div aria-label="What happened to your decision" ref={acknowledgementRef} role="status" tabIndex={-1}>
           {rejected ? (
             <div role="alert">
-              <Callout tone="warning" title={isLive ? SUBMISSION_TITLE.rejected : 'Nothing was sent'}>
+              {/*
+                The title is read off the status, not fixed to `rejected`. Two different refusals
+                arrive here — the server's, and this page's own — and a heading that says "The
+                server refused it" about a frame the server never received tells the reader to go
+                and look at the wrong thing.
+              */}
+              <Callout
+                tone="warning"
+                title={isLive ? SUBMISSION_TITLE[submission.status] : 'Nothing was sent'}
+              >
                 {submission.message}
               </Callout>
             </div>
           ) : (
             <Callout
-              tone={isLive ? 'insight' : 'warning'}
+              // `held` is a caveat rather than an insight: nothing is lost, but the table is not
+              // reachable and the reader is entitled to see that at a glance.
+              tone={isLive && submission.status !== 'held' ? 'insight' : 'warning'}
               title={isLive ? SUBMISSION_TITLE[submission.status] : 'Nothing was sent'}
             >
               {submission.message}

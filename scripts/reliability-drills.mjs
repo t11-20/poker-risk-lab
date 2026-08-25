@@ -253,33 +253,66 @@ function printOutcome(outcome) {
 }
 
 /**
+ * The context object a drill is handed: the run's settings, plus the two ways it registers work
+ * for cleanup.
+ *
+ * Exported and parameterised on `spawnServer` so `scripts/reliability-drills.test.mjs` can drive
+ * the ordering below with a stub. See the comment inside `startServer`: the ordering is the
+ * whole point of this function existing, and it is not observable from outside without one.
+ */
+export function drillContext(ctx, cleanups, spawnServer = startServer) {
+  return {
+    ...ctx,
+    cleanup: (fn) => cleanups.push(fn),
+    startServer: async (extra = {}) =>
+      spawnServer({
+        databaseUrl: ctx.databaseUrl,
+        webOrigin: ctx.webOrigin,
+        graceMs: ctx.graceMs,
+        metricsToken: ctx.metricsToken,
+        ...extra,
+        /**
+         * Registered from inside `onSpawn`, which the harness calls synchronously with the child
+         * in hand — BEFORE it waits up to thirty seconds for the server's listening line.
+         *
+         * ## The defect this exists for
+         *
+         * The push used to sit after `await startServer(...)`, so it was only ever reached when
+         * the start SUCCEEDED. A server that never printed a listening address — a bad
+         * DATABASE_URL, a port lost to a race, a machine slow enough under a drill's own load to
+         * miss the thirty-second budget — rejected with the child still running, `detached: true`
+         * and in its own process group. Nothing held a reference to it: the rejection carries a
+         * message, not a pid. It outlived the drill, the suite and the terminal, holding its port
+         * and a pool of database connections, and made the NEXT run fail somewhere unrelated.
+         *
+         * The file header promises that every drill cleans up after itself, INCLUDING ON FAILURE.
+         * That promise was false in precisely the case it was written for. Do not move this back
+         * outside the call.
+         */
+        onSpawn: (handle) => {
+          cleanups.push(async () => {
+            await handle.stop();
+          });
+        },
+      }),
+  };
+}
+
+/**
  * Runs one drill, then everything it registered for cleanup, in reverse order.
  *
  * Cleanup runs whether the drill passed, failed or threw, and a cleanup that itself fails is
  * recorded as a warning rather than allowed to mask the drill's own result. That ordering is what
  * makes the suite re-runnable: a drill that left a container or a database behind would make the
  * next run's first failure somebody else's mess.
+ *
+ * What gets INTO `cleanups`, and when, is `drillContext`'s job — and the "when" is the part that
+ * was wrong: a server the drill never managed to start was not registered at all.
  */
 async function runDrill(drill, ctx) {
   const cleanups = [];
   const startedAt = performance.now();
-  const scoped = {
-    ...ctx,
-    cleanup: (fn) => cleanups.push(fn),
-    startServer: async (extra = {}) => {
-      const server = await startServer({
-        databaseUrl: ctx.databaseUrl,
-        webOrigin: ctx.webOrigin,
-        graceMs: ctx.graceMs,
-        metricsToken: ctx.metricsToken,
-        ...extra,
-      });
-      cleanups.push(async () => {
-        await server.stop();
-      });
-      return server;
-    },
-  };
+  const scoped = drillContext(ctx, cleanups);
 
   let report;
   try {

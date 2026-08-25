@@ -24,7 +24,7 @@ pnpm --version             # must be 11.10.0
 cd poker-risk-lab
 
 pnpm install --frozen-lockfile     # never --no-frozen-lockfile
-pnpm run security:audit            # 9 gates; must pass before anything else
+pnpm run security:audit            # 11 gates; must pass before anything else
 
 cp .env.example .env
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
@@ -98,8 +98,9 @@ The container stack has no such split: there is exactly one published origin (§
 | `pnpm run test:a11y` | Static accessibility audit of the rendered pages. Starts web on **:3000** itself, or pass `--no-start --base-url <url>` | ~30 s |
 | `pnpm run test:keyboard` | **Real keyboard journeys in real Chrome** over the DevTools Protocol: focus order, focus visibility, keyboard traps, the modal sheet, the bet-size slider, and one hand folded from the keyboard at a live table. Needs a **running production build** on :3000 and a running API — it is not started for you, because a dev build ships overlays that do not ship | ~2 min |
 | `pnpm run test:smoke` | End-to-end smoke against a running stack; `-- --strict` fails on warnings | seconds |
+| `pnpm run alerts:verify` | Brings Prometheus and Alertmanager up beside the **running staging stack**, checks all 22 alert rules load/agree/ground/evaluate, then **stops the API** and follows `ApiDown` through to a receiver. `-- --skip-provoke` does the first four checks only and leaves the API alone | ~5 min |
 | `pnpm run test:load` | WebSocket load harness against a local server | configurable |
-| `pnpm run test:all` | test + exhaustive + simulation + a11y | ~5 min |
+| `pnpm run test:all` | test + exhaustive + simulation + a11y + ax | ~5 min |
 | `pnpm run fixtures:check` | Report drift between `apps/web/src/fixtures/**` and what the engine computes today. Changes nothing | seconds |
 | `pnpm run fixtures:regenerate` | Rewrite those fixtures from the engine. **The remedy for a failing fixture guard** | seconds |
 
@@ -145,24 +146,30 @@ never receive another player's hole cards. A guardrail that skips is not a guard
 
 | Command | What it does |
 | --- | --- |
-| `pnpm run security:audit` | **All nine supply-chain gates.** Itself one of the eleven gates inside `pnpm run verify`, which is the release gate as a whole |
-| `pnpm run security:audit -- --offline` | Skips the two network gates and **exits 2** — *not* a valid release audit |
+| `pnpm run security:audit` | **All eleven supply-chain gates.** Itself one of the *thirteen* gates inside `pnpm run verify`, which is the release gate as a whole |
+| `pnpm run security:audit -- --offline` | Skips the three network gates and **exits 2** — *not* a valid release audit |
 | `pnpm run security:policy` | Is the supply-chain policy actually in effect? |
 | `pnpm run security:hygiene` | Source encoding, NUL bytes, hidden/bidi characters |
 | `pnpm run security:denylist` | Banned packages anywhere in the graph |
 | `pnpm run security:shapes` | Resolution shapes, install scripts, exact versions |
 | `pnpm run security:ioc` | Shai-Hulud IOC sweep of the tree and the installed store |
+| `pnpm run security:secrets` | Credentials in tracked files, and the ignore rules that keep the uncommitted ones uncommitted |
+| `pnpm run security:secrets -- --history` | The same sweep over every blob in git history. Not part of the audit — see `docs/production/security.md` |
 | `pnpm run security:pinning` | CI actions pinned by commit SHA, base images by digest, no undeclared workflow |
 | `pnpm run security:provenance` | Lockfile ↔ registry integrity, release-age cooldown |
 | `pnpm run security:osv` | OSV.dev vulnerability scan |
 | `pnpm run security:sbom` | Generate the CycloneDX 1.6 SBOM |
 | `pnpm run deps:quarantine` | Resolve dependencies in a scrubbed, secret-free quarantine |
 
-**`--offline` exits 2 and that is the point.** It prints `2 network gate(s) skipped — NOT a
+**`--offline` exits 2 and that is the point.** It prints `3 network gate(s) skipped — NOT a
 valid release audit` and exits non-zero, so a pipeline reading only the exit code cannot
 mistake a partial audit for a passing one. Exit **2**, not 1, so a caller can still
-distinguish "gates were skipped" from "a gate failed". It used to exit 0 with two gates
-unrun, which is exactly the failure this project keeps finding: a check that cannot fail.
+distinguish "gates were skipped" from "a gate failed". It used to exit 0 with the network
+gates unrun, which is exactly the failure this project keeps finding: a check that cannot
+fail. (This paragraph said *two* network gates, and quoted a `2 network gate(s) skipped`
+transcript. There are three — `provenance`, `osv-scan` and `container-scan` — and the
+container gate is among them under `--offline` because the audit checks the offline branch
+before it checks whether release artefacts exist.)
 
 ### Database
 
@@ -192,7 +199,9 @@ privilege boundary working, not a broken command.
 ```bash
 pnpm run verify
 # security:audit · security:hygiene · lint · build · typecheck · design:contrast
-# test · test:a11y · test:exhaustive · test:simulation · db:verify
+# test · test:a11y · test:ax · test:csp · test:exhaustive · test:simulation · db:verify
+# — thirteen gates. This comment used to list eleven; test:ax and test:csp were missing
+#   from it, not from the loop in package.json.
 ```
 
 **Every gate runs, every gate reports, and the command exits non-zero if any of them failed.** It
@@ -783,21 +792,37 @@ pnpm run db:migrate:status
   is deliberately not readable by the runtime role. Give it the migration identity.
 
 Rehearsed end to end on 2026-08-19 against a migrated and seeded database — dump, `roles`,
-`pg_restore --exit-on-error`, then:
+`pg_restore --exit-on-error`, then `db:verify` and `db:migrate:status`, both exit 0.
+
+The transcript below is a **re-capture taken 2026-08-25** against the local dev database, not
+the 2026-08-19 rehearsal output. The original paste had gone stale in two ways that matter
+here — it showed `121 columns` and only two applied migrations — and a stale transcript in a
+restore procedure reads as an assertion about the schema you are restoring, which is exactly
+the mistake §11.4 is trying to stop you making. Compare shape, not just numbers: the counts
+move with every migration, and they also move with **who connected** (see the header of
+`verify-schema.mjs`).
 
 ```
-$ pnpm run db:verify                    # DATABASE_URL naming prl_api
-  · 121 columns across the prl schema
+$ pnpm run db:verify                    # DATABASE_MIGRATION_URL naming the owner (poker, locally)
+  · 123 columns across the prl schema, as poker
   · 41 indexes
-  · checked 13 tables for prl_app privileges
+  · bot_profile permits exactly the 13 runtime values
+  · checked the delete action of 8 foreign key(s) referencing users
+  · checked 13 tables for prl_app privileges, as seen by poker
   · checked schema and every relation owner
   ✓ every documented schema security property holds      → exit 0
 
-$ pnpm run db:migrate:status            # DATABASE_MIGRATION_URL naming prl_deployer
-  applied  0001_initial.sql
-  applied  0002_indexes_and_constraints.sql
-  · 2 applied and matching, 0 pending                    → exit 0
+$ pnpm run db:migrate:status            # DATABASE_MIGRATION_URL; prl_deployer in a deployment
+  applied  0001_initial.sql                 2026-08-19T09:33:37.021Z
+  applied  0002_indexes_and_constraints.sql 2026-08-19T09:33:37.108Z
+  applied  0003_bot_seat_recovery.sql       2026-08-19T09:33:37.143Z
+  applied  0004_account_deletion.sql        2026-08-22T13:09:19.205Z
+  · 4 applied and matching, 0 pending                    → exit 0
 ```
+
+`db/migrations/` holds four files, and a restored database that reports fewer than the
+directory holds is a restore of an older release, not a broken one — `db:migrate` is the
+remedy, not `db:reset`.
 
 Test the restore on a schedule. A backup nobody has restored is a hypothesis, and `pg_restore`
 exiting 0 is not the test — `db:verify` exiting 0 is. `pnpm run db:migrate:status` on the
@@ -912,4 +937,12 @@ log driver, or a sidecar. Points that matter when you configure it:
       passwords are cluster-wide and are in neither the dump nor `migrate.mjs roles` (§11.4)
 - [ ] Logs shipped somewhere with retention set
 - [ ] Orchestrator termination grace **above** `SHUTDOWN_GRACE_MS`, never equal to it (§10)
+- [ ] Alerting rules deployed **and delivery rehearsed** to whatever this environment pages with.
+      `pnpm run alerts:verify` does that against staging and its own webhook sink; production
+      differs only in the two receiver URLs in
+      `deploy/staging/observability/alertmanager.yml`, and that last hop is the half staging
+      cannot rehearse. An alert nobody receives is a rule with an encouraging name
+- [ ] `WebSocketConnectionsHigh` re-derived if the capacity measurement was repeated
+      ([docs/production/load-test.md](production/load-test.md)); it is 70% of the measured
+      saturation point and lives in two files that must agree
 - [ ] `pnpm run verify` green on the release commit — every gate `PASS`, not just an exit code

@@ -418,6 +418,10 @@ for its result.
 **Candidate SHA:** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`. The application evidence and its
 provenance are listed in the final readiness report; this manual certification remains unexecuted.
 **Capture:** `/var/folders/7s/l9fr0tyd4wn9vp8qhg9yv7g80000gn/T/grok-goal-843cf6607006/implementer/screen-reader-blocked.log` recaptured on this SHA (`osascript` System Events **-1743**).
+**Re-confirmed** at UTC 2026-08-24 on the same host, during the work that closed the alerting and
+secret-scanning gaps: `osascript -e 'tell application "System Events" to return name of first
+process'` still answers `execution error: Not authorised to send Apple events to System Events.
+(-1743)`. Nothing about this blocker has changed, and nothing in this repository can change it.
 **Host:** macOS 26.5.2 (build 25F84), Darwin, Apple silicon. Safari and VoiceOver.app are both
 present (`/System/Library/CoreServices/VoiceOver.app`). Google Chrome 151 is installed and is what
 `pnpm run test:ax` and `pnpm run test:keyboard` drive.

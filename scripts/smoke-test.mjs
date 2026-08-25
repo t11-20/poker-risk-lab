@@ -410,6 +410,84 @@ export function originBucketNote(origin) {
 }
 
 // ---------------------------------------------------------------------------
+// Assertions about absence
+// ---------------------------------------------------------------------------
+
+/**
+ * True when `value` is not a non-empty array — because it is empty, or because it is not there.
+ *
+ * ## The defect this exists for
+ *
+ * Section 5 asserted `report.uncertainty?.limitations?.length === 0`. For a report that carries
+ * no `uncertainty` at all, `?.` short-circuits to `undefined`, `undefined === 0` is false, and
+ * there was no `else` — so the field simply going missing produced neither a pass nor a
+ * failure. The check evaporated, silently, in exactly the state that is MORE broken than the
+ * one it was written to catch: an empty `limitations` array is a coach report that stated no
+ * limitations, and a missing `uncertainty` object is a coach report that has stopped modelling
+ * uncertainty at all.
+ *
+ * This is the idiom the rest of the file already used two lines away (`assumptions`,
+ * `whatWouldChangeIt`, the Legends disclaimers), named and shared so that the next assertion
+ * about a list cannot be written the other way by accident.
+ */
+export function listIsMissingOrEmpty(value) {
+  return !Array.isArray(value) || value.length === 0;
+}
+
+/**
+ * True when a sampled equity result came back without the interval that makes it honest.
+ *
+ * `== null`, not `=== null`: the check was written `=== null` and therefore passed a response
+ * whose `confidenceHalfWidthPoints` key was absent entirely — which is what a serialiser that
+ * drops undefined fields produces, and what a route that stopped computing the interval would
+ * produce. A Monte Carlo figure printed without its half-width is a number that reads as exact
+ * and is not, which is the single claim this repository's uncertainty policy is about. `!= null`
+ * is the idiom already used for `holeCards` in section 8.
+ */
+export function sampledEquityMissesInterval(equity) {
+  return equity?.method === 'monte-carlo' && equity?.confidenceHalfWidthPoints == null;
+}
+
+/**
+ * What a hostile calculation input's response actually proves.
+ *
+ * ## The defect this exists for
+ *
+ * The negative control read `if (response.status >= 400 && response.status < 500) rejected += 1`,
+ * so ANY 4xx counted. Section 12 exhausts the expensive-rate-limit budget, and a run in which
+ * that budget was already spent answered all six probes with 429 — a status the limiter produces
+ * before the request reaches a route, let alone a validator. The script then printed "all 6
+ * hostile calculation inputs rejected" having demonstrated nothing whatsoever about validation:
+ * the strongest safety claim in section 5, entirely unearned, on a green run.
+ *
+ * So the refusal has to be a VALIDATION refusal, identified by the contract error code the way
+ * section 3 identifies `csrf_failed` rather than by a status class:
+ *
+ *   - `invalid_request` (400) — the closed schema rejected the body;
+ *   - `computation_rejected` (422) — the body parsed and the calculator refused it, which is
+ *     where the absurd sample count and the duplicate card land;
+ *   - `payload_too_large` (413) — the same refusal taken at the body limit.
+ *
+ * A 429 is `untested`, never a pass: the probe did not reach a validator, so the run has no
+ * evidence either way and must say so rather than count it.
+ */
+const VALIDATION_REFUSAL_CODES = new Set(['invalid_request', 'computation_rejected', 'payload_too_large']);
+
+export function classifyHostileRefusal(response) {
+  const code = response?.json?.error?.code;
+  if (response?.status === 429 || code === 'rate_limited') {
+    return { kind: 'untested', why: 'the rate limiter answered before any validator ran' };
+  }
+  if (typeof code === 'string' && VALIDATION_REFUSAL_CODES.has(code)) {
+    return { kind: 'rejected', why: code };
+  }
+  if (response?.status >= 400 && response?.status < 500) {
+    return { kind: 'wrong-refusal', why: `refused with ${response.status} ${code ?? '(no contract code)'}` };
+  }
+  return { kind: 'accepted', why: `returned ${response?.status}` };
+}
+
+// ---------------------------------------------------------------------------
 // Output
 // ---------------------------------------------------------------------------
 
@@ -988,11 +1066,16 @@ async function sectionCalculation(alice) {
     } else {
       bad('equity', `AA vs KK returned ${percent.toFixed(2)}%, which is not credible`);
     }
-    if (
-      equity.json.equity.method === 'monte-carlo' &&
-      equity.json.equity.confidenceHalfWidthPoints === null
-    ) {
+    // `sampledEquityMissesInterval` uses `!= null` rather than the `=== null` that used to be
+    // written out here: an absent key is the more broken state, and it was the one this check
+    // could not see.
+    if (sampledEquityMissesInterval(equity.json.equity)) {
       bad('equity', 'a sampled result reported no confidence interval');
+    } else if (equity.json.equity.method === 'monte-carlo') {
+      ok(
+        'the sampled result carries a confidence interval',
+        `±${equity.json.equity.confidenceHalfWidthPoints} pts`,
+      );
     }
   } else {
     bad('equity endpoint', `got ${equity.status} ${equity.text.slice(0, 160)}`);
@@ -1012,14 +1095,16 @@ async function sectionCalculation(alice) {
   const report = coach.json?.report;
   if (coach.status === 200 && report !== undefined) {
     ok('coach report returned', `suggests ${report.suggestion?.action} (${report.suggestion?.confidence})`);
-    if (!Array.isArray(report.assumptions) || report.assumptions.length === 0) {
-      bad('coach report', 'assumptions empty');
+    if (listIsMissingOrEmpty(report.assumptions)) {
+      bad('coach report', 'assumptions empty or absent');
     } else ok('coach states assumptions', `${report.assumptions.length}`);
-    if (report.uncertainty?.limitations?.length === 0) bad('coach report', 'no limitations stated');
-    if (
-      !Array.isArray(report.suggestion?.whatWouldChangeIt) ||
-      report.suggestion.whatWouldChangeIt.length === 0
-    ) {
+    // Was `report.uncertainty?.limitations?.length === 0` with no `else`, which is false for
+    // `undefined` — so a report that had lost its `uncertainty` object entirely produced neither
+    // a pass nor a failure and the assertion vanished from the run. See `listIsMissingOrEmpty`.
+    if (listIsMissingOrEmpty(report.uncertainty?.limitations)) {
+      bad('coach report', 'no limitations stated (the uncertainty block is empty or missing)');
+    } else ok('coach states its limitations', `${report.uncertainty.limitations.length}`);
+    if (listIsMissingOrEmpty(report.suggestion?.whatWouldChangeIt)) {
       bad('coach report', 'the suggestion does not say what would change it');
     } else ok('the suggestion says what would change it');
   } else {
@@ -1036,12 +1121,30 @@ async function sectionCalculation(alice) {
     [{ heroCards: 'AhAd', opponents: ['KsKc'], unexpectedField: 1 }, 'unknown field (closed schema)'],
   ];
   let rejected = 0;
+  let untested = 0;
   for (const [body, label] of hostile) {
     const response = await alice.request('POST', '/api/v1/math/equity', body);
-    if (response.status >= 400 && response.status < 500) rejected += 1;
-    else bad('hostile input accepted', `${label} returned ${response.status}`);
+    // Not `status >= 400 && status < 500`. See `classifyHostileRefusal`: that test counted the
+    // limiter's 429 as a validation refusal, so a run whose expensive-rate-limit budget was
+    // already spent printed "all 6 hostile calculation inputs rejected" without a validator
+    // having seen a single one of them.
+    const verdict = classifyHostileRefusal(response);
+    if (verdict.kind === 'rejected') rejected += 1;
+    else if (verdict.kind === 'untested') untested += 1;
+    else bad('hostile input accepted', `${label} ${verdict.why}`);
   }
-  if (rejected === hostile.length) ok(`all ${hostile.length} hostile calculation inputs rejected`);
+  if (untested > 0) {
+    // A failure, not a warning. This is the section's strongest claim, and a gate that reports
+    // a claim it could not test is a gate that lies. The fix on the operator's side is to let
+    // the expensive-input window drain, or to run with a reset token configured.
+    bad(
+      'hostile input untested',
+      `${untested} of ${hostile.length} probes were answered by the rate limiter (429), so no ` +
+        'validator was reached and this run proves nothing about input validation',
+    );
+  } else if (rejected === hostile.length) {
+    ok(`all ${hostile.length} hostile calculation inputs rejected`, 'by a validator, with a contract code');
+  }
 }
 
 /** 6. AI Legends labelling. */

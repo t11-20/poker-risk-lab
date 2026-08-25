@@ -496,8 +496,8 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       confidenceHalfWidthPoints: null,
       ruleOfThumb: {
         estimate: 0.36,
-        errorPoints: 1.0323774283071216,
-        note: "9 outs with two cards to come, times 4, is roughly 36% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut overstates by 1.0 points here — 36% against an exact 35.0%. Fine as a rough read, but do not hang a marginal call on it. The comparison is against the exact chance of one of those 9 clean cards arriving (Two cards to come, 9 outs, 47 cards unseen. Count the misses instead of the hits: 38 cards do not help. The turn misses 38/47 of the time, and with one miss now gone the river misses 37/46 of the time, so both cards miss (38/47) x (37/46) = 65.0% of the time. Hitting at least one is whatever is left: 1 - 65.0% = 35.0%. Adding 9/47 + 9/46 instead would count every run-out that hits twice twice over, and overstate the chance.), not against hero's equity: hitting and winning are different questions, and the dirty-out count is zero here only because every out is clean. The shortcut is an approximation and this is its error, stated rather than hidden.",
+        errorPoints: -0.36363636363636687,
+        note: "9 outs with two cards to come, times 4, is roughly 36% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut is within half a point here — 36% against an exact 36.4% — so it is safe to use at the table. The comparison is against the exact chance of one of those 9 clean cards arriving (Two cards to come, 9 outs, 45 cards unseen. Count the misses instead of the hits: 36 cards do not help. The turn misses 36/45 of the time, and with one miss now gone the river misses 35/44 of the time, so both cards miss (36/45) x (35/44) = 63.6% of the time. Hitting at least one is whatever is left: 1 - 63.6% = 36.4%. Adding 9/45 + 9/44 instead would count every run-out that hits twice twice over, and overstate the chance.), not against hero's equity: hitting and winning are different questions, and the dirty-out count is zero here only because every out is clean. The shortcut is an approximation and this is its error, stated rather than hidden.",
       },
       perPlayer: [
         {
@@ -545,7 +545,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 130,
         ev: 81.1810606060606,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 65) - 130 ] = 68.25 + 12.93 = 81.18 chips. Risks 130 to win 195. Raising by 65 is one quarter pot of the 260 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 65, and has to continue with 80% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 65) - 130 ] = 68.25 + 12.93 = 81.18 chips. Risks 130 to win 195. Raising by 65 is one quarter pot of the 260 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 65, and has to continue with 60% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.3843434343434343,
       },
@@ -555,7 +555,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 238,
         ev: 64.94287878787878,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 173) - 238 ] = 68.25 + (-3.31) = 64.94 chips. Risks 238 to win 195. Raising by 173 is two thirds pot of the 260 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 173, and has to continue with 60% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 173) - 238 ] = 68.25 + (-3.31) = 64.94 chips. Risks 238 to win 195. Raising by 173 is two thirds pot of the 260 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 173, and has to continue with 45% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.3843434343434343,
       },
@@ -565,7 +565,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 935,
         ev: -39.85353535353542,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 870) - 935 ] = 68.25 + (-108.1) = -39.85 chips. Risks 935 to win 195. Raising by 870 puts your whole remaining stack in. A caller needs 43.5% equity to break even on the extra 870, and has to continue with 23% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 870) - 935 ] = 68.25 + (-108.1) = -39.85 chips. Risks 935 to win 195. Raising by 870 puts your whole remaining stack in. A caller needs 43.5% equity to break even on the extra 870, and has to continue with 17.3% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.3843434343434343,
       },
@@ -615,7 +615,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     teachingNotes: [
       'The pot is laying you 3.0 to 1, so you need 25.0% to break even on a call. That number depends only on the price — not on your cards.',
-      'The rule of 2 and 4 gives 36% on your 9 cards of clean outs, overstating the exact chance of hitting one of them by 1.0 points. Your equity here is 38.4%, which is a different question again: hitting is not the same as winning.',
+      'The rule of 2 and 4 gives 36% on your 9 cards of clean outs, understating the exact chance of hitting one of them by 0.4 points. Your equity here is 38.4%, which is a different question again: hitting is not the same as winning.',
       'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
     ],
   },
@@ -639,8 +639,8 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       confidenceHalfWidthPoints: null,
       ruleOfThumb: {
         estimate: 0.08,
-        errorPoints: -0.695652173913043,
-        note: "4 outs with one card to come, times 2, is roughly 8% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut understates by 0.7 points here — 8% against an exact 8.7%. Fine as a rough read, but do not hang a marginal call on it. The comparison is against the exact chance of one of those 4 clean cards arriving (One card to come. 4 of the 46 unseen cards win the hand, so the chance is 4/46 = 8.7%. With a single card there is nothing to correct for: the count of outs over the count of unseen cards is the probability.), not against hero's equity: hitting and winning are different questions, and the dirty-out count is zero here only because every out is clean. The shortcut is an approximation and this is its error, stated rather than hidden.",
+        errorPoints: -1.0909090909090917,
+        note: "4 outs with one card to come, times 2, is roughly 8% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut understates by 1.1 points here — 8% against an exact 9.1%. Fine as a rough read, but do not hang a marginal call on it. The comparison is against the exact chance of one of those 4 clean cards arriving (One card to come. 4 of the 44 unseen cards win the hand, so the chance is 4/44 = 9.1%. With a single card there is nothing to correct for: the count of outs over the count of unseen cards is the probability.), not against hero's equity: hitting and winning are different questions, and the dirty-out count is zero here only because every out is clean. The shortcut is an approximation and this is its error, stated rather than hidden.",
       },
       perPlayer: [
         {
@@ -689,7 +689,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 200,
         ev: 10.454545454545467,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 100) - 200 ] = 105 + (-94.55) = 10.45 chips. Risks 200 to win 300. Raising by 100 is one quarter pot of the 400 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 100, and has to continue with 80% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 100) - 200 ] = 105 + (-94.55) = 10.45 chips. Risks 200 to win 300. Raising by 100 is one quarter pot of the 400 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 100, and has to continue with 60% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.09090909090909091,
       },
@@ -699,7 +699,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 366,
         ev: -77.82727272727271,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 266) - 366 ] = 105 + (-182.83) = -77.83 chips. Risks 366 to win 300. Raising by 266 is two thirds pot of the 400 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 266, and has to continue with 60.1% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 266) - 366 ] = 105 + (-182.83) = -77.83 chips. Risks 366 to win 300. Raising by 266 is two thirds pot of the 400 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 266, and has to continue with 45% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.09090909090909091,
       },
@@ -709,7 +709,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 800,
         ev: -308.6363636363637,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 700) - 800 ] = 105 + (-413.64) = -308.64 chips. Risks 800 to win 300. Raising by 700 puts your whole remaining stack in. A caller needs 38.9% equity to break even on the extra 700, and has to continue with 36.4% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 700) - 800 ] = 105 + (-413.64) = -308.64 chips. Risks 800 to win 300. Raising by 700 puts your whole remaining stack in. A caller needs 38.9% equity to break even on the extra 700, and has to continue with 27.3% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.09090909090909091,
       },
@@ -759,7 +759,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     teachingNotes: [
       'The pot is laying you 3.0 to 1, so you need 25.0% to break even on a call. That number depends only on the price — not on your cards.',
-      'The rule of 2 and 4 gives 8% on your 4 cards of clean outs, understating the exact chance of hitting one of them by 0.7 points. Your equity here is 9.1%, which is a different question again: hitting is not the same as winning.',
+      'The rule of 2 and 4 gives 8% on your 4 cards of clean outs, understating the exact chance of hitting one of them by 1.1 points. Your equity here is 9.1%, which is a different question again: hitting is not the same as winning.',
       'At an SPR of 2.3 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
     ],
   },
@@ -820,7 +820,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 135,
         ev: 18.842062499999997,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 75) - 135 ] = 31.5 + (-12.66) = 18.84 chips. Risks 135 to win 90. Raising by 75 is half pot of the 150 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 75, and has to continue with 66.7% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 75) - 135 ] = 31.5 + (-12.66) = 18.84 chips. Risks 135 to win 90. Raising by 75 is half pot of the 150 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 75, and has to continue with 40% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.3850875,
       },
@@ -830,7 +830,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 172,
         ev: 13.31477125,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 112) - 172 ] = 31.5 + (-18.19) = 13.31 chips. Risks 172 to win 90. Raising by 112 is three quarters pot of the 150 that would be in the middle once you call. A caller needs 29.9% equity to break even on the extra 112, and has to continue with 57.3% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 112) - 172 ] = 31.5 + (-18.19) = 13.31 chips. Risks 172 to win 90. Raising by 112 is three quarters pot of the 150 that would be in the middle once you call. A caller needs 29.9% equity to break even on the extra 112, and has to continue with 34.4% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.3850875,
       },
@@ -840,7 +840,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 1000,
         ev: -110.37704374999993,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 940) - 1000 ] = 31.5 + (-141.88) = -110.38 chips. Risks 1000 to win 90. Raising by 940 puts your whole remaining stack in. A caller needs 46.3% equity to break even on the extra 940, and has to continue with 13.8% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 940) - 1000 ] = 31.5 + (-141.88) = -110.38 chips. Risks 1000 to win 90. Raising by 940 puts your whole remaining stack in. A caller needs 46.3% equity to break even on the extra 940, and has to continue with 8.3% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.3850875,
       },
@@ -1134,7 +1134,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 900,
         ev: 71.51351351351352,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 900 + 0.65 x [ 0.2432 x (900 + 540 + 2 x 360) - 900 ] = 315 + (-243.49) = 71.51 chips. Risks 900 to win 900. Raising by 360 is one quarter pot of the 1440 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 360, and has to continue with 80% of their range for a raise of this size not to print automatically. That size is also your whole remaining stack.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 900 + 0.65 x [ 0.2432 x (900 + 540 + 2 x 360) - 900 ] = 315 + (-243.49) = 71.51 chips. Risks 900 to win 900. Raising by 360 is one quarter pot of the 1440 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 360, and has to continue with 50% of their range for a raise of this size not to print automatically. That size is also your whole remaining stack.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.24324324324324326,
       },
@@ -1243,7 +1243,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 87,
         ev: 78.24467999999999,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 47) - 87 ] = 52.5 + 25.74 = 78.24 chips. Risks 87 to win 150. Raising by 47 is one quarter pot of the 190 that would be in the middle once you call. A caller needs 16.5% equity to break even on the extra 47, and has to continue with 80.2% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 47) - 87 ] = 52.5 + 25.74 = 78.24 chips. Risks 87 to win 150. Raising by 47 is one quarter pot of the 190 that would be in the middle once you call. A caller needs 16.5% equity to break even on the extra 47, and has to continue with 63.3% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.4458,
       },
@@ -1253,7 +1253,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 166,
         ev: 72.67833999999999,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 126) - 166 ] = 52.5 + 20.18 = 72.68 chips. Risks 166 to win 150. Raising by 126 is two thirds pot of the 190 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 126, and has to continue with 60.1% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 126) - 166 ] = 52.5 + 20.18 = 72.68 chips. Risks 166 to win 150. Raising by 126 is two thirds pot of the 190 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 126, and has to continue with 47.5% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.4458,
       },
@@ -1263,7 +1263,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 1000,
         ev: 13.914699999999947,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 960) - 1000 ] = 52.5 + (-38.59) = 13.91 chips. Risks 1000 to win 150. Raising by 960 puts your whole remaining stack in. A caller needs 45.5% equity to break even on the extra 960, and has to continue with 16.5% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 960) - 1000 ] = 52.5 + (-38.59) = 13.91 chips. Risks 1000 to win 150. Raising by 960 puts your whole remaining stack in. A caller needs 45.5% equity to break even on the extra 960, and has to continue with 13% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.4458,
       },

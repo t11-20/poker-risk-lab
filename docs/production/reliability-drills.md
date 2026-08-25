@@ -9,6 +9,8 @@
 
 A first run on this SHA (`{SCRATCH}/drills-contended-with-verify.log`) failed `slow-simulation` while `pnpm run verify` was still using the same machine: the second overrun answered 200 instead of 504. That is host contention, not a passing re-roll of a broken assertion. The isolated rerun, with the leftover API/web stopped, passed all 16.
 
+**Re-run 2026-08-24** on the same application tree (`git diff b292b2a HEAD -- apps packages` is empty), isolated: **16 of 16, `DRILLS_EXIT=0`, wall 142.2 s**. One release review recorded these as "not run under the repository's hard destructive-command policy" — that was a restriction on that review's own harness rather than a property of the suite, and this run is the same sixteen drills from the same tree with nothing waived.
+
 ---
 
 ## Isolated results

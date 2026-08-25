@@ -41,6 +41,19 @@
 # while an exclusion here is invisible at build time and its worst failure is a
 # `COPY` that silently copies nothing. Only the things that must never be in a
 # layer at all are listed here.
+#
+# That paragraph was, for a while, not true. This file said the tsconfigs and the
+# test trees were removed by the prune stages; the released images said otherwise.
+# prl-web shipped `/app/apps/web/test` — 26 files, 320 KB — because the runtime
+# stage copies `apps/web` from the build stage OVER the pruned prod-deps tree and
+# the build stage's prune had no `apps/web/test` line. Both images shipped every
+# `tsconfig.test.json`, because the prunes globbed `tsconfig.json`, which does not
+# match it. prl-api additionally shipped `apps/web/next.config.ts` and
+# `next-env.d.ts`, because the prune named app SUBdirectories and nothing at the
+# app root. All three are fixed in the Dockerfiles, which is where the fix belongs
+# — the reason none of it is excluded here has not changed. It is worth reading as
+# a demonstration of this paragraph's own risk: a claim about a prune is only as
+# true as the prune, and nothing failed while it was false.
 # ---------------------------------------------------------------------------
 
 # Host build output and installed dependencies. Every stage installs from the

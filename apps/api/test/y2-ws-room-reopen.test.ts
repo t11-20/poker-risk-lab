@@ -28,6 +28,17 @@
  * `HandState`, a turn timer and a bot runner on their behalf. `registry.size` is how that is
  * asserted here: it is the count of live tables, and a refused stranger must leave it at zero.
  *
+ * ## And a refusal that has to be told apart from a fault
+ *
+ * The same catch block later grew a second defect of exactly the opposite shape. Nothing on the
+ * `reopenFor` path is wrapped — `store.byId`, `store.memberOf` and `ensureOpen`'s `membersOfRooms`
+ * all reach Postgres directly — so a connection blip was caught here, correctly reported as
+ * `internal_error` in the frame, and then closed with a hard-coded 4403 anyway. 4403 is
+ * `retryable: false` in the client's `describeClose`, so a member of their own table was shown
+ * "Not your table" for a fault that would have cleared on the next attempt, and the socket never
+ * retried. The last block in this file holds both halves of that: a fault closes with a code the
+ * client reconnects from, and a genuine refusal still closes 4403.
+ *
  * ## No socket, no port, no timing
  *
  * `SocketSink` is two methods and the clock is manual, exactly as in `test/ws-router.test.ts`. The
@@ -37,7 +48,10 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { WS_CLOSE } from '@prl/contracts';
 import { createSecureRandom } from '@prl/poker-engine';
 import type { FastifyInstance } from 'fastify';
@@ -131,7 +145,20 @@ interface Reads {
  * under test rather than by this fake: a closed room's row still exists and still lists its
  * members, and reopening one would resurrect a table somebody deliberately ended.
  */
-function persistedStore(reads: Reads, options: { readonly status?: RoomRow['status'] } = {}): RoomStore {
+function persistedStore(
+  reads: Reads,
+  options: {
+    readonly status?: RoomRow['status'];
+    /**
+     * Makes `byId` reject with this, rather than answer.
+     *
+     * A plain `Error`, never an `AppError`: the point of the fixture is the path where the
+     * database itself failed — `postgres` rejects with its own error type, which carries no
+     * `code` this server understands. See the "a database blip is not a refusal" block below.
+     */
+    readonly byIdRejectsWith?: Error;
+  } = {},
+): RoomStore {
   const refuse = (name: string): never => {
     throw new AppError('internal_error', { logDetail: `the fake store has no ${name}` });
   };
@@ -144,6 +171,7 @@ function persistedStore(reads: Reads, options: { readonly status?: RoomRow['stat
     create: () => refuse('create'),
     byId: (roomId) => {
       reads.calls.push(`byId:${roomId}`);
+      if (options.byIdRejectsWith !== undefined) return Promise.reject(options.byIdRejectsWith);
       return Promise.resolve(roomId === ROOM_ID ? row : null);
     },
     byInviteCode: () => Promise.resolve(null),
@@ -213,7 +241,9 @@ interface Restarted {
  * Nothing here calls `registry.open`. That absence IS the restart — it is the whole of what a
  * restart does to this server — and it is why no fixture needs to kill anything.
  */
-async function afterRestart(options: { readonly status?: RoomRow['status'] } = {}): Promise<Restarted> {
+async function afterRestart(
+  options: { readonly status?: RoomRow['status']; readonly byIdRejectsWith?: Error } = {},
+): Promise<Restarted> {
   const app = await appWithValidator();
   const clock = createManualClock();
   const reads: Reads = { calls: [] };
@@ -435,6 +465,123 @@ describe('reopening does not become a way in', () => {
       assert.ok(room !== null);
       const member = room.memberList().find((entry) => entry.userId === MEMBER);
       assert.equal(member?.sockets, 0, 'the only socket closed, so nobody is connected');
+    } finally {
+      await test.app.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A database blip is not a refusal
+// ---------------------------------------------------------------------------
+
+/**
+ * The source of the client's close-code table, read as text.
+ *
+ * `apps/web` is a separate TypeScript program that cannot be imported from here — the same
+ * constraint `web-api-paths.test.ts` and `legend-fixture-figures.test.ts` work around — so the
+ * property this file depends on ("the client retries this code and not that one") is asserted
+ * against the real file rather than against a copy of it that could drift.
+ */
+const TABLE_SOCKET_SOURCE = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'web',
+  'src',
+  'lib',
+  'table-socket.ts',
+);
+
+/**
+ * Whether `describeClose` marks one close code retryable, read out of the web client's source.
+ *
+ * The block for a `case` runs to the next `case`, which is enough structure to read a
+ * single-property answer out of a file that is deliberately written as a flat table.
+ */
+function clientRetries(caseLabel: string): boolean {
+  const source = readFileSync(TABLE_SOCKET_SOURCE, 'utf8');
+  const start = source.indexOf(`case ${caseLabel}:`);
+  assert.notEqual(start, -1, `describeClose has no branch for ${caseLabel}; this test is out of date`);
+  const rest = source.slice(start + `case ${caseLabel}:`.length);
+  const end = rest.indexOf('\n    case ');
+  const block = end === -1 ? rest : rest.slice(0, end);
+  assert.match(block, /retryable: (true|false)/, `no retryable flag in the ${caseLabel} branch`);
+  return /retryable: true/.test(block);
+}
+
+describe('a transient database fault during hello is not reported as a permanent refusal', () => {
+  it('closes with a code the client retries, not with 4403', async () => {
+    // The reproduction, exactly: nothing on the `reopenFor` path is wrapped, so a Postgres blip
+    // arrives here as a plain `Error` with no `code` this server understands.
+    const blip = new Error('connection terminated unexpectedly');
+    const test = await afterRestart({ byIdRejectsWith: blip });
+    try {
+      const recorded = await sayHello(test, MEMBER, 'Bo');
+
+      const error = firstOf(recorded, 'error');
+      assert.ok(error !== null, 'the frame half is unchanged: the member is told something failed');
+      const body = error['error'];
+      assert.ok(typeof body === 'object' && body !== null && 'code' in body);
+      assert.equal(
+        (body as { readonly code: unknown }).code,
+        'internal_error',
+        'a fault on our side is `internal_error`, which the old code also got right',
+      );
+
+      const close = recorded.closes.at(0);
+      assert.ok(close !== undefined, 'the socket is still closed; a half-joined socket must not linger');
+
+      // MEASURED BEFORE: `closes: [{ code: 4403, reason: 'not permitted' }]`, because the catch
+      // block derived the frame code from the error and then closed with a hard-coded
+      // `WS_CLOSE.forbidden`. The old expression, written out so this assertion is against the
+      // behaviour and not against a constant that moved:
+      const oldCloseCode = WS_CLOSE.forbidden;
+      assert.notEqual(
+        close.code,
+        oldCloseCode,
+        'a database blip must not close 4403 — that is the code for "not your table"',
+      );
+      // MEASURED AFTER: `closes: [{ code: 4503, reason: 'handshake failed' }]`.
+      assert.equal(close.code, WS_CLOSE.serverShuttingDown);
+
+      // The consequence, which is the whole reason the code matters. Both halves are asserted:
+      // without the second, this would also pass on a client that retried everything.
+      assert.equal(
+        clientRetries('WS_CLOSE.serverShuttingDown'),
+        true,
+        'the code chosen for a server fault must be one the client reconnects from',
+      );
+      assert.equal(
+        clientRetries('WS_CLOSE.forbidden'),
+        false,
+        'and 4403 must still be the permanent one, or this test proves nothing about the fix',
+      );
+    } finally {
+      await test.app.close();
+    }
+  });
+
+  it('still closes a genuine refusal with 4403, blip fixture and all', async () => {
+    // The negative control for the fix itself. A change that routed every handshake failure to a
+    // retryable code would pass the test above and quietly turn "not your table" into an infinite
+    // reconnect loop against a room the caller will never be allowed into.
+    const test = await afterRestart();
+    try {
+      const recorded = await sayHello(test, STRANGER, 'Mallory');
+      assert.equal(recorded.closes.at(0)?.code, WS_CLOSE.forbidden);
+      assert.equal(recorded.closes.at(0)?.reason, 'not permitted');
+    } finally {
+      await test.app.close();
+    }
+  });
+
+  it('leaves nothing behind: no live table, and the socket is not left half-joined', async () => {
+    const test = await afterRestart({ byIdRejectsWith: new Error('connection terminated unexpectedly') });
+    try {
+      await sayHello(test, MEMBER, 'Bo');
+      assert.equal(test.registry.size, 0, 'the read failed, so no table was built');
+      assert.equal(test.router.socketsIn(ROOM_ID).length, 0, 'and the socket joined no room');
     } finally {
       await test.app.close();
     }

@@ -41,6 +41,13 @@
  * and `coachRequestsPerMinute` (the analysis is not free to compute). `maxSocketsPerSession` is
  * the hub's, because it is a property of the upgrade rather than of a message.
  *
+ * The first two are PER SOCKET and the third is PER SESSION, which is not an inconsistency. A
+ * token bucket bounds what one connection may push through the frame path, and a socket is the
+ * right unit for that. A Coach request is answered by the shared worker pool, which is a
+ * process-wide resource, so the unit has to be the thing a caller is allowed several of: a
+ * session may hold `maxSocketsPerSession` sockets, and a per-socket Coach window handed one
+ * session four times its published budget. See `takeCoachToken` and `bySession`.
+ *
  * ## The Coach analysis happens on a thread, and that is not an optimisation
  *
  * `requestCoach` used to call `coachForView` — a 2,000-sample Monte Carlo, plus the preflop
@@ -73,7 +80,7 @@ import type {
   WsClientMessage,
   WsServerMessage,
 } from '@prl/contracts';
-import { ERROR_MESSAGES, WS_CLOSE, WS_LIMITS, WS_PROTOCOL_VERSION } from '@prl/contracts';
+import { ERROR_MESSAGES, WS_CLOSE, WS_LIMITS, WS_PROTOCOL_VERSION, wsCloseForError } from '@prl/contracts';
 import type { Card, PlayerView, SeatView } from '@prl/poker-engine';
 import { type Street as BettingStreetName, buildCoachReport, type CoachAction } from '@prl/poker-math';
 import { STRENGTH_TABLE_ALLOWANCE_MS } from '../calc/parse.ts';
@@ -127,8 +134,6 @@ export interface WsConnection {
   /** Token bucket for `messagesPerSecond` / `burstAllowance`. */
   tokens: number;
   lastRefillMs: number;
-  /** Timestamps of recent Coach requests, for `coachRequestsPerMinute`. */
-  coachRequests: number[];
   handshake: ScheduledTask | null;
   /** Heartbeats sent since the last pong. Two means the socket is gone (`hub.ts` acts on it). */
   missedHeartbeats: number;
@@ -246,6 +251,39 @@ const DEFAULT_COACH_SAMPLES = 2_000;
 /** One minute, for the Coach limiter's window. */
 const COACH_WINDOW_MS = 60_000;
 
+/**
+ * The per-SESSION state, which is everything a limit whose unit is the session needs.
+ *
+ * `sockets` is a reference count: it is incremented in `open` and decremented in `handleClose`,
+ * the same lifetime `hub.ts` gives its own `bySession` counter (the one that enforces
+ * `maxSocketsPerSession`), so there is one answer to "is this session still connected" rather
+ * than two that can disagree. It is a separate map only because the hub's belongs to the upgrade
+ * and this belongs to the frames; if a third per-session limit appears they should become one.
+ *
+ * ## Why the entry does not simply die with the last socket
+ *
+ * That was the first version, and it reintroduced the defect through the back door. Reconnecting
+ * is free — a client does it on every network hiccup — so an entry discarded the instant the last
+ * socket closed would let a caller clear their Coach window by closing the socket and opening
+ * another, which is a cheaper reset than the per-socket window ever was. The upgrade is only
+ * bounded by the global HTTP limiter (300/minute by default), so "the window survives the socket"
+ * is the difference between 30 analyses a minute and several thousand.
+ *
+ * So an entry with spent Coach tokens outlives its sockets by one window, on a timer. An entry
+ * with none is deleted immediately, which is the common case: a socket that never asked for a
+ * Coach analysis leaves nothing behind. The map is therefore bounded by the sessions that have
+ * actually used the Coach in the last two minutes, and NOT by every session that has ever
+ * connected — which is what an unswept map keyed on caller-supplied ids would be.
+ */
+interface SessionState {
+  /** Live sockets this session holds. Zero means only the window below is keeping it alive. */
+  sockets: number;
+  /** Timestamps of accepted Coach requests inside the window, for `coachRequestsPerMinute`. */
+  coachRequests: number[];
+  /** The pending deletion, armed when the last socket goes and cancelled if one comes back. */
+  expiry: ScheduledTask | null;
+}
+
 export class WsRouter {
   private readonly registry: RoomRegistry;
   private readonly clock: Clock;
@@ -258,6 +296,8 @@ export class WsRouter {
   /** Sockets by room, and one table subscription per room rather than per socket. */
   private readonly byRoom = new Map<string, Set<WsConnection>>();
   private readonly subscriptions = new Map<string, () => void>();
+  /** Per-session state that outlives any one socket. See `SessionState` and `takeCoachToken`. */
+  private readonly bySession = new Map<string, SessionState>();
   private counter = 0;
 
   constructor(options: WsRouterOptions) {
@@ -298,11 +338,26 @@ export class WsRouter {
       revision: 0,
       tokens: WS_LIMITS.burstAllowance,
       lastRefillMs: this.clock.now(),
-      coachRequests: [],
       handshake: null,
       missedHeartbeats: 0,
       closed: false,
     };
+    // The session's entry is claimed here and released in `handleClose`, whatever ends the socket
+    // — a peer close, the heartbeat's `terminate`, the shutdown drain. A Coach window that only
+    // lived as long as one socket was the defect; one that never goes away is a leak. See
+    // `SessionState`.
+    const session = this.bySession.get(principal.sessionId) ?? {
+      sockets: 0,
+      coachRequests: [],
+      expiry: null,
+    };
+    // A session that reconnects inside its window keeps the window. Cancelling the pending
+    // deletion rather than letting it fire and re-creating the entry is what makes "close the
+    // socket and open another" useless as a way to clear the Coach limit.
+    session.expiry?.cancel();
+    session.expiry = null;
+    session.sockets += 1;
+    this.bySession.set(principal.sessionId, session);
     connection.handshake = this.clock.schedule(WS_LIMITS.handshakeTimeoutMs, () => {
       if (connection.closed || connection.roomId !== null) return;
       this.closeConnection(connection, WS_CLOSE.handshakeTimeout, 'no hello');
@@ -316,6 +371,10 @@ export class WsRouter {
     connection.closed = true;
     connection.handshake?.cancel();
     connection.handshake = null;
+    // BEFORE the `roomId === null` return below, because a socket that never sent `hello` still
+    // claimed a session entry in `open`. Releasing it only on the room path would leave one entry
+    // per handshake that timed out, held for the life of the process.
+    this.releaseSession(connection.principal.sessionId);
     const roomId = connection.roomId;
     if (roomId === null) return;
     const sockets = this.byRoom.get(roomId);
@@ -333,6 +392,48 @@ export class WsRouter {
     }
   }
 
+  /**
+   * Drops one socket's claim on its session's state, and arms the state's own expiry.
+   *
+   * The deletion is the point. A `Map` keyed on something the caller supplies — a session id is
+   * one per guest session, and a guest session costs one `POST /auth/guest` — is unbounded growth
+   * unless every entry has something that removes it. Two things do here: the last socket
+   * leaving, when there is no window to preserve, and a timer for when there is.
+   */
+  private releaseSession(sessionId: string): void {
+    const session = this.bySession.get(sessionId);
+    if (session === undefined) return;
+    session.sockets -= 1;
+    if (session.sockets > 0) return;
+    if (session.coachRequests.length === 0) {
+      // Nothing to remember. The overwhelmingly common case: most sockets never ask for a Coach
+      // analysis at all, so most sessions leave no residue whatsoever.
+      this.bySession.delete(sessionId);
+      return;
+    }
+    // One window from now, not from the oldest token: it is an upper bound, it is one timer
+    // instead of a re-arming chain, and over-retaining a handful of timestamps by up to a minute
+    // costs nothing. The task is `unref`'d by `systemClock`, so it never holds the process open.
+    session.expiry?.cancel();
+    session.expiry = this.clock.schedule(COACH_WINDOW_MS, () => {
+      // Re-checked rather than assumed: a socket may have come back and cancelled this, and a
+      // stale timer deleting a live session's window would hand it a free reset.
+      const current = this.bySession.get(sessionId);
+      if (current === session && current.sockets <= 0) this.bySession.delete(sessionId);
+    });
+  }
+
+  /**
+   * Sessions this router currently holds state for.
+   *
+   * Public for the leak assertions in `test/ws-coach-session-limit.test.ts`: a limit whose
+   * bookkeeping only ever grows is a different defect from the one it fixed, and "the map is
+   * empty again afterwards" is the only way to see that from outside.
+   */
+  sessionsTracked(): number {
+    return this.bySession.size;
+  }
+
   /** Every socket currently attached to a room. */
   socketsIn(roomId: string): readonly WsConnection[] {
     return [...(this.byRoom.get(roomId) ?? [])];
@@ -345,6 +446,12 @@ export class WsRouter {
         this.closeConnection(connection, WS_CLOSE.serverShuttingDown, reason);
       }
     }
+    // The session windows go with the sockets. Their expiry timers are `unref`'d and would not
+    // hold the process open, but a router that has been shut down should be holding nothing at
+    // all — an armed timer closing over a dead router is the shape `handleClose` drops a room's
+    // table subscription to avoid.
+    for (const session of this.bySession.values()) session.expiry?.cancel();
+    this.bySession.clear();
   }
 
   // -----------------------------------------------------------------------
@@ -536,9 +643,30 @@ export class WsRouter {
       connection.joining = false;
       const code: ErrorCode = isAppError(error) ? error.code : 'internal_error';
       this.sendError(connection, null, code);
-      // 4403 for both "no such room" and "not your room": the frame already carries the one code
-      // that does not distinguish them, and the close code must not either.
-      this.closeConnection(connection, WS_CLOSE.forbidden, 'not permitted');
+      // The close code comes from the SAME error the frame does. It used to be a hard-coded
+      // `WS_CLOSE.forbidden` here, justified by a comment that only held for one of the errors
+      // this block can catch: "4403 for both 'no such room' and 'not your room' — the frame
+      // already carries the one code that does not distinguish them, and the close code must not
+      // either." That reasoning is still exactly right for `room_not_found_or_not_permitted`, and
+      // `wsCloseForError` keeps it: a 4xx code still closes 4403, so a stranger and a room that
+      // never existed remain indistinguishable, close code included.
+      //
+      // What the comment did not cover is everything else that can be thrown here. Nothing on the
+      // `reopenFor` path is wrapped — `store.byId`, `store.memberOf` and `ensureOpen`'s
+      // `membersOfRooms` all reach Postgres directly — so a connection blip arrived as a plain
+      // `Error`, became `internal_error` in the frame, and was still closed 4403. 4403 is
+      // `retryable: false` in `describeClose` (`apps/web/src/lib/table-socket.ts`), so the client
+      // set status `closed` and never tried again: a member of their own table was told, until
+      // they reloaded by hand, that the table was not theirs. A 5xx code now closes 4503, which
+      // that same client reconnects from with backoff.
+      const closeCode = wsCloseForError(code);
+      this.closeConnection(
+        connection,
+        closeCode,
+        // The reason is diagnostic only — browsers do not show it — so it says which of the two
+        // things happened, which the close code deliberately no longer does on its own.
+        closeCode === WS_CLOSE.forbidden ? 'not permitted' : 'handshake failed',
+      );
       return;
     }
     connection.joining = false;
@@ -679,7 +807,7 @@ export class WsRouter {
    *
    * Difficulty, then the rate limit, then the hand, then the pool. The two refusals that cost
    * nothing come first, so an Expert table — which sells "Coach in review only" — never queues a
-   * task it is going to refuse, and a socket over its minute limit never occupies a thread. That
+   * task it is going to refuse, and a session over its minute limit never occupies a thread. That
    * ordering was already here for the rate-limit token; it matters more now that what follows it
    * is a queue slot rather than a stretch of this thread's time.
    *
@@ -709,7 +837,10 @@ export class WsRouter {
     if (!this.takeCoachToken(connection)) {
       throw new AppError('rate_limited', {
         retryAfterSeconds: 5,
-        logDetail: 'coach requests per minute exceeded on a socket',
+        // "for this session", not "on this socket": the window is the session's, so closing this
+        // socket and opening another does not clear it. The log detail said the wrong one while
+        // the limiter did too.
+        logDetail: 'coach requests per minute exceeded for this session',
       });
     }
     const view = room.table.viewFor(connection.principal.userId);
@@ -850,11 +981,39 @@ export class WsRouter {
     return true;
   }
 
+  /**
+   * The Coach window, keyed on the SESSION rather than on the socket.
+   *
+   * ## What was wrong
+   *
+   * This used to filter and push `connection.coachRequests`, a `WsConnection` field. The contract
+   * has always said `coachRequestsPerMinute` is "per minute per session", and a session is
+   * permitted `WS_LIMITS.maxSocketsPerSession` sockets at once, so the enforced limit was four
+   * times the published one: one session opening its four permitted sockets could put
+   * 4 × 30 = 120 analyses a minute onto the shared worker pool — which is precisely the
+   * process-wide resource the number exists to protect, and which every other session is queuing
+   * behind. Measured before: 4 sockets, one session, 30 accepted on each, 120 total. After: 30
+   * accepted across all four, the 31st refused with `rate_limited` on whichever socket sent it.
+   *
+   * ## Why a session entry and not a `WsConnection` field
+   *
+   * The counter has to outlive any one socket, or a caller resets it by reconnecting — which is
+   * free and which a client already does on every network hiccup. It must also not outlive the
+   * session, or the map grows one entry per session forever; `open` and `handleClose` reference-
+   * count it, the same lifetime `hub.ts` gives `maxSocketsPerSession`.
+   *
+   * A missing entry means the socket has already been released, which `handleFrame`'s
+   * `connection.closed` guard makes unreachable. It is refused rather than lazily recreated: a
+   * recreated entry would be a fresh window for a caller whose bookkeeping we have already
+   * dropped, and re-adding it here is how the leak comes back.
+   */
   private takeCoachToken(connection: WsConnection): boolean {
+    const session = this.bySession.get(connection.principal.sessionId);
+    if (session === undefined) return false;
     const now = this.clock.now();
-    connection.coachRequests = connection.coachRequests.filter((at) => now - at < COACH_WINDOW_MS);
-    if (connection.coachRequests.length >= WS_LIMITS.coachRequestsPerMinute) return false;
-    connection.coachRequests.push(now);
+    session.coachRequests = session.coachRequests.filter((at) => now - at < COACH_WINDOW_MS);
+    if (session.coachRequests.length >= WS_LIMITS.coachRequestsPerMinute) return false;
+    session.coachRequests.push(now);
     return true;
   }
 

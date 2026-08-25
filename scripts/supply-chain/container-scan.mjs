@@ -10,19 +10,33 @@
  * Nine supply-chain gates examined the npm dependency graph in forensic detail —
  * denied packages, install-time lifecycle hooks, integrity hashes, release age,
  * OSV advisories, an SBOM, IOC sweeps — and **nothing looked inside the artefact
- * that actually ships**. The images are Debian bookworm-slim with a Node runtime
+ * that actually ships**. The images were Debian bookworm-slim with a Node runtime
  * and roughly a hundred OS packages in them, none of which appear in
  * pnpm-lock.yaml and none of which any of those gates could see. A CVE in zlib or
  * perl-base was, as far as this repository's release audit was concerned, not a
  * thing that could exist.
  *
  * The first run of this gate against the then-current web image found 38 HIGH or
- * CRITICAL findings. That is not a scandal — most are Debian packages Debian has
+ * CRITICAL findings. That is not a scandal — most were Debian packages Debian had
  * marked `fix_deferred` or `will_not_fix` — but "we did not know" and "we knew
  * and decided" are different states, and only one of them is a security posture.
  * It also found eight findings with fixes available, all of them inside npm's own
  * bundled dependency tree at `/usr/local/lib/node_modules/npm`, in an image that
  * has never run npm. Both Dockerfiles now delete it.
+ *
+ * ## What this gate then caused
+ *
+ * Worth recording, because it is the point of having the gate at all. The
+ * unfixable count it kept printing — 60 HIGH/CRITICAL across the two images, 14
+ * distinct CVEs, every one of them from the base and none from an application
+ * layer — is what moved both Dockerfiles from `node:24.18.0-bookworm-slim` to
+ * `node:24.18.0-alpine3.24` on 2026-08-25: 88 OS packages down to 18, and all 60
+ * findings gone. The paragraph below says "the right response to a growing number
+ * is a different base image, not a bigger allowlist". That is what happened.
+ *
+ * The gate is OS-family agnostic and needed no change for it: it requires trivy
+ * to report SOME `Metadata.OS`, not a Debian one, and Alpine's apk database is
+ * deliberately left in the runtime images so trivy can still identify them.
  *
  * ## Refusing is the whole point
  *
@@ -47,11 +61,14 @@
  * A finding with no available fix is reported in its own section, counted, and
  * does not block. That is a deliberate trade and it deserves its reasoning
  * written down rather than assumed: the only remediation for `zlib1g
- * CVE-2023-45853`, which Debian has marked `will_not_fix`, is to stop using
- * Debian. Blocking on it makes this gate permanently red through no action of
- * this project, and a permanently red gate is a gate somebody turns off — which
- * costs the fixable findings too. `--include-unfixed` makes them block, for a
- * deployment that has somewhere else to go.
+ * CVE-2023-45853`, which Debian marked `will_not_fix`, was to stop using Debian —
+ * which is eventually what this project did, but not on the timescale of a build.
+ * Blocking on it makes this gate permanently red through no action of this
+ * project, and a permanently red gate is a gate somebody turns off — which costs
+ * the fixable findings too. `--include-unfixed` makes them block, for a
+ * deployment that has somewhere else to go. The Alpine images now report zero in
+ * both columns, so `--include-unfixed` is currently free; if that stops being
+ * true, this paragraph is the reasoning to re-read rather than re-derive.
  *
  * The cost of that choice, stated plainly: an unfixable CRITICAL in a shipped
  * image is a real vulnerability that this gate lets through. The number is printed
@@ -513,6 +530,18 @@ export function runContainerScanGate(options) {
     let blocking = 0;
     let unfixable = 0;
     let allowed = 0;
+    /**
+     * Unfixable findings counted by severity, and the distinct CRITICAL ids.
+     *
+     * The total on its own has already been misread. Two independent release
+     * reviews of this project recorded this gate's result as "60 unfixable HIGH",
+     * and the number was right while the sentence was not: 52 were HIGH and 8 were
+     * CRITICAL, including a `will_not_fix` in zlib1g. "Sixty HIGH" and "eight
+     * CRITICAL among sixty" are different facts to somebody deciding whether to
+     * ship, and a summary that only prints the total invites the first reading.
+     */
+    const unfixableBySeverity = new Map();
+    const unfixableCriticalIds = new Set();
     const usedAllowlistIds = new Set();
 
     for (const image of images) {
@@ -555,6 +584,8 @@ export function runContainerScanGate(options) {
           );
         } else {
           unfixable += 1;
+          unfixableBySeverity.set(finding.severity, (unfixableBySeverity.get(finding.severity) ?? 0) + 1);
+          if (finding.severity === 'CRITICAL') unfixableCriticalIds.add(`${finding.id} (${finding.package})`);
         }
       }
 
@@ -575,9 +606,26 @@ export function runContainerScanGate(options) {
       );
     }
 
+    // Highest first, so the sentence a reader quotes starts with the worst of it.
+    const bySeverity = SEVERITIES.filter((severity) => unfixableBySeverity.has(severity))
+      .reverse()
+      .map((severity) => `${unfixableBySeverity.get(severity)} ${severity}`)
+      .join(', ');
+    report.unfixableBySeverity = Object.fromEntries(unfixableBySeverity);
+
+    if (unfixableCriticalIds.size > 0) {
+      // A separate line from the total, and above it, because an unfixable
+      // CRITICAL in a shipped image is the finding most likely to be summarised
+      // away — and naming it costs one line.
+      gate.warn(
+        `${unfixableBySeverity.get('CRITICAL')} CRITICAL finding(s) ship unfixed in these images`,
+        [...unfixableCriticalIds].join(', '),
+      );
+    }
     if (unfixable > 0) {
       gate.warn(
-        `${unfixable} finding(s) at or above ${options.severity} have NO available fix and did not block`,
+        `${unfixable} finding(s) at or above ${options.severity} have NO available fix and did not block ` +
+          `(${bySeverity})`,
         'These are real vulnerabilities in a shipped image. They do not block because the only ' +
           'remediation is a different base image, and a permanently red gate is a gate somebody turns ' +
           'off. Pass --include-unfixed to make them block; watch this number and change base image ' +
@@ -585,7 +633,8 @@ export function runContainerScanGate(options) {
       );
     }
     gate.note(
-      `${images.length} image(s) scanned: ${blocking} blocking, ${unfixable} unfixable, ${allowed} allowed`,
+      `${images.length} image(s) scanned: ${blocking} blocking, ${unfixable} unfixable` +
+        `${bySeverity === '' ? '' : ` (${bySeverity})`}, ${allowed} allowed`,
     );
   }).then((code) => {
     if (options.out !== null) {

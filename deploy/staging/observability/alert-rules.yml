@@ -1,0 +1,329 @@
+# ---------------------------------------------------------------------------
+# The alerting rules, as Prometheus evaluates them.
+#
+# `docs/production/alerts.md` is the prose: every rule below is stated there with
+# its threshold, the reason that number and not another, what a human does first,
+# and which runbook to open. This file must not disagree with it, and
+# `scripts/alert-delivery.mjs` asserts that it does not — it reads the alert names
+# out of the markdown and fails if either side has a rule the other does not.
+#
+# Until this file existed, that document ended with a sentence saying it described
+# intent, because a rule that has never been evaluated is a hypothesis. It has now
+# been loaded into a real Prometheus, every expression has been evaluated against a
+# live scrape of the staging API, and one of them — `ApiDown` — has been provoked,
+# routed through Alertmanager and delivered to a receiver. See
+# `docs/production/alerts.md` § Verifying these rules for what that run proved and
+# what it did not.
+#
+# ## Two labels, and one of them decides who wakes up
+#
+# `severity: page` and `severity: ticket` are the two tiers from that document, and
+# alertmanager.yml routes on them. There is no third value: an alert whose severity
+# is neither goes to the catch-all receiver, which is why `alert-delivery.mjs`
+# checks every rule carries one of the two.
+#
+# `runbook` is an annotation rather than a label. Labels are the alert's identity —
+# two alerts differing only in an annotation are the same alert — and a runbook
+# path is documentation about the alert, not part of what makes it distinct.
+# ---------------------------------------------------------------------------
+
+groups:
+  - name: availability
+    rules:
+      - alert: ApiDown
+        expr: absent(up{job="prl-api"}) or max_over_time(up{job="prl-api"}[2m]) == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: The API is not answering scrapes
+          description: >-
+            Eight consecutive scrapes missed at a 15 s interval. Confirm from outside the
+            deployment that /api/v1/health is unreachable before treating it as a scrape problem.
+          runbook: docs/production/runbooks/api-unhealthy.md
+
+      - alert: ApiNotReady
+        expr: min_over_time(prl_readiness_state[5m]) == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: /ready has reported degraded for five continuous minutes
+          description: >-
+            prl_readiness_state is set by the probe, so this cannot fire unless something is
+            calling /ready. A brief blip during a Postgres failover is expected and self-healing;
+            five minutes is not healing.
+          runbook: docs/production/runbooks/db-unavailable.md
+
+      - alert: ProcessRestartLoop
+        expr: changes(prl_process_start_time_seconds[15m]) >= 3
+        labels:
+          severity: page
+        annotations:
+          summary: The API process has restarted three times in fifteen minutes
+          description: >-
+            One restart is a deploy, two is a deploy plus a rollback, three is a crash loop. Read
+            the last 200 log lines before each restart; uncaughtException and unhandledRejection
+            both log at fatal and then exit non-zero.
+          runbook: docs/production/runbooks/api-unhealthy.md
+
+  - name: latency-and-errors
+    rules:
+      - alert: HttpErrorRateHigh
+        expr: >-
+          sum(rate(prl_http_requests_total{status="5xx"}[5m]))
+            / sum(rate(prl_http_requests_total[5m])) > 0.02
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: More than 2% of requests are answering 5xx
+          description: >-
+            A healthy run of this API serves essentially zero 5xx; every expected refusal is a 4xx
+            with a contract error code. Group prl_api_errors_total by code, then correlate by
+            x-request-id in the logs.
+          runbook: docs/production/runbooks/elevated-error-rate.md
+
+      - alert: HttpLatencyP99High
+        expr: >-
+          histogram_quantile(0.99, sum by (le) (rate(prl_http_request_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: Request p99 is over one second
+          description: >-
+            Roughly two orders of magnitude above a healthy request here. Requests are queueing
+            behind something: check prl_event_loop_delay_p99_seconds, prl_db_probe_duration_seconds
+            and prl_worker_pool_queued, in that order.
+          runbook: docs/production/runbooks/elevated-error-rate.md
+
+      - alert: HttpLatencyP95Degraded
+        expr: >-
+          histogram_quantile(0.95, sum by (le) (rate(prl_http_request_duration_seconds_bucket[10m]))) > 0.25
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Request p95 has been over 250 ms for half an hour
+          description: The level at which the app feels sluggish without being broken.
+          runbook: docs/production/runbooks/elevated-error-rate.md
+
+  - name: saturation
+    rules:
+      - alert: EventLoopBlocked
+        expr: prl_event_loop_delay_p99_seconds > 0.25
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: The event loop is delayed past 250 ms at p99
+          description: >-
+            This process is single-threaded for everything except Monte Carlo. One synchronous
+            stretch blocks every socket, timer and turn clock at once, and shows up as latency on
+            endpoints unrelated to the cause.
+          runbook: docs/production/runbooks/worker-saturation.md
+
+      - alert: DbPoolSaturated
+        expr: >-
+          histogram_quantile(0.95, sum by (le) (rate(prl_db_probe_duration_seconds_bucket[5m]))) > 0.5
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: select 1 is taking over 500 ms at p95
+          description: >-
+            The probe is the cheapest possible query, so its time is spent waiting for a pooled
+            connection rather than in the query. Read it together with the event-loop delay: a
+            blocked process produces the same reading without the pool being busy at all.
+          runbook: docs/production/runbooks/db-saturation.md
+
+      - alert: WorkerPoolQueueDeep
+        expr: avg_over_time(prl_worker_pool_queued[10m]) > 4
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: The Monte Carlo queue is not draining
+          description: >-
+            The queue is bounded by design and a full one answers service_unavailable immediately
+            rather than degrading everybody, so this is Coach analyses being refused: bad,
+            contained, and not an outage.
+          runbook: docs/production/runbooks/worker-saturation.md
+
+      - alert: AnalysisTimeouts
+        expr: >-
+          sum(rate(prl_analysis_total{outcome="timeout"}[10m]))
+            / sum(rate(prl_analysis_total[10m])) > 0.05
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: One Coach analysis in twenty is abandoning its budget
+          description: >-
+            Abandoning a run past COACH_TIMEOUT_MS is a designed outcome and a few percent is the
+            tail. One in twenty means the budget is wrong or the box is oversubscribed.
+          runbook: docs/production/runbooks/worker-saturation.md
+
+  - name: product-correctness
+    rules:
+      - alert: HandsFailing
+        expr: sum(rate(prl_hands_failed_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: Hands are failing
+          description: >-
+            A hand that starts and never settles is a table full of people whose chips are in an
+            indeterminate state. There is no acceptable background rate. The reason label says
+            which kind; interrupted_by_restart after a deploy is expected once and must not recur.
+          runbook: docs/production/runbooks/hidden-card-incident.md
+
+      - alert: HandCompletionGap
+        expr: >-
+          sum(increase(prl_hands_started_total[1h])) - sum(increase(prl_hands_completed_total[1h])) > 5
+        labels:
+          severity: ticket
+        annotations:
+          summary: More hands started than completed over the last hour
+          description: >-
+            prl_hands_failed_total only counts failures the code recognised. This catches hands
+            that vanished for a reason nobody wrote a counter for, which is the failure mode that
+            matters most and is hardest to anticipate.
+          runbook: docs/production/runbooks/hidden-card-incident.md
+
+      - alert: TableActorFailing
+        expr: sum(rate(prl_table_actor_failures_total[10m])) > 0.05
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: Bot seats are failing to act
+          description: >-
+            A seat that cannot produce an action stalls a table without producing a user-facing
+            error. The turn clock eventually folds it, so the learner reports "the table went
+            quiet", which is very hard to trace backwards.
+          runbook: docs/production/runbooks/api-unhealthy.md
+
+      - alert: ArchiveFailing
+        expr: sum(rate(prl_archive_failures_total[15m])) > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Hand history is failing to persist
+          description: >-
+            Play deliberately continues when an archive write fails, so nothing is broken right
+            now. Hand history is silently becoming incomplete, which is a data problem to fix
+            today rather than tonight.
+          runbook: docs/production/runbooks/db-saturation.md
+
+  - name: security
+    rules:
+      - alert: AuthFailureSpike
+        expr: sum(rate(prl_auth_failures_total[5m])) > 5
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Authentication failures are elevated
+          description: >-
+            Distinguishes a broken client (one reason, one deploy boundary) from credential
+            stuffing (sustained, mixed reasons). Correlate with prl_rate_limit_events_total: if
+            bans are also rising, it is automated.
+          runbook: docs/production/runbooks/elevated-error-rate.md
+
+      - alert: AuthzFailureSpike
+        expr: sum(rate(prl_authz_failures_total[5m])) > 2
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: Authenticated callers are being refused resources
+          description: >-
+            not_room_member, room_not_found_or_not_permitted and forbidden. Legitimate use
+            produces almost none, because the UI offers no links to other people's rooms. A
+            sustained rate is somebody walking room and hand ids.
+          runbook: docs/production/runbooks/hidden-card-incident.md
+
+      - alert: RateLimitBans
+        expr: sum(increase(prl_rate_limit_events_total{kind="banned"}[15m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: The rate limiter is banning callers
+          description: >-
+            A 429 is the limiter doing its job for a busy client. A ban means the caller went far
+            past the limit while ignoring Retry-After, which is a script rather than a person.
+          runbook: docs/production/runbooks/websocket-spike.md
+
+      - alert: WebSocketRefusalSpike
+        expr: sum(rate(prl_websocket_refused_total{reason="bad_origin"}[10m])) > 0.5
+        labels:
+          severity: ticket
+        annotations:
+          summary: WebSocket handshakes are being refused for a bad Origin
+          description: >-
+            The Origin check is the only server-side defence on a socket handshake — browsers send
+            cookies cross-origin and CORS does not apply. A stream of these is somebody trying, or
+            a legitimate origin missing from PUBLIC_WEB_ORIGIN after a deploy.
+          runbook: docs/production/runbooks/websocket-spike.md
+
+  - name: connection-churn
+    rules:
+      - alert: WebSocketReconnectStorm
+        expr: >-
+          sum(rate(prl_websocket_opened_total[5m])) > 3 * sum(rate(prl_websocket_closed_total[1h]))
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Sockets are opening far above this deployment's own recent baseline
+          description: >-
+            Clients reconnect automatically, so a storm looks healthy in every per-request metric
+            while every learner's table flickers. Check the code label on
+            prl_websocket_closed_total.
+          runbook: docs/production/runbooks/websocket-spike.md
+
+      # 67 is 70% of the 96 concurrent seated players at which one instance saturated in
+      # docs/production/load-test.md, which is where alerts.md says this number must come from and
+      # what it must be re-derived from whenever that measurement is repeated. It replaced a
+      # placeholder of 400 that document flagged as a tracked task. A capacity alert copied from
+      # another service is worse than none, so if you change the measurement, change this.
+      - alert: WebSocketConnectionsHigh
+        expr: prl_websocket_connections > 67
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Live socket count is at 70% of the measured saturation point
+          description: >-
+            Derived from the measured saturation of one instance in docs/production/load-test.md,
+            not from a generic figure. Re-derive it whenever that measurement is repeated.
+          runbook: docs/production/runbooks/worker-saturation.md
+
+  - name: telemetry
+    rules:
+      - alert: MetricsCardinalityOverflow
+        expr: prl_metrics_cardinality_overflow == 1
+        labels:
+          severity: ticket
+        annotations:
+          summary: A metric has passed its series cap and folded into the overflow series
+          description: >-
+            The cap is a net, not the design: every label is meant to come from a closed set. If
+            it engaged, some caller is passing an unbounded value and that metric has silently
+            stopped being precise.
+          runbook: docs/production/runbooks/api-unhealthy.md
+
+      - alert: ReadinessFlapping
+        expr: changes(prl_readiness_state[30m]) > 6
+        labels:
+          severity: ticket
+        annotations:
+          summary: Readiness is flapping in and out of the load balancer
+          description: >-
+            Taking an instance in and out repeatedly is worse for learners than being cleanly out.
+            Usually a database that is marginal rather than down.
+          runbook: docs/production/runbooks/db-unavailable.md

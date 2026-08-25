@@ -116,7 +116,8 @@
  *
  * ## Why the harness paces Coach and Hand Review
  *
- * `WS_LIMITS.coachRequestsPerMinute` is 30 per socket and `GET /hands/:handId` sits behind the
+ * `WS_LIMITS.coachRequestsPerMinute` is 30 per SESSION — across every socket that session holds,
+ * which this harness gives one each — and `GET /hands/:handId` sits behind the
  * expensive rate limit (20 per minute per session by default). A harness that ignores both
  * spends the whole run measuring the limiter and reports a capacity number for a server that
  * was refusing most of the offered work. So each socket holds off Coach for
@@ -957,8 +958,23 @@ export function histogramDelta(before, after) {
  * Deliberately NOT `histogram_quantile`'s linear interpolation. Interpolating inside a bucket
  * asserts the observations were uniformly distributed across it, which they are not, and
  * produces a decimal that reads like a measurement. This returns a BOUND — "99% of probes
- * finished within 0.05 s" — which is a statement the data actually supports. `null` means the
- * quantile fell in the `+Inf` bucket, so all that is known is "above the top bound".
+ * finished within 0.05 s" — which is a statement the data actually supports.
+ *
+ * Three return values, and the distinction between the last two is a defect this function used
+ * to have rather than a nicety:
+ *
+ *   * a finite number — the quantile fell at or below that bound;
+ *   * `Infinity`      — it fell in the `+Inf` bucket, so all that is known is "above the top
+ *                       bound";
+ *   * `null`          — there were no observations at all.
+ *
+ * Both of the last two used to be `null`, on the reasoning that a number for the `+Inf` case
+ * would be an invention. The number would be; the DISTINCTION is not. `null` is read downstream
+ * as "this build does not export the metric", so a database probe slower than the top bucket —
+ * the single most alarming reading the pool can produce — was indistinguishable from no data,
+ * and the saturation signal that exists to name it stayed quiet. `Infinity` is not an invented
+ * measurement, it is the bound itself, and every caller either compares it against a threshold
+ * (where it is correct) or formats it (where it prints as "above the top bucket").
  */
 export function histogramBoundAtQuantile(histogram, quantile) {
   if (histogram === null || histogram.count <= 0) return null;
@@ -966,9 +982,11 @@ export function histogramBoundAtQuantile(histogram, quantile) {
   let seen = 0;
   for (const bucket of histogram.buckets) {
     seen = bucket.cumulative;
-    if (seen >= target) return Number.isFinite(bucket.le) ? bucket.le : null;
+    if (seen >= target) return bucket.le;
   }
-  return null;
+  // Past the last bucket. A well-formed exposition ends with `+Inf`, so this is reached only by
+  // a truncated one — where "above every bound I was given" is the same statement.
+  return Number.POSITIVE_INFINITY;
 }
 
 // ---------------------------------------------------------------------------
@@ -1401,6 +1419,12 @@ function summariseServerSide(readings) {
     dbProbeCount: dbProbe === null ? null : dbProbe.count,
     dbProbeMeanMs: dbProbe === null || dbProbe.count <= 0 ? null : (dbProbe.sum / dbProbe.count) * 1000,
     dbProbeP99BoundMs: scaleOrNull(histogramBoundAtQuantile(dbProbe, 0.99), 1000),
+    /**
+     * `JSON.stringify(Infinity)` is `null`, which would put the above-the-top-bucket case back
+     * into the field it was just separated from as soon as the report is written to a file. This
+     * boolean is how the JSON keeps the distinction the number cannot.
+     */
+    dbProbeP99AboveTopBound: histogramBoundAtQuantile(dbProbe, 0.99) === Number.POSITIVE_INFINITY,
     readinessState: sampleValue(last, SERIES.readinessState),
     websocketConnectionsPeak: gaugePeak(SERIES.wsConnections),
     workerPoolBusyPeak: gaugePeak(SERIES.workerPoolBusy),
@@ -2459,7 +2483,28 @@ export function classifySaturation(level, thresholds) {
       observed: server.dbProbeP99BoundMs ?? null,
       limit: thresholds.dbProbeP99Ms,
       unit: 'ms',
-      fired: exported(server.dbProbeP99BoundMs) && server.dbProbeP99BoundMs >= thresholds.dbProbeP99Ms,
+      /**
+       * Strictly greater, and this is the difference between a signal and a coin toss.
+       *
+       * The observed value is a BOUND, not a measurement: `50 ms` here means "99% of probes
+       * finished within 50 ms", which is the threshold being met. Firing on `>=` fired on every
+       * probe set whose p99 landed anywhere in the 25-50 ms bucket — including a three-player
+       * level at 0.4 requests per second, where the reading is the pool's first connection being
+       * opened and nothing is exhausted. It reported `resource: db-pool` for that run.
+       *
+       * `>` fires when 99% of probes did NOT finish within the threshold, which is the claim the
+       * signal's own text makes. `Infinity` — the quantile in the `+Inf` bucket — exceeds every
+       * threshold and fires, which is the case that most needed to.
+       */
+      fired: exported(server.dbProbeP99BoundMs) && server.dbProbeP99BoundMs > thresholds.dbProbeP99Ms,
+      /**
+       * `JSON.stringify(Infinity)` is `null`, and the report is serialised — so without this the
+       * published signal reads `{observed: null, fired: true, exported: true}`, which is "it
+       * fired and there is no observation": exactly the conflation the `Infinity` return value
+       * was introduced to remove, reappearing one field later. `summariseServerSide` got a
+       * boolean for this; the signal record needed its own.
+       */
+      observedAboveTopBound: server.dbProbeP99BoundMs === Number.POSITIVE_INFINITY,
       meaning: 'select 1 waited for a pooled connection, which is pool exhaustion before any query fails',
       /**
        * The probe is timed inside the request handler, so its duration includes any time the
@@ -2690,7 +2735,26 @@ const NOT_MEASURED = [
 ];
 
 const ms = (value) => (value === null || value === undefined ? '    -   ' : `${value.toFixed(1)}ms`);
-const num = (value, digits = 1) => (value === null || value === undefined ? '   -  ' : value.toFixed(digits));
+const num = (value, digits = 1) =>
+  value === null || value === undefined
+    ? '   -  '
+    : Number.isFinite(value)
+      ? value.toFixed(digits)
+      : 'above top bucket';
+
+/**
+ * A histogram bound, which has one more state than a number: `<= 50.0ms`, `above the top
+ * bucket`, or nothing measured. Printed rather than `ms()` wherever the value came from
+ * `histogramBoundAtQuantile`, so the `<=` and the overflow case are never contradicted — the
+ * report used to print `db probe p99 <= 50.0ms` on the same run whose signal table said the
+ * threshold of 50 ms had been exceeded.
+ */
+const boundMs = (value) =>
+  value === null || value === undefined
+    ? '   -  '
+    : Number.isFinite(value)
+      ? `<= ${value.toFixed(1)}ms`
+      : 'above the top bucket';
 const mib = (bytes) =>
   bytes === null || bytes === undefined ? '  -  ' : `${(bytes / 1048576).toFixed(0)}MiB`;
 
@@ -2780,7 +2844,7 @@ export function renderReport(report) {
     if (level.server.usable) {
       detail(
         `         server: CPU ${num(level.server.cpuCores, 2)} cores, RSS ${mib(level.server.residentMemoryPeakBytes)}, ` +
-          `event loop p99 ${ms(level.server.eventLoopP99PeakMs)}, db probe p99 <= ${ms(level.server.dbProbeP99BoundMs)}, ` +
+          `event loop p99 ${ms(level.server.eventLoopP99PeakMs)}, db probe p99 ${boundMs(level.server.dbProbeP99BoundMs)}, ` +
           `${num(level.server.httpRequestsPerSecond)} req/s, ${level.server.scrapes} scrapes`,
       );
     } else {
@@ -2818,6 +2882,24 @@ export function renderReport(report) {
       tone: 'warn',
       text: `  ! resource: ${report.saturation.resource} — ${report.saturation.meaning}`,
     });
+    /**
+     * The sentence above says "saturated at N seated players", and when the limiter is what
+     * stopped the ramp that number is a policy setting rather than a capacity. It has already
+     * been quoted as one: a release review of this project recorded "capacity saturated at 6
+     * seated players, conservative ceiling 3" from a run whose levels ended on rate-limit
+     * refusals, against a harness that had printed "no capacity figure" three lines further down.
+     * Saying it once, next to the number, is cheaper than the correction.
+     */
+    if (report.saturation.stoppedBy.includes('refusal-rate-limited')) {
+      lines.push({
+        tone: 'warn',
+        text:
+          '  ! the RATE LIMITER ended this ramp, so that concurrency is a configured ceiling and not ' +
+          'a capacity. Raise the limits on the measured process (RATE_LIMIT_MAX, ' +
+          'RATE_LIMIT_GUEST_MAX, RATE_LIMIT_EXPENSIVE_MAX) and re-run before quoting any figure ' +
+          'from it, and say beside the figure that you did.',
+      });
+    }
   } else {
     lines.push({ tone: 'warn', text: `  ! ${report.saturation.note}` });
   }
@@ -2827,10 +2909,12 @@ export function renderReport(report) {
       continue;
     }
     const mark = signal.fired ? 'FIRED ' : 'quiet ';
-    detail(
-      `      ${signal.name.padEnd(12)} ${mark} ${num(signal.observed, 2)} ${signal.unit} ` +
-        `(threshold ${signal.limit} ${signal.unit})`,
-    );
+    // A non-finite observation is a histogram bound in the `+Inf` bucket, and "above the top
+    // bucket ms" is not a sentence. The unit belongs to a number.
+    const observed = Number.isFinite(signal.observed)
+      ? `${num(signal.observed, 2)} ${signal.unit}`
+      : num(signal.observed, 2);
+    detail(`      ${signal.name.padEnd(12)} ${mark} ${observed} (threshold ${signal.limit} ${signal.unit})`);
     // A confounded signal is worse than a missing one: it fires, it is true, and it means
     // something other than what its name says. Say so where the number is, not in a footnote.
     const confounder =

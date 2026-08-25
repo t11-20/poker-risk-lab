@@ -34,6 +34,12 @@
  *      have: two of these keys were ON DELETE RESTRICT, which made every learner who had ever
  *      created or joined a table permanently undeletable, and nothing anywhere compared the
  *      schema's answer to the policy's requirement.
+ *
+ * Every one of them reads `pg_catalog` directly, and no check reads `information_schema` at all.
+ * That is a correctness requirement, not a preference: `information_schema` is filtered by the
+ * connecting role's privileges, and a gate that cannot see a table cannot fail on it. The long
+ * comment above the column query has the incident. The single remaining `information_schema`
+ * query in this file measures the size of that filter and prints it as a note.
  */
 
 import { PROFILES } from '@prl/poker-ai';
@@ -131,26 +137,90 @@ try {
   /**
    * Who this run connected as, printed with the counts below.
    *
-   * `information_schema` is FILTERED BY PRIVILEGE: it shows only what the current role may
-   * touch. `prl_app` is granted nothing on `prl.schema_migrations`, so a run as the runtime
-   * login counts 12 tables and 120 columns while a run as the owner counts 13 and 123 — the
-   * same database, two different true answers.
-   *
-   * That cost real time once: two captured transcripts of this script, taken from two different
-   * identities, were read as evidence that a restored database had lost a table. Neither number
-   * was wrong; neither said which role produced it. Printing the role makes two transcripts
-   * comparable, which is the only thing that made the numbers worth printing in the first place.
+   * Two captured transcripts of this script, taken from two different identities, were once read
+   * as evidence that a restored database had lost a table. Neither number was wrong; neither said
+   * which role produced it. Printing the role makes two transcripts comparable — and now that
+   * nothing below reads a privilege-filtered catalogue (see the next comment), two transcripts
+   * that disagree about a count describe two genuinely different databases.
    */
   const [identity] = await sql`select current_user as role`;
   const role = identity?.role ?? 'unknown';
+
   // ---- 1 & 2. Forbidden columns -------------------------------------------------------
+  //
+  // ##########################################################################
+  // ## READ THE COLUMNS FROM pg_catalog. `information_schema` CANNOT SEE A  ##
+  // ## TABLE THE CONNECTING ROLE HAS NO GRANT ON, AND THAT MADE CHECKS 1,   ##
+  // ## 2 AND 7 BLIND TO EXACTLY THE TABLES THEY MOST NEEDED TO SEE.         ##
+  // ##########################################################################
+  //
+  // `information_schema.columns` is FILTERED BY PRIVILEGE — its view definition ends in
+  // `pg_has_role(c.relowner, 'USAGE') OR has_column_privilege(...)` — so a table the current role
+  // may not touch contributes ZERO ROWS and cannot fail a check that iterates them.
+  //
+  // That is the default state of a new table here, not an exotic one. `pnpm run db:verify`
+  // connects as `DATABASE_URL`, which RUNBOOK §5 makes `prl_api` (a member of `prl_app` and
+  // nothing else), and `db/migrations/0001_initial.sql` says in as many words that a table added
+  // by a later migration gets NO grant until somebody writes one. So a new table is invisible to
+  // this script until a GRANT makes it visible, which is backwards: the tables nobody has decided
+  // the grants for are the ones least likely to have been reviewed at all.
+  //
+  // Demonstrated, not theorised. `prl.hand_deck_cache (deck jsonb, deck_salts jsonb,
+  // total_score int)` created by the migrator with no grants: exit 0 as `prl_api`, four
+  // violations as the owner. The same database, and check 1 — this script's single most
+  // important persistence property, that no column may hold the deck or the salts — answering
+  // "fine" for the one table in the schema that held both.
+  //
+  // The asymmetry survived review for as long as it did because every OTHER check in this file
+  // already reads an unfiltered catalogue: `pg_indexes` (3, 4), `pg_constraint` (5, 8, 9),
+  // `pg_class`/`pg_namespace` (6b), `pg_roles` (6). Nothing in the file's shape suggested that
+  // one of the reads was answering a different question from the rest.
+  //
+  // DO NOT "simplify" this back to `information_schema.columns` because that is shorter, or
+  // because `data_type` reads more nicely than `format_type`. The privilege filter is the entire
+  // bug. `pg_attribute` has none, `relkind` here also covers the materialized view that
+  // `information_schema` omits altogether (a matview caching the deck is the same leak with a
+  // different relkind), and `attnum > 0 and not attisdropped` is what drops the system columns
+  // and the tombstones of dropped ones.
+  //
+  // The one thing `information_schema` did for free and this query has to do explicitly: unwrap
+  // the DOMAIN. `sessions.token_hash` is `prl.sha256_hash`, a domain over `bytea` with a length
+  // CHECK, and `format_type` on the column's own type answers `prl.sha256_hash` — which would
+  // fail the "hash columns are bytea" check below on a perfectly correct schema. `typtype = 'd'`
+  // is the domain case and `typbasetype` is what it is a domain over. One level, because every
+  // domain in `0001_initial.sql` is one level over a base type and a domain over a domain would
+  // be a schema decision worth failing on rather than resolving silently.
   const columns = await sql`
-    select table_name, column_name, data_type
-    from information_schema.columns
-    where table_schema = ${SCHEMA}
-    order by table_name, ordinal_position
+    select cls.relname as table_name,
+           att.attname as column_name,
+           format_type(
+             case when typ.typtype = 'd' then typ.typbasetype else att.atttypid end,
+             case when typ.typtype = 'd' then typ.typtypmod else att.atttypmod end
+           ) as data_type
+    from pg_catalog.pg_attribute att
+    join pg_catalog.pg_class cls on cls.oid = att.attrelid
+    join pg_catalog.pg_namespace nsp on nsp.oid = cls.relnamespace
+    join pg_catalog.pg_type typ on typ.oid = att.atttypid
+    where nsp.nspname = ${SCHEMA}
+      and cls.relkind in ('r', 'p', 'v', 'm', 'f')
+      and att.attnum > 0
+      and not att.attisdropped
+    order by cls.relname, att.attnum
   `;
-  note(`${columns.length} columns across the ${SCHEMA} schema, as ${role}`);
+  note(`${columns.length} columns across the ${SCHEMA} schema, read from pg_catalog as ${role}`);
+
+  // How much this run would have missed had it kept reading `information_schema`. Not a failure:
+  // a runtime role that cannot see `prl.schema_migrations` is the privilege model working, and on
+  // a correctly granted database this note reports the three columns of that one table. It is
+  // here so the number above can never quietly become the smaller number again without somebody
+  // noticing that the gap moved.
+  const [visible] = await sql`
+    select count(*)::int as count from information_schema.columns where table_schema = ${SCHEMA}
+  `;
+  const hidden = columns.length - (visible?.count ?? 0);
+  if (hidden > 0) {
+    note(`${hidden} of them are invisible to ${role}; information_schema would not have checked those`);
+  }
 
   // A deck or a salt must not be storable. Matched on the column NAME, because that is what a
   // future maintainer would reach for, and deliberately broad.
@@ -392,9 +462,23 @@ try {
 
     // TRUNCATE is a distinct privilege from DELETE and is worth checking separately: it
     // bypasses row-level rules and cannot be rolled back as cheaply.
+    //
+    // The table list comes from `pg_class` for the same reason the column list above does.
+    //
+    // Honestly stated, because the difference matters to anyone auditing this: unlike the column
+    // read, this one was not actually wrong. `information_schema.tables` counts TRUNCATE among
+    // the privileges its filter tests, so a table `prl_app` could TRUNCATE was always visible to
+    // it. That is soundness by coincidence — it rests on a detail of one view definition, it
+    // would not survive somebody widening the check to a privilege the filter does not list, and
+    // it is not a thing the next reader should have to know. Converting it leaves no CHECK in
+    // this file depending on a privilege-filtered catalogue; the only `information_schema` read
+    // left is the diagnostic count above, which produces a note and never a verdict.
     const tables = await sql`
-      select table_name from information_schema.tables
-      where table_schema = ${SCHEMA} and table_type = 'BASE TABLE'
+      select cls.relname as table_name
+      from pg_catalog.pg_class cls
+      join pg_catalog.pg_namespace nsp on nsp.oid = cls.relnamespace
+      where nsp.nspname = ${SCHEMA} and cls.relkind in ('r', 'p')
+      order by cls.relname
     `;
     for (const { table_name: table } of tables) {
       const [privilege] = await sql`
@@ -402,7 +486,7 @@ try {
       `;
       if (privilege?.can_truncate === true) fail('prl_app', `can TRUNCATE ${table}`);
     }
-    note(`checked ${tables.length} tables for prl_app privileges, as seen by ${role}`);
+    note(`checked ${tables.length} tables for prl_app privileges, run as ${role}`);
   }
 
   // ---- 6b. The schema and everything in it is owned by the migrator ---------------------

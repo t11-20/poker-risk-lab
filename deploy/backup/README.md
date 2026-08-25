@@ -13,7 +13,7 @@ decision tree is in
 | `prl-backup-verify.service` | one-shot unit: `verify --all`, then `verify --deep`, then `prune --apply` |
 | `prl-backup-verify.timer` | Sunday 04:00 UTC, with catch-up |
 | `backup.env.example` | the environment the units read — key, destination, database identity |
-| `crontab.example` | the fallback for hosts without systemd, and what it costs |
+| `crontab.example` | the fallback for hosts without systemd, and what it costs — installed to `/etc/cron.d/`, running as root |
 
 ## Why systemd timers, and not the other three options
 
@@ -45,8 +45,10 @@ stops you: the container would run `node scripts/backup.mjs create` with the sam
 and a PVC (or object storage) at `PRL_BACKUP_DIR`. This repository has no Kubernetes
 manifests, so shipping one would be shipping a guess.
 
-**Plain cron** is the fallback, in `crontab.example`, with the four things it cannot do
-written down next to it.
+**Plain cron** is the fallback, in `crontab.example`, with the seven things it cannot do
+written down next to it. The first of the seven is specific to this deployment and is worth
+knowing before you choose it: see [The cron fallback runs as root](#the-cron-fallback-runs-as-root)
+below.
 
 ## Install
 
@@ -88,6 +90,43 @@ sudo -u prl-backup env $(sudo cat /etc/poker-risk-lab/backup.env | grep -v '^#' 
 The units assume the checkout is at `/opt/poker-risk-lab`. If it is somewhere else, change
 `WorkingDirectory=` in both `.service` files; there is no other path baked in.
 
+## The cron fallback runs as root
+
+Only for a host with no systemd. Steps 1 and 2 of the install above are unchanged — the same
+`prl-backup` account, the same 0700 destination, the same **0600 root-owned**
+`/etc/poker-risk-lab/backup.env`. Step 3 becomes:
+
+```bash
+sudo install -o root -g root -m 0644 deploy/backup/crontab.example /etc/cron.d/prl-backup
+
+# 4. Prove it works NOW, exactly as cron will run it — as root, sourcing the env as root.
+sudo flock --nonblock /var/lock/prl-backup.lock sh -c \
+  'set -a; . /etc/poker-risk-lab/backup.env; set +a; cd /opt/poker-risk-lab &&
+   runuser -u prl-backup -- node scripts/backup.mjs create'
+```
+
+**This documentation used to be wrong, and the correction is the point of this section.**
+`crontab.example` said to install with `crontab -u prl-backup`, and its cron lines source
+`/etc/poker-risk-lab/backup.env` — the file this README, `backup.env.example` and
+`prl-backup.service` all describe as 0600 and root-owned in a 0700 root-owned directory. As
+`prl-backup` that `.` fails with EACCES, the `&&` chain never reaches `node`, and cron's
+output goes to a mail spool that on most hosts goes nowhere. The documented fallback could
+not run a single backup, and would not have said so.
+
+The systemd path has no such problem because systemd reads `EnvironmentFile=` as root and
+*then* drops to `User=prl-backup`. Cron has no equivalent step, so the fallback does it by
+hand: **the cron entry runs as root**, sources the env file as root, and drops to
+`prl-backup` with `runuser` for the backup process itself.
+
+What that costs, stated rather than buried: `cron`, `flock`, `sh` and the read of the secret
+all run as root under the fallback, so a compromise of `/etc/cron.d/prl-backup` or of that
+wrapper is root on the host, not just the backup account. `node`, `pg_dump` and everything
+that touches an archive still run as `prl-backup`. The alternative — relaxing `backup.env` to
+0640 `root:prl-backup` and scheduling as `prl-backup` — moves the encryption key and the
+database password into the unprivileged account's blast radius, which is the exact thing the
+0600 mode exists to prevent. Either is defensible; neither is as good as the timer, and that
+asymmetry is why the timer is the supported path.
+
 ## Checking on it
 
 ```bash
@@ -95,6 +134,12 @@ systemctl list-timers 'prl-backup*'     # next and last run of each timer
 journalctl -u prl-backup.service -n 50  # what the last backup actually printed
 node scripts/backup.mjs list            # the archives, their retention class, their integrity
 ```
+
+Under the cron fallback the first two have no equivalent — that is item two and item three of
+the seven. `sudo tail -50 /var/log/prl-backup.log` is all there is for "what the last run
+printed", there is no "next run", and a run that never happened leaves nothing at all. `list`
+works the same either way and is the only one of the three that answers the question that
+actually matters.
 
 `list` marks an archive "good" when its manifest signature verifies and every file it names
 is present at the recorded size. That is not the same as restorable — `verify --deep` is what

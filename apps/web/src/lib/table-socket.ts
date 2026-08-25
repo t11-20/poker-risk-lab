@@ -790,12 +790,41 @@ export interface TableSocketOptions {
   readonly scheduler?: Scheduler;
 }
 
+/**
+ * What happened to a frame this client tried to send.
+ *
+ * ## Why this is not a boolean
+ *
+ * It was one, and the single `false` covered two refusals that mean opposite things to a reader.
+ * There is no socket during the whole reconnect backoff — up to fifteen seconds — and the caller
+ * had no way to tell that apart from the client's own token bucket refusing a burst. So
+ * `use-live-table.ts` reported "this page is refusing to exceed the socket rate limit" for a
+ * decision that was refused because the connection had dropped: a cause that never happened (no
+ * token was taken), a conclusion that was wrong (the reconnect replays the decision and the server
+ * applies it), and an alert that contradicted the "Decision sent" beside it.
+ *
+ * The two also differ in what the caller should DO. A disconnected frame is held and replayed; a
+ * rate-limited one is gone, and only the reader can decide again.
+ */
+export type SendOutcome =
+  /** On the wire. The server's answer is the next thing to wait for. */
+  | 'sent'
+  /**
+   * There is no open socket. A reconnect is scheduled, and `useLiveTable` replays the outstanding
+   * decision on the next `welcome` — same `actionId`, so the server applies it once.
+   */
+  | 'disconnected'
+  /** This client's own token bucket refused it. Nothing will send it later; the reader decides again. */
+  | 'rate-limited'
+  /** Refused for a reason a retry will not fix: over the protocol's 8 KiB ceiling, or `send` threw. */
+  | 'undeliverable';
+
 /** What the caller can do with a live table. */
 export interface TableSocketHandle {
-  /** Sends `sit`. Returns false when the frame was refused locally (rate limit, or no socket). */
-  sit(seat: number, requestId: string): boolean;
-  stand(requestId: string): boolean;
-  startHand(requestId: string): boolean;
+  /** Sends `sit`. See `SendOutcome` for the refusals, which are not interchangeable. */
+  sit(seat: number, requestId: string): SendOutcome;
+  stand(requestId: string): SendOutcome;
+  startHand(requestId: string): SendOutcome;
   /**
    * Sends one decision.
    *
@@ -808,8 +837,8 @@ export interface TableSocketHandle {
     readonly actionId: string;
     readonly expectedSequence: number;
     readonly requestId: string;
-  }): boolean;
-  requestCoach(requestId: string, opponentRange?: string): boolean;
+  }): SendOutcome;
+  requestCoach(requestId: string, opponentRange?: string): SendOutcome;
   /** Closes and stops reconnecting. Safe to call twice. */
   dispose(): void;
 }
@@ -878,25 +907,28 @@ export function openTableSocket(options: TableSocketOptions): TableSocketHandle 
     cancelPing = null;
   };
 
-  const sendRaw = (message: WsClientMessage): boolean => {
-    if (socket === null || disposed) return false;
+  const sendRaw = (message: WsClientMessage): SendOutcome => {
+    // Each refusal names itself. A caller that is told only "no" has to guess which of these
+    // happened, and the guess this file used to invite was the wrong one — see `SendOutcome`.
+    if (disposed) return 'undeliverable';
+    if (socket === null) return 'disconnected';
     const text = JSON.stringify(message);
     // Checked before `send`: the server drops an oversized frame AND closes the socket, so an
     // accidental giant frame costs the reader their table rather than one message.
     if (new TextEncoder().encode(text).length > WS_LIMITS.maxMessageBytes) {
       problem(`refusing to send a ${message.type} frame larger than the protocol's 8 KiB ceiling`);
-      return false;
+      return 'undeliverable';
     }
     if (!takeToken(bucket, scheduler.now())) {
       problem(`refusing to send ${message.type}: the client-side rate limit would be exceeded`);
-      return false;
+      return 'rate-limited';
     }
     try {
       socket.send(text);
-      return true;
+      return 'sent';
     } catch (cause) {
       problem(`sending ${message.type} threw: ${cause instanceof Error ? cause.message : 'unknown'}`);
-      return false;
+      return 'undeliverable';
     }
   };
 

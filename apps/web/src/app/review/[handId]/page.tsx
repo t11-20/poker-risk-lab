@@ -4,7 +4,7 @@
  * The page loads the review, reconstructs the table state at every decision, and hands both to
  * `HandReplay`. The reconstruction runs here rather than in the client component on purpose — see
  * the header of `src/lib/hand-replay.ts` — so that the only engine code reaching the browser is the
- * one function `CommitmentVerifier` genuinely needs.
+ * one function `CommitmentVerifier` genuinely needs, imported in `src/lib/deck-proof.ts`.
  *
  * ## What the header states before the replay starts
  *

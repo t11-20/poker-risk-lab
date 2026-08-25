@@ -334,6 +334,15 @@ interface CallbackQuery {
   readonly code?: string;
   readonly state: string;
   readonly error?: string;
+  /**
+   * RFC 9207's issuer identifier, present on any OpenID-conformant provider.
+   *
+   * Optional because the RFC is newer than plenty of deployed providers, and refusing a callback
+   * that omits it would lock this endpoint to the modern half of the ecosystem. Present, it is
+   * checked; absent, the state/nonce/PKCE triple is what carries the attempt's identity, exactly
+   * as before.
+   */
+  readonly iss?: string;
 }
 
 interface AcceptedAttempt {
@@ -551,6 +560,34 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
         // Cleared unconditionally and early: the attempt is over either way, and a cookie left
         // behind after a failure is a PKCE verifier sitting in a browser for another ten minutes.
         reply.clearCookie(oidcCookieName(config), sessionCookieOptions(config));
+
+        /**
+         * RFC 9207, and the reason it exists.
+         *
+         * A client registered with more than one provider can be induced into a mix-up: the
+         * attacker starts a flow at provider A, and returns a code minted by A to this client's
+         * callback while the client believes it is talking to B. The client then sends A's code
+         * to B's token endpoint, and with some provider pairs that is an account takeover. The
+         * `state` cookie does not close it, because the attacker can start a genuine flow to get
+         * a genuine `state`.
+         *
+         * Checked before anything else touches the callback, and before the attempt is consumed,
+         * so a mismatched issuer cannot burn a legitimate single-use attempt row.
+         */
+        const expectedIssuer = config.oidc?.issuer;
+        if (query.iss !== undefined && expectedIssuer !== undefined && query.iss !== expectedIssuer) {
+          request.log.warn(
+            {
+              oidcCallbackIssuer: query.iss
+                .replace(/[^a-z0-9:/._-]/gi, '')
+                .slice(0, MAX_LOGGED_PROVIDER_ERROR),
+            },
+            'callback carried an issuer this deployment did not ask for',
+          );
+          throw new AppError('oidc_exchange_failed', {
+            logDetail: 'callback issuer did not match the configured issuer (RFC 9207)',
+          });
+        }
 
         if (query.error !== undefined) {
           // The provider's `error` is echoed nowhere and logged only after being stripped to a

@@ -250,11 +250,13 @@ sum(rate(prl_websocket_opened_total[5m])) > 3 * sum(rate(prl_websocket_closed_to
 ### `WebSocketConnectionsHigh` — ticket
 
 ```
-prl_websocket_connections > 400
+prl_websocket_connections > 67
 ```
 
 **For:** 10m.
-**Why 400 and where the number comes from:** it must be set from the measured saturation point in `docs/production/load-test.md`, at roughly 70% of it, and re-derived whenever that measurement is repeated. **A capacity alert copied from another service is worse than none**, because it produces confident wrong numbers. The value above is a placeholder until the measured figure is substituted; the rule is deliberately listed here so that substitution is a visible, tracked task rather than a forgotten one.
+**Why 67 and where the number comes from:** it is 70% of **96**, the concurrent seated players at which one instance saturated in [`load-test.md`](load-test.md). **A capacity alert copied from another service is worse than none**, because it produces confident wrong numbers — so this one is derived from this deployment's own measurement and must be re-derived whenever that measurement is repeated.
+
+It was a placeholder of 400 until the measurement existed, listed here so the substitution was a visible task rather than a forgotten one. That task is now done, which moves the obligation rather than removing it: if you re-run the saturation hunt, change this number and `deploy/staging/observability/alert-rules.yml` in the same commit.
 
 ---
 
@@ -287,6 +289,25 @@ changes(prl_readiness_state[30m]) > 6
 
 ---
 
+## Where these rules live now
+
+Every rule above is also `deploy/staging/observability/alert-rules.yml`, which a real
+Prometheus loads. This file is the reasoning — the threshold, why that number and not
+another, what a human does first — and that file is the behaviour. They must not disagree,
+and two checks make sure they cannot drift quietly:
+
+- `pnpm run alerts:verify` compares the alert names and severities in the two files and
+  fails on any difference, against a live Prometheus.
+- `scripts/alert-delivery.test.mjs` makes the same comparison with no containers, so an
+  edit to one file and not the other fails in the pull request rather than in a release
+  rehearsal.
+
+`docker-compose.observability.yml` is an **overlay** on the staging stack, not part of it:
+`docker-compose.staging.yml` is a manifest of what production runs, and production gets its
+monitoring from somewhere else. Bringing staging up does not bring Prometheus up.
+
+---
+
 ## Verifying these rules
 
 A rule that has never fired is a rule that has never been tested. Each of the following can be provoked deliberately:
@@ -300,4 +321,27 @@ A rule that has never fired is a rule that has never been tested. Each of the fo
 | `RateLimitBans` | `pnpm run test:smoke --strict` (section 12 floods the guest limiter by design) |
 | `MetricsCardinalityOverflow` | covered by a unit test that pushes a metric past the cap |
 
-Provoking a rule and watching it fire is the only evidence that it is wired correctly. Until that has been done against a real Prometheus, this file describes intent — and says so.
+Provoking a rule and watching it fire is the only evidence that it is wired correctly.
+
+That has now been done, and what it proved is narrower than "these alerts work". `pnpm run
+alerts:verify` brings up a real Prometheus and a real Alertmanager beside the staging stack
+and establishes four things about **all twenty-two** rules — they load with no evaluation
+error, they agree with this document, every `prl_*` series they name appears in a live
+scrape, and every expression executes — and one thing about **one** of them: `ApiDown` was
+provoked by stopping the API container, went pending, fired, reached Alertmanager, and was
+delivered to a receiver, which then received the resolved notification when the API came
+back. The notification arrived on the paging path and not the ticket path, which is the
+two-tier rule at the top of this file being enforced by configuration rather than by prose.
+
+The three limits on that, stated plainly:
+
+1. **Twenty-one rules have not been provoked.** Loaded, agreed, grounded and evaluable is a
+   great deal more than a markdown file, and a great deal less than tested. The table above
+   is how to provoke each of them by hand.
+2. **No human is reached.** Both receivers are a webhook sink that the verification script
+   runs on this host. There is no PagerDuty account here and no ticket queue; production
+   replaces two URLs in `alertmanager.yml` and changes nothing else. The hop that ends at
+   somebody's phone at 3am is still unrehearsed.
+3. **Staging, not production.** These rules have never been evaluated against production
+   data volumes, and several thresholds (`WebSocketConnectionsHigh`, `WorkerPoolQueueDeep`)
+   are derived from a capacity measurement of one instance on a laptop.

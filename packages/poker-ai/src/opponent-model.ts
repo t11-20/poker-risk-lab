@@ -97,10 +97,14 @@
  *     could only mislead, and `null` says "unknown" in the type rather than in a footnote.
  *   - `reliability` bands the sample: `insufficient` / `indicative` / `reasonable`. There is
  *     deliberately no band above `reasonable`. Counting public actions never earns "certain".
- *   - `exploitAdjustments` multiplies by a reliability weight, so an `insufficient` sample
- *     produces exactly neutral multipliers however high `exploitativeAdaptation` is. The
- *     learner still sees the frequencies and the interval — that is the teaching moment —
- *     but the model does not act on them.
+ *   - `readWeight` multiplies `exploitativeAdaptation` by a reliability weight, and **both**
+ *     channels out of this module go through it: `exploitAdjustments` for the multipliers and
+ *     `estimateRange` for the assumed range. An `insufficient` sample therefore produces
+ *     exactly neutral multipliers *and* exactly the neutral range, however high
+ *     `exploitativeAdaptation` is. The learner still sees the frequencies and the interval —
+ *     that is the teaching moment — but the model does not act on them. Gating one channel
+ *     and not the other is the failure this is written down to prevent: the range is the
+ *     larger of the two effects, because a decision is priced against it.
  *
  * ## 6. What this model is not
  *
@@ -885,13 +889,70 @@ function facingMultiplierFor(facingAction: string): number {
   );
 }
 
+// ---------------------------------------------------------------------------
+// How much of a read is allowed to reach a decision, in one place
+// ---------------------------------------------------------------------------
+
+function assertAdaptation(adaptation: number): void {
+  if (!Number.isFinite(adaptation) || adaptation < 0 || adaptation > 1) {
+    throw new ObservationError(
+      `adaptation must be between 0 and 1, received ${String(adaptation)}; it is a trait value, and a ` +
+        'trait quietly clamped from 1.4 makes a profile behave differently from what its card claims',
+    );
+  }
+}
+
+/**
+ * The single weight every read is scaled by, so there is exactly one answer to "how much of
+ * what this model has watched reaches this decision".
+ *
+ * Two gates, multiplied, and both have to be here rather than at one call site:
+ *   - `adaptation` is the profile's own `exploitativeAdaptation`, which `expressTraits` forces
+ *     to 0 at the `educational` difficulty. A profile designed to play its own game regardless
+ *     is unaffected by anything observed, and `docs/AI-LEGENDS.md` §8 says so on the card.
+ *   - `RELIABILITY_WEIGHT` gates on the sample: an `insufficient` one contributes nothing
+ *     however adaptive the profile is, because a little of a meaningless number is still
+ *     meaningless.
+ *
+ * Both `exploitAdjustments` and `estimateRange` go through this function. That is the whole
+ * point of it existing: the two are the *only* channels from the opponent model into a
+ * decision, and when only one of them was gated, `educational` — where the card promises
+ * "adaptation is off entirely" — still tracked what the learner had been doing, through the
+ * assumed range.
+ */
+function readWeight(adaptation: number, reliability: Reliability): number {
+  assertAdaptation(adaptation);
+  return adaptation * RELIABILITY_WEIGHT[reliability];
+}
+
+/**
+ * `weight` of the way from the neutral assumption to what was observed.
+ *
+ * The mirror of `blend`, which pulls a *multiplier* towards 1. This one pulls a *frequency*
+ * towards its neutral reference, because a frequency's "no read" value is the baseline
+ * profile's own number rather than 1.
+ */
+function towardsObserved(neutral: number, observed: number, weight: number): number {
+  return neutral + (observed - neutral) * weight;
+}
+
 /**
  * The range to assume for a seat, as a slice of the computed strength ordering.
  *
  * ## The mapping, in full
  *
+ * 0. **Weight the read.** `adaptation * RELIABILITY_WEIGHT[reliability]`, the same product
+ *    `exploitAdjustments` gates on, and computed by the same `readWeight`. Both observed
+ *    quantities below are pulled that far from the neutral assumption towards what was
+ *    actually counted, so at weight 0 every step runs on the baseline profile's own numbers
+ *    and the result is a constant. This is step 0 rather than a footnote because a range *is*
+ *    an adaptation: it is the single largest thing a read changes about a decision, since
+ *    `assessPostflop` prices relative strength, equity and the value/bluff split against it.
+ *    Scaling only the multipliers in `exploitAdjustments` and leaving this path raw is
+ *    exactly the second, unscaled path `policy.ts` promises does not exist — and it made
+ *    `educational`, where `adaptationEnabled` is false, track the learner anyway.
  * 1. **Entry range from tightness.** `tightness` is `1 - vpip`, so `(1 - tightness) * 100`
- *    is the seat's observed VPIP as a percentage of hands — and a percentage of hands is
+ *    is the seat's weighted VPIP as a percentage of hands — and a percentage of hands is
  *    exactly what `topPercentRange` consumes. The assumption being made, and it is a real
  *    one: that a seat entering 30% of hands enters with its *strongest* 30%, not a random
  *    30%.
@@ -908,8 +969,15 @@ function facingMultiplierFor(facingAction: string): number {
  *    169 starting-hand classes by measured all-in equity against a random hand. That
  *    ordering is computed in `@prl/poker-math`, never transcribed from a published chart.
  *
- * An `insufficient` sample is ignored entirely: step 1 uses `NEUTRAL_TIGHTNESS`, the
- * baseline profile's own 25% entry rate, so a 25-hand sample cannot move the range.
+ * An `insufficient` sample is ignored entirely, on **every** street: `RELIABILITY_WEIGHT` is
+ * 0 there, so step 0 leaves tightness at `NEUTRAL_TIGHTNESS` — the baseline profile's own 25%
+ * entry rate — *and* fold-to-bet at `NEUTRAL_FOLD_TO_BET`, and a 25-hand sample cannot move
+ * the range. Neutralising only tightness is not enough and the failure hides preflop: there
+ * `streetsOfBetting` is 0, `keep ** 0` is 1, and a test that only checks preflop passes
+ * whatever `keep` holds. Postflop the same untouched `keep` was raised to the power of the
+ * street, and a 25-hand seat observed folding to nothing widened the assumed river range from
+ * the neutral 56 combos (4.22% of hands) to 244 (18.40%) — 4.4x, from a sample this comment
+ * has always said is ignored.
  *
  * What this ignores, and it is a lot: board texture, the hands the seat's earlier line rules
  * out, position, stack depth and the number of opponents. It is one number mapped onto one
@@ -921,14 +989,26 @@ function facingMultiplierFor(facingAction: string): number {
  * validated lookup gives a good error instead of a silently wrong answer. The accepted
  * values are exported as `RANGE_STREETS` and `FACING_ACTIONS` for callers that want to be
  * exhaustive.
+ *
+ * `adaptation` is required rather than defaulted for the same reason `exploitAdjustments`
+ * requires it: a default would let a caller take the observed range by forgetting to say how
+ * adaptive it is, which is the bug this parameter exists to make impossible.
  */
-export function estimateRange(stats: DerivedSeatStats, street: string, facingAction: string): ParsedRange {
+export function estimateRange(
+  stats: DerivedSeatStats,
+  street: string,
+  facingAction: string,
+  adaptation: number,
+): ParsedRange {
   const streets = streetsOfBettingFor(street);
   const multiplier = facingMultiplierFor(facingAction);
-  const tightness = stats.reliability === 'insufficient' ? NEUTRAL_TIGHTNESS : stats.tightness;
+  const weight = readWeight(adaptation, stats.reliability);
+
+  const tightness = towardsObserved(NEUTRAL_TIGHTNESS, stats.tightness, weight);
+  const foldToBet = towardsObserved(NEUTRAL_FOLD_TO_BET, stats.foldToBetFrequency, weight);
 
   const entryPercent = clamp((1 - tightness) * 100, MIN_RANGE_PERCENT, 100);
-  const keep = clamp(1 - stats.foldToBetFrequency, MIN_STREET_KEEP, MAX_STREET_KEEP);
+  const keep = clamp(1 - foldToBet, MIN_STREET_KEEP, MAX_STREET_KEEP);
   const narrowed = entryPercent * keep ** streets * multiplier;
 
   return topPercentRange(clamp(Math.min(narrowed, entryPercent), MIN_RANGE_PERCENT, 100));
@@ -1100,29 +1180,19 @@ function describeAdjustment(stats: DerivedSeatStats, applied: RawSignals): strin
  * The multipliers a policy applies, scaled so that a profile with `adaptation` 0 gets exactly
  * neutral ones.
  *
- * Two gates, both required:
- *   - `adaptation` is the profile's own `exploitativeAdaptation`, so a model designed to play
- *     its own game regardless is unaffected by anything observed. `expressTraits` forces it
- *     to 0 at the `educational` difficulty, which is how that setting keeps a style holding
- *     still long enough to be recognised.
- *   - `RELIABILITY_WEIGHT` gates on the sample. An `insufficient` sample contributes nothing
- *     however adaptive the profile is — a little of a meaningless number is still
- *     meaningless.
+ * The two gates are `readWeight`'s, and `estimateRange` is scaled by the same call: adaptation
+ * off means neutral multipliers *and* the neutral range, which is what makes "adaptation is
+ * off entirely" a statement about behaviour rather than about one of the two paths.
  *
  * `null` stats (no seat, or fewer than `MINIMUM_HANDS_FOR_STATS` hands) return neutral with a
  * note saying why, rather than throwing: "not enough seen yet" is a normal state for the
  * first twenty hands of every match, not an error.
  */
 export function exploitAdjustments(stats: DerivedSeatStats | null, adaptation: number): ExploitAdjustments {
-  if (!Number.isFinite(adaptation) || adaptation < 0 || adaptation > 1) {
-    throw new ObservationError(
-      `adaptation must be between 0 and 1, received ${String(adaptation)}; it is a trait value, and a ` +
-        'trait quietly clamped from 1.4 makes a profile behave differently from what its card claims',
-    );
-  }
+  assertAdaptation(adaptation);
   if (stats === null) return neutralAdjustments(neutralNote(null, adaptation));
 
-  const weight = adaptation * RELIABILITY_WEIGHT[stats.reliability];
+  const weight = readWeight(adaptation, stats.reliability);
   if (weight === 0) return neutralAdjustments(neutralNote(stats, adaptation));
 
   const raw = rawSignals(stats);
@@ -1219,13 +1289,29 @@ export class OpponentModel {
   /**
    * Frequencies for a seat, falling back to the neutral assumption rather than `null`, for
    * the callers that must always have something to reason with.
+   *
+   * The fallback covers the whole `insufficient` band, not just the `null` floor. Those are
+   * two different thresholds — `derivedStats` returns `null` below `MINIMUM_HANDS_FOR_STATS`
+   * (20), while `insufficient` runs to `INDICATIVE_MINIMUM_HANDS` (40) — and a `?? neutral`
+   * that only caught the first handed back raw frequencies for a 20-to-39-hand sample, which
+   * is precisely the read `ObservedSeatTendencies` promises a caller cannot lean on. The band
+   * is the authority here because it is the one every other consumer of a read gates on.
    */
   statsOrNeutralFor(seat: number): DerivedSeatStats {
-    return this.statsFor(seat) ?? neutralStats(seat);
+    const stats = this.statsFor(seat);
+    if (stats === null || stats.reliability === 'insufficient') return neutralStats(seat);
+    return stats;
   }
 
-  rangeFor(seat: number, street: string, facingAction: string): ParsedRange {
-    return estimateRange(this.statsOrNeutralFor(seat), street, facingAction);
+  /**
+   * The assumed continuing range for a seat, scaled by this model's own adaptation trait.
+   *
+   * `adaptation` is required for the same reason it is on `adjustmentsFor`: these are the two
+   * channels out of the opponent model, and a caller that could take one of them without
+   * stating its adaptation would reintroduce exactly the unscaled path this parameter closed.
+   */
+  rangeFor(seat: number, street: string, facingAction: string, adaptation: number): ParsedRange {
+    return estimateRange(this.statsOrNeutralFor(seat), street, facingAction, adaptation);
   }
 
   adjustmentsFor(seat: number, adaptation: number): ExploitAdjustments {

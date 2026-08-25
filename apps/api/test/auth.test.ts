@@ -1166,6 +1166,107 @@ describe('the OIDC round trip', () => {
     await app.close();
   });
 
+  it('completes when the provider adds its own query parameters, as every real one does', async () => {
+    /**
+     * The defect this pins: `oidcCallbackQuerySchema` was `additionalProperties: false` with only
+     * `code`, `state`, `error` and `error_description`, and `app.ts` sets
+     * `removeAdditional: false` — deliberately, so an unknown parameter is a refusal rather than
+     * a silent deletion. Together that made an ordinary provider callback a 400 before the
+     * handler ran.
+     *
+     * Google appends `scope`, `authuser`, `prompt` and `hd`; Keycloak appends `session_state`;
+     * Microsoft appends `client_info`; and RFC 9207 requires `iss`. So a live sign-in against
+     * Google, Auth0, Okta, Entra or Keycloak could never have completed, which is the residual
+     * `docs/production/security.md` recorded as "the live OIDC flow is unverified".
+     *
+     * Sends the union of them in one callback. Without the fix this is a 400 with a validation
+     * error naming the first extra property.
+     */
+    const provider = makeFakeProvider();
+    const store = createFakeStore();
+    const config = oidcConfig();
+    const app = await buildApp({ config, database: stubDatabase });
+    await registerRoutes(app, [
+      createAuthRoutes({
+        store: store.store,
+        relyingParty: createOidcRelyingParty({
+          config: requiredOidcConfig(config),
+          fetchImpl: provider.fetchImpl,
+        }),
+      }),
+    ]);
+
+    const flow = await startFlow(app);
+    provider.lastNonce = flow.nonce;
+    const extras = new URLSearchParams({
+      code: 'the-code',
+      state: flow.state,
+      iss: ISSUER,
+      scope: 'openid email profile',
+      authuser: '0',
+      prompt: 'consent',
+      hd: 'school.example',
+      session_state: 'a1b2c3d4',
+      client_info: 'eyJ1aWQiOiIwMDAwIn0',
+    });
+    const callback = await app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/oidc/callback?${extras.toString()}`,
+      cookies: { prl_oidc: flow.attemptCookie },
+    });
+
+    assert.equal(callback.statusCode, 303, callback.payload);
+    assert.ok(cookieValue(callback, 'prl_session') !== null, 'the sign-in must complete');
+    await app.close();
+  });
+
+  it('refuses a callback whose RFC 9207 issuer is not the one this deployment asked for', async () => {
+    /**
+     * The mix-up attack RFC 9207 exists for: a client registered with more than one provider is
+     * induced to send provider A's code to provider B's token endpoint. `state` does not close
+     * it, because the attacker can start a genuine flow to obtain a genuine `state` — which is
+     * why this callback carries a VALID state and attempt cookie and must still be refused.
+     *
+     * The check runs before the attempt is consumed, so a mismatched issuer cannot burn a
+     * legitimate single-use attempt row: the assertion on `store.attempts.size` is that half.
+     */
+    const provider = makeFakeProvider();
+    const store = createFakeStore();
+    const config = oidcConfig();
+    const app = await buildApp({ config, database: stubDatabase });
+    await registerRoutes(app, [
+      createAuthRoutes({
+        store: store.store,
+        relyingParty: createOidcRelyingParty({
+          config: requiredOidcConfig(config),
+          fetchImpl: provider.fetchImpl,
+        }),
+      }),
+    ]);
+
+    const flow = await startFlow(app);
+    provider.lastNonce = flow.nonce;
+    const callback = await app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/oidc/callback?code=the-code&state=${encodeURIComponent(flow.state)}&iss=${encodeURIComponent('https://attacker.example.test')}`,
+      cookies: { prl_oidc: flow.attemptCookie },
+    });
+
+    assert.equal(errorCode(callback.json()), 'oidc_exchange_failed');
+    assert.equal(cookieValue(callback, 'prl_session'), null, 'no session may be issued');
+    assert.equal(store.attempts.size, 1, 'the legitimate attempt must survive a rejected callback');
+
+    // The positive control: the same flow with the RIGHT issuer completes, so the assertion above
+    // is the issuer check and not a broken fixture.
+    const good = await app.inject({
+      method: 'GET',
+      url: `/api/v1/auth/oidc/callback?code=the-code&state=${encodeURIComponent(flow.state)}&iss=${encodeURIComponent(ISSUER)}`,
+      cookies: { prl_oidc: flow.attemptCookie },
+    });
+    assert.equal(good.statusCode, 303, good.payload);
+    await app.close();
+  });
+
   it('reuses the account on a second sign-in rather than creating a duplicate', async () => {
     const provider = makeFakeProvider();
     const store = createFakeStore();

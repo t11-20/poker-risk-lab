@@ -31,7 +31,8 @@ import { pathToFileURL } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from './app.ts';
 import { type AppConfig, ConfigError, getConfig } from './config.ts';
-import { closeDatabase, configureDatabase } from './db.ts';
+import { closeDatabase, configureDatabase, getSql } from './db.ts';
+import { startRetentionSweep } from './maintenance/retention-sweep.ts';
 import { API_ROUTE_MODULES, registerApiRoutes } from './routes/index.ts';
 import { beginSharedPoolWarmup, closeSharedPool } from './workers/pool.ts';
 
@@ -47,6 +48,15 @@ const EXIT_CRASHED = 1;
  * a clean stop turns into a half-closed pool.
  */
 let shuttingDown = false;
+
+/**
+ * The retention sweep's handle, so `shutdown` can stop it.
+ *
+ * Module scope for the same reason `shuttingDown` is: `shutdown` is registered as a signal
+ * handler and cannot be handed anything `main` created. Undefined until `listen` succeeds, which
+ * is why every use is optional — a process that failed to start has no sweep to stop.
+ */
+let retention: { stop: () => void } | undefined;
 
 /**
  * How often, during a drain, to drop sockets that are no longer holding work of ours.
@@ -247,6 +257,11 @@ async function shutdown(
   }, config.shutdownGraceMs);
   deadline.unref();
 
+  // Stopped before anything else: it is the one piece of work that is pure maintenance, so it has
+  // no claim on the shutdown grace, and a sweep starting mid-drain would hold a pooled connection
+  // that `closeDatabase` is about to wait for.
+  retention?.stop();
+
   const stopDraining = drainIdleConnections(app, connections, config.shutdownGraceMs);
   try {
     await app.close();
@@ -350,6 +365,42 @@ async function main(): Promise<void> {
       },
     });
     const address = await app.listen({ port: config.port, host: config.host });
+
+    /**
+     * Expired rows are removed from here on, and until now nothing removed them at all.
+     *
+     * `deleteExpired` and `deleteExpiredLoginAttempts` have been implemented and tested since
+     * sessions existed and had no caller outside the test suite, so `prl.sessions` and
+     * `prl.oidc_login_attempts` only ever grew and the retention paragraph on `/privacy` was
+     * honest only because it said the sweep did not run
+     * (`docs/production/legal-review-requirements.md` §7). See `maintenance/retention-sweep.ts`
+     * for why this lives in the process rather than in a systemd unit like the backups do.
+     *
+     * Started AFTER `listen` deliberately: a sweep must never be a reason the process is slow to
+     * accept traffic, and there is nothing about an expired row that cannot wait one more tick.
+     */
+    retention = startRetentionSweep({
+      sql: getSql,
+      onSwept: (result) => {
+        // `info`, not `debug`: four lines a day that say a retention promise is being kept is the
+        // evidence an operator needs when somebody asks, and it is the only place that evidence
+        // exists.
+        app.log.info(
+          {
+            sweptSessions: result.sessions,
+            sweptLoginAttempts: result.loginAttempts,
+            sweepIncomplete: result.incomplete,
+            sweepMs: Math.round(result.durationMs),
+          },
+          'retention sweep',
+        );
+      },
+      onProblem: (error) => {
+        // Never fatal. A sweep is on no request path and nobody is waiting for it; the next tick
+        // tries again. A database that is down is already `/ready`'s problem to report.
+        app.log.warn({ err: error }, 'retention sweep failed');
+      },
+    });
     app.log.info(
       {
         address,

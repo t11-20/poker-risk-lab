@@ -67,7 +67,7 @@ import type {
   StackContext,
   UncertaintyNote,
 } from '@prl/contracts';
-import { type Card, DECK_SIZE } from '@prl/poker-engine';
+import type { Card } from '@prl/poker-engine';
 import { type EquityResult, type EquitySpec, equity } from './equity.ts';
 import { evOfBet, evOfCall, evOfCheck, evOfFold, evOfRaise, requiredFoldEquity } from './ev.ts';
 import { chips, percent } from './format.ts';
@@ -479,14 +479,54 @@ export function ruleOfThumbRefusalFor(
  * reported the sum as though the shortcut were responsible for all of it. Against the
  * hit probability it is the shortcut's error and nothing else, which is the figure a
  * learner needs to decide whether to trust it at the table.
+ *
+ * ## …and out of WHICH cards, which is the same question asked twice
+ *
+ * "The shortcut's error and nothing else" is a promise about the denominator as much as
+ * about the numerator, and this function used to break it. It derived the unseen count
+ * from the street — `52 - 2 - (5 - cardsToCome)`, so 47 on the flop — while
+ * `computeOuts` had counted those same outs out of `cardsConsidered`, which is 45 when
+ * the opponent is a known hand, because two of the cards the shortcut was dividing by
+ * are face down in front of the opponent and cannot come.
+ *
+ * The report then carried both denominators for one event, three paragraphs apart: "Of
+ * the 45 cards that can come next, 8 are clean…" beside "Two cards to come, 8 outs, 47
+ * cards unseen … = 31.5%". Worse than untidy, it inverted the teaching point. Measured
+ * against 9s8s on 7s6d2c facing exactly AhAd: the shortcut's 32% was published as
+ * **overstating by 0.55 points**, when conditional on the very model that produced those
+ * 8 outs the exact figure is `1 - (37/45)(36/44)` = 32.727% and the shortcut
+ * **understates by 0.73**. The stated direction of the error — the one thing a learner
+ * takes away from an error bar — was wrong, and the denominator mismatch it came from
+ * was larger than the error being reported.
+ *
+ * So `unseen` is now `outs.cardsConsidered`: the card set the outs were literally
+ * counted from, carried on the result rather than re-derived here. Re-deriving it is the
+ * defect; there is no arithmetic in this function that could notice the two disagreeing,
+ * because both were valid probabilities and `assertProbabilityFraction` only bounds
+ * 0..1. Passing the same number to both halves is the only thing that makes them the
+ * same question.
+ *
+ * `cardsConsidered` also absorbs, for free, the two smaller cases that had the same
+ * shape: `deadCards`, and the cards `computeOuts` skips because every combination left
+ * in the range uses them. Both shrink the set a card can actually come from, and both
+ * used to be divided away.
+ *
+ * The bound this relies on: `cardsConsidered` is at least 45 on the flop and 44 on the
+ * turn, and the two subtractions cannot both apply. Either the range is a single
+ * combination, and those two cards are removed while nothing can be skipped (every
+ * remaining card leaves that combination legal), or the range is wider, nothing is
+ * removed, and at most two cards can be skipped — a skipped card is one that EVERY
+ * remaining combination uses, and two cards is all a two-card hand has. A caller passing
+ * `deadCards` to `computeOuts` shrinks it further; the Coach passes none, and even a
+ * pathological dead list leaves the count far above `cardsToCome`. So
+ * `probabilityOfHitting`'s guards on `unseen` cannot fire from here.
  */
 function buildRuleOfThumb(outs: OutsResult, cardsToCome: 1 | 2): NonNullable<EquitySummary['ruleOfThumb']> {
-  // Cards hero cannot see: 52 less hero's two and the board, and the board length is
-  // fixed by the street. 47 on the flop, 46 on the turn — the two counts the shortcut is
-  // taught against and the ones `ruleOf24`'s own caveat quotes. Derived from
-  // `cardsToCome` rather than taken as a parameter so there is no way to pass the other
-  // street's figure.
-  const unseen = DECK_SIZE - 2 - (5 - cardsToCome);
+  // The cards this spot's outs were counted out of, taken from the result that counted
+  // them. Not `DECK_SIZE - 2 - (5 - cardsToCome)`, which is what this line used to be:
+  // that is 47 on the flop whatever the spot, and against a known opponent hand the outs
+  // beside it had been counted out of 45. See the "out of WHICH cards" note above.
+  const unseen = outs.cardsConsidered;
   const exact = probabilityOfHitting(outs.cleanCount, unseen, cardsToCome);
   const accuracy = ruleOf24Accuracy(outs.cleanCount, cardsToCome, exact.probability);
 
@@ -675,12 +715,43 @@ export function minimumAggressiveTo(spot: SizedSpot): number {
  * The ladder's own note cannot be used for a raise: it reads "Risks {amount} to win
  * {pot}", which is true of a bet and false of a raise, where the risk also includes
  * the call. Getting that sentence wrong is how a mispriced raise hides in plain sight,
- * so the risk is stated by `evOfRaise` and this note only carries the figures the
- * ladder computed from `odds.ts` — the price the extra chips lay a caller and the
- * defence they demand, both of which are correctly measured against the pot as it
- * stands once hero calls.
+ * so the risk is stated by `evOfRaise` and this note carries the price the extra chips
+ * lay a caller, which the ladder computes correctly.
+ *
+ * ## The defence frequency is recomputed here, and the ladder's is wrong for a raise
+ *
+ * `sizingLadder(potAfterCall, …)` calls `defenceFrequency(pot, betSize)`, which returns
+ * `pot / (pot + betSize)` — the right answer for a BET, where the aggressor risks `betSize` to
+ * win `pot` and the two are the whole story. A raise is not that shape. Raising by `r` while
+ * facing `c` risks `c + r` to win the pot as it stood BEFORE hero called, which is exactly what
+ * `evOfRaise` insists on and what this note used to contradict two clauses later.
+ *
+ * Handing the ladder `potAfterCall` makes it answer `(pot + c) / (pot + c + r)`, which counts
+ * hero's own call as money hero wins when the opponent folds. Measured on a real report (pot 150,
+ * toCall 50): a raise to 100 published 80.0% where the answer is 60.0%; a 950-chip shove
+ * published 17.4% where the answer is 13.0%. Bisecting this package's own
+ * `evOfRaise(..., equityWhenCalled: 0)` for the fold frequency at which EV is zero agrees with
+ * the corrected figure to the digit, in all three cases.
+ *
+ * The published sentence reads "…has to continue with X% of their range for a raise of this size
+ * not to print automatically", so an overstated X tells the learner to defend far wider than the
+ * arithmetic requires. `priceLaidToCaller` in the same sentence was and is correct, which is why
+ * the whole thing read plausibly.
+ *
+ * It is recomputed here rather than fixed in `defenceFrequency` because that function is right:
+ * its parameters are a pot and a bet into it, and this is the caller that was passing a raise.
  */
-function raiseSizingNote(option: SizingOption, potAfterCall: number, isAllIn: boolean): string {
+function raiseSizingNote(
+  option: SizingOption,
+  potAfterCall: number,
+  potBeforeCall: number,
+  toCall: number,
+  isAllIn: boolean,
+): string {
+  // MDF = pot / (pot + c + r). The complement of the raiser's break-even bluff frequency,
+  // alpha = (c + r) / (pot + c + r).
+  const risked = toCall + option.amount;
+  const minimumDefence = potBeforeCall / (potBeforeCall + risked);
   const shape =
     option.label === 'all-in'
       ? `Raising by ${chips(option.amount)} puts your whole remaining stack in.`
@@ -688,7 +759,7 @@ function raiseSizingNote(option: SizingOption, potAfterCall: number, isAllIn: bo
   const allIn = isAllIn && option.label !== 'all-in' ? ' That size is also your whole remaining stack.' : '';
   return (
     `${shape} A caller needs ${percent(option.priceLaidToCaller)} equity to break even on the extra ` +
-    `${chips(option.amount)}, and has to continue with ${percent(option.minimumDefenceFrequency)} of ` +
+    `${chips(option.amount)}, and has to continue with ${percent(minimumDefence)} of ` +
     `their range for a raise of this size not to print automatically.${allIn}`
   );
 }
@@ -857,7 +928,7 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
         to: betLevel + raiseBy,
         cost: raise.risk,
         ev: raise.ev,
-        derivation: `${raise.derivation} ${raiseSizingNote(option, potAfterCall, raiseBy === maxRaiseBy)}`,
+        derivation: `${raise.derivation} ${raiseSizingNote(option, potAfterCall, input.pot, input.toCall, raiseBy === maxRaiseBy)}`,
         foldEquityAssumed: foldEquity,
         potShareIfCalled: heroEquity,
       });

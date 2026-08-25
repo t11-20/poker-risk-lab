@@ -709,6 +709,24 @@ function sizingLine(traits: Traits): string {
   );
 }
 
+/**
+ * The one line here that makes a falsifiable promise about the machine rather than describing
+ * a number, so it is the one worth stating the dependency of.
+ *
+ * "Nothing you did in earlier hands moves this decision" is true only while *every* channel
+ * out of `opponent-model.ts` is gated on the adaptation weight. There are exactly two —
+ * `adjustmentsFor` and `rangeFor` — and for a while only the first was: the assumed opponent
+ * range tracked the read at every difficulty, and since `assessPostflop` prices relative
+ * strength, equity and the value/bluff split against that range, this sentence was false at
+ * the setting that prints it. Measured over 350 real postflop spots at `educational`, swapping
+ * a 200-hand station read for a folder read changed the sampled action in 209 of 1,050 paired
+ * decisions; with `rangeFor` gated it is 0 of 1,050, which is what
+ * `test/policy.test.ts`'s paired-decision test now asserts.
+ *
+ * If a third channel is ever added and not gated, fix the channel. Softening this sentence to
+ * survive it would trade a true promise for a vague one, which is the wrong direction for a
+ * line whose whole job is to tell a learner what the difficulty setting bought them.
+ */
 function difficultyLine(traits: Traits, difficulty: Difficulty): string {
   const settings = DIFFICULTY_SETTINGS[difficulty];
   const adaptation = settings.adaptationEnabled

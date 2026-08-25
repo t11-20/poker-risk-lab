@@ -29,3 +29,11 @@ pnpm-lock.yaml.new
 # rehearsal and then running `git add -A`, which would commit an encrypted copy
 # of every learner's account.
 backups/
+
+# The backup identity's environment file. `deploy/backup/README.md` tells an
+# operator to create it from `backup.env.example` and fill in PRL_BACKUP_KEY —
+# the key that decrypts every archive ever taken with it — and the backup role's
+# database password. `.env` and `deploy/staging/tls/` were both covered here and
+# this one was not, so on a backup host `git add -A` would have committed it.
+# `scripts/supply-chain/secret-scan.mjs` asserts this rule exists.
+deploy/backup/backup.env

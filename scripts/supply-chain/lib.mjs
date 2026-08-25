@@ -448,6 +448,16 @@ export function storeCoverage(resolvedPackages, installed) {
   }
   return {
     storePresent,
+    /**
+     * Whether `node_modules/.modules.yaml` could be read. Computed here and, for
+     * a while, read by nobody — which is the same shape as the gates that judged
+     * fewer things than they claimed, so it is now reported in the failure detail
+     * of `requireStoreCoverage`. It cannot be a gate of its own: when the file is
+     * missing, `platformSkippedVersions()` returns an empty skipped set, so every
+     * version absent from disk lands in `uninspected` and fails there. What it
+     * adds is the reason — "pnpm's own record of what it skipped is missing" is a
+     * different remedy from "the store and the lockfile disagree".
+     */
     skippedManifestPresent: manifestPresent,
     resolvedCount: resolvedPackages.size,
     installedCount: installed.size,
@@ -494,7 +504,12 @@ export function requireStoreCoverage(gate, coverage, what) {
       `${sample}${coverage.uninspected.length > 10 ? ', …' : ''}\n      ` +
         'These are in the resolved graph but absent from node_modules/.pnpm, and pnpm does not ' +
         'record them as platform-skipped. The store and the lockfile disagree — reinstall with ' +
-        '`pnpm install --frozen-lockfile` rather than trusting a partial scan.',
+        '`pnpm install --frozen-lockfile` rather than trusting a partial scan.' +
+        (coverage.skippedManifestPresent === false
+          ? '\n      node_modules/.modules.yaml could not be read either, so pnpm’s own record of what ' +
+            'it skipped for this platform was unavailable: some of the above may be platform-skipped ' +
+            'optionals rather than genuinely missing.'
+          : ''),
     );
     return false;
   }

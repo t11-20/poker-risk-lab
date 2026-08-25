@@ -27,8 +27,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseCards } from '@prl/poker-engine';
 import {
+  countMatchups,
   EquityError,
   type EquitySpec,
+  exactEquity,
   MAX_MONTE_CARLO_SAMPLES,
   MIN_MONTE_CARLO_SAMPLES,
   monteCarloEquity,
@@ -125,4 +127,52 @@ test('the sample bounds are exported so callers can quote them rather than guess
   assert.equal(MIN_MONTE_CARLO_SAMPLES, 2);
   assert.equal(MAX_MONTE_CARLO_SAMPLES, 5_000_000);
   assert.doesNotThrow(() => monteCarloEquity(spec(), { samples: MIN_MONTE_CARLO_SAMPLES }));
+});
+
+test('EquityResult.matchups means what its doc comment now says on both paths', () => {
+  // This pins a DOC defect, so unlike its neighbours it does not fail against the old
+  // code — the number did not move, the sentence describing it did. It is here because
+  // the field had no reader, and a field with no reader is where a wrong description
+  // survives until the first consumer builds on it.
+  //
+  // The comment used to read, for both methods, "Distinct hand-vs-hand assignments
+  // considered." AA against AA is the smallest case where that is false on the sampled
+  // path: `countMatchups` says 6 legal matchups (each of the six AA combos leaves
+  // exactly one disjoint AA combo), while `monteCarloEquity` reports 6 x 6 = 36, the
+  // product of the range sizes taken before card conflicts remove anything. The sampler
+  // never scores one of the 30 impossible assignments — it rejects and redraws — so 36
+  // was neither a count of legal matchups nor a count of assignments sampled.
+  //
+  // The comment now documents the asymmetry: exact reports what it enumerated, Monte
+  // Carlo reports an upper bound, and `countMatchups` is the exported way to buy the
+  // legal figure. These assertions are what makes the two halves of that sentence
+  // breakable if either the code or the comment moves without the other.
+  const aces: EquitySpec = {
+    players: [
+      { label: 'hero', range: parseRange('AA') },
+      { label: 'villain', range: parseRange('AA') },
+    ],
+    board: parseCards('7h 5c 2d'),
+  };
+
+  assert.equal(countMatchups(aces), 6, 'six legal AA-vs-AA matchups, derived by hand and by enumeration');
+
+  const sampled = monteCarloEquity(aces, { samples: 2_000, seed: 11 });
+  assert.equal(sampled.method, 'monte-carlo');
+  assert.equal(
+    sampled.matchups,
+    36,
+    'the documented UPPER BOUND: 6 combos x 6 combos, conflicts not removed',
+  );
+  assert.ok(
+    sampled.matchups >= countMatchups(aces),
+    'an upper bound is only honest if it is actually above the legal count',
+  );
+
+  // And the exact path is the half that really does report distinct legal assignments,
+  // so the two are not interchangeable and the comment may not describe them as one.
+  const enumerated = exactEquity(aces);
+  assert.equal(enumerated.method, 'exact-enumeration');
+  assert.equal(enumerated.matchups, 6, 'exact enumeration counts what it dealt out');
+  assert.notEqual(enumerated.matchups, sampled.matchups, 'the asymmetry the doc comment now names');
 });

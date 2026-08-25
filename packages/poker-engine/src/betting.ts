@@ -27,10 +27,17 @@
  *     acted this street, or null if it has not acted.
  *
  * A seat still owes an action when it is active and either has not acted or is
- * short of `betLevel`. A seat may raise only when
- * `lastActedAtBetLevel === null || lastActedAtBetLevel < lastFullRaiseBetLevel`.
- * Work through the short-all-in case with those two rules and it comes out right,
- * including the case where a later full raise re-opens the action to everyone.
+ * short of `betLevel`. A seat may raise when it has not acted, when a COMPLETE
+ * raise has landed since it acted (`lastActedAtBetLevel < lastFullRaiseBetLevel`),
+ * or when the total increase since it acted is itself at least a full raise
+ * (`betLevel - lastActedAtBetLevel >= max(lastFullRaiseIncrement, bigBlind)`).
+ *
+ * That third clause is not a refinement, it is the rule: TDA 43-C reopens the
+ * action to a seat that "is facing at least a full raise when the action returns
+ * to him". One short all-in never reaches that bar; two consecutive ones can,
+ * because their increments add. Working the single-short-all-in case through the
+ * first two clauses alone comes out right, which is exactly why the missing third
+ * one survived — see `mayRaise` for the hand that exposed it.
  *
  * ## 3. When the betting is closed for the whole hand
  *
@@ -86,11 +93,36 @@ export function owesAction(state: HandState, seat: SeatState): boolean {
 
 /**
  * True when this seat is allowed to raise, as opposed to only call or fold.
- * See the module comment for why this is the whole rule.
+ *
+ * Two ways in: a complete raise has landed since this seat acted, or the total increase since it
+ * acted is itself at least a full raise. The second clause is the half this function used to be
+ * missing, and it is the half the rule is actually written with.
+ *
+ * TDA Rule 43-C and Robert's Rules both say an all-in wager of less than a full raise does not
+ * reopen the betting to a player who has already acted **and is not facing at least a full raise
+ * when the action returns to him**. One short all-in cannot reach that bar, which is why keying
+ * only on `lastFullRaiseBetLevel` looks complete and passes the one-short-all-in test. Two or
+ * more consecutive short all-ins can: their increments add up.
+ *
+ * The case, reproduced: blinds 5/10, seat 3 raises to 100 (a full raise, increment 90), seat 0
+ * calls 100, seat 1 is all-in to 150 (short — the minimum was 190), seat 2 is all-in to 220
+ * (short — the minimum was 240). `lastFullRaiseBetLevel` is still 100, so the old test refused
+ * seat 3 and seat 0 a re-raise. But seat 3 last acted at 100 and now faces 220: an increase of
+ * 120 against a full-raise increment of 90. It is facing more than a full raise and the action is
+ * reopened. A 30,000-hand fuzz found 44 wrongly-denied raises across 34 hands.
+ *
+ * The error was one-directional — `lastActedAtBetLevel < lastFullRaiseBetLevel` implies the seat
+ * is facing at least a full raise, so the old code never *permitted* an illegal raise, it only
+ * refused legal ones — which is why nothing detected it as chips going missing.
+ *
+ * `max(lastFullRaiseIncrement, bigBlind)` is the same bar `minRaiseTo` uses, and deliberately so:
+ * "a full raise" has one meaning in this file.
  */
 export function mayRaise(state: HandState, seat: SeatState): boolean {
   if (seat.lastActedAtBetLevel === null) return true;
-  return seat.lastActedAtBetLevel < state.lastFullRaiseBetLevel;
+  if (seat.lastActedAtBetLevel < state.lastFullRaiseBetLevel) return true;
+  const fullRaise = Math.max(state.lastFullRaiseIncrement, state.config.bigBlind);
+  return state.betLevel - seat.lastActedAtBetLevel >= fullRaise;
 }
 
 /**

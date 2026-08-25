@@ -15,10 +15,36 @@
 # refresh one, refresh both — an api and a web container built on different
 # base-OS patch levels is a debugging trap for whoever is on call.
 #
-#     node:24.18.0-bookworm-slim
-#     sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d
-#     multi-arch OCI index (linux/amd64, linux/arm64/v8, linux/ppc64le)
-#     captured 2026-08-17
+#     node:24.18.0-alpine3.24
+#     sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd
+#     multi-arch OCI index (linux/amd64, linux/arm64/v8, linux/s390x)
+#     captured 2026-08-25
+#
+# ## Why Alpine
+#
+# This file said `node:24.18.0-bookworm-slim@sha256:6f7b03f7…51452d` until
+# 2026-08-25. Dockerfile.api's header carries the full argument and the trivy
+# table; the short version is that the runtime stage descends from `base`, so the
+# shipped image's OS package set IS the base's, and that set was 88 packages
+# carrying every HIGH/CRITICAL finding this project shipped. Alpine's is 18 and
+# scans at zero. Two things specific to THIS image made it safe to do:
+#
+#   * `@next/swc-linux-x64-musl` and `@next/swc-linux-arm64-musl` are already in
+#     pnpm-lock.yaml, as are `@img/sharp-linuxmusl-{x64,arm64}`. Next's compiler
+#     and sharp are the two native binaries in this tree, and pnpm picks the musl
+#     builds by install platform — there is no `supportedArchitectures` block
+#     forcing a libc, so `--frozen-lockfile` is still satisfied on Alpine.
+#   * Nothing is compiled from source. `ignoreScripts: true` in
+#     pnpm-workspace.yaml plus `--ignore-scripts` on both installs means node-gyp
+#     never runs, so there is no glibc-linked addon to rebuild.
+#
+# The honest caveat, the same one as in Dockerfile.api: musl is not glibc. This
+# image builds, scans clean and boots; a full staging run is what actually
+# settles it, and that has not happened at the time of writing.
+#
+# There is no bash on Alpine — `/bin/sh` is busybox ash, which is what Docker's
+# default `SHELL` already invoked. The `for pkg in packages/*/` loop in the build
+# stage below is POSIX and stays that way. Keep any new `RUN` POSIX too.
 #
 # ## Why the runtime runs `next start` through the workspace bin shim
 #
@@ -75,7 +101,7 @@
 # container will serve pages but log EROFS on the first revalidation.
 # ---------------------------------------------------------------------------
 
-FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS base
+FROM node:24.18.0-alpine3.24@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS base
 WORKDIR /app
 
 FROM base AS toolchain
@@ -101,10 +127,15 @@ RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@prl/web...
 # See the identical markdown lines in Dockerfile.api: .dockerignore is the real
 # fix and these are the second line of defence, because THIS image is the one that
 # shipped apps/web/AGENTS.md and apps/web/CLAUDE.md.
+# `tsconfig*.json`, not `tsconfig.json`: the narrow spelling matched only the base
+# config and left every `tsconfig.test.json` behind. Verified in the released
+# image — prl-web shipped apps/api/tsconfig.test.json and five
+# packages/*/tsconfig.test.json under a .dockerignore that says the test trees and
+# tsconfigs "are removed inside the images by the prune stages".
 RUN rm -rf \
       apps/*/src apps/*/test apps/*/scripts \
       packages/*/src packages/*/test \
-      apps/*/tsconfig.json packages/*/tsconfig.json tsconfig.base.json \
+      apps/*/tsconfig*.json packages/*/tsconfig*.json tsconfig.base.json \
       biome.json db .github scripts Dockerfile.api Dockerfile.web \
       docker-compose.yml docker-compose.staging.yml deploy \
       ./*.md apps/*/*.md packages/*/*.md
@@ -155,9 +186,21 @@ RUN pnpm --filter "@prl/web..." run build
 # `apps/web/*.md` is the line that matters most in this file. The runtime stage
 # copies /app/apps/web as one directory, so anything left here is published; that
 # is exactly how AGENTS.md and CLAUDE.md got into the image.
-RUN rm -rf apps/web/node_modules apps/web/src apps/web/tsconfig.json apps/web/.next/cache \
+#
+# `apps/web/test` is on this line for the same reason, and it was missing. The
+# prod-deps prune above did remove it, but the runtime stage lays THIS stage's
+# /app/apps/web over that already-pruned tree — so a directory pruned once at the
+# bottom and not at the top comes straight back. Measured in the released image:
+# prl-web@sha256:2bc457c…31a8bd88 shipped /app/apps/web/test, 26 files and 320 KB
+# of tests, contradicting .dockerignore's claim that the test trees are "removed
+# inside the images by the prune stages". Anything pruned in prod-deps that lives
+# under apps/web has to be pruned here too or the copy undoes it.
+#
+# `tsconfig*.json` rather than `tsconfig.json`, here and for packages: the narrow
+# spelling never matched `tsconfig.test.json`, and those shipped too.
+RUN rm -rf apps/web/node_modules apps/web/src apps/web/test apps/web/tsconfig*.json apps/web/.next/cache \
       apps/web/*.md packages/*/*.md \
-      packages/*/node_modules packages/*/test packages/*/tsconfig.json \
+      packages/*/node_modules packages/*/test packages/*/tsconfig*.json \
  && for pkg in packages/*/; do [ "$pkg" = 'packages/ui/' ] || rm -rf "${pkg}src"; done
 
 FROM base AS runtime
@@ -170,17 +213,25 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 
-# npm and corepack are removed for the reasons written out at length in the same
-# place in Dockerfile.api: measured, they were the source of every HIGH/CRITICAL
-# finding in this image that had an available fix (all inside
-# /usr/local/lib/node_modules/npm); structurally, a package manager next to a
-# production application is a downloader and an arbitrary-code executor in a
+# npm, corepack and yarn are removed for the reasons written out at length in the
+# same place in Dockerfile.api: measured, npm's bundled tree was once the source
+# of every HIGH/CRITICAL finding in this image that had an available fix (all
+# inside /usr/local/lib/node_modules/npm); structurally, a package manager next to
+# a production application is a downloader and an arbitrary-code executor in a
 # container whose whole posture is a read-only root and a non-root user.
 #
+# The three yarn paths arrived with the Alpine base: bookworm-slim shipped no
+# yarn, `node:24.18.0-alpine3.24` ships yarn 1.22.22 at /opt/yarn-v1.22.22 with
+# /usr/local/bin/yarn and /usr/local/bin/yarnpkg pointing at it. Leaving them
+# would have put a second package manager back into an image that claims to have
+# none. This is a deny list: re-check `ls /usr/local/bin /opt` whenever the base
+# changes.
+#
 # The CMD below is /app/apps/web/node_modules/.bin/next, a pnpm-written shim that
-# execs node directly. It does not go near npm.
+# execs node directly. It does not go near npm or yarn.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
-      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+      /opt/yarn-v1.22.22 /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 COPY --from=prod-deps --chown=node:node /app /app
 # Every workspace package's dist/ — whichever they are today — plus

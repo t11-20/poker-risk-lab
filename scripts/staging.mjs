@@ -318,6 +318,55 @@ function compose(args, options = {}) {
 }
 
 /**
+ * The HSTS policy `deploy/staging/nginx.conf` sets, and the path it is probed on.
+ *
+ * These two constants are a pair and they exist because of a real defect. The
+ * check used to probe `/api/v1/health`, read `res.headers`, and tick as soon as
+ * *something* came back. Two things were wrong with that:
+ *
+ *   * `/api/v1/health` is an API route, and the API sets its own HSTS through
+ *     helmet whenever `NODE_ENV=production` — which staging is. nginx's
+ *     `add_header` APPENDS, so every `/api/*` response carried two headers and a
+ *     browser obeyed only the first (RFC 6797 §8.1), which was the API's
+ *     `includeSubDomains` variant. The proxy's deliberate no-`includeSubDomains`
+ *     policy was in force on the page path and silently overridden on the API
+ *     path.
+ *   * Because the API was answering, the check would have ticked green with the
+ *     `add_header` line deleted from nginx.conf entirely. It was not testing the
+ *     proxy at all. Its own failure message — "the app cannot set it; only the
+ *     TLS terminator knows" — was the false claim that hid the defect.
+ *
+ * So: probe a path the API does not serve, and assert EXACTLY ONE header with
+ * EXACTLY the expected value. `/` is the page server (nginx's `location /`), and
+ * `nginx.conf` now carries `proxy_hide_header Strict-Transport-Security` so the
+ * terminator really is the single source on every path.
+ *
+ * HSTS_EXPECTED must stay in step with the `add_header` line in
+ * `deploy/staging/nginx.conf`. If you change one, this check fails until you
+ * change the other, which is the intended coupling.
+ */
+export const HSTS_PROBE_PATH = '/';
+export const HSTS_EXPECTED = 'max-age=31536000';
+
+/**
+ * Every `Strict-Transport-Security` value in a raw header list, in wire order.
+ *
+ * `res.rawHeaders` is a flat [name, value, name, value, …] array that preserves
+ * duplicates; `res.headers` folds them into one comma-joined string, which is
+ * exactly the information this check needs and cannot get there. Exported so the
+ * test can drive the duplicate case without a running proxy.
+ */
+export function hstsFromRawHeaders(rawHeaders) {
+  const values = [];
+  const list = Array.isArray(rawHeaders) ? rawHeaders : [];
+  for (let i = 0; i + 1 < list.length; i += 2) {
+    if (String(list[i]).toLowerCase() === 'strict-transport-security')
+      values.push(String(list[i + 1]).trim());
+  }
+  return values;
+}
+
+/**
  * Compose argv that restarts nginx so it re-reads the bind-mounted certificate.
  *
  * `staging init` can renew the leaf while this stack is already up. The cert
@@ -577,6 +626,13 @@ function certificateDaysRemaining() {
  * this process starts before the CA exists on a first run. Trusting exactly the
  * generated CA — rather than disabling verification — is what makes the TLS check
  * a check.
+ *
+ * `rawHeaders` is returned alongside `headers` because `headers` cannot answer
+ * "how many of these were there?". Node folds repeated headers into one
+ * comma-joined string for every field except a short special-cased list, and
+ * `strict-transport-security` is not on it — so two HSTS headers and one
+ * malformed one are indistinguishable there. Counting duplicates is the whole
+ * point of the check at `hstsFromRawHeaders`, so it needs the unfolded list.
  */
 function httpsCall(origin, path, { method = 'GET', headers = {}, body } = {}) {
   const url = new URL(path, origin.origin);
@@ -605,12 +661,21 @@ function httpsCall(origin, path, { method = 'GET', headers = {}, body } = {}) {
           } catch {
             json = null;
           }
-          resolveCall({ status: res.statusCode ?? 0, headers: res.headers, text, json, error: null });
+          resolveCall({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            rawHeaders: res.rawHeaders,
+            text,
+            json,
+            error: null,
+          });
         });
       },
     );
     req.on('timeout', () => req.destroy(new Error('timed out')));
-    req.on('error', (err) => resolveCall({ status: 0, headers: {}, text: '', json: null, error: err }));
+    req.on('error', (err) =>
+      resolveCall({ status: 0, headers: {}, rawHeaders: [], text: '', json: null, error: err }),
+    );
     if (body !== undefined) req.write(body);
     req.end();
   });
@@ -1078,9 +1143,31 @@ async function commandUp(options) {
     cross(`${origin.origin}/api/v1/ready did not answer 200`, `last status ${readyStatus}`);
   }
 
-  const hsts = (await httpsCall(origin, '/api/v1/health')).headers['strict-transport-security'];
-  if (typeof hsts === 'string') tick('the proxy sets Strict-Transport-Security', hsts);
-  else cross('no Strict-Transport-Security header', 'the app cannot set it; only the TLS terminator knows');
+  // See HSTS_PROBE_PATH: a path the API does not serve, so the only header that
+  // can come back is the proxy's, and exactly one of them.
+  const hstsValues = hstsFromRawHeaders((await httpsCall(origin, HSTS_PROBE_PATH)).rawHeaders);
+  if (hstsValues.length === 1 && hstsValues[0] === HSTS_EXPECTED) {
+    tick(
+      `the proxy is the only source of Strict-Transport-Security on ${HSTS_PROBE_PATH}`,
+      `exactly one header, ${HSTS_EXPECTED}`,
+    );
+  } else if (hstsValues.length === 0) {
+    cross(
+      `no Strict-Transport-Security header on ${HSTS_PROBE_PATH}`,
+      'only the TLS terminator knows there is TLS, so nginx.conf is the only place this can come from',
+    );
+  } else if (hstsValues.length > 1) {
+    cross(
+      `${hstsValues.length} Strict-Transport-Security headers on ${HSTS_PROBE_PATH}`,
+      `a UA obeys only the first (RFC 6797 §8.1): ${hstsValues.join(' | ')}\n` +
+        '      nginx add_header appends; proxy_hide_header must drop the upstream copy',
+    );
+  } else {
+    cross(
+      `Strict-Transport-Security on ${HSTS_PROBE_PATH} is not the configured policy`,
+      `expected ${HSTS_EXPECTED}, got ${hstsValues[0]}`,
+    );
+  }
 
   let smokePassed = null;
   if (options.smoke) {

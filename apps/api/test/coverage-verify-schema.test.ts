@@ -16,6 +16,17 @@
  * is run again to confirm it is content — which is what makes each failure attributable to the
  * change rather than to anything else that happened to be wrong.
  *
+ * ## The hostile change the loop cannot make
+ *
+ * Every case in `HOSTILE_CHANGES` is applied to a table the runtime role already has a grant on,
+ * and the script is run as the schema owner — who sees the whole schema whichever catalogue is
+ * asked. So none of them could detect the defect that mattered most: `information_schema` is
+ * filtered by the CONNECTING ROLE's privileges, `pnpm run db:verify` connects as a member of
+ * `prl_app`, and a table added by a later migration is granted nothing by default. The verifier
+ * was therefore blind, by default, to exactly the tables nobody had reviewed. The suite named
+ * "a table the connecting role cannot see" is the negative control for that, and it runs the
+ * script as `prl_app` because running it as the owner is what hid the hole.
+ *
  * ## What is deliberately NOT broken
  *
  * `prl_app`'s role *attributes* — `rolsuper`, `rolcreatedb`, `rolcreaterole`. Those are cluster-wide
@@ -192,6 +203,28 @@ async function assertPasses(throwaway: Throwaway, when: string): Promise<void> {
   const result = await verify(throwaway.url);
   assert.equal(result.code, 0, `${when}: the verifier should pass but did not:\n${result.output}`);
   assert.match(result.output, /every documented schema security property holds/);
+}
+
+/**
+ * The same DSN, but the verifier runs as `prl_app` — the privileges a deployment actually gives it.
+ *
+ * `pnpm run db:verify` connects as `DATABASE_URL`, which RUNBOOK §5 makes `prl_api`: a login role
+ * that is a member of `prl_app` and holds nothing of its own. This file's DSN is the schema-owning
+ * identity instead, because it has to be able to apply hostile DDL — and an owner sees everything
+ * in `pg_catalog` AND everything in `information_schema`, which is precisely the difference the
+ * test below exists to catch. Running the script under the runtime role is what puts it back.
+ *
+ * Done with the `options` startup parameter rather than a second login role, for two reasons: a
+ * role is cluster-wide, so creating one to prove a point in one throwaway database leaks out of
+ * the database this file is allowed to vandalise; and `prl_app` is NOLOGIN on purpose, so there
+ * is no password to put in a test file. `SET ROLE` is exactly what a login role's membership does
+ * at connection time, and postgres.js forwards any query parameter it does not recognise as a
+ * startup parameter, which is how `-c role=prl_app` reaches the server.
+ */
+function asRuntimeRole(url: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set('options', '-c role=prl_app');
+  return parsed.toString();
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +487,129 @@ describe('verify-schema.mjs — it passes a correct schema and rejects a hostile
       });
     });
   }
+});
+
+describe('verify-schema.mjs — a table the connecting role cannot see', dbOptions, () => {
+  /**
+   * The negative control for the privilege filter, and the one case the loop above cannot make.
+   *
+   * Every hostile change above is applied to a table `prl_app` already has a grant on, and the
+   * verifier is run as the schema owner, who sees everything either way. So none of them could
+   * ever have caught this: `information_schema.columns` is filtered by the CURRENT ROLE's
+   * privileges, `db/migrations/0001_initial.sql` says a table added by a later migration is
+   * granted nothing until somebody writes the GRANT, and `pnpm run db:verify` connects as a
+   * member of `prl_app`. A new table is therefore invisible to the gate by default — and checks
+   * 1, 2 and 7 iterate exactly that column list.
+   *
+   * `prl.hand_deck_cache` is the table an auditor built to demonstrate it: created by the
+   * migrator with no grants, it produced four violations as the owner and exit 0 as `prl_api`.
+   * The same database, and the property the script calls its most important one — no column may
+   * hold the deck or the salts — answering "fine" about the one table holding both.
+   *
+   * The three assertions in the middle are not decoration. Without them, a future GRANT (or a
+   * change of DSN identity) could make the table visible again, and this test would go on passing
+   * as an ordinary duplicate of "rejects a column that would persist the deck order" while
+   * silently no longer covering the blind case at all.
+   */
+  it('fails on a forbidden column in a table it has no grant on, run as prl_app', async () => {
+    await withMigratedDatabase(async (throwaway) => {
+      const runtimeUrl = asRuntimeRole(throwaway.url);
+
+      // The control: as the runtime role, the migrated schema passes. If this fails, the run is
+      // not measuring the privilege filter — it is measuring a broken connection.
+      const clean = await verify(runtimeUrl);
+      assert.equal(clean.code, 0, `the migrated schema should pass as prl_app:\n${clean.output}`);
+
+      // Created as prl_migrator so the table is owned the way every other relation is — check 6b
+      // would otherwise fail for the unrelated reason that the owner is wrong, and the finding
+      // this test is about would arrive alongside a distraction. `set local` is undone by the
+      // commit, so the pooled connection is not left wearing another role.
+      await throwaway.sql.begin(async (tx) => {
+        await tx`set local role prl_migrator`;
+        await tx`
+          create table prl.hand_deck_cache (
+            id text primary key,
+            deck jsonb,
+            deck_salts jsonb,
+            total_score integer
+          )
+        `;
+      });
+
+      // It really is invisible to the runtime role: pg_catalog lists its four columns, and
+      // information_schema — asked as prl_app — lists none of them.
+      const seen = await throwaway.sql.begin(async (tx) => {
+        await tx`set local role prl_app`;
+        const [visible] = await tx<{ count: number }[]>`
+          select count(*)::int as count from information_schema.columns
+          where table_schema = 'prl' and table_name = 'hand_deck_cache'
+        `;
+        const [real] = await tx<{ count: number }[]>`
+          select count(*)::int as count
+          from pg_catalog.pg_attribute att
+          join pg_catalog.pg_class cls on cls.oid = att.attrelid
+          join pg_catalog.pg_namespace nsp on nsp.oid = cls.relnamespace
+          where nsp.nspname = 'prl' and cls.relname = 'hand_deck_cache'
+            and att.attnum > 0 and not att.attisdropped
+        `;
+        return { visible: visible?.count ?? -1, real: real?.count ?? -1 };
+      });
+      assert.equal(seen.real, 4, 'the table should have four columns in pg_catalog');
+      assert.equal(
+        seen.visible,
+        0,
+        'prl_app can see this table, so this run no longer exercises the privilege filter — ' +
+          'something granted it, and the negative control has quietly become a duplicate',
+      );
+
+      // The finding. Against a verifier that reads `information_schema.columns` this run exits 0.
+      const rejected = await verify(runtimeUrl);
+      assert.equal(
+        rejected.code,
+        1,
+        'the verifier passed a table holding the deck and the salts because the connecting role ' +
+          `could not see it, which is a gate that cannot fail:\n${rejected.output}`,
+      );
+      assert.match(rejected.output, /forbidden column: hand_deck_cache\.deck — would persist deck order/);
+      assert.match(rejected.output, /forbidden column: hand_deck_cache\.deck_salts .*sealed Merkle leaves/);
+      assert.match(rejected.output, /gamification column: hand_deck_cache\.total_score/);
+      // The count it reports has to be the whole schema's, not the visible subset's.
+      assert.match(rejected.output, /columns across the prl schema, read from pg_catalog as prl_app/);
+      assert.match(rejected.output, /invisible to prl_app/);
+
+      // Reverting and passing again attributes every one of those findings to this table.
+      await throwaway.sql.begin(async (tx) => {
+        await tx`set local role prl_migrator`;
+        await tx`drop table prl.hand_deck_cache`;
+      });
+      const reverted = await verify(runtimeUrl);
+      assert.equal(reverted.code, 0, `after the revert the verifier should pass:\n${reverted.output}`);
+    });
+  });
+
+  /**
+   * The table list check 6 iterates, asked the same way.
+   *
+   * This one is NOT a case the old code got wrong, and saying so is the point of the test:
+   * `information_schema.tables` includes TRUNCATE in the privilege list its filter tests, so a
+   * table `prl_app` can TRUNCATE was always visible to it. Check 6 was sound by coincidence, on a
+   * detail of one view definition that nobody had written down. The script now reads `pg_class`
+   * there too, and this asserts the finding still arrives — so converting the read cannot have
+   * cost the check the one thing it was already doing correctly.
+   */
+  it('still reports a TRUNCATE grant to prl_app when run as prl_app', async () => {
+    await withMigratedDatabase(async (throwaway) => {
+      const runtimeUrl = asRuntimeRole(throwaway.url);
+      await throwaway.sql`grant truncate on prl.users to prl_app`;
+      const rejected = await verify(runtimeUrl);
+      assert.equal(rejected.code, 1, `prl_app can TRUNCATE prl.users:\n${rejected.output}`);
+      assert.match(rejected.output, /prl_app: can TRUNCATE users/);
+
+      await throwaway.sql`revoke truncate on prl.users from prl_app`;
+      const reverted = await verify(runtimeUrl);
+      assert.equal(reverted.code, 0, `after the revert the verifier should pass:\n${reverted.output}`);
+    });
+  });
 });
 
 describe('verify-schema.mjs — pointed at the wrong thing', dbOptions, () => {

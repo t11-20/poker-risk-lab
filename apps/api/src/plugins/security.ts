@@ -15,13 +15,30 @@
  *
  * The order below is therefore deliberate:
  *
- *   1. `onRequest` (instance)  — request context, helmet headers, CORS / preflight.
+ *   1. `onRequest` (instance)  — request context, helmet headers, cookies, CORS / preflight.
  *   2. `onRequest` (route)     — rate limit. First thing that can cost a caller anything.
  *   3. body parsing            — bounded by `bodyLimit`.
  *   4. `preValidation`         — CSRF. After the limiter, before schema validation, so a
  *                                cross-site caller learns "not verified" rather than a
  *                                field-by-field description of our schema.
  *   5. validation, handler.
+ *
+ * ## Where that ordering was not enough, and what was done about it
+ *
+ * The invariant above is about the ORDER of the hooks, and the order alone does not deliver it.
+ * Anything answered from an INSTANCE hook is answered before stage 2 has run, and anything
+ * answered at stage 4 is answered before a route whose limiter is a `preHandler` — which the
+ * not-found route's is. Four request classes were therefore refused without ever being counted:
+ * a CORS-refused mutating request, a rejected preflight, an ACCEPTED preflight, and a `POST` to
+ * a nonexistent path with a bad CSRF token. Measured: 50 of each returned 403 with the caller's
+ * bucket still empty afterwards. Responses are cheap on all four paths — no body parse, no
+ * database — so this was amplification rather than a knockout, but it was unbounded and it was
+ * the property this comment claimed.
+ *
+ * All four now call the limiter by hand before they answer, via `countRequest` below. The library
+ * counts a request once, so nothing is double-counted and no route's stricter limit is displaced.
+ * `test/security-uncounted-requests.test.ts` holds each class, with the controls that show the
+ * limiter is what refused them.
  *
  * ## What is NOT here
  *
@@ -317,16 +334,16 @@ function applyCorsHeaders(reply: FastifyReply, origin: string): void {
  * What the caller of `applyCors` must do next.
  *
  * - `continue`: carry on with the request.
- * - `answered`: the reply has already been sent; do not call `done()`.
+ * - `preflightAllowed`: answer 204; the headers are already on the reply.
+ * - `preflightRefused`: answer 403 with the contract's error body.
  * - `refuse`: reject the request with `forbidden`.
+ *
+ * `applyCors` used to send the two preflight answers itself and report `answered`. It no longer
+ * sends anything, and that is the whole of the fix for the second and third of the three request
+ * classes this file's header promised were counted and were not: the caller has to run the rate
+ * limiter BEFORE the reply goes out, and it cannot do that if the reply has already gone.
  */
-type CorsOutcome = 'continue' | 'answered' | 'refuse';
-
-function rejectPreflight(request: FastifyRequest, reply: FastifyReply): CorsOutcome {
-  reply.header('cache-control', 'no-store');
-  void reply.status(403).send(apiErrorBody('forbidden', request.id));
-  return 'answered';
-}
+type CorsOutcome = 'continue' | 'preflightAllowed' | 'preflightRefused' | 'refuse';
 
 /**
  * The CORS decision.
@@ -356,20 +373,19 @@ function applyCors(request: FastifyRequest, reply: FastifyReply): CorsOutcome {
     // A preflight with no Origin is malformed — no browser sends one. Refuse rather than
     // guess. Anything else without an Origin is same-origin or not a browser, and needs
     // no CORS headers at all.
-    return isPreflight ? rejectPreflight(request, reply) : 'continue';
+    return isPreflight ? 'preflightRefused' : 'continue';
   }
 
   const allowed = isAllowedOrigin(origin);
   if (allowed) applyCorsHeaders(reply, origin);
 
   if (isPreflight) {
-    if (!allowed) return rejectPreflight(request, reply);
+    if (!allowed) return 'preflightRefused';
     reply.header('access-control-allow-methods', ALLOWED_METHODS);
     reply.header('access-control-allow-headers', ALLOWED_REQUEST_HEADERS);
     reply.header('access-control-max-age', String(PREFLIGHT_MAX_AGE_SECONDS));
     appendVary(reply, 'Access-Control-Request-Headers');
-    void reply.status(204).send();
-    return 'answered';
+    return 'preflightAllowed';
   }
 
   return !allowed && MUTATING_METHODS.has(request.method) ? 'refuse' : 'continue';
@@ -384,11 +400,16 @@ function applyCors(request: FastifyRequest, reply: FastifyReply): CorsOutcome {
  *
  * `@fastify/cookie` populates `request.cookies` from its own `onRequest` hook and leaves the
  * property as `null` until then. It is *typed* as always present, so `request.cookies[name]`
- * looks safe and throws a TypeError on any request answered by an earlier hook — a CORS
- * preflight, a rejected origin, a 429. That crash then surfaces from `onSend`, at which point
- * Fastify's last-resort serializer takes over and puts the raw error message into the response
- * body. In other words: the tidy-looking version of this line leaks internal detail on exactly
- * the requests the security layer rejected. Hence the guard.
+ * looks safe and throws a TypeError on any request answered by an earlier hook. That crash then
+ * surfaces from `onSend`, at which point Fastify's last-resort serializer takes over and puts the
+ * raw error message into the response body. In other words: the tidy-looking version of this line
+ * leaks internal detail on exactly the requests the security layer rejected. Hence the guard.
+ *
+ * The cookie plugin now registers BEFORE the CORS hook, so the three cases this comment used to
+ * name — a preflight, a rejected origin, a 429 — all have a parsed jar today. The guard stays
+ * because the hooks that still run earlier (`request-context.ts`, helmet) can answer a request
+ * too, and because "which hook runs first" is exactly the kind of fact that changes underneath a
+ * line like this one. It has changed once already.
  */
 function cookieValue(request: FastifyRequest, name: string): string | undefined {
   const jar: { [key: string]: string | undefined } | null = request.cookies;
@@ -406,12 +427,44 @@ function cookieValue(request: FastifyRequest, name: string): string | undefined 
  * The session cookie's value is hashed rather than used directly. It is a credential, and
  * `@fastify/rate-limit` keeps keys in an in-memory cache and hands them to `onBanReach` for
  * logging — neither of which should ever hold something that can be replayed.
+ *
+ * ## The signature is checked FIRST, and that check is the whole limiter
+ *
+ * This function used to hash the raw cookie string straight out of `request.cookies`, which is
+ * whatever the caller sent. `@fastify/cookie` parses cookies; it does not verify them, and
+ * unsigning is a separate call that happens much later, at session resolution. So the bucket was
+ * chosen by a string the caller invents, and rate limiting was optional for anybody who noticed:
+ * send `prl_session=1`, then `prl_session=2`, and every request is the first request in a fresh
+ * bucket. Measured before the fix: 60 requests with a rotating garbage cookie, **zero** 429s,
+ * against a configured limit of 3. The same trick emptied the expensive limiter that guards
+ * `POST /math/equity`, which accepts up to 500,000 Monte Carlo samples per call.
+ *
+ * `resolveSession` in `auth/session.ts` already had this exactly right, and says why in its own
+ * comment: "a forged cookie would be a way to make the database do work on demand". The limiter
+ * is the same problem one layer earlier, so it gets the same answer — an unsigned or
+ * foreign-signed cookie is not a session, and a request carrying one is keyed on its address
+ * like any other anonymous caller.
+ *
+ * What this leaves, stated because it is the real bound: a caller can still obtain genuine
+ * signed cookies and rotate those. Each one costs a `POST /auth/guest`, which is address-keyed
+ * by `clientKeyedRateLimit` below at ten per minute, so the number of buckets one address can
+ * hold is bounded by that limiter rather than by the caller's imagination. That is the trade the
+ * session-preferring key was always meant to make.
+ *
+ * Exported for `rate-limit-isolation.test.ts`, which asserts the preference directly. Doing it
+ * over HTTP would need a route that is rate-limited AND does not resolve a session, and there is
+ * no such route — a valid cookie reaches the session store, which is the whole point of it.
  */
-function rateLimitKeyFor(request: FastifyRequest, config: AppConfig): string {
+export function rateLimitKeyFor(request: FastifyRequest, config: AppConfig): string {
   const secret = config.sessionCookieSecret;
   const raw = cookieValue(request, sessionCookieName(config));
   if (typeof raw === 'string' && raw !== '') {
-    return `s:${hashWithKey(secret, 'ratelimit-session', raw)}`;
+    const unsigned = request.unsignCookie(raw);
+    if (unsigned.valid && unsigned.value !== null) {
+      // The UNSIGNED value, not the raw string: it is the stable identity of the session, so a
+      // re-signed cookie carrying the same token lands in the same bucket.
+      return `s:${hashWithKey(secret, 'ratelimit-session', unsigned.value)}`;
+    }
   }
   return `c:${clientRateLimitKey(request, config)}`;
 }
@@ -663,24 +716,15 @@ export const securityPlugin: FastifyPluginAsync<SecurityPluginOptions> = async (
       : false,
   });
 
-  // --- CORS (before cookies: a rejected preflight should do no further work) ---
-  app.addHook('onRequest', (request, reply, done) => {
-    const outcome = applyCors(request, reply);
-    // 'answered' means the reply has already been sent; Fastify's rule for a
-    // callback-style hook in that case is to return without calling done().
-    if (outcome === 'answered') return;
-    if (outcome === 'refuse') {
-      done(
-        new AppError('forbidden', {
-          logDetail: `cross-origin ${request.method} from an origin that is not allowlisted`,
-        }),
-      );
-      return;
-    }
-    done();
-  });
-
   // --- cookies ---------------------------------------------------------------
+  //
+  // BEFORE the CORS hook, which is a reversal. It used to be after, with the comment "before
+  // cookies: a rejected preflight should do no further work". That saving was one string split of
+  // a header the request already carries, and it cost something real: the CORS hook now runs the
+  // rate limiter by hand (see below), and `rateLimitKeyFor` prefers the SIGNED SESSION over the
+  // address. With the jar unparsed, every CORS refusal from a caller holding a session would have
+  // landed in that caller's ADDRESS bucket instead — a different bucket from the one the route
+  // limiter uses for the same caller, and one shared with everybody behind the same NAT.
   await app.register(cookie, {
     secret: config.sessionCookieSecret,
     // HMAC-SHA256 signatures. The default in @fastify/cookie, stated so a future
@@ -688,6 +732,194 @@ export const securityPlugin: FastifyPluginAsync<SecurityPluginOptions> = async (
     // downgrade.
     algorithm: 'sha256',
     hook: 'onRequest',
+  });
+
+  // --- rate limiting ---------------------------------------------------------
+  /**
+   * The counter store.
+   *
+   * Production gets the library's own — this is `undefined` there, because
+   * `config.rateLimitResetToken` cannot be set in production at all (`config.ts` refuses to
+   * start such a process). Only a development, test or CI process substitutes the resettable
+   * store, and it does so purely so `scripts/smoke-test.mjs` can run twice in a row without
+   * the first run's deliberate flood of the guest limiter breaking the second one. See
+   * `plugins/rate-limit-store.ts` for the whole argument.
+   */
+  const resettableStore = config.rateLimitResetToken === null ? undefined : ResettableRateLimitStore;
+
+  /**
+   * Bans are recorded once per key per window, not once per refused request.
+   *
+   * `onBanReach` is called by `@fastify/rate-limit` on EVERY request while
+   * `current - max > ban` holds, which is every request for the rest of the window once a caller
+   * has crossed the threshold — not, as the name and the comment below it both implied, once when
+   * it is crossed. At the shipped defaults (`banAfter=200`, `globalMax=300`) a single address
+   * flooding past 501 requests a minute therefore turned every subsequent REFUSED request into a
+   * `warn` line, a metric increment and a fire-and-forget `INSERT` into `prl.audit_log`. That
+   * INSERT is un-awaited (`observability/telemetry.ts`), so there is no backpressure and the
+   * pending-promise queue is bounded only by the flood: the refusal path became a database write
+   * amplifier under exactly the load the limiter exists to survive.
+   *
+   * This map is the deduplication. It holds one entry per banned key until that key's window has
+   * elapsed, so the audit row, the log line and the metric are each written once per (key,
+   * window) — which is what "a ban is a security event rather than traffic" was always supposed
+   * to mean.
+   *
+   * It is swept rather than left to grow: the keys come from `rateLimitKeyFor`, so a caller
+   * rotating addresses could otherwise mint entries indefinitely. The sweep is lazy and bounded
+   * — it only runs once the map is larger than a flood from a handful of keys could make it.
+   */
+  const bansRecordedUntil = new Map<string, number>();
+  const BAN_SWEEP_THRESHOLD = 1_024;
+
+  await app.register(rateLimit, {
+    global: true,
+    max: config.rateLimit.globalMax,
+    timeWindow: config.rateLimit.globalWindowMs,
+    ...(resettableStore === undefined ? {} : { store: resettableStore }),
+    // Past this much over the limit the caller is blocked outright instead of merely
+    // told to wait. It still answers `rate_limited` (the contract has no separate code),
+    // but `onBanReach` records it.
+    //
+    // `0` does NOT turn this off, and `.env.example` says so at length: the library computes
+    // `isBanned = ban !== -1 && current - max > ban` and treats only a NEGATIVE value as off,
+    // while `config.ts` bounds the variable at `min: 0`. So `0` is the most aggressive setting
+    // there is — every single request past the limit is a ban — and banning cannot be disabled
+    // from configuration at all.
+    ban: config.rateLimit.banAfter,
+    hook: 'onRequest',
+    keyGenerator: (request) => rateLimitKeyFor(request, config),
+    // If the counter store ever fails, allow the request rather than turning every call into
+    // a 500. The in-memory store this uses today cannot fail; the setting is here for the day
+    // a shared store (Redis, or a second process) is introduced, when the failure mode changes
+    // from impossible to "the cache is briefly unreachable". Note the trade-off: during such a
+    // failure there is effectively no rate limit.
+    skipOnError: true,
+    addHeaders: {
+      'x-ratelimit-limit': true,
+      'x-ratelimit-remaining': true,
+      'x-ratelimit-reset': true,
+      'retry-after': true,
+    },
+    onBanReach: (request, key) => {
+      const now = Date.now();
+      if (bansRecordedUntil.size > BAN_SWEEP_THRESHOLD) {
+        for (const [seen, until] of bansRecordedUntil) {
+          if (until <= now) bansRecordedUntil.delete(seen);
+        }
+      }
+      const recordedUntil = bansRecordedUntil.get(key);
+      // Already recorded for this key inside this window. Everything below is deliberately
+      // skipped — including the log line, because a `warn` per refused request is the same
+      // amplification in the log pipeline that the audit INSERT is in the database.
+      if (recordedUntil !== undefined && recordedUntil > now) return;
+      bansRecordedUntil.set(key, now + config.rateLimit.globalWindowMs);
+
+      request.log.warn({ rateLimitKey: key }, 'rate-limit ban threshold reached');
+      // Written to the audit log as well as logged and counted, because a ban is the one
+      // rate-limit outcome that is a security event rather than traffic: the caller went far
+      // past the limit while ignoring `Retry-After`, which is a script and not a person. The
+      // KEY IS NOT RECORDED — it is derived from the caller's address, and the audit log is not
+      // the place to keep a pseudonymous identifier for that. The route is, because the route
+      // is what an investigation starts from.
+      //
+      // ONE ROW PER (KEY, WINDOW). The route recorded is therefore the first route the caller
+      // crossed the threshold on rather than every route it went on to hit, which is the right
+      // trade: an investigation starts from where a flood began, and a row per refused request
+      // is a write amplifier rather than a record.
+      recordSecurityAudit(
+        { event: 'security.rate_limit.banned', detail: { route: request.routeOptions.url ?? null } },
+        (message, detail) => {
+          request.log.warn({ ...detail }, message);
+        },
+      );
+      // Counted as well as logged. A ban is the signal that somebody is ignoring
+      // `Retry-After` rather than merely being busy, which is the difference between a
+      // popular hour and an abusive client — and an alert can only be written against the
+      // counter. The key is NOT a metric label: it is derived from the caller's address and
+      // would be both unbounded and personally identifying. See `observability/metrics.ts`.
+      //
+      // One increment per (key, window), so this counter now measures BANNED CALLERS rather
+      // than refused requests. `prl_rate_limit_events_total{kind="exceeded"}` is the one that
+      // counts requests; an alert written against `banned` should read as "distinct callers
+      // banned per minute", which is what an operator wanted from it in the first place.
+      app.appMetrics.rateLimitEvents.inc({ kind: 'banned' });
+    },
+    // The 429 body is built by `errors.ts` from the same `AppError` shape as everything
+    // else, so `retryAfterSeconds` and the `Retry-After` header come from one number.
+    errorResponseBuilder: (_request, context) => rateLimitError(context.ttl / 1000),
+  });
+
+  app.decorate('expensiveRateLimit', {
+    rateLimit: { max: config.rateLimit.expensiveMax, timeWindow: config.rateLimit.expensiveWindowMs },
+  });
+
+  /**
+   * The route limiter, callable by hand from a hook that would otherwise answer before it.
+   *
+   * ## What this closes
+   *
+   * The header of this file states an invariant — a caller cannot make this server answer
+   * without being counted, because the route-level limiter is "the first thing that can cost a
+   * caller anything". Three request classes broke it, all of them answered from an INSTANCE hook,
+   * which Fastify runs before every route-level hook:
+   *
+   *  1. A cross-origin mutating request from an origin that is not allowlisted (403 from the CORS
+   *     hook).
+   *  2. A rejected preflight (403 from the same hook).
+   *  3. An accepted preflight (204 from the same hook).
+   *
+   * and a fourth that is an ordering problem rather than a hook problem:
+   *
+   *  4. A `POST` to a path that does not exist and whose CSRF token is bad. The not-found route's
+   *     limiter is a `preHandler` (`errors.ts`), and the CSRF check is a `preValidation` hook, so
+   *     the 403 was answered one stage earlier than the counting. That is the exact hole the
+   *     header names, and it also blunts the not-found limiter's own reason for existing: "a
+   *     caller can hammer nonexistent paths for free — exactly what a path scanner does".
+   *
+   * Measured before: 50 x `POST /api/v1/ready` with a rejected `Origin`, 50 x rejected `OPTIONS`,
+   * and 50 x `POST /api/v1/does-not-exist-N` each returned 403 with the caller's bucket still
+   * empty afterwards. After: each class is counted, and a caller who exceeds the limit with them
+   * is answered 429 instead. The negative controls are in
+   * `test/security-uncounted-requests.test.ts`.
+   *
+   * ## Why calling it by hand is safe
+   *
+   * `rateLimitRequestHandler` sets a per-request flag the first time it runs and returns
+   * immediately on every later call. So a request counted here is NOT counted again by its route,
+   * and — the case that matters — a route carrying a STRICTER limit (`expensiveRateLimit`) has
+   * already run its own at `onRequest`, so this call is the no-op and the strict limit stands.
+   * That is also why the CORS hook only calls this when it is about to answer or refuse: calling
+   * it on the `continue` path would consume the global limiter's turn for every request and quietly
+   * disable every per-route limit in the API.
+   *
+   * It throws the same `AppError` the route limiter throws, so an over-limit caller gets the
+   * contract's `rate_limited` body and `Retry-After` from these paths too.
+   */
+  const countRequest = app.rateLimit();
+
+  // --- CORS (after cookies and the limiter; see both comments above) ----------
+  app.addHook('onRequest', async (request, reply) => {
+    const outcome = applyCors(request, reply);
+    if (outcome === 'continue') return;
+    // Every path below answers the caller from this hook, so every path below is counted first.
+    // A throw from here is the limiter's 429 and replaces the CORS answer, which is correct: a
+    // caller past the limit is past the limit whatever they were going to be told.
+    await countRequest.call(app, request, reply);
+    if (outcome === 'refuse') {
+      throw new AppError('forbidden', {
+        logDetail: `cross-origin ${request.method} from an origin that is not allowlisted`,
+      });
+    }
+    if (outcome === 'preflightRefused') {
+      reply.header('cache-control', 'no-store');
+      return reply.status(403).send(apiErrorBody('forbidden', request.id));
+    }
+    // An ACCEPTED preflight is counted too. It costs the browser one extra count per
+    // `PREFLIGHT_MAX_AGE_SECONDS` per method/header combination, which is negligible against the
+    // limit, and the alternative is an uncounted 204 that anyone can ask for without a session,
+    // without a token and without an allowlisted origin being needed for the count to matter.
+    return reply.status(204).send();
   });
 
   // --- CSRF ------------------------------------------------------------------
@@ -730,79 +962,45 @@ export const securityPlugin: FastifyPluginAsync<SecurityPluginOptions> = async (
    * socket *with cookies attached*. The only server-side signal is the `Origin` header,
    * which browsers always send on a handshake and page script cannot forge — which is why
    * `isAllowedOrigin` is exported for the hub to call before accepting the upgrade.
+   *
+   * ## The count comes first, and that is the fix for the fourth uncounted class
+   *
+   * `countRequest` runs BEFORE the check, not after it. This hook is `preValidation`, and the
+   * not-found route's limiter is a `preHandler` — one stage later — so a `POST` to a path that
+   * does not exist and carries a bad token was answered 403 here and never reached the counting
+   * at all. Measured: 50 x `POST /api/v1/does-not-exist-N` with no token, all 403, the caller's
+   * bucket empty afterwards. That is precisely the hole this file's header names ("unlimited
+   * requests that fail CSRF without ever being counted") and it is also what `errors.ts` means by
+   * "a caller can hammer nonexistent paths for free — exactly what a path scanner does".
+   *
+   * On every route that exists this call is a no-op: the route's own limiter has already run at
+   * `onRequest` and `@fastify/rate-limit` counts a request once. So this adds counting exactly
+   * where there was none, and changes nothing where there was. No mutating route is exempt from
+   * the limiter (`rateLimit: false` appears on `/health` alone, which is a GET), so there is no
+   * route this can count against an exemption somebody meant.
+   *
+   * The hook stays CALLBACK-STYLE, which is not an oversight. `@fastify/csrf-protection` answers a
+   * failure by calling `reply.send(error)` itself and never calling `next`, so wrapping it in a
+   * promise produces one that never settles — a pending promise retained per failed CSRF request,
+   * which is a leak on precisely the path a flood uses. `countRequest` is the only asynchronous
+   * part, so it is the only part with a `.then`, and `app.csrfProtection` still receives Fastify's
+   * own `done` exactly as before.
    */
   app.addHook('preValidation', (request, reply, done) => {
     if (!MUTATING_METHODS.has(request.method)) {
       done();
       return;
     }
-    app.csrfProtection(request, reply, done);
-  });
-
-  // --- rate limiting ---------------------------------------------------------
-  /**
-   * The counter store.
-   *
-   * Production gets the library's own — this is `undefined` there, because
-   * `config.rateLimitResetToken` cannot be set in production at all (`config.ts` refuses to
-   * start such a process). Only a development, test or CI process substitutes the resettable
-   * store, and it does so purely so `scripts/smoke-test.mjs` can run twice in a row without
-   * the first run's deliberate flood of the guest limiter breaking the second one. See
-   * `plugins/rate-limit-store.ts` for the whole argument.
-   */
-  const resettableStore = config.rateLimitResetToken === null ? undefined : ResettableRateLimitStore;
-
-  await app.register(rateLimit, {
-    global: true,
-    max: config.rateLimit.globalMax,
-    timeWindow: config.rateLimit.globalWindowMs,
-    ...(resettableStore === undefined ? {} : { store: resettableStore }),
-    // Past this much over the limit the caller is blocked outright instead of merely
-    // told to wait. It still answers `rate_limited` (the contract has no separate code),
-    // but `onBanReach` records it.
-    ban: config.rateLimit.banAfter,
-    hook: 'onRequest',
-    keyGenerator: (request) => rateLimitKeyFor(request, config),
-    // If the counter store ever fails, allow the request rather than turning every call into
-    // a 500. The in-memory store this uses today cannot fail; the setting is here for the day
-    // a shared store (Redis, or a second process) is introduced, when the failure mode changes
-    // from impossible to "the cache is briefly unreachable". Note the trade-off: during such a
-    // failure there is effectively no rate limit.
-    skipOnError: true,
-    addHeaders: {
-      'x-ratelimit-limit': true,
-      'x-ratelimit-remaining': true,
-      'x-ratelimit-reset': true,
-      'retry-after': true,
-    },
-    onBanReach: (request, key) => {
-      request.log.warn({ rateLimitKey: key }, 'rate-limit ban threshold reached');
-      // Written to the audit log as well as logged and counted, because a ban is the one
-      // rate-limit outcome that is a security event rather than traffic: the caller went far
-      // past the limit while ignoring `Retry-After`, which is a script and not a person. The
-      // KEY IS NOT RECORDED — it is derived from the caller's address, and the audit log is not
-      // the place to keep a pseudonymous identifier for that. The route is, because the route
-      // is what an investigation starts from.
-      recordSecurityAudit(
-        { event: 'security.rate_limit.banned', detail: { route: request.routeOptions.url ?? null } },
-        (message, detail) => {
-          request.log.warn({ ...detail }, message);
-        },
-      );
-      // Counted as well as logged. A ban is the signal that somebody is ignoring
-      // `Retry-After` rather than merely being busy, which is the difference between a
-      // popular hour and an abusive client — and an alert can only be written against the
-      // counter. The key is NOT a metric label: it is derived from the caller's address and
-      // would be both unbounded and personally identifying. See `observability/metrics.ts`.
-      app.appMetrics.rateLimitEvents.inc({ kind: 'banned' });
-    },
-    // The 429 body is built by `errors.ts` from the same `AppError` shape as everything
-    // else, so `retryAfterSeconds` and the `Retry-After` header come from one number.
-    errorResponseBuilder: (_request, context) => rateLimitError(context.ttl / 1000),
-  });
-
-  app.decorate('expensiveRateLimit', {
-    rateLimit: { max: config.rateLimit.expensiveMax, timeWindow: config.rateLimit.expensiveWindowMs },
+    countRequest.call(app, request, reply).then(
+      () => {
+        app.csrfProtection(request, reply, done);
+      },
+      // The limiter's own `rate_limited`, so an over-limit caller is told to wait rather than
+      // told their token was bad.
+      (error: unknown) => {
+        done(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
   });
 
   // --- cache policy ----------------------------------------------------------

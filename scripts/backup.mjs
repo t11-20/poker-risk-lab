@@ -139,7 +139,7 @@ import {
 } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -1046,6 +1046,63 @@ const archiveFileName = (id, payload) => (payload === 'globals' ? `${id}.globals
 const manifestFileName = (id) => `${id}.manifest.json`;
 
 /**
+ * True only for a name that can name a file directly inside the archive directory.
+ *
+ * ## The defect this exists for
+ *
+ * `prune --apply` used to take every `manifest.files[].name` straight to
+ * `rm(join(directory, name))`. A manifest is a JSON file sitting in the archive directory
+ * beside the payloads, so anybody who can write there can write a name into it — and a name of
+ * `../VICTIM.txt` resolves through `join` to a file OUTSIDE the directory, which prune then
+ * unlinked and reported as a successful, exit-0 PASS. The archives whose signature does NOT
+ * verify are in the delete set by construction (that is what `prune` is for), so the manifest
+ * signature protects nothing here: the attacker's manifest is the one being acted on.
+ *
+ * The containment idiom is `scripts/clean.mjs` (`isInsideRepo`, `verifySafe`), and this is the
+ * same rule stated for a directory-relative name: a payload name is a BASENAME. There is no
+ * legitimate archive in this format whose payload lives in a subdirectory or above the archive
+ * directory — `archiveFileName` above only ever produces `<id>.dump.enc` or
+ * `<id>.globals.sql.enc` — so anything else is not a formatting quirk, it is tampering, and
+ * `unsafeArchiveFileNames` below makes it fail the command rather than skip the file.
+ *
+ * Checked explicitly rather than by comparing `resolve(join(dir, name))` against the directory:
+ * a resolve-and-compare accepts `sub/../file.enc` and `./file.enc`, which are contained but are
+ * still not names this format writes, and every extra shape accepted is a shape a future reader
+ * has to reason about.
+ */
+export function isPlainArchiveFileName(name) {
+  if (typeof name !== 'string' || name === '') return false;
+  // NUL truncates the path at the syscall boundary on some platforms, so a name carrying one is
+  // not the name that would be unlinked. `\` is rejected as well as `/`: this script is expected
+  // to run on Linux, but an archive directory can be read on a developer's machine, and on
+  // Windows `..\` is the same escape.
+  if (name.includes('\0') || name.includes('/') || name.includes('\\')) return false;
+  if (name === '.' || name === '..') return false;
+  if (isAbsolute(name)) return false;
+  // Belt and braces against a separator this platform recognises that the two above do not.
+  return basename(name) === name;
+}
+
+/**
+ * Every payload name in `backups` that is not a plain basename, with the archive it came from.
+ *
+ * Exported and pure so `prune` can check the WHOLE delete set before it unlinks anything: a
+ * tampered manifest discovered halfway through would otherwise leave a half-applied prune, and
+ * the operator would have to work out which archives had already gone.
+ */
+export function unsafeArchiveFileNames(backups) {
+  const offences = [];
+  for (const backup of backups) {
+    for (const file of backup.manifest?.files ?? []) {
+      if (!isPlainArchiveFileName(file?.name)) {
+        offences.push({ id: backup.id, name: String(file?.name), manifestPath: backup.manifestPath });
+      }
+    }
+  }
+  return offences;
+}
+
+/**
  * Reads every manifest in the directory and reports what is actually on disk beside it.
  *
  * A backup is "good" only when its manifest signature verifies AND every file it names is
@@ -1085,6 +1142,17 @@ export async function readInventory(directory, material) {
     let bytes = 0;
     if (manifest !== null && Array.isArray(manifest.files)) {
       for (const file of manifest.files) {
+        // Checked BEFORE the stat, not only before the unlink in `prune`: `join(directory,
+        // '../VICTIM.txt')` is a path outside the archive directory whichever syscall it is
+        // handed to, and a manifest that names one is tampered with. Recording it as a problem
+        // is what stops such an archive being "good", which is the definition `prune`'s
+        // never-delete-the-newest-good rule is built on.
+        if (!isPlainArchiveFileName(file?.name)) {
+          problems.push(
+            `${String(file?.name)} is not a plain file name — a manifest that names a path is tampered with`,
+          );
+          continue;
+        }
         try {
           const info = await stat(join(directory, file.name));
           bytes += info.size;
@@ -1677,6 +1745,8 @@ async function verifyArchive(backup, { ctx, material, directory, deep, target })
   }
   const startedAt = Date.now();
   let restored = null;
+  /** null when the scratch database is gone; the reason it is still there when it is not. */
+  let dropFailure = null;
   try {
     await createDatabase(ctx, scratch);
     await restoreInto(ctx, scratch, join(directory, dumpFile.name), material);
@@ -1684,20 +1754,63 @@ async function verifyArchive(backup, { ctx, material, directory, deep, target })
   } finally {
     // Always. A verification run that leaves a copy of the production database lying around
     // on the cluster has created the exact exposure the encryption exists to prevent.
+    //
+    // The failure is captured rather than printed here. `cross()` in THIS file is a pure
+    // printer (see the output helpers) — unlike the same-named helper in staging.mjs, it feeds
+    // no verdict — so the previous `.catch(cross)` wrote a red line to stderr and let the
+    // command go on to print PASS, exit 0, and claim in so many words that it had "restored
+    // into a scratch database and dropped it". A plaintext copy of the database surviving on
+    // the cluster is the one outcome this command exists to prevent, so it is a verdict, and
+    // the verdict is recorded through `record` below like every other layer-4 claim.
     await dropDatabase(ctx, scratch).catch((err) => {
-      cross(`could not drop the scratch database ${scratch}`, err.message);
+      dropFailure = err.message;
     });
   }
   const comparison = compareCensus(backup.manifest.rowCounts, restored);
-  record(
-    '4',
-    comparison.ok,
-    comparison.ok
-      ? `restored into a scratch database and dropped it  (${seconds(Date.now() - startedAt)})`
-      : 'the restored database does not carry the recorded rows',
-    comparison.summary,
-  );
+  for (const result of deepVerifyResults({
+    comparison,
+    dropFailure,
+    scratch,
+    elapsedMs: Date.now() - startedAt,
+  })) {
+    record(result.layer, result.ok, result.message, result.detail);
+  }
   return results;
+}
+
+/**
+ * The two claims a `--deep` verification makes, as data.
+ *
+ * Split into two records rather than folded into one line because they are two different
+ * statements — "the restore carried the rows" and "no plaintext copy is left on the cluster" —
+ * and an operator reading the output needs to know which of them failed. Pure and exported so
+ * `scripts/backup.test.mjs` can assert the property that actually regressed: that no message
+ * this function can produce claims a drop that did not happen, and that a failed drop is never
+ * `ok`.
+ */
+export function deepVerifyResults({ comparison, dropFailure, scratch, elapsedMs }) {
+  const dropped = dropFailure === null || dropFailure === undefined;
+  return [
+    {
+      layer: '4',
+      ok: comparison.ok,
+      message: comparison.ok
+        ? `restored into a scratch database  (${seconds(elapsedMs)})`
+        : 'the restored database does not carry the recorded rows',
+      detail: comparison.summary,
+    },
+    {
+      layer: '4',
+      ok: dropped,
+      message: dropped
+        ? `dropped the scratch database ${scratch}`
+        : `the scratch database ${scratch} is STILL ON THE CLUSTER`,
+      detail: dropped
+        ? 'no plaintext copy of the archive remains'
+        : `${dropFailure} — it holds a plaintext copy of every row in this archive. Drop it by ` +
+          `hand (\`DROP DATABASE ${scratch}\`) before treating this verification as done.`,
+    },
+  ];
 }
 
 /**
@@ -1964,10 +2077,59 @@ async function commandPrune(options, _ctx, material, directory) {
   const plan = selectForRetention(inventory, policy);
 
   for (const backup of plan.keep) tick(`keep    ${backup.id}`, backup.reasons.join(', '));
+
+  // Every name in the WHOLE delete set is checked before a single file is unlinked. See
+  // `isPlainArchiveFileName`: a payload name that is not a basename escapes the archive
+  // directory through `join`, and `prune --apply` used to unlink whatever it landed on and
+  // still print PASS. Two properties matter and both are deliberate:
+  //
+  //   * it is a hard failure of the command, not a skipped file. The archives in the delete set
+  //     are exactly the ones whose signature did not have to verify, so a manifest that names a
+  //     path is evidence somebody wrote to the archive directory. That is an incident, and an
+  //     incident must not exit 0 with a tidy summary above it.
+  //   * it happens before any deletion, so the operator investigating is looking at the
+  //     directory as the attacker left it rather than at a directory this script half-pruned.
+  //
+  // Checked in plan mode too, and failing there as well. Plan mode deletes nothing, so it is not
+  // dangerous — but it is the run an operator does FIRST, and a compromised archive directory
+  // that exits 0 with a tidy plan is the worst possible moment to say nothing.
+  const offences = unsafeArchiveFileNames(plan.delete);
+  if (offences.length > 0) {
+    for (const offence of offences) {
+      cross(
+        `${offence.id} names a payload that is not a plain file name: ${offence.name}`,
+        `--apply would have deleted ${join(directory.path, offence.name)}; ` +
+          `${offence.manifestPath} has been tampered with`,
+      );
+    }
+    say(`\n  ${red(bold('FAIL'))} prune — nothing was deleted\n`);
+    say(
+      dim(
+        '  Do not run this with --apply. Somebody who can write to the archive directory wrote a\n' +
+          '  path traversal into a manifest; treat the whole directory as untrusted and look at\n' +
+          '  who has write access to it before anything else.\n',
+      ),
+    );
+    if (options.json) console.log(JSON.stringify({ policy, applied: false, offences }));
+    return 1;
+  }
+
   for (const backup of plan.delete) {
     if (options.apply) {
       const names = (backup.manifest?.files ?? []).map((file) => file.name);
-      for (const name of names) await rm(join(directory.path, name), { force: true });
+      for (const name of names) {
+        // Belt and braces to the gate above, and deliberately a throw rather than a skip: if
+        // that gate is ever removed or moved, this line must stop the deletion rather than
+        // quietly resume unlinking whatever `join` produces. `BackupError` is caught at the
+        // entry point and exits 1.
+        if (!isPlainArchiveFileName(name)) {
+          throw new BackupError(
+            `refusing to delete ${String(name)} named by ${backup.manifestPath}`,
+            'it is not a plain file name, so it does not name a file in the archive directory',
+          );
+        }
+        await rm(join(directory.path, name), { force: true });
+      }
       await rm(backup.manifestPath, { force: true });
       say(`  ${red('✗')} deleted ${backup.id}`);
     } else {

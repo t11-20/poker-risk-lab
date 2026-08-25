@@ -53,6 +53,7 @@
     "security:provenance": "node scripts/supply-chain/provenance.mjs",
     "security:ioc": "node scripts/supply-chain/ioc-scan.mjs",
     "security:sbom": "node scripts/supply-chain/sbom.mjs",
+    "security:secrets": "node scripts/supply-chain/secret-scan.mjs",
     "security:audit": "node scripts/supply-chain/audit.mjs",
     "security:pinning": "node scripts/supply-chain/ci-pinning.mjs",
     "security:containers": "node scripts/supply-chain/container-scan.mjs",
@@ -64,7 +65,8 @@
     "test:smoke": "node scripts/smoke-test.mjs",
     "backup": "node scripts/backup.mjs",
     "release:artifacts": "node scripts/release-artifacts.mjs",
-    "staging": "node scripts/staging.mjs"
+    "staging": "node scripts/staging.mjs",
+    "alerts:verify": "node scripts/alert-delivery.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",

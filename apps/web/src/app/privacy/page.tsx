@@ -26,10 +26,15 @@
  * ## One thing on this page is a policy rather than an observation
  *
  * The retention paragraph. `deleteExpired` and `deleteExpiredLoginAttempts` exist in
- * `apps/api/src/repositories/sessions.ts` and, at the time this was drafted, had no caller anywhere
- * outside the test suite — so expired rows are removable but nothing removes them on a schedule.
- * The page says that in as many words rather than describing a sweep that does not run. If a
- * scheduled job is added, this paragraph changes with it.
+ * `apps/api/src/repositories/sessions.ts` and, when this page was first drafted, had no caller
+ * anywhere outside the test suite — so expired rows were removable and nothing removed them. The
+ * page said that in as many words rather than describing a sweep that did not run, and it said "if
+ * a scheduled job is added, this paragraph changes with it".
+ *
+ * It has been, so it did. `apps/api/src/maintenance/retention-sweep.ts` runs both sweeps every six
+ * hours in the API process. The paragraph below now describes what runs; what it still does not do
+ * is decide the PERIODS, which are entry 7 of the counsel register and are a policy question, not
+ * an observation about the code.
  *
  * `robots` is not overridden here, for the reason written out on `/terms`.
  */
@@ -296,10 +301,11 @@ export default function PrivacyPage(): ReactElement {
           </p>
           <p>
             <strong>An honest note about the sweeps.</strong> The code that removes expired sessions and
-            expired sign-in attempts exists and is tested, and at the time this page was written nothing
-            called it on a schedule. So an expired session is unusable but its row may still be present.
-            Whoever runs this deployment is the one who can say whether a job now runs; if none does, the
-            retention above is a policy rather than an observation.
+            expired sign-in attempts runs on a schedule — every six hours, inside the server, in bounded
+            batches. So an expired session is both unusable and, within a few hours, gone. This paragraph used
+            to say the opposite, because until that schedule existed nothing called that code at all. The
+            periods above are still a policy: they say how long a thing may be kept, and the sweep only
+            enforces what the code already implements.
           </p>
           <CounselFlag clause={COUNSEL_CLAUSES['retention-and-deletion']} />
         </section>

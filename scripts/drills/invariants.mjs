@@ -207,6 +207,31 @@ export function visibleCardCheck(view, label = 'view') {
   const complete = street === 'complete';
   const viewerSeat = view['viewerSeat'];
 
+  /**
+   * The seats that actually tabled a hand, from the view's own `result.showdowns`.
+   *
+   * ## The defect this exists for
+   *
+   * The rule has two clauses — complete AND showed down — and this function used to implement
+   * only the first: any non-null `holeCards` on a `street: 'complete'` view passed. So a hand
+   * that ended by folding, whose showdown list is EMPTY by construction (`machine.ts` builds it
+   * from the seats still in at the end), could carry a folder's cards to every recipient and
+   * the structural half of the hidden-information check would have said nothing. That leak is
+   * worse than an ordinary one: it tells every observer whether the player who folded was
+   * bluffing, which is the single fact the fold was meant to keep.
+   *
+   * An absent or unparseable `result` yields an EMPTY set, so cards on a completed view with no
+   * showdown list to justify them are a finding rather than a free pass. `redactFor` populates
+   * `result` on exactly the views where `street === 'complete'`, so there is no legitimate
+   * completed view this treats unfairly — and "I cannot tell whether this was shown, therefore
+   * it is fine" is the reasoning that produced the gap in the first place.
+   */
+  const result = view['result'];
+  const showdowns = Array.isArray(result?.['showdowns']) ? result['showdowns'] : [];
+  const showedDown = new Set(
+    showdowns.filter((entry) => entry !== null && typeof entry === 'object').map((entry) => entry['seat']),
+  );
+
   for (const seat of seats) {
     if (seat === null || typeof seat !== 'object') continue;
     const cards = seat['holeCards'];
@@ -224,6 +249,14 @@ export function visibleCardCheck(view, label = 'view') {
     if (!complete) {
       findings.push(
         `${label}: seat ${String(seatIndex)} exposed hole cards on street "${String(street)}" ` +
+          `to viewer seat ${String(viewerSeat)}`,
+      );
+      continue;
+    }
+    if (!showedDown.has(seatIndex)) {
+      findings.push(
+        `${label}: seat ${String(seatIndex)} exposed hole cards on a completed hand it did NOT ` +
+          `show down in (showdown seats: ${showdowns.length === 0 ? 'none' : [...showedDown].join(', ')}) ` +
           `to viewer seat ${String(viewerSeat)}`,
       );
     }

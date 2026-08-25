@@ -450,7 +450,14 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
       'How often re-raising preflop is available, and how much pressure that puts on someone who only raises with strong hands.',
     ],
     styleNotes: [
-      'Re-raises preflop more than any other profile here.',
+      // The named quantity is `threeBetShareOfEntries`, which is what `threeBetTendency`
+      // declares and the only frequency it can be compared against (see `traits.ts` on why the
+      // multiplier is not a 3-bet frequency). This profile is the highest here on it — 0.93
+      // declared, 0.89 measured over 3,000 hands at `realistic`, against 0.88 for the next.
+      // The bare superlative that used to stand here was false under the natural reading: on
+      // unconditional 3-bet frequency this profile is third, because two looser profiles face
+      // and enter more openings. Naming the denominator is what makes the sentence checkable.
+      'Re-raises a larger share of the openings it plays back at than any other profile here — which is not the same as making the most 3-bets, since looser profiles get more openings to answer.',
       'Takes marginal all-in spots that other profiles decline.',
       'Its short-run results swing hard in both directions.',
     ],
@@ -630,13 +637,18 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     }),
     learnFrom: [
       'What a disciplined, fundamentals-first strategy looks like when played without deviation — the baseline every other style is a departure from.',
-      'How position, pot odds and stack depth alone, applied consistently, produce a solid strategy with no reads at all.',
+      'How position, pot odds and stack depth alone, applied consistently, produce a solid strategy that leans on reads barely at all.',
       'Why a consistent, readable strategy is a reasonable place to start: it is exploitable, but it is also correct often enough to learn from.',
     ],
     styleNotes: [
       'Tight, position-aware, and highly consistent — the easiest profile here to predict.',
       'One bet size for almost everything, chosen by pot fraction rather than by hand.',
-      'Does not adapt to you at all, by design.',
+      // Both of these used to say the profile does not adapt at all, which contradicted the
+      // 0.30 sitting on the `exploitativeAdaptation` axis of the very same card — and 0.30 is
+      // not even the lowest here (the calling station is 0.10). The number is the one that
+      // moves the play, so the sentence is what changed; `assertStyleNotesMatchTraits` now
+      // refuses the old wording on any profile whose adaptation trait is not 0.
+      'Barely adapts to you: 0.30 on that axis, and nothing at all at the Educational setting.',
     ],
     counterStrategy: [
       'Its consistency is the weakness. Once you know its opening range you know its continuing range.',
@@ -698,8 +710,72 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
   },
 ];
 
-/** Validates the profile set once, at module load, so a bad profile fails loudly. */
-function validateProfiles(profiles: readonly StrategyProfile[]): readonly StrategyProfile[] {
+/**
+ * Wordings that assert a profile ignores what it has seen, and the trait that would have to
+ * be 0 for any of them to be true.
+ *
+ * Matched case-insensitively against the whole of every learner-facing string, so a claim
+ * embedded mid-sentence is caught as well as one standing alone. The list is deliberately
+ * about *phrasing* rather than meaning — nothing here can tell that "plays its own game
+ * whatever you do" is the same claim — so it is a backstop, not a proof. What it does buy is
+ * that the one specific sentence that shipped false cannot ship false again, and that anyone
+ * copying it onto another profile has to make the number true first.
+ */
+const NO_ADAPTATION_CLAIMS: readonly string[] = [
+  'does not adapt',
+  'never adapts',
+  'no reads at all',
+  'does not adjust to you',
+  'ignores what you',
+];
+
+/**
+ * A styleNote may not claim the model ignores you unless its adaptation trait really is 0.
+ *
+ * `assertNoImpersonation` checks the *voice* of every string — third person, about the model,
+ * no person's name. Nothing checked whether a sentence agreed with the vector printed beside
+ * it, and `profileCard` renders both in one object: the radar axis read "Adapts to opponents:
+ * 0.30" directly under "Does not adapt to you at all, by design." A card that contradicts
+ * itself is the same class of defect as a model that contradicts its card, so this runs at
+ * load time with the impersonation guard rather than in a test.
+ *
+ * The trait, not the difficulty, is the subject. `expressTraits` zeroes adaptation at
+ * `educational`, so *every* profile ignores you there — a sentence on a card that is only true
+ * at one of three settings is not a true sentence about the profile.
+ */
+function assertStyleNotesMatchTraits(profile: StrategyProfile): void {
+  if (profile.traits.exploitativeAdaptation === 0) return;
+  for (const [field, strings] of [
+    ['learnFrom', profile.learnFrom],
+    ['styleNotes', profile.styleNotes],
+    ['counterStrategy', profile.counterStrategy],
+  ] as const) {
+    for (const text of strings) {
+      const lowered = text.toLowerCase();
+      for (const claim of NO_ADAPTATION_CLAIMS) {
+        if (lowered.includes(claim)) {
+          throw new ProfileError(
+            `profile "${profile.naming.id}" ${field} claims "${claim}", but its ` +
+              `exploitativeAdaptation trait is ${profile.traits.exploitativeAdaptation} and ` +
+              'profileCard renders the sentence and the axis in the same object. Set the trait to 0 ' +
+              'or say what the number actually means.',
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Validates the profile set once, at module load, so a bad profile fails loudly.
+ *
+ * Exported so a test can run the real guard against a deliberately broken profile rather than
+ * restating the rule. A test that recomputes the implementation's own check passes whenever
+ * both are wrong in the same way, which is exactly the failure a guard exists to catch. Not
+ * re-exported from `index.ts`: the package's public surface is the validated `PROFILES`, and
+ * nothing outside this package assembles a profile of its own.
+ */
+export function validateProfiles(profiles: readonly StrategyProfile[]): readonly StrategyProfile[] {
   const ids = new Set<string>();
   for (const profile of profiles) {
     if (ids.has(profile.naming.id)) throw new ProfileError(`duplicate profile id "${profile.naming.id}"`);
@@ -729,6 +805,8 @@ function validateProfiles(profiles: readonly StrategyProfile[]): readonly Strate
         assertNoImpersonation(text, `profile "${profile.naming.id}" ${field}`);
       }
     }
+
+    assertStyleNotesMatchTraits(profile);
   }
   return profiles;
 }

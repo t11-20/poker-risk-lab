@@ -594,7 +594,14 @@ export const poolExhaustion = {
       report.warnings.push(`prl_db_pool_max reports ${String(gauge)} for a pool configured at ${poolMax}`);
     }
     report.failures.push(...scanTextForSecrets(server.output(), 'the API log'));
-    report.failures.push(...scanForSecrets({ metrics: saturated ?? '' }, 'the metrics body'));
+    // `scanTextForSecrets`, not `scanForSecrets`. The metrics body is Prometheus text exposition,
+    // not JSON, and `scanForSecrets` is a KEY-walker: its first act is `if (node === null ||
+    // typeof node !== 'object') return`, so wrapping the text in `{ metrics: '...' }` handed it an
+    // object with exactly one key — `metrics`, which is not forbidden — and one string value it
+    // returned from immediately. The scan was structurally incapable of producing a finding, and
+    // had been reporting a clean metrics body on every run since it was written. The line above
+    // is the correct shape and always was.
+    report.failures.push(...scanTextForSecrets(saturated ?? '', 'the metrics body'));
     return report;
   },
 };

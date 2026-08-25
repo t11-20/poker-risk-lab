@@ -3,12 +3,12 @@
 #
 # ## The base image is pinned by digest
 #
-# `node:24.18.0-bookworm-slim` is a tag, and a tag is repointed every time the
+# `node:24.18.0-alpine3.24` is a tag, and a tag is repointed every time the
 # upstream image is rebuilt for a base-OS patch. That is usually a good thing and
 # occasionally the delivery mechanism for something else, and either way it means
 # two builds of this file at different times are not the same build. The digest
 # below is the multi-arch OCI index for that tag (linux/amd64, linux/arm64/v8,
-# linux/ppc64le), captured 2026-08-17.
+# linux/s390x), captured 2026-08-25.
 #
 # To refresh it (no Docker daemon required, and it does not pull the image):
 #
@@ -17,12 +17,89 @@
 #     curl -sI -H "Authorization: Bearer $TOKEN" \
 #       -H 'Accept: application/vnd.oci.image.index.v1+json' \
 #       -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
-#       https://registry-1.docker.io/v2/library/node/manifests/24.18.0-bookworm-slim \
+#       https://registry-1.docker.io/v2/library/node/manifests/24.18.0-alpine3.24 \
 #       | grep -i docker-content-digest
 #
-# With the daemon: `docker buildx imagetools inspect node:24.18.0-bookworm-slim`.
+# With the daemon: `docker buildx imagetools inspect node:24.18.0-alpine3.24`.
 # Keep the human-readable tag in the reference as well as the digest, so a reader
 # can see which version they are looking at without resolving the hash.
+#
+# ## Why Alpine, when this file used to say bookworm-slim
+#
+# The base was `node:24.18.0-bookworm-slim@sha256:6f7b03f7…51452d` until
+# 2026-08-25. It was replaced because the runtime stage descends from `base`, so
+# the OS package set of the SHIPPED images is the base's — and that package set
+# was the entire vulnerability surface of this project's release artefacts.
+#
+# Measured with trivy 0.72.0, `--severity HIGH,CRITICAL --scanners vuln`, against
+# the BASE IMAGES alone on arm64, before any application layer:
+#
+#   base                              OS pkgs  H/C findings  unfixed  fixable
+#   node:24.18.0-bookworm-slim (old)      88     30 (26/4)       30        0
+#   node:24.18.0-trixie-slim              79     51 (48/3)       15       36
+#   node:24.18.0-alpine3.24 (this)        18      0 (0/0)         0        0
+#
+# Across the two shipped images the old base contributed 60 HIGH/CRITICAL
+# findings — 52 HIGH, 8 CRITICAL, 14 distinct CVEs — every one of them from the
+# base and none from an application layer. All 60 are gone, and none of the 14
+# CVEs exists in the Alpine package set.
+#
+# Trixie was considered and rejected, and the reason is the opposite of the
+# obvious one: 36 of its findings HAVE upstream fixes, and this file runs no
+# `apt-get` at any stage, so under this repository's gate policy (block when a fix
+# exists — see scripts/supply-chain/container-scan.mjs) trixie would have turned a
+# passing gate into 72 blocking findings. Distroless was rejected because both
+# runtime stages need a shell for their `RUN rm -rf`, it puts node at
+# `/nodejs/bin/node` (so `docker run --entrypoint node` breaks, and so does
+# `checkArtefact` in scripts/release-artifacts.mjs), and it has no `node` user —
+# which breaks `USER node`, the CI assertion on `Config.User`, and the
+# `uid=1000,gid=1000` tmpfs line in docker-compose.staging.yml.
+#
+# ## Why the switch was cheap here — the things that had to be true
+#
+#   * Nothing compiles native code. pnpm-workspace.yaml sets `ignoreScripts: true`
+#     and `onlyBuiltDependencies: []`, and every install below also passes
+#     `--ignore-scripts`. node-gyp never runs, so there is no glibc-linked
+#     addon to rebuild.
+#   * pnpm-lock.yaml already carries every musl variant it needs
+#     (`@next/swc-linux-{x64,arm64}-musl`, `@img/sharp-linuxmusl-{x64,arm64}`,
+#     `@biomejs/cli-linux-*-musl`) and there is no `supportedArchitectures` block
+#     pinning a libc, so pnpm resolves by install platform and
+#     `--frozen-lockfile` is still satisfied.
+#   * `node:24-alpine` has `uid=1000(node) gid=1000(node)`, identical to the
+#     Debian images, so `USER node` still produces `Config.User == "node"`.
+#   * node is at `/usr/local/bin/node` on both, and neither Dockerfile referenced
+#     a Debian path, `dpkg`, or `apt-get`.
+#
+# ## What Alpine changes that a reader should know
+#
+#   * There is no bash. `/bin/sh` is busybox ash, which is what Docker's default
+#     `SHELL ["/bin/sh", "-c"]` was already using — every `RUN` in this file is
+#     POSIX and stays POSIX. If you add one, no `[[ ]]`, no arrays, no `pipefail`.
+#     busybox `find` does support `-mindepth`/`-maxdepth`/`-exec … +`, which the
+#     prod-deps prune below relies on; that was checked, not assumed.
+#   * `wget` exists here (busybox provides it) where bookworm-slim had neither
+#     wget nor curl. The healthcheck at the bottom is still `node -e` anyway —
+#     see the reason written there, which was never really about availability.
+#   * `apk` itself is left in place. It is a package manager in a production
+#     image, which this file otherwise objects to, but deleting it would also
+#     remove the apk database trivy reads to identify the OS, and
+#     container-scan.mjs correctly FAILS a scan whose OS it cannot identify —
+#     trading a real gate for a cosmetic one. The runtime root filesystem is
+#     read-only and the process is uid 1000, so apk cannot install anything here.
+#
+# ## What this migration has NOT proved
+#
+# musl is not glibc. Thread stack sizes and DNS resolver semantics differ, and
+# this project touches both: the Monte Carlo worker pool in
+# apps/api/src/workers/pool.ts creates Workers with `resourceLimits`, and the
+# Postgres client resolves and connects by hostname. What has been verified is
+# that both images build, that trivy reports zero findings against them, that
+# `new Worker(…, { resourceLimits: { maxOldGenerationSizeMb } })` runs clean, and
+# that ICU is full (`process.config.variables.icu_small === false`, `de-DE`
+# formatting and named time zones correct). A full staging run under load is what
+# settles the rest, and it has not happened yet. Do not read the zero in the
+# table above as "safe"; read it as "no known-vulnerable OS package".
 #
 # ## No `# syntax=` directive
 #
@@ -86,10 +163,15 @@
 #
 # ## What is deliberately NOT in the image
 #
-# TypeScript sources, tests, tsconfigs, the web app's source, and
+# TypeScript sources, tests, EVERY tsconfig (including `tsconfig.test.json`, which
+# the prune's glob used to miss), all of apps/web except its package.json, and
 # `apps/api/scripts/` — all removed by the prune in the prod-deps stage. Because
-# that prune is a deny list rather than an allow list, its worst failure is an
-# image slightly larger than necessary, never a broken one.
+# that prune is mostly a deny list rather than an allow list, its worst failure is
+# an image slightly larger than necessary, never a broken one. That is the right
+# trade, and it is also why it drifted: a fat image is not a red build, so
+# `apps/api/tsconfig.test.json`, `apps/web/next.config.ts` and
+# `apps/web/next-env.d.ts` sat in the released image without anything complaining.
+# The prune's own comments record which line each of those slipped through.
 #
 # Migrations are therefore run from the host (`pnpm run db:migrate`) rather than
 # from this container. If you want them run in-cluster instead, add
@@ -105,7 +187,7 @@
 # docker-compose.yml.
 # ---------------------------------------------------------------------------
 
-FROM node:24.18.0-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS base
+FROM node:24.18.0-alpine3.24@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS base
 WORKDIR /app
 
 FROM base AS toolchain
@@ -149,13 +231,35 @@ RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@prl/api...
 # .dockerignore now excludes markdown at every depth; this repeats the claim
 # inside the build so that a future change to the ignore file cannot quietly put
 # prose back into a layer without also passing this line.
+#
+# Two things on this list were wrong and were found in the released image
+# prl-api@sha256:3854174f…d92e36f, under a .dockerignore that says the tsconfigs
+# and the test trees "are removed inside the images by the prune stages":
+#
+#   * `apps/*/tsconfig.json` does not match `tsconfig.test.json`. Every
+#     `tsconfig.test.json` in the repository survived — apps/api's and all five
+#     packages'. `tsconfig*.json` is the spelling that means what the line meant.
+#   * The app-level entries all name a SUBDIRECTORY (src, test, scripts, public)
+#     and nothing at the app root, so apps/web/next.config.ts and
+#     apps/web/next-env.d.ts shipped in the API image — a Next config in an image
+#     whose own stage header, a few lines up, says it "has no business containing
+#     Next or React".
+#
+# The second one is fixed with an allow list for exactly one directory rather than
+# by adding two more names to the deny list, because adding names is what already
+# failed: this image executes NOTHING from apps/web, and the only reason the
+# directory exists here at all is that Node and pnpm want the manifest to resolve
+# the workspace. So keep package.json and delete the rest, and the next root-level
+# file somebody adds to the web app cannot repeat this. Everywhere else the deny
+# list stands, for the reason in the header — its worst case is a fat image.
 RUN rm -rf \
       apps/*/src apps/*/test apps/*/scripts apps/*/public \
       packages/*/src packages/*/test \
-      apps/*/tsconfig.json packages/*/tsconfig.json tsconfig.base.json \
+      apps/*/tsconfig*.json packages/*/tsconfig*.json tsconfig.base.json \
       biome.json db .github scripts Dockerfile.api Dockerfile.web \
       docker-compose.yml docker-compose.staging.yml deploy \
-      ./*.md apps/*/*.md packages/*/*.md
+      ./*.md apps/*/*.md packages/*/*.md \
+ && find apps/web -mindepth 1 -maxdepth 1 ! -name package.json -exec rm -rf {} +
 
 # ---------------------------------------------------------------------------
 # build: full install, then compile.
@@ -186,9 +290,13 @@ RUN pnpm --filter "@prl/api..." run build
 # /app/apps/api/node_modules/@prl/poker-ai/dist/index.js — the "fails open" failure
 # this file's own header warns about, in this file. A deny list here and one
 # directory-wide COPY below means a new workspace package is included automatically.
+#
+# `tsconfig*.json`, not `tsconfig.json`, for the same reason as in the prod-deps
+# stage: /app/packages is copied from HERE into the runtime, so the narrow glob
+# left a `tsconfig.test.json` in every workspace package of the shipped image.
 RUN rm -rf \
-      packages/*/node_modules packages/*/src packages/*/test packages/*/tsconfig.json \
-      apps/api/node_modules apps/api/src apps/api/test apps/api/scripts apps/api/tsconfig.json
+      packages/*/node_modules packages/*/src packages/*/test packages/*/tsconfig*.json \
+      apps/api/node_modules apps/api/src apps/api/test apps/api/scripts apps/api/tsconfig*.json
 
 # ---------------------------------------------------------------------------
 # runtime
@@ -215,7 +323,7 @@ ENV NODE_ENV=production \
     HOST=0.0.0.0
 
 # ---------------------------------------------------------------------------
-# Remove npm and corepack from the RUNTIME image.
+# Remove npm, corepack and yarn from the RUNTIME image.
 #
 # The official Node image ships npm at /usr/local/lib/node_modules/npm with its
 # own bundled dependency tree, and corepack beside it. This project uses neither
@@ -225,25 +333,39 @@ ENV NODE_ENV=production \
 #
 # Two reasons to delete them, one measured and one structural.
 #
-# **Measured.** `trivy image` against the previous build reported eight HIGH and
-# CRITICAL vulnerabilities whose package path was
+# **Measured.** `trivy image` against a bookworm-slim-era build reported eight
+# HIGH and CRITICAL vulnerabilities whose package path was
 # `usr/local/lib/node_modules/npm/node_modules/...` — brace-expansion, ip-address,
 # tar and undici, all bundled inside npm, all with fixes available upstream and
 # none of them reachable from anything this image runs. They were, at the time,
 # the ONLY findings in the image with an available fix; everything else was a
-# Debian package Debian has marked `fix_deferred` or `will_not_fix`. Deleting a
-# package manager nothing uses removed every actionable finding.
+# Debian package Debian had marked `fix_deferred` or `will_not_fix`. Deleting a
+# package manager nothing uses removed every actionable finding. That measurement
+# is history now — the base is Alpine and the whole image scans at zero — but the
+# lines stay, because "the scanner currently finds nothing" is not a reason to
+# ship a bundled dependency tree nothing executes.
 #
 # **Structural.** A package manager in a production container is a downloader and
 # an arbitrary-code executor sitting next to the application, and this image runs
 # with a read-only root filesystem precisely because we do not want either.
 #
-# `npm` and `npx` under /usr/local/bin are symlinks into the directory above, so
-# they are removed by name rather than left dangling. Run before `USER node`
-# because /usr/local is root-owned; nothing after this line needs either tool.
+# **The three yarn paths are new, and they are here because the base changed.**
+# bookworm-slim had no yarn at all; `node:24.18.0-alpine3.24` ships yarn 1.22.22
+# unpacked at /opt/yarn-v1.22.22 with /usr/local/bin/yarn and
+# /usr/local/bin/yarnpkg symlinked to it. Carrying it over unnoticed would have
+# quietly reinstated exactly the thing the paragraph above deletes: a second
+# package manager, in an image whose stated posture is that it has none. Whoever
+# next changes the base should re-run `ls /usr/local/bin /opt` on it rather than
+# trusting this list — it is a deny list, and the base decides what it misses.
+#
+# `npm`, `npx`, `yarn` and `yarnpkg` under /usr/local/bin are symlinks into the
+# directories above, so they are removed by name rather than left dangling. Run
+# before `USER node` because /usr/local and /opt are root-owned; nothing after
+# this line needs any of these tools.
 # ---------------------------------------------------------------------------
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
-      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+      /opt/yarn-v1.22.22 /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 COPY --from=prod-deps --chown=node:node /app /app
 # Two directory-wide copies, not a per-package list. COPY merges into an existing
@@ -264,9 +386,15 @@ USER node
 
 EXPOSE 3001
 
-# `node -e` rather than curl or wget, because neither is in bookworm-slim and
-# adding one to run a healthcheck is a new package in the runtime image for no
-# reason. Exec form, so there is no shell in the probe either.
+# `node -e` rather than curl or wget. On bookworm-slim the reason was that
+# neither existed and adding one was a new package in the runtime image for no
+# reason; on Alpine busybox does provide wget, and the probe stays `node -e`
+# anyway, because the better half of that argument never depended on
+# availability. node is the one binary this image is guaranteed to have — it is
+# a Node image — so the probe cannot be broken by a base change, and the exec
+# form means there is no shell in the probe either. A wget probe would also need
+# `CMD-SHELL` to interpolate the hostname, putting a shell back into the health
+# path of a container that otherwise has no reason to start one.
 #
 # The probe targets `os.hostname()`, NOT 127.0.0.1. Docker resolves a container's own
 # hostname to its address on the container network, so this asks the question that

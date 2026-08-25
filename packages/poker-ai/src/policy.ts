@@ -117,14 +117,22 @@
  * `opponent-model.ts` owns the counting, the range estimate and the reliability weighting.
  * This file consumes three of its methods and adds nothing of its own to them:
  *
- *   - `rangeFor(seat, street, facingAction)` is the assumed opponent continuing range. Its
- *     blockers are removed here, because the estimator cannot know this seat's cards and an
- *     opponent cannot hold a card this seat can see.
+ *   - `rangeFor(seat, street, facingAction, adaptation)` is the assumed opponent continuing
+ *     range, scaled by `traits.exploitativeAdaptation` *and* by how reliable the sample is,
+ *     exactly as the multipliers are. Its blockers are removed here, because the estimator
+ *     cannot know this seat's cards and an opponent cannot hold a card this seat can see.
  *   - `adjustmentsFor(seat, adaptation)` returns five multipliers on this model's own
  *     tendencies, already scaled by `traits.exploitativeAdaptation` *and* by how reliable the
- *     sample is. Passing the adaptation trait in and multiplying by what comes back is the
- *     whole of the adaptation in this file — there is no second, unscaled path where a
- *     twelve-hand read could move a decision.
+ *     sample is.
+ *
+ * Both take the adaptation weight, and `adaptationWeight(input)` is the only thing this file
+ * ever passes for it — so there is no unscaled path where a twelve-hand read, or any read at
+ * all at the `educational` difficulty, could move a decision. The range needs the gate more
+ * than the multipliers do, not less: `assessPostflop` prices relative strength, equity and the
+ * value/bluff split against the assumed range, so an unscaled range moves the whole action
+ * distribution. It was unscaled, and it did — measured at `educational` over 350 real
+ * postflop spots, swapping a station read for a folder read changed the sampled action in 209
+ * of 1,050 paired decisions. After the gate, zero.
  *   - `statsFor(seat)` is used only to describe the read in `whatChangedIt`, and it returns
  *     null below the model's own minimum sample, which is reported as "no read yet" rather
  *     than smoothed into a number.
@@ -236,8 +244,11 @@ export interface ObservedAdjustments {
 export interface PolicyObservations {
   /** Null below the observer's own minimum sample: unknown, said in the type. */
   statsFor(seat: number): ObservedSeatRead | null;
-  /** The assumed continuing range for a seat, as a slice of the computed strength ordering. */
-  rangeFor(seat: number, street: string, facingAction: string): ParsedRange;
+  /**
+   * The assumed continuing range for a seat, as a slice of the computed strength ordering,
+   * already scaled by `adaptation` and by the sample's reliability.
+   */
+  rangeFor(seat: number, street: string, facingAction: string, adaptation: number): ParsedRange;
   /** Multipliers, already scaled by `adaptation` and by the sample's reliability. */
   adjustmentsFor(seat: number, adaptation: number): ObservedAdjustments;
 }
@@ -668,12 +679,19 @@ function adaptationWeight(input: PolicyInput): number {
  * `docs/AI-LEGENDS.md` L5: one tightness number mapped onto a slice of the computed strength
  * ordering, with no knowledge of board texture and no removal of hands an earlier line rules
  * out.
+ *
+ * `adaptationWeight(input)` goes in for the same reason it goes into `adjustmentsFor`. An
+ * assumed range built from what this model has watched the learner do IS adaptation, and the
+ * strongest kind, because everything `assessPostflop` returns is priced against it. Passing 0
+ * here — which `educational` always does — gets the neutral 25% entry range, so the profile
+ * plays the same hand the same way whatever it has seen.
  */
 function assumedOpponentRange(input: PolicyInput, situation: Situation): ParsedRange {
   const estimated = input.observations.rangeFor(
     situation.primaryOpponent,
     situation.street,
     situation.facingAction,
+    adaptationWeight(input),
   );
   const labels = estimated.classes.map((handClass) => handClass.label);
   if (labels.length === 0) {

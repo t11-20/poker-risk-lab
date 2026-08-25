@@ -105,7 +105,7 @@ GitHub gives each job a fresh machine, so the images built in `build` do not exi
 
 ## 3. Stage 1 — gates
 
-`pnpm run security:audit` runs ten gates, each in its own child process so one crashing gate cannot prevent the others reporting: policy in effect, source encoding hygiene, denied packages, dependency shapes, Shai-Hulud IOC sweep, CI + container pinning, integrity + release age, OSV vulnerabilities, SBOM generation, and container image CVEs. Then lint, `build:packages`, typecheck.
+`pnpm run security:audit` runs **eleven** gates, each in its own child process so one crashing gate cannot prevent the others reporting: policy in effect, source encoding hygiene, denied packages, dependency shapes, Shai-Hulud IOC sweep, **committed credentials**, CI + container pinning, integrity + release age, OSV vulnerabilities, SBOM generation, and container image CVEs. Then lint, `build:packages`, typecheck. (This paragraph said "ten gates" and its list omitted the secret scan; the count and the order are the `GATES` array in `scripts/supply-chain/audit.mjs`.)
 
 The install is `pnpm install --frozen-lockfile --ignore-scripts`: this job installs a dependency graph in order to decide whether it is safe, so it must not run that graph's install-time hooks first.
 
@@ -117,11 +117,11 @@ The install is `pnpm install --frozen-lockfile --ignore-scripts`: this job insta
 | no artefacts on this machine — reported `not applicable`, and the summary says the audit did not cover images | 0 |
 | `--skip-containers` with artefacts present — an explicit refusal to run a gate that could have run | **2**, printing `1 network gate(s) skipped — NOT a valid release audit.` |
 
-Measured 2026-08-22: `node scripts/supply-chain/audit.mjs` exit **0**, all ten gates pass including the container gate; `--skip-containers` exit **2** with that message.
+Measured 2026-08-22: `node scripts/supply-chain/audit.mjs` exit **0**, all gates pass including the container gate; `--skip-containers` exit **2** with that message. There were ten gates that day; the secret scan has since made it eleven.
 
-Pinning is enforced, not requested. `node scripts/supply-chain/ci-pinning.mjs` exit **0** over 3 workflows, 46 action references, 2 Dockerfiles with 2 external base images and 2 compose files with 6 image references — all digest-pinned. Every `uses:` is a full 40-character commit SHA with the version in a trailing comment, and every `runs-on` names an explicit runner version. The gate also refuses any workflow file not declared in its `EXPECTED_WORKFLOWS`, so adding a workflow is a two-file diff.
+Pinning is enforced, not requested. Re-measured 2026-08-25: `node scripts/supply-chain/ci-pinning.mjs` exit **0** over **3 workflows, 46 action references, 2 Dockerfiles with 2 external base images and 3 compose files with 8 image references** — all digest-pinned. (The compose figures read "2 compose files with 6 image references"; the observability overlay added a third file and two more pinned images.) Every `uses:` is a full 40-character commit SHA with the version in a trailing comment, and every `runs-on` names an explicit runner version. The gate also refuses any workflow file not declared in its `EXPECTED_WORKFLOWS`, so adding a workflow is a two-file diff.
 
-`--freshness` is a **report, not a gate**: it exits 0 whatever it finds, and its job is to make a base image that has been rebuilt upstream — usually for a security patch — visible in the release log, so refreshing a pinned digest is a decision somebody makes rather than one nobody knows is available. Measured 2026-08-22: exit 0, all three pinned tags re-resolved against `registry-1.docker.io` — `postgres:16-bookworm`, `node:24.18.0-bookworm-slim` and `nginxinc/nginx-unprivileged:1.29.8-alpine` all still resolve to the digests beside them. **drifted 0.**
+`--freshness` is a **report, not a gate**: it exits 0 whatever it finds, and its job is to make a base image that has been rebuilt upstream — usually for a security patch — visible in the release log, so refreshing a pinned digest is a decision somebody makes rather than one nobody knows is available. Measured 2026-08-22: exit 0, all three pinned tags re-resolved against `registry-1.docker.io` — `postgres:16-bookworm`, `node:24.18.0-bookworm-slim` and `nginxinc/nginx-unprivileged:1.29.8-alpine` all still resolve to the digests beside them. **drifted 0.** That capture names the application base this project no longer uses: the runtime base moved to `node:24.18.0-alpine3.24` afterwards, so the next `--freshness` run reports a different set of three.
 
 ---
 
@@ -135,7 +135,9 @@ The job's default `DATABASE_URL` names a **login role that is only a member of `
 
 ## 5. Stage 4 — the container CVE scan
 
-Nine supply-chain gates examined the npm dependency graph in forensic detail and **nothing looked inside the artefact that actually ships**. The images are Debian bookworm-slim with a Node runtime and roughly a hundred OS packages in them, none of which appear in `pnpm-lock.yaml`. A CVE in zlib or perl-base was, as far as this repository's release audit was concerned, not a thing that could exist.
+Ten supply-chain gates examine the npm dependency graph and the repository in forensic detail, and until this one existed **nothing looked inside the artefact that actually ships**. The images carry a Node runtime and an OS package set, none of which appears in `pnpm-lock.yaml`. A CVE in zlib or perl-base was, as far as this repository's release audit was concerned, not a thing that could exist.
+
+That gate is also what moved the base image. On Debian bookworm-slim it reported 60 unfixed findings across the two images — 52 HIGH and 8 CRITICAL, 14 distinct CVEs, every one of them from the base's 88 OS packages and none from this project's code. None of them blocked, because the policy is not to block on a finding with no upstream fix; the scanner's own header says the right answer to a growing number is a different base image. The base is now `node:24.18.0-alpine3.24` with 18 OS packages, and the same scan reports **0 findings, blocking or otherwise**, with `--include-unfixed` agreeing.
 
 `trivy` is installed at an exact pinned version and **verified against its published checksum** — a scanner installed from a moving `latest` is a moving dependency in the job that decides whether the release is safe.
 
@@ -276,11 +278,11 @@ Everything below was measured on 2026-08-22. Nothing else here is claimed as ver
 | Command | Exit | Result |
 | --- | --- | --- |
 | `node scripts/release-artifacts.mjs --force` | 0 | built `prl-api` (83 MB) and `prl-web` (171 MB) once each; digests recorded to the manifest |
-| `node scripts/supply-chain/ci-pinning.mjs` | 0 | 3 workflows, 46 action references, 2 Dockerfiles / 2 external base images, 2 compose files / 6 image references — all digest-pinned |
+| `node scripts/supply-chain/ci-pinning.mjs` | 0 | *re-run 2026-08-25:* 3 workflows, 46 action references, 2 Dockerfiles / 2 external base images, **3 compose files / 8 image references** — all digest-pinned. (The row read 2 compose files / 6 images, from the 2026-08-22 run) |
 | `node scripts/supply-chain/ci-pinning.mjs --freshness` | 0 | all 3 pinned tags re-resolved against the registry, drifted 0 |
 | `node scripts/supply-chain/container-scan.mjs` | 0 | trivy 0.72.0, floor HIGH; api and web 30 findings each, all unfixable; 0 blocking, 0 allowed |
 | the same, against the **pre-fix** web image | 1 | 8 blocking findings under `/usr/local/lib/node_modules/npm` |
-| `node scripts/supply-chain/audit.mjs` | 0 | all 10 gates pass, container gate included |
+| `node scripts/supply-chain/audit.mjs` | 0 | all gates pass, container gate included — 10 of them on that date, 11 now that the secret scan is in the array |
 | `node scripts/supply-chain/audit.mjs --skip-containers` | 2 | `1 network gate(s) skipped — NOT a valid release audit.` |
 | `node scripts/staging.mjs up` | 1 | stack verified; the smoke test then found two application defects (53 passed, 2 failed). No attestation written — correct behaviour |
 | `node scripts/staging.mjs status` | 0 | both images match the manifest; `attestation absent — nothing has been verified` |
@@ -289,7 +291,9 @@ Everything below was measured on 2026-08-22. Nothing else here is claimed as ver
 
 The two defects that `staging up` found — Monte Carlo equity throwing under `NODE_ENV=production`, and guest bootstrap being refused behind any reverse proxy — are described in [`staging.md`](staging.md) §8. **Both are now fixed.**
 
-**Outstanding, and stated here so nothing above reads as more than it is: `staging up` has not been re-run since those fixes, so no green attestation exists and no promotion has completed end to end.** The refusal paths are proven by the runs in the table. The success path — a green `up`, an attestation, and `promote` accepting the digest — is implemented and unexercised. There is also no registry, no deploy target and no bot account in this repository, so stages 7 and 8 have never run anywhere.
+**`staging up` has since been re-run, and the success path is no longer unexercised.** This paragraph used to say the opposite — that no green attestation existed and no promotion had completed end to end — and it was true only until the two defects were fixed. `deploy/staging/staging-verified.json` now records a green run at `2026-08-22T18:55:36Z` against commit `b292b2ac234c` with `dirty: false`, all four checks true: running digests match the manifest, the TLS chain verified, the proxy overwrote `X-Forwarded-For`, and the strict smoke test passed (61 checks). `staging promote` on that run reported promotable and byte-identical. The evidence is in [`staging-verification.md`](staging-verification.md).
+
+**What is genuinely still outstanding** is narrower than "unexercised": the digests in that attestation are from the **local BuildKit store and are not registry-attested**, so what has been proven is that this machine deployed and verified the images it built, not that a registry can hand the same digests to somewhere else. There is still no registry, no deploy target and no bot account in this repository, so stages 7 and 8 have never run anywhere.
 
 ---
 

@@ -25,6 +25,7 @@
 import type { PlayerView } from '@prl/poker-engine';
 import type { CoachReport, RoomSummary } from './api-types.ts';
 import type { ApiError, ErrorCode } from './errors.ts';
+import { ERROR_STATUS } from './errors.ts';
 
 export const WS_PROTOCOL_VERSION = 1;
 
@@ -49,6 +50,54 @@ export const WS_CLOSE = {
 } as const;
 
 export type WsCloseCode = (typeof WS_CLOSE)[keyof typeof WS_CLOSE];
+
+/**
+ * The close code that goes with an error frame the server has already sent.
+ *
+ * ## The defect this exists to stop repeating
+ *
+ * A close code is not decoration: `describeClose` in `apps/web/src/lib/table-socket.ts` decides
+ * from it alone whether the client ever tries again. 4403 is `retryable: false`, so the socket
+ * gives up permanently and the reader is told "Not your table… start your own table instead".
+ *
+ * `onHello` in `apps/api/src/ws/router.ts` used to derive the FRAME code from the error and then
+ * close with a hard-coded `WS_CLOSE.forbidden` regardless. That is right for the refusal it was
+ * written for — `room_not_found_or_not_permitted`, where "no such room" and "not yours" must be
+ * indistinguishable — and wrong for everything else that can be thrown on that path. A Postgres
+ * blip while reading the durable room rows produced `internal_error` in the frame and 4403 on the
+ * wire, so a legitimate member of their own table was shown a permanent authorisation failure for
+ * a fault that would have cleared on the next attempt. Measured against the old code: a store
+ * whose `byId` rejected with `Error('connection terminated unexpectedly')` gave
+ * `frames: [error/internal_error]`, `closes: [{ code: 4403, reason: 'not permitted' }]`.
+ *
+ * ## Why it is derived from `ERROR_STATUS` rather than a second table
+ *
+ * Every code already declares what class of failure it is, as the HTTP status the REST transport
+ * answers with. A second hand-maintained mapping would be a second place to forget a code, and
+ * the two transports would start disagreeing about whether a failure was the caller's fault.
+ *
+ * The four buckets, and nothing else:
+ *
+ *  - 5xx — the server broke. Retryable, so the client backs off and reconnects.
+ *  - 401 — no session. The client asks the reader to sign in.
+ *  - 429 — too many. The client waits.
+ *  - anything else (4xx) — a genuine refusal. 4403, which is permanent, as it should be.
+ *
+ * `serverShuttingDown` (4503) carries the 5xx case rather than a code of its own. A dedicated
+ * `internalError` would read better, but the client's mapping is exhaustive per code and this
+ * change could not edit `apps/web`; an unknown code falls to a `default` branch whose wording
+ * ("that is not a code this client knows") is worse for a reader than 4503's, and 4503 already
+ * means exactly what the client must do — reconnect with a widening delay, the table is held
+ * server-side. If `apps/web` gains an `internalError` branch, add the code here and route 5xx to
+ * it; nothing else has to change.
+ */
+export function wsCloseForError(code: ErrorCode): WsCloseCode {
+  const status = ERROR_STATUS[code];
+  if (status >= 500) return WS_CLOSE.serverShuttingDown;
+  if (status === 401) return WS_CLOSE.unauthenticated;
+  if (status === 429) return WS_CLOSE.rateLimited;
+  return WS_CLOSE.forbidden;
+}
 
 // ---------------------------------------------------------------------------
 // Client → server
@@ -242,7 +291,25 @@ export const WS_LIMITS = {
   handshakeTimeoutMs: 5_000,
   /** Server ping interval; a socket that misses two is considered gone. */
   heartbeatIntervalMs: 15_000,
-  /** Coach requests per minute per session — the analysis is not free to compute. */
+  /**
+   * Coach requests per minute per SESSION, summed across every socket that session holds.
+   *
+   * Per session and not per socket, and the difference is the whole limit. The analysis runs on
+   * the shared worker pool (`workers/pool.ts`), which is a process-wide resource — the thing this
+   * number exists to protect — and a session is permitted `maxSocketsPerSession` sockets at once.
+   * A per-socket window therefore hands one session 4 × this figure, which is the budget of four
+   * sessions, without the caller doing anything the protocol forbids.
+   *
+   * It was enforced per socket until this was written down properly: `takeCoachToken` kept the
+   * window on the `WsConnection`, so this comment described a limit the server did not have.
+   * Measured before the fix: 4 sockets on one session, 30 accepted Coach requests each, 120 tasks
+   * on the pool in one window. After: 30 accepted in total, the 31st refused with `rate_limited`
+   * whichever socket sends it.
+   *
+   * `scripts/load-test.mjs` still says "30 per socket" next to its Coach section. That comment is
+   * now wrong and could not be edited from here; the script's own traffic stays under the limit
+   * either way because it drives one socket per session.
+   */
   coachRequestsPerMinute: 30,
 } as const;
 

@@ -262,13 +262,54 @@ Not "it started". In order:
    `docker inspect`;
 5. `https://localhost:8443/api/v1/ready` answers 200, with the chain **verified**
    against the local CA rather than waved through;
-6. the proxy sets `Strict-Transport-Security` — the one header neither the app nor
-   the API can set honestly, because only the terminator knows there is TLS;
+6. the proxy is the **only** source of `Strict-Transport-Security` — probed on a
+   path the API does not serve, and asserted to be exactly one header with the
+   value `nginx.conf` sets. This check used to probe `/api/v1/health` and tick as
+   long as *a* header came back, which is why it never noticed that the API also
+   sends one (helmet, whenever `NODE_ENV=production`, which staging is) and that
+   `add_header` appends rather than replaces: every `/api/*` response carried two,
+   and a browser obeys only the first. `proxy_hide_header` in `nginx.conf` now
+   drops the upstream's copy;
 7. the smoke test, `--strict`, over https: guest sessions, CSRF enforcement,
    content, calculation, rooms, the hidden-information property over a **real
    `wss://` WebSocket**, hand-history isolation, the CSP on the rendered page, and
    rate limiting;
 8. the `X-Forwarded-For` overwrite proof described above.
+
+## Alerting, as an overlay
+
+`docker-compose.observability.yml` adds a Prometheus and an Alertmanager beside this
+stack, and `pnpm run alerts:verify` uses them to answer a question staging could not
+answer before: do the twenty-two rules in `docs/production/alerts.md` load, agree with
+that document, name series that exist, evaluate, and — for one of them, provoked for
+real — fire, route by severity and arrive at a receiver.
+
+```bash
+pnpm run staging up          # this stack first; the overlay scrapes it
+pnpm run alerts:verify       # ~5 minutes; STOPS the API for about two of them
+pnpm run alerts:verify -- --skip-provoke   # ~30s, checks 1-4 only, API untouched
+```
+
+It is an overlay and not part of `docker-compose.staging.yml` for the same reason that
+file has no `build:` section: that file is a manifest of what production runs, and
+production does not get its monitoring from this repository. `pnpm run staging up` brings
+up no Prometheus, and nothing here depends on one existing.
+
+Two things to know before running it:
+
+- **It stops the API container.** `ApiDown` has `for: 2m` on top of a two-minute
+  `max_over_time` window, so the earliest it can fire is a little over four minutes after
+  the container stops. The script restores the API in a `finally` block, so an interrupted
+  run does not leave staging down — but a `kill -9` of the script will.
+- **It writes `observability/metrics-token`**, the bearer token Prometheus scrapes with,
+  because compose interpolates compose files and not the files they mount. It is
+  gitignored, `scripts/supply-chain/secret-scan.mjs` asserts that rule, and the script
+  deletes it on the way out unless `--keep-up` was passed.
+
+Both receivers are a webhook sink the script runs on this host. Production replaces two
+URLs in `observability/alertmanager.yml`; nothing between here and there is rehearsed.
+
+---
 
 ## What it does not prove
 

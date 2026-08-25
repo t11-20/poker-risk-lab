@@ -10,7 +10,8 @@
  * engine's module graph contains the shuffler and the deck commitment. Doing the projection in this
  * server component means the finished `PlayerView` crosses to the client as plain data and the client
  * bundle links against none of it. Same reasoning as the hand replay; the only place the engine is
- * deliberately allowed into the browser is `CommitmentVerifier`.
+ * deliberately allowed into the browser is `lib/deck-proof.ts`, the client-side deck-proof check
+ * behind `CommitmentVerifier`.
  *
  * ## Three different kinds of "not found", and only two of them are 404s
  *

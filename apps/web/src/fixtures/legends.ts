@@ -752,13 +752,13 @@ export const LEGEND_PROFILE_FIXTURES: readonly LegendProfileCardDto[] = [
     axes: axesFor(FUNDAMENTALS_COACH_TRAITS),
     learnFrom: [
       'What a disciplined, fundamentals-first strategy looks like when played without deviation — the baseline every other style is a departure from.',
-      'How position, pot odds and stack depth alone, applied consistently, produce a solid strategy with no reads at all.',
+      'How position, pot odds and stack depth alone, applied consistently, produce a solid strategy that leans on reads barely at all.',
       'Why a consistent, readable strategy is a reasonable place to start: it is exploitable, but it is also correct often enough to learn from.',
     ],
     styleNotes: [
       'Tight, position-aware, and highly consistent — the easiest profile here to predict.',
       'One bet size for almost everything, chosen by pot fraction rather than by hand.',
-      'Does not adapt to you at all, by design.',
+      'Barely adapts to you: 0.30 on that axis, and nothing at all at the Educational setting.',
     ],
     counterStrategy: [
       'Its consistency is the weakness. Once you know its opening range you know its continuing range.',

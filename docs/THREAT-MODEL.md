@@ -396,7 +396,7 @@ Stated without hedging.
 | G9 | **No rate limiting on WebSocket reconnection storms** beyond the per-session socket cap | Low impact for the current scale | A backoff requirement enforced server-side |
 | G10 | ~~**Container base images may not be digest-pinned**~~ **Closed 2026-08-19.** Every base image and every GitHub Action is now pinned, and `ci-pinning` fails the release otherwise. Kept in the table, struck through, because a gap that vanishes without a trace teaches nobody anything | — | — |
 | G11 | **A pinned digest is not a vouched-for digest** | Pinning buys immutability: an upstream cannot change what runs here without a diff in this repository. It does not say the artefact was benign when the digest was taken | Verifying the base image and each action against upstream attestation at pin time, and recording the evidence — the release audit did this by hand once |
-| G12 | **Nothing re-checks a pin against new advisories** | The OSV gate queries the `npm` ecosystem only. An advisory against `node:24.18.0-bookworm-slim` or against a pinned action does not reach any gate here | A second advisory source for base images and actions, wired into the daily scheduled audit |
+| G12 | **Nothing re-checks a pin against new advisories** | The OSV gate queries the `npm` ecosystem only. An advisory against `node:24.18.0-alpine3.24` or against a pinned action does not reach any gate here | A second advisory source for base images and actions, wired into the daily scheduled audit |
 
 ## 10. Review triggers
 

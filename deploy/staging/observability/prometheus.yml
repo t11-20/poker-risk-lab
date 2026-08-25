@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# Prometheus, for the staging stack only.
+#
+# This exists to answer one question that `docs/production/alerts.md` could not
+# answer on its own: do the rules in that document actually fire, route and
+# arrive? Two independent release reviews recorded "alert delivery UNVERIFIED —
+# no Alertmanager in staging compose", and they were right. Prose describing an
+# alert is a hypothesis about a system nobody has run.
+#
+# It is deliberately NOT part of docker-compose.staging.yml. That file is a
+# deployment manifest whose whole point is that it runs the exact image digests
+# production will run, and adding two services to it that production gets from
+# somewhere else would make it describe a stack nobody deploys. This is an
+# overlay — `docker-compose.observability.yml` — brought up beside it by
+# `pnpm run alerts:verify` and taken down after.
+#
+# ## The scrape target is the container, not the published origin
+#
+# `/metrics` is not under `/api/`, so the proxy routes it to the page server,
+# which 404s. That is the design: metrics are not public. Prometheus is on the
+# staging network and scrapes `api:3001` directly, which is also how a real
+# deployment does it.
+#
+# ## The bearer token comes from a file, and the file is generated
+#
+# Compose interpolates docker-compose.yml, not the files it mounts, so
+# `${PRL_STAGING_METRICS_TOKEN}` written here would reach Prometheus as those
+# literal characters and every scrape would 401. `scripts/alert-delivery.mjs`
+# writes the token to `metrics-token` beside this file, which
+# `deploy/staging/.gitignore` keeps out of the repository and
+# `scripts/supply-chain/secret-scan.mjs` asserts the rule for.
+#
+# ## Intervals
+#
+# 15 s, which is what `alerts.md` assumes when it says "one missed scrape at a
+# 15 s interval is a scrape problem; eight consecutive misses is the service".
+# Change one and that reasoning has to change with it.
+# ---------------------------------------------------------------------------
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: staging
+
+rule_files:
+  - /etc/prometheus/alert-rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+
+scrape_configs:
+  # The job name is load-bearing: `ApiDown` is keyed on `up{job="prl-api"}`, so
+  # renaming this silently disables the alert that says the service is gone.
+  - job_name: prl-api
+    metrics_path: /metrics
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/metrics-token
+    static_configs:
+      - targets: ['api:3001']

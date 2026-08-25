@@ -110,7 +110,14 @@ export function quarantineSettings(home) {
   };
 }
 
-/** The variables inherited from the caller — the only ones that could carry a secret. */
+/**
+ * The variables inherited from the caller — the only ones that could carry a
+ * secret.
+ *
+ * **This filter is where the security property lives.** A name that matches a
+ * forbidden pattern is dropped here, allowlisted or not, and nothing downstream
+ * can put it back. Everything below is an alarm on top of it, not the lock.
+ */
 export function inheritedEnv() {
   const env = Object.create(null);
   for (const name of ENV_ALLOWLIST) {
@@ -122,6 +129,78 @@ export function inheritedEnv() {
 
 export function scrubbedEnv(home) {
   return { ...inheritedEnv(), ...quarantineSettings(home) };
+}
+
+/**
+ * Names on `ENV_ALLOWLIST` that are secret-shaped — the check that can actually
+ * fail, and the one this script used to only appear to run.
+ *
+ * ## What the previous check could not see
+ *
+ * The refusal below used to read:
+ *
+ *     const leaked = Object.keys(inheritedEnv())
+ *       .filter((k) => FORBIDDEN_PATTERNS.some((p) => p.test(k)));
+ *
+ * and was commented "the check that matters". `inheritedEnv()` had already
+ * dropped every name matching `FORBIDDEN_PATTERNS` while building its result, so
+ * this asked the same question of an already-filtered object: `leaked` was `[]`
+ * by construction, and the branch was unreachable. A second refusal — "nothing
+ * outside the allowlist and this script's own settings gets through", over
+ * `{...inheritedEnv(), ...quarantineSettings(home)}` — was unreachable for the
+ * same reason, since that object is BUILT from exactly those two sources.
+ *
+ * Measured by driving the exported helpers with `GITHUB_TOKEN`,
+ * `AWS_SECRET_ACCESS_KEY` and `NPM_TOKEN` set to real-looking values in the
+ * environment and then pushing those three names onto `ENV_ALLOWLIST` to defeat
+ * the allowlist itself: `leaked = []` and `unexpected = []` in every case, and
+ * `quarantine.test.mjs`'s assertion that `leaked` is `[]` — whose failure message
+ * was "the allowlist has grown a secret-shaped name" — passed while the allowlist
+ * HAD grown exactly such a name. Three tautologies agreeing with each other.
+ *
+ * Nothing leaked: `inheritedEnv` did the work. But a guard whose failure mode has
+ * never been observed is decoration, and this file's own comment called that one
+ * the check that matters.
+ *
+ * ## What this asks instead
+ *
+ * The allowlist is committed policy, so the question is answerable before any
+ * filtering and without reference to what happens to be exported on this machine:
+ * does the list of names this script promises to carry through admit one that is
+ * shaped like a credential? Adding `NPM_TOKEN` to `ENV_ALLOWLIST` now stops the
+ * run, whether or not `NPM_TOKEN` is set. The value is never read.
+ *
+ * Takes the list as an argument so the test can hand it a poisoned allowlist and
+ * watch this fail, rather than asserting a tautology about the current one.
+ *
+ * @param {string[]} allowlist
+ * @returns {string[]}
+ */
+export function forbiddenAllowlistEntries(allowlist = ENV_ALLOWLIST) {
+  return allowlist.filter((name) => FORBIDDEN_PATTERNS.some((p) => p.test(name)));
+}
+
+/**
+ * Secret-shaped names present in a FINISHED quarantine environment, excluding the
+ * hardening this script sets itself.
+ *
+ * Takes the environment as an argument for the reason the old check should have:
+ * asked about `scrubbedEnv()`'s own output it is a tautology, because that object
+ * is assembled from an allowlist-filtered inherit plus `quarantineSettings`. A
+ * parameter makes it a real function with a real negative control — the test
+ * hands it a deliberately leaky env and watches it name the leak — and keeps the
+ * live assertion (`leakedNames(scrubbedEnv(home), home)` is empty) honest about
+ * being a regression guard on the assembly, not the lock itself.
+ *
+ * @param {Record<string, string>} env
+ * @param {string} home
+ * @returns {string[]}
+ */
+export function leakedNames(env, home) {
+  const deliberate = new Set(Object.keys(quarantineSettings(home)));
+  return Object.keys(env).filter(
+    (name) => !deliberate.has(name) && FORBIDDEN_PATTERNS.some((p) => p.test(name)),
+  );
 }
 
 /** Files that define the dependency graph — and nothing else. */
@@ -186,23 +265,35 @@ function main() {
   );
   console.log(dim(`  env: ${ENV_ALLOWLIST.join(', ')} + throwaway HOME — every token/secret dropped`));
 
-  // The check that matters: did anything from the *caller's* environment survive
-  // that should not have? Asking it of the finished environment instead asked it of
-  // this script's own hardening, which is what stopped the tool from ever running.
-  const env = scrubbedEnv(fakeHome);
-  const leaked = Object.keys(inheritedEnv()).filter((k) => FORBIDDEN_PATTERNS.some((p) => p.test(k)));
-  if (leaked.length > 0) {
+  // The check that matters, and that can now fail: is the POLICY sound? Asking
+  // the same question of `inheritedEnv()`'s output was a tautology — see
+  // `forbiddenAllowlistEntries` for what that could not see and how it was
+  // measured.
+  const admitted = forbiddenAllowlistEntries();
+  if (admitted.length > 0) {
     console.log(
-      red(`  ✗ refusing to run: secret-shaped variables reached the quarantine env: ${leaked.join(', ')}`),
+      red(`  ✗ refusing to run: ENV_ALLOWLIST admits secret-shaped name(s): ${admitted.join(', ')}`),
+    );
+    console.log(
+      dim(
+        '    inheritedEnv() would drop them anyway, so nothing has leaked — but the allowlist is the\n' +
+          '    committed statement of what this quarantine carries, and it must not say this.',
+      ),
     );
     process.exit(1);
   }
-  // And nothing outside the allowlist and this script's own settings gets through.
-  const deliberate = new Set(Object.keys(quarantineSettings(fakeHome)));
-  const unexpected = Object.keys(env).filter((k) => !deliberate.has(k) && !ENV_ALLOWLIST.includes(k));
-  if (unexpected.length > 0) {
+
+  const env = scrubbedEnv(fakeHome);
+  // A regression guard on the assembly, not the lock: `scrubbedEnv` is built from
+  // an allowlist-filtered inherit plus this script's own settings, so this can
+  // only fire if one of those two changes shape. It is here rather than deleted
+  // because it is the assertion the whole quarantine rests on, and
+  // `quarantine.test.mjs` proves the function itself can fail by handing it a
+  // leaky environment.
+  const leaked = leakedNames(env, fakeHome);
+  if (leaked.length > 0) {
     console.log(
-      red(`  ✗ refusing to run: unexpected variables in the quarantine env: ${unexpected.join(', ')}`),
+      red(`  ✗ refusing to run: secret-shaped variables reached the quarantine env: ${leaked.join(', ')}`),
     );
     process.exit(1);
   }
@@ -272,7 +363,7 @@ function main() {
 
   console.log(bold('\nNext steps'));
   if (unchanged) {
-    console.log('  1. audit:   pnpm run security:audit    (the full eight-gate release audit)');
+    console.log('  1. audit:   pnpm run security:audit    (the full eleven-gate release audit)');
   } else {
     console.log('  1. review:  git diff --no-index -- pnpm-lock.yaml pnpm-lock.yaml.new');
     console.log('  2. adopt:   mv pnpm-lock.yaml.new pnpm-lock.yaml');

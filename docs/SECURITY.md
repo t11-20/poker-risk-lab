@@ -63,7 +63,7 @@ fetched at build time rather than pinned.
 pnpm run deps:quarantine      # resolve in a throwaway dir with a scrubbed environment
 git diff -- pnpm-lock.yaml    # review every added line
 pnpm install --frozen-lockfile
-pnpm run security:audit       # all nine gates must pass
+pnpm run security:audit       # all eleven gates must pass
 ```
 
 `deps:quarantine` resolves in a temporary directory with a throwaway `HOME`, no `.git`, no
@@ -160,31 +160,51 @@ These are the rules a reviewer will actually check.
 ## 4. Running the gates
 
 ```bash
-pnpm run security:audit          # all nine supply-chain gates
-pnpm run security:audit -- --offline   # skip the two network gates — EXITS 2, see below
+pnpm run security:audit          # all eleven supply-chain gates
+pnpm run security:audit -- --offline   # skip the three network gates — EXITS 2, see below
 
 pnpm run security:policy         # is the policy actually in effect?
 pnpm run security:hygiene        # source encoding, hidden characters
 pnpm run security:denylist       # banned packages
 pnpm run security:shapes         # resolution shapes, install scripts, exact versions
 pnpm run security:ioc            # Shai-Hulud IOC sweep
+pnpm run security:secrets        # committed credentials, and the ignore rules that prevent them
 pnpm run security:pinning        # CI actions by commit SHA, base images by digest
 pnpm run security:provenance     # lockfile ↔ registry integrity, release age
 pnpm run security:osv            # OSV.dev vulnerabilities
 pnpm run security:sbom           # CycloneDX 1.6 SBOM
+pnpm run security:containers     # trivy against the built release images
 ```
 
-**`--offline` exits 2, deliberately.** It skips *integrity + release age* and *OSV*, prints
-`2 network gate(s) skipped — NOT a valid release audit`, and then exits non-zero. It used to
-exit 0, which is the defect: an audit that did not run two of its gates is indistinguishable,
-to anything reading only the exit code, from one that ran all nine and passed. Exit 2 rather
-than 1 so a caller can still tell "skipped" from "a gate failed". Verified 2026-08-19:
+**`--offline` exits 2, deliberately.** It skips *integrity + release age*, *OSV* and
+*container image CVEs*, prints `3 network gate(s) skipped — NOT a valid release audit`, and
+then exits non-zero. It used to exit 0, which is the defect: an audit that did not run three
+of its gates is indistinguishable, to anything reading only the exit code, from one that ran
+all eleven and passed. Exit 2 rather than 1 so a caller can still tell "skipped" from "a gate
+failed".
+
+This section said *two* network gates and pasted a `2 network gate(s) skipped` transcript,
+which was true when the container scan did not exist. There are three, and the container scan
+is skipped by `--offline` even on a machine with no release images: `audit.mjs` evaluates the
+offline branch before the artefact branch, so the gate is reported as **skipped** — which
+exits 2 — rather than as *not applicable*, which would not. Re-captured 2026-08-25:
 
 ```
 $ node scripts/supply-chain/audit.mjs --offline; echo $?
+Summary
+  ✓ pass     policy in effect
+  ✓ pass     source encoding hygiene
+  ✓ pass     denied packages
+  ✓ pass     dependency shapes
+  ✓ pass     Shai-Hulud IOC sweep
+  ✓ pass     committed credentials
+  ✓ pass     CI + container pinning
   ○ skipped  integrity + release age
   ○ skipped  OSV vulnerabilities
-2 network gate(s) skipped — NOT a valid release audit.
+  ✓ pass     SBOM generation
+  ○ skipped  container image CVEs
+
+3 network gate(s) skipped — NOT a valid release audit.
 2
 ```
 
@@ -192,10 +212,12 @@ Artifacts land in `docs/sbom/`: the SBOM, the OSV report and the provenance repo
 SBOM is content-derived and byte-stable, so `git diff` shows dependency changes rather than
 a fresh timestamp.
 
-`security:audit` and `security:hygiene` are **two of the eleven gates in `pnpm run verify`**, which
+`security:audit` and `security:hygiene` are **two of the thirteen gates in `pnpm run verify`**, which
 is the release gate as a whole (`RUNBOOK.md` §3). They are the first two it runs, and it runs the
-other nine whether or not they pass — a supply-chain failure must not be the reason nobody found out
-that the schema check also fails.
+other eleven whether or not they pass — a supply-chain failure must not be the reason nobody found out
+that the schema check also fails. (This said *eleven* and *nine*; the loop in `package.json` gained
+`test:ax` and `test:csp`. Eleven is the count of gates inside `security:audit`, which is a different
+number that happens to have been the same one.)
 
 Findings are not waived to unblock a release — fix the dependency, pin an older version, or remove
 it. The single escape hatch is an entry in `scripts/supply-chain/osv-allowlist.json`, which requires
@@ -235,5 +257,5 @@ it. The headline items:
   pinned digest of a compromised artefact is pinned to the compromise. The control it buys is
   that an upstream cannot change what runs here without a diff in this repository.
 * **Nothing re-checks a pin for a newly disclosed advisory.** OSV covers npm packages only.
-  An advisory against `node:24.18.0-bookworm-slim` or a pinned action surfaces through
+  An advisory against `node:24.18.0-alpine3.24` or a pinned action surfaces through
   whatever watches those ecosystems, which today is a human.

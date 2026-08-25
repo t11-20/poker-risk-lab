@@ -9,8 +9,9 @@
  * `import` away from the browser bundle. So the pages call this on the server and hand the finished
  * views down as props: the client component receives plain data and can address none of the engine.
  *
- * (`CommitmentVerifier` is the one deliberate exception. It has to run `verifyDeckReveal` in the
- * browser, which is the whole point of it, and that is stated in its own header.)
+ * (`CommitmentVerifier` is the one deliberate exception, through `lib/deck-proof.ts`. It has to run
+ * `verifyDeckReveal` in the browser, which is the whole point of it, and that is stated in both of
+ * their headers.)
  *
  * ## What the review payload does and does not carry
  *

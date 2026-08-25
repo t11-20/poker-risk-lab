@@ -28,6 +28,16 @@
  *
  * These tests keep both halves true at once: the hardening is present, and a
  * genuine secret in the inherited environment is still refused.
+ *
+ * ## And why the refusal that fixed that could not fail either
+ *
+ * The repair moved the leak check off the finished environment and onto
+ * `inheritedEnv()` — which filters `FORBIDDEN_PATTERNS` while building its
+ * result, so the check asked a question it had already guaranteed the answer to.
+ * The test below it asserted `leaked` was `[]` under the message "the allowlist
+ * has grown a secret-shaped name", and passed when the allowlist had grown
+ * exactly that. See the `describe('the refusals can fail')` block for the
+ * negative control that established this and for what replaced it.
  */
 
 import assert from 'node:assert/strict';
@@ -35,7 +45,9 @@ import { describe, it } from 'node:test';
 import {
   ENV_ALLOWLIST,
   FORBIDDEN_PATTERNS,
+  forbiddenAllowlistEntries,
   inheritedEnv,
+  leakedNames,
   quarantineSettings,
   scrubbedEnv,
 } from './quarantine.mjs';
@@ -63,10 +75,9 @@ describe('the quarantine environment', () => {
       'fixture is stale: the hardening no longer contains the names that broke the check',
     );
 
-    // …and the check the script actually runs, over the inherited environment
-    // only, is clean.
-    const leaked = Object.keys(inheritedEnv()).filter((name) => FORBIDDEN_PATTERNS.some((p) => p.test(name)));
-    assert.deepEqual(leaked, [], 'the allowlist has grown a secret-shaped name');
+    // …and neither of the checks the script actually runs objects to it.
+    assert.deepEqual(forbiddenAllowlistEntries(), []);
+    assert.deepEqual(leakedNames(scrubbedEnv(HOME), HOME), []);
   });
 
   it('inherits nothing but the allowlist', () => {
@@ -87,10 +98,7 @@ describe('the quarantine environment', () => {
     }
   });
 
-  it('would still refuse a secret-shaped name added to the allowlist', () => {
-    // The check has to be able to fail, or it is decoration. This asserts the
-    // rule rather than the current allowlist: any name matching a forbidden
-    // pattern is dropped even when it is allowlisted.
+  it('recognises the shapes a real credential comes in', () => {
     for (const name of [
       'GITHUB_TOKEN',
       'AWS_SECRET_ACCESS_KEY',
@@ -102,6 +110,102 @@ describe('the quarantine environment', () => {
         FORBIDDEN_PATTERNS.some((p) => p.test(name)),
         `${name} is not recognised as secret-shaped`,
       );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two refusals, and the tautologies they used to be
+//
+// The defect: `main()` refused to run when
+//
+//     Object.keys(inheritedEnv()).filter((k) => FORBIDDEN_PATTERNS.some((p) => p.test(k)))
+//
+// was non-empty, under the comment "the check that matters". `inheritedEnv()`
+// drops every name matching `FORBIDDEN_PATTERNS` while BUILDING its result, so
+// that asked the same question of an already-filtered object and the branch was
+// unreachable. The second refusal — anything in
+// `{...inheritedEnv(), ...quarantineSettings(home)}` outside the allowlist and
+// the settings — was unreachable for the same reason: the object is assembled
+// from exactly those two sources.
+//
+// The test above was the third tautology. It asserted `leaked` was `[]` with the
+// failure message "the allowlist has grown a secret-shaped name", and it passed
+// when the allowlist HAD grown exactly such a name.
+//
+// Negative control, run before any change: `GITHUB_TOKEN`,
+// `AWS_SECRET_ACCESS_KEY` and `NPM_TOKEN` set to real-looking values in the
+// environment, then pushed onto `ENV_ALLOWLIST` to defeat the allowlist itself.
+// `leaked = []`, `unexpected = []`, the old test's assertion PASSED, and the
+// script ran on to `▸ resolving`. Nothing had leaked — `inheritedEnv` did the
+// work — but neither refusal could ever fire, and one of them was documented as
+// the point of the file.
+//
+// Same control against the current code, end to end with `NPM_TOKEN` on the
+// allowlist: `✗ refusing to run: ENV_ALLOWLIST admits secret-shaped name(s):
+// NPM_TOKEN`, exit 1, before a single manifest was copied.
+// ---------------------------------------------------------------------------
+
+describe('the refusals can fail', () => {
+  it('REFUSES an allowlist that has grown a secret-shaped name', () => {
+    // The negative control the old assertion could not be. The allowlist is
+    // committed policy, so this is answerable without reading a single value.
+    for (const name of ['NPM_TOKEN', 'GITHUB_TOKEN', 'AWS_SECRET_ACCESS_KEY', 'DEPLOY_PASSWORD']) {
+      assert.deepEqual(
+        forbiddenAllowlistEntries([...ENV_ALLOWLIST, name]),
+        [name],
+        `${name} on the allowlist did not stop the run`,
+      );
+    }
+  });
+
+  it('accepts the allowlist as committed', () => {
+    assert.deepEqual(
+      forbiddenAllowlistEntries(),
+      [],
+      'ENV_ALLOWLIST names something secret-shaped; `pnpm run deps:quarantine` now refuses to run',
+    );
+  });
+
+  it('NAMES a secret that reaches a finished quarantine environment', () => {
+    // `leakedNames` takes the environment rather than rebuilding it, which is the
+    // whole difference: handed a leaky one it says so, instead of asking a
+    // question whose answer it had already guaranteed.
+    assert.deepEqual(
+      leakedNames({ PATH: '/usr/bin', GITHUB_TOKEN: 'ghp_x', AWS_SECRET_ACCESS_KEY: 'y' }, HOME),
+      ['GITHUB_TOKEN', 'AWS_SECRET_ACCESS_KEY'],
+    );
+  });
+
+  it('does not name the hardening this script sets itself as a leak', () => {
+    // The original regression, restated against the function that now runs: all
+    // three of these match /^NPM_/i and all three are set by this script.
+    assert.deepEqual(leakedNames(quarantineSettings(HOME), HOME), []);
+  });
+
+  it('finds nothing to name in the environment the script actually builds', () => {
+    // Live assertion. Structurally it cannot fail today — `scrubbedEnv` is an
+    // allowlist-filtered inherit plus `quarantineSettings` — and it is kept as a
+    // regression guard on that assembly, not offered as proof of anything. The
+    // test above is what proves the function can fail.
+    assert.deepEqual(leakedNames(scrubbedEnv(HOME), HOME), []);
+  });
+
+  it('drops a secret-shaped name even when the allowlist admits it', () => {
+    // Defence in depth behind the refusal: `inheritedEnv` is where the security
+    // property lives, and it holds regardless of what the allowlist says.
+    const restore = process.env['GITHUB_TOKEN'];
+    process.env['GITHUB_TOKEN'] = 'ghp_realsecret';
+    ENV_ALLOWLIST.push('GITHUB_TOKEN');
+    try {
+      assert.equal(inheritedEnv()['GITHUB_TOKEN'], undefined, 'an allowlisted secret survived the filter');
+      assert.equal(scrubbedEnv(HOME)['GITHUB_TOKEN'], undefined);
+      // …and the refusal fires, which is what the old check could not do.
+      assert.deepEqual(forbiddenAllowlistEntries(), ['GITHUB_TOKEN']);
+    } finally {
+      ENV_ALLOWLIST.pop();
+      if (restore === undefined) delete process.env['GITHUB_TOKEN'];
+      else process.env['GITHUB_TOKEN'] = restore;
     }
   });
 });

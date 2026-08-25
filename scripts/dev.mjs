@@ -38,6 +38,12 @@
  * that code. Leaving half a stack running after the other half failed is how you
  * end up debugging the API against a web app that was never built.
  *
+ * A child that never STARTS counts too, and it is the case this got wrong. Node
+ * emits an `'error'` event and no `'exit'` when a spawn fails, so the handler that
+ * decides the exit code has to be reachable from both — see the comment on
+ * `child.on('error')`. With `pnpm` missing from PATH, both spawns failed and this
+ * script exited 0.
+ *
  * To run just one, the root package.json already has `dev:api` and `dev:web`.
  */
 
@@ -119,6 +125,18 @@ function start(target) {
     if (firstFailure === null) firstFailure = 1;
     children.delete(target.label);
     stopAll('SIGTERM');
+    // This line is the difference between `pnpm run dev` reporting a failure and
+    // reporting nothing. Node emits NO 'exit' event after a spawn 'error' — the
+    // process never existed, so there is nothing to have exited — which means the
+    // 'exit' handler below, and therefore `finish()`, is never reached for this
+    // child. Without this call `firstFailure` was set and then never read: with
+    // both servers failing to spawn (a PATH without pnpm on it, the usual case)
+    // the script printed two "failed to start" lines, ran out of work, and exited
+    // 0. `pnpm run dev && …` carried on, and CI would have gone green on a stack
+    // that had never started. The header's promise — "first non-zero exit wins …
+    // exits with that code" — needs `finish()` on every path that empties
+    // `children`, not just the one where a process really did exit.
+    if (children.size === 0) finish();
   });
 
   child.on('exit', (code, signal) => {

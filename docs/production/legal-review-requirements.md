@@ -231,7 +231,13 @@ frozen into an image is that defect wearing a different hat.
 | `PRL_AGE_GATE_JURISDICTION` | The place the threshold is set for | The gate says the threshold is tied to no jurisdiction |
 | `PRL_LEGEND_NAMING` | `archetype` or `attributed` | `archetype`. **Must stay unset until entry 9 is answered.** |
 
-These are not yet in `.env.example`; adding them is listed below.
+**All eleven are now in `.env.example`.** This line used to say they were not, and that was
+true of the change that produced this document — it has since been done. The three age-gate
+variables that ship with a value are set there (`PRL_AGE_GATE=off`,
+`PRL_AGE_GATE_MINIMUM_AGE=18`, `PRL_AGE_GATE_SCOPE=play`); the other eight are present as
+commented placeholders with the reason beside each, because for these the *unset* behaviour is
+the deliberate one. A blank operator name renders as a visible "not configured" marker, while
+a plausible default would read as a reviewed term.
 
 ---
 
@@ -243,16 +249,38 @@ Engineering work that this review unblocks or depends on. None of it closes a re
    deliberately not overridden. Publishing unreviewed placeholder clauses to a search index under a
    real operator's name is a worse failure than being unfindable. Once the register is closed and
    the placeholders are replaced, that decision should be revisited on purpose.
-2. **Schedule the expiry sweeps.** Entry 7 depends on it: today the retention paragraph on
-   `/privacy` is honest only because it says the sweep does not run.
-3. **`.env.example` needs the eleven variables above.** That file is outside the scope of the change
-   that produced this document and was not edited.
-4. **The browser harnesses need `PRL_AGE_GATE=off`** — or a pre-seeded declaration cookie — if a
-   deployment turns the gate on. `scripts/a11y-audit.mjs` crawls from `/` and follows links, so a
-   redirect at `/play` would leave the table screens silently unaudited while the report still says
-   PASS; `scripts/keyboard-audit.mjs` drives `/play` directly and would fail outright. The shipped
-   default (no gate) does not have this problem, which is one of the three reasons it is the
-   default.
+2. **Done: the expiry sweeps are scheduled.** This read "Entry 7 depends on it: today the
+   retention paragraph on `/privacy` is honest only because it says the sweep does not run."
+   `apps/api/src/maintenance/retention-sweep.ts` now calls `deleteExpired` and
+   `deleteExpiredLoginAttempts` every six hours, in bounded batches, started after `listen` and
+   stopped before the shutdown drain. It runs in the API process rather than as a systemd unit —
+   unlike the backups, it needs exactly the privileges the API already has on exactly the tables
+   the API already owns, and it is meaningless while the API is down; that reasoning is in the
+   file. `apps/api/test/retention-sweep.test.ts` covers the backlog, the pass ceiling and its
+   reporting, a database failure the schedule survives, and the overlap guard.
+
+   What is **not** closed is entry 7 itself, which is a question for counsel: how long each
+   category may be kept, and whether erasure must delete hand history rather than detach it. The
+   sweep enforces the periods the code already implements (14-day session, 24-hour revoked-row
+   grace, 10-minute sign-in attempt); it does not decide them. The `/privacy` §5 wording needs
+   re-reading now that the sweep runs, because the sentence that made it honest was the admission
+   that it did not.
+3. **Done: `.env.example` carries all eleven variables above.** This follow-up read "needs the
+   eleven variables above … outside the scope of the change that produced this document and was
+   not edited". They are there now — grep it for `PRL_AGE_GATE`, `PRL_LEGAL_` and
+   `PRL_LEGEND_NAMING`. What is *not* done is anything about their values: every legal placeholder
+   is still commented out, which is the register's problem, not the example file's.
+4. **Stale, and worth recording as stale rather than deleting.** This read: "`a11y-audit.mjs`
+   crawls from `/` and follows links, so a redirect at `/play` would leave the table screens
+   silently unaudited while the report still says PASS." That is no longer true and is the more
+   dangerous half of the original claim, so the correction matters. `a11y-audit.mjs` sends a
+   declaration cookie, compares the URL it LANDED on against the one it asked for, and records any
+   route the gate answered as UNAUDITABLE — which fails the run, with the gate named and with
+   `--routes /age-check` offered as the way to audit the interstitial deliberately. An
+   interstitial can no longer be audited under the name of `/play`.
+   `scripts/keyboard-audit.mjs` drives `/play` directly and fails outright, which is the correct
+   behaviour and always was. The shipped default (no gate) still avoids the question entirely,
+   which remains one of the three reasons it is the default.
 5. **The gate has no browser-level test.** The pure decisions are covered by
    `apps/web/test/age-gate.test.ts`; that a redirect and a `Set-Cookie` actually reach a browser,
    and that an in-app router navigation is gated as well as a document navigation, needs a running

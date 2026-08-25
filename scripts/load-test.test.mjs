@@ -524,9 +524,11 @@ describe('parseExposition, against a real captured scrape', () => {
     assert.equal(histogramBoundAtQuantile({ buckets: [], sum: 0, count: 0 }, 0.99), null);
   });
 
-  it('returns null when the quantile falls in the +Inf bucket', () => {
-    // Everything landed above the top bound, so all that is known is "above 10 s". A number here
-    // would be an invention.
+  it('separates "above the top bound" from "nothing was measured"', () => {
+    // Everything landed above the top bound, so all that is known is "above 10 s". This used to
+    // return null, which is also what no observations returns — so the slowest reading the
+    // histogram can produce was indistinguishable from an absent metric, and the signal that
+    // exists to name it stayed quiet. Infinity is not an invented number: it is the bound.
     const overflowing = {
       buckets: [
         { le: 1, cumulative: 0 },
@@ -536,7 +538,8 @@ describe('parseExposition, against a real captured scrape', () => {
       sum: 400,
       count: 4,
     };
-    assert.equal(histogramBoundAtQuantile(overflowing, 0.99), null);
+    assert.equal(histogramBoundAtQuantile(overflowing, 0.99), Number.POSITIVE_INFINITY);
+    assert.equal(histogramBoundAtQuantile({ buckets: [], sum: 0, count: 0 }, 0.99), null);
   });
 });
 
@@ -823,6 +826,33 @@ describe('classifySaturation', () => {
     assert.equal(verdict.resource, 'db-pool');
     const probe = verdict.signals.find((signal) => signal.name === 'db-pool');
     assert.equal(probe.confoundedBy, 'event-loop', 'the probe must always declare what confounds it');
+  });
+
+  it('does not blame the pool for a bound that MEETS the threshold (NEGATIVE CONTROL)', () => {
+    // The observed value is a bound: 50 ms means "99% of probes finished within 50 ms", which is
+    // the threshold being met, not exceeded. Firing on `>=` reported `resource: db-pool` for a
+    // three-player level at 0.4 requests per second, where the reading was the pool opening its
+    // first connection. The report printed `db probe p99 <= 50.0ms` and `FIRED 50.00 ms
+    // (threshold 50 ms)` on the same screen.
+    const verdict = classifySaturation(
+      level({ server: { dbProbeP99BoundMs: THRESHOLDS.dbProbeP99Ms } }),
+      THRESHOLDS,
+    );
+    assert.equal(verdict.resource, 'not-identified');
+    assert.equal(verdict.signals.find((signal) => signal.name === 'db-pool').fired, false);
+  });
+
+  it('blames the pool when the probe quantile is above the top bucket', () => {
+    // The worst reading the histogram can give. It must fire, and it must not be mistaken for an
+    // unexported metric.
+    const verdict = classifySaturation(
+      level({ server: { dbProbeP99BoundMs: Number.POSITIVE_INFINITY } }),
+      THRESHOLDS,
+    );
+    assert.equal(verdict.resource, 'db-pool');
+    const probe = verdict.signals.find((signal) => signal.name === 'db-pool');
+    assert.equal(probe.fired, true);
+    assert.equal(probe.exported, true);
   });
 
   it('a signal whose metric is not exported can never fire (NEGATIVE CONTROL)', () => {

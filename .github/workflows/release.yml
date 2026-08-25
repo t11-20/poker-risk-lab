@@ -335,6 +335,29 @@ jobs:
         with:
           persist-credentials: false
 
+      # This job had neither of the next two steps, and it was the only
+      # pnpm-invoking job in any of the three workflow files without them. The
+      # ubuntu-24.04 image has no pnpm on PATH, so the `Scan` step below exited
+      # 127 before trivy was ever consulted — and because `staging` needs this job
+      # and `promote` needs `staging`, the mandatory container-CVE gate did not
+      # merely fail open, it took the rest of the release down with it in a way
+      # that read as a scanner problem rather than a missing toolchain. Neither
+      # step is optional here.
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack (pins pnpm via the packageManager integrity hash)
+        run: corepack enable
+
+      # Deliberately no `pnpm install`: `security:containers` is `node
+      # scripts/supply-chain/container-scan.mjs`, which imports node: builtins and
+      # its sibling lib.mjs and nothing else. corepack is here so `pnpm run` can
+      # resolve the script name, not to provide a dependency tree — and this job
+      # decides whether the artefacts are safe, so not installing the graph it is
+      # judging is the same reasoning `build` uses one job above.
+
       - name: Download the release manifest
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:

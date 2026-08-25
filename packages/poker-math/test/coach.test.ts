@@ -354,18 +354,168 @@ test('the rule of 2/4 is published as a fraction, from clean outs, with its real
   assert.equal(thumb.estimate, 0.36, 'published as a FRACTION, so @prl/ui renders 36.0% and not 3,600.0%');
   assert.ok(thumb.estimate <= 1, 'a probability is never above 1');
 
-  // The exact chance of one of those nine arriving, by complementary counting over the
-  // 47 cards hero cannot see, with the turn and the river to come:
-  //     1 - (38/47) x (37/46) = 1 - 1406/2162 = 0.34967622571693...
-  // so the shortcut overstates by 36 - 34.967622571693 = 1.032377428307 points.
-  const exactHitPercent = (1 - (38 / 47) * (37 / 46)) * 100;
-  assert.ok(Math.abs(exactHitPercent - 34.967622571693) < 1e-9, 'the hand-derived exact figure');
+  // The exact chance of one of those nine arriving, by complementary counting, with the
+  // turn and the river to come.
+  //
+  // The denominator is 45, not 47. The opponent is `exactRange(Ks Qd)` — a KNOWN hand —
+  // so the king of spades and the queen of diamonds are face down in front of them and
+  // cannot come off the deck. `computeOuts` already works this way: its own sentence for
+  // this spot reads "Of the 45 cards that can come next, 9 are clean". Nine hearts among
+  // 45 leaves 36 misses:
+  //     1 - (36/45) x (35/44) = 1 - 1260/1980 = 1 - 7/11 = 4/11 = 0.363636363636...
+  // so the shortcut UNDERSTATES by 36 - 36.3636363636 = -0.3636363636 points.
+  //
+  // This assertion used to read 47, 38, 37 and "+1.0324, the x4 form overstates". Those
+  // literals were correct arithmetic for a denominator this spot does not have, and they
+  // passed only because `buildRuleOfThumb` was re-deriving 47 from the street instead of
+  // using the card set the outs were counted from. Fed `nineOutFlushDraw()` the old code
+  // returned errorPoints +1.0324 and a note quoting "47 cards unseen" beside an outs
+  // paragraph quoting 45; it now returns -0.3636 and quotes 45 in both places.
+  const exactHitPercent = (1 - (36 / 45) * (35 / 44)) * 100;
+  assert.ok(Math.abs(exactHitPercent - (4 / 11) * 100) < 1e-12, 'the hand-derived exact figure, 4/11');
+  assert.ok(Math.abs(exactHitPercent - 36.363636363636) < 1e-9, 'stated as a decimal too');
   assert.ok(
     Math.abs(thumb.errorPoints - (36 - exactHitPercent)) < 1e-9,
-    `errorPoints should be +1.0324 against the exact chance of HITTING, got ${thumb.errorPoints}`,
+    `errorPoints should be -0.3636 against the exact chance of HITTING out of 45, got ${thumb.errorPoints}`,
   );
-  assert.ok(thumb.errorPoints > 0, 'the x4 form overstates at nine outs');
+  assert.ok(
+    thumb.errorPoints < 0,
+    'x4 understates here: nine outs among 45 is worth more per out than nine among 47',
+  );
   assert.ok(thumb.note.length > 0);
+  // The note carries the derivation, and the derivation names the denominator. If it
+  // ever says 47 again the report is contradicting its own outs paragraph.
+  assert.match(thumb.note, /45 cards unseen/, 'the derivation must quote the same 45 the outs came from');
+  assert.doesNotMatch(thumb.note, /47 cards unseen/);
+});
+
+/**
+ * The denominator the shortcut is measured against is the one the outs were counted
+ * from — the defect this pins, and the sign of the error is what it got wrong.
+ *
+ * `buildRuleOfThumb` used to compute the unseen count as `52 - 2 - (5 - cardsToCome)`,
+ * which is 47 on the flop whatever the spot is, while `computeOuts` had counted the
+ * outs out of `cardsConsidered`. Those two agree for a notation range and disagree by
+ * two cards for a known opponent hand, so one report carried both numbers for one
+ * event: "Of the 45 cards that can come next, 8 are clean" three paragraphs above "Two
+ * cards to come, 8 outs, 47 cards unseen … = 31.5%".
+ *
+ * `errorPoints` is documented as "the shortcut's error and nothing else". It was
+ * carrying a denominator mismatch larger than the error it reported, and — the part
+ * that reaches a learner — pointing the wrong way.
+ *
+ * The two spots below are the same hero hand, the same board and the same 8 clean outs,
+ * differing only in whether the opponent is a known hand or a range. That is the whole
+ * variable, and the true error points in opposite directions across it, which is why
+ * both are here and why both assert a SIGN and not just a magnitude. Every literal is
+ * worked out longhand in the comments and nothing is taken from the code under test.
+ */
+function eightOutStraightDraw(overrides: Partial<CoachInput> = {}): CoachInput {
+  return {
+    heroCards: parseCards('9s 8s'),
+    board: parseCards('7s 6d 2c'),
+    street: 'flop',
+    opponents: [{ label: 'aces', range: exactRange(parseCards('Ah Ad')) }],
+    pot: 100,
+    toCall: 50,
+    heroCommittedThisStreet: 0,
+    heroStack: 400,
+    opponentStacks: [400],
+    bigBlind: 10,
+    ...overrides,
+  };
+}
+
+test('errorPoints is measured against the cards the outs were counted from, sign included', () => {
+  // ---- Case 1: a KNOWN opponent hand, so 45 cards can come, not 47. ----
+  //
+  // Hero 9s8s on 7s6d2c against exactly AhAd: an open-ended straight draw, and
+  // `computeOuts` reports cleanCount 8, cardsConsidered 45, equityNow 36.87%, no
+  // refusal. The two aces are behind the opponent and cannot arrive.
+  //
+  // 8 outs among 45, two cards to come, 37 misses:
+  //     1 - (37/45) x (36/44) = 1 - 1332/1980 = 1 - 37/55 = 18/55 = 0.327272727272...
+  // The shortcut says 8 x 4 = 32%, so it UNDERSTATES by 32 - 32.727272727 = -0.727272727.
+  //
+  // Fed exactly this input, the old code published estimate 0.32, errorPoints +0.5476
+  // and a note reading "overstating … by 0.5 points" — it had divided by 47. The
+  // published 31.45% was 1.28 points below the truth and the direction was inverted.
+  // It now returns errorPoints -0.7273 and says "understates".
+  const known = buildCoachReport(eightOutStraightDraw());
+  const knownOuts = known.outs;
+  assert.ok(knownOuts !== null);
+  assert.equal(knownOuts.clean, 8, 'the four fives and the four tens');
+  assert.equal(knownOuts.dirty, 0);
+  assert.match(
+    knownOuts.explanation,
+    /Of the 45 cards that can come next/,
+    'the outs paragraph is the one that names the real card set',
+  );
+
+  const knownThumb = known.equity.ruleOfThumb;
+  assert.ok(knownThumb !== null);
+  assert.equal(knownThumb.estimate, 0.32, '8 x 4 = 32 points = 0.32 as a fraction');
+
+  const exactOutOf45 = (1 - (37 / 45) * (36 / 44)) * 100;
+  assert.ok(Math.abs(exactOutOf45 - (18 / 55) * 100) < 1e-12, 'the hand-derived exact figure, 18/55');
+  assert.ok(Math.abs(exactOutOf45 - 32.727272727272) < 1e-9, 'stated as a decimal too');
+  assert.ok(
+    Math.abs(knownThumb.errorPoints - (32 - exactOutOf45)) < 1e-9,
+    `errorPoints should be -0.7273, got ${knownThumb.errorPoints}`,
+  );
+  assert.ok(
+    knownThumb.errorPoints < 0,
+    'THE SIGN IS THE DEFECT: the old code published +0.5476 and the word "overstating" here',
+  );
+  assert.match(knownThumb.note, /understates/, 'and the prose has to agree with the sign');
+  assert.doesNotMatch(knownThumb.note, /overstates/);
+  assert.match(knownThumb.note, /45 cards unseen/, 'one denominator in the whole report, not two');
+  assert.doesNotMatch(knownThumb.note, /47 cards unseen/);
+
+  // ---- Case 2: an ordinary notation range, where 47 is correct and must stay. ----
+  //
+  // Same hero hand and board against "QQ+, AKs". The range holds more than one
+  // combination, so no specific two cards are removed from the deck and `computeOuts`
+  // reports cleanCount 8 out of cardsConsidered 47. The fix must not move this figure:
+  // it is a regression guard against "correcting" the denominator into a different
+  // wrong constant.
+  //
+  // 8 outs among 47, two cards to come, 39 misses:
+  //     1 - (39/47) x (38/46) = 1 - 1482/2162 = 1 - 741/1081 = 0.3145235892691952...
+  // The shortcut's 32% OVERSTATES by 32 - 31.45235892691952 = +0.54764107308048 —
+  // the identical number the old code wrongly attached to case 1.
+  const dead = parseCards('9s 8s 7s 6d 2c');
+  const ranged = buildCoachReport(
+    eightOutStraightDraw({ opponents: [{ label: 'a strong range', range: parseRange('QQ+, AKs', dead) }] }),
+  );
+  const rangedOuts = ranged.outs;
+  assert.ok(rangedOuts !== null);
+  assert.equal(rangedOuts.clean, 8, 'the same eight cards');
+  assert.match(rangedOuts.explanation, /Of the 47 cards that can come next/);
+
+  const rangedThumb = ranged.equity.ruleOfThumb;
+  assert.ok(rangedThumb !== null);
+  assert.equal(rangedThumb.estimate, 0.32);
+
+  const exactOutOf47 = (1 - (39 / 47) * (38 / 46)) * 100;
+  assert.ok(
+    Math.abs(exactOutOf47 - (1 - 741 / 1081) * 100) < 1e-12,
+    'the hand-derived exact figure, 741/1081',
+  );
+  assert.ok(Math.abs(exactOutOf47 - 31.45235892691952) < 1e-9, 'stated as a decimal too');
+  assert.ok(
+    Math.abs(rangedThumb.errorPoints - (32 - exactOutOf47)) < 1e-9,
+    `errorPoints should be +0.5476, got ${rangedThumb.errorPoints}`,
+  );
+  assert.ok(rangedThumb.errorPoints > 0, 'and here the x4 form really does overstate');
+  assert.match(rangedThumb.note, /47 cards unseen/);
+
+  // The same 8 outs, the same 32% shortcut, and an error that changes SIGN with the card
+  // set. That is the whole reason the denominator cannot be re-derived from the street.
+  assert.ok(
+    knownThumb.errorPoints < 0 && rangedThumb.errorPoints > 0,
+    'the sign is a property of the spot, not of the street',
+  );
 });
 
 test('the shortcut is withheld where it cannot mean anything, and says why', () => {
@@ -1060,5 +1210,55 @@ test('no figure a report publishes, in a number or in a sentence, is a probabili
         );
       }
     }
+  }
+});
+
+test('a raise states the defence frequency for a RAISE, not for a bet of the same size', () => {
+  /**
+   * `sizingLadder` builds its options with `defenceFrequency(potAfterCall, raiseBy)`, which
+   * returns `pot / (pot + bet)` — correct for a BET, where the aggressor risks `bet` to win
+   * `pot`. A raise is a different shape: raising by `r` while facing `c` risks `c + r` to win the
+   * pot as it stood BEFORE hero called. Reading the ladder's figure into a raise's note therefore
+   * counted hero's own call as money hero wins when the opponent folds, and overstated every
+   * raise's minimum defence frequency.
+   *
+   * Measured before the fix, at pot 100 / toCall 50: a raise of 50 published 75.0% where the
+   * answer is 50.0%. The published sentence is "…has to continue with X% of their range for a
+   * raise of this size not to print automatically", so an overstated X tells the learner to
+   * defend far wider than the arithmetic supports — in a product whose whole purpose is the
+   * arithmetic.
+   *
+   * This asserts the closed form `pot / (pot + toCall + raiseBy)` against every raise the report
+   * publishes, so it cannot be satisfied by a single hard-coded number. `priceLaidToCaller` in
+   * the same sentence was always right, and is checked here too so a future edit cannot fix one
+   * by breaking the other.
+   */
+  const input = flushDrawVsSet();
+  const report = buildCoachReport(input);
+  const raises = report.candidates.filter((entry) => /Raising by/.test(entry.derivation));
+  assert.ok(raises.length > 0, 'the fixture must publish at least one raise for this to mean anything');
+
+  for (const entry of raises) {
+    const sizing = /Raising by ([\d,]+)/.exec(entry.derivation);
+    const defence = /continue with ([\d.]+)%/.exec(entry.derivation);
+    const price = /needs ([\d.]+)% equity/.exec(entry.derivation);
+    assert.ok(sizing?.[1] !== undefined, entry.derivation);
+    assert.ok(defence?.[1] !== undefined, entry.derivation);
+    assert.ok(price?.[1] !== undefined, entry.derivation);
+    const raiseBy = Number(sizing[1].replace(/,/g, ''));
+
+    const expectedDefence = (100 * input.pot) / (input.pot + input.toCall + raiseBy);
+    assert.ok(
+      Math.abs(Number(defence[1]) - expectedDefence) < 0.6,
+      `raise of ${raiseBy}: published MDF ${defence[1]}%, correct ${expectedDefence.toFixed(1)}%`,
+    );
+
+    // The caller's price is measured against the pot after they call the raise, which includes
+    // hero's call and the raise twice — this one the ladder gets right.
+    const expectedPrice = (100 * raiseBy) / (input.pot + input.toCall + 2 * raiseBy);
+    assert.ok(
+      Math.abs(Number(price[1]) - expectedPrice) < 0.6,
+      `raise of ${raiseBy}: published price ${price[1]}%, correct ${expectedPrice.toFixed(1)}%`,
+    );
   }
 });

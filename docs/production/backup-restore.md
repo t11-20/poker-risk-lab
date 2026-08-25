@@ -419,6 +419,12 @@ backup create
 
 ### 7.2 Verify it, all four layers, including a real scratch restore
 
+**Re-run 2026-08-24** against the development cluster, on the frozen application tree: `create`
+exit 0, `verify --deep` exit 0, all four layers, restored into a scratch database and dropped it
+in 40.1 s, row census 13 tables / 899,267 rows. One release review recorded `verify --deep` as
+not run under its own harness's restrictions; this is the same command with nothing waived. The
+transcript below is from the original capture and its shape is unchanged.
+
 ```
 $ node --env-file-if-exists=.env scripts/backup.mjs verify --deep --dir ... --key-file ... \
     --container poker-risk-lab-postgres-1

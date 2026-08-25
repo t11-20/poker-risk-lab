@@ -329,6 +329,28 @@ export class LiveRoom {
   private readonly metrics: AppMetrics;
   /** Serialises archive writes, so `hands.start` lands before the first action row. */
   private archiveQueue: Promise<void> = Promise.resolve();
+  /**
+   * Serialises the durable work a released seat causes, so a caller can await it.
+   *
+   * Separate from `archiveQueue` deliberately: an archive write that fails must not stop a hand
+   * (see the file header), but a seat release is not reporting — it is what makes the chair
+   * usable again — and `standFromTable` awaits this chain so that the response it returns
+   * describes a seat that really has been freed.
+   */
+  private releaseQueue: Promise<void> = Promise.resolve();
+  /**
+   * Members who asked to leave the ROOM, not merely the chair, and are still holding a seat.
+   *
+   * Recorded here rather than acted on at once because a player in a live hand does not leave
+   * when they ask to: they fold at their turn and the chair is freed when the hand settles, which
+   * can be several minutes of play later. `leaveRoom` used to drop the in-memory membership only
+   * `if (seatOf(userId) === null)` at the instant of the request, and nothing re-ran it — so a
+   * mid-hand leaver was durably gone (`left_at` set, seat null) and still a live member for the
+   * rest of the process's life: `registry.require()` kept granting them the room summary, socket
+   * attach and spectator views, and `RoomSummary.members` kept listing them.
+   */
+  private readonly pendingRoomExit = new Set<string>();
+  private readonly releaseSeat: ((userId: string) => Promise<void>) | null;
   private unsubscribe: (() => void) | null = null;
 
   constructor(options: {
@@ -338,13 +360,27 @@ export class LiveRoom {
     readonly archive: HandArchive;
     readonly onProblem: ProblemHook;
     readonly metrics: AppMetrics;
+    /**
+     * Frees the durable seat of a player the table has just released.
+     *
+     * A port rather than the `RoomStore` itself, because a `LiveRoom` is constructed directly by
+     * tests that have no store at all, and because this is the only durable write a room makes
+     * on its own initiative. `RoomRegistry.buildRoom` binds it to `store.unseatMember`; omitted,
+     * a released seat is released in memory only — which is exactly what a table-only test wants.
+     */
+    readonly releaseSeat?: (userId: string) => Promise<void>;
   }) {
     this.record = options.record;
     this.table = options.table;
     this.bots = options.bots;
     this.metrics = options.metrics;
+    this.releaseSeat = options.releaseSeat ?? null;
     this.unsubscribe = this.table.subscribe((notice) => {
       this.archiveNotice(notice, options.archive, options.onProblem);
+      // Both reactions hang off the SAME notice, and that is the design: settlement announces
+      // who left, and everything that must happen when a seat is released happens once, here.
+      // Four separate patches at four call sites is what produced the four defects this replaced.
+      this.releaseDeparted(notice, options.onProblem);
     });
   }
 
@@ -366,6 +402,83 @@ export class LiveRoom {
 
   removeMember(userId: string): void {
     this.members.delete(userId);
+  }
+
+  /**
+   * Starts a member's exit from the room, finishing it now if there is nothing to wait for.
+   *
+   * **Call this BEFORE `table.stand`, always.** `stand` releases the chair synchronously for a
+   * player who is not in the live hand, and the notice that does it is what completes the exit;
+   * marking afterwards would let that notice fire against an unmarked room and leave an ex-member
+   * live for the process's lifetime. Calling it first is correct in all three cases:
+   *
+   *   - not seated at all: there is no departure notice coming, so the exit completes here;
+   *   - seated, not in the hand: `stand` frees the chair at once and the notice completes it;
+   *   - seated and in the hand: the chair is freed when the hand settles, and so is the exit.
+   */
+  beginRoomExit(userId: string): void {
+    if (this.table.seatOf(userId) === null) {
+      this.removeMember(userId);
+      return;
+    }
+    this.pendingRoomExit.add(userId);
+  }
+
+  /**
+   * Resolves once every seat release this room has queued has been written.
+   *
+   * What it does NOT wait for is a release that has not been announced yet — a player still
+   * holding a live hand. That is the point: their chair is theirs until the hand settles, and the
+   * caller is told about the release that happened, not promised one that has not.
+   */
+  settleSeatReleases(): Promise<void> {
+    return this.releaseQueue;
+  }
+
+  /**
+   * Turns "the table released these seats" into the durable and in-memory tidying that owes it.
+   *
+   * One reaction, on one event, for both kinds of departure — the immediate one and the one that
+   * waits out a hand — which is what makes the two indistinguishable to everything downstream.
+   * The seat row is freed for every departure; the membership is dropped only for somebody who
+   * asked to leave the room rather than merely the chair.
+   */
+  private releaseDeparted(notice: TableNotice, onProblem: ProblemHook): void {
+    if (notice.departed.length === 0) return;
+    const departed = [...notice.departed];
+    // Synchronously, and this is NOT the file's "persist, then update memory" rule being broken:
+    // the durable removal already happened, back in `leaveRoom`, at the moment the member asked
+    // to go. What is left is memory catching up with a row that is already written, and deferring
+    // that by even a microtask would let a request arriving on the same turn of the event loop as
+    // the settlement still find an ex-member and be served.
+    for (const userId of departed) {
+      if (this.pendingRoomExit.delete(userId)) this.removeMember(userId);
+    }
+    if (this.releaseSeat === null) return;
+    const releaseSeat = this.releaseSeat;
+    this.releaseQueue = this.releaseQueue
+      .then(async () => {
+        for (const userId of departed) await releaseSeat(userId);
+      })
+      .catch((error: unknown) => {
+        // Logged and swallowed, like an archive write, so one failed release cannot wedge the
+        // chain for every later departure. The cost is honest: the seat row stays occupied until
+        // something else frees it, and the summary and the row disagree until then.
+        //
+        // Reported as `archive-write`, and counted here for the same reason `archiveNotice`
+        // counts its own: this is the same class of failure — a durable write a live room owed,
+        // which must not be allowed to stop play — and `archive-write` is `counted-at-source` in
+        // `observability/telemetry.ts`, so the module that raises it is the module that must
+        // increment. The message distinguishes the two in the log. Give this its own
+        // `ProblemEvent` the day an operator needs to alert on released seats separately.
+        this.metrics.archiveFailures.inc();
+        onProblem('a released seat could not be freed', {
+          event: 'archive-write',
+          roomId: this.record.id,
+          users: departed,
+          error: String(error),
+        });
+      });
   }
 
   /** Tracks open sockets so `RoomMember.connected` is a fact rather than a guess. */
@@ -402,8 +515,11 @@ export class LiveRoom {
     // subscription every notice passes through and because the table is a component the tests
     // construct directly — instrumenting it there would make every one of them a metrics test.
     // Both conditions fire exactly once per hand: `handStarted` is the reason of a single notice,
-    // and `handCompleted` is set by `settleIfComplete`, which returns true once per hand by
-    // design so that a subscriber cannot double-count.
+    // and `handCompleted` is set by `settleIfComplete`, which settles once per hand by design so
+    // that a subscriber cannot double-count. The two are INDEPENDENT — a hand that is over before
+    // anybody acts sets both on one notice — and the table no longer overwrites the reason with
+    // `handComplete`, which is what used to make `handsCompleted` climb while `handsStarted` did
+    // not, and falsify this paragraph's own claim that each fires exactly once per hand.
     if (notice.reason === 'handStarted') this.metrics.handsStarted.inc();
     if (notice.handCompleted) this.metrics.handsCompleted.inc();
 
@@ -413,8 +529,15 @@ export class LiveRoom {
     const board = notice.board;
     const actions = notice.loggedActions;
     const result = notice.handCompleted ? this.table.archivedResult() : null;
-    const settled = notice.handCompleted ? this.table.snapshot().seats : null;
-    const roomStatus = notice.reason === 'handStarted' ? 'playing' : notice.handCompleted ? 'open' : null;
+    // From the NOTICE, never from `this.table.snapshot().seats`. The snapshot is a later read, and
+    // by the time it happens `settleIfComplete` has already removed the seats that stood up
+    // mid-hand — so a departing winner was archived as though the hand had not paid them and the
+    // chips they won were destroyed. See `TableNotice.settledStacks`.
+    const settled = notice.settledStacks;
+    // Completion wins when a hand starts and ends on one notice: the room is open at the end of
+    // it, and writing `playing` because the deal was also on this notice would leave the lobby
+    // advertising a hand that is already over.
+    const roomStatus = notice.handCompleted ? 'open' : notice.reason === 'handStarted' ? 'playing' : null;
 
     this.archiveQueue = this.archiveQueue
       .then(async () => {
@@ -425,10 +548,7 @@ export class LiveRoom {
         }
         if (result !== null) await archive.handCompleted(result);
         if (settled !== null) {
-          await archive.stacksSettled({
-            roomId: this.record.id,
-            stacks: settled.map((seat) => ({ userId: seat.userId, stack: seat.stack })),
-          });
+          await archive.stacksSettled({ roomId: this.record.id, stacks: settled });
         }
         // `rooms.status` follows play, so a lobby read from the database agrees with the table.
         if (roomStatus !== null) await archive.roomStatusChanged(this.record.id, roomStatus);
@@ -503,6 +623,14 @@ export interface OpenRoomRequest {
  */
 export class RoomRegistry {
   private readonly rooms = new Map<string, LiveRoom>();
+
+  /**
+   * Builds in flight, keyed by room id, so two concurrent first-touches share one build.
+   *
+   * Empty except during an open. An entry is removed when the build settles — including when
+   * it rejects, so a database blip during one open does not make the room unopenable.
+   */
+  private readonly opening = new Map<string, Promise<LiveRoom>>();
   private readonly clock: Clock;
   private readonly random: RandomSource;
   private readonly learnerTurnSeconds: number | undefined;
@@ -535,11 +663,67 @@ export class RoomRegistry {
     this.metrics.roomsLive.setFrom(() => this.rooms.size);
   }
 
-  /** Opens a live table for a room, or returns the one already open. */
-  async open(request: OpenRoomRequest): Promise<LiveRoom> {
+  /**
+   * Opens a live table for a room, or returns the one already open.
+   *
+   * ## Why there is an in-flight map and not just the `rooms` lookup
+   *
+   * The body below is a check-then-act across four `await`s: it reads `this.rooms`, then
+   * reconciles interrupted hands, then reads the hand count and the last deal, and only at the
+   * very end does it `this.rooms.set`. Two callers that both arrive while the room is cold both
+   * pass the lookup, both build a `LiveTable`, and the second `set` silently replaces the first.
+   *
+   * That is not a theoretical window. Both public entry points — `openRoomFor` in
+   * `routes/rooms.ts` and `reopenFor` in `ws/router.ts` — await a database round trip before
+   * calling this, and `ensureOpen` adds two more in front, so the window is several
+   * Postgres round trips wide and opens on exactly the sequence a page load performs: a
+   * `GET /rooms/:id` racing the WebSocket `hello`, or two tabs of one session.
+   *
+   * Three things went wrong when it lost, all reproduced:
+   *
+   *   1. **A permanently silent table.** `ensureSubscription` in `ws/router.ts` caches one
+   *      table subscription per room id and never re-checks it. Attached to the room that was
+   *      replaced, it listens to a table nobody mutates: `startHand` answers `ack` and then no
+   *      `state` and no `event` frame ever arrives. The socket stays healthy — pongs answered,
+   *      acks returned — so neither the client's handshake grace nor its ping watchdog fires and
+   *      it never reconnects. Nothing repairs it until every socket in the room has closed.
+   *   2. **A permanent lockout.** `joinByInviteCode` calls `addMember` on the room this returns.
+   *      If that is the orphan, the learner is a durable member who is absent from the mapped
+   *      room's member map, and `require()` — which never re-reads the database — answers
+   *      `room_not_found_or_not_permitted` for every later request, having just told the client
+   *      it joined.
+   *   3. **A leak.** The orphan's `LiveTable`, `TurnTimer`, `BotRunner` subscription and archive
+   *      listener are unreachable from `this.rooms`, so `closeAll()` cannot close them.
+   *
+   * The file header says one API process per room is a correctness constraint because two
+   * processes holding "the" `HandState` deal two different hands. This produced that condition
+   * inside one process.
+   *
+   * So a build in flight is published before its first `await`, and every other caller waits on
+   * it. The entry is removed when it settles, including on rejection, so a failed open does not
+   * poison the next attempt.
+   *
+   * `request.members` is applied only by the caller that actually builds the room, which is the
+   * same rule the `existing !== undefined` early return has always had.
+   */
+  open(request: OpenRoomRequest): Promise<LiveRoom> {
     const existing = this.rooms.get(request.record.id);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) return Promise.resolve(existing);
 
+    const inFlight = this.opening.get(request.record.id);
+    if (inFlight !== undefined) return inFlight;
+
+    // No `await` between here and the `set`, which is what makes this a lock rather than a
+    // slightly narrower race: `buildRoom` runs synchronously up to its own first `await`, so no
+    // other caller can be scheduled until the entry is published.
+    const build = this.buildRoom(request).finally(() => {
+      this.opening.delete(request.record.id);
+    });
+    this.opening.set(request.record.id, build);
+    return build;
+  }
+
+  private async buildRoom(request: OpenRoomRequest): Promise<LiveRoom> {
     // Nothing in this process holds a table for this room yet, so any hand still open in the
     // database belongs to a process that is gone and can never finish it. Closed here, before the
     // table exists, so the reconciliation can never race a hand this process is about to deal.
@@ -592,6 +776,10 @@ export class RoomRegistry {
       archive: this.archive,
       onProblem: this.onProblem,
       metrics: this.metrics,
+      // The one durable write a room makes on its own initiative, and the reason a mid-hand stand
+      // no longer strands `room_members.seat`: the release is announced by the table when the
+      // chair is actually freed, not when the player asked, so the two cannot drift apart.
+      releaseSeat: (userId) => this.store.unseatMember(request.record.id, userId),
     });
     for (const member of request.members ?? []) room.addMember(member);
     this.rooms.set(request.record.id, room);
@@ -882,20 +1070,49 @@ export class RoomRegistry {
    * player holding a live hand does not leave immediately — they are flagged, they fold at their
    * turn, and the seat is released when the hand completes. Freeing the database seat first would
    * let somebody else take a seat that is still holding cards.
+   *
+   * ## Why there is no `if (seatOf(userId) === null)` here any more
+   *
+   * There used to be, guarding the `unseatMember` call, and it was false for exactly the case
+   * that mattered: a player holding a live hand is flagged `leaving` and STAYS seated, so the
+   * durable seat was never released. `settleIfComplete` freed the live chair when the hand ended,
+   * on a path with no store and no listener, and nothing re-ran this. The room summary (built
+   * from the live table) then showed the seat free, the next client to tap it was refused by
+   * `room_members_live_seat_key` with `seat_taken` — for the rest of the process's life — and a
+   * restart re-seated a player who had left, with the stale stack that came with them.
+   *
+   * The release is now announced by the table on the notice that actually frees the chair, and
+   * `LiveRoom.releaseDeparted` does the write. This call awaits the chain only so that the
+   * synchronous case — a player who was not in the live hand — has been written by the time the
+   * caller answers. A player still in a hand has nothing queued yet, and correctly does not wait.
    */
   async standFromTable(roomId: string, userId: string): Promise<void> {
     const room = this.require(roomId, userId);
     await room.table.stand(userId);
-    if (room.table.seatOf(userId) === null) await this.store.unseatMember(roomId, userId);
+    await room.settleSeatReleases();
   }
 
-  /** Leaves the room altogether: stand up if seated, then drop the membership. */
+  /**
+   * Leaves the room altogether: stand up if seated, then drop the membership.
+   *
+   * `beginRoomExit` comes FIRST, before `stand`, and that order is load-bearing — `stand` can
+   * free the chair synchronously, and the notice that does it is what completes the exit. See
+   * `LiveRoom.beginRoomExit`, which also explains why an unseated member is dropped immediately.
+   *
+   * The durable writes are unconditional, as they always were. What used to be conditional — and
+   * on a condition evaluated at the wrong instant — was the in-memory membership: dropped only
+   * `if (seatOf(userId) === null)` at the moment of the request, which is false for anybody
+   * holding a live hand, and never re-run. A mid-hand leaver was therefore durably gone and still
+   * a live member, so `require()` kept letting them read the room and `RoomSummary.members` kept
+   * listing them.
+   */
   async leaveRoom(roomId: string, userId: string): Promise<void> {
     const room = this.require(roomId, userId);
+    room.beginRoomExit(userId);
     if (room.table.seatOf(userId) !== null) await room.table.stand(userId);
     await this.store.unseatMember(roomId, userId);
     await this.store.removeMember(roomId, userId);
-    if (room.table.seatOf(userId) === null) room.removeMember(userId);
+    await room.settleSeatReleases();
   }
 
   /** Seats a bot and registers it with the runner. Both, or neither. */

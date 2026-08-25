@@ -25,9 +25,14 @@ A pnpm workspace of six libraries and two applications.
 | `@prl/api` | Fastify 5 REST + WebSocket server, PostgreSQL persistence | fastify, @fastify/*, postgres, ws |
 | `@prl/web` | Next.js 16 App Router client | next, react, react-dom |
 
-**13 web routes:** `/`, `/learn`, `/learn/[lessonId]`, `/learn/glossary`, `/lab`,
-`/lab/[scenarioId]`, `/play`, `/legends`, `/legends/[profileId]`, `/legends/compare`,
-`/legends/hand-review`, `/review`, `/review/[handId]`.
+**19 web routes** (`find apps/web/src/app -name page.tsx`): `/`, `/learn`,
+`/learn/[lessonId]`, `/learn/glossary`, `/lab`, `/lab/[scenarioId]`, `/play`, `/legends`,
+`/legends/[profileId]`, `/legends/compare`, `/legends/hand-review`,
+`/legends/hand-review/demo`, `/review`, `/review/[handId]`, `/record`, `/age-check`,
+`/privacy`, `/terms`, `/responsible-use`. This said thirteen and listed thirteen; the six it
+was missing are the ones added since — the hand-review demo, the recorder, and the four
+age-gate and legal pages, which are exactly the routes a reader auditing the compliance
+surface would come here to find.
 
 **8 API route modules:** auth, calc, content, hands, legends, progress, rooms, plus the
 router index that mounts them under `/api/v1`.
@@ -100,15 +105,15 @@ procedure, including the one-API-process rule, is in `RUNBOOK.md`.
 ## 4. Verification
 
 ```bash
-pnpm run verify          # the release gate: 11 gates, every one of them run and reported
+pnpm run verify          # the release gate: 13 gates, every one of them run and reported
 pnpm run test            # build:packages, then unit + integration + scripts
-pnpm run test:all        # the above, plus exhaustive, simulation and a11y
-pnpm run security:audit  # 9 supply-chain gates
+pnpm run test:all        # the above, plus exhaustive, simulation, a11y and ax
+pnpm run security:audit  # 11 supply-chain gates
 pnpm run test:exhaustive # all 133,784,560 seven-card hands
 pnpm run test:simulation # AI profiles vs their published cards
 pnpm run test:smoke -- --strict
 pnpm run test:load
-pnpm run db:verify       # asserts the LIVE schema's security properties — but not its ownership, §6
+pnpm run db:verify       # asserts the LIVE schema's security properties, ownership included (check 6b)
 pnpm run design:contrast # WCAG 2.2 AA, both themes
 pnpm run fixtures:check  # the web fixtures still equal what the engine computes
 ```
@@ -117,8 +122,11 @@ pnpm run fixtures:check  # the web fixtures still equal what the engine computes
 
 ```
 security:audit · security:hygiene · lint · build · typecheck · design:contrast
-test · test:a11y · test:exhaustive · test:simulation · db:verify
+test · test:a11y · test:ax · test:csp · test:exhaustive · test:simulation · db:verify
 ```
+
+Thirteen. This list said eleven and omitted `test:ax` and `test:csp`, which are in the loop in
+`package.json` — the authority for this list is that loop, not this block.
 
 **Every gate runs even if an earlier one fails**, each prints `PASS`/`FAIL`, and the command exits
 non-zero if any failed. `verify` used to be a `&&` chain with `db:verify` last — so while `test` was
@@ -240,12 +248,22 @@ Stated plainly. Several of these are things the automated suite cannot detect.
 9. **The release verdict is FAIL and no independent round has been run since remediation.** §8.
    Reading the source and seeing a repair is not the same as verifying it, and this project has
    been caught making that substitution twice.
-10. **Nothing in the repository restores a backup, and `db:verify` does not check schema
-    ownership.** The `RUNBOOK` §11.4 procedure was rehearsed by hand and is enforced by no gate.
-    Worse, the command the checklist says to trust as the rehearsal exits 0 on a database whose
-    54 relations are owned by the runtime role — it asks whether `prl_app` owns anything and never
-    asks who does. Measured 2026-08-19; the fix is one query in
-    `apps/api/scripts/verify-schema.mjs`.
+10. **Both halves of this item have been closed, and it is kept because it was load-bearing.**
+    It read: "Nothing in the repository restores a backup, and `db:verify` does not check schema
+    ownership" — the `RUNBOOK` §11.4 procedure was rehearsed by hand and enforced by no gate, and
+    the command the checklist says to trust as the rehearsal exited 0 on a database whose 54
+    relations were owned by the runtime role, because it asked whether `prl_app` owned anything
+    and never asked who did. Measured 2026-08-19. Since then: `apps/api/scripts/verify-schema.mjs`
+    gained **check 6b**, which asserts that schema `prl` and every relation in it are owned by
+    `prl_migrator` and names the offenders when they are not; and `scripts/backup.mjs` gained
+    **`restore`** (into a named target, never over the live database without an explicit flag) and
+    **`verify --deep`**, which restores into a scratch database and compares row counts rather than
+    checking a sha256 sidecar and calling that a restore. `deploy/backup/prl-backup-verify.timer`
+    runs the verification on a schedule, because a backup nobody restores is a directory of files
+    with an encouraging name. **What remains true:** none of this is in `pnpm run verify` — a
+    restore is not a release gate — and `verify --deep` proves `pg_restore` can read the archive,
+    not that the application serves the restored data. That drill is
+    [`production/backup-restore.md`](production/backup-restore.md) §7.
 11. **A pinned digest is not a safe digest.** The new `ci-pinning` gate proves every action and
     base image is referenced immutably. It cannot say the artefact was benign when the digest was
     taken, and the OSV gate queries the npm ecosystem only, so an advisory against a base image
@@ -318,7 +336,7 @@ paragraph; the numbers are that run's output, not a carry-forward.
 
 | Audit finding | State | How that was established |
 |---|---|---|
-| **P0-4** `verify` was a `&&` chain, so `db:verify` had never executed inside it | Fixed | `verify` is now a loop over eleven gates that prints `PASS`/`FAIL` for each, runs all of them regardless, and exits 1 listing every failure. Read from `package.json`; the control flow was executed with stand-in gates and two deliberate failures — both were reported and the exit was 1 |
+| **P0-4** `verify` was a `&&` chain, so `db:verify` had never executed inside it | Fixed | `verify` is now a loop over thirteen gates that prints `PASS`/`FAIL` for each, runs all of them regardless, and exits 1 listing every failure. Read from `package.json`; the control flow was executed with stand-in gates and two deliberate failures — both were reported and the exit was 1 |
 | **OPS-015** `RUNBOOK` §11.4 backup/restore produced an unservable database | Fixed | Rehearsed end to end 2026-08-19. The old `--no-owner --no-privileges` restore exits **0** and then `db:verify` exits **1** with `prl_app: lacks USAGE on schema prl`. The corrected procedure — `migrate.mjs roles`, then `pg_restore --exit-on-error` with ownership kept — gives `db:verify` exit 0 and `db:migrate:status` exit 0 |
 | **OPS-008** the least-privilege database model was never exercised | Fixed | `docker-compose.yml` and `.env.example` connect as `prl_api`; `db/seeds/0002_dev_login_roles.sql` creates it as a member of `prl_app` and asserts it holds `USAGE` and not `CREATE` on schema `prl` |
 | **OPS-003** no rollback path and no roll-forward-only policy in its place | Fixed | `migrate.mjs down` refuses and lists four alternatives (run, exit 1); `up` refuses an undeclared destructive statement; `apps/api/scripts/migrate.test.mjs` covers it, 10/10 pass |

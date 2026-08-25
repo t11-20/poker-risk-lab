@@ -1,0 +1,112 @@
+# ---------------------------------------------------------------------------
+# Prometheus and Alertmanager, as an OVERLAY on the staging stack.
+#
+#     docker compose --env-file deploy/staging/.env.staging \
+#       -f docker-compose.staging.yml -f docker-compose.observability.yml up -d
+#
+# or, with the checks and the teardown around it:
+#
+#     pnpm run alerts:verify
+#
+# ## Why an overlay and not two more services in docker-compose.staging.yml
+#
+# That file is a deployment manifest and its header says what makes it one: no
+# `build:` anywhere, both application services pinned to a content digest from the
+# release manifest, and `staging promote` refusing a digest staging did not test.
+# Its claim is "this is the stack production runs". Prometheus and Alertmanager are
+# not part of that stack — a real deployment gets them from its platform, its cloud
+# provider or a separate operations repository — so putting them in that file would
+# make it describe a deployment nobody performs.
+#
+# They are also not needed to run staging. `pnpm run staging up` must stay a
+# complete rehearsal on its own, and it does: this file is additive and optional,
+# and the same project name puts these two containers on the staging network so
+# they can reach `api:3001` without publishing anything.
+#
+# ## What this proves, and what it does not
+#
+# It proves the delivery path: a metric condition on the real API becomes a firing
+# rule in a real Prometheus, is routed by severity in a real Alertmanager, and
+# arrives at a receiver. `docs/production/alerts.md` needed that, because until it
+# existed the document ended by admitting it described intent.
+#
+# It does not prove that a human is reached. There is no PagerDuty here and no
+# ticket queue; both receivers are a local webhook sink that
+# `scripts/alert-delivery.mjs` runs while it watches. Production replaces two URLs
+# in alertmanager.yml. That last hop — the one that ends at somebody's phone — is
+# still unrehearsed, and the readiness report says so.
+# ---------------------------------------------------------------------------
+
+name: poker-risk-lab-staging
+
+services:
+  prometheus:
+    # Pinned by digest, like every other image in this deployment: `ci-pinning.mjs`
+    # fails a compose file that names an image by tag alone, and an alerting stack
+    # that silently changed underneath a verification run would invalidate the run.
+    image: prom/prometheus:v3.7.3@sha256:49214755b6153f90a597adcbff0252cc61069f8ab69ce8411285cd4a560e8038
+    pull_policy: missing
+    restart: unless-stopped
+    init: true
+    depends_on:
+      api:
+        condition: service_healthy
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Two hours is more than any verification run needs and keeps the container's
+      # disk use bounded on a laptop.
+      - --storage.tsdb.retention.time=2h
+      - --web.enable-lifecycle
+    volumes:
+      - ./deploy/staging/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/staging/observability/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      # Written by `scripts/alert-delivery.mjs` from PRL_STAGING_METRICS_TOKEN;
+      # gitignored, because it is the credential that reads /metrics.
+      - ./deploy/staging/observability/metrics-token:/etc/prometheus/metrics-token:ro
+    ports:
+      # Loopback, so the verification script can query it. Prometheus has no
+      # authentication of its own and its query API can read every series, which is
+      # exactly why this is not on a routable address.
+      - '127.0.0.1:${PRL_STAGING_PROMETHEUS_PORT:-9090}:9090'
+    extra_hosts:
+      # Docker Desktop resolves host.docker.internal already; this is what makes
+      # the same alertmanager.yml work on Linux.
+      - 'host.docker.internal:host-gateway'
+    # Read-only, like every service in docker-compose.staging.yml, with the TSDB on
+    # a tmpfs rather than a volume. That is not a compromise here: this stack exists
+    # for the length of one verification run, and a Prometheus whose history
+    # survives it would be a second, unversioned record of what staging did.
+    read_only: true
+    tmpfs:
+      - /prometheus:mode=0700,uid=65534,gid=65534,size=256m
+      - /tmp:mode=1777,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1@sha256:27c475db5fb156cab31d5c18a4251ac7ed567746a2483ff264516437a39b15ba
+    pull_policy: missing
+    restart: unless-stopped
+    init: true
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./deploy/staging/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - '127.0.0.1:${PRL_STAGING_ALERTMANAGER_PORT:-9093}:9093'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    read_only: true
+    tmpfs:
+      # Alertmanager's notification log and silences. Losing them with the
+      # container is correct here for the same reason as the TSDB above.
+      - /alertmanager:mode=0700,uid=65534,gid=65534,size=32m
+      - /tmp:mode=1777,noexec,nosuid,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

@@ -38,10 +38,58 @@ Live `staging up` waited on `proxy:running/starting` after the stack `up`, then:
 
 ## CVE
 
-trivy HIGH floor, this SHA’s images: 0 blocking, 60 unfixable, 0 allowed (`containers.log`).
+trivy HIGH floor, this SHA’s images: **0 blocking, 60 unfixable, 0 allowed**. Re-scanned at
+UTC 2026-08-24T16:15:22Z with trivy 0.72.0 against the same two digests: still 0 blocking.
+
+The 60 is **not** 60 HIGH, which is how both release reviews recorded it. It is **52 HIGH and
+8 CRITICAL**, 30 findings per image, 14 distinct CVEs — the images are the same Debian 12.15
+base, so each finding appears twice:
+
+| Severity | Distinct CVEs | Notable |
+| --- | --- | --- |
+| CRITICAL | 4 | `CVE-2023-45853` zlib1g (`will_not_fix`), `CVE-2026-13221` / `CVE-2026-42496` / `CVE-2026-8376` perl-base |
+| HIGH | 10 | `CVE-2026-53613` / `CVE-2026-53615` util-linux family (8 packages each), ncurses, gzip, libacl1, perl-base |
+
+`container-scan.mjs` now prints that breakdown and names the unfixed CRITICALs on their own
+line, because "60 unfixable HIGH" and "8 CRITICAL among 60" are different facts to somebody
+deciding whether to ship. The policy is unchanged and is deliberate: a finding with no
+available fix does not block, because the only remediation is a different base image and a
+permanently red gate is a gate somebody turns off. `--include-unfixed` makes them block, and a
+review that runs it is measuring a different policy from the one this repository ships — which
+is the whole of the disagreement between the two reviews on this point.
 
 ---
 
 ## Alerts
 
-Metric families exist. `ApiDown`/`ApiNotReady` conditions were produced (drills 503; rollback 504). Staging compose has no Prometheus/Alertmanager. **Alert delivery UNVERIFIED.**
+**Was:** metric families exist, `ApiDown`/`ApiNotReady` conditions were produced (drills 503;
+rollback 504), staging compose has no Prometheus/Alertmanager — **alert delivery UNVERIFIED**.
+
+**Now:** `pnpm run alerts:verify`, against this same running stack, **16 of 16 checks, exit 0**
+(`alert-delivery2.log` / `.json`, stamped `SHA=5e3cbbc`, UTC 2026-08-24T16:50:52Z). The application
+images under test are still the candidate digests above; the overlay adds only Prometheus
+(`v3.7.3`) and Alertmanager (`v0.28.1`), both pinned by digest in
+`docker-compose.observability.yml`.
+
+| Check | Result |
+| --- | --- |
+| All 22 rules loaded, no evaluation error | PASS |
+| Every rule is `page` or `ticket` | PASS — 10 page, 12 ticket |
+| Every `runbook` annotation resolves to a file | PASS |
+| Rules file and `alerts.md` name the same 22 alerts, same severities | PASS |
+| Every `prl_*` series the rules name is in a live scrape | PASS — 38 metric families |
+| Every expression evaluates against live data | PASS — 22 expressions |
+| `ApiDown` provoked: `compose stop api` → firing | PASS — 248 s after the stop |
+| Alertmanager received it | PASS — same second |
+| Paging receiver notified | PASS — 4 s later, on `/page` |
+| The page did **not** also raise a ticket | PASS — severity routing enforced |
+| API restored, resolved notification delivered | PASS — healthy in 11 s, resolved 18 s later |
+
+The 248 s is not slack: `max_over_time(up[2m]) == 0` cannot be true until two minutes of failed
+scrapes have accumulated, and only then does `for: 2m` begin. A first run of this verification
+used a four-minute budget and reported a false negative on a rule that was working — the
+budget is now six.
+
+**Still unverified:** that a human is reached. Both receivers are a webhook sink on the host.
+Production replaces two URLs in `deploy/staging/observability/alertmanager.yml`. Twenty-one of
+the twenty-two rules were checked but not provoked.

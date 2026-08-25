@@ -237,10 +237,12 @@ services:
       # while the database is unreachable. `depends_on: service_healthy` on the
       # proxy therefore means "the API can actually serve", not "a process exists".
       #
-      # `node -e` rather than curl or wget: neither is in bookworm-slim and adding
-      # a package to run a probe is a package in the runtime image for nothing. The
-      # probe targets the container's own network address, not 127.0.0.1, so a
-      # server bound to loopback fails it instead of passing it.
+      # `node -e` rather than curl or wget. The images are Alpine-based
+      # (Dockerfile.api), so busybox wget does exist now where bookworm-slim had
+      # neither — but node is the binary a Node image is guaranteed to have, so a
+      # node probe cannot be broken by a base change, and it needs no shell to
+      # build its URL. The probe targets the container's own network address, not
+      # 127.0.0.1, so a server bound to loopback fails it instead of passing it.
       #
       # Written with string concatenation rather than a template literal on
       # purpose: `${...}` inside a compose VALUE is interpolated by compose before

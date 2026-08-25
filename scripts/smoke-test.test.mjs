@@ -77,6 +77,8 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   classifyGuestLimit,
+  classifyHostileRefusal,
+  listIsMissingOrEmpty,
   originBucketNote,
   parseArgs,
   parseDeltaSeconds,
@@ -84,6 +86,7 @@ import {
   RATE_LIMIT_RESET_PATH,
   RECOVERY_PADDING_SECONDS,
   recoveryWaitSeconds,
+  sampledEquityMissesInterval,
 } from './smoke-test.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -473,5 +476,154 @@ describe('the harness does not hand harness-paths.test.ts a route that must not 
     const doctored = `const p = '${RATE_LIMIT_RESET_PATH}';`;
     const offenders = apiPathLiterals(doctored).filter((path) => path.startsWith('/api/v1/_test/'));
     assert.deepEqual(offenders, [RATE_LIMIT_RESET_PATH]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Assertions that must not evaporate when the field is absent
+// ---------------------------------------------------------------------------
+
+/**
+ * Section 5's checks on the coach report and the equity result were written so that a MISSING
+ * field produced neither a pass nor a failure. That is the worst of the three outcomes: an
+ * empty list is a coach that stated nothing, and an absent block is a coach that has stopped
+ * modelling the thing at all — and the run said neither.
+ *
+ * ## Would these fail against the old code?
+ *
+ * Yes, and it was checked that way rather than assumed. Each block below states the OLD
+ * expression as well as the new one and asserts they DISAGREE on the absent case, so the
+ * negative control is a property of this test rather than of the current implementation — a
+ * revert to `?.length === 0` or `=== null` fails here, not merely a rename.
+ */
+describe('assertions about absence', () => {
+  it('treats an empty list as missing, which is what it was already doing', () => {
+    assert.equal(listIsMissingOrEmpty([]), true);
+  });
+
+  it('treats an ABSENT list as missing, which is what the old expression could not see', () => {
+    const report = { suggestion: {} };
+    assert.equal(listIsMissingOrEmpty(report.uncertainty?.limitations), true);
+
+    // The old test, spelled out. It is false for `undefined`, and section 5 had no `else`, so
+    // the check produced nothing at all — neither `ok` nor `bad`.
+    const asItWasWritten = report.uncertainty?.limitations?.length === 0;
+    assert.equal(asItWasWritten, false, 'the fixture must actually reproduce the old blind spot');
+    assert.notEqual(listIsMissingOrEmpty(report.uncertainty?.limitations), asItWasWritten);
+  });
+
+  it('is false for a list that has something in it, so it cannot fire on every report', () => {
+    // The positive control. A predicate that returned true unconditionally would pass both
+    // assertions above.
+    assert.equal(listIsMissingOrEmpty(['sampling error is not modelled']), false);
+    assert.equal(listIsMissingOrEmpty([0]), false);
+  });
+
+  it('treats a non-array as missing rather than reading .length off it', () => {
+    assert.equal(listIsMissingOrEmpty('sampling error is not modelled'), true);
+    assert.equal(listIsMissingOrEmpty({ length: 3 }), true);
+    assert.equal(listIsMissingOrEmpty(null), true);
+  });
+});
+
+describe('the confidence-interval check on a sampled equity', () => {
+  it('passes a sampled result that carries its interval', () => {
+    // Positive control: a predicate that always fired would pass every other case here.
+    assert.equal(
+      sampledEquityMissesInterval({ method: 'monte-carlo', confidenceHalfWidthPoints: 0.4 }),
+      false,
+    );
+  });
+
+  it('ignores an exact result, which has no interval to carry', () => {
+    assert.equal(sampledEquityMissesInterval({ method: 'exhaustive' }), false);
+    assert.equal(sampledEquityMissesInterval(undefined), false);
+  });
+
+  it('fires on an explicit null, which is what the old expression caught', () => {
+    assert.equal(
+      sampledEquityMissesInterval({ method: 'monte-carlo', confidenceHalfWidthPoints: null }),
+      true,
+    );
+  });
+
+  it('fires on an ABSENT key, which is what the old `=== null` missed', () => {
+    const equity = { method: 'monte-carlo' };
+    assert.equal(sampledEquityMissesInterval(equity), true);
+
+    // The old test, spelled out, disagreeing on exactly this case. A serialiser that drops
+    // undefined fields — or a route that stopped computing the half-width — produces this
+    // shape, and the run then printed a Monte Carlo percentage that reads as exact.
+    const asItWasWritten = equity.confidenceHalfWidthPoints === null;
+    assert.equal(asItWasWritten, false, 'the fixture must actually reproduce the old blind spot');
+    assert.notEqual(sampledEquityMissesInterval(equity), asItWasWritten);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The hostile-input negative control
+// ---------------------------------------------------------------------------
+
+/**
+ * Section 5 sends six deliberately invalid bodies to `POST /math/equity` and reports "all 6
+ * hostile calculation inputs rejected". It used to accept ANY 4xx as a rejection.
+ *
+ * Section 12 exhausts the expensive-rate-limit budget on purpose, and that limiter answers
+ * before the request reaches a route. So a run in which the budget was already spent — a second
+ * run inside one window, a shared bucket, a deployment without the reset control — answered all
+ * six probes with 429 and printed the claim anyway, having reached no validator at all.
+ *
+ * ## Would these fail against the old code?
+ *
+ * The old rule is written out below as `oldRuleCountedItRejected` and asserted to DISAGREE with
+ * the classifier on the 429 case. Restoring `status >= 400 && status < 500` therefore fails
+ * here by construction rather than by coincidence.
+ */
+describe('classifyHostileRefusal', () => {
+  const response = (status, code) => ({
+    status,
+    json: code === undefined ? {} : { error: { code, message: 'x', requestId: 'r' } },
+  });
+
+  it('counts a closed-schema rejection', () => {
+    assert.equal(classifyHostileRefusal(response(400, 'invalid_request')).kind, 'rejected');
+  });
+
+  it('counts a calculator refusal, which is where the absurd sample count lands', () => {
+    assert.equal(classifyHostileRefusal(response(422, 'computation_rejected')).kind, 'rejected');
+    assert.equal(classifyHostileRefusal(response(413, 'payload_too_large')).kind, 'rejected');
+  });
+
+  it('calls a 429 UNTESTED rather than rejected, which is the whole defect', () => {
+    const limited = response(429, 'rate_limited');
+    const verdict = classifyHostileRefusal(limited);
+    assert.equal(verdict.kind, 'untested');
+    assert.match(verdict.why, /before any validator/);
+
+    // The old rule, spelled out. It counted this as a pass, which is how six 429s became
+    // "all 6 hostile calculation inputs rejected".
+    const oldRuleCountedItRejected = limited.status >= 400 && limited.status < 500;
+    assert.equal(oldRuleCountedItRejected, true, 'the fixture must reproduce what the old rule saw');
+    assert.notEqual(verdict.kind, 'rejected');
+  });
+
+  it('calls a 429 untested even when a proxy stripped the body', () => {
+    assert.equal(classifyHostileRefusal({ status: 429, json: null }).kind, 'untested');
+  });
+
+  it('does not count a 4xx that carries no validation code', () => {
+    // 401 and 403 are 4xx and are not validation: a session that expired mid-section would
+    // otherwise have read as six successful refusals.
+    assert.equal(classifyHostileRefusal(response(401, 'not_authenticated')).kind, 'wrong-refusal');
+    assert.equal(classifyHostileRefusal(response(403, 'csrf_failed')).kind, 'wrong-refusal');
+    assert.equal(classifyHostileRefusal(response(404, undefined)).kind, 'wrong-refusal');
+  });
+
+  it('calls a 200 accepted, which is the failure the section was written for', () => {
+    // The positive control for the other direction: a classifier that returned 'rejected' for
+    // everything would pass the three cases above, and a classifier that never did would pass
+    // this one.
+    assert.equal(classifyHostileRefusal(response(200)).kind, 'accepted');
+    assert.equal(classifyHostileRefusal(response(500, 'internal_error')).kind, 'accepted');
   });
 });

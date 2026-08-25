@@ -66,6 +66,10 @@ const GATES = [
   { file: 'deny-list.mjs', label: 'denied packages', network: false },
   { file: 'dep-shapes.mjs', label: 'dependency shapes', network: false },
   { file: 'ioc-scan.mjs', label: 'Shai-Hulud IOC sweep', network: false },
+  // The working tree only. `--history` is opt-in and is not run here; see that
+  // file's header for why a gate whose only remedy is a history rewrite must not
+  // be able to turn the release audit permanently red.
+  { file: 'secret-scan.mjs', label: 'committed credentials', network: false },
   { file: 'ci-pinning.mjs', label: 'CI + container pinning', network: false },
   { file: 'provenance.mjs', label: 'integrity + release age', network: true },
   { file: 'osv-scan.mjs', label: 'OSV vulnerabilities', network: true },

@@ -200,9 +200,22 @@ The exact-enumeration path was unaffected, which is precisely why the smoke test
 
 This works on the development stack only by coincidence: there the proxy publishes port 3000 and web listens on 3000, so the two spellings happen to match. It could not be fixed at the proxy — no forwarded header changed the answer — and it could not be worked around by allowlisting the wrong origin, because `PUBLIC_WEB_ORIGIN` refuses a plaintext entry in production and the port would still be wrong. Fixed with `apps/web/src/lib/public-origin.ts`.
 
-### The outstanding item
+### The outstanding item, and what has closed since
 
-**Because both fixes landed after that run, `staging up` has not yet been re-run to produce a green attestation, and no promotion has completed end to end.** The refusal paths are proven — `promote` refused with `nothing has been verified in staging`, and with a synthetic attestation naming a different api digest it printed both digests (`about to promote  sha256:65299822…` / `staging tested    sha256:0000…`) and also flagged the dirty working tree. The success path is implemented and is not yet evidenced. Do not read this document, or [`deployment.md`](deployment.md), as saying otherwise.
+This section used to end here, saying that because both fixes landed after that run, `staging up` had not yet been re-run to produce a green attestation and no promotion had completed end to end. **That is no longer the case.** `staging up` was re-run on the fixed code and wrote `deploy/staging/staging-verified.json`: `verifiedAt` `2026-08-22T18:55:36Z`, commit `b292b2ac234c` with `dirty: false`, and all four checks true —
+
+| Check | Result |
+| --- | --- |
+| `runningDigestsMatchManifest` | true |
+| `tlsChainVerified` | true |
+| `forwardedForOverwritten` | true |
+| `smokeTestStrict` | true |
+
+— with `/api/v1/ready` answering 200, HSTS at `max-age=31536000; includeSubDomains`, the strict smoke test passing 61 checks, the proxy overwriting `X-Forwarded-For` on 24 of 24, and `staging promote` reporting promotable and byte-identical. The run is written up in [`staging-verification.md`](staging-verification.md).
+
+The refusal paths remain proven from the earlier run — `promote` refused with `nothing has been verified in staging`, and with a synthetic attestation naming a different api digest it printed both digests (`about to promote  sha256:65299822…` / `staging tested    sha256:0000…`) and also flagged the dirty working tree.
+
+**What is still outstanding is the registry, not the run.** Those digests come from the local BuildKit store and are **not registry-attested**, so the attestation proves this machine deployed and verified the images this machine built. Nothing here proves a registry hands the same digests to a different host, because there is no registry. Do not read this document, or [`deployment.md`](deployment.md), as claiming more than that.
 
 ---
 

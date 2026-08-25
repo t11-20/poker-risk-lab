@@ -57,6 +57,7 @@ import {
   observeAction,
   observeHandComplete,
   type PublicActionEvent,
+  RANGE_STREETS,
   REASONABLE_MINIMUM_HANDS,
   reliabilityFor,
   type SeatObservations,
@@ -674,8 +675,8 @@ test('a tight seat is given a narrower range than a loose one', () => {
   assert.ok(Math.abs(tight.vpip - 0.12) < 1e-12);
   assert.ok(Math.abs(loose.vpip - 0.55) < 1e-12);
 
-  const tightRange = estimateRange(tight, 'preflop', 'none');
-  const looseRange = estimateRange(loose, 'preflop', 'none');
+  const tightRange = estimateRange(tight, 'preflop', 'none', 1);
+  const looseRange = estimateRange(loose, 'preflop', 'none', 1);
   assert.ok(
     tightRange.combos.length < looseRange.combos.length,
     `tight ${tightRange.combos.length} combos should be fewer than loose ${looseRange.combos.length}`,
@@ -690,7 +691,7 @@ test('a range narrows with each street of betting and with the strength of the a
   const stats = statsOf(seatWithVpip(base, 1, 200, 110), 1);
 
   const combos = (street: string, facing: string): number =>
-    estimateRange(stats, street, facing).combos.length;
+    estimateRange(stats, street, facing, 1).combos.length;
 
   assert.ok(combos('flop', 'none') < combos('preflop', 'none'));
   assert.ok(combos('turn', 'none') < combos('flop', 'none'));
@@ -706,25 +707,117 @@ test('a range narrows with each street of betting and with the strength of the a
   assert.equal(combos('preflop', 'check'), combos('preflop', 'none'));
 });
 
-test('an insufficient sample cannot move the range off the baseline assumption', () => {
+/** `hands` observed hands for one seat, every one entered and every flop bet called. */
+function seatThatNeverFolds(base: PlayerView, seat: number, hands: number): OpponentObservations {
+  let observations = emptyObservations();
+  for (let index = 0; index < hands; index++) {
+    observations = feedHand(observations, base, `nf${index}`, [
+      preflop(seat, 'call', 2, 2),
+      postflop(seat, 'call', 10, 20, 10),
+    ]);
+  }
+  return observations;
+}
+
+/**
+ * An insufficient sample must be ignored on EVERY street, not just the one where it is free.
+ *
+ * The test this replaces asserted the same rule at `('preflop', 'none')` only, and preflop is
+ * the one street where it could not fail: `streetsOfBetting` is 0 there, `keep ** 0` is 1, and
+ * the per-street keep factor — the term that was reading the insufficient sample's own
+ * fold-to-bet rate — drops out of the arithmetic entirely. A guard that can only be satisfied
+ * is not a guard.
+ *
+ * Measured with this exact 25-hand sample before the fix: preflop 334 combos (correct, and
+ * the reason nothing caught it), flop 300 against a neutral 184, turn 272 against 106, and
+ * river 244 combos / 18.40% against a neutral 56 / 4.22% — 4.4x wider, from a sample the
+ * module's own doc comment says it ignores. After: identical to neutral on all four.
+ */
+test('an insufficient sample cannot move the range off the baseline assumption, on any street', () => {
   const base = completedBaseView();
-  // 25 hands: past the null floor, still `insufficient`.
-  const veryLoose = statsOf(seatWithVpip(base, 1, 25, 25), 1);
+  // 25 hands: past the null floor, still `insufficient`. Entered every hand AND called every
+  // flop bet, so it pushes both terms — entry width and per-street keep — as far as they go.
+  const veryLoose = statsOf(seatThatNeverFolds(base, 1, 25), 1);
   assert.equal(veryLoose.reliability, 'insufficient');
   assert.equal(veryLoose.vpip, 1, 'this seat entered every single observed hand');
+  assert.equal(veryLoose.foldToBetFrequency, 0, 'and folded to none of the bets it faced');
 
-  // The baseline vpip is 0.25, so the range is the top 25% and not the top 100%.
-  const range = estimateRange(veryLoose, 'preflop', 'none');
-  assert.ok(range.fractionOfAllHands >= 0.25 && range.fractionOfAllHands < 0.3);
-  assert.deepEqual(range.combos.length, estimateRange(neutralStats(1), 'preflop', 'none').combos.length);
+  // The baseline vpip is 0.25, so the entry range is the top 25% and not the top 100%.
+  const preflop = estimateRange(veryLoose, 'preflop', 'none', 1);
+  assert.ok(preflop.fractionOfAllHands >= 0.25 && preflop.fractionOfAllHands < 0.3);
+
+  for (const street of RANGE_STREETS) {
+    const observed = estimateRange(veryLoose, street, 'none', 1);
+    const neutral = estimateRange(neutralStats(1), street, 'none', 1);
+    assert.equal(
+      observed.combos.length,
+      neutral.combos.length,
+      `${street}: a 25-hand sample moved the range to ${observed.combos.length} combos from the ` +
+        `neutral ${neutral.combos.length}`,
+    );
+  }
+
+  // The neutral river range really is narrow, so the assertion above is not passing because
+  // every street collapsed to the same number. Before the fix this seat's river range was 244.
+  assert.equal(estimateRange(neutralStats(1), 'river', 'none', 1).combos.length, 56);
 });
 
-test('estimateRange rejects a street or an action it does not model', () => {
+/**
+ * The gate defect 1 closed: a range is an adaptation, and it has to be scaled like one.
+ *
+ * `exploitAdjustments` was scaled by `adaptation x RELIABILITY_WEIGHT` and `estimateRange` was
+ * scaled by neither, so a profile with adaptation 0 — which is every profile at the
+ * `educational` difficulty — still played against a range built from what it had watched.
+ * Negative control: at adaptation 0 the station and the rock below produced 300 and 84 combos
+ * on the flop respectively; they must now both produce the neutral 184.
+ */
+test('estimateRange returns the neutral baseline at adaptation 0, whatever it has counted', () => {
+  const station: DerivedSeatStats = {
+    ...neutralStats(1),
+    handsSeen: 400,
+    vpip: 0.9,
+    tightness: 0.1,
+    foldToBetFrequency: 0,
+    reliability: 'reasonable',
+  };
+  const rock: DerivedSeatStats = {
+    ...neutralStats(1),
+    handsSeen: 400,
+    vpip: 0.08,
+    tightness: 0.92,
+    foldToBetFrequency: 0.85,
+    reliability: 'reasonable',
+  };
+
+  for (const street of RANGE_STREETS) {
+    const neutral = estimateRange(neutralStats(1), street, 'none', 0).combos.length;
+    assert.equal(estimateRange(station, street, 'none', 0).combos.length, neutral, `${street}: station`);
+    assert.equal(estimateRange(rock, street, 'none', 0).combos.length, neutral, `${street}: rock`);
+  }
+
+  // And the gate is a gate, not a mute: at full adaptation the two reads are far apart, so a
+  // fix that simply stopped reading the sample would fail here.
+  assert.ok(
+    estimateRange(station, 'flop', 'none', 1).combos.length >
+      estimateRange(rock, 'flop', 'none', 1).combos.length + 100,
+  );
+  // Half adaptation lands between the two, so the weight is a blend and not a switch.
+  const half = estimateRange(station, 'flop', 'none', 0.5).combos.length;
+  const neutralFlop = estimateRange(neutralStats(1), 'flop', 'none', 1).combos.length;
+  assert.ok(half > neutralFlop && half < estimateRange(station, 'flop', 'none', 1).combos.length);
+});
+
+test('estimateRange rejects a street, an action or an adaptation it does not model', () => {
   const stats = neutralStats(2);
-  assert.throws(() => estimateRange(stats, 'showdown', 'none'), ObservationError);
-  assert.throws(() => estimateRange(stats, 'complete', 'none'), ObservationError);
-  assert.throws(() => estimateRange(stats, 'flop', 'shove'), ObservationError);
-  assert.doesNotThrow(() => estimateRange(stats, 'flop', 'none'));
+  assert.throws(() => estimateRange(stats, 'showdown', 'none', 1), ObservationError);
+  assert.throws(() => estimateRange(stats, 'complete', 'none', 1), ObservationError);
+  assert.throws(() => estimateRange(stats, 'flop', 'shove', 1), ObservationError);
+  // The same validation `exploitAdjustments` applies, for the same reason: a trait quietly
+  // clamped from 1.4 makes a profile behave differently from what its card claims.
+  assert.throws(() => estimateRange(stats, 'flop', 'none', 1.4), ObservationError);
+  assert.throws(() => estimateRange(stats, 'flop', 'none', -0.1), ObservationError);
+  assert.throws(() => estimateRange(stats, 'flop', 'none', Number.NaN), ObservationError);
+  assert.doesNotThrow(() => estimateRange(stats, 'flop', 'none', 1));
 });
 
 // ---------------------------------------------------------------------------
@@ -935,9 +1028,43 @@ test('the OpponentModel handle swaps snapshots without mutating the one already 
   assert.equal(model.statsFor(1), null);
   assert.equal(model.statsOrNeutralFor(1).reliability, 'insufficient');
   assert.equal(model.adjustmentsFor(1, 1).bluffMore, 1);
-  assert.ok(model.rangeFor(1, 'preflop', 'none').combos.length > 0);
+  assert.ok(model.rangeFor(1, 'preflop', 'none', 1).combos.length > 0);
 
   assert.throws(() => createOpponentModel(-1), ObservationError);
+});
+
+/**
+ * `statsOrNeutralFor` must fall back across the whole `insufficient` band, not just the `null`
+ * floor.
+ *
+ * These are two different thresholds — `derivedStats` returns null below 20 hands, while
+ * `insufficient` runs to 40 — and the `?? neutralStats` that used to stand here caught only
+ * the first. Negative control: at 25 hands of a seat that entered every pot, this returned the
+ * raw vpip of 1 and fold-to-bet of 0. `ObservedSeatTendencies` documents that a caller cannot
+ * lean on such a read, and the `opponents` getter is built from this method, so the doc was
+ * false for the 20-to-39-hand window.
+ */
+test('statsOrNeutralFor neutralises the whole insufficient band, not just the null floor', () => {
+  const base = completedBaseView();
+  const model = createOpponentModel(2);
+  for (let hand = 0; hand < 25; hand++) {
+    model.observe(scriptedView(base, `h${hand}`, [preflop(1, 'call', 2, 2)]));
+  }
+
+  const raw = model.statsFor(1);
+  assert.ok(raw !== null, '25 hands is past the null floor, so the raw read exists');
+  assert.equal(raw.reliability, 'insufficient', 'and is still below the indicative minimum of 40');
+  assert.equal(raw.vpip, 1, 'the raw read really is extreme — a neutral answer is not a no-op');
+
+  const guarded = model.statsOrNeutralFor(1);
+  assert.equal(guarded.vpip, neutralStats(1).vpip);
+  assert.equal(guarded.foldToBetFrequency, neutralStats(1).foldToBetFrequency);
+  assert.equal(guarded.tightness, neutralStats(1).tightness);
+  // And the `opponents` list, which is what the doc comment promises, agrees — while still
+  // reporting the true hand count so a caller can see why.
+  const seen = model.opponents.find((entry) => entry.seat === 1);
+  assert.equal(seen?.handsObserved, 25);
+  assert.equal(seen?.vpip, neutralStats(1).vpip);
 });
 
 test('the opponents list excludes the model own seat, is sorted, and is neutral until reliable', () => {

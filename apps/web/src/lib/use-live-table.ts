@@ -32,6 +32,15 @@
  * and applies nothing. The reader is told the spot changed rather than having their fold land on a
  * street they never saw.
  *
+ * ## "Not sent" is three different sentences, and saying the wrong one is a defect
+ *
+ * A decision can fail to leave the browser for reasons that mean opposite things to the reader: the
+ * connection is down and the decision is held and replayed, or this page's own rate limiter refused
+ * it and nothing will send it. `sendRaw` used to answer both with `false`, so this file reported the
+ * rate limit for a decision that was refused because there was no socket — while the panel beside it
+ * said "Decision sent". `SendOutcome` is what that `false` became; `SUBMISSION_FOR` is the sentence
+ * per outcome, and `act` dispatches the outcome rather than assuming one.
+ *
  * ## Reconnect is "render the current view"
  *
  * State is sent whole, so there is no catch-up protocol and nothing to resynchronise: the socket
@@ -78,6 +87,7 @@ import {
   openTableSocket,
   type RawSocketFactory,
   type Scheduler,
+  type SendOutcome,
   type TableSocketHandle,
   type TableSocketStatus,
   tableSocketUrl,
@@ -142,9 +152,22 @@ export interface TableState {
    */
   readonly turnAnnouncement: string;
   readonly summary: readonly string[];
-  /** The report, with the decision it was computed for. Never rendered against a different one. */
+  /**
+   * The report, with the decision it was computed for. Never rendered against a different one.
+   *
+   * `key` is the spot the request was SENT for, carried through the round trip in `coachRequest`
+   * below — not the spot on screen when the answer landed. Those are routinely different, and the
+   * difference is the whole reason this field is a pair rather than a report: see `onCoachFrame`.
+   */
   readonly coach: { readonly key: string; readonly report: CoachReport } | null;
-  readonly coachRequestId: string | null;
+  /**
+   * The outstanding request: its id, and the decision it asked about.
+   *
+   * One object rather than two fields, because the two must never be apart. A `coach` frame carries
+   * a `requestId` and nothing else — no hand id, no sequence — so the only record of what the
+   * server is computing is the one this client kept when it asked.
+   */
+  readonly coachRequest: { readonly requestId: string; readonly key: string } | null;
   /** Why there is no analysis, when the reason is something other than "none was asked for". */
   readonly coachProblem: string | null;
   /**
@@ -171,7 +194,7 @@ export const EMPTY_TABLE_STATE: TableState = {
   turnAnnouncement: '',
   summary: [],
   coach: null,
-  coachRequestId: null,
+  coachRequest: null,
   coachProblem: null,
   coachDuringHand: true,
   pending: null,
@@ -181,7 +204,15 @@ export const EMPTY_TABLE_STATE: TableState = {
 
 export type TableEvent =
   | { readonly kind: 'frame'; readonly frame: WsServerMessage }
-  | { readonly kind: 'submit'; readonly pending: PendingDecision }
+  /**
+   * A decision the reader made, with what the socket did with it.
+   *
+   * `delivery` is not optional and has no default on purpose: it is the answer to "did this
+   * actually go out", and the caller is the only one who knows. A default would restore the
+   * assumption the old code made — that dispatching this means the frame was sent — which is the
+   * defect `SUBMISSION_FOR` is written against.
+   */
+  | { readonly kind: 'submit'; readonly pending: PendingDecision; readonly delivery: SendOutcome }
   | { readonly kind: 'coachRequested'; readonly requestId: string; readonly key: string }
   | { readonly kind: 'coachFailed'; readonly reason: string }
   | { readonly kind: 'notice'; readonly message: string | null }
@@ -301,7 +332,7 @@ export function spokenDecision(action: TableAction): string {
  * literal it has copied — a test that carries its own copy of the text passes after somebody
  * deletes the announcement and pastes the sentence into the test.
  *
- * Neither one carries a number. See the `coach` case in `onFrame` for why.
+ * Neither one carries a number. See `onCoachFrame` for why.
  */
 export const COACH_READY_ANNOUNCEMENT =
   'The analysis of this decision is ready in the Coach panel, below the table on a narrow screen.';
@@ -381,6 +412,15 @@ function onStateFrame(state: TableState, frame: Extract<WsServerMessage, { type:
     // one could not be shown, which described a different spot too.
     coach: state.coach !== null && state.coach.key === key ? state.coach : null,
     coachProblem: movedOn ? null : state.coachProblem,
+    // The request goes with the spot, and this line is half of a real defect's fix.
+    //
+    // Dropping the report above was never enough on its own: it runs when the frame that MOVES the
+    // spot arrives, and the analysis of the spot just left is still being computed at that moment
+    // — on a worker thread, with a three-second budget. It lands afterwards, against a table that
+    // has moved on. Leaving the request open let that late frame in, and `onFrame` then filed it
+    // under whatever was on screen. Closing the request here means a late answer is discarded for
+    // the same reason an answer to a request nobody made is: nothing is waiting for it.
+    coachRequest: movedOn ? null : state.coachRequest,
     // A finished decision stops disabling the controls once the hand has actually moved.
     submission: movedOn && state.pending === null ? null : state.submission,
   };
@@ -405,11 +445,11 @@ function onAckFrame(state: TableState, frame: Extract<WsServerMessage, { type: '
 }
 
 function onErrorFrame(state: TableState, frame: Extract<WsServerMessage, { type: 'error' }>): TableState {
-  if (state.coachRequestId !== null && frame.requestId === state.coachRequestId) {
+  if (state.coachRequest !== null && frame.requestId === state.coachRequest.requestId) {
     const reviewOnly = frame.error.code === 'coach_not_available';
     return {
       ...state,
-      coachRequestId: null,
+      coachRequest: null,
       coach: null,
       coachProblem: reviewOnly ? null : frame.error.message,
       coachDuringHand: reviewOnly ? false : state.coachDuringHand,
@@ -455,26 +495,7 @@ function onFrame(state: TableState, frame: WsServerMessage): TableState {
     case 'event':
       return onEventFrame(state, frame);
     case 'coach':
-      return frame.requestId === state.coachRequestId
-        ? {
-            ...state,
-            coach: { key: decisionKey(state.view), report: frame.report },
-            coachRequestId: null,
-            coachProblem: null,
-            // The analysis ARRIVING is news, and it was silent. The panel fills in beside the
-            // buttons with no announcement at all, and below 600px it is not even on screen —
-            // `styles/play.css` makes it a bottom sheet that starts collapsed, so a reader who
-            // cannot see the panel had no way to learn the thing they are waiting for is there.
-            //
-            // The same event is already announced correctly one screen away, in
-            // `ScenarioStage.tsx`'s reveal region, and this is that pattern rather than a new one:
-            // one short sentence, in the polite region the table already owns, saying WHERE the
-            // analysis is rather than what it says. It must not carry a figure — a number read out
-            // of the panel it came from has lost the assumptions it rests on, which is the one
-            // thing this product refuses to do with a number.
-            announcement: COACH_READY_ANNOUNCEMENT,
-          }
-        : state;
+      return onCoachFrame(state, frame);
     case 'ack':
       return onAckFrame(state, frame);
     case 'error':
@@ -486,6 +507,123 @@ function onFrame(state: TableState, frame: WsServerMessage): TableState {
   }
 }
 
+/**
+ * Files an analysis under the decision it was COMPUTED for, or drops it.
+ *
+ * ## The defect this is written against
+ *
+ * This used to key the report on `decisionKey(state.view)` — the spot on screen at the moment the
+ * frame arrived — while the key that was actually asked about travelled in the `coachRequested`
+ * action and was read by nothing. The two are routinely different: the server computes on a worker
+ * thread with a three-second budget, and a `coach` frame carries a `requestId` and nothing else, so
+ * there is no hand id and no sequence in the answer to re-derive it from.
+ *
+ * What that cost a reader: the turn opens at `hand-1:7` and the effect below asks automatically;
+ * the reader folds; the hand ends; the last `state` frame of the hand lands at `hand-1:11`; the
+ * analysis arrives after it and was keyed `hand-1:11`. `CoachPanel` then printed "flop · 100 units
+ * in the pot · 35 to call" beside a finished hand whose pot was 1,505 and whose price to call was
+ * 0 — and since no further `state` frame arrives until the reader deals again, it stayed there. The
+ * hook's `coach.key === decisionKey(view)` guard could not catch it, because the key had already
+ * been rewritten to the value that guard compares against.
+ *
+ * Two guards now, and they are not redundant: `onStateFrame` closes the request the moment the spot
+ * changes, so a late frame is usually discarded before it gets here; and if one arrives against a
+ * spot that changed without a `state` frame, it is refused here rather than re-keyed. Dropping it
+ * is the honest outcome — nothing is on screen to describe, and the reader is between hands.
+ */
+function onCoachFrame(state: TableState, frame: Extract<WsServerMessage, { type: 'coach' }>): TableState {
+  const request = state.coachRequest;
+  if (request === null || request.requestId !== frame.requestId) return state;
+  // Closed either way: this request has been answered, and no second answer is coming for it.
+  if (request.key !== decisionKey(state.view)) return { ...state, coachRequest: null };
+  return {
+    ...state,
+    coach: { key: request.key, report: frame.report },
+    coachRequest: null,
+    coachProblem: null,
+    // The analysis ARRIVING is news, and it was silent. The panel fills in beside the
+    // buttons with no announcement at all, and below 600px it is not even on screen —
+    // `styles/play.css` makes it a bottom sheet that starts collapsed, so a reader who
+    // cannot see the panel had no way to learn the thing they are waiting for is there.
+    //
+    // The same event is already announced correctly one screen away, in
+    // `ScenarioStage.tsx`'s reveal region, and this is that pattern rather than a new one:
+    // one short sentence, in the polite region the table already owns, saying WHERE the
+    // analysis is rather than what it says. It must not carry a figure — a number read out
+    // of the panel it came from has lost the assumptions it rests on, which is the one
+    // thing this product refuses to do with a number.
+    //
+    // Only on the path that actually fills the panel. A report that is dropped above changes
+    // nothing on screen, and announcing it would send a reader to look for a panel that never
+    // filled.
+    announcement: COACH_READY_ANNOUNCEMENT,
+  };
+}
+
+/**
+ * What became of a decision, as one sentence per fate — and only one.
+ *
+ * ## The defect this table exists for
+ *
+ * There used to be a single sentence here, "Sent. The server is the only authority…", written on
+ * the assumption that dispatching `submit` meant the frame had gone out. It did not. `sendRaw`
+ * refuses a frame when the client's own token bucket is empty AND when there is no socket at all,
+ * and `socket` is null for the whole reconnect backoff — up to fifteen seconds — during which
+ * `stageStatusOf` still reports `ready`, so the controls are live and a reader does press Fold.
+ * They were then told their decision had been sent, and simultaneously, in a `role="alert"`, that
+ * "this page is refusing to exceed the socket rate limit" — a cause that was not the cause, beside
+ * a conclusion that was not true either, because the decision was replayed on reconnect and
+ * applied.
+ *
+ * Four fates, four sentences, and each says what the reader can do about it. `held` is the one
+ * worth reading twice: nothing has been sent, but the decision is not lost — `onFrame` replays it
+ * on the next `welcome` with the same `actionId`, so the server applies it once or answers
+ * `deduplicated`, and there is nothing for the reader to do but wait.
+ */
+const SUBMISSION_FOR: Readonly<Record<SendOutcome, (action: TableAction) => TableSubmission>> = {
+  sent: (action) => ({
+    action,
+    status: 'pending',
+    message:
+      'Sent. The server is the only authority on a hand, so the controls stay disabled until it ' +
+      'answers.',
+  }),
+  disconnected: (action) => ({
+    action,
+    status: 'held',
+    message:
+      'Not sent yet: this page has no connection to the table. Your decision is held here, ' +
+      'unchanged, and goes out as soon as the connection is back — with the same decision id, so ' +
+      'the server applies it once and only once. Nothing has been staked twice and nothing has ' +
+      'been lost. The controls stay disabled until the server answers.',
+  }),
+  'rate-limited': (action) => ({
+    action,
+    status: 'not-sent',
+    message:
+      'Not sent, and not by the server: this page refused to exceed the rate limit the protocol ' +
+      'sets for one socket, so the decision never left your browser and nothing was staked. ' +
+      'Nothing is holding it either — decide again in a moment.',
+  }),
+  undeliverable: (action) => ({
+    action,
+    status: 'not-sent',
+    message:
+      'This page could not put the decision on the wire, so it never reached the table and nothing ' +
+      'was staked. Nothing is holding it — decide again, and if it happens twice the connection ' +
+      'itself is the thing to reload.',
+  }),
+};
+
+/**
+ * The fates a decision is still going to be sent under.
+ *
+ * `pending` is what the reconnect replays and what disables the controls, so it is kept for exactly
+ * these two and dropped for the rest. Keeping it after a refusal nothing will retry leaves the
+ * table disabled forever against a decision that is never coming back.
+ */
+const WILL_STILL_BE_SENT: ReadonlySet<SendOutcome> = new Set<SendOutcome>(['sent', 'disconnected']);
+
 export function tableReducer(state: TableState, event: TableEvent): TableState {
   switch (event.kind) {
     case 'frame':
@@ -493,24 +631,38 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
     case 'submit':
       return {
         ...state,
-        pending: event.pending,
+        // Kept only while something is still going to send it. See `SUBMISSION_FOR`.
+        pending: WILL_STILL_BE_SENT.has(event.delivery) ? event.pending : null,
         // The echo, as a state change rather than a prefix. See `spokenDecision`.
+        //
+        // Said whatever became of the frame, because it describes the reader's own choice rather
+        // than the table's response to it — and the response is in `submission`, one region over.
         //
         // `turnAnnouncement` is deliberately left alone. Clearing it here would look tidy and would
         // cost the reader the one case that matters: a decision the server REFUSES leaves the spot
         // exactly as it was, and an emptied region has nothing left to re-announce it with. Carried
         // as it is, the sentence does not change, so nothing is said twice either.
         announcement: spokenDecision(event.pending.action),
-        submission: {
-          action: event.pending.action,
-          status: 'pending',
-          message:
-            'Sent. The server is the only authority on a hand, so the controls stay disabled until it ' +
-            'answers.',
-        },
+        submission: SUBMISSION_FOR[event.delivery](event.pending.action),
+        // The refusal is the submission, and only the submission.
+        //
+        // This is the second half of a real defect. `act` used to dispatch a `notice` as well, so a
+        // reader who pressed Fold during a reconnect got a polite "Decision sent — the server is the
+        // only authority…" and, at the same moment, a `role="alert"` saying "The decision was not
+        // sent". `notice` is for the server refusing something that was not a decision (a seat that
+        // had gone, a hand somebody else started); a decision's fate belongs to the region that is
+        // labelled "What happened to your decision", where there is exactly one of it.
+        notice: null,
       };
     case 'coachRequested':
-      return { ...state, coachRequestId: event.requestId, coach: null, coachProblem: null };
+      // The key is kept, not just the id. It is the only record of which decision the answer will
+      // be about, because the answer itself carries no hand and no sequence. See `onCoachFrame`.
+      return {
+        ...state,
+        coachRequest: { requestId: event.requestId, key: event.key },
+        coach: null,
+        coachProblem: null,
+      };
     case 'coachFailed':
       // The request is over: no second answer is coming for it, so the outstanding id is cleared
       // and the reason takes the place of the analysis rather than sitting beside a stale one.
@@ -520,7 +672,7 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
       // included because, unlike a figure, it is complete on its own.
       return {
         ...state,
-        coachRequestId: null,
+        coachRequest: null,
         coach: null,
         coachProblem: event.reason,
         announcement: `${COACH_FAILED_ANNOUNCEMENT} ${event.reason}`,
@@ -927,13 +1079,14 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
       expectedSequence: view.actionSequence,
       requestId: newRequestId('req'),
     };
-    dispatch({ kind: 'submit', pending });
-    if (!handle.action(pending)) {
-      dispatch({
-        kind: 'notice',
-        message: 'The decision was not sent: this page is refusing to exceed the socket rate limit.',
-      });
-    }
+    // Sent BEFORE the state change, and the state change carries what happened to it.
+    //
+    // The order is the fix. This used to dispatch `submit` — whose one message said "Sent." — and
+    // then, if the send had failed, a separate `notice` saying it had not been sent and blaming the
+    // rate limiter. Two regions, two claims, and during a reconnect both were wrong: the socket was
+    // null rather than throttled, and the decision was replayed on the next `welcome` and applied.
+    // `sendRaw` cannot be asked afterwards which it was, so the answer travels with the event.
+    dispatch({ kind: 'submit', pending, delivery: handle.action(pending) });
   }, []);
 
   const view = table.view;

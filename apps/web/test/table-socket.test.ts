@@ -490,7 +490,7 @@ test('the client refuses to exceed the protocol rate limit rather than losing it
   // The clock does not advance, so the bucket never refills: exactly `burstAllowance` frames get
   // through, minus the `hello` that has already been spent.
   for (let index = 0; index < WS_LIMITS.burstAllowance + 10; index += 1) {
-    if (handle.startHand(`deal-${String(index).padStart(6, '0')}`)) accepted += 1;
+    if (handle.startHand(`deal-${String(index).padStart(6, '0')}`) === 'sent') accepted += 1;
   }
   assert.equal(accepted, WS_LIMITS.burstAllowance - 1);
   handle.dispose();

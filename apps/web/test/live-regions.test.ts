@@ -176,7 +176,7 @@ describe('the Coach’s arrival is announced', () => {
     });
     assert.equal(refused.coachDuringHand, false);
     assert.equal(refused.coach, null);
-    assert.equal(refused.coachRequestId, null);
+    assert.equal(refused.coachRequest, null);
     assert.match(refused.announcement, /review afterwards/u);
   });
 
@@ -381,7 +381,7 @@ describe('the table announces whose decision it is', () => {
 
 describe('the reader’s own decision is echoed once, not prefixed forever', () => {
   it('announces the decision as a state change', () => {
-    const sent = tableReducer(EMPTY_TABLE_STATE, { kind: 'submit', pending: FOLD });
+    const sent = tableReducer(EMPTY_TABLE_STATE, { kind: 'submit', pending: FOLD, delivery: 'sent' });
     assert.equal(sent.announcement, 'You chose to fold.');
     assert.equal(sent.submission?.status, 'pending');
   });
@@ -390,7 +390,7 @@ describe('the reader’s own decision is echoed once, not prefixed forever', () 
     // The defect: `TableStage` used to CONCATENATE this phrase onto every announcement, and
     // `role="status"` is atomic — so every subsequent event was read out as "You chose to fold.
     // Seat 3 called 50 units." for the rest of the street.
-    const sent = tableReducer(EMPTY_TABLE_STATE, { kind: 'submit', pending: FOLD });
+    const sent = tableReducer(EMPTY_TABLE_STATE, { kind: 'submit', pending: FOLD, delivery: 'sent' });
     const next = tableReducer(sent, { kind: 'frame', frame: eventFrame('Seat 3 called 50 units') });
     assert.equal(next.announcement, 'Seat 3 called 50 units');
     assert.doesNotMatch(next.announcement, /You chose/u);
@@ -398,7 +398,7 @@ describe('the reader’s own decision is echoed once, not prefixed forever', () 
 
   it('leaves the turn sentence alone, so a refused decision can still be re-announced', () => {
     const mine = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: stateFrame(DECISION_VIEW, 1) });
-    const sent = tableReducer(mine, { kind: 'submit', pending: FOLD });
+    const sent = tableReducer(mine, { kind: 'submit', pending: FOLD, delivery: 'sent' });
     assert.equal(
       sent.turnAnnouncement,
       mine.turnAnnouncement,

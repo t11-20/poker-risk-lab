@@ -94,6 +94,74 @@ test('a player who raises cannot raise again until someone else raises', () => {
   assert.ok(!mayRaise(afterRaise, raiser), 'a player may not re-raise its own raise');
 });
 
+test('TWO short all-ins DO reopen the action when their increments add to a full raise', () => {
+  /**
+   * The half of TDA 43-C that `mayRaise` used to be missing.
+   *
+   * The rule is not "a short all-in never reopens". It is that an all-in of less than a full
+   * raise does not reopen the betting to a player who has already acted **and is not facing at
+   * least a full raise when the action returns to him**. One short all-in cannot clear that bar,
+   * which is what the test above pins down and why keying only on `lastFullRaiseBetLevel` looked
+   * complete. Two consecutive short all-ins can, because their increments add.
+   *
+   * Seats: 0 BTN (1000), 1 SB (150 — short), 2 BB (220 — short), 3 UTG (1000).
+   *   UTG raises to 100   → complete. Increment 98, so a full re-raise must reach 198.
+   *   BTN calls 100       → has now acted at the full-raise level.
+   *   SB shoves to 150    → +50, short of 198. Not a complete raise.
+   *   BB shoves to 220    → +70, short of 248. Also not a complete raise.
+   *   Back to UTG         → acted at 100, now facing 220. The increase is 120, against a full
+   *                         raise of 98. It IS facing a full raise, so it may re-raise.
+   *
+   * Against the unfixed code both UTG and BTN were offered only call and fold, with a live
+   * opponent still holding 780 behind. A 30,000-hand fuzz put the rate at 44 wrongly-denied
+   * raises across 34 hands.
+   */
+  const { state } = deal({ stacks: [1000, 150, 220, 1000], buttonSeat: 0, config: { maxSeats: 4 } });
+  let current = play(state, [raise(3, 100), call(0)]);
+  assert.equal(current.lastFullRaiseBetLevel, 100);
+  assert.equal(current.lastFullRaiseIncrement, 98);
+
+  current = applyAction(current, 1, { type: 'raise', to: 150 }).state;
+  current = applyAction(current, 2, { type: 'raise', to: 220 }).state;
+  assert.equal(current.betLevel, 220);
+  assert.equal(current.lastFullRaiseBetLevel, 100, 'neither all-in was a complete raise');
+
+  // UTG acted at 100 and faces 220: an increase of 120 >= the full raise of 98.
+  assert.equal(current.toAct, 3);
+  const utg = current.seats.find((entry) => entry.seat === 3);
+  assert.ok(utg !== undefined);
+  assert.equal(mayRaise(current, utg), true);
+  const utgOptions = legalActions(current, 3);
+  assert.ok(
+    utgOptions.some((entry) => entry.type === 'raise'),
+    'two short all-ins together are a full raise, so the action is reopened',
+  );
+  // And the reopened minimum is the ordinary one, measured from the current level.
+  assert.equal(minimumRaiseTo(current), 318);
+  const raised = applyAction(current, 3, { type: 'raise', to: 318 });
+  assert.equal(raised.state.betLevel, 318);
+
+  // The negative control that keeps this honest: a seat facing LESS than a full raise since it
+  // acted is still refused. Same shape, one short all-in short of the bar.
+  const { state: near } = deal({ stacks: [1000, 150, 200, 1000], buttonSeat: 0, config: { maxSeats: 4 } });
+  let short = play(near, [raise(3, 100), call(0)]);
+  short = applyAction(short, 1, { type: 'raise', to: 150 }).state;
+  assert.equal(short.betLevel, 150);
+  assert.equal(short.toAct, 2);
+  const bbOptions = legalActions(short, 2);
+  assert.ok(
+    bbOptions.some((entry) => entry.type === 'raise'),
+    'the BB has not acted, so it may raise',
+  );
+  short = applyAction(short, 2, { type: 'call' }).state;
+  // UTG acted at 100 and faces 150: an increase of 50, short of the full raise of 98.
+  assert.equal(short.toAct, 3);
+  const utgShort = short.seats.find((entry) => entry.seat === 3);
+  assert.ok(utgShort !== undefined);
+  assert.equal(mayRaise(short, utgShort), false);
+  assert.ok(!legalActions(short, 3).some((entry) => entry.type === 'raise'));
+});
+
 test('a short all-in raise does NOT reopen the action for a player who already acted', () => {
   // Seats: 0 BTN (200), 1 SB (30 — the short stack), 2 BB (200), 3 UTG (200).
   //

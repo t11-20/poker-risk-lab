@@ -98,6 +98,32 @@ export const deleteAccountBodySchema = {
   },
 } as const;
 
+/**
+ * The authorization-code callback's query string.
+ *
+ * ## Why the extra provider parameters are named here
+ *
+ * `additionalProperties: false` with `removeAdditional: false` (see `apps/api/src/app.ts`) means
+ * an unknown query parameter is a 400 before the handler runs. That is the right default — it is
+ * why an attacker cannot smuggle a parameter past validation — but it made this endpoint reject
+ * every real identity provider.
+ *
+ * Google adds `scope`, `authuser`, `prompt` and `hd`. Keycloak adds `session_state`. Microsoft
+ * adds `client_info`. And RFC 9207 adds `iss`, which OpenID-conformant deployments are now
+ * REQUIRED to send. Any one of them was a 400 on a callback that was otherwise perfectly valid,
+ * so a live sign-in against Google, Auth0, Okta, Entra or Keycloak could never have completed.
+ * `docs/production/security.md` listed "the live OIDC flow is unverified" as a residual; this is
+ * what that residual was hiding.
+ *
+ * They are enumerated rather than allowed wholesale. `additionalProperties: true` would accept
+ * anything, and the point of a closed set is that a parameter nobody has thought about is a
+ * refusal rather than a shrug. A provider that sends something not on this list is a deliberate
+ * decision to add it here, with a reason.
+ *
+ * `iss` is not merely tolerated — `routes/auth.ts` compares it against the configured issuer.
+ * RFC 9207 exists because a client with more than one provider can otherwise be induced to send
+ * one provider's code to another's token endpoint, and the check is the whole mitigation.
+ */
 export const oidcCallbackQuerySchema = {
   $id: 'prl:oidcCallbackQuery',
   type: 'object',
@@ -108,6 +134,15 @@ export const oidcCallbackQuerySchema = {
     state: { type: 'string', minLength: 8, maxLength: 256 },
     error: { type: 'string', maxLength: 256 },
     error_description: { type: 'string', maxLength: 512 },
+    /** RFC 9207. Validated against the configured issuer, never merely accepted. */
+    iss: { type: 'string', maxLength: 512 },
+    /** Informational, echoed by several providers. Read by nothing here. */
+    scope: { type: 'string', maxLength: 512 },
+    session_state: { type: 'string', maxLength: 256 },
+    authuser: { type: 'string', maxLength: 32 },
+    prompt: { type: 'string', maxLength: 64 },
+    hd: { type: 'string', maxLength: 256 },
+    client_info: { type: 'string', maxLength: 2048 },
   },
 } as const;
 

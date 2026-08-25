@@ -54,8 +54,18 @@
  *     node scripts/release-artifacts.mjs [--tag <label>] [--manifest <path>]
  *                                        [--force] [--no-cache] [--verbose] [--json]
  *
- * Exit codes: 0 both images built and every artefact check passed; 1 anything
- * else, including a refusal to rebuild without --force. 0 for --help.
+ * Exit codes: 0 both images built and every artefact check passed; 1 a build that
+ * failed or an artefact check that did not pass. 0 for --help.
+ *
+ * Refusing to rebuild a commit that already has a valid manifest also exits 0, and
+ * this paragraph used to claim it exited 1. The CODE is right and the sentence was
+ * wrong, so the sentence was fixed: the refusal means "the artefacts you asked for
+ * already exist and are still resolvable", which is the desired end state, not a
+ * failure. It has to be 0 because the release path chains — `pnpm run
+ * release:artifacts && pnpm run security:containers && pnpm run staging up` — and
+ * an exit 1 there would stop a release for having already built what it needed,
+ * teaching everybody to pass --force by reflex and destroying the build-once
+ * property this whole script exists to hold. Do not "fix" it the other way.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -112,7 +122,8 @@ ${bold('pnpm run release:artifacts')} — build both images once, record their d
   and \`pnpm run security:containers\` all read it and none of them can build an
   image, so the digest that reaches production is the digest staging tested.
 
-  Exit codes: 0 built and verified, 1 anything else.
+  Exit codes: 0 built and verified, 0 refused to rebuild an already-valid manifest
+  (pass --force to rebuild anyway), 1 a failed build or a failed artefact check.
 `;
 
 function parseArgs(argv) {
@@ -257,10 +268,13 @@ function inspectImage(reference, iidDigest) {
     'inspect',
     reference,
     '--format',
-    '{{.Id}}\t{{.Size}}\t{{.Created}}\t{{.Config.User}}\t{{json .RepoDigests}}',
+    // WorkingDir is read here rather than assumed by the filesystem probe. See `probeRoot`: the
+    // probe used to walk a hard-coded `/app`, which is a guess about the artefact rather than a
+    // reading of it, and a wrong guess made the probe examine nothing and pass.
+    '{{.Id}}\t{{.Size}}\t{{.Created}}\t{{.Config.User}}\t{{.Config.WorkingDir}}\t{{json .RepoDigests}}',
   ]);
   if (raw === null) throw new Error(`docker image inspect ${reference} failed after a successful build`);
-  const [id, size, created, user, repoDigestsJson] = raw.split('\t');
+  const [id, size, created, user, workingDir, repoDigestsJson] = raw.split('\t');
   if (id === undefined || !DIGEST.test(id)) {
     throw new Error(`docker reported an unusable image id for ${reference}: ${String(id)}`);
   }
@@ -288,6 +302,7 @@ function inspectImage(reference, iidDigest) {
     sizeBytes: Number(size),
     createdAt: created ?? null,
     user: user === undefined || user === '' ? null : user,
+    workingDir: workingDir ?? '',
     repoDigests,
   };
 }
@@ -298,30 +313,116 @@ function inspectImage(reference, iidDigest) {
  * A short walk of the image's own filesystem, run inside the image.
  *
  * Written as `node -e` rather than `find`, because node is the one binary both
- * images are guaranteed to have — they are Node images and the runtime stage is
- * bookworm-slim, where the presence of any other tool is an assumption rather
- * than a fact.
+ * images are guaranteed to have — they are Node images, and everything else in
+ * the runtime stage is whatever the base happens to include. That base has
+ * already changed once (bookworm-slim → alpine3.24, 2026-08-25, taking the OS
+ * package count from 88 to 18 and with it every `find` a Debian layout implied),
+ * which is the argument for depending on node and nothing else.
  */
-const FILESYSTEM_PROBE = `
+const filesystemProbe = (root) => `
 const fs = require('node:fs');
 const path = require('node:path');
-const hits = { markdown: [], dotenv: [] };
+const root = ${JSON.stringify(root)};
+// \`examined\` is the load-bearing field, and \`unreadable\` records why a directory produced
+// none. See \`probeRoot\` and \`checkArtefact\`: the walk used to swallow a missing directory and
+// report an empty \`hits\`, which is indistinguishable from a clean image.
+const hits = { root, exists: false, examined: 0, unreadable: [], markdown: [], dotenv: [] };
 const walk = (dir, depth) => {
   if (depth > 12) return;
   let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+  catch (err) { hits.unreadable.push(dir + ': ' + err.code); return; }
   for (const entry of entries) {
     if (entry.name === 'node_modules') continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) { walk(full, depth + 1); continue; }
     if (!entry.isFile()) continue;
+    hits.examined += 1;
     if (/\\.md$/i.test(entry.name)) hits.markdown.push(full);
     if (/^\\.env/.test(entry.name)) hits.dotenv.push(full);
   }
 };
-walk('/app', 0);
+try { hits.exists = fs.statSync(root).isDirectory(); }
+catch (err) { hits.unreadable.push(root + ': ' + err.code); }
+if (hits.exists) walk(root, 0);
 process.stdout.write(JSON.stringify(hits));
 `;
+
+/**
+ * Where in the image the probe starts, derived from the image's own metadata.
+ *
+ * `/app` used to be written into the probe as a literal, which is the second half of the defect
+ * above: a literal path is a guess, and a guess that stops being true produces a walk of nothing
+ * and — before the `examined` count existed — a clean pass. `docker image inspect` reports the
+ * directory the image actually uses, so a Dockerfile that moves to `/srv` moves the probe with
+ * it rather than silently disabling it.
+ *
+ * The TOP-LEVEL ancestor of the working directory is returned, not the working directory itself,
+ * and that is deliberate rather than sloppy. `Dockerfile.web`'s runtime stage ends on
+ * `WORKDIR /app/apps/web` while the repository tree it must not carry is copied to `/app`; a
+ * probe rooted at the literal working directory would examine one subtree and never look at its
+ * siblings, which is a narrower check than the one that caught `apps/web/AGENTS.md`. Taking the
+ * first path segment keeps the blast radius the images were actually built with, while still
+ * being read from the artefact rather than assumed.
+ */
+export function probeRoot(workingDir) {
+  if (typeof workingDir !== 'string') return null;
+  const trimmed = workingDir.trim();
+  if (!trimmed.startsWith('/')) return null;
+  const [first] = trimmed
+    .slice(1)
+    .split('/')
+    .filter((segment) => segment !== '');
+  return first === undefined ? null : `/${first}`;
+}
+
+/**
+ * The problems a probe result implies, separated from `checkArtefact` so it can be reasoned
+ * about — and asserted about — without a Docker daemon.
+ *
+ * ## The defect this exists for
+ *
+ * The probe walked a hard-coded `/app` and its `readdirSync` sat inside `try { … } catch {
+ * return; }`. An image whose content had moved, or whose runtime stage never received the
+ * application at all, produced `{ markdown: [], dotenv: [] }` — byte-for-byte the same result as
+ * a clean image — and the release passed. This is the check that exists because `AGENTS.md` and
+ * `CLAUDE.md` shipped inside the published web image once already, and a check that cannot fail
+ * is not a check.
+ *
+ * So the probe counts what it examined, and examining nothing is a failure. "Zero files under
+ * the application root" is not a state any working release image can be in.
+ */
+export function filesystemProblems(hits, workingDir) {
+  const problems = [];
+  const root = hits?.root ?? '(unknown)';
+  if (hits?.exists !== true) {
+    problems.push(
+      `the image has no ${root} directory (its WorkingDir is ${workingDir || '(unset)'}), so the ` +
+        'markdown and .env probe examined nothing — this check cannot pass by finding nothing to look at',
+    );
+    return problems;
+  }
+  if (!(hits.examined > 0)) {
+    const why = hits.unreadable?.join('; ') || 'the directory is empty';
+    problems.push(
+      `the filesystem probe examined 0 files under ${root} (${why}). A release image with no files ` +
+        'under its application root is not an image; the previous version of this check read that ' +
+        'as a clean pass',
+    );
+    return problems;
+  }
+  if (hits.markdown.length > 0) {
+    problems.push(
+      `${hits.markdown.length} markdown file(s) in the image: ${hits.markdown.slice(0, 5).join(', ')}` +
+        `${hits.markdown.length > 5 ? ', …' : ''} — see .dockerignore's header; this is how ` +
+        'AGENTS.md and CLAUDE.md were published',
+    );
+  }
+  if (hits.dotenv.length > 0) {
+    problems.push(`environment file(s) in the image: ${hits.dotenv.join(', ')} — these carry credentials`);
+  }
+  return problems;
+}
 
 /**
  * The properties a release image must have, checked against the built artefact
@@ -332,7 +433,13 @@ process.stdout.write(JSON.stringify(hits));
  *
  *   * **Runs as `node`.** ci.yml already asserts this; it is repeated here so the
  *     release path does not depend on a CI job that a deployment does not run.
- *   * **No repository markdown outside node_modules.** `.dockerignore` anchored
+ *   * **No repository markdown outside node_modules** — and the probe must have
+ *     LOOKED. The walk is rooted at the top of the image's own declared working
+ *     directory (`probeRoot`) and reports how many files it examined; examining
+ *     none is a failure. The previous version hard-coded `/app` and swallowed a
+ *     missing directory, so an image whose content had moved returned an empty
+ *     hit list, which is byte-for-byte what a clean image returns, and the release
+ *     passed. The defect this bullet is really about: `.dockerignore` anchored
  *     `*.md` to the context root, so it matched README.md and nothing deeper, and
  *     `apps/web/AGENTS.md` and `apps/web/CLAUDE.md` — this repository's
  *     instructions to coding agents — shipped inside the published web image.
@@ -356,7 +463,28 @@ function checkArtefact(reference, meta, note) {
     );
   }
 
-  const probe = run('docker', ['run', '--rm', '--entrypoint', 'node', reference, '-e', FILESYSTEM_PROBE]);
+  // Read from the artefact, never written here as a literal: a probe rooted at a path this
+  // script assumed rather than measured walks nothing the day the Dockerfile changes, and
+  // walking nothing used to be a pass.
+  const root = probeRoot(meta.workingDir);
+  if (root === null) {
+    problems.push(
+      `docker image inspect reports WorkingDir ${JSON.stringify(meta.workingDir ?? null)}, which is ` +
+        'not an absolute path. There is no directory to probe for markdown and .env files, and this ' +
+        'check will not report a pass it did not earn',
+    );
+    return problems;
+  }
+
+  const probe = run('docker', [
+    'run',
+    '--rm',
+    '--entrypoint',
+    'node',
+    reference,
+    '-e',
+    filesystemProbe(root),
+  ]);
   if (probe.status !== 0) {
     problems.push(`could not inspect the image filesystem: ${probe.stderr.trim() || 'no output'}`);
     return problems;
@@ -368,18 +496,12 @@ function checkArtefact(reference, meta, note) {
     problems.push(`the filesystem probe returned something that is not JSON: ${probe.stdout.slice(0, 200)}`);
     return problems;
   }
-  if (hits.markdown.length > 0) {
-    problems.push(
-      `${hits.markdown.length} markdown file(s) in the image: ${hits.markdown.slice(0, 5).join(', ')}` +
-        `${hits.markdown.length > 5 ? ', …' : ''} — see .dockerignore's header; this is how ` +
-        'AGENTS.md and CLAUDE.md were published',
-    );
-  }
-  if (hits.dotenv.length > 0) {
-    problems.push(`environment file(s) in the image: ${hits.dotenv.join(', ')} — these carry credentials`);
-  }
+  problems.push(...filesystemProblems(hits, meta.workingDir));
   if (problems.length === 0) {
-    note(`no markdown and no .env under /app outside node_modules; runs as ${meta.user}`);
+    note(
+      `no markdown and no .env among ${hits.examined} files under ${root} outside node_modules; ` +
+        `runs as ${meta.user}`,
+    );
   }
   return problems;
 }

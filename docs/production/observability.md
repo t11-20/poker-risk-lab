@@ -255,6 +255,8 @@ The last one is also a unit test, asserted over a populated registry, because a 
 
 `pnpm run test:drills` provokes each alertable condition on purpose; `pnpm run test:load` scrapes `/metrics` before, during and after each concurrency level, so the metrics are read by something other than a human eye.
 
+`pnpm run alerts:verify` closes the loop the other way. It brings a real Prometheus and Alertmanager up beside the staging stack (`docker-compose.observability.yml`, an overlay — the staging manifest has no monitoring in it, because production does not get its monitoring from this repository), asserts that every `prl_*` series the rules in [`alerts.md`](alerts.md) name appears in a live scrape of this exposition, and provokes `ApiDown` through to a receiver. That check is the one that catches a metric renamed here and not there: an alert on a series that stopped existing is syntactically perfect and permanently silent.
+
 ---
 
 ## 5. Known limits — what this does not give you
