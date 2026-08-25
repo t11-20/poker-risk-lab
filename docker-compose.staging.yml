@@ -27,6 +27,16 @@
 #     pnpm run staging status
 #     pnpm run staging down      # add --volumes to destroy the database too
 #
+# Optionally, and only if you want the artefacts to be fetchable from another
+# machine rather than merely identified:
+#
+#     docker compose -f deploy/registry/docker-compose.registry.yml up -d
+#     pnpm run release:artifacts -- --push
+#     pnpm run staging up        # now deploys the REGISTRY digests, pull_policy always
+#
+# Nothing above requires that. With no registry running, this stack behaves
+# exactly as it always has.
+#
 # See deploy/staging/README.md for the whole procedure, including what promotion
 # checks and what it deliberately does not.
 #
@@ -56,6 +66,12 @@
 # A default would be worse than the trap. A defaulted secret is a secret in a
 # public repository that works, which is how a placeholder becomes a production
 # credential.
+#
+# Exactly one variable breaks that rule — `PRL_PULL_POLICY`, which defaults to
+# `never`. It is not a secret, its default is the safe value and the behaviour
+# this file had before it existed, and requiring it would break `staging status`
+# and `staging logs` for anybody whose .env.staging predates it. The full argument
+# is on the `pull_policy` line of the api service, beside the code it governs.
 #
 # ## RATE_LIMIT_RESET_TOKEN is absent, and that is deliberate
 #
@@ -147,12 +163,35 @@ services:
     # not a `name@sha256:<64 hex>` reference, and after `up` it compares the
     # running container's image against the manifest and fails if they differ.
     image: ${PRL_API_IMAGE:?the API image DIGEST. Run `pnpm run release:artifacts`, then `pnpm run staging up`}
-    # `never`, because there is no registry: the image exists only because it was
-    # built on this machine, and a pull attempt would reach out to Docker Hub for a
-    # repository named `prl-api` that belongs to somebody else. With a registry in
-    # play this becomes `always` and the digest still guarantees identity — a
-    # digest pull cannot return different bytes.
-    pull_policy: never
+    # Decided per run by `scripts/staging.mjs` (`deploymentPlan`), and defaulting
+    # to the old hard-coded `never` when nothing sets it.
+    #
+    # This line used to be `pull_policy: never`, because there was no registry:
+    # the image existed only because it was built on this machine, and a pull
+    # would have gone to Docker Hub for a repository named `prl-api` that belongs
+    # to somebody else. That comment also said what would happen once a registry
+    # existed — "this becomes `always` and the digest still guarantees identity, a
+    # digest pull cannot return different bytes" — and that is now what happens.
+    #
+    # `pnpm run release:artifacts --push` publishes both artefacts to the registry
+    # in deploy/registry/ and records the digest the registry returned.
+    # `pnpm run staging up` then re-fetches each of those manifests, re-hashes them
+    # itself, and only if that succeeds writes PRL_API_IMAGE as the REGISTRY
+    # reference and PRL_PULL_POLICY=always. Pulling is then the point rather than a
+    # risk: the reference is the hash of the manifest, so the pull produces exactly
+    # those bytes or fails. Under `never` a pull is what would be dangerous —
+    # there is no registry to pull from and the name would resolve to a stranger's.
+    #
+    # The `:-never` default is the one interpolation in this file that HAS a
+    # default, which the header's "every variable is `${VAR:?}`" rule otherwise
+    # forbids. The reasoning that rule is built on — a defaulted secret is a secret
+    # in a public repository that works — does not apply to a pull policy, and the
+    # cost of requiring it would land on exactly the wrong person: an operator
+    # whose deploy/staging/.env.staging predates this line, running `staging status`
+    # against a stack that is up, would get "required variable PRL_PULL_POLICY is
+    # missing" instead of an answer. The default is also the SAFE value: with no
+    # registry involved, `never` is what must happen.
+    pull_policy: ${PRL_PULL_POLICY:-never}
     restart: unless-stopped
     init: true
     depends_on:
@@ -268,7 +307,11 @@ services:
   # -------------------------------------------------------------------------
   web:
     image: ${PRL_WEB_IMAGE:?the web image DIGEST. Run `pnpm run release:artifacts`, then `pnpm run staging up`}
-    pull_policy: never
+    # The same variable the api service uses, and for the same reasons — see the
+    # long comment there. Both services move together: `staging up` deploys either
+    # both registry references or both local digests, because one pull policy
+    # cannot describe a mixed stack.
+    pull_policy: ${PRL_PULL_POLICY:-never}
     restart: unless-stopped
     init: true
     depends_on:

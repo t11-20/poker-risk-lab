@@ -940,7 +940,8 @@ log driver, or a sidecar. Points that matter when you configure it:
 - [ ] Alerting rules deployed **and delivery rehearsed** to whatever this environment pages with.
       `pnpm run alerts:verify` does that against staging and its own webhook sink; production
       differs only in the two receiver URLs in
-      `deploy/staging/observability/alertmanager.yml`, and that last hop is the half staging
+      the `PRL_ALERT_*` variables that render `alertmanager.template.yml`, and that last hop — a
+      provider accepting real credentials — is the half staging
       cannot rehearse. An alert nobody receives is a rule with an encouraging name
 - [ ] `WebSocketConnectionsHigh` re-derived if the capacity measurement was repeated
       ([docs/production/load-test.md](production/load-test.md)); it is 70% of the measured

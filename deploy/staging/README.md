@@ -31,6 +31,15 @@ pnpm run release:artifacts   # build BOTH images ONCE, record their digests
 pnpm run staging up          # deploy those digests, migrate, verify, smoke
 ```
 
+Optionally, if you want the artefacts to be **fetchable from another machine**
+rather than merely identified — see [`deploy/registry/`](../registry/README.md):
+
+```bash
+docker compose -f deploy/registry/docker-compose.registry.yml up -d
+pnpm run release:artifacts -- --push   # records the registry digest as well
+pnpm run staging up                    # deploys the registry digests, pull_policy always
+```
+
 Then:
 
 ```bash
@@ -88,16 +97,45 @@ passed. Its absence is a refusal, not a warning: nothing has earned a promotion.
 
 ### What "digest" means here, precisely
 
-There is no container registry in this project and nothing is pushed. The digest
-is the one BuildKit's exporter assigns in the local containerd image store — the
-value `--iidfile` writes, the value `docker image inspect --format '{{.Id}}'`
-reports, and the value that appears in `RepoDigests`. It is content-addressed:
-two builds producing different bytes cannot share it.
+By default nothing is pushed. The digest is the one BuildKit's exporter assigns in
+the local containerd image store — the value `--iidfile` writes, the value
+`docker image inspect --format '{{.Id}}'` reports, and the value that appears in
+`RepoDigests`. It is content-addressed: two builds producing different bytes
+cannot share it.
 
-It is **not** registry-attested. Nobody signed it and no registry vouches for it,
-and it exists only on the machine that built it. `promote` says so in its own
-output rather than implying more. When this project gains a registry, the push
-step records the registry digest alongside this one and promotion compares that.
+What that value is not, on its own, is **fetchable**. It names bytes that exist on
+one machine, which is why "the release images are identified only by a local
+BuildKit digest, so they cannot be promoted across machines" was an open residual
+in `docs/production/final-readiness-report.md`.
+
+`pnpm run release:artifacts -- --push` closes that. It publishes both artefacts to
+the registry in [`deploy/registry/`](../registry/README.md) and records the digest
+the **registry** returned beside the local one, after proving they name the same
+artefact: the manifest is re-fetched from the registry and re-hashed in-process,
+and the image is pulled back by digest with every local reference to it removed
+first. `staging up` then deploys the registry references with `pull_policy:
+always` — re-verifying each digest first — and `promote` reports the artefacts as
+promotable across machines.
+
+Neither digest is **signed**. A registry is content-addressed storage, not a
+notary: what a push buys is content identity across a push/pull boundary — another
+machine asking for `repo@sha256:X` gets those bytes or an error, never different
+ones. Who built them, from what source, and whether anybody stands behind them is
+provenance; it needs `cosign` in CI and there is none in this environment.
+`promote` prints that split rather than letting a green tick imply the larger
+claim. The evidence for the content claim — including a cold pull, on a throwaway
+image, after deleting it locally — is in
+[`deploy/registry/README.md`](../registry/README.md).
+
+### The registry is opt-in, and the no-registry path is the default
+
+With no registry running, everything behaves exactly as it did before: local
+digests, `pull_policy: never`, and a `promote` that states cross-machine promotion
+is unavailable and names the two commands that would change that. The stack does
+not depend on a registry existing, `staging up` falls back (loudly, never
+silently) if a manifest names a registry that does not answer, and
+`scripts/staging.test.mjs` asserts the fallback rather than trusting this
+paragraph.
 
 ---
 
@@ -307,7 +345,9 @@ Two things to know before running it:
   deletes it on the way out unless `--keep-up` was passed.
 
 Both receivers are a webhook sink the script runs on this host. Production replaces two
-URLs in `observability/alertmanager.yml`; nothing between here and there is rehearsed.
+`PRL_ALERT_*` variables, from which `observability/alertmanager.template.yml` is rendered at
+bring-up. Both tiers are delivered over a webhook and a real SMTP transaction; what is not
+rehearsed is a provider accepting real credentials, and somebody being awake.
 
 ---
 
@@ -320,9 +360,16 @@ URLs in `observability/alertmanager.yml`; nothing between here and there is rehe
   authoritative hand state in process memory, so two processes serving one room
   deal two different hands and nothing detects it (ADR 0001, RUNBOOK §11.1).
   `deploy: replicas: 1` is a correctness constraint.
-- **A deploy identity, a registry, or a rollback.** See
-  `.github/workflows/release.yml`, which is explicit about which of its steps
-  cannot execute today and fails rather than pretending.
+- **A deploy identity, or a rollback.** See `.github/workflows/release.yml`, which
+  is explicit about which of its steps cannot execute today and fails rather than
+  pretending.
+- **Provenance or a signature, registry or no registry.** A pushed artefact is
+  fetchable by digest and that is all a content address can mean. Nothing signs
+  it, nothing attests to who built it, and the registry in `deploy/registry/` is a
+  container on this host rather than a third party. `cosign` in CI is the missing
+  piece and it is missing deliberately rather than forgotten — it is not installed
+  in this environment, and a pipeline that claimed attestation without it would be
+  the worst outcome of the three.
 
 ---
 

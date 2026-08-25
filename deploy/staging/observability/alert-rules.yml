@@ -10,15 +10,16 @@
 # Until this file existed, that document ended with a sentence saying it described
 # intent, because a rule that has never been evaluated is a hypothesis. It has now
 # been loaded into a real Prometheus, every expression has been evaluated against a
-# live scrape of the staging API, and one of them — `ApiDown` — has been provoked,
-# routed through Alertmanager and delivered to a receiver. See
-# `docs/production/alerts.md` § Verifying these rules for what that run proved and
-# what it did not.
+# live scrape of the staging API, and two of them — one per tier — have been
+# provoked, routed through Alertmanager and delivered to a receiver over both an
+# HTTP webhook and a real SMTP transaction. See `docs/production/alerts.md`
+# § Verifying these rules for what that run proved and, in more detail than it used
+# to need, what it did not.
 #
 # ## Two labels, and one of them decides who wakes up
 #
 # `severity: page` and `severity: ticket` are the two tiers from that document, and
-# alertmanager.yml routes on them. There is no third value: an alert whose severity
+# the route tree rendered from `alertmanager.template.yml` routes on them. There is no third value: an alert whose severity
 # is neither goes to the catch-all receiver, which is why `alert-delivery.mjs`
 # checks every rule carries one of the two.
 #

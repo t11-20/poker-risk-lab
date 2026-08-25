@@ -156,10 +156,26 @@ under a real network partition.
    refuses to call an incomplete run a pass, and stamps the result with the commit it was run
    against so `--check` calls it stale the moment `HEAD` moves. It does not certify anything — it
    records what a person heard, which is the part a machine cannot do.
-2. **No human is paged.** Alert delivery is verified to a receiver and the two-tier routing is
-   enforced by configuration; the last hop — a real paging provider and a real ticket queue — is two
-   URLs in `alertmanager.yml` and is not deployed.
-3. **Digests are local, not registry-attested.**
+2. **No provider is configured, and nobody is on call.** This is much narrower than it was.
+   Both tiers are delivered over two transports — an HTTP webhook and a **real SMTP transaction**,
+   verified end to end: Alertmanager opens a TCP connection, speaks a complete SMTP exchange, and
+   hands over ~10 KB of RFC822 whose envelope recipient is the address the tier's routing chose and
+   whose `Subject:` names the alert. Both directions are asserted: a page does not raise a ticket
+   and a ticket does not page, on both transports. Destinations are **rendered** from
+   `alertmanager.template.yml` at bring-up from `PRL_ALERT_*` variables, so a deployment configures
+   them rather than editing a file — and the file Alertmanager loads does not exist in a clean
+   checkout.
+
+   What is still unproven: that a real provider accepts real credentials (the sink negotiates no
+   TLS and asks for no AUTH), that the address is one a phone actually watches, and that anybody is
+   awake. Note that `alerts:verify` asserts against the values it rendered with, so pointing it at
+   a real pager fails the delivery checks by design; the run prints which values were overridden.
+3. **Images carry a registry digest but no signature.** `release:artifacts --push` publishes to a
+   registry and the round trip is proven — the manifest is re-fetched and re-hashed in process, and
+   every local reference is deleted and pulled back by digest before the ids are compared. So
+   content identity across a push/pull boundary holds, and cross-machine promotion works. What does
+   not exist is **provenance**: nothing is signed, there is no transparency log, and a local
+   registry is not a third party. That needs `cosign sign` / `cosign attest` in CI.
 4. **Twenty of the twenty-two alert rules are loaded, agreed, grounded and evaluable, but have not
    been provoked.** Two are driven end to end — `ApiDown` for the paging tier and `RateLimitBans`
    for the ticket tier — which is what makes the two-tier rule a tested property rather than a

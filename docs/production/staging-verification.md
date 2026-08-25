@@ -98,6 +98,11 @@ scrapes have accumulated, and only then does `for: 2m` begin. A first run of thi
 used a four-minute budget and reported a false negative on a rule that was working — the
 budget is now six.
 
-**Still unverified:** that a human is reached. Both receivers are a webhook sink on the host.
-Production replaces two URLs in `deploy/staging/observability/alertmanager.yml`. Twenty-one of
-the twenty-two rules were checked but not provoked.
+**Still unverified:** that a human is reached — but the boundary has moved a long way in. Both
+tiers are now delivered over **two transports**: an HTTP webhook and a real SMTP transaction, with
+Alertmanager handing ~10 KB of RFC822 to a sink whose envelope recipient is the address the tier's
+routing chose. Destinations are rendered from `alertmanager.template.yml` at bring-up rather than
+edited, so the file Alertmanager loads does not exist in a clean checkout. What remains unproven is
+that a provider accepts real credentials (the sink negotiates no TLS and asks for no AUTH), that
+the address is one a phone watches, and that anybody is awake. Twenty of the twenty-two rules were
+checked but not provoked; `ApiDown` and `RateLimitBans` are driven end to end.

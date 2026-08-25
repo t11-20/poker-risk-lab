@@ -27,21 +27,38 @@
  *
  * ## What "digest" means here, precisely, because it is easy to overclaim
  *
- * There is no container registry in this project and nothing is pushed. The
- * digest recorded is the one BuildKit's image exporter assigns to the manifest
- * it wrote into the local containerd image store — the same value `--iidfile`
- * emits, the same value `docker image inspect --format '{{.Id}}'` reports, and
- * the same value that appears in `RepoDigests` as `prl-api@sha256:...`. It is a
- * content address: two builds that produce different bytes cannot share it, and
+ * By default nothing is pushed. The digest recorded is the one BuildKit's image
+ * exporter assigns to the manifest it wrote into the local containerd image
+ * store — the same value `--iidfile` emits, the same value
+ * `docker image inspect --format '{{.Id}}'` reports, and the same value that
+ * appears in `RepoDigests` as `prl-api@sha256:...`. It is a content address: two
+ * builds that produce different bytes cannot share it, and
  * `image: prl-api@sha256:...` in a compose file resolves to exactly that image or
  * to nothing.
  *
- * What it is NOT is a registry-attested digest. Nobody signed it, no registry
- * vouched for it, and it exists only on the machine that built it. When this
- * project gains a registry, the push step records the registry digest alongside
- * this one and promotion compares that; until then, the honest statement is "the
- * same local artefact", and `pnpm run staging promote` says so in its output
- * rather than implying more.
+ * What that value is NOT, on its own, is fetchable. It names bytes that exist on
+ * one machine, which is why "the release images are identified only by a local
+ * BuildKit digest, so they cannot be promoted across machines" sat in
+ * `docs/production/final-readiness-report.md` as an open residual.
+ *
+ * `--push` closes that. It tags and pushes both artefacts to a registry
+ * (`deploy/registry/docker-compose.registry.yml` runs one on loopback), records
+ * the digest the REGISTRY returned alongside the local one, and then proves the
+ * two name the same artefact instead of asserting it: the manifest bytes are
+ * re-fetched from the registry over HTTP and re-hashed here, and the image is
+ * pulled back BY DIGEST after every local reference to it has been removed. See
+ * `scripts/registry-digest.mjs` for why `docker image inspect {{.RepoDigests}}`
+ * is cross-checked rather than believed — it has been measured reporting a digest
+ * the registry does not hold.
+ *
+ * What NEITHER digest is, is signed. No registry "vouches" for an artefact in the
+ * sense people mean when they say that: a registry is content-addressed storage,
+ * so what a push buys is content identity across a push/pull boundary — another
+ * machine asking for `repo@sha256:X` gets those bytes or an error, never
+ * different bytes. Who built them, from what source, on what machine, and whether
+ * anybody stands behind them is provenance, it needs a signing tool
+ * (`cosign attest`/`cosign sign` in CI), and there is none in this environment.
+ * `pnpm run staging promote` states exactly that split rather than implying more.
  *
  * ## What this does NOT prove
  *
@@ -52,6 +69,7 @@
  *
  * Usage:
  *     node scripts/release-artifacts.mjs [--tag <label>] [--manifest <path>]
+ *                                        [--push] [--registry <host:port>]
  *                                        [--force] [--no-cache] [--verbose] [--json]
  *
  * Exit codes: 0 both images built and every artefact check passed; 1 a build that
@@ -73,6 +91,15 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  DEFAULT_REGISTRY,
+  parsePushDigest,
+  parseRegistryHost,
+  registryReference,
+  registryRepoDigests,
+  registryTagReference,
+  verifyRegistryDigest,
+} from './registry-digest.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -95,6 +122,12 @@ const DEFAULTS = {
    * of `<none>` entries is how a machine runs out of disk without anyone noticing.
    */
   tag: '<git short sha>',
+  /**
+   * Where `--push` pushes. Loopback, because the registry
+   * `deploy/registry/docker-compose.registry.yml` runs has no authentication and
+   * no TLS; see that file for why the port is 5001 rather than 5000.
+   */
+  registry: DEFAULT_REGISTRY,
 };
 
 /** The two artefacts. Order matters only for the output; both are always built. */
@@ -112,6 +145,8 @@ ${bold('pnpm run release:artifacts')} — build both images once, record their d
   Options:
     --tag <label>      human-readable tag for both images  (default ${DEFAULTS.tag})
     --manifest <path>  where to write the manifest         (default ${DEFAULTS.manifest})
+    --push             push both artefacts and record the registry digest too
+    --registry <host>  where --push pushes                 (default ${DEFAULTS.registry})
     --force            rebuild even though a valid manifest for this commit exists
     --no-cache         pass --no-cache to docker build
     --verbose          stream the build output instead of buffering it
@@ -122,6 +157,14 @@ ${bold('pnpm run release:artifacts')} — build both images once, record their d
   and \`pnpm run security:containers\` all read it and none of them can build an
   image, so the digest that reaches production is the digest staging tested.
 
+  Without --push the digests are local to this machine and the stack deploys them
+  with \`pull_policy: never\`, exactly as before. With --push each artefact also
+  gets a registry digest, verified by re-fetching the manifest from the registry
+  and by pulling the image back by digest, and the staging stack then deploys the
+  registry reference with \`pull_policy: always\`. Start the registry first:
+
+      docker compose -f deploy/registry/docker-compose.registry.yml up -d
+
   Exit codes: 0 built and verified, 0 refused to rebuild an already-valid manifest
   (pass --force to rebuild anyway), 1 a failed build or a failed artefact check.
 `;
@@ -130,6 +173,8 @@ function parseArgs(argv) {
   const options = {
     tag: null,
     manifest: DEFAULTS.manifest,
+    push: false,
+    registry: DEFAULTS.registry,
     force: false,
     noCache: false,
     verbose: false,
@@ -157,6 +202,12 @@ function parseArgs(argv) {
       case '--manifest':
         options.manifest = next();
         break;
+      case '--push':
+        options.push = true;
+        break;
+      case '--registry':
+        options.registry = next();
+        break;
       case '--force':
         options.force = true;
         break;
@@ -177,6 +228,22 @@ function parseArgs(argv) {
     throw new Error(
       `--tag "${options.tag}" is not a valid Docker tag: start with a letter, digit or underscore, ` +
         'then letters, digits, dots, dashes and underscores, at most 128 characters',
+    );
+  }
+  // Parsed even when --push was not passed: a typo in --registry that is only
+  // noticed after two builds have completed is a typo that costs four minutes.
+  const registry = parseRegistryHost(options.registry);
+  if ('problem' in registry) throw new Error(`--registry ${registry.problem}`);
+  if (options.push && !registry.loopback) {
+    // docker will refuse plain HTTP to a non-loopback host anyway, and this
+    // script sends no credentials, so a remote registry would fail late and
+    // obscurely. Saying so here is not a policy about remote registries; it is a
+    // statement about what this script has been proven to do.
+    throw new Error(
+      `--registry ${registry.host} is not a loopback address. --push is written for the local ` +
+        'registry in deploy/registry/docker-compose.registry.yml: it sends no credentials, and docker ' +
+        'itself only treats localhost and 127.0.0.1 as insecure-by-default. Pushing to a real registry ' +
+        'needs authentication and TLS, which belongs in CI with a signing step beside it.',
     );
   }
   return options;
@@ -506,6 +573,149 @@ function checkArtefact(reference, meta, note) {
   return problems;
 }
 
+// --- the registry ---------------------------------------------------------
+
+/**
+ * Pushes one built artefact and returns everything that can be PROVEN about the
+ * copy the registry now holds.
+ *
+ * ## Why this is four checks and not one
+ *
+ * The blocker being closed is "these images are identified only by a local
+ * BuildKit digest, so they cannot be promoted across machines". The fix is not
+ * "we ran docker push"; it is a reference another machine can resolve to these
+ * exact bytes. Every step below is one way that claim could be false, and each is
+ * measured rather than assumed:
+ *
+ *   1. **The push reported a digest.** Read from the push output, which is the
+ *      registry's answer, and not from `docker image inspect` — see
+ *      `scripts/registry-digest.mjs` for the measured case where `RepoDigests`
+ *      names a digest the registry has never held.
+ *   2. **`RepoDigests` agrees with it.** Two readings of the same fact from two
+ *      code paths; a disagreement means the push converted the artefact (the
+ *      multi-platform case), and the local digest and the registry digest would
+ *      then describe different things.
+ *   3. **The registry serves bytes that hash to that digest, and those bytes tie
+ *      back to the local build.** Done over HTTP, in this process, by hashing
+ *      what came back. This is the step that makes the whole thing a measurement:
+ *      everything else is docker's word for it.
+ *   4. **The image pulls back BY DIGEST after every local reference to it is
+ *      removed**, and the image that arrives has the identity the build recorded.
+ *
+ * ## What step 4 does and does not show on the building machine
+ *
+ * The layers are already in this machine's content store, so the pull resolves
+ * without transferring them and it would be dishonest to call it proof of
+ * transfer. What it proves is that the reference RESOLVES: the registry answers
+ * for that digest, docker accepts the manifest as matching it, and the image that
+ * comes out carries the identity the build recorded. Step 3 is what establishes
+ * that the bytes are really in the registry and hash to the digest. The two
+ * together are the cross-machine property — a digest pull cannot return different
+ * bytes, because a registry that returned different bytes would be returning
+ * bytes whose hash is not the digest that was asked for, which step 3 checks by
+ * doing the hashing here. `deploy/registry/README.md` carries the cold-store
+ * demonstration, on a throwaway image, where the transfer genuinely happens.
+ */
+async function pushArtefact(image, registry) {
+  const separator = image.tag.lastIndexOf(':');
+  const tagLabel = separator === -1 ? 'latest' : image.tag.slice(separator + 1);
+  const registryTag = registryTagReference(registry.host, image.repository, tagLabel);
+
+  // Tagged from the DIGEST reference, never from the local tag: the tag is a
+  // pointer that a concurrent build could have moved between the build and here,
+  // and the whole point is that the bytes pushed are the bytes verified.
+  const tagged = run('docker', ['tag', image.reference, registryTag]);
+  if (tagged.status !== 0) {
+    return { problem: `docker tag ${image.reference} ${registryTag} failed: ${tagged.stderr.trim()}` };
+  }
+
+  const push = run('docker', ['push', registryTag]);
+  const pushOutput = `${push.stdout}\n${push.stderr}`;
+  if (push.status !== 0) {
+    return {
+      problem:
+        `docker push ${registryTag} failed: ${push.stderr.trim() || push.stdout.trim()}\n      Is the ` +
+        'registry up? `docker compose -f deploy/registry/docker-compose.registry.yml up -d`',
+    };
+  }
+  const pushedDigest = parsePushDigest(pushOutput);
+  if (pushedDigest === null) {
+    return {
+      problem:
+        `docker push ${registryTag} succeeded but printed no "digest: sha256:…" line, so the registry ` +
+        `digest is unknown. Output was: ${pushOutput.trim().slice(-400)}`,
+    };
+  }
+
+  const raw = capture('docker', ['image', 'inspect', registryTag, '--format', '{{json .RepoDigests}}']);
+  let repoDigests = [];
+  try {
+    const parsed = JSON.parse(raw ?? 'null');
+    if (Array.isArray(parsed)) repoDigests = parsed;
+  } catch {
+    repoDigests = [];
+  }
+  const reported = registryRepoDigests(repoDigests, registry.host, image.repository);
+  if (reported.length > 0 && !reported.includes(pushedDigest)) {
+    return {
+      problem:
+        `the push returned ${pushedDigest} but docker image inspect reports ${reported.join(', ')} for ` +
+        `${registry.host}/${image.repository}. That is the multi-platform conversion case: docker ` +
+        'pushed a single-platform manifest and kept naming the local index, so the two digests describe ' +
+        'different artefacts. Recording either one would produce a reference that resolves to something ' +
+        'other than what was tested here.',
+    };
+  }
+
+  const verified = await verifyRegistryDigest({
+    host: registry.host,
+    repository: image.repository,
+    digest: pushedDigest,
+    localDigest: image.digest,
+  });
+  if (!verified.ok) return { problem: verified.problem };
+
+  const reference = registryReference(registry.host, image.repository, pushedDigest);
+  // Both local references to the registry copy are removed so the pull below has
+  // to go through the registry to resolve the digest. These are untags — the
+  // image is still tagged `prl-api:<tag>`, and a container running it is
+  // untouched — so this cannot delete the artefact out from under the stack.
+  const untagged = [registryTag, reference].map((ref) => run('docker', ['rmi', ref]).status === 0);
+  const pull = run('docker', ['pull', reference]);
+  if (pull.status !== 0) {
+    return { problem: `docker pull ${reference} failed: ${pull.stderr.trim() || pull.stdout.trim()}` };
+  }
+  const pulledId = capture('docker', ['image', 'inspect', reference, '--format', '{{.Id}}']);
+  if (pulledId !== image.digest) {
+    return {
+      problem:
+        `pulling ${reference} back produced image ${String(pulledId)}, and the build recorded ` +
+        `${image.digest}. The registry is serving something other than the artefact that was built ` +
+        'and checked here; nothing downstream may use either value until that is understood.',
+    };
+  }
+
+  return {
+    registry: {
+      host: registry.host,
+      repository: image.repository,
+      tag: registryTag,
+      digest: pushedDigest,
+      reference,
+      // How the registry's manifest was tied to the local build — see
+      // `tieManifestToLocalDigest`. Recorded so a reader of the manifest knows
+      // which check ran rather than having to infer it from the image store.
+      tiedBy: verified.tie,
+      pulledBackId: pulledId,
+      pushedAt: new Date().toISOString(),
+    },
+    detail:
+      `${pushedDigest}\n      registry manifest re-fetched and re-hashed here (${verified.tie}); ` +
+      `${untagged.filter(Boolean).length} local reference(s) to it removed, then pulled back by ` +
+      `digest and the image that came back is ${pulledId.slice(0, 19)}…`,
+  };
+}
+
 // --- the manifest ---------------------------------------------------------
 
 /**
@@ -534,6 +744,56 @@ function existingManifestFor(path, commitSha) {
     if (capture('docker', ['image', 'inspect', reference, '--format', '{{.Id}}']) === null) return null;
   }
   return manifest;
+}
+
+/**
+ * What kind of digest the manifest is recording, stated inside the artefact so
+ * that nobody reading it has to find this file to learn what they are looking at.
+ *
+ * Two strings, because there are two genuinely different situations and a single
+ * hedged sentence covering both would be a sentence that overclaims in one of
+ * them. This field has been wrong in exactly that way before: it said "not
+ * registry-attested: nothing is pushed" for every manifest, which stopped being
+ * true the moment `--push` existed.
+ */
+function digestKindFor(images) {
+  const everyServicePushed = ARTEFACTS.every(({ service }) => images[service]?.registry != null);
+  if (!everyServicePushed) {
+    return (
+      'local BuildKit image-store manifest digest (--iidfile). Content-addressed and stable, but ' +
+      'local to the machine that built it: nothing was pushed, so no other machine can resolve it. ' +
+      'Re-run with --push against a registry to add a fetchable digest.'
+    );
+  }
+  return (
+    'two content addresses for one artefact: the local BuildKit image-store manifest digest ' +
+    '(--iidfile), and the manifest digest the registry returned on push — which was re-fetched from ' +
+    'the registry, re-hashed here, and pulled back by digest. images.<service>.registry.reference ' +
+    'resolves to exactly these bytes on any machine that can reach the registry. NEITHER digest is ' +
+    'signed: no signature, no attestation and no notary (cosign is not available here), so this is ' +
+    'content identity across a push/pull boundary and not provenance.'
+  );
+}
+
+/**
+ * Pushes every artefact and hangs the proven registry facts off the manifest
+ * entries. A service that could not be pushed is a `cross`, so no manifest is
+ * written: a manifest carrying a registry reference for one image and not the
+ * other is a manifest whose reader has to guess which half is promotable.
+ */
+async function pushAll(images, registry) {
+  console.log(bold(`\nPush → ${registry.host}`));
+  for (const { service } of ARTEFACTS) {
+    const image = images[service];
+    if (image === undefined) continue;
+    const result = await pushArtefact(image, registry);
+    if ('problem' in result) {
+      cross(`${service}: no registry digest was recorded`, result.problem);
+      continue;
+    }
+    image.registry = result.registry;
+    tick(`${service} pushed to ${result.registry.tag}`, result.detail);
+  }
 }
 
 // --- run ------------------------------------------------------------------
@@ -579,11 +839,14 @@ try {
 const git = gitProvenance();
 const tag = options.tag ?? `${git.shortSha ?? 'local'}${git.dirty === true ? '-dirty' : ''}`;
 const manifestPath = resolve(REPO_ROOT, options.manifest);
+// parseArgs has already refused anything unusable, so this cannot carry a problem.
+const registry = parseRegistryHost(options.registry);
 
 console.log(dim(`  docker   ${server}`));
 console.log(dim(`  commit   ${git.sha ?? '(not a git checkout)'}${git.dirty === true ? ' (dirty)' : ''}`));
 console.log(dim(`  tag      ${tag}`));
-console.log(dim(`  manifest ${options.manifest}\n`));
+console.log(dim(`  manifest ${options.manifest}`));
+console.log(dim(`  registry ${options.push ? registry.host : 'none (--push not given)'}\n`));
 
 if (git.dirty === true) {
   bang(
@@ -600,11 +863,33 @@ if (!options.force) {
     for (const { service } of ARTEFACTS) {
       console.log(`  ${green('✓')} ${service}  ${dim(existing.images[service].reference)}`);
     }
+    // `--push` on an already-built commit pushes what is there rather than
+    // refusing, and that is the whole point of the refusal: publishing an
+    // artefact must never be a reason to build a second one. Re-pushing an
+    // artefact already in the registry is a no-op on the wire and re-runs every
+    // verification, which is what makes this safe to type twice.
+    if (options.push) {
+      await pushAll(existing.images, registry);
+      if (failures.length === 0) {
+        existing.digestKind = digestKindFor(existing.images);
+        existing.pushedAt = new Date().toISOString();
+        writeFileSync(manifestPath, `${JSON.stringify(existing, null, 2)}\n`);
+        tick(`manifest updated with the registry digests (${options.manifest})`);
+        if (options.json) console.log(JSON.stringify(existing, null, 2));
+        console.log(green(bold('\nPASS — the existing artefacts are now fetchable by registry digest.\n')));
+        process.exit(0);
+      }
+      console.log(red(bold(`\nFAIL — ${failures.length} problem(s), the manifest was left untouched:`)));
+      for (const failure of failures) console.log(red(`    - ${failure}`));
+      console.log('');
+      process.exit(1);
+    }
     console.log(
       dim(
         '\n  A valid manifest for this exact commit already exists and both images are still present.\n' +
           '  Building again would produce a different artefact from the same source, which is the\n' +
-          '  thing this script exists to prevent. Pass --force if that is genuinely what you want.\n',
+          '  thing this script exists to prevent. Pass --force if that is genuinely what you want.\n' +
+          '  (--push publishes these existing artefacts without rebuilding them.)\n',
       ),
     );
     process.exit(0);
@@ -671,6 +956,13 @@ try {
 
 const built = Object.keys(images).length;
 
+// Only after every artefact check has passed. Pushing an image that failed a
+// check would put it one `docker pull` away from any machine on the network,
+// which is the opposite of what a gate is for.
+if (options.push && built === ARTEFACTS.length && failures.length === 0) {
+  await pushAll(images, registry);
+}
+
 if (built === ARTEFACTS.length && failures.length === 0) {
   const manifest = {
     schema: MANIFEST_SCHEMA,
@@ -679,9 +971,7 @@ if (built === ARTEFACTS.length && failures.length === 0) {
     toolchain: { node: process.version, dockerServer: server },
     // Stated in the artefact itself so that nobody reading the manifest has to
     // find this file to learn what kind of digest they are looking at.
-    digestKind:
-      'local BuildKit image-store manifest digest (--iidfile). Content-addressed and stable, ' +
-      'but not registry-attested: nothing is pushed, so no registry vouches for it.',
+    digestKind: digestKindFor(images),
     images,
   };
   mkdirSync(dirname(manifestPath), { recursive: true });
@@ -698,6 +988,7 @@ console.log(
 for (const { service } of ARTEFACTS) {
   const image = images[service];
   console.log(`  ${service.padEnd(16)} ${image ? dim(image.reference) : red('not built')}`);
+  if (image?.registry != null) console.log(`  ${''.padEnd(16)} ${dim(image.registry.reference)}`);
 }
 
 if (built !== ARTEFACTS.length || failures.length > 0) {
@@ -721,3 +1012,23 @@ console.log(
       '  known vulnerabilities in them, which is the container scan.\n',
   ),
 );
+if (options.push) {
+  console.log(
+    dim(
+      '  Both artefacts are also in the registry, and each registry digest was re-fetched,\n' +
+        '  re-hashed here and pulled back by digest. Another machine that can reach the registry\n' +
+        '  can obtain exactly these bytes; a digest pull cannot return different ones.\n' +
+        '  What that is NOT: a signature. Nothing here signs, attests or notarises anything, so\n' +
+        '  the registry copy proves content identity and says nothing about provenance — who\n' +
+        '  built it, from what source, or whether anybody stands behind it. That needs cosign\n' +
+        '  (or an equivalent) in CI, and there is none in this environment.\n',
+    ),
+  );
+} else {
+  console.log(
+    dim(
+      '  These digests are local to this machine: nothing was pushed, so no other machine can\n' +
+        '  resolve them. `--push` adds a registry digest — see deploy/registry/README.md.\n',
+    ),
+  );
+}

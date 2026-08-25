@@ -17,6 +17,8 @@ There are exactly two severities, and the difference is not how bad it is. It is
 
 A third tier was considered and rejected. "Warning" alerts that go to a channel nobody owns are how a team learns to scroll past the one that mattered.
 
+Each tier carries **two transports**, not one, and a deployment may use either or both. See [Configuring the destinations](#configuring-the-destinations) below.
+
 ---
 
 ## Why the thresholds fall on bucket boundaries
@@ -308,11 +310,60 @@ and two checks make sure they cannot drift quietly:
   fails on any difference, against a live Prometheus.
 - `scripts/alert-delivery.test.mjs` makes the same comparison with no containers, so an
   edit to one file and not the other fails in the pull request rather than in a release
-  rehearsal.
+  rehearsal. It also drives the config renderer and the SMTP sink directly, because a
+  protocol bug in the latter would otherwise surface six minutes into a verification run
+  that had already stopped the staging API.
 
 `docker-compose.observability.yml` is an **overlay** on the staging stack, not part of it:
 `docker-compose.staging.yml` is a manifest of what production runs, and production gets its
 monitoring from somewhere else. Bringing staging up does not bring Prometheus up.
+
+---
+
+## Configuring the destinations
+
+`deploy/staging/observability/alertmanager.yml` is **not a tracked file**. It is rendered from
+`alertmanager.template.yml` by `scripts/alert-delivery.mjs` before Alertmanager starts, the same
+way that script already writes `metrics-token` from `PRL_STAGING_METRICS_TOKEN`. To bring the
+overlay up by hand, render it first:
+
+```
+node scripts/alert-delivery.mjs --render-config
+```
+
+This exists because the previous arrangement — two `webhook_configs` URLs written into a tracked
+file, and every document about it ending "production replaces two URLs" — makes the most
+consequential setting in the alerting stack changeable only by editing a checkout. That is a
+change made on a laptop, at the wrong moment, by somebody already having a bad night, and it
+never appears in a diff. Alertmanager does not expand environment variables in its own
+configuration, so the honest alternatives were a rendered template or a documented overlay; this
+is the first, because a rendered file can be shown, diffed and archived.
+
+Each tier takes a webhook, an email recipient, or both. Set the empty string to drop one; a tier
+left with neither is refused before anything starts.
+
+| Variable | Rehearsal default | What a deployment puts here |
+| --- | --- | --- |
+| `PRL_ALERT_PAGE_WEBHOOK_URL` | the local sink's `/page` | PagerDuty Events API v2, Opsgenie, a Slack relay |
+| `PRL_ALERT_TICKET_WEBHOOK_URL` | the local sink's `/ticket` | the ticket queue's intake webhook |
+| `PRL_ALERT_PAGE_EMAIL_TO` | `oncall@…invalid` | email-to-SMS, an email-to-PagerDuty address, a shared inbox |
+| `PRL_ALERT_TICKET_EMAIL_TO` | `tickets@…invalid` | the ticket queue's intake address |
+| `PRL_ALERT_SMTP_SMARTHOST` | the local SMTP sink | `host:port` of the relay that accepts the mail |
+| `PRL_ALERT_EMAIL_FROM` | `alertmanager@…invalid` | envelope sender; relays reject mail from a domain they do not know |
+| `PRL_ALERT_SMTP_HELLO` | `localhost` | the name given in `EHLO` |
+| `PRL_ALERT_SMTP_REQUIRE_TLS` | `false` | **`true` anywhere the relay is not on the same host** |
+| `PRL_ALERT_SMTP_USERNAME` | unset | enables SMTP AUTH |
+| `PRL_ALERT_SMTP_PASSWORD` | unset | written to a 0600 file and read through `smtp_auth_password_file` |
+
+The password is a file rather than a value in the configuration because the rendered
+configuration is the artefact somebody pastes into a bug report, and a submission password in it
+is a credential in a chat log.
+
+**Why email is a first-class transport here and not a fallback.** A great many teams page through
+it — an email-to-SMS gateway, a provider's inbound address, a shared inbox with a phone rule on
+it. It is also the only paging transport this repository can rehearse end to end without holding
+an account somewhere, because SMTP is a protocol rather than an API key. That is what the next
+section is about.
 
 ---
 
@@ -335,21 +386,55 @@ That has now been done, and what it proved is narrower than "these alerts work".
 alerts:verify` brings up a real Prometheus and a real Alertmanager beside the staging stack
 and establishes four things about **all twenty-two** rules — they load with no evaluation
 error, they agree with this document, every `prl_*` series they name appears in a live
-scrape, and every expression executes — and one thing about **one** of them: `ApiDown` was
-provoked by stopping the API container, went pending, fired, reached Alertmanager, and was
-delivered to a receiver, which then received the resolved notification when the API came
-back. The notification arrived on the paging path and not the ticket path, which is the
-two-tier rule at the top of this file being enforced by configuration rather than by prose.
+scrape, and every expression executes — and delivery for **two** of them, one per tier.
+`ApiDown` is provoked by stopping the API container: it goes pending, fires, reaches
+Alertmanager, and is delivered to the paging tier and not the ticket tier, with the resolved
+notification following when the API comes back. `RateLimitBans` is provoked by flooding the
+limiter past its ban threshold, and must reach the ticket tier and not the pager. Together
+those are the two-tier rule at the top of this file being enforced by configuration rather
+than by prose, in both directions.
 
-The three limits on that, stated plainly:
+### The email delivery is real, and here is exactly how far it goes
 
-1. **Twenty-one rules have not been provoked.** Loaded, agreed, grounded and evaluable is a
+Both tiers are delivered over **two** transports, and every assertion above is made against
+each. One is an HTTP webhook. The other is SMTP, and it is the one worth being precise about.
+
+Alertmanager's `email_configs` speaks SMTP to a smarthost. `scripts/alert-delivery.mjs` runs
+one: a few hundred bytes of `node:net` that greets with `220`, answers `EHLO` with a
+multi-line `250`, takes `MAIL FROM` and `RCPT TO`, answers `DATA` with `354`, captures until
+`\r\n.\r\n` and says `250`. That is a genuine SMTP transaction — Alertmanager's client cannot
+tell it from a provider's relay — and what it captures is the RFC822 message a relay would
+have been handed. The verification asserts on that message: the envelope recipient is the
+address the tier's routing chose, the `Subject:` is Alertmanager's own `[FIRING:…]` or
+`[RESOLVED]` line naming the alert, and the decoded body contains the alert name too.
+
+**What that proves:** the email path is configured, reachable, addressed per tier, and
+produces a real message containing the alert. Alertmanager opened a TCP connection, spoke the
+protocol, and handed over ten kilobytes of RFC822 with `alertname = ApiDown` in it.
+
+**What it does not prove, precisely:**
+
+- **Not that a pager rings.** The SMTP server is a sink under this repository's control, not
+  a relay that forwards anywhere. Nothing left this machine.
+- **Not that a provider accepts this deployment's credentials.** The sink advertises neither
+  `STARTTLS` nor `AUTH` and asks for nothing, deliberately: inventing an API key or a
+  submission password would rehearse somebody else's account rather than this one. TLS
+  negotiation, authentication and a provider's own acceptance rules are all untested.
+- **Not that the address is one anybody watches.** An email-to-SMS gateway that was
+  decommissioned last year looks identical to a working one from this end.
+- **Not that a person is awake.** Nothing a repository can run proves that.
+
+### The three limits, stated plainly
+
+1. **Twenty rules have not been provoked.** Loaded, agreed, grounded and evaluable is a
    great deal more than a markdown file, and a great deal less than tested. The table above
    is how to provoke each of them by hand.
-2. **No human is reached.** Both receivers are a webhook sink that the verification script
-   runs on this host. There is no PagerDuty account here and no ticket queue; production
-   replaces two URLs in `alertmanager.yml` and changes nothing else. The hop that ends at
-   somebody's phone at 3am is still unrehearsed.
+2. **The last hop is narrower than it was, not gone.** It used to be the whole of "no human
+   is paged": both receivers were a webhook sink and no real delivery protocol had ever been
+   spoken. What remains is the four bullets above: nothing left this machine, no credential
+   was exercised, no address was confirmed to be watched, and nobody was woken. Closing
+   those is a deployment's job, done by setting `PRL_ALERT_*` and sending itself a test page
+   — not by editing a file in a checkout.
 3. **Staging, not production.** These rules have never been evaluated against production
    data volumes, and several thresholds (`WebSocketConnectionsHigh`, `WorkerPoolQueueDeep`)
    are derived from a capacity measurement of one instance on a laptop.

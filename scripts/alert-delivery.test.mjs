@@ -1,15 +1,28 @@
 #!/usr/bin/env node
 /**
- * Tests for the parsers behind `pnpm run alerts:verify`.
+ * Tests for the parsers, the config renderer and the SMTP sink behind
+ * `pnpm run alerts:verify`.
  *
  * Run with:  node --test scripts/alert-delivery.test.mjs
  *
  * The verification itself needs a running staging stack, a Prometheus, an
- * Alertmanager and about four minutes, so it is not a unit test and does not
+ * Alertmanager and about six minutes, so it is not a unit test and does not
  * pretend to be. What IS testable here is everything the checks are built on:
- * three small parsers that read the rules file and the document, and whose
- * failures are silent in the worst way — a parser that returns fewer alerts than
- * exist makes every check pass by looking at less.
+ * three small parsers that read the rules file and the document, the renderer that
+ * turns `alertmanager.template.yml` into the file Alertmanager loads, and the SMTP
+ * server the email proof depends on. Their failures are silent in the worst way —
+ * a parser that returns fewer alerts than exist makes every check pass by looking
+ * at less, and a renderer that emits a blank destination produces an Alertmanager
+ * that starts, routes correctly and notifies nobody.
+ *
+ * ## Why the SMTP sink is driven over a real socket here
+ *
+ * Because the alternative place to find a protocol bug in it is six minutes into a
+ * verification run, after the staging API has already been stopped. The dialogue
+ * test opens a TCP connection to the sink on an ephemeral port and speaks the same
+ * sequence Alertmanager's client does, including the two things a naive
+ * implementation gets wrong: multi-line `250` framing after `EHLO`, and undoing
+ * dot-stuffing in the captured body.
  *
  * ## The defect these were written against
  *
@@ -28,19 +41,41 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { connect } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  ALERT_DESTINATION_DEFAULTS,
+  alertmanagerValues,
   alertsInDocument,
   alertsInRulesFile,
+  decodeQuotedPrintable,
+  destinationProblems,
+  emailsFor,
   expressionsInRulesFile,
+  parseMessage,
+  renderAlertmanagerConfig,
   seriesReferencedBy,
+  startSmtpSink,
 } from './alert-delivery.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const RULES = readFileSync(join(REPO_ROOT, 'deploy', 'staging', 'observability', 'alert-rules.yml'), 'utf8');
+const OBSERVABILITY = join(REPO_ROOT, 'deploy', 'staging', 'observability');
+const RULES = readFileSync(join(OBSERVABILITY, 'alert-rules.yml'), 'utf8');
+const TEMPLATE = readFileSync(join(OBSERVABILITY, 'alertmanager.template.yml'), 'utf8');
 const DOC = readFileSync(join(REPO_ROOT, 'docs', 'production', 'alerts.md'), 'utf8');
+
+/**
+ * `${NAME}`, assembled rather than typed.
+ *
+ * Everywhere else in this repository a literal `${…}` inside an ordinary quoted
+ * string is a template literal somebody forgot to backtick, and the linter says so.
+ * This file is the one place the sequence is data — it is the substitution syntax
+ * under test — so it is built, which keeps that rule earning its keep rather than
+ * being switched off for a file that legitimately needs the characters.
+ */
+const ref = (name) => `\${${name}}`;
 
 describe('alertsInRulesFile', () => {
   it('reads the name, the severity and the runbook of each rule', () => {
@@ -244,5 +279,364 @@ describe('the document and the rules describe the same alerts', () => {
         `${name}: ${rule.runbook} is empty`,
       );
     }
+  });
+});
+
+describe('renderAlertmanagerConfig', () => {
+  /**
+   * The renderer is the thing standing between "an operator set a variable" and
+   * "Alertmanager notifies somebody". Every failure mode it has is silent in the
+   * same way the parsers above are silent: a config that renders, loads, routes
+   * and drops. So the cases below are all about what must NOT survive a render.
+   */
+
+  it('substitutes a value', () => {
+    const rendered = renderAlertmanagerConfig(`      - url: '${ref('A')}'`, {
+      A: 'http://example.test/page',
+    });
+    assert.equal(rendered, "      - url: 'http://example.test/page'");
+  });
+
+  it('drops an @if block whose value is empty, and keeps one whose value is not', () => {
+    const template = [
+      'receivers:',
+      '# @if WEBHOOK',
+      '    webhook_configs:',
+      `      - url: '${ref('WEBHOOK')}'`,
+      '# @endif',
+      '# @if EMAIL',
+      '    email_configs:',
+      `      - to: '${ref('EMAIL')}'`,
+      '# @endif',
+    ].join('\n');
+    const emailOnly = renderAlertmanagerConfig(template, { WEBHOOK: '', EMAIL: 'oncall@example.test' });
+    assert.ok(!emailOnly.includes('webhook_configs'));
+    assert.ok(emailOnly.includes("- to: 'oncall@example.test'"));
+    const both = renderAlertmanagerConfig(template, {
+      WEBHOOK: 'http://example.test/page',
+      EMAIL: 'oncall@example.test',
+    });
+    assert.ok(both.includes('webhook_configs') && both.includes('email_configs'));
+  });
+
+  it('refuses an empty value rather than emitting a destination that is blank', () => {
+    // `url: ''` is accepted by Alertmanager. It notifies nobody, reports no error,
+    // and looks exactly like a working configuration from every API it exposes —
+    // which is the shape of the blocker this whole feature exists to close.
+    assert.throws(() => renderAlertmanagerConfig(`      - url: '${ref('A')}'`, { A: '' }), /is empty/);
+  });
+
+  it('refuses a name it has no value for rather than leaving it literal', () => {
+    assert.throws(
+      () => renderAlertmanagerConfig(`      - url: '${ref('NOPE')}'`, { A: 'x' }),
+      /no such value/,
+    );
+    assert.throws(() => renderAlertmanagerConfig('# @if NOPE\na\n# @endif', { A: 'x' }), /no such value/);
+  });
+
+  it('refuses an unclosed @if', () => {
+    assert.throws(() => renderAlertmanagerConfig('# @if A\nx', { A: 'y' }), /never closed/);
+    assert.throws(() => renderAlertmanagerConfig('x\n# @endif', { A: 'y' }), /no matching @if/);
+  });
+
+  it('leaves a comment line untouched, so the documentation table stays a table', () => {
+    // The template's header documents every variable by name. Substituting there
+    // would turn the reference table in the rendered file into a list of one
+    // deployment's real destinations — including, on a production host, the
+    // address of somebody's phone.
+    const documented = `# | \`${ref('A')}\` | what it is |`;
+    const rendered = renderAlertmanagerConfig([documented, `  url: '${ref('A')}'`].join('\n'), {
+      A: 'http://example.test/page',
+    });
+    assert.ok(rendered.includes(documented));
+    assert.ok(rendered.includes("url: 'http://example.test/page'"));
+  });
+});
+
+describe('the real alertmanager.template.yml', () => {
+  it('renders with the shipped defaults and leaves no placeholder behind', () => {
+    const { values } = alertmanagerValues({});
+    const rendered = renderAlertmanagerConfig(TEMPLATE, values);
+    assert.ok(!/^[^#]*\$\{/m.test(rendered), 'a placeholder survived into a non-comment line');
+    for (const key of ['smtp_smarthost:', 'webhook_configs:', 'email_configs:']) {
+      assert.ok(rendered.includes(key), `the rendered config has no ${key}`);
+    }
+    // Both tiers, both transports. Counting is the point: one `email_configs` would
+    // mean a receiver quietly lost its mail destination.
+    assert.equal(rendered.match(/webhook_configs:/g).length, 2);
+    assert.equal(rendered.match(/email_configs:/g).length, 2);
+    assert.ok(rendered.includes(values.PRL_ALERT_PAGE_EMAIL_TO));
+    assert.ok(rendered.includes(values.PRL_ALERT_TICKET_EMAIL_TO));
+  });
+
+  it('keeps the two-tier route tree exactly as it was, whatever the destinations are', () => {
+    // The routing is the part that is verified in both directions against a live
+    // Alertmanager, and making the receivers configurable must not have cost it.
+    const { values } = alertmanagerValues({});
+    const rendered = renderAlertmanagerConfig(TEMPLATE, values);
+    assert.match(rendered, /severity = "page"\n {6}receiver: paging\n {6}continue: false/);
+    assert.match(rendered, /severity = "ticket"\n {6}receiver: tickets\n {6}continue: false/);
+    assert.match(rendered, /^ {2}receiver: tickets$/m, 'the catch-all receiver changed');
+  });
+
+  it('renders an email-only deployment with no webhook blocks at all', () => {
+    const { values } = alertmanagerValues({
+      PRL_ALERT_PAGE_WEBHOOK_URL: '',
+      PRL_ALERT_TICKET_WEBHOOK_URL: '',
+    });
+    const rendered = renderAlertmanagerConfig(TEMPLATE, values);
+    assert.ok(!rendered.includes('webhook_configs:'));
+    assert.equal(rendered.match(/email_configs:/g).length, 2);
+    assert.deepEqual(destinationProblems(values), []);
+  });
+
+  it('renders a webhook-only deployment with no SMTP settings at all', () => {
+    const { values } = alertmanagerValues({ PRL_ALERT_PAGE_EMAIL_TO: '', PRL_ALERT_TICKET_EMAIL_TO: '' });
+    const rendered = renderAlertmanagerConfig(TEMPLATE, values);
+    assert.ok(!rendered.includes('email_configs:'));
+    assert.equal(rendered.match(/webhook_configs:/g).length, 2);
+    assert.deepEqual(destinationProblems(values), []);
+  });
+
+  it('emits smtp_auth_password_file, and never the password itself', () => {
+    const { values } = alertmanagerValues({ PRL_ALERT_SMTP_USERNAME: 'apikey' });
+    const rendered = renderAlertmanagerConfig(TEMPLATE, values);
+    assert.ok(rendered.includes("smtp_auth_username: 'apikey'"));
+    assert.ok(rendered.includes('smtp_auth_password_file: /etc/alertmanager/smtp-password'));
+    assert.ok(!/^\s*smtp_auth_password:/m.test(rendered), 'a password would be written into the config');
+  });
+});
+
+describe('alertmanagerValues and destinationProblems', () => {
+  it('falls back to the local sinks and reports nothing as overridden', () => {
+    const { values, overridden } = alertmanagerValues({});
+    assert.deepEqual(values, ALERT_DESTINATION_DEFAULTS);
+    assert.deepEqual(overridden, []);
+  });
+
+  it('records what the environment supplied, so a failed check can be explained', () => {
+    const { values, overridden } = alertmanagerValues({
+      PRL_ALERT_PAGE_EMAIL_TO: '  5551234567@txt.example.test  ',
+    });
+    assert.equal(values.PRL_ALERT_PAGE_EMAIL_TO, '5551234567@txt.example.test');
+    assert.deepEqual(overridden, ['PRL_ALERT_PAGE_EMAIL_TO']);
+  });
+
+  it('refuses a tier with no destination left in it', () => {
+    const { values } = alertmanagerValues({
+      PRL_ALERT_PAGE_WEBHOOK_URL: '',
+      PRL_ALERT_PAGE_EMAIL_TO: '',
+    });
+    assert.match(destinationProblems(values).join(' '), /paging receiver would have no destination/);
+  });
+
+  it('refuses email with no relay to send it through', () => {
+    const { values } = alertmanagerValues({ PRL_ALERT_SMTP_SMARTHOST: '' });
+    assert.match(destinationProblems(values).join(' '), /PRL_ALERT_SMTP_SMARTHOST is empty/);
+  });
+
+  it('refuses a require_tls that is not a YAML boolean', () => {
+    // `smtp_require_tls: yes` is a string to Alertmanager's parser and the container
+    // refuses to start on it — six minutes into a run, after the API has been stopped.
+    const { values } = alertmanagerValues({ PRL_ALERT_SMTP_REQUIRE_TLS: 'yes' });
+    assert.match(destinationProblems(values).join(' '), /must be exactly true or false/);
+  });
+});
+
+describe('decodeQuotedPrintable', () => {
+  it('rejoins a word split by a soft line break', () => {
+    // Alertmanager's default HTML body is one very long line, so the alert name in
+    // it is genuinely likely to be split mid-word. An assertion on the raw bytes
+    // would fail against a message that contains exactly what it is looking for.
+    assert.equal(decodeQuotedPrintable('Api=\r\nDown'), 'ApiDown');
+    assert.equal(decodeQuotedPrintable('Api=\nDown'), 'ApiDown');
+  });
+
+  it('decodes escaped bytes', () => {
+    assert.equal(decodeQuotedPrintable('a=3Db'), 'a=b');
+  });
+});
+
+describe('parseMessage', () => {
+  it('splits headers from body, lowercases names and unfolds a continuation', () => {
+    const parsed = parseMessage(
+      [
+        'From: alertmanager@example.test',
+        'To: oncall@example.test',
+        'Subject: [FIRING:1]',
+        ' ApiDown',
+        'Content-Transfer-Encoding: quoted-printable',
+        '',
+        '<p>Alert: Api=',
+        'Down</p>',
+      ].join('\r\n'),
+    );
+    assert.equal(parsed.headers.get('subject'), '[FIRING:1] ApiDown');
+    assert.equal(parsed.headers.get('to'), 'oncall@example.test');
+    assert.ok(parsed.body.includes('ApiDown'));
+  });
+
+  it('does not decode the headers, because a MIME boundary looks like an escape', () => {
+    const parsed = parseMessage(
+      ['Content-Type: multipart/alternative; boundary=3f9a2b', '', 'body'].join('\r\n'),
+    );
+    assert.equal(parsed.headers.get('content-type'), 'multipart/alternative; boundary=3f9a2b');
+  });
+});
+
+describe('the SMTP sink speaks the protocol', () => {
+  /**
+   * The one part of `alerts:verify` that is a network protocol implementation, driven
+   * here over a real socket with no containers. A defect in the state machine below
+   * would otherwise surface six minutes into a run that had already stopped the
+   * staging API — which is the most expensive place in this repository to find a bug.
+   */
+
+  /** Sends each line as the previous reply completes, and returns every reply in order. */
+  function dialogue(port, script) {
+    return new Promise((done, failed) => {
+      const socket = connect(port, '127.0.0.1');
+      const replies = [];
+      let buffer = '';
+      let step = -1;
+      socket.setEncoding('utf8');
+      socket.on('error', failed);
+      socket.on('data', (chunk) => {
+        buffer += chunk;
+        // A reply is complete when its LAST line puts a space after the code rather
+        // than a hyphen. That is the whole of SMTP's multi-line framing, and reading
+        // it wrongly here would make this test hang rather than fail.
+        const lines = buffer.split('\r\n').filter((line) => line !== '');
+        if (lines.length === 0 || !/^\d{3} /.test(lines[lines.length - 1])) return;
+        if (!buffer.endsWith('\r\n')) return;
+        replies.push(buffer);
+        buffer = '';
+        step += 1;
+        if (step >= script.length) {
+          socket.end();
+          done(replies);
+          return;
+        }
+        socket.write(script[step]);
+      });
+    });
+  }
+
+  it('captures a message, its envelope, and undoes dot-stuffing', async () => {
+    const sink = await startSmtpSink(0);
+    try {
+      const replies = await dialogue(sink.port, [
+        'EHLO localhost\r\n',
+        'MAIL FROM:<alertmanager@example.test>\r\n',
+        'RCPT TO:<oncall@example.test>\r\n',
+        'RCPT TO:<duty@example.test>\r\n',
+        'DATA\r\n',
+        // The doubled dot on the last body line is dot-stuffing: a body line starting
+        // with `.` is sent with two so it cannot be read as the terminator.
+        'Subject: [FIRING:1] ApiDown\r\n\r\nAlert: ApiDown\r\n..hidden\r\n.\r\n',
+        'QUIT\r\n',
+      ]);
+      assert.match(replies[0], /^220 /, 'no greeting');
+      assert.match(replies[1], /^250-/, 'EHLO must answer with a multi-line 250');
+      assert.ok(!replies[1].includes('STARTTLS'), 'a sink with no certificate must not offer STARTTLS');
+      assert.ok(!replies[1].includes('AUTH'), 'advertising AUTH would invite an invented credential');
+      assert.match(replies[5], /^354 /, 'DATA must answer 354');
+      assert.match(replies[6], /^250 /, 'the message must be accepted');
+      assert.match(replies[7], /^221 /, 'QUIT must answer 221');
+
+      assert.equal(sink.received.length, 1);
+      const [message] = sink.received;
+      assert.equal(message.from, 'alertmanager@example.test');
+      assert.deepEqual(message.recipients, ['oncall@example.test', 'duty@example.test']);
+      assert.ok(message.raw.includes('.hidden'), 'dot-stuffing was not undone');
+      assert.ok(!message.raw.includes('..hidden'));
+      assert.ok(!message.raw.endsWith('.'), 'the terminating dot must not be part of the message');
+      assert.equal(parseMessage(message.raw).headers.get('subject'), '[FIRING:1] ApiDown');
+    } finally {
+      sink.close();
+    }
+  });
+
+  it('takes two messages on one connection, as a client with a queue would', async () => {
+    // Alertmanager opens a connection per notification today. Handling a second
+    // transaction after the first `250` costs one line of state and means the sink
+    // cannot silently swallow a page because a ticket shared its socket.
+    const sink = await startSmtpSink(0);
+    try {
+      await dialogue(sink.port, [
+        'EHLO localhost\r\n',
+        'MAIL FROM:<a@example.test>\r\n',
+        'RCPT TO:<one@example.test>\r\n',
+        'DATA\r\n',
+        'Subject: first\r\n\r\nbody\r\n.\r\n',
+        'MAIL FROM:<a@example.test>\r\n',
+        'RCPT TO:<two@example.test>\r\n',
+        'DATA\r\n',
+        'Subject: second\r\n\r\nbody\r\n.\r\n',
+        'QUIT\r\n',
+      ]);
+      assert.deepEqual(
+        sink.received.map((entry) => entry.recipients),
+        [['one@example.test'], ['two@example.test']],
+      );
+      assert.deepEqual(
+        sink.received.map((entry) => parseMessage(entry.raw).headers.get('subject')),
+        ['first', 'second'],
+      );
+    } finally {
+      sink.close();
+    }
+  });
+});
+
+describe('emailsFor', () => {
+  const message = (recipients, subject, body) => ({
+    from: 'alertmanager@example.test',
+    recipients,
+    raw: `Subject: ${subject}\r\nTo: ${recipients.join(', ')}\r\n\r\n${body}`,
+    at: '2026-01-01T00:00:00.000Z',
+  });
+
+  it('matches on the envelope recipient, the status, the subject and the body together', () => {
+    const received = [message(['oncall@example.test'], '[FIRING:1] ApiDown', '<p>Alert: ApiDown</p>')];
+    assert.equal(emailsFor(received, 'oncall@example.test', 'ApiDown', 'firing').length, 1);
+    // Every one of these is a real way the email path breaks while still delivering.
+    assert.equal(emailsFor(received, 'tickets@example.test', 'ApiDown', 'firing').length, 0);
+    assert.equal(emailsFor(received, 'oncall@example.test', 'ApiDown', 'resolved').length, 0);
+    assert.equal(emailsFor(received, 'oncall@example.test', 'RateLimitBans', 'firing').length, 0);
+  });
+
+  it('does not accept a subject that names the alert with an empty body', () => {
+    // A mail template that renders to nothing still produces a correct-looking
+    // subject, because the subject comes from a different template.
+    const received = [message(['oncall@example.test'], '[FIRING:1] ApiDown', '')];
+    assert.equal(emailsFor(received, 'oncall@example.test', 'ApiDown', 'firing').length, 0);
+  });
+
+  it('requires every address in a comma-separated recipient list', () => {
+    const received = [message(['oncall@example.test'], '[RESOLVED] ApiDown', 'ApiDown')];
+    assert.equal(emailsFor(received, 'oncall@example.test', 'ApiDown', 'resolved').length, 1);
+    assert.equal(
+      emailsFor(received, 'oncall@example.test, backup@example.test', 'ApiDown', 'resolved').length,
+      0,
+    );
+  });
+});
+
+describe('emailsFor with no address configured', () => {
+  it('matches nothing at all (REGRESSION-shaped)', () => {
+    // `every` over an empty recipient list is vacuously true, so an unconfigured tier
+    // used to match EVERY captured message — which turns "a ticket did not also page"
+    // into a guaranteed failure for a deployment that pages by webhook alone.
+    const received = [
+      {
+        from: 'alertmanager@example.test',
+        recipients: ['tickets@example.test'],
+        raw: 'Subject: [FIRING:1] RateLimitBans\r\n\r\nRateLimitBans',
+        at: '2026-01-01T00:00:00.000Z',
+      },
+    ];
+    assert.equal(emailsFor(received, '', 'RateLimitBans', 'firing').length, 0);
+    assert.equal(emailsFor(received, '  ,  ', 'RateLimitBans', 'firing').length, 0);
   });
 });
