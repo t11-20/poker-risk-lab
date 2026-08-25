@@ -1363,10 +1363,30 @@ function summariseServerSide(readings) {
     if (delta > 0) apiErrors[code] = delta;
   }
 
-  const rateBefore = seriesByLabel(first, SERIES.rateLimitEvents, 'kind') ?? {};
-  const rateAfter = seriesByLabel(last, SERIES.rateLimitEvents, 'kind') ?? {};
-  const rateLimited = (rateAfter.limited ?? 0) - (rateBefore.limited ?? 0);
-  const rateBanned = (rateAfter.banned ?? 0) - (rateBefore.banned ?? 0);
+  /**
+   * The rate-limit counters, or null when the process exports no such series at all.
+   *
+   * `?? {}` on both sides used to swallow the difference: a scrape with no
+   * `prl_rate_limit_events_total` in it produced `0 - 0 = 0`, a NUMBER, so `classifySaturation`
+   * reported `{observed: 0, exported: true, fired: false}` for a series the build had never
+   * rendered — the one shape this file's header promises never to produce ("a metric the scraped
+   * process does not emit reads as `null`, its name goes into `server.missing` … and it can never
+   * fire a saturation signal"). Every other series in `SERIES` obeys that; these two did not.
+   *
+   * It is masked today, not fixed: `metrics.ts` primes `rateLimitEvents` with
+   * `[{kind:'limited'},{kind:'banned'}]`, so both series exist from boot with the value 0 and the
+   * absent case does not arise. Dropping that priming — or renaming the metric — would have made
+   * the `refusal-rate-limited` stop criterion permanently unable to fire while the report went on
+   * saying the signal had been evaluated. That is the same shape as an alert rule that cannot
+   * fire behind checks that all pass.
+   */
+  const rateBefore = seriesByLabel(first, SERIES.rateLimitEvents, 'kind');
+  const rateAfter = seriesByLabel(last, SERIES.rateLimitEvents, 'kind');
+  if (rateAfter === null) missing.add(SERIES.rateLimitEvents);
+  const rateDelta = (kind) =>
+    rateAfter === null ? null : (rateAfter[kind] ?? 0) - (rateBefore?.[kind] ?? 0);
+  const rateLimited = rateDelta('limited');
+  const rateBanned = rateDelta('banned');
 
   return {
     scrapes: good.length,
@@ -2407,6 +2427,40 @@ export function evaluateStopCriteria(level, thresholds) {
       observed: client.connectionsAttempted - client.connectionsEstablished,
       limit: 0,
       detail: `${client.connectionsAttempted - client.connectionsEstablished} of ${client.connectionsAttempted} sockets never reached welcome`,
+    });
+  }
+  /**
+   * The level had no usable server-side half at all.
+   *
+   * Before this, an unusable summary made every server-side criterion below unreachable and
+   * produced no breach of its own, so the level PASSED on client timings alone and could become
+   * the capacity figure. Reproduced against this file's own `buildReport`: four levels with
+   * `{usable:false, scrapes:1, scrapeFailures:5}` and healthy client numbers returned
+   * `passed:true`, `failures:[]`, `capacity.concurrentSeatedPlayers: 24` and
+   * `saturation.resource: null` — a published capacity for a run with no server-side evidence
+   * behind any of it.
+   *
+   * That is the exact degradation this file's header forbids ("a refused or unreachable
+   * `/metrics` is a FAILURE, not a warning … a run that silently degrades to client-side timings
+   * is exactly the kind of 'capacity measurement' this file exists to stop"), and the preflight
+   * in `main` enforces it only for the FIRST scrape. A `/metrics` that starts refusing mid-ramp —
+   * a token rotated, a proxy in front of it, the process restarting — lands here instead.
+   *
+   * It matters most for the criterion immediately below. `refusal-rate-limited` exists because a
+   * ramp bounded by the LIMITER rather than by the machine once had its number quoted as a
+   * capacity; a level with no scrapes cannot see a single refusal, so without this the fixed bug
+   * is reachable again through a door nobody was watching.
+   */
+  if (level.server.usable !== true) {
+    breaches.push({
+      criterion: 'server-side-blind',
+      observed: level.server.scrapes ?? 0,
+      limit: 2,
+      detail:
+        `${level.server.scrapes ?? 0} usable /metrics scrape(s) at this level ` +
+        `(${level.server.scrapeFailures ?? 0} failed), so no server-side criterion could be ` +
+        'evaluated — including the rate-limit refusal count, which is what tells a limiter-bound ' +
+        `ramp from a saturated machine${level.server.note == null ? '' : `. ${level.server.note}`}`,
     });
   }
   if (level.server.usable === true && level.server.rateLimitLimited > 0) {

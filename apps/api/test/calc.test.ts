@@ -501,6 +501,99 @@ describe('workers/pool.ts — sharding, deadlines and the queue', () => {
     );
     assert.equal(pool.stats().workers, 0);
   });
+
+  /**
+   * A jointly-undealable set of ranges is refused on the thread, not sampled at for the budget.
+   *
+   * `calc/parse.ts :: assertDealable` states the rule — `k` opponents need `2k` distinct cards
+   * between them — and applies it to the ranges IT expanded. It expands no `top:NN` range,
+   * because that needs the three-second preflop strength table this whole file exists to keep
+   * off the event loop, so a `topPercent` opponent arrives there with an empty support set and
+   * is skipped. The check is then vacuous for a request whose opponents are all `top:NN`.
+   *
+   * The two spellings below are the SAME range: `topPercentRange(1).notation` is exactly
+   * `"AA, KK, QQ"`. Hero's `AhKh` and a board of `As Ks Qs` leave seven cards between them, and
+   * five opponents need ten. Measured on the reference machine before this guard existed:
+   *
+   *     opponents = ["AA, KK, QQ"] x5 -> refused by assertDealable in 0 ms, with a field message
+   *     opponents = ["top:1"]      x5 -> accepted, granted the 15,000 ms top:NN budget, and held
+   *                                      a WARM calculator thread for 9,431 ms before
+   *                                      `monteCarloEquity` gave up — then the same 422
+   *
+   * Nine seconds of the pool's scarcest resource for an answer of "no", on a bucket a session
+   * may hit twenty times a minute, against a pool that is one thread on a one- or two-vCPU host
+   * and that also serves hand review, the Legends comparison and the Scenario Lab. With the
+   * guard in `equity-worker.ts` the same request is refused in 1 ms and the warm thread lives.
+   */
+  it('refuses jointly-undealable ranges on the thread instead of sampling for the whole budget', async () => {
+    const undealable: WireSpec = {
+      heroLabel: 'you',
+      heroCards: parseCards('AhKh'),
+      board: parseCards('AsKsQs'),
+      opponents: Array.from({ length: 5 }, (_unused, index) => ({
+        kind: 'topPercent' as const,
+        label: `opponent ${index + 1}`,
+        percent: 1,
+      })),
+    };
+    const pool = new WorkerPool({ size: 1, timeoutMs: 20_000 });
+    try {
+      // Warmed first, so what is measured is the calculation and not the strength table.
+      await pool.warm(60_000);
+      const started = performance.now();
+      await assert.rejects(
+        () =>
+          pool.runEquity(
+            { spec: undealable, method: 'monte-carlo', samples: 20_000, shards: 1, seed: 1 },
+            20_000,
+          ),
+        (error: unknown) => {
+          assert.ok(isAppError(error), `expected an AppError, got ${String(error)}`);
+          // `EquityError` is a statement about the request, so 422 rather than 500.
+          assert.equal(error.code, 'computation_rejected');
+          assert.equal(error.statusCode, 422);
+          assert.match(String(error.logDetail), /cannot all be dealt at once/);
+          return true;
+        },
+      );
+      const elapsed = performance.now() - started;
+      assert.ok(elapsed < 1_000, `expected a near-instant refusal, it took ${Math.round(elapsed)} ms`);
+      assert.equal(pool.stats().workers, 1, 'refusing must not cost the warm thread');
+    } finally {
+      await pool.close();
+    }
+  });
+
+  /**
+   * The other half of the guard: it must refuse only what genuinely cannot be dealt.
+   *
+   * The same five `top:1` opponents with a hero who blocks none of them have twelve cards
+   * between them, which is more than the ten five opponents need, so the request is answered.
+   * Without this the guard could be made to pass by refusing everything.
+   */
+  it('leaves a wide top:NN request that CAN be dealt alone', async () => {
+    const dealable: WireSpec = {
+      heroLabel: 'you',
+      heroCards: parseCards('2c3d'),
+      board: [],
+      opponents: Array.from({ length: 5 }, (_unused, index) => ({
+        kind: 'topPercent' as const,
+        label: `opponent ${index + 1}`,
+        percent: 5,
+      })),
+    };
+    const pool = new WorkerPool({ size: 1, timeoutMs: 60_000 });
+    try {
+      const result = await pool.runEquity(
+        { spec: dealable, method: 'monte-carlo', samples: 2_000, shards: 1, seed: 1 },
+        60_000,
+      );
+      assert.equal(result.trials, 2_000);
+      assert.equal(result.players.length, 6);
+    } finally {
+      await pool.close();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

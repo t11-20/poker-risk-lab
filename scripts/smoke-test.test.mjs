@@ -87,6 +87,7 @@ import {
   RECOVERY_PADDING_SECONDS,
   recoveryWaitSeconds,
   sampledEquityMissesInterval,
+  unentitledHoleCardSeats,
 } from './smoke-test.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -625,5 +626,106 @@ describe('classifyHostileRefusal', () => {
     // this one.
     assert.equal(classifyHostileRefusal(response(200)).kind, 'accepted');
     assert.equal(classifyHostileRefusal(response(500, 'internal_error')).kind, 'accepted');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The confidentiality property, on the wire
+// ---------------------------------------------------------------------------
+
+/**
+ * Section 7's live scan used to read, in full:
+ *
+ *     if (frame.view.street === 'complete') return false;
+ *     return seats.some((seat) => seat.holeCards !== null && seat.seat !== view.viewerSeat);
+ *
+ * — every frame of a finished hand exempted, on the reasoning that a showdown makes cards
+ * public. A showdown does; a FOLD does not, and `HandResult.showdowns` is documented as "empty
+ * when the hand ended before showdown (everyone else folded)". The smoke run's own client checks
+ * or calls when it can and folds when it cannot, so a hand that ends without a showdown is the
+ * ORDINARY outcome here.
+ *
+ * Measured, before the fix, against a stub API that served the opponent's hole cards in the
+ * `street: 'complete'` frame of a hand nobody showed down: section 7 printed
+ * `✓ no live frame carried another seat's hole cards mid-hand`, section 8 printed
+ * `✓ an archived hand carries no opponent's unshown hole cards` (the archive was honest — only
+ * the wire was not), and the whole run reported no failure. The one claim this script exists to
+ * make, green over a live leak.
+ *
+ * ## Would these fail against the old code?
+ *
+ * The old expression is written out below as `oldScanExemptedIt` and asserted to DISAGREE on the
+ * fold-ended case, so restoring the `street === 'complete'` exemption fails here by construction
+ * rather than by coincidence.
+ */
+describe('unentitledHoleCardSeats', () => {
+  const frame = (street, { opponentCards = null, showdowns = null } = {}) => ({
+    type: 'state',
+    view: {
+      street,
+      viewerSeat: 0,
+      seats: [
+        { seat: 0, isSelf: true, holeCards: ['Ah', 'Kd'] },
+        { seat: 1, isSelf: false, holeCards: opponentCards },
+      ],
+      result: street === 'complete' ? { endedByFold: showdowns === null, showdowns: showdowns ?? [] } : null,
+    },
+  });
+
+  it('finds nothing in an honest mid-hand frame', () => {
+    assert.deepEqual(unentitledHoleCardSeats(frame('flop')), []);
+  });
+
+  it('finds a mid-hand leak, which is what the old scan already caught', () => {
+    assert.deepEqual(unentitledHoleCardSeats(frame('turn', { opponentCards: ['Qs', 'Qc'] })), [1]);
+  });
+
+  it('finds a leak in a COMPLETED hand that nobody showed down', () => {
+    const leaking = frame('complete', { opponentCards: ['Qs', 'Qc'] });
+    assert.deepEqual(unentitledHoleCardSeats(leaking), [1]);
+
+    // The old expression, spelled out. It returned early on every completed frame, so this leak
+    // produced neither a pass nor a failure — it produced a tick.
+    const oldScanExemptedIt = leaking.view.street === 'complete';
+    assert.equal(oldScanExemptedIt, true, 'the fixture must reproduce what the old scan skipped');
+    assert.notEqual(unentitledHoleCardSeats(leaking).length, 0);
+  });
+
+  it('exempts a seat that genuinely showed down, so the check is not just "never send cards"', () => {
+    // The positive control. A predicate that flagged every foreign holeCards would pass every
+    // assertion above and would fail every honest showdown this product is built to display.
+    const shown = frame('complete', { opponentCards: ['Qs', 'Qc'], showdowns: [{ seat: 0 }, { seat: 1 }] });
+    assert.deepEqual(unentitledHoleCardSeats(shown), []);
+  });
+
+  it('exempts nobody when a completed frame carries no result, so the check gets stricter', () => {
+    const noResult = frame('complete', { opponentCards: ['Qs', 'Qc'] });
+    noResult.view.result = null;
+    assert.deepEqual(unentitledHoleCardSeats(noResult), [1]);
+  });
+
+  it('treats an ABSENT holeCards key as absent rather than as a leak', () => {
+    // `!== null` reported a leak here — a serialiser that drops nulls would have failed the gate
+    // for emitting nothing at all. `!= null` is the idiom section 8 already used.
+    const dropped = frame('flop');
+    dropped.view.seats[1].holeCards = undefined;
+    assert.deepEqual(unentitledHoleCardSeats(dropped), []);
+  });
+
+  it('falls back to viewerSeat when isSelf is absent, so a rename narrows the exemption', () => {
+    const renamed = frame('flop');
+    renamed.view.seats[0].isSelf = undefined;
+    assert.deepEqual(unentitledHoleCardSeats(renamed), [], "the viewer's own seat is still exempt");
+
+    // …and the other way: with viewerSeat gone, isSelf still carries it.
+    const noViewerSeat = frame('flop');
+    noViewerSeat.view.viewerSeat = null;
+    assert.deepEqual(unentitledHoleCardSeats(noViewerSeat), []);
+  });
+
+  it('ignores frames that are not a view at all', () => {
+    assert.deepEqual(unentitledHoleCardSeats({ type: 'ack', requestId: 'r' }), []);
+    assert.deepEqual(unentitledHoleCardSeats({ type: 'state', view: null }), []);
+    assert.deepEqual(unentitledHoleCardSeats(undefined), []);
   });
 });

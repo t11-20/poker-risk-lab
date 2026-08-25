@@ -507,6 +507,60 @@ export function sampledEquityMissesInterval(equity) {
 }
 
 /**
+ * Seats in one live `state` frame whose hole cards the recipient was not entitled to see.
+ *
+ * ## The defect this exists for
+ *
+ * Section 7's scan was `if (frame.view.street === 'complete') return false` — every frame of a
+ * finished hand skipped, unconditionally, on the reasoning that a showdown makes cards public.
+ * A showdown does. A FOLD does not, and `HandResult.showdowns` is documented as "empty when the
+ * hand ended before showdown (everyone else folded)" while `endedByFold` says so in one field.
+ * The smoke run's own client checks or calls when it can and folds when it cannot, so hands that
+ * end without a showdown are the ordinary case here, not the exotic one.
+ *
+ * Measured against a stub API that served the opponent's hole cards in the `street: 'complete'`
+ * frame of a hand nobody showed down: section 7 printed
+ * `✓ no live frame carried another seat's hole cards mid-hand` and
+ * `✓ no socket frame carried a deck, cursor or salt`, section 8 printed
+ * `✓ an archived hand carries no opponent's unshown hole cards` — because the archive was
+ * honest and only the wire was not — and the run reported no failure of any kind. That is the
+ * single claim this script exists to make ("one player must never receive another player's
+ * private cards") passing green over a live leak.
+ *
+ * So the exemption is now the one `redactFor` actually implements
+ * (`maySeeCards = isSelf || shownSeats.has(seat.seat)`, packages/poker-engine/src/redact.ts):
+ * cards may appear for the recipient's own seat, and for a seat named in
+ * `view.result.showdowns` of a COMPLETED hand. Anything else is a leak whatever the street says.
+ *
+ * Three deliberate details:
+ *
+ *   * `holeCards != null`, not `!== null`. An absent key is a seat whose cards were not sent,
+ *     which is the safe state; the strict form called that a leak and would have reported one
+ *     against a serialiser that drops nulls. This is the idiom section 8 already uses.
+ *   * A seat is the recipient's own when `isSelf === true` OR its index equals `viewerSeat`.
+ *     Either field being renamed away therefore narrows the exemption rather than widening it,
+ *     so the failure lands in the safe direction.
+ *   * `shown` is built only for a completed hand, and only from an ARRAY. A `result` of null —
+ *     which is what a completed frame carries if the server stopped populating it — exempts
+ *     nobody, so the check gets stricter rather than evaporating.
+ *
+ * @returns {number[]} the offending seat indices, empty when the frame is clean or is not a view
+ */
+export function unentitledHoleCardSeats(frame) {
+  if (frame?.type !== 'state' || frame.view === null || frame.view === undefined) return [];
+  const view = frame.view;
+  const seats = Array.isArray(view.seats) ? view.seats : [];
+  const showdowns =
+    view.street === 'complete' && Array.isArray(view.result?.showdowns) ? view.result.showdowns : [];
+  const shown = new Set(showdowns.map((showdown) => showdown?.seat));
+  return seats
+    .filter((seat) => seat?.holeCards != null)
+    .filter((seat) => seat.isSelf !== true && seat.seat !== view.viewerSeat)
+    .filter((seat) => !shown.has(seat.seat))
+    .map((seat) => seat.seat);
+}
+
+/**
  * What a hostile calculation input's response actually proves.
  *
  * ## The defect this exists for
@@ -1765,14 +1819,34 @@ async function sectionRooms(alice) {
       bad('hidden information', 'no frames were received, so the socket scan proved nothing');
     }
 
-    const preShowdownLeak = played.frames.some((frame) => {
-      if (frame.type !== 'state' || frame.view === null || frame.view === undefined) return false;
-      if (frame.view.street === 'complete') return false;
-      const seats = Array.isArray(frame.view.seats) ? frame.view.seats : [];
-      return seats.some((seat) => seat.holeCards !== null && seat.seat !== frame.view.viewerSeat);
-    });
-    if (preShowdownLeak) bad('hidden information', "a live frame carried another seat's hole cards mid-hand");
-    else if (played.frames.length > 0) ok("no live frame carried another seat's hole cards mid-hand");
+    // Every frame, including the completed ones. The old scan skipped `street === 'complete'`
+    // outright, which exempts a hand that ended by FOLD — the ordinary outcome for this client —
+    // from the only confidentiality check on the wire. See `unentitledHoleCardSeats`.
+    const leakedSeats = [...new Set(played.frames.flatMap(unentitledHoleCardSeats))];
+    const completedFrames = played.frames.filter(
+      (frame) => frame.type === 'state' && frame?.view?.street === 'complete',
+    );
+    if (leakedSeats.length > 0) {
+      bad(
+        'hidden information',
+        `a live frame carried the hole cards of seat(s) ${leakedSeats.join(', ')}, which are neither ` +
+          "the recipient's own nor named in result.showdowns",
+      );
+    } else if (completedFrames.length > 0) {
+      ok(
+        'no live frame carried hole cards the recipient was not entitled to',
+        `${played.frames.length} frame(s), including ${completedFrames.length} completed-hand frame(s) ` +
+          'checked against result.showdowns rather than exempted',
+      );
+    } else {
+      // A sweep of nothing is not a pass: with no completed frame the showdown exemption was
+      // never exercised, and the mid-hand half alone is the weaker of the two claims.
+      bad(
+        'hidden information',
+        'no completed-hand frame reached this scan, so the showdown half of the confidentiality ' +
+          'check ran over nothing',
+      );
+    }
   }
 
   return bob;
@@ -1830,10 +1904,21 @@ async function sectionHandHistory(alice, bob) {
     bad('hand isolation', `Bob's history returned ${bobHands.status} ${bobHands.text.slice(0, 200)}`);
   }
   if (bobHands.status === 200) {
-    const aliceIds = new Set(aliceRows.map((h) => h.id));
-    const overlap = (bobHands.json?.hands ?? []).filter((h) => aliceIds.has(h.id));
+    // `.filter(typeof === 'string')` and not a bare `.map`, because the guard below is the whole
+    // reason this comparison is trustworthy and a bare map defeats it. A list of rows that carry
+    // no `id` at all — a renamed field, a summary shape that dropped it — maps to `[undefined]`,
+    // and `new Set([undefined]).size` is 1, so `aliceIds.size === 0` was false and the run printed
+    // "1 of Alice's ids checked" having compared nothing to nothing. Measured against a stub whose
+    // /hands rows carried `handId` instead of `id`: that exact line, green.
+    const aliceIds = new Set(aliceRows.map((hand) => hand.id).filter((id) => typeof id === 'string'));
+    const overlap = (bobHands.json?.hands ?? []).filter((hand) => aliceIds.has(hand.id));
     if (aliceIds.size === 0) {
-      bad('hand isolation', 'Alice has no hand ids, so the overlap comparison is two empty sets');
+      bad(
+        'hand isolation',
+        `Alice has ${aliceRows.length} archived hand(s) and not one usable id among them, so the ` +
+          'overlap comparison would be two empty sets. The rows are there and the identifier this ' +
+          'check keys on is not.',
+      );
     } else if (overlap.length === 0) {
       ok("Bob's hand history does not contain Alice's hands", `${aliceIds.size} of Alice's ids checked`);
     } else {

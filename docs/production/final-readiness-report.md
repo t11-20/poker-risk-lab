@@ -1,6 +1,6 @@
 # Final readiness report
 
-**Candidate SHA:** `6677dfcc2ae7e9c93b5d6183a47d35d604f48931`
+**Candidate SHA:** `6c806f0a668864bd9beb41b7010ba390bd8a4e6c`
 **Tree at freeze:** clean — the release manifest records `dirty: false`.
 **Branch:** `production-hardening-2`
 **Date:** 2026-08-25
@@ -260,8 +260,8 @@ that has to reconcile a digest with the manifest's, which is why the drift surfa
 
 | Service | Digest built, pushed and **signed** | Registry reference |
 | --- | --- | --- |
-| api | `sha256:787fad9744648da61a0b9d5c89d1777792ab6c918371b8054bbcfa5d1c20c168` | `127.0.0.1:5001/prl-api@sha256:787fad…` |
-| web | `sha256:bd94e7c3bce32e19324813afb0d6e018adbfca4fe2ac9dd070fe1e625c26741d` | `127.0.0.1:5001/prl-web@sha256:bd94e7…` |
+| api | `sha256:4477ca00fa608202e607b8ee43294a6b0550f4dfc3484c68c4f38824ad3e52bf` | `127.0.0.1:5001/prl-api@sha256:4477ca…` |
+| web | `sha256:5cb1bd82dfc7e833119db787d9a8e06375f0add71ccc3fc072e436d837caa1e2` | `127.0.0.1:5001/prl-web@sha256:5cb1bd…` |
 
 The registry digest equals the build digest for both — checked rather than assumed: the manifest is
 re-fetched from the registry over HTTP and re-hashed in process, and `pnpm run release:sign` refuses
