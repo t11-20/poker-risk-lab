@@ -127,6 +127,7 @@ import type {
 import {
   COMMITMENT_VERSION,
   cardToString,
+  contestablePotFor,
   DECK_SIZE,
   orderFrom,
   PROOF_LENGTH,
@@ -837,6 +838,14 @@ function closeStreet(state: ReplayState, nextStreet: string): void {
 interface Situation {
   readonly street: BettingStreetName;
   readonly potBefore: number;
+  /**
+   * The part of `potBefore` this seat could actually win.
+   *
+   * Below `potBefore` exactly when the seat was all-in for less than the bet in front of it, which
+   * is the case a review used to grade against the whole middle: the excess of that bet is a side
+   * pot the seat is not in, so a correct fold was scored as a large error and published as one.
+   */
+  readonly contestablePot: number;
   readonly toCall: number;
   /** What this seat had already put out on the street, for a legal raise total. */
   readonly committedThisStreet: number;
@@ -853,6 +862,12 @@ function situationBefore(state: ReplayState, action: HandActionRow): Situation |
   const street = bettingStreetName(action.street);
   const actor = state.seats.get(action.seat);
   if (street === null || actor === undefined) return null;
+  // A seat that has already folded, or was never dealt in, cannot win a pot and so has no price
+  // to be quoted. Rows like that mean the log does not describe a hand this module can replay,
+  // and `null` is the established answer for that — the decision is shown without an analysis
+  // rather than with one computed from a state the engine would refuse. Checked here rather than
+  // left to `contestablePotFor`, which is entitled to throw on a seat that cannot win anything.
+  if (replaySeatStatus(actor) !== 'active' && replaySeatStatus(actor) !== 'allIn') return null;
 
   // Opponents are the seats that were dealt in and have not folded — all-in ones included, since
   // they still hold cards and can still win the pot they paid for.
@@ -862,15 +877,44 @@ function situationBefore(state: ReplayState, action: HandActionRow): Situation |
     opponentStacks.push(entry.stack);
   }
 
+  const potBefore = potTotal(state);
+  const toCall = Math.max(0, Math.min(state.betLevel - actor.committedThisStreet, actor.stack));
+  // Asked of the engine, on the replayed tally, rather than derived here. `contestablePotFor` runs
+  // the same layering `buildPotLayers` runs at settlement, so a review prices a decision against
+  // the pot the dealer would have paid out — one implementation of the rule, not two.
+  //
+  // Only this street's commitments are passed, with everything carried in added back whole through
+  // `potTotal`. That is exact: a seat that is *to act* has matched the closing level of every
+  // completed street, so no earlier chip can sit above its reach. `state.potInMiddle` is a lump
+  // with no per-seat split, and this is why it does not need one.
+  const { contestable } = contestablePotFor({
+    seats: [...state.seats].map(([seat, entry]) => ({
+      seat,
+      committedThisStreet: entry.committedThisStreet,
+      status: replaySeatStatus(entry),
+    })),
+    heroSeat: action.seat,
+    callAmount: toCall,
+    potTotal: potBefore,
+  });
+
   return {
     street,
-    potBefore: potTotal(state),
-    toCall: Math.max(0, Math.min(state.betLevel - actor.committedThisStreet, actor.stack)),
+    potBefore,
+    contestablePot: contestable,
+    toCall,
     committedThisStreet: actor.committedThisStreet,
     heroStack: actor.stack,
     opponentStacks,
     opponentCount: opponentStacks.length,
   };
+}
+
+/** The layering rule's view of a replayed seat: who is still live, and who merely paid. */
+function replaySeatStatus(entry: ReplaySeat): SeatStatus {
+  if (!entry.dealtIn) return 'sittingOut';
+  if (entry.folded) return 'folded';
+  return entry.stack === 0 ? 'allIn' : 'active';
 }
 
 function sumCommitted(state: ReplayState): number {
@@ -1003,6 +1047,7 @@ function coachTaskFor(request: AnalysisRequest): CoachTask {
     },
     street: situation.street,
     pot: situation.potBefore,
+    contestablePot: situation.contestablePot,
     toCall: situation.toCall,
     heroCommittedThisStreet: situation.committedThisStreet,
     heroStack: situation.heroStack,
@@ -1055,6 +1100,7 @@ function analyse(request: AnalysisRequest): CoachReport {
     street: situation.street,
     opponents,
     pot: situation.potBefore,
+    contestablePot: situation.contestablePot,
     toCall: situation.toCall,
     heroCommittedThisStreet: situation.committedThisStreet,
     heroStack: situation.heroStack,

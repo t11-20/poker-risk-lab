@@ -449,6 +449,94 @@ describe('the retention sweep, against a real database', { skip: skipReason }, (
     }
   });
 
+  it('never erases a guest whose enrolment was written while the sweep waited (NEGATIVE CONTROL)', async () => {
+    // ########################################################################
+    // ## THE DOOR D9's FIX LEFT OPEN, AND THE ONE THE COMMENT SAID WAS SHUT ##
+    // ########################################################################
+    //
+    // `abandonedGuestPredicate` re-runs inside the deleting transaction, and the reasoning written
+    // beside it was: `FOR UPDATE` conflicts with the `FOR KEY SHARE` an INSERT referencing the row
+    // must take, so "an instructor enrolling a class at the same instant as a sweep tick either
+    // lands before the lock and is seen, or blocks until the sweep has finished with that row".
+    //
+    // The lock conflict is real. The conclusion is not. Measured on a scratch database before the
+    // fix: the sweep's statement blocked for 1,124 ms on exactly that conflict, and then returned
+    // the account as ABANDONED — because under READ COMMITTED a statement's snapshot is taken when
+    // the statement starts, waiting on a row lock does not refresh it, and PostgreSQL re-checks a
+    // qual after such a wait only when the locked tuple was itself UPDATED. An insert into
+    // `prl.enrolments` locks `prl.users`; it does not update it. So the `not exists` had already
+    // been answered against a snapshot without the student's place in it, and the answer survived
+    // the wait. The account went, and the place cascaded away with it.
+    //
+    // This case is that sequence, and nothing about it is contrived: `enrolments grant` holds one
+    // transaction open across a whole class list, so its window is as long as it takes to write
+    // thirty rows and thirty audit entries — and the sweep ticks four times a day into it.
+    const racer = await makeGuest('-400 days');
+    const cohortId = `coh_race${randomBytes(6).toString('hex')}`;
+    let sawTheLock = 0;
+    try {
+      await withAdminSql(async (admin) => {
+        await admin`
+          insert into prl.cohorts (id, key, name, starts_at, ends_at)
+          values (${cohortId}, ${`race-probe-${randomBytes(4).toString('hex')}`},
+                  ${'Race probe cohort'}, now() + interval '30 days', now() + interval '120 days')
+        `;
+      });
+
+      // The instructor's transaction: insert, then hold, exactly as a class list does.
+      let releaseInstructor: () => void = () => undefined;
+      const held = new Promise<void>((resolve) => {
+        releaseInstructor = resolve;
+      });
+      const instructor = withAdminSql((admin) =>
+        admin.begin(async (tx) => {
+          await tx`
+            insert into prl.enrolments (id, cohort_id, user_id, granted_by, reference)
+            values (${`enr_race${randomBytes(6).toString('hex')}`}, ${cohortId}, ${racer},
+                    ${'J. Okafor'}, ${'registry-row-90'})
+          `;
+          await held;
+          return { ok: true };
+        }),
+      );
+
+      // Give the INSERT time to land and take its lock, without committing.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+
+      const startedAt = Date.now();
+      const sweep = runRetentionSweep({ sql, batchSize: 500, maxPasses: 10 }).then((result) => {
+        sawTheLock = Date.now() - startedAt;
+        return result;
+      });
+
+      // The sweep is now blocked on the instructor's row lock. Let the class list commit.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      releaseInstructor();
+      await instructor;
+      const result = await sweep;
+
+      // A sweep of nothing is not a pass: if it never reached the lock this proves nothing, so the
+      // wait itself is asserted before the outcome is.
+      assert.ok(
+        sawTheLock >= 400,
+        `the sweep finished in ${sawTheLock} ms, so it never blocked on the instructor's lock and ` +
+          'this case did not exercise the race it exists for',
+      );
+      assert.equal(
+        await userAlive(racer),
+        true,
+        'the sweep erased a student whose place was granted while it waited for the lock',
+      );
+      assert.equal(result.guestAccountsBlocked, 0, 'the refusal must be a clean decline, not a failure');
+    } finally {
+      await withAdminSql(async (admin) => {
+        await admin`delete from prl.enrolments where cohort_id = ${cohortId}`;
+        await admin`delete from prl.cohorts where id = ${cohortId}`;
+      });
+      await dropFixtures([], [racer]);
+    }
+  });
+
   it('works through a backlog larger than one batch', async () => {
     // The same property the session sweep has, and it is not free here: the guest sweep chooses a
     // bounded batch and then erases each account in its own transaction, so "kept going" has to be

@@ -78,6 +78,7 @@ import type {
 import { type Card, parseCards } from '@prl/poker-engine';
 import {
   computeOuts,
+  deriveContestablePot,
   deriveLegalActions,
   evOfCall,
   evOfSemiBluff,
@@ -356,6 +357,25 @@ export function coachTaskFor(scenario: Scenario): CoachTask {
     heroStack: situation.heroStack,
     opponentStacks: situation.opponentStacks,
   });
+  // The pot hero could actually win. A scenario whose hero is all-in for less than the bet in
+  // front of them has a side pot hero is not in, and the Lab used to price the call — and grade
+  // the learner's answer — against the whole middle.
+  //
+  // `deriveContestablePot`, not `contestablePotFor`, and the reason is the data rather than a
+  // preference. The engine's layering needs a COMPLETE per-seat record of the street, and a
+  // scenario does not have one: `preflop-squeeze-fold-equity` posts blinds of 10/20 into
+  // `potBeforeStreet: 30` and lists only the two raisers in `committedThisStreet`, so hero's own
+  // posted 20 is inside the lump and hero's street commitment reads 0 while `toCall` is 40. Layered
+  // as though that record were complete, the two 60s look 40 chips above hero's reach and the Lab
+  // withholds a side pot that does not exist. A described spot is what a scenario is, so the
+  // derivation for described spots is what reads it — see its doc for what that costs multiway.
+  const contestable = deriveContestablePot({
+    pot: situation.pot,
+    toCall: situation.toCall,
+    heroCommittedThisStreet,
+    heroStack: situation.heroStack,
+    opponentStacks: situation.opponentStacks,
+  });
   return {
     kind: 'coach',
     spec: {
@@ -366,6 +386,7 @@ export function coachTaskFor(scenario: Scenario): CoachTask {
     },
     street: scenario.street,
     pot: situation.pot,
+    contestablePot: contestable,
     toCall: situation.toCall,
     heroCommittedThisStreet,
     heroStack: situation.heroStack,

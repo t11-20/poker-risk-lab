@@ -56,6 +56,18 @@ groups:
             five minutes is not healing.
           runbook: docs/production/runbooks/db-unavailable.md
 
+      # This rule is only as good as the flatness of the series under it, and for a while that
+      # series was not flat. `prl_process_start_time_seconds` was exported with `setFrom`, so the
+      # start instant was RE-DERIVED on every scrape as `Math.floor(Date.now()/1000 -
+      # process.uptime())` — one fixed instant recomputed from a wall clock and a monotonic clock
+      # that do not agree, with `Math.floor` turning the disagreement into an integer that flips.
+      # Measured on the development machine: 1.11 ms of drift over 20 s of sampling, and on a
+      # series phased onto a second boundary — which one process in roughly a thousand is, by the
+      # accident of when it started — `changes()` counted 32 transitions over those same samples.
+      # Three is a page, so this fired within a minute on a process that had never restarted, and
+      # went on firing for as long as it ran. The fix is in `observability/metrics.ts`: computed ONCE at
+      # construction and `set()`, so a scrape reports the same integer forever and every change
+      # in it is a real restart. `rule-tests/availability.test.yml` holds both directions.
       - alert: ProcessRestartLoop
         expr: changes(prl_process_start_time_seconds[15m]) >= 3
         labels:
@@ -139,17 +151,32 @@ groups:
             blocked process produces the same reading without the pool being busy at all.
           runbook: docs/production/runbooks/db-saturation.md
 
+      # The threshold is DERIVED from the pool rather than written down, and the constant it
+      # replaced could not fire on the hosts this runs on. `WorkerPool` bounds the queue at
+      # `size * QUEUE_SLOTS_PER_WORKER` (3, `apps/api/src/workers/pool.ts`) and `size` is
+      # `max(1, min(4, availableParallelism() - 1))` (`config.ts`). On a 1- or 2-vCPU host that
+      # is one worker and a queue of three slots, so `prl_worker_pool_queued` can never exceed 3
+      # and the old `> 4` was an alert with no reachable state. `* 3 / 2` is half the queue limit
+      # on whatever host this is: 1.5 of 3 slots on one worker, 6 of 12 on four.
+      #
+      # `scalar()` rather than a bare aggregation on the right so the left side keeps its own
+      # labels: `avg_over_time(...)` carries job and instance, `max(...)` carries none, and a
+      # binary operator between the two matches nothing at all — which would be this same defect
+      # in a new spelling, an expression that is always empty.
       - alert: WorkerPoolQueueDeep
-        expr: avg_over_time(prl_worker_pool_queued[10m]) > 4
+        expr: >-
+          avg_over_time(prl_worker_pool_queued[10m]) > scalar(max(prl_worker_pool_size)) * 3 / 2
         for: 15m
         labels:
           severity: ticket
         annotations:
           summary: The Monte Carlo queue is not draining
           description: >-
-            The queue is bounded by design and a full one answers service_unavailable immediately
-            rather than degrading everybody, so this is Coach analyses being refused: bad,
-            contained, and not an outage.
+            Half the queue limit, on a ten-minute average, for fifteen minutes. The limit is three slots per
+            worker thread, so this threshold moves with prl_worker_pool_size rather than being a
+            constant that a small host can never reach. The queue is bounded by design and a full
+            one answers service_unavailable immediately rather than degrading everybody, so this
+            is Coach analyses being refused: bad, contained, and not an outage.
           runbook: docs/production/runbooks/worker-saturation.md
 
       - alert: AnalysisTimeouts
@@ -166,45 +193,103 @@ groups:
             tail. One in twenty means the budget is wrong or the box is oversubscribed.
           runbook: docs/production/runbooks/worker-saturation.md
 
+  # -------------------------------------------------------------------------
+  # A `for:` may never be as long as the range window above it.
+  #
+  # This is arithmetic, not taste, and it silently killed the two zero-tolerance
+  # rules in this group. `rate(x[10m])` and `increase(x[10m])` are non-zero only
+  # while the window still holds a sample from BEFORE the step and one from after
+  # it, which for a single step is 10m minus one scrape interval — 9m45s at the
+  # 15 s scrape this deployment uses. `for: 10m` then asks the condition to stay
+  # true for longer than it can possibly be true, and the alert cannot fire at
+  # all. Measured across 101 evaluation points with `promtool test rules`:
+  # `HandsFailing` never left `pending`, and the same expression with `for: 9m`
+  # fired at t=1770s. `ArchiveFailing` had the identical shape at 15m/15m.
+  #
+  # A single step is not an exotic input here — it is the normal one.
+  # `rooms/registry.ts` increments `handsFailed` once, by `abandoned.length`,
+  # when it reconciles hands a restart interrupted.
+  #
+  # `SeatReleaseFailing` below is the model for zero tolerance: a window, no
+  # `for:` at all, so the first occurrence is the alert. `RoomOwnershipRefused`
+  # is the model for the other shape — a window SHORTER than the `for:`, which
+  # asks for something that does not stop, and says so in its own description.
+  # `rule-tests/product-correctness.test.yml` holds both directions for each.
+  # -------------------------------------------------------------------------
   - name: product-correctness
     rules:
       - alert: HandsFailing
-        expr: sum(rate(prl_hands_failed_total[10m])) > 0
-        for: 10m
+        expr: sum(increase(prl_hands_failed_total[10m])) > 0
         labels:
           severity: page
         annotations:
           summary: Hands are failing
           description: >-
             A hand that starts and never settles is a table full of people whose chips are in an
-            indeterminate state. There is no acceptable background rate. The reason label says
-            which kind; interrupted_by_restart after a deploy is expected once and must not recur.
-          runbook: docs/production/runbooks/hidden-card-incident.md
+            indeterminate state. There is no acceptable background rate, so there is no for: —
+            the first failed hand is the alert. The reason label says which kind;
+            interrupted_by_restart after a deploy is expected once and must not recur.
+          runbook: docs/production/runbooks/api-unhealthy.md
 
+      # Not a windowed difference any more, and the reason is that the old one measured the wrong
+      # quantity. `increase(started[1h]) - increase(completed[1h])` is (hands in flight now) minus
+      # (hands in flight an hour ago), which is a number six healthy tables produce: measured at 20
+      # for twenty tables each dealing continuously, firing on a threshold of 5 and staying firing
+      # for an hour. And with `prl_hands_completed_total` unprimed, the catastrophic case — no hand
+      # ever completes — left the right-hand side ABSENT, so `A - empty` was empty and the rule
+      # could not fire at the one moment it was written for. Both are fixed here: the counters are
+      # primed (`observability/metrics.ts`) and the expression is the invariant itself.
+      #
+      # started = completed + failed + in flight, always. A hand leaves the in-flight set only by
+      # settling (`handsCompleted`), by its room closing under it (`LiveRoom.close` counts
+      # `room_closed`) or by being reconciled after a restart (`interrupted_by_restart`). At most
+      # one hand is in flight per live room, so `prl_rooms_live` is the exact upper bound on the
+      # legitimate difference — read from the same scrape as the counters, so there is no skew
+      # between the two sides. Anything above it is a hand that vanished for a reason nobody wrote
+      # a counter for, which is what this rule is for and what a threshold picked out of the air
+      # cannot see.
       - alert: HandCompletionGap
         expr: >-
-          sum(increase(prl_hands_started_total[1h])) - sum(increase(prl_hands_completed_total[1h])) > 5
+          sum(prl_hands_started_total)
+            - sum(prl_hands_completed_total)
+            - sum(prl_hands_failed_total)
+            > sum(prl_rooms_live)
+        for: 30m
         labels:
           severity: ticket
         annotations:
-          summary: More hands started than completed over the last hour
+          summary: More hands were dealt than have settled, failed, or can still be in play
           description: >-
             prl_hands_failed_total only counts failures the code recognised. This catches hands
             that vanished for a reason nobody wrote a counter for, which is the failure mode that
-            matters most and is hardest to anticipate.
-          runbook: docs/production/runbooks/hidden-card-incident.md
+            matters most and is hardest to anticipate. The bound is prl_rooms_live because at most
+            one hand is in flight per live room; a difference above it is unaccounted for. Half an
+            hour because a real difference does not heal.
+          runbook: docs/production/runbooks/api-unhealthy.md
 
+      # 0.05/s sustained for ten minutes was thirty failures per ten minutes, and this alert's own
+      # description is ONE stalled seat on a thirty-second action clock — two failures a minute, or
+      # a fifteenth of what it asked for. A permanently broken bot seat was silent for an hour.
+      #
+      # Zero is the honest threshold: every value classified `actor` in `observability/telemetry.ts`
+      # is an error path (a bot that could not decide, an action the engine refused, a turn timeout
+      # that could not be applied), so there is no healthy background rate to sit above. What
+      # separates an incident from a hiccup is not the height, it is that it does not stop — and
+      # that is what the `for:` is for. The window is deliberately SHORTER than the `for:`, the
+      # `RoomOwnershipRefused` shape: at least one failure in every five-minute window for ten
+      # consecutive minutes. One stray failure, or a burst that stops, cannot stay true long enough.
       - alert: TableActorFailing
-        expr: sum(rate(prl_table_actor_failures_total[10m])) > 0.05
+        expr: sum(increase(prl_table_actor_failures_total[5m])) > 0
         for: 10m
         labels:
           severity: page
         annotations:
-          summary: Bot seats are failing to act
+          summary: A seat has been failing to act for ten minutes
           description: >-
             A seat that cannot produce an action stalls a table without producing a user-facing
             error. The turn clock eventually folds it, so the learner reports "the table went
-            quiet", which is very hard to trace backwards.
+            quiet", which is very hard to trace backwards. The window is shorter than the for
+            duration on purpose: this fires on failures that do not stop, not on a burst.
           runbook: docs/production/runbooks/api-unhealthy.md
 
       - alert: SeatReleaseFailing
@@ -248,9 +333,11 @@ groups:
             that stops cannot stay true long enough to fire.
           runbook: docs/production/runbooks/room-ownership-contended.md
 
+      # `rate[15m]` with `for: 15m` was the same dead arithmetic as `HandsFailing`, one tier down:
+      # after a single archive failure the condition is true for 14m45s and the `for:` asks for
+      # 15m. `SeatReleaseFailing` above is the shape this should always have had.
       - alert: ArchiveFailing
-        expr: sum(rate(prl_archive_failures_total[15m])) > 0
-        for: 15m
+        expr: sum(increase(prl_archive_failures_total[15m])) > 0
         labels:
           severity: ticket
         annotations:
@@ -261,32 +348,140 @@ groups:
             today rather than tonight.
           runbook: docs/production/runbooks/db-saturation.md
 
+  # -------------------------------------------------------------------------
+  # Enrolment, which only exists on a deployment running
+  # `PRL_ENROLMENT_REQUIRED=enforced`.
+  #
+  # `prl_seat_entitlement_refusals_total` is primed on both of its reasons, is
+  # documented at length in `observability/metrics.ts`, and until now was read by
+  # no rule at all — an exported, primed, argued-about counter that nothing
+  # watched. The two reasons are not two sizes of the same event and must not be
+  # summed; they are separate rules for the same reason they are separate label
+  # values.
+  #
+  # Both are TICKETS, and the argument is the same for both: on an enforced
+  # deployment a refusal is the guard doing exactly what it was configured to do.
+  # Neither rule can tell "the class list is wrong" from "somebody who is not on
+  # the list tried a seat" — no identifier reaches a label here, on purpose — and
+  # the remedy for either is `pnpm run enrolments`, an operator CLI with no
+  # HTTP surface, run by a person during working hours. A page would wake
+  # somebody to be told that an access control refused access.
+  # -------------------------------------------------------------------------
+  - name: enrolment
+    rules:
+      # A volume threshold rather than zero, because one refusal is a visitor tapping a seat on an
+      # enforced instance and that is the product working. Six in ten minutes is a group of people
+      # who expected to be able to sit and could not — the shape of a cohort arriving on the
+      # morning of a class to a list that missed them. No `for:`: on that morning the useful
+      # latency is the ten-minute window itself, and the difference is a class either waiting or
+      # not.
+      - alert: SeatEntitlementRefused
+        expr: >-
+          sum(increase(prl_seat_entitlement_refusals_total{reason="not_entitled"}[10m])) > 5
+        labels:
+          severity: ticket
+        annotations:
+          summary: Learners are being refused seats for want of an enrolment
+          description: >-
+            Only moves on a deployment running PRL_ENROLMENT_REQUIRED=enforced, where it is the
+            seat guard refusing somebody who holds no live enrolment. Six in ten minutes is a
+            group rather than a passer-by, and the usual cause is a cohort list that missed
+            people. Which learner, room and seat are in the log line beside the counter, never in
+            a label. Grants are made with the enrolments CLI; the API holds SELECT only on both
+            enrolment tables and cannot enrol anybody.
+          runbook: docs/production/runbooks/seat-entitlement-refused.md
+
+      # Zero tolerance and no `for:`, the `SeatReleaseFailing` shape, and the counter is already
+      # primed so the first occurrence is a rise from zero rather than a series appearing.
+      # `metrics.ts` calls this the one refusal that can move with nobody using the product: it is
+      # counted when a room is re-opened after a restart and a chair recorded in `room_members` is
+      # not given back, because whoever was sitting in it is no longer entitled. Nobody is being
+      # refused anything they just asked for and nothing else in this file can see it — no request
+      # fails, no learner is at a keyboard, and the chair is simply gone the next time they look.
+      # An expiry or a revocation taking effect at the next restart rather than at the moment of
+      # the write is a legitimate outcome, so this is a ticket; being invisible is what makes it
+      # worth a rule.
+      - alert: SeatNotRestored
+        expr: >-
+          sum(increase(prl_seat_entitlement_refusals_total{reason="seat_not_restored"}[15m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: A chair was not given back after a restart because its holder is no longer entitled
+          description: >-
+            The only entitlement refusal that can happen with nobody using the product. A room
+            re-opened after a restart did not restore a seat recorded in room_members, because the
+            learner's enrolment has expired or been revoked since the row was written. Expected
+            after a revocation and not otherwise; if no enrolment changed, the seat was lost to a
+            bug rather than to a policy.
+          runbook: docs/production/runbooks/seat-entitlement-refused.md
+
+  # -------------------------------------------------------------------------
+  # The three thresholds below were all set above any attack that would actually
+  # be run against this deployment, on signals whose own documentation says
+  # legitimate use produces almost none of them. Each was measured silent for a
+  # full hour of the traffic it names:
+  #
+  #   * `AuthzFailureSpike` at >2/s needed 120 refused room reads a MINUTE. An
+  #     enumeration at one request a second — a shell loop, not a botnet — was
+  #     silent for an hour.
+  #   * `AuthFailureSpike` at >5/s needed 7,200 failed sign-ins an hour. Two a
+  #     second, sustained, was silent for an hour.
+  #   * `WebSocketRefusalSpike` at >0.5/s needed about 300 bad-Origin refusals per
+  #     ten minutes. A hundred in ten minutes was silent.
+  #
+  # And the rate limiter closes the other end: it bans a caller who ignores
+  # `Retry-After`, so anyone slow enough to stay unbanned sat comfortably under
+  # all three at once. The band between "fast enough to trip these" and "slow
+  # enough not to be banned" was empty, which means these three rules could only
+  # ever have fired for traffic `RateLimitBans` had already reported.
+  #
+  # So the numbers come down to near zero and the SHAPE moves into the `for:`.
+  # The window is shorter than the `for:` on all three — the `RoomOwnershipRefused`
+  # spelling — so what fires them is traffic that does not stop, and a burst that
+  # stops cannot stay true long enough. `rule-tests/security.test.yml` holds the
+  # firing and the silent case for each.
+  # -------------------------------------------------------------------------
   - name: security
     rules:
+      # >20 in every five-minute window, held for ten minutes: four failed sign-ins a minute that
+      # do not stop. Deliberately not zero, and this is the one of the three with a real background
+      # rate — `not_authenticated`, `session_expired` and `csrf_failed` all occur to honest users
+      # with a stale tab. In a cohort of thirty, four a minute for ten straight minutes is one
+      # learner in seven failing every minute, which is not a stale tab. It stays a ticket: at this
+      # threshold it will occasionally be a broken client after a deploy, and that is a
+      # working-hours question, not a 3am one.
       - alert: AuthFailureSpike
-        expr: sum(rate(prl_auth_failures_total[5m])) > 5
+        expr: sum(increase(prl_auth_failures_total[5m])) > 20
         for: 10m
         labels:
           severity: ticket
         annotations:
-          summary: Authentication failures are elevated
+          summary: Sign-ins have been failing at four a minute for ten minutes
           description: >-
             Distinguishes a broken client (one reason, one deploy boundary) from credential
             stuffing (sustained, mixed reasons). Correlate with prl_rate_limit_events_total: if
             bans are also rising, it is automated.
-          runbook: docs/production/runbooks/elevated-error-rate.md
+          runbook: docs/production/runbooks/automated-abuse.md
 
+      # >5 in every five-minute window, held for ten minutes: roughly one refused room read a
+      # minute that does not stop. This one pages, so the number has to be defensible at 3am —
+      # what it now catches that it did not is a learner-speed walk of room and hand ids, which is
+      # precisely the traffic this rule names and precisely what the old >2/s excluded. What it
+      # still ignores is somebody clicking a dead link to a room they were removed from: five
+      # refusals in five minutes, or twenty in one burst and then nothing, both stay silent.
       - alert: AuthzFailureSpike
-        expr: sum(rate(prl_authz_failures_total[5m])) > 2
+        expr: sum(increase(prl_authz_failures_total[5m])) > 5
         for: 10m
         labels:
           severity: page
         annotations:
-          summary: Authenticated callers are being refused resources
+          summary: Authenticated callers have been refused resources for ten minutes
           description: >-
             not_room_member, room_not_found_or_not_permitted and forbidden. Legitimate use
-            produces almost none, because the UI offers no links to other people's rooms. A
-            sustained rate is somebody walking room and hand ids.
+            produces almost none, because the UI offers no links to other people's rooms. Six or
+            more in every five-minute window for ten minutes is somebody walking room and hand
+            ids at a speed that stays under the rate limiter's ban threshold.
           runbook: docs/production/runbooks/hidden-card-incident.md
 
       - alert: RateLimitBans
@@ -298,33 +493,63 @@ groups:
           description: >-
             A 429 is the limiter doing its job for a busy client. A ban means the caller went far
             past the limit while ignoring Retry-After, which is a script rather than a person.
-          runbook: docs/production/runbooks/websocket-spike.md
+          runbook: docs/production/runbooks/automated-abuse.md
 
+      # Zero, held for ten minutes: at least one bad-Origin refusal in every five-minute window,
+      # three times over. A browser at a configured origin never produces one, so there is nothing
+      # to sit above — the old >0.5/s asked for three hundred in ten minutes, which is a number
+      # neither of this rule's two causes reaches. Both of them are continuous rather than large:
+      # PUBLIC_WEB_ORIGIN wrong after a deploy refuses every learner for as long as it is wrong,
+      # and somebody probing keeps probing. A single stray refusal — one scanner, once — stays
+      # silent, which is the whole reason the persistence is in the `for:` and not in the number.
       - alert: WebSocketRefusalSpike
-        expr: sum(rate(prl_websocket_refused_total{reason="bad_origin"}[10m])) > 0.5
-        labels:
-          severity: ticket
-        annotations:
-          summary: WebSocket handshakes are being refused for a bad Origin
-          description: >-
-            The Origin check is the only server-side defence on a socket handshake — browsers send
-            cookies cross-origin and CORS does not apply. A stream of these is somebody trying, or
-            a legitimate origin missing from PUBLIC_WEB_ORIGIN after a deploy.
-          runbook: docs/production/runbooks/websocket-spike.md
-
-  - name: connection-churn
-    rules:
-      - alert: WebSocketReconnectStorm
-        expr: >-
-          sum(rate(prl_websocket_opened_total[5m])) > 3 * sum(rate(prl_websocket_closed_total[1h]))
+        expr: sum(increase(prl_websocket_refused_total{reason="bad_origin"}[5m])) > 0
         for: 10m
         labels:
           severity: ticket
         annotations:
-          summary: Sockets are opening far above this deployment's own recent baseline
+          summary: WebSocket handshakes have been refused for a bad Origin for ten minutes
+          description: >-
+            The Origin check is the only server-side defence on a socket handshake — browsers send
+            cookies cross-origin and CORS does not apply. A stream of these is somebody trying, or
+            a legitimate origin missing from PUBLIC_WEB_ORIGIN after a deploy. One stray refusal
+            does not fire this; refusals that keep arriving for ten minutes do.
+          runbook: docs/production/runbooks/websocket-spike.md
+
+  - name: connection-churn
+    rules:
+      # The baseline is the live connection count, not this deployment's own recent past, and the
+      # change is not a refinement — the old rule fired on healthy traffic and could not fire on
+      # the failure it names.
+      #
+      #   * `3 * rate(closed[1h])` makes the quiet hour the baseline. Measured: a class of thirty
+      #     connecting on a morning after an overnight lull cleared it more than threefold, on
+      #     thirty sockets that each opened once and stayed open. Any deployment used during the
+      #     day and not at night trips it every morning, which is how a ticket queue is taught to
+      #     be scrolled past.
+      #   * `prl_websocket_closed_total` is created by its first increment, so before any socket
+      #     had ever closed the right-hand side was ABSENT and the whole comparison was empty. A
+      #     storm at the start of a deployment's life — a proxy misconfigured at the same deploy
+      #     that started the process — could not be seen.
+      #
+      # A reconnect storm is churn, not volume: sockets opening far faster than the number of
+      # sockets that are actually up. `prl_websocket_connections` is read at scrape time from the
+      # hub, so the right-hand side is always present. More than one open per live connection per
+      # minute, for ten minutes, is every learner's table re-establishing itself repeatedly — the
+      # `+ 5` is the floor that keeps a deployment with nobody connected from firing on a handful
+      # of opens. Thirty learners arriving at once is 0.1 opens/s against a bar of 0.58: silent.
+      - alert: WebSocketReconnectStorm
+        expr: >-
+          sum(rate(prl_websocket_opened_total[5m])) * 60 > max(prl_websocket_connections) + 5
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Sockets are opening faster than one per live connection per minute
           description: >-
             Clients reconnect automatically, so a storm looks healthy in every per-request metric
-            while every learner's table flickers. Check the code label on
+            while every learner's table flickers. The signal is churn rather than volume: opens
+            far above the number of connections actually standing. Check the code label on
             prl_websocket_closed_total.
           runbook: docs/production/runbooks/websocket-spike.md
 
@@ -343,7 +568,7 @@ groups:
           description: >-
             Derived from the measured saturation of one instance in docs/production/load-test.md,
             not from a generic figure. Re-derive it whenever that measurement is repeated.
-          runbook: docs/production/runbooks/worker-saturation.md
+          runbook: docs/production/runbooks/websocket-spike.md
 
   # -------------------------------------------------------------------------
   # Data retention.
@@ -361,6 +586,122 @@ groups:
   # constantly or never. "Removed nothing" and "did not run" are the same flat line,
   # which is why the sweep exports its own age and this rule reads that instead.
   # -------------------------------------------------------------------------
+  # -------------------------------------------------------------------------
+  # The front door, probed from outside the application.
+  #
+  # Every other rule in this file reads a series the API exports about itself, and
+  # Prometheus scrapes that series on the compose network — past the proxy, past
+  # TLS, past the page server. So a dead nginx, an expired certificate, unreadable
+  # TLS material or a stopped Next.js server left `up{job="prl-api"}` at 1,
+  # `prl_readiness_state` at 1, every counter flat, and every rule in this file
+  # green, while every learner saw a dead site. That is the whole of the blind spot
+  # `prometheus.yml` names above the `prl-public-origin` job, and these four rules
+  # are the only things in this deployment that can report it.
+  #
+  # The series come from a blackbox exporter making a real HTTPS request through
+  # the front door every 15 s, so they exist only while that exporter is running —
+  # which is why `PublicOriginProbeDown` is here as well. It is a ticket rather
+  # than a page on purpose: a dead probe is not evidence that the site is down, it
+  # is evidence that nobody can see whether it is. Stating that plainly is better
+  # than a page that means "something might be wrong somewhere", and the runbook
+  # says the same.
+  #
+  # `instance` is the probed URL and `module` says which upstream was being
+  # reached, so a firing alert names the front-door path that failed rather than
+  # the exporter. Both are kept: `learner_page_https` failing while
+  # `api_health_https` passes is the page server, and both failing is the proxy,
+  # TLS or the host. Two failing targets are two alerts with one alertname, which
+  # `group_by: ['alertname']` in `alertmanager.template.yml` delivers as one
+  # notification carrying both.
+  #
+  # Nothing inhibits `PublicOriginDown` and it inhibits nothing, which is
+  # deliberate and is the one place in this deployment where two pages for one
+  # incident is the right answer. It is the only rule here that speaks for the
+  # learner rather than about a process, and neither direction of implication
+  # holds: the API can be down with `/` still served, and `/` can be dark with the
+  # API perfectly healthy. An alert added to close a blind spot must not be
+  # suppressible by a signal from inside the thing it is watching.
+  # -------------------------------------------------------------------------
+  - name: public-origin
+    rules:
+      - alert: PublicOriginDown
+        expr: probe_success{job="prl-public-origin"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: The site is not answering through its own front door
+          description: >-
+            A real HTTPS request through the proxy, with the certificate verified, failed for two
+            minutes. The instance label is the URL and the module label says which upstream:
+            learner_page_https failing alone is the page server, both failing is the proxy, TLS or
+            the host. This probe enters nginx on the compose network, so it does NOT cover
+            Docker's port publishing, the host firewall or public DNS — confirm from off the box
+            before ruling those out.
+          runbook: docs/production/runbooks/public-origin-unreachable.md
+
+      # `absent()` for the same reason `ApiDown` has it: a job whose targets have gone produces no
+      # `up` series at all, and `up == 0` over nothing is empty. Without the first half, deleting
+      # the exporter from the compose file would silence this rule and `PublicOriginDown` together
+      # and leave nothing to say so.
+      - alert: PublicOriginProbeDown
+        expr: absent(up{job="prl-public-origin"}) or up{job="prl-public-origin"} == 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: The front-door probe has stopped reporting, so nothing is watching the origin
+          description: >-
+            Deliberately a ticket and not a page. This does not say the site is down; it says
+            nobody can see whether it is, which is a different fact and a different urgency. While
+            it is true, PublicOriginDown and both certificate rules cannot fire — treat the origin
+            as unmonitored since it started and check the site by hand until it clears.
+          runbook: docs/production/runbooks/public-origin-unreachable.md
+
+      # `> 0` inside the `min()` is load-bearing and is not cosmetic. A failed probe reports
+      # `probe_ssl_earliest_cert_expiry 0`, and `0 - time()` is a large negative number, so without
+      # the filter every outage would page a certificate expiry that had not happened and send an
+      # operator to renew a certificate that is fine. Filtered, an outage leaves the min over an
+      # empty set — no alert — and `PublicOriginDown` is what pages instead, which is the truth.
+      #
+      # `min()` rather than a per-instance comparison because both probed URLs are served by one
+      # nginx with one certificate, and a `for:` on a two-element vector is two alerts about one
+      # expiry.
+      #
+      # Twenty-one days is ahead of the <14-day warning `pnpm run staging status` prints, which
+      # only speaks when a person happens to run it. Three days pages, because the site goes dark
+      # at a known minute and a renewal that needs a third party has to start before the last
+      # working day before it.
+      - alert: TlsCertificateExpiringSoon
+        expr: >-
+          min(probe_ssl_earliest_cert_expiry{job="prl-public-origin"} > 0) - time() < 21 * 86400
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: The origin certificate expires within three weeks
+          description: >-
+            Measured from the certificate the proxy actually presented on a real handshake, not
+            from a file on disk, so it is the one a browser will see. Three weeks is deliberately
+            earlier than the under-fourteen-days warning staging status prints, because that
+            warning only speaks when somebody runs the command.
+          runbook: docs/production/runbooks/public-origin-unreachable.md
+
+      - alert: TlsCertificateExpiryImminent
+        expr: >-
+          min(probe_ssl_earliest_cert_expiry{job="prl-public-origin"} > 0) - time() < 3 * 86400
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: The origin certificate expires within three days
+          description: >-
+            An expiry is an outage with a timetable: at a known minute every browser refuses the
+            site and no request reaches any service that could report it. Three days is the last
+            point at which a renewal needing anybody outside this deployment can still be started
+            on a working day.
+          runbook: docs/production/runbooks/public-origin-unreachable.md
+
   - name: data-retention
     rules:
       - alert: RetentionSweepStalled
@@ -390,7 +731,7 @@ groups:
             The cap is a net, not the design: every label is meant to come from a closed set. If
             it engaged, some caller is passing an unbounded value and that metric has silently
             stopped being precise.
-          runbook: docs/production/runbooks/api-unhealthy.md
+          runbook: docs/production/runbooks/metrics-cardinality-overflow.md
 
       - alert: ReadinessFlapping
         expr: changes(prl_readiness_state[30m]) > 6

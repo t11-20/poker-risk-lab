@@ -55,6 +55,7 @@ import { join, resolve } from 'node:path';
 import { SIGNATURES_PATH } from '../image-signing.mjs';
 import {
   expectedCertificateIdentity,
+  grantsIdTokenWrite,
   KEYLESS_POLICY_PATH,
   parseKeylessPolicy,
   parseWorkflowStructure,
@@ -98,11 +99,14 @@ export function workflowsThatCanMintTokens(files) {
   const found = [];
   for (const { name, text } of files) {
     const structure = parseWorkflowStructure(text);
-    if (structure.topLevelPermissions.get('id-token') === 'write') {
+    // `grantsIdTokenWrite` rather than a direct lookup, because `permissions: write-all` grants
+    // id-token without ever writing the words: an adversarial review found this reader blind to it,
+    // and to the flow-mapping and quoted forms. See `permissionsFrom` in keyless-identity.mjs.
+    if (grantsIdTokenWrite(structure.topLevelPermissions)) {
       found.push({ name, scope: 'the workflow top level', job: null });
     }
     for (const [job, permissions] of structure.jobs) {
-      if (permissions.get('id-token') === 'write') found.push({ name, scope: 'job', job });
+      if (grantsIdTokenWrite(permissions)) found.push({ name, scope: 'job', job });
     }
   }
   return found;
@@ -149,9 +153,11 @@ export function runKeylessPolicyGate(options) {
       gate.warn(
         'the policy names no repository owner, so the exact identity is not yet pinned',
         `${resolved.problem}\n      Everything else below is checked. What is NOT checked is the ` +
-          'owner half of the identity — and `security:image-provenance` refuses a committed keyless ' +
-          'signature record while this is the case, because an outsider has no environment to ' +
-          'resolve it from.',
+          'owner half of the identity — and THIS gate refuses outright if a committed ' +
+          'release-signatures.json is in the keyless posture while it stays null, because an ' +
+          'outsider has no environment to resolve it from.\n      `security:image-provenance` only ' +
+          'WARNS about the same fallback, so that the signing workflow can verify its own signature ' +
+          'on the run that made it. Do not read that warning as a second refusal.',
       );
       report.identity = expectedCertificateIdentity(policy, '<OWNER>/poker-risk-lab');
     } else {

@@ -217,10 +217,22 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
           }
           value={report.potOdds.breakEvenEquity}
         />
+        {/*
+          `potOdds.pot` is the pot hero could WIN, which is the whole middle except where hero was
+          all-in for less than the bet in front of them. The label says "could win" rather than
+          "pot" so that a review of such a decision does not put a figure below `report.potTotal`
+          under a label claiming to be it.
+        */}
         <Metric
           format="units"
-          label="Pot before the decision"
-          note={priced ? `${formatUnits(report.toCall)} to call.` : 'Nothing to call.'}
+          label="Pot the decision was for"
+          note={
+            report.potTotal > report.potOdds.pot
+              ? `${formatUnits(report.toCall)} to call, with ${formatUnits(report.potTotal - report.potOdds.pot)} of the ${formatUnits(report.potTotal)} in the middle a side pot this seat was not in.`
+              : priced
+                ? `${formatUnits(report.toCall)} to call.`
+                : 'Nothing to call.'
+          }
           value={report.potOdds.pot}
         />
       </div>

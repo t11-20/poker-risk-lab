@@ -441,7 +441,27 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
   );
 }
 
-function PriceSection({ potOdds }: { readonly potOdds: PotOddsSummary }): ReactElement {
+/**
+ * The price, and the pot it is a price into.
+ *
+ * `potOdds.pot` is the pot hero can actually WIN, which is below `potTotal` exactly when hero is
+ * all-in for less than the bet in front of them: the excess of that bet is a side pot hero is not
+ * eligible for. `potTotal` is taken separately rather than subtracted out of a single figure,
+ * because a reader looking at 320 chips in the middle and a tile saying "50 in the middle" has been
+ * handed two numbers that cannot both be right and no way to tell which is.
+ *
+ * So the tile names both, and says which is which. The Coach's own prose underneath explains why
+ * the side pot is out of reach; this is the figure that stops the two contradicting each other on
+ * the face of the panel.
+ */
+function PriceSection({
+  potOdds,
+  potTotal,
+}: {
+  readonly potOdds: PotOddsSummary;
+  readonly potTotal: number;
+}): ReactElement {
+  const beyondReach = potTotal - potOdds.pot;
   return (
     <section className="prl-coach__section">
       <h3 className="prl-coach__section-heading">The price</h3>
@@ -491,7 +511,16 @@ function PriceSection({ potOdds }: { readonly potOdds: PotOddsSummary }): ReactE
 
       <StatTile
         label="Pot and price"
-        value={`${formatUnits(potOdds.pot)} in the middle, ${formatUnits(potOdds.toCall)} to call`}
+        value={
+          beyondReach > 0
+            ? `${formatUnits(potOdds.pot)} of the ${formatUnits(potTotal)} in the middle, ${formatUnits(potOdds.toCall)} to call`
+            : `${formatUnits(potOdds.pot)} in the middle, ${formatUnits(potOdds.toCall)} to call`
+        }
+        {...(beyondReach > 0
+          ? {
+              note: `You are all-in for less than the bet, so ${formatUnits(beyondReach)} is a side pot you are not in. Every figure on this panel is against the ${formatUnits(potOdds.pot)} you can win.`,
+            }
+          : {})}
       />
 
       <p className="prl-coach__prose">{potOdds.explanation}</p>
@@ -824,7 +853,7 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
       {/* ---- always visible ------------------------------------------------------------- */}
       <div className="prl-coach__grid">
         <EquitySection equity={equity} interval={intervalText} surplus={report.potOdds.equitySurplus} />
-        <PriceSection potOdds={report.potOdds} />
+        <PriceSection potOdds={report.potOdds} potTotal={report.potTotal} />
         <OutsSection outs={outs} heroEquity={equity.heroEquity} />
         <StackSection stack={report.stackContext} />
       </div>

@@ -72,6 +72,7 @@
     "release:artifacts": "node scripts/release-artifacts.mjs",
     "release:sign": "node --env-file-if-exists=deploy/signing/signing.env scripts/release-sign.mjs",
     "staging": "node scripts/staging.mjs",
+    "alerts:unit": "bash deploy/staging/observability/rule-tests/run.sh",
     "alerts:verify": "node scripts/alert-delivery.mjs",
     "alerts:preflight": "node scripts/alert-preflight.mjs",
     "alerts:ack": "node scripts/alert-ack-page.mjs",

@@ -1300,6 +1300,24 @@ export function runImageProvenanceGate(options) {
     }
   }).then((code) => {
     if (options.json) console.log(JSON.stringify(report, null, 2));
+    if (code !== 0) {
+      // The epilogue below is a claim in the present tense — "each release digest IS signed by" —
+      // and it used to print on a FAILED run, word for word, under a red FAIL. Demonstrated by an
+      // adversarial review: a record whose identity resolved to `attacker-org` and whose cosign
+      // verification failed outright still printed "each release digest was signed by a GitHub
+      // Actions workflow whose certificate identity is https://github.com/attacker-org/…". That is
+      // the same class of defect `scripts/readiness-report.test.mjs` was written for — a claim
+      // about a release, in the place a reviewer reads, that nothing joined to the result.
+      const anchor = report.posture === 'keyless' ? 'the committed identity policy' : 'the committed key';
+      console.log(
+        red(
+          '\n  This gate FAILED, so nothing here is proven. The images named in the signature\n' +
+            `  record were NOT verified against ${anchor}, and this run establishes\n` +
+            '  nothing whatever about their provenance. Fix the failures above and run it again.\n',
+        ),
+      );
+      return code;
+    }
     console.log(
       dim(
         report.posture === 'keyless'

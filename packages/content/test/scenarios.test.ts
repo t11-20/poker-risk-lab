@@ -256,6 +256,58 @@ test('no lesson or quiz states a computed figure as prose fact', () => {
   );
 });
 
+test('a quiz prompt that names the blinds and a stack depth agrees with the chips it names', () => {
+  // The defect this exists for shipped. `icm-q2` opened "Blinds are 1 and 2. A player with
+  // exactly 10 big blinds moves all in" and then did its arithmetic on a stack of 10 chips
+  // — 5 big blinds, not 10. Everything downstream was right for the chips (pot 13, call 8,
+  // break-even 38.1%), so no assertion anywhere could see it; only the depth in WORDS was
+  // wrong, and wrong by a factor of two, in the one lesson whose own takeaway is that a
+  // tournament stack is only meaningful in big blinds and whose next question asks the
+  // learner to carry that figure forward.
+  //
+  // `checkStatedDepth` in `src/validate.ts` catches exactly this shape — it exists because
+  // `rk-nine-big-blinds-call-or-fold` was titled "Nine big blinds" while giving hero 13.5 of
+  // them — but it reads a scenario's `title` and `opponentRange.label` and needs a seat list
+  // to check against. A quiz question has neither, so quiz prompts were outside its reach.
+  //
+  // What makes the check possible without seats: a prompt that states the blinds is a prompt
+  // doing chip arithmetic out loud, so the stack it is talking about appears in it as a
+  // number. A depth of N big blinds therefore has to be one of the amounts the prompt names.
+  // Narrow on purpose — a prompt that states a depth and never names the chips is not read as
+  // a claim, because guessing there is how a content gate starts crying wolf.
+  const STATES_BLINDS = /blinds are (\d+) and (\d+)/i;
+  const STATED_DEPTH = /\b(\d+)\s+big\s+blinds?\b/gi;
+  const offenders: string[] = [];
+  let claimsChecked = 0;
+
+  for (const quiz of content().quizzes) {
+    for (const question of quiz.questions) {
+      const blinds = STATES_BLINDS.exec(question.prompt);
+      if (blinds === null) continue;
+      const bigBlind = Number(blinds[2]);
+      const named = new Set([...question.prompt.matchAll(/\b(\d+)\b/g)].map((match) => Number(match[1])));
+      for (const match of question.prompt.matchAll(STATED_DEPTH)) {
+        claimsChecked += 1;
+        const asChips = Number(match[1]) * bigBlind;
+        if (named.has(asChips)) continue;
+        offenders.push(
+          `${quiz.id}/${question.id}: "${match[0].trim()}" is ${asChips} chips at a big blind of ` +
+            `${bigBlind}, and the prompt names no such amount — it names ` +
+            `${[...named].sort((left, right) => left - right).join(', ')}`,
+        );
+      }
+    }
+  }
+
+  // A sweep of nothing is not a pass: if no prompt states both, this test proved nothing.
+  assert.ok(claimsChecked > 0, 'no quiz prompt stated both the blinds and a depth; the sweep is empty');
+  assert.deepEqual(
+    offenders,
+    [],
+    `these quiz prompts state a stack depth the chips beside it contradict:\n  - ${offenders.join('\n  - ')}`,
+  );
+});
+
 test('content contains no gambling or dark-pattern language', () => {
   // PRODUCT-GUARDRAILS §1 and §2, checked mechanically. A phrase list is crude, but it
   // catches the drift that matters: content that starts talking about money or streaks.

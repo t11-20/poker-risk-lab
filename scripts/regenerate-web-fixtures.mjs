@@ -42,7 +42,7 @@ const CHECK_ONLY = process.argv.includes('--check');
 // a workspace project and therefore cannot resolve `@prl/*`. Each package's own directory can, so
 // resolution of their internal imports still works normally.
 const fromRepo = (rel) => import(pathToFileURL(join(REPO, rel)).href);
-const { buildCoachReport } = await fromRepo('packages/poker-math/dist/index.js');
+const { buildCoachReport, deriveContestablePot } = await fromRepo('packages/poker-math/dist/index.js');
 const { readSituation } = await fromRepo('packages/content/dist/index.js');
 const { buildHandReview } = await fromRepo('apps/api/src/review/build-review.ts');
 
@@ -68,6 +68,17 @@ function reportForScenario(scenario) {
     street: scenario.street,
     opponents: [{ label: opponentLabelFor(scenario), range: situation.opponentRange }],
     pot: situation.pot,
+    // The pot hero can actually win. Below `situation.pot` only when a scenario's hero is all-in
+    // for less than the bet in front of them, which is a side pot hero is not in. Derived rather
+    // than layered because a scenario carries no complete per-seat record of the street — see
+    // `routes/content.ts`, which this mirrors.
+    contestablePot: deriveContestablePot({
+      pot: situation.pot,
+      toCall: situation.toCall,
+      heroCommittedThisStreet: scenario.committedThisStreet?.[heroSeat?.seat ?? -1] ?? 0,
+      heroStack: situation.heroStack,
+      opponentStacks: [...situation.opponentStacks],
+    }),
     toCall: situation.toCall,
     heroCommittedThisStreet: scenario.committedThisStreet?.[heroSeat?.seat ?? -1] ?? 0,
     heroStack: situation.heroStack,

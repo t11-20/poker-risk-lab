@@ -89,6 +89,7 @@ import type {
 import { commitToKnownDeck, createSecureRandom, orderedDeck, redactFor } from '@prl/poker-engine';
 import {
   buildCoachReport,
+  deriveContestablePot,
   deriveLegalActions,
   type ParsedRange,
   parseRange,
@@ -863,6 +864,19 @@ function coachReportFor(request: CompareRequest): CoachReport {
     street: spot.street,
     opponents: [{ label: 'the profile', range }],
     pot: spot.pot,
+    // A comparison spot is always heads-up, so the money hero cannot reach is one
+    // opponent's excess over hero's stack and `deriveContestablePot` is exact here —
+    // no layering needed and none available, since the spot has no per-seat street
+    // record to layer. Required rather than defaulted, deliberately: the defect this
+    // closes was the Coach pricing a call against a pot the learner cannot win, and a
+    // field with a fallback is a field the next call site forgets to think about.
+    contestablePot: deriveContestablePot({
+      pot: spot.pot,
+      toCall: spot.toCall,
+      heroCommittedThisStreet: 0,
+      heroStack: spot.heroStack,
+      opponentStacks: [spot.opponentStack],
+    }),
     toCall: spot.toCall,
     // A comparison spot is reconstructed rather than played: earlier-street money is
     // split evenly between the two seats and lands in `pot`, so hero has nothing out

@@ -307,14 +307,38 @@ export class AppMetrics {
     help: 'Rooms held in memory by this process.',
   });
 
+  /**
+   * All three hand counters are PRIMED, and the reason is the rule that reads them together.
+   *
+   * `HandCompletionGap` is the invariant `started = completed + failed + in flight`, evaluated as
+   * a subtraction. In PromQL a series that has never been incremented is not zero, it is ABSENT,
+   * and `A - absent` is the empty vector — so on a deployment where no hand has ever completed,
+   * which is exactly the catastrophe the rule exists for, the alert could not fire at all. Primed,
+   * the same catastrophe renders `started 40, completed 0, failed 0` and the subtraction is 40.
+   *
+   * `handsFailed` needs it for the second, independent reason: `HandsFailing` is
+   * `increase(...) > 0`, and `increase()` is computed only from samples inside its range. A
+   * counter that appears mid-window at 3 has an increase of 0, because Prometheus does not assume
+   * a series began at zero before it was first scraped — so the FIRST failed hand, which is the
+   * one a zero-tolerance page is entirely about, was invisible to it. Same argument, same
+   * measurement, as `rateLimitEvents{kind="banned"}`; and `rooms/registry.ts` increments this
+   * once, by `abandoned.length`, which is precisely the single step that shape hides.
+   *
+   * `reason` is a closed set of two, both named at their call sites in `rooms/registry.ts`:
+   * `room_closed` (a hand in progress when its room shut) and `interrupted_by_restart` (hands a
+   * restart abandoned, closed when the room is next opened). Both are primed, because an alert
+   * cannot see a rise from a series that was never scraped and either one may be the first.
+   */
   readonly handsStarted = this.registry.counter({
     name: `${PREFIX}_hands_started_total`,
     help: 'Hands dealt.',
+    primeLabels: [{}],
   });
 
   readonly handsCompleted = this.registry.counter({
     name: `${PREFIX}_hands_completed_total`,
     help: 'Hands that reached a settled result.',
+    primeLabels: [{}],
   });
 
   /**
@@ -328,6 +352,7 @@ export class AppMetrics {
     name: `${PREFIX}_hands_failed_total`,
     help: 'Hands abandoned without a settled result, by reason.',
     labelNames: ['reason'],
+    primeLabels: [{ reason: 'room_closed' }, { reason: 'interrupted_by_restart' }],
   });
 
   /** "Is a bot seat failing to act?" A stuck actor stalls a table without erroring anywhere. */
@@ -524,10 +549,29 @@ export class AppMetrics {
    *   * **Read at scrape time**, per rule 3 at the top of this file — a gauge mirroring state
    *     owned elsewhere is never written on change.
    *   * **It starts from process start, not from zero.** A process that has never swept is not
-   *     infinitely stale; it is as stale as it is old, and the first sweep is deliberately at
-   *     T+6h rather than at boot. Zero-initialising would page every deployment at every restart,
-   *     which trains people to ignore the rule — and a process restarting often enough to hide a
-   *     dead timer this way is already `ProcessRestartLoop`.
+   *     infinitely stale; it is as stale as it is old. Zero-initialising would page every
+   *     deployment at every restart, which trains people to ignore the rule — and a process
+   *     restarting often enough to hide a dead timer this way is already `ProcessRestartLoop`.
+   *
+   * ## The substitution above is honest only because the first sweep is at T+60s
+   *
+   * It used to say "the first sweep is deliberately at T+6h rather than at boot", and that is what
+   * made the `ProcessRestartLoop` defence false. Substituting uptime means this gauge is RESET by
+   * every restart, so a deployment redeployed more often than the sweep interval drew a sawtooth
+   * that never reached the 27,000 s threshold while sweeping exactly zero times — and
+   * `ProcessRestartLoop` is `changes(prl_process_start_time_seconds[15m]) >= 3`, which four
+   * restarts a day is nowhere near. `maintenance/retention-sweep.ts` now runs the first sweep at
+   * `FIRST_SWEEP_DELAY_MS`, sixty seconds, which is what makes the sentence above true: three
+   * processes that each die before sweeping fit inside fifteen minutes, so the only restart pattern
+   * that can hide a dead sweep is one that rule already pages for. The arithmetic is asserted in
+   * `test/retention-sweep.test.ts` against that rule's own literals, because it is the kind of
+   * claim that goes quietly false when somebody changes a number in the other file.
+   *
+   * What it still cannot answer, said plainly rather than left to be discovered again: **"did the
+   * PREVIOUS process sweep?"** This reading is derived from THIS process's uptime, so it cannot.
+   * Answering it needs something durable — the oldest `expires_at` still present, or a persisted
+   * marker — which is a change to what this gauge reads and to the rule that reads it, and belongs
+   * with that rule rather than here.
    */
   readonly retentionSweepAge = this.registry.gauge({
     name: `${PREFIX}_retention_sweep_age_seconds`,
@@ -619,6 +663,26 @@ export class AppMetrics {
    * that restarted resets to zero on exactly the event it is meant to record. `time() -
    * prl_process_start_time_seconds` is the uptime, and a drop in it is a restart — which is
    * both the standard convention and the only version of this that survives the event.
+   *
+   * ## `set()` once, not `setFrom()` — and this is the one gauge in the file where that is right
+   *
+   * Rule 3 at the top of this file says a gauge whose value lives somewhere authoritative is read
+   * at scrape time, and every other gauge here obeys it. This one is the exception, because the
+   * value it reports is not a state that can change: it is a single instant in the past. It was
+   * written as `setFrom(() => Math.floor(Date.now() / 1000 - process.uptime()))`, which re-derived
+   * that fixed instant on EVERY scrape from two clocks that do not agree — `Date.now()` is a wall
+   * clock subject to NTP and to leap smearing, `process.uptime()` is monotonic — and `Math.floor`
+   * turned their disagreement into an integer that flipped between two adjacent seconds.
+   *
+   * Measured on this machine, sampling the old expression: 4.5 ms of spread over five seconds,
+   * enough to straddle a second boundary. `ProcessRestartLoop` is
+   * `changes(prl_process_start_time_seconds[15m]) >= 3`, and `changes()` counts a one-second
+   * wobble exactly as it counts a restart — so the alert fired at sixteen minutes on a process
+   * that had never restarted, which is a page in the middle of the night about nothing.
+   *
+   * Computed once here, at construction, which is within milliseconds of process start and is the
+   * same number the old expression was trying to recover. Every scrape now renders the same
+   * integer for the life of the process, so every change in it is a restart.
    */
   readonly processStart = this.registry.gauge({
     name: `${PREFIX}_process_start_time_seconds`,
@@ -708,7 +772,10 @@ export class AppMetrics {
 
   constructor() {
     this.eventLoop.enable();
-    this.processStart.setFrom(() => Math.floor(Date.now() / 1000 - process.uptime()));
+    // Once, and never again — see the gauge's own comment. A collector here re-derives one fixed
+    // instant from two disagreeing clocks on every scrape, and `ProcessRestartLoop` counts the
+    // resulting one-second wobble as a restart.
+    this.processStart.set({}, Math.floor(Date.now() / 1000 - process.uptime()));
     this.retentionSweepAge.setFrom(() => {
       const since = this.lastRetentionSweepMs ?? Date.now() - process.uptime() * 1_000;
       // Clamped at zero: a clock stepped backwards between the sweep and the scrape must render a

@@ -29,7 +29,17 @@ batches"*). While this alert is firing that statement is false.
 flat is the normal state of a healthy small deployment: most six-hour windows genuinely have nothing
 to remove. "Removed nothing" and "did not run" are the same flat line, so the sweep exports its own
 age and the rule reads that. The age starts from process start rather than from zero, so a freshly
-restarted process is not instantly stale — the first sweep is deliberately at T+6h, not at boot.
+restarted process is not instantly stale — the first sweep is at T+60s, not at boot.
+
+**The number used to be T+6h, and that made this rule unable to fire on the worst case.** Because
+the age substitutes process uptime until this process has swept, it is reset by every restart: a
+deployment redeployed more often than the six-hour interval never reached its first sweep, swept
+nothing for its entire life, and drew a sawtooth peaking at 21,600 s against a 27,000 s threshold.
+Reproduced in `apps/api/test/retention-sweep.test.ts` — eight consecutive five-hour deployments,
+zero sweeps. The first sweep is now sixty seconds after start, which also makes the fallback
+argument ("a process restarting often enough to hide a dead timer is already `ProcessRestartLoop`")
+true rather than merely stated: three processes that die before sweeping fit inside that rule's
+fifteen-minute window. What the gauge still cannot see is whether the PREVIOUS process swept.
 
 ## Immediate containment
 
@@ -38,7 +48,7 @@ leaking, nobody is being served wrong data, and no learner is affected. The cost
 rows that should have gone still being present, and it accrues slowly. Do not restart the API to
 "fix" it before reading the next section: a restart drops every hand in progress
 (`README.md` in this directory, "the one architectural fact"), and doing that to a live table to
-tidy up a maintenance timer is a worse trade than waiting six hours.
+tidy up a maintenance timer is a worse trade than waiting for the next scheduled sweep.
 
 ## Diagnosis
 
@@ -107,9 +117,10 @@ For (c): this is a deploy, not an operation. Roll back to the previous image
 
 **Restarting the API is a legitimate last resort and is not free.** It clears (b), it does nothing
 for (a) or (c), and it drops every hand in progress. If you do it, do it when tables are quiet, and
-note that the first sweep of the new process is six hours later — the age gauge will read healthy
-immediately even though nothing has been swept yet. That is deliberate (a process that has never
-swept is only as stale as it is old) and it means the verification below matters more than usual.
+note that the age gauge reads healthy immediately even though nothing has been swept yet — it
+substitutes uptime until this process has completed a sweep. The first sweep of the new process is
+sixty seconds later, so the verification below is a minute's wait rather than six hours', and it
+matters more than usual: the gauge cannot tell you the previous process was failing.
 
 ## Verification
 

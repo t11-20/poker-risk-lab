@@ -33,6 +33,7 @@ import type { Scenario, ScenarioClaim } from '@prl/contracts';
 import { type Card, parseCards } from '@prl/poker-engine';
 import {
   computeOuts,
+  deriveContestablePot,
   type EquityResult,
   effectiveStack,
   equity,
@@ -164,12 +165,30 @@ export function analyseScenario(scenario: Scenario, options: AnalyseOptions = {}
   const hero = result.players[0];
   if (hero === undefined) throw new ScenarioAnalysisError(`equity for "${scenario.id}" produced no hero`);
 
-  const odds = potOdds(situation.pot, situation.toCall);
+  // The pot hero could actually WIN, which is `situation.pot` in every ordinary spot and less
+  // than it when hero is all-in for less than the bet in front of them: the excess of that bet is
+  // a side pot hero is not eligible for. Capping `toCall` at the stack — which the call below has
+  // always done — fixes the price hero pays and says nothing about the pot they are paying it
+  // into, and pricing the call against the whole middle is what let the Coach tell a learner they
+  // needed 8.6% where they needed 37.5%. This module is the second producer of that figure (it
+  // verifies a scenario's stated claims), so it has to answer the same way `buildCoachReport`
+  // does or a bundled claim could be checked against a price no learner is ever shown.
+  //
+  // Derived rather than layered: a scenario is a described spot with no complete per-seat record
+  // of the street — see the note in `apps/api/src/routes/content.ts`.
+  const contestablePot = deriveContestablePot({
+    pot: situation.pot,
+    toCall: situation.toCall,
+    heroCommittedThisStreet: 0,
+    heroStack: situation.heroStack,
+    opponentStacks: situation.opponentStacks,
+  });
+  const odds = potOdds(contestablePot, situation.toCall);
   const callEv =
     situation.toCall === 0
       ? 0
       : evOfCall({
-          pot: situation.pot,
+          pot: contestablePot,
           toCall: Math.min(situation.toCall, situation.heroStack),
           equity: hero.equity,
         }).ev;

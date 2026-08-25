@@ -43,7 +43,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readSituation } from '@prl/content';
 import type { CoachReport, HandReviewResponse, Scenario } from '@prl/contracts';
-import { buildCoachReport } from '@prl/poker-math';
+import { buildCoachReport, deriveContestablePot } from '@prl/poker-math';
 import { buildHandReview, type HandActionRow, type HandSeatRow } from '../src/review/build-review.ts';
 
 const WEB_FIXTURES = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'src', 'fixtures');
@@ -91,6 +91,17 @@ function reportForScenario(scenario: Scenario): CoachReport {
     street: scenario.street,
     opponents: [{ label: opponentLabelFor(scenario), range: situation.opponentRange }],
     pot: situation.pot,
+    // The described-spot derivation, which is what `routes/content.ts` uses and why: a scenario
+    // does not carry a complete per-seat record of the street (`preflop-squeeze-fold-equity` keeps
+    // hero's own posted blind inside `potBeforeStreet`), so the engine's layering has nothing
+    // sound to layer.
+    contestablePot: deriveContestablePot({
+      pot: situation.pot,
+      toCall: situation.toCall,
+      heroCommittedThisStreet: scenario.committedThisStreet?.[heroSeat?.seat ?? -1] ?? 0,
+      heroStack: situation.heroStack,
+      opponentStacks: [...situation.opponentStacks],
+    }),
     toCall: situation.toCall,
     heroCommittedThisStreet: scenario.committedThisStreet?.[heroSeat?.seat ?? -1] ?? 0,
     heroStack: situation.heroStack,

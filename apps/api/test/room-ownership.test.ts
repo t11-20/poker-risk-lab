@@ -117,6 +117,51 @@ function fakeOwnership(ownerId = 'api_test_1_aaaaaaaa'): FakeOwnership {
   return fake;
 }
 
+/**
+ * A `RoomOwnership` whose beat does not come back until the case says so.
+ *
+ * Separate from `fakeOwnership` because it is for the opposite question. That one answers
+ * immediately, which is what every case about the four verdicts wants; this one holds the beat OPEN
+ * so a case can do something to the registry while a renewal is in flight — which is the state the
+ * request path is in for one round trip out of every heartbeat interval, and which no test that
+ * resolves synchronously can reach at all.
+ */
+function heldHeartbeat(ownerId = 'api_test_1_aaaaaaaa'): {
+  readonly ownership: RoomOwnership;
+  /** Room id sets the beats were given, in order. */
+  readonly asked: string[][];
+  /** Answers the beat that is currently in flight. */
+  readonly answer: (renewed: readonly string[]) => void;
+} {
+  let fence = 0;
+  let pending: ((renewed: readonly string[]) => void) | null = null;
+  const asked: string[][] = [];
+  return {
+    asked,
+    answer: (renewed) => {
+      const resolve = pending;
+      assert.ok(resolve !== null, 'no beat was in flight to answer');
+      pending = null;
+      resolve(renewed);
+    },
+    ownership: {
+      ownerId,
+      acquire: (roomId): Promise<RoomLease | null> => {
+        fence += 1;
+        return Promise.resolve({ roomId, fence, acquiredAt: new Date() });
+      },
+      heartbeat: (roomIds): Promise<readonly string[]> => {
+        asked.push([...roomIds]);
+        return new Promise((resolve) => {
+          pending = resolve;
+        });
+      },
+      release: () => Promise.resolve(true),
+      holderOf: () => Promise.resolve(null),
+    },
+  };
+}
+
 interface Probe {
   readonly registry: RoomRegistry;
   readonly ownership: FakeOwnership;
@@ -466,6 +511,127 @@ describe('a renewal that comes back without our room', () => {
   });
 });
 
+describe('a room opened while a beat is in flight', () => {
+  /**
+   * ##########################################################################
+   * ## A BEAT IS A ROUND TRIP, AND `acquireLease` RUNS THROUGHOUT IT.       ##
+   * ##########################################################################
+   *
+   * `heartbeatLeases` reads the rooms it holds, goes to the database, and then applies the answer.
+   * The request path does not stop while it is out there: `open` → `buildRoom` → `acquireLease`
+   * adds rooms to `this.leases` during the round trip, and those rooms were never in the ids the
+   * statement carried, so they cannot be in its answer either. Applying the verdict to the CURRENT
+   * map therefore read every one of them as fenced.
+   *
+   * Reproduced by holding a beat open across an `open()`, which is what these two cases do. It is
+   * not an exotic interleaving — the window is one database round trip, every five seconds, on
+   * every process that is opening rooms, and the two ways it lands are both bad:
+   *
+   *   * this case: a table a learner has just opened is closed under them, their sockets are
+   *     closed, and `prl_api_room_fencings_total{reason="fenced"}` — zero-tolerance, with a runbook
+   *     about two replicas — rises for an incident that did not happen;
+   *   * the next case: it lands mid-build instead, and the room is published with no lease entry.
+   */
+  it('is not evicted as fenced (NEGATIVE CONTROL)', async () => {
+    const gate = heldHeartbeat();
+    const metrics = new AppMetrics();
+    const evictions: { roomId: string; reason: string }[] = [];
+    const registry = new RoomRegistry({
+      clock: createManualClock(),
+      metrics,
+      random: createSecureRandom(),
+      ownership: gate.ownership,
+      onProblem: () => undefined,
+    });
+    registry.onEviction((roomId, reason) => evictions.push({ roomId, reason }));
+
+    await registry.open({ record: record('room_beat0001') });
+    const beat = registry.heartbeatLeases();
+    await registry.open({ record: record('room_beat0002') });
+    assert.equal(registry.leaseFor('room_beat0002')?.fence, 2, 'the second room was leased to us');
+
+    assert.deepEqual(gate.asked, [['room_beat0001']], 'the statement never carried the second room');
+    gate.answer(['room_beat0001']);
+    await beat;
+
+    assert.deepEqual(evictions, [], 'a room the beat never asked about cannot have been fenced');
+    assert.equal(metrics.roomFencings.get({ reason: 'fenced' }), 0);
+    assert.ok(registry.get('room_beat0002') !== null, 'a freshly opened table was closed under it');
+    await registry.shutdown();
+  });
+
+  /**
+   * The half that corrupts a hand rather than merely ending one.
+   *
+   * `buildRoom` is several awaits long between `acquireLease` and `this.rooms.set`, so the eviction
+   * can land while the room is still being built. It then deletes a lease entry for a room that is
+   * not in `this.rooms` yet — closing nothing, notifying nobody — and the build publishes the room
+   * a moment later with NO entry in `this.leases`.
+   *
+   * Nothing renews a room that is not in that map. Its `heartbeat_at` stops moving, this process
+   * never self-evicts because it holds no lease to time out, and `LEASE_TTL_MS` later another
+   * process is entitled to take a room this one is still dealing at — two decks, two pots, and
+   * whichever `stacksSettled` lands second destroys the chips the other paid out. That is the
+   * corruption the whole file exists to make impossible, reached through the guard.
+   */
+  it('is not left serving a room with no lease at all (NEGATIVE CONTROL)', async () => {
+    const gate = heldHeartbeat();
+    let reads = 0;
+    let releaseRead: ((handNumber: number) => void) | null = null;
+    const registry = new RoomRegistry({
+      clock: createManualClock(),
+      metrics: new AppMetrics(),
+      random: createSecureRandom(),
+      ownership: gate.ownership,
+      archive: {
+        // The first open finishes; the second stops mid-build, between the lease and the publish.
+        nextHandNumber: () => {
+          reads += 1;
+          if (reads === 1) return Promise.resolve(1);
+          return new Promise<number>((resolve) => {
+            releaseRead = resolve;
+          });
+        },
+        lastDealtHand: () => Promise.resolve(null),
+        abandonInterruptedHands: () => Promise.resolve([]),
+        handStarted: () => Promise.resolve(),
+        actionsApplied: () => Promise.resolve(),
+        streetAdvanced: () => Promise.resolve(),
+        handCompleted: () => Promise.resolve(),
+        stacksSettled: () => Promise.resolve(),
+        roomStatusChanged: () => Promise.resolve(),
+      },
+      onProblem: () => undefined,
+    });
+
+    await registry.open({ record: record('room_beat0003') });
+    const beat = registry.heartbeatLeases();
+    const opening = registry.open({ record: record('room_beat0004') });
+    // Let the build get as far as its blocked read, which is past `acquireLease`.
+    for (let tick = 0; tick < 4; tick += 1) await Promise.resolve();
+
+    gate.answer(['room_beat0003']);
+    await beat;
+
+    (releaseRead as unknown as ((handNumber: number) => void) | null)?.(1);
+    const room = await opening;
+    assert.equal(room.record.closed, false, 'the room was published and is being served');
+
+    // The property that matters, asserted on the NEXT beat rather than on the map: a room this
+    // process is serving must be in every renewal, or its lease is a row nobody is keeping alive.
+    gate.asked.length = 0;
+    const next = registry.heartbeatLeases();
+    gate.answer(gate.asked[0] ?? []);
+    await next;
+    assert.deepEqual(
+      gate.asked[0],
+      ['room_beat0003', 'room_beat0004'],
+      'a room being served was left out of the renewal, so another process may take it mid-hand',
+    );
+    await registry.shutdown();
+  });
+});
+
 describe('a renewal that fails outright', () => {
   /**
    * The distinction the heartbeat turns on, and the reason a fake is the only way to test it.
@@ -556,6 +722,137 @@ describe('giving the lease back', () => {
     await registry.shutdown();
     assert.deepEqual([...ownership.released].sort(), ['room_shut0001', 'room_shut0002']);
     assert.equal(registry.size, 0);
+  });
+
+  /**
+   * The room that was still being OPENED when the SIGTERM arrived.
+   *
+   * `closeAll` can only close what is in `this.rooms`, and a build in flight is not: the lease is
+   * taken first — a hard rule, because reconciling before acquiring would settle another process's
+   * live hand — and the room is published several awaits later. A shutdown that landed in that gap
+   * dropped the entry on the floor. Two things came of it, both reproduced against this class:
+   *
+   *   * the lease row was never deleted, so the replacement process was refused THAT room for a
+   *     full `LEASE_TTL_MS` — thirty seconds of "that table will not open" on a deploy whose whole
+   *     point was to hand the rooms over at once;
+   *   * the build then published a `LiveRoom` — its table, its bots, its turn timer — into a
+   *     registry that had already shut down, where nothing could reach it to close it. That is
+   *     consequence 3 of the orphaned-room list in `open()`, reached from the other end.
+   *
+   * The window is one room open wide, which is exactly what a deploy interrupts: a rolling deploy
+   * sends SIGTERM while requests are in flight, and opening a room is one of them.
+   */
+  it('waits for a room still being opened, and gives its lease back too (NEGATIVE CONTROL)', async () => {
+    const ownership = fakeOwnership();
+    let reads = 0;
+    let answerRead: ((handNumber: number) => void) | null = null;
+    const registry = new RoomRegistry({
+      ownership,
+      metrics: new AppMetrics(),
+      clock: createManualClock(),
+      random: createSecureRandom(),
+      archive: {
+        // The build stops here, past `acquireLease` and before `this.rooms.set`.
+        nextHandNumber: () => {
+          reads += 1;
+          return new Promise<number>((resolve) => {
+            answerRead = resolve;
+          });
+        },
+        lastDealtHand: () => Promise.resolve(null),
+        abandonInterruptedHands: () => Promise.resolve([]),
+        handStarted: () => Promise.resolve(),
+        actionsApplied: () => Promise.resolve(),
+        streetAdvanced: () => Promise.resolve(),
+        handCompleted: () => Promise.resolve(),
+        stacksSettled: () => Promise.resolve(),
+        roomStatusChanged: () => Promise.resolve(),
+      },
+      onProblem: () => undefined,
+    });
+
+    const opening = registry.open({ record: record('room_drain001') });
+    for (let tick = 0; tick < 4; tick += 1) await Promise.resolve();
+    assert.equal(reads, 1, 'the build is past the lease and blocked on a durable read');
+    assert.equal(registry.leaseFor('room_drain001')?.fence, 1, 'and it is holding the lease');
+    assert.equal(registry.size, 0, 'while the room itself is not published yet');
+
+    // SIGTERM. The database answers the outstanding read a moment later, as it would.
+    const answered = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        (answerRead as unknown as ((handNumber: number) => void) | null)?.(1);
+        resolve();
+      }, 10);
+    });
+    await registry.shutdown();
+    await answered;
+    const room = await opening;
+
+    assert.deepEqual(
+      ownership.released,
+      ['room_drain001'],
+      'the process exited still holding the lease, so the replacement refuses that room for a TTL',
+    );
+    assert.equal(room.record.closed, true, 'a table published after the shutdown is one nobody can close');
+    assert.equal(registry.size, 0);
+  });
+
+  /**
+   * The same hazard `buildRoom`'s test provokes — "the log serialiser threw" — on the two paths
+   * where the report comes AFTER the thing that mattered has already happened.
+   *
+   * `shutdown()` documents "never rejects", and `releaseLeaseSoon`'s catch IS `releaseQueue`, the
+   * chain `shutdown()` awaits. A hook that threw inside that catch put the rejection straight back
+   * into the chain, so a failing release plus a failing logger made the Fastify `onClose` hook
+   * reject — a deploy that fails on its way out, which is precisely what the swallow exists to
+   * prevent. `assert.doesNotReject` against BOTH failures at once is the only shape that catches
+   * it; either alone passes.
+   */
+  it('does not let a throwing logger reject a shutdown (NEGATIVE CONTROL)', async () => {
+    const ownership = fakeOwnership();
+    let opened = false;
+    const registry = new RoomRegistry({
+      ownership: { ...ownership, release: () => Promise.reject(new Error('connection terminated')) },
+      metrics: new AppMetrics(),
+      clock: createManualClock(),
+      random: createSecureRandom(),
+      onProblem: () => {
+        // Only after the open, so the build itself is unaffected and this case is about the exit.
+        if (opened) throw new Error('the log serialiser threw');
+      },
+    });
+    await registry.open({ record: record('room_logrej001') });
+    opened = true;
+    await assert.doesNotReject(() => registry.shutdown());
+  });
+
+  /**
+   * The worse half of the same omission.
+   *
+   * `evict` guards its eviction LISTENERS against throwing and did not guard `onProblem`, which is
+   * called from the same method for the same reason. Production arms the heartbeat as
+   * `void this.heartbeatLeases().finally(...)`, so a rejection out of it is an UNHANDLED rejection
+   * — a dead API process under Node's default handling, caused by a logger fault, in the middle of
+   * the incident the fencing was reporting. It also skipped the `lease_expired` release that
+   * follows the report.
+   */
+  it('does not let a throwing logger escape a fencing (NEGATIVE CONTROL)', async () => {
+    const ownership = fakeOwnership();
+    let opened = false;
+    const registry = new RoomRegistry({
+      ownership,
+      metrics: new AppMetrics(),
+      clock: createManualClock(),
+      random: createSecureRandom(),
+      onProblem: () => {
+        if (opened) throw new Error('the log serialiser threw');
+      },
+    });
+    await registry.open({ record: record('room_logrej002') });
+    opened = true;
+    ownership.fenced.add('room_logrej002');
+    await assert.doesNotReject(() => registry.heartbeatLeases());
+    assert.equal(registry.get('room_logrej002'), null, 'and the eviction still happened');
   });
 
   it('does not fail a shutdown when a release cannot be written', async () => {

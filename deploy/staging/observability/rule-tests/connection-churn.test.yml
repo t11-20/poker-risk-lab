@@ -1,0 +1,122 @@
+# ---------------------------------------------------------------------------
+# `WebSocketReconnectStorm`, which fired on healthy mornings and could not fire
+# on the failure it names.
+#
+# It was `rate(opened[5m]) > 3 * rate(closed[1h])`, a rate against this
+# deployment's own recent past. Two consequences, both reproduced below:
+#
+#   * After any quiet period the baseline is zero, and three times zero is zero.
+#     A class of thirty arriving on a morning after an overnight lull clears it
+#     on thirty sockets that each open once and stay open.
+#   * A genuine storm raises BOTH counters, so the baseline rises with the
+#     signal and the ratio never moves. Thirty learners reconnecting every ten
+#     seconds is 3 opens/s against a bar of 9 — silent.
+#   * And before any socket had ever closed, `prl_websocket_closed_total` did not
+#     exist, so the right-hand side was absent and the comparison was empty.
+#
+# The baseline is now the live connection count, which is read at scrape time
+# from the hub and therefore always present. A storm is churn rather than
+# volume: sockets opening faster than one per standing connection per minute.
+# ---------------------------------------------------------------------------
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    name: a class of thirty arriving after a quiet night raises nothing
+    input_series:
+      # Two hours of night with nothing opening and nothing closing, then thirty
+      # learners connecting over twenty minutes and staying connected.
+      - series: 'prl_websocket_opened_total'
+        values: '100+0x480 100.375+0.375x79 130+0x200'
+      - series: 'prl_websocket_closed_total'
+        values: '100+0x760'
+      - series: 'prl_websocket_connections'
+        values: '0+0x480 0.375+0.375x79 30+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm"}'
+        eval_time: 125m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm"}'
+        eval_time: 135m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm"}'
+        eval_time: 160m
+        exp_samples: []
+      # The old expression on the same morning: true, and true for long enough
+      # to have fired. Every deployment used by day and not by night trips this
+      # once a day, which is how a ticket queue is taught to be scrolled past.
+      # `count()` rather than the value itself, because the value is a float and
+      # the assertion here is "this was true", not "this was 0.025".
+      - expr: 'count(sum(rate(prl_websocket_opened_total[5m])) > 3 * sum(rate(prl_websocket_closed_total[1h])))'
+        eval_time: 132m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  - interval: 15s
+    name: thirty learners reconnecting every ten seconds raises a ticket
+    input_series:
+      # Three opens a second against thirty standing connections: every table in
+      # the deployment re-establishing itself six times a minute. Nothing in a
+      # per-request metric looks wrong, because every reconnect succeeds.
+      - series: 'prl_websocket_opened_total'
+        values: '0+45x400'
+      - series: 'prl_websocket_closed_total{code="abnormal"}'
+        values: '0+45x400'
+      - series: 'prl_websocket_connections'
+        values: '30+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm", alertstate="firing"}'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketReconnectStorm", alertstate="firing", severity="ticket"}'
+            value: 1
+      # The old expression, on the storm it was written for. The closes rise with
+      # the opens, so the baseline rises with the signal: 3 opens/s against a bar
+      # of 9. Silent.
+      - expr: 'sum(rate(prl_websocket_opened_total[5m])) > 3 * sum(rate(prl_websocket_closed_total[1h]))'
+        eval_time: 30m
+        exp_samples: []
+
+  - interval: 15s
+    name: a storm before any socket has ever closed raises a ticket
+    input_series:
+      # `prl_websocket_closed_total` is absent, which is what a counter looks
+      # like before its first increment — a proxy resetting connections at the
+      # same deploy that started the process, so the hub's close handler has
+      # never run. The old right-hand side was the empty vector and the whole
+      # comparison was empty, so the alert could not fire at the start of a
+      # deployment's life.
+      - series: 'prl_websocket_opened_total'
+        values: '0+15x400'
+      - series: 'prl_websocket_connections'
+        values: '0+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm", alertstate="firing"}'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketReconnectStorm", alertstate="firing", severity="ticket"}'
+            value: 1
+      - expr: 'sum(rate(prl_websocket_opened_total[5m])) > 3 * sum(rate(prl_websocket_closed_total[1h]))'
+        eval_time: 12m
+        exp_samples: []
+
+  - interval: 15s
+    name: a busy deployment where every socket stays up raises nothing
+    input_series:
+      # Sixty standing connections and one open a minute — people arriving and
+      # staying. Volume without churn, which is the state the old ratio could not
+      # tell from a storm.
+      - series: 'prl_websocket_opened_total'
+        values: '0+0.25x400'
+      - series: 'prl_websocket_closed_total{code="normal"}'
+        values: '0+0.05x400'
+      - series: 'prl_websocket_connections'
+        values: '60+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm"}'
+        eval_time: 40m
+        exp_samples: []

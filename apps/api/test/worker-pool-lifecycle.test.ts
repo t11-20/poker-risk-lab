@@ -65,6 +65,7 @@ function topPercentCoach(): CoachTask {
     },
     street: 'preflop',
     pot: 30,
+    contestablePot: 30,
     toCall: 20,
     heroCommittedThisStreet: 10,
     heroStack: 1_000,

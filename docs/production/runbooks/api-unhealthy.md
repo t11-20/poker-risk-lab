@@ -19,10 +19,15 @@ Read [README.md](README.md) first — in particular, restarting this service **d
 | --- | --- |
 | `ApiDown` | no successful scrape for 2 minutes |
 | `ProcessRestartLoop` | `prl_process_start_time_seconds` changed 3+ times in 15 minutes |
-| `HandsFailing` | hands abandoned without settling |
+| `HandsFailing` | hands abandoned without settling, with a `reason` the code recognised |
+| `HandCompletionGap` | more hands started than completed over an hour, for **no** recognised reason |
 | `TableActorFailing` | a seat actor cannot produce an action |
 
-Distinguish the four cases immediately, because they have different causes:
+`HandsFailing` pages and `HandCompletionGap` is a ticket, and they are not the same finding. The first counts failures something in the code knew about and labelled; the second is arithmetic on two counters and catches hands that vanished for a reason nobody wrote a counter for. **`HandCompletionGap` firing while `prl_hands_failed_total` is flat is the more interesting of the two** — it means a hand ended in a path that reports nothing — and §Alive but wrong is where it is diagnosed.
+
+Neither of them is a hidden-card incident on its own. A hand that never settles leaves chips in an indeterminate state; it does not mean hidden state reached a client. Go to [hidden-card-incident.md](hidden-card-incident.md) when there is evidence of *disclosure* — see §Escalation — and not merely because a hand failed. (This runbook is the default destination for both alerts for exactly that reason: the containment step there is "stop the affected surface and roll back", which is the wrong first move for an `interrupted_by_restart` after a deploy.)
+
+Distinguish the cases immediately, because they have different causes:
 
 ```bash
 curl -sS -o /dev/null -w 'health %{http_code}\n' "$API/api/v1/health"   # process alive?
@@ -93,7 +98,7 @@ curl -sS -H "Authorization: Bearer $METRICS_TOKEN" "$API/metrics" | grep -E \
   'prl_hands_(started|completed|failed)_total|prl_table_actor_failures_total|prl_archive_failures_total|prl_rooms_live|prl_websocket_connections'
 ```
 
-- **`prl_hands_started_total` rising, `prl_hands_completed_total` flat.** Hands are dealt and never settle. The `reason` on `prl_hands_failed_total` says which recognised failure; if that counter is *also* flat, the hands are stuck rather than failing, which points at a seat that will not act — next bullet.
+- **`prl_hands_started_total` rising, `prl_hands_completed_total` flat.** This difference is what `HandCompletionGap` measures, and the two counters are where its diagnosis starts. Hands are dealt and never settle. The `reason` on `prl_hands_failed_total` says which recognised failure; if that counter is *also* flat, the hands are stuck rather than failing, which points at a seat that will not act — next bullet. The rule is a **cumulative invariant**, not a windowed difference: every hand ever started must have completed or failed, except the ones in flight right now, and `prl_rooms_live` bounds those. So one stuck hand per live room is tolerated and one more is not, and there are no window edges to be ordinary at. It used to be a difference of two one-hour `increase()`s, which fired on any healthy class ramping past five concurrent tables and could not fire at all when no hand had ever completed.
 - **`prl_table_actor_failures_total` rising.** A seat actor cannot produce an action. The `reason` label is a closed set of typed problem events. `bot-rehydrate` means a seat could not be restored after a restart — the log line is `a bot seat could not be restored and will not act` and carries the reason; a row predating migration 0003 is a known, permanent case for that row and not an incident. `bot-policy`, `bot-action-rejected` and `engine-rejection` are code faults and need the log lines.
 - **`prl_rooms_live` at 0 after a restart** is expected: rooms are rehydrated lazily on access, not eagerly at boot.
 - **`prl_archive_failures_total` rising while play continues** is the database, not the tables. Go to [db-saturation.md](db-saturation.md); nothing is broken for the learner yet.

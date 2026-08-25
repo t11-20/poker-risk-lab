@@ -25,7 +25,11 @@
  *
  * 1. **Loaded** — every rule in `alert-rules.yml` is present in a live Prometheus
  *    with no evaluation error, carries `severity: page` or `severity: ticket`, and
- *    names a runbook that exists on disk.
+ *    names a runbook that exists on disk **and that names the alert back**, in its
+ *    Detection section. The second half was missing, and six of twenty-nine rules
+ *    opened a runbook that had never heard of them — including `HandsFailing`, a
+ *    page, opening the hidden-card incident runbook and its "roll back to the last
+ *    digest". See `runbookNamingProblems`.
  * 2. **Agreed** — the alert names and severities in the rules file and in
  *    `docs/production/alerts.md` are the same set. The document is the reasoning;
  *    the file is the behaviour. Two sets that drift is how a threshold gets
@@ -39,7 +43,11 @@
  *    caused it. The Alertmanager half also asserts `up{job="prl-alertmanager"} == 1`:
  *    a series that exists and is not being scraped grounds a rule that can never fire,
  *    and `AlertmanagerNotificationsFailing` is the one rule whose silence nothing else
- *    here could report.
+ *    here could report. A third half, added with the blackbox probe: every `probe_*`
+ *    series is grounded against Prometheus' query API rather than a scrape, because
+ *    nothing exports those — they are manufactured per scrape by the exporter making a
+ *    request through the front door. A rules file naming none of them is a deployment
+ *    where the proxy, TLS and the page server can all be dead with every alert green.
  * 4. **Evaluable** — every expression is executed by Prometheus. A rule that
  *    cannot be parsed or that references a label set that does not exist is a rule
  *    that will never fire, and it looks identical to a quiet one.
@@ -178,7 +186,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createServer as createSocketServer } from 'node:net';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { bold, dim, green, measureUntil, REPO_ROOT, red, run, yellow } from './drills/harness.mjs';
 
 // ---------------------------------------------------------------------------
@@ -373,6 +381,90 @@ export function alertsInDocument(text) {
 }
 
 /**
+ * The body of one `## ` section of a runbook, or null if it has no such heading.
+ *
+ * Every file in `docs/production/runbooks/` has the same seven sections in the same
+ * order and its README says so — Symptoms, Detection, Immediate containment,
+ * Diagnosis, Recovery, Verification, Escalation. That structure is what makes
+ * `runbookNamingProblems` able to ask a sharper question than "is this name
+ * anywhere in the file".
+ */
+export function runbookSection(text, heading) {
+  const match = new RegExp(`^##\\s+${heading}\\s*$`, 'm').exec(text);
+  if (match === null) return null;
+  const rest = text.slice(match.index + match[0].length);
+  const next = /^##\s/m.exec(rest);
+  return next === null ? rest : rest.slice(0, next.index);
+}
+
+/**
+ * Every rule's runbook is asked whether it has heard of the alert that opens it.
+ *
+ * ## The incident this is for
+ *
+ * `existsSync(rule.runbook)` — the check directly above this one — asks whether the
+ * annotation points at a file. It cannot ask whether the file is about this alert,
+ * and for six of twenty-nine rules it was not. Measured against the tree this check
+ * was written into: `HandsFailing` (**page**) opened `hidden-card-incident.md`,
+ * whose first instructions are "treat any credible suspicion as an incident at page
+ * severity, stop the affected surface, roll back to the last digest, notify the
+ * incident owner immediately, even out of hours". `HandsFailing`'s own description
+ * says `interrupted_by_restart` after a deploy is expected once. So the alert most
+ * likely to fire benignly at 3am opened the runbook most likely to cause a
+ * production rollback, and `api-unhealthy.md` — which lists `HandsFailing` in its
+ * Detection table with the right first move — was one line away in the annotation.
+ *
+ * This is the `seat-release` mistake repeating with a different mechanism.
+ * `alerts.md` records that one: `SeatReleaseFailing` fired as `ArchiveFailing`, and
+ * "an operator was told hand history was being lost, with that runbook, when what
+ * had failed was freeing a chair". There the wrong runbook came from a wrong metric;
+ * here it comes from a wrong annotation, and nothing was checking either.
+ *
+ * ## Why the Detection section and not the whole file
+ *
+ * A whole-file substring search is satisfied by a cross-reference. `websocket-spike.md`
+ * could mention `RateLimitBans` in a "see also" line and pass, while an operator
+ * following its containment steps would still be reading about socket origins during a
+ * ban wave. Every runbook's Detection section is the table that says *which alerts open
+ * this file and what each one means*, so requiring the name there requires somebody to
+ * have decided this runbook treats this alert. Measured: at the time this was written
+ * all twenty-three correctly-routed rules already appeared in their runbook's Detection
+ * section, and all six wrong ones appeared nowhere in their file at all — so the
+ * stricter question costs nothing and is much harder to satisfy by accident.
+ *
+ * Rules whose `runbook:` is absent or points at a missing file are skipped here: the
+ * check above already reports those, and reporting them twice as two different faults
+ * is how a report gets read as noise.
+ *
+ * @param {Map<string, {severity: string|null, runbook: string|null}>} declared
+ * @param {(path: string) => string|null} readRunbook — null when the file is missing
+ * @returns {{alert: string, runbook: string, reason: string}[]}
+ */
+export function runbookNamingProblems(declared, readRunbook) {
+  const problems = [];
+  for (const [alert, rule] of declared) {
+    if (rule.runbook === null) continue;
+    const text = readRunbook(rule.runbook);
+    if (text === null) continue;
+    // Word boundaries by hand: `\b` would match `Failing` inside `TableActorFailing`
+    // in the other direction too, and an alert name is [A-Za-z0-9_] throughout.
+    const names = (haystack) => new RegExp(`(?<![A-Za-z0-9_])${alert}(?![A-Za-z0-9_])`).test(haystack);
+    const detection = runbookSection(text, 'Detection');
+    if (detection === null) {
+      problems.push({ alert, runbook: rule.runbook, reason: 'has no "## Detection" section' });
+      continue;
+    }
+    if (names(detection)) continue;
+    problems.push({
+      alert,
+      runbook: rule.runbook,
+      reason: names(text) ? 'mentions it only outside its Detection section' : 'never mentions it at all',
+    });
+  }
+  return problems;
+}
+
+/**
  * Every `prl_*` series name an expression mentions, with histogram suffixes
  * resolved back to the metric family.
  *
@@ -409,6 +501,29 @@ export function seriesReferencedBy(expression) {
 export function alertmanagerSeriesReferencedBy(expression) {
   const names = new Set();
   for (const match of expression.matchAll(/\balertmanager_[a-z0-9_]+/g)) {
+    names.add(match[0].replace(/_(?:bucket|sum|count)$/, ''));
+  }
+  return names;
+}
+
+/**
+ * And the same question again for the series the BLACKBOX probe produces.
+ *
+ * A third function for a third reason, and the reason is that `probe_*` series exist
+ * in neither exposition the other two read. They are not exported by anything: they
+ * are manufactured per scrape, by the exporter, as the result of a request it makes
+ * on Prometheus' behalf. So they are grounded against Prometheus' own query API in
+ * check 3 rather than against a `/metrics` read, and a name that never appears there
+ * is a rule that can never fire — the same failure as the other two, arrived at from
+ * a direction neither of them looks in.
+ *
+ * These are the rules that close the blind spot named in prometheus.yml: with the API
+ * scraped directly on the compose network, a dead proxy, an expired certificate or a
+ * dead page server leaves every `prl_*` rule green while the site is dark.
+ */
+export function probeSeriesReferencedBy(expression) {
+  const names = new Set();
+  for (const match of expression.matchAll(/\bprobe_[a-z0-9_]+/g)) {
     names.add(match[0].replace(/_(?:bucket|sum|count)$/, ''));
   }
   return names;
@@ -1294,9 +1409,13 @@ async function main() {
     // A container left over from an interrupted run therefore holds a directory at
     // /etc/prometheus/metrics-token, `up -d` sees no configuration change and reuses it, and
     // every scrape then fails with "unable to read authorization credentials: is a directory" —
-    // which reads as a bad token rather than as a stale mount. Recreating both containers costs
+    // which reads as a bad token rather than as a stale mount. Recreating the containers costs
     // about a second and makes the mount resolve against the file this run just wrote.
-    const up = await compose(['up', '-d', '--force-recreate', 'prometheus', 'alertmanager']);
+    //
+    // `blackbox` is named explicitly, like the other two: compose would start it anyway as a
+    // dependency of nothing, which is to say not at all. A probe that is not running is the
+    // blind spot it exists to close, and it looks exactly like a healthy origin.
+    const up = await compose(['up', '-d', '--force-recreate', 'prometheus', 'alertmanager', 'blackbox']);
     if (up.code !== 0) {
       fail('compose up', up.stderr.trim().split('\n').slice(-3).join(' | '));
       return 1;
@@ -1502,6 +1621,24 @@ async function main() {
       pass('every runbook annotation exists on disk');
     }
 
+    // A file existing is not a file about this alert. See `runbookNamingProblems`: six of
+    // twenty-nine rules opened a runbook that had never heard of them, one of them a page.
+    const naming = runbookNamingProblems(declared, (path) => {
+      const full = join(REPO_ROOT, path);
+      return existsSync(full) ? readFileSync(full, 'utf8') : null;
+    });
+    if (naming.length > 0) {
+      fail(
+        'every runbook names the alert that opens it, in its Detection section',
+        naming.map((p) => `${p.alert} → ${basename(p.runbook)} ${p.reason}`).join('; '),
+      );
+    } else {
+      pass(
+        'every runbook names the alert that opens it, in its Detection section',
+        `${declared.size} alerts`,
+      );
+    }
+
     // --- Check 2: the document and the rules agree -------------------------
     section('2. The rules file and docs/production/alerts.md describe the same alerts');
     const documented = alertsInDocument(readFileSync(ALERTS_DOC, 'utf8'));
@@ -1659,6 +1796,70 @@ async function main() {
         `${alertmanagerSeries.size} series in ${alertmanagerExported.size} families, ` +
           `up{job="prl-alertmanager"} = 1 after ${(scrapingAlertmanager / 1000).toFixed(1)}s`,
       );
+    }
+
+    /**
+     * The third exposition: the probe's, which is not an exposition at all.
+     *
+     * `probe_*` series are manufactured per scrape by the blackbox exporter as the
+     * result of a request it makes through the front door — nothing exports them, so
+     * they are grounded against Prometheus' query API rather than a `/metrics` read.
+     *
+     * The empty case fails, and it is the most important branch in this check. Nothing
+     * else in this file can notice the blind spot prometheus.yml describes: the API is
+     * scraped directly on the compose network, so a dead proxy, unreadable TLS material,
+     * an expired certificate or a dead page server leaves `up{job="prl-api"}` at 1,
+     * `prl_readiness_state` at 1 and every counter merely flat, and no rule keys on the
+     * absence of traffic. Every learner sees a dead site and every alert is green. If no
+     * rule names a `probe_*` series, that hole is open again and this says so.
+     */
+    const probeSeries = new Map();
+    for (const [name, expression] of expressions) {
+      for (const series of probeSeriesReferencedBy(expression)) probeSeries.set(series, name);
+    }
+    const PROBE_JOB = 'prl-public-origin';
+    const probeCheck = `every probe_* series exists and the ${PROBE_JOB} probe is being scraped`;
+    if (probeSeries.size === 0) {
+      fail(
+        probeCheck,
+        'no rule names a probe_* series, so nothing looks at this deployment from outside the ' +
+          'application: with the API scraped on the compose network, a dead proxy, an expired ' +
+          'certificate or a dead page server would fire nothing at all',
+      );
+    } else {
+      const probeUp = await measureUntil(
+        async () => {
+          const result = await getJson(
+            `${PROMETHEUS}/api/v1/query?query=${encodeURIComponent(`up{job="${PROBE_JOB}"}`)}`,
+          );
+          const series = result?.data?.result ?? [];
+          return series.length > 0 && series.every((s) => s.value?.[1] === '1');
+        },
+        90_000,
+        1_000,
+      );
+      // Each series is asked for by name, with the job selector the rules use. A name
+      // that is real but scraped under a different job label is a rule that never fires,
+      // and it looks identical to a quiet one — the same failure the `job` selector on
+      // ApiDown has, which is why that one is checked this way too.
+      const probeUnknown = [];
+      for (const [series, alert] of probeSeries) {
+        const result = await getJson(
+          `${PROMETHEUS}/api/v1/query?query=${encodeURIComponent(`${series}{job="${PROBE_JOB}"}`)}`,
+        );
+        if ((result?.data?.result ?? []).length === 0) probeUnknown.push(`${series} (${alert})`);
+      }
+      if (probeUp === null) {
+        fail(
+          probeCheck,
+          `up{job="${PROBE_JOB}"} is not 1 for every target — the blackbox scrape job in ` +
+            'prometheus.yml is missing, misnamed, or the exporter is not answering /probe',
+        );
+      } else if (probeUnknown.length > 0) {
+        fail(probeCheck, probeUnknown.join(', '));
+      } else {
+        pass(probeCheck, `${probeSeries.size} series, up{job="${PROBE_JOB}"} = 1 for every target`);
+      }
     }
 
     // --- Check 4: every expression evaluates -------------------------------
@@ -2140,8 +2341,8 @@ async function main() {
     sink.close();
     mail.close();
     if (broughtUp && !options.keepUp) {
-      await compose(['stop', 'prometheus', 'alertmanager']);
-      await compose(['rm', '-f', 'prometheus', 'alertmanager']);
+      await compose(['stop', 'prometheus', 'alertmanager', 'blackbox']);
+      await compose(['rm', '-f', 'prometheus', 'alertmanager', 'blackbox']);
     }
     if (!options.keepUp) {
       rmSync(TOKEN_FILE, { force: true, recursive: true });

@@ -30,8 +30,33 @@ number: the two lists are unrelated and now look interchangeable. Read each coun
 
 Gates outside `verify` because they need a deployment: `alerts:verify`, `alerts:preflight`,
 `alerts:ack`, `staging`, `backup`, `test:load`, `test:drills`, `release:artifacts`,
-`release:sign`, `certify:screen-reader`. `alerts:ack` needs a **person** as well as a deployment —
-it sends a real page and fails unless somebody types back a code that appears only in it. `pnpm run staging up` runs the strict smoke test — **72 checks** over TLS
+`release:sign`, `certify:screen-reader`. `alerts:ack` needs a **person** as well as a deployment — it
+sends a real `severity: page` alert through the Alertmanager it is pointed at and fails unless
+somebody types back, at a TTY and inside five attempts, a code carried in that page.
+
+`pnpm run alerts:unit` is the exception in that list: it needs Docker but **no deployment**. It runs
+`promtool test rules` against `alert-rules.yml` in a throwaway container and asserts on
+`ALERTS{alertname=…,alertstate=…}` rather than on annotation prose. It exists because an adversarial
+review found alerts that were *mathematically unable to fire* — `rate(x[10m]) > 0` with `for: 10m`
+is true for ten minutes minus one scrape interval, so the `for:` can never be satisfied — and every
+other check in the repo passed them. **If you change a rule expression, run it.**
+
+**What that pass does not prove, because this file used to claim it did.** It said the code "appears
+only in" the delivered notification. That is false and unfixable: the code travels as an alert label,
+and Alertmanager's `GET /api/v2/alerts` is unauthenticated and echoes labels back — measured against
+a real `prom/alertmanager:v0.28.1`. The caller also chooses `--alertmanager`, so an automated caller
+can point it at an Alertmanager it controls, read the code out of its own POST, and type it into a
+pty for exit 0. A pass is therefore evidence a **cooperating** operator produces for themselves — one
+page, acknowledged at a known time, through the paging path that Alertmanager was configured with —
+and not an attestation that survives a caller who wants a green result. The command and the record it
+writes both say so; `scripts/alert-ack-page.mjs`'s header has the measurements.
+
+What is sound: the code is never printed by the command on the passing path, the attempts are capped
+at five (uncapped, a pty drove ~106,000 guesses/s — a third of a 30-bit space inside `--within 1h`),
+and `rehearsal` is decided by reading the targeted Alertmanager's own config over `/api/v2/status`
+**and** watching the page arrive at this process's own sinks — never from `PRL_ALERT_*`, which say
+what this checkout would render and nothing about where the page went. Unattended mode is fenced on
+that measurement. `pnpm run staging up` runs the strict smoke test — **72 checks** over TLS
 against the deployed images, which is where several guards get their only continuous exercise.
 
 ## Enrolment

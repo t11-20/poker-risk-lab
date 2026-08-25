@@ -1,0 +1,83 @@
+# ---------------------------------------------------------------------------
+# `ProcessRestartLoop`, and the defect that made it page with zero restarts.
+#
+# The rule is `changes(prl_process_start_time_seconds[15m]) >= 3` and it is
+# correct. What was wrong was the series under it: `metrics.ts` exported the
+# start instant with `setFrom`, so every scrape re-derived one fixed moment as
+# `Math.floor(Date.now() / 1000 - process.uptime())` — a wall clock minus a
+# monotonic clock, floored. The two clocks disagree by a drifting amount
+# (measured on the development machine: 1.11 ms over 20 s of sampling), and a
+# process whose start instant lands inside that band of a second boundary
+# exports an integer that flips back and forth. Over the same 20 s of samples,
+# `changes()` counted 32 transitions on such a series.
+#
+# `changes()` cannot tell a wobble from a restart, and the first test below is
+# what that costs: a series that has never restarted, firing a page. The fix is
+# in `metrics.ts` — compute once at construction and `set()` — and the guard for
+# it is `apps/api/test/observability-metrics.test.ts`, which asserts the exported
+# value is identical across scrapes. This file's job is to show WHY that matters,
+# by evaluating the rule against both series.
+# ---------------------------------------------------------------------------
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # D8, reproduced. Nothing restarted. The series is one process, exporting its
+  # own start time, wobbling by one second between adjacent scrapes exactly as
+  # the old `setFrom` expression did.
+  - interval: 15s
+    name: a one-second wobble in the start time pages ProcessRestartLoop with no restart behind it
+    input_series:
+      - series: 'prl_process_start_time_seconds'
+        values: '1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914 1787678915 1787678914'
+    promql_expr_test:
+      # Three transitions is 45 s of scraping, so this is firing before the
+      # process is a minute old and stays firing for as long as it runs.
+      - expr: 'ALERTS{alertname="ProcessRestartLoop"}'
+        eval_time: 16m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ProcessRestartLoop", alertstate="firing", severity="page"}'
+            value: 1
+      - expr: 'changes(prl_process_start_time_seconds[15m])'
+        eval_time: 16m
+        exp_samples:
+          - labels: '{}'
+            value: 59
+
+  # The fixed export: one integer, computed once at construction, rendered
+  # unchanged on every scrape for the life of the process.
+  - interval: 15s
+    name: a start time that never moves is not a restart loop
+    input_series:
+      - series: 'prl_process_start_time_seconds'
+        values: '1787678914+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ProcessRestartLoop"}'
+        eval_time: 16m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ProcessRestartLoop"}'
+        eval_time: 45m
+        exp_samples: []
+
+  # The positive control. Without it, the test above would also pass against a
+  # rule that had been broken into never firing at all.
+  - interval: 15s
+    name: three real restarts inside fifteen minutes still page
+    input_series:
+      # A deploy at t=5m, a rollback at t=9m, and a third start at t=13m: three
+      # distinct start instants, each minutes apart, which is a crash loop and
+      # not a clock.
+      - series: 'prl_process_start_time_seconds'
+        values: '1787678914+0x19 1787679214+0x15 1787679454+0x15 1787679694+0x150'
+    promql_expr_test:
+      # Two restarts is a deploy plus a rollback, and must not page.
+      - expr: 'ALERTS{alertname="ProcessRestartLoop"}'
+        eval_time: 12m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ProcessRestartLoop"}'
+        eval_time: 14m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ProcessRestartLoop", alertstate="firing", severity="page"}'
+            value: 1

@@ -440,6 +440,7 @@ describe('PRL_ENROLMENT_REQUIRED=off: nothing changes', () => {
  */
 function rosterStore(
   members: readonly { readonly userId: string; readonly seat: number; readonly isBot: boolean }[],
+  unseated: string[] = [],
 ): RoomRegistry['store'] {
   const refuse = (name: string): never => {
     throw new Error(`the roster fake has no ${name}`);
@@ -484,7 +485,10 @@ function rosterStore(
     memberOf: (_roomId, userId) => Promise.resolve(rows.find((entry) => entry.user_id === userId) ?? null),
     addMember: () => refuse('addMember'),
     seatMember: () => Promise.resolve(),
-    unseatMember: () => Promise.resolve(),
+    unseatMember: (_roomId, userId) => {
+      unseated.push(userId);
+      return Promise.resolve();
+    },
     removeMember: () => Promise.resolve(),
     close: () => Promise.resolve(true),
     createBotUser: () => refuse('createBotUser'),
@@ -499,19 +503,22 @@ async function restoreRoom(
   readonly registry: RoomRegistry;
   readonly metrics: AppMetrics;
   readonly problems: { message: string; detail: ProblemDetail }[];
+  /** Users whose durable seat was given back. See the phantom-chair case below. */
+  readonly unseated: string[];
 }> {
   const metrics = new AppMetrics();
   const problems: { message: string; detail: ProblemDetail }[] = [];
+  const unseated: string[] = [];
   const registry = new RoomRegistry({
     clock: createManualClock(),
     random: createSecureRandom(),
-    store: rosterStore(members),
+    store: rosterStore(members, unseated),
     metrics,
     onProblem: (message, detail) => problems.push({ message, detail }),
     ...(entitlement === null ? {} : { entitlement }),
   });
   await registry.ensureOpen(ROOM_ID);
-  return { registry, metrics, problems };
+  return { registry, metrics, problems, unseated };
 }
 
 describe('a room re-opened after a restart', () => {
@@ -558,10 +565,43 @@ describe('a room re-opened after a restart', () => {
     );
   });
 
+  /**
+   * ##########################################################################
+   * ## "THE SEAT IS LEFT FREE" HAS TO BE TRUE IN THE DATABASE TOO.          ##
+   * ##########################################################################
+   *
+   * `room_members_live_seat_key` is UNIQUE `(room_id, seat) WHERE left_at IS NULL`, so a row that
+   * still names seat 0 HOLDS seat 0 whether or not anybody is sitting in it. Leaving it meant the
+   * live table reported the chair empty — that is where `RoomSummary` is built from — while the
+   * next learner to tap it was refused by that index with `seat_taken`, for the life of the room,
+   * with nothing anywhere saying why.
+   *
+   * That is not a new failure mode, it is a known one arrived at from a new direction:
+   * `standFromTable` records the identical state ("the room summary showed the seat free, the next
+   * client to tap it was refused by `room_members_live_seat_key` … for the rest of the process's
+   * life") as the incident that removed its own `if (seatOf(userId) === null)` guard.
+   *
+   * Only `seat` is given back. The membership and the STACK stay, so the learner loses nothing
+   * they won, and a re-entitled learner still buys in at what they had rather than at the room's
+   * starting stack.
+   */
+  it('gives the durable seat back, so the chair is usable by somebody else (NEGATIVE CONTROL)', async () => {
+    const restored = await restoreRoom(fakeEntitlement([]), [{ userId: ADA, seat: 0, isBot: false }]);
+    assert.equal(restored.registry.require(ROOM_ID, ADA).table.seatOf(ADA), null);
+    assert.deepEqual(
+      restored.unseated,
+      [ADA],
+      'the durable seat was left held by a learner who is not in it, so nobody else can take it',
+    );
+    const problem = restored.problems.find((entry) => entry.detail.event === 'seat-entitlement');
+    assert.equal(problem?.detail['freed'], true, 'the log must say whether the chair actually came free');
+  });
+
   it('gives the chair back to somebody who still is entitled', async () => {
     const restored = await restoreRoom(fakeEntitlement([ADA]), [{ userId: ADA, seat: 0, isBot: false }]);
     assert.equal(restored.registry.require(ROOM_ID, ADA).table.seatOf(ADA), 0);
     assert.deepEqual(restored.problems, []);
+    assert.deepEqual(restored.unseated, [], 'a restored chair must not be handed back to the pool');
   });
 
   /**

@@ -95,3 +95,71 @@ scrape_configs:
     scheme: http
     static_configs:
       - targets: ['alertmanager:9093']
+
+  # The public origin, probed from outside the application.
+  #
+  # ## The blind spot, stated as the failure it was
+  #
+  # Every job above reads a series the API exports about itself, and the first one
+  # scrapes it on the compose network — bypassing the proxy, TLS and the page
+  # server entirely. The API's own healthcheck targets its own container. So if
+  # nginx dies, if the certificate expires, if TLS material becomes unreadable, or
+  # if the Next.js server stops: `up{job="prl-api"}` stays 1, `prl_readiness_state`
+  # stays 1, the request counters go flat, and no rule keys on the absence of
+  # traffic. Every learner sees a dead site and every alert stays green. This job is
+  # the only thing in this configuration that would say otherwise.
+  #
+  # A rule on "requests stopped arriving" was the alternative and it is worse here:
+  # this is a teaching lab with a class of thirty, so a night with no requests is
+  # the healthy overnight state, and a rule that fires every night is a rule that
+  # gets silenced. A synthetic request every 15 seconds has no such ambiguity.
+  #
+  # ## Why the target is `proxy:8443` and not the published origin
+  #
+  # The honest target would be `https://localhost:8443` — the address a learner
+  # types, through Docker's published port. It cannot be probed from a container
+  # and stay portable, for two independent reasons:
+  #
+  #   * inside any container, `localhost` is that container;
+  #   * the port is published to 127.0.0.1 on the host, and a loopback-published
+  #     port is NOT reachable from a container on Linux (`host.docker.internal`
+  #     resolves to the bridge gateway there, not to the host's loopback). A probe
+  #     written that way passes on Docker Desktop and is permanently red on Linux,
+  #     which is worse than not having it.
+  #
+  # So the probe enters the same nginx, on the same TLS listener, with the same
+  # certificate, and `server_name: localhost` in blackbox.yml makes the handshake
+  # verify the name the origin actually uses. What is NOT covered by this and must
+  # still be checked from off the box during an incident: Docker's port publishing,
+  # the host firewall, and public DNS. The runbook says so in as many words.
+  #
+  # ## The relabel dance
+  #
+  # `__address__` starts as the URL to probe, is copied into the `target` parameter,
+  # is kept as `instance` so a firing alert names the URL rather than the exporter,
+  # and is then replaced by the exporter's own address — which is where the scrape
+  # actually goes. The per-target `module` label chooses the probe module and stays
+  # on the series, so one job covers both targets and `probe_success{module=...}`
+  # distinguishes "the page server is gone" from "the whole origin is gone".
+  #
+  # `blackbox:9115` is not published to the host: an open /probe endpoint fetches
+  # any URL it is given.
+  - job_name: prl-public-origin
+    metrics_path: /probe
+    scheme: http
+    static_configs:
+      - targets: ['https://proxy:8443/']
+        labels:
+          module: learner_page_https
+      - targets: ['https://proxy:8443/api/v1/health']
+        labels:
+          module: api_health_https
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [module]
+        target_label: __param_module
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115

@@ -59,7 +59,10 @@ import {
   heartbeatGaps,
   heartbeatProblem,
   parseMessage,
+  probeSeriesReferencedBy,
   renderAlertmanagerConfig,
+  runbookNamingProblems,
+  runbookSection,
   seriesReferencedBy,
   startSmtpSink,
   watchForSilence,
@@ -284,6 +287,113 @@ describe('the document and the rules describe the same alerts', () => {
         `${name}: ${rule.runbook} is empty`,
       );
     }
+  });
+
+  /**
+   * The half of check 1 that a file existing does not answer.
+   *
+   * Run here as well as in `alerts:verify` deliberately, and it is the same argument
+   * as the check above it: an annotation is edited in a pull request, and a release
+   * rehearsal is a very late place to discover that six of them point at runbooks
+   * that had never heard of their alert. `runbookNamingProblems`'s own comment
+   * records what that cost — `HandsFailing`, a page, opening the hidden-card
+   * incident runbook and its "roll back to the last digest, notify the incident
+   * owner, even out of hours".
+   */
+  it('every runbook names the alert that opens it, in its Detection section', () => {
+    const declared = alertsInRulesFile(RULES);
+    assert.ok(declared.size >= 20, `only ${declared.size} alerts parsed out of the rules file`);
+    const problems = runbookNamingProblems(declared, (path) => readFileSync(join(REPO_ROOT, path), 'utf8'));
+    assert.deepEqual(
+      problems.map((p) => `${p.alert} → ${p.runbook.replace('docs/production/runbooks/', '')} ${p.reason}`),
+      [],
+    );
+  });
+});
+
+describe('runbookSection', () => {
+  it('returns one section, stopping at the next heading of the same level', () => {
+    const text = ['# T', '', '## Detection', '', 'a', '', '## Recovery', '', 'b'].join('\n');
+    assert.equal(runbookSection(text, 'Detection').trim(), 'a');
+    assert.equal(runbookSection(text, 'Recovery').trim(), 'b');
+    assert.equal(runbookSection(text, 'Escalation'), null);
+  });
+
+  it('does not stop at a deeper heading inside the section', () => {
+    const text = ['## Detection', '', '### By code', 'a', '', '## Recovery', 'b'].join('\n');
+    assert.match(runbookSection(text, 'Detection'), /### By code/);
+    assert.doesNotMatch(runbookSection(text, 'Detection'), /^b$/m);
+  });
+});
+
+/**
+ * NEGATIVE CONTROL: the check refusing a runbook that does not cover its alert.
+ *
+ * Without these, `runbookNamingProblems` returning `[]` for everything would look
+ * exactly like a tree in which every annotation is right — which is precisely the
+ * state the repository was in for six rules while `existsSync` reported a green
+ * check over all of them.
+ */
+describe('NEGATIVE CONTROL: runbookNamingProblems refusing a mismatched runbook', () => {
+  const rules = (runbook) => new Map([['HandsFailing', { severity: 'page', runbook }]]);
+  const DETECTION_WITH = ['# R', '## Detection', '', '| `HandsFailing` | hands abandoned |', ''].join('\n');
+
+  it('accepts a runbook whose Detection section names the alert', () => {
+    assert.deepEqual(
+      runbookNamingProblems(rules('r.md'), () => DETECTION_WITH),
+      [],
+    );
+  });
+
+  it('refuses a runbook that never mentions the alert', () => {
+    const text = ['# R', '## Detection', '', '| `AuthzFailureSpike` | enumeration |', ''].join('\n');
+    assert.deepEqual(
+      runbookNamingProblems(rules('r.md'), () => text),
+      [{ alert: 'HandsFailing', runbook: 'r.md', reason: 'never mentions it at all' }],
+    );
+  });
+
+  it('refuses a runbook that mentions the alert only in a cross-reference', () => {
+    // The failure a whole-file substring search would have passed: a "see also" line
+    // in Escalation is not somebody deciding this runbook treats this alert.
+    const text = ['# R', '## Detection', '', 'nothing', '', '## Escalation', '', 'see `HandsFailing`'].join(
+      '\n',
+    );
+    assert.deepEqual(
+      runbookNamingProblems(rules('r.md'), () => text),
+      [{ alert: 'HandsFailing', runbook: 'r.md', reason: 'mentions it only outside its Detection section' }],
+    );
+  });
+
+  it('refuses a runbook with no Detection section, however much else it says', () => {
+    const text = ['# R', '', 'HandsFailing is discussed at length here.'].join('\n');
+    assert.deepEqual(
+      runbookNamingProblems(rules('r.md'), () => text),
+      [{ alert: 'HandsFailing', runbook: 'r.md', reason: 'has no "## Detection" section' }],
+    );
+  });
+
+  it('is not satisfied by a name this one is a substring of', () => {
+    // `TableActorFailing` contains neither `HandsFailing` nor `Failing` as a word, and
+    // must not stand in for either. A plain `includes` gets the general case of this
+    // wrong in both directions.
+    const text = ['# R', '## Detection', '', '| `TableActorFailing` | a seat cannot act |'].join('\n');
+    assert.equal(runbookNamingProblems(rules('r.md'), () => text).length, 1);
+    assert.deepEqual(
+      runbookNamingProblems(new Map([['Failing', { severity: 'page', runbook: 'r.md' }]]), () => text),
+      [{ alert: 'Failing', runbook: 'r.md', reason: 'never mentions it at all' }],
+    );
+  });
+
+  it('leaves a missing or absent runbook to the check that reports those', () => {
+    assert.deepEqual(
+      runbookNamingProblems(rules('gone.md'), () => null),
+      [],
+    );
+    assert.deepEqual(
+      runbookNamingProblems(new Map([['A', { severity: 'page', runbook: null }]]), () => DETECTION_WITH),
+      [],
+    );
   });
 });
 
@@ -679,6 +789,48 @@ describe('alertmanagerSeriesReferencedBy', () => {
   });
 });
 
+describe('probeSeriesReferencedBy', () => {
+  it('finds the series the blackbox probe produces, and nothing else', () => {
+    assert.deepEqual(
+      [...probeSeriesReferencedBy('probe_success{job="prl-public-origin"} == 0')],
+      ['probe_success'],
+    );
+    assert.deepEqual(
+      [...probeSeriesReferencedBy('min(probe_ssl_earliest_cert_expiry) - time() < 21 * 86400')],
+      ['probe_ssl_earliest_cert_expiry'],
+    );
+    assert.deepEqual([...probeSeriesReferencedBy('prl_readiness_state == 0')], []);
+  });
+
+  /**
+   * The regression guard on the blind spot itself.
+   *
+   * Prometheus scrapes the API directly on the compose network and the API's healthcheck
+   * targets its own container, so a dead proxy, unreadable TLS material, an expired
+   * certificate or a dead page server leaves `up{job="prl-api"}` at 1,
+   * `prl_readiness_state` at 1 and every counter merely flat — a total user-facing outage
+   * that fires nothing at all. The probe is the only thing that looks at the deployment
+   * from outside the application, so a rules file that names no `probe_*` series is a
+   * rules file with that hole open again, and it looks exactly like a healthy one.
+   *
+   * Measured while this was written: with the exporter running and a throwaway TLS target
+   * stopped, `probe_success == 0` went pending in 10 s and fired at 2m10s, and
+   * `probe_ssl_earliest_cert_expiry` read 1795200901 — Nov 20 2026 18:55:01 UTC, which is
+   * to the second the `notAfter` of `deploy/staging/tls/staging-cert.pem`.
+   */
+  it('is used by at least one shipped rule, so the public origin is watched at all', () => {
+    const named = new Set();
+    for (const expression of expressionsInRulesFile(RULES).values()) {
+      for (const series of probeSeriesReferencedBy(expression)) named.add(series);
+    }
+    assert.ok(
+      named.size > 0,
+      'no rule names a probe_* series, so nothing watches this deployment from outside the ' +
+        'application: the proxy, TLS and the page server can all be dead with every alert green',
+    );
+  });
+});
+
 describe('the counts docs/production/alerts.md states about itself', () => {
   /** The number words that document uses, which is all it will ever need. */
   const WORDS = new Map(
@@ -706,6 +858,17 @@ describe('the counts docs/production/alerts.md states about itself', () => {
       'twenty',
     ].map((word, index) => [word, index]),
   );
+  // The tens above twenty, added when the rules file passed thirty. `spelled` returns null for a
+  // word it does not know, and `assert.equal(null, 35)` fails with a message about the wrong
+  // thing — so a counter that outgrows this map turns a count check into a spelling check. Extend
+  // it rather than rewording the document to stay inside it.
+  for (const [word, value] of [
+    ['thirty', 30],
+    ['forty', 40],
+    ['fifty', 50],
+  ]) {
+    WORDS.set(word, value);
+  }
   const spelled = (text) => {
     const [tens, units] = text.toLowerCase().split('-');
     const base = WORDS.get(tens);

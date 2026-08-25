@@ -196,6 +196,114 @@ route:
       repeat_interval: ${PRL_ALERT_HEARTBEAT_INTERVAL}
 # @endif
 
+# ---------------------------------------------------------------------------
+# One incident must not be four notifications.
+#
+# `continue: false` above enforces "a page must not also raise a ticket" for ONE
+# alert reaching two receivers. It has nothing to say about four alerts about one
+# incident, and until these rules existed there was nothing in this file that did.
+#
+# Measured: one blocked event loop raises `EventLoopBlocked`, and because the
+# process is not answering, it also raises `DbPoolSaturated`, `HttpLatencyP99High`
+# and `HttpLatencyP95Degraded`. That is three pages and a ticket for one cause —
+# and `DbPoolSaturated`'s own description admits the shape of the problem in
+# writing: "a blocked process produces the same reading without the pool being
+# busy at all". It opens the Postgres runbook. So of the three phones that ring,
+# one is actively sending somebody to the wrong subsystem while the event loop is
+# the thing that is stuck.
+#
+# An inhibition is the right mechanism and grouping is not. Grouping decides how
+# notifications are BATCHED; inhibition decides which alerts are consequences of
+# another one that is already firing, and suppresses those. Only the second can
+# say "the pool reading is downstream of the loop".
+#
+# ## Why `group_by` stays `['alertname']`
+#
+# The obvious-looking companion change — group by severity, so a tier's alerts
+# arrive as one notification — is wrong here, and the reason is the locked screen.
+# Alertmanager's default subject template renders the GROUP labels, so a group of
+# one alert keyed by `alertname` produces `[FIRING:1] EventLoopBlocked` and a group
+# keyed by severity produces `[FIRING:2] page`, with the alert names demoted into
+# the body. `alerts:verify` asserts the alert name is in the subject for exactly
+# that reason. Batching would trade the one line that says what is wrong for a
+# count. Inhibition removes the extra notifications instead of merging them.
+#
+# ## Why there is no `equal:` on any of these
+#
+# `equal` requires the named labels to match between the source and target alert,
+# and Alertmanager treats a label present on one and absent on the other as
+# unequal. Nearly every rule in `alert-rules.yml` is a `sum()` over the whole
+# deployment and carries no `instance` at all, while a few — `EventLoopBlocked`
+# reads a bare gauge — do. `equal: ['instance']` would therefore match nothing and
+# every inhibition here would silently never apply, which is the same class of
+# defect as a rule that cannot fire. Deployment-wide is also correct rather than
+# merely convenient: `replicas: 1` is a correctness constraint here (ADR 0001),
+# so there is one process and one instance to talk about.
+#
+# ## What is deliberately NOT inhibited
+#
+# `Watchdog` appears in no target list and must never appear in one. It is the
+# dead man's switch, its signal is its ARRIVAL, and an inhibition would create the
+# one thing its design forbids: a silence with a cause other than the deployment
+# being dead. `RateLimitBans` is not inhibited either — a ban is evidence about a
+# caller, and it stays true regardless of what else is broken.
+#
+# Nothing inhibits `ApiDown` or `RoomOwnershipFenced`: they are the top of their
+# causal chains, and an alert that can be suppressed by a symptom of itself is an
+# incident nobody is told about.
+# ---------------------------------------------------------------------------
+inhibit_rules:
+  # A single-threaded process that is stalled produces every downstream reading at
+  # once. The loop is the cause and the other three are the same stall, measured in
+  # three places.
+  - source_matchers:
+      - alertname = "EventLoopBlocked"
+    target_matchers:
+      - alertname =~ "DbPoolSaturated|HttpLatencyP99High|HttpLatencyP95Degraded"
+
+  # A process that is not answering scrapes cannot be measured by anything that
+  # scrapes it, and a crash loop is how it usually got there. Every target below is
+  # a reading OF the process that is down.
+  - source_matchers:
+      - alertname = "ApiDown"
+    target_matchers:
+      - alertname =~ "ApiNotReady|ProcessRestartLoop|HttpErrorRateHigh|HttpLatencyP99High|HttpLatencyP95Degraded|EventLoopBlocked|DbPoolSaturated"
+
+  # Two halves of one room-ownership incident, and the fencing is the worse half:
+  # a refusal means the guard caught a second process before it dealt anything, a
+  # fencing means two processes were both authoritative for one room's hand state.
+  # Both open the same runbook, so the second page adds a phone call and no
+  # information.
+  - source_matchers:
+      - alertname = "RoomOwnershipFenced"
+    target_matchers:
+      - alertname = "RoomOwnershipRefused"
+
+  # Two thresholds on one number. Under three days both are true, so one
+  # certificate produces a page and a ticket about the same minute in the same
+  # future — which is the shape `continue: false` was written for, arriving from
+  # the rules file instead of from the route tree. The page is the one that
+  # carries the deadline.
+  - source_matchers:
+      - alertname = "TlsCertificateExpiryImminent"
+    target_matchers:
+      - alertname = "TlsCertificateExpiringSoon"
+
+  # A probe that is not running produces no `probe_*` series, so `PublicOriginDown`
+  # and both certificate rules go quiet for a reason that is not the origin being
+  # healthy. `PublicOriginProbeDown` is the rule that says so, and nothing here
+  # suppresses it — it is deliberately absent from every target list above.
+  #
+  # An Alertmanager that is not running cannot deliver, so of course its
+  # notification counter is not moving. Note what this does NOT do: it cannot stop
+  # the pages arriving, because neither of them can be delivered while it is true.
+  # It stops the pair being read as two faults in the Prometheus UI, which is where
+  # `AlertmanagerDown` says it will be seen.
+  - source_matchers:
+      - alertname = "AlertmanagerDown"
+    target_matchers:
+      - alertname = "AlertmanagerNotificationsFailing"
+
 receivers:
   - name: paging
 # @if PRL_ALERT_PAGE_WEBHOOK_URL

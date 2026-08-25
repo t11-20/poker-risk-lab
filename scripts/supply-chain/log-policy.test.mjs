@@ -80,27 +80,56 @@
  *   * the `EXEMPT_SERVICES` lookup replaced with an unconditional `continue`
  *     (i.e. every service silently exempt) → 26 failed. That is the shape of the
  *     original defect — a check that runs, reports success, and covers nothing.
+ *
+ * ## The five bypasses, pinned
+ *
+ * An adversarial review then defeated the whole variable half of this gate five
+ * ways, every one of them measured against a real container while this gate printed
+ * `✓ log policy — pass` and exited 0. Those five are pinned in
+ * `describe('negative control: the five measured bypasses')` below, as mutations of
+ * the real shipped text rather than as prose — a bypass written down only in a
+ * comment is a bypass that comes back — and each carries the line the container
+ * actually wrote.
+ *
+ * They are why rule 2 is now an ALLOWLIST and why this gate reads configuration with
+ * a tokenizer instead of a regex. The two properties those changes buy are asserted
+ * directly rather than inferred: a variable nobody has reviewed is refused even
+ * though nothing knows it is dangerous, and a `;` inside a quoted string does not
+ * end a directive.
  */
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { Gate } from './lib.mjs';
 import {
+  ALLOWED_LOG_VARIABLES,
   COMPOSE_SOURCES,
   composeLoggingFindings,
   composeServices,
   crossFileCapFindings,
+  derivedVariableProblem,
+  discoveredNginxConfigs,
   EXEMPT_SERVICES,
+  FORBIDDEN_LOG_VARIABLES,
   inlineNginxConfigFrom,
   locationBody,
   logCapOf,
+  nginxDirectives,
   nginxFindings,
+  nginxInvocationsIn,
+  nginxMaps,
   OIDC_CALLBACK_PATH,
+  REVIEWED_DERIVED_VARIABLES,
+  REVIEWED_NGINX_CONFIG_PATHS,
+  runLogPolicyGate,
   stripNginxComments,
   upstreamOf,
+  variablesIn,
 } from './log-policy.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -220,7 +249,11 @@ describe('positive control: the shipped configuration passes', () => {
     const expected = {
       'docker-compose.yml': ['postgres', 'api', 'web', 'proxy'],
       'docker-compose.staging.yml': ['postgres', 'api', 'web', 'proxy'],
-      'docker-compose.observability.yml': ['prometheus', 'alertmanager'],
+      // `blackbox` is the third service in the observability overlay. It is written
+      // here by hand, off the file, for the reason above — and it is also the proof
+      // that this assertion works: it was added to that compose file by somebody
+      // else and this list went red until a person read the file and agreed.
+      'docker-compose.observability.yml': ['prometheus', 'blackbox', 'alertmanager'],
     };
     for (const [label, compose] of COMPOSE_FILES) {
       assert.deepEqual(
@@ -504,5 +537,452 @@ describe('the gate reads configuration, not prose', () => {
     assert.equal(inlineNginxConfigFrom('services:\n  proxy:\n    image: nginx\n'), null);
     const run = spawnSync(process.execPath, [GATE], { cwd: '/', encoding: 'utf8' });
     assert.equal(run.status, 0, 'the gate resolves its own repo root, so cwd must not change the verdict');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The five measured bypasses
+// ---------------------------------------------------------------------------
+
+/** The four files `runLogPolicyGate` reads, so a mutation can be judged by the WHOLE gate. */
+const GATE_INPUTS = [
+  'deploy/staging/nginx.conf',
+  'docker-compose.yml',
+  'docker-compose.staging.yml',
+  'docker-compose.observability.yml',
+];
+
+/**
+ * Run the real gate — not one exported rule — against a throwaway copy of the repo.
+ *
+ * Every bypass below was reported the same way: "measured against a real container,
+ * with the gate printing `✓ log policy — pass`, exit 0". So the assertion has to be
+ * about the gate's verdict and not about a helper's return value: three of the five
+ * were defeats of REACH rather than of a rule, and a test that called `nginxFindings`
+ * directly would have handed the rule the text the real run never gave it.
+ */
+function gateVerdictFor(mutate) {
+  const root = mkdtempSync(join(tmpdir(), 'prl-log-policy-'));
+  mkdirSync(join(root, 'deploy/staging'), { recursive: true });
+  for (const file of GATE_INPUTS) cpSync(join(REPO_ROOT, file), join(root, file));
+  const read = (file) => readFileSync(join(root, file), 'utf8');
+  const write = (file, text) => {
+    assert.notEqual(text, read(file), `the mutation of ${file} did not apply`);
+    writeFileSync(join(root, file), text);
+  };
+  mutate({ read, write });
+  const gate = runLogPolicyGate(root, new Gate('log policy'));
+  return {
+    failures: gate.failures,
+    complains: (fragment) => gate.failures.some((failure) => failure.message.includes(fragment)),
+    text: JSON.stringify(gate.failures, null, 2),
+  };
+}
+
+describe('positive control: an unmutated copy of the repo still passes', () => {
+  it('the gate finds nothing to complain about', () => {
+    // The control for every test below. If `gateVerdictFor` itself broke the tree —
+    // a file not copied, a path wrong — every "this is refused" case would pass for
+    // the wrong reason, and the suite would be measuring its own harness.
+    const verdict = gateVerdictFor(() => {
+      // Deliberately mutates nothing.
+    });
+    assert.deepEqual(verdict.failures, [], verdict.text);
+  });
+});
+
+describe('negative control: the five measured bypasses', () => {
+  it('1. $arg_code — a denied $args and an allowed $arg_code are the same string', () => {
+    // Measured, before this fix, in a real nginxinc/nginx-unprivileged container
+    // running the shipped config with this one addition:
+    //
+    //   2026-08-25T17:23:19+00:00 172.17.0.0/24 tool "GET /api/v1/auth/oidc/callback?"
+    //   code=SENTINELCODE123 502 157 rt=30.007 up=- us=- urt=- rid=-
+    //
+    // The old rule denied `$args` with a right-hand word boundary, which is correct
+    // and irrelevant: `$arg_code` is a different variable carrying the same value.
+    const verdict = gateVerdictFor(({ read, write }) =>
+      write(
+        'deploy/staging/nginx.conf',
+        read('deploy/staging/nginx.conf').replace(
+          '"$request_method $uri$is_args" ',
+          '"$request_method $uri$is_args" code=$arg_code ',
+        ),
+      ),
+    );
+    assert.ok(verdict.complains('logs $arg_code, which is not on the reviewed allowlist'), verdict.text);
+  });
+
+  it('2. a `;` inside the quoted format string hid the rest of the format', () => {
+    // Measured: the container wrote the request line AND the session cookie.
+    //
+    //   boundary;GET /api/v1/auth/oidc/callback?code=SENTINELCODE123&state=SENTINELSTATE456
+    //   HTTP/1.1 prl_session=SENTINELCOOKIE789
+    //
+    // nginx read three quoted arguments; the old `/log_format\s+(\w+)([\s\S]*?);/g`
+    // read one, because it was lazy and did not know what a quote was. Both halves
+    // are asserted: the tokenizer sees the whole format, and the two variables in
+    // the part that used to be invisible are named.
+    const verdict = gateVerdictFor(({ read, write }) =>
+      write(
+        'deploy/staging/nginx.conf',
+        read('deploy/staging/nginx.conf').replace(
+          '    \'$time_iso8601 $prl_client_net $prl_ua_class "$request_method $uri$is_args" \'',
+          "    'boundary;' '$request' ' $http_cookie' ",
+        ),
+      ),
+    );
+    assert.ok(verdict.complains('logs $request'), verdict.text);
+    assert.ok(verdict.complains('logs $http_cookie'), verdict.text);
+  });
+
+  it('3. a map launders $request_uri into an innocent-looking name', () => {
+    // Measured: `"GET /api/v1/auth/oidc/callback?code=SENTINELCODE123&state=…"` in
+    // the access log, through a variable whose name contains nothing to grep for.
+    // The old gate read `log_format` bodies and nothing else, so the laundering step
+    // — four words of `map` — was invisible to it.
+    const verdict = gateVerdictFor(({ read, write }) => {
+      const original = read('deploy/staging/nginx.conf');
+      write(
+        'deploy/staging/nginx.conf',
+        original
+          .replace(
+            '  # See the header for why every field here is the field it is.',
+            '  map $request_uri $prl_path_detail {\n    default "$request_uri";\n  }\n\n' +
+              '  # See the header for why every field here is the field it is.',
+          )
+          .replace('"$request_method $uri$is_args" ', '"$request_method $prl_path_detail" '),
+      );
+    });
+    assert.ok(verdict.complains('logs $prl_path_detail'), verdict.text);
+    // And the failure has to SAY it is laundered, or the fix a hurried maintainer
+    // reaches for is to add the name to the allowlist.
+    assert.ok(
+      verdict.failures.some((failure) => (failure.detail ?? '').includes('map $request_uri')),
+      verdict.text,
+    );
+  });
+
+  it('4. $sent_http_location and the rest of an open class', () => {
+    // Measured: a 302 back to the callback put the code in the access log through
+    // the RESPONSE header, which no rule about request variables could ever reach.
+    //
+    //   … 302 145 … loc=http://127.0.0.1:8080/signed-in?code=SENTINELCODE123&state=…
+    //   xfu=/cb?code=SENTINELCODE123 bf=-
+    //
+    // `$http_*` had five names denied out of an unbounded family, and `$sent_http_*`,
+    // `$arg_*` and `$upstream_http_*` are three more families exactly like it.
+    const leaky = [
+      'sent_http_location',
+      'http_x_forwarded_uri',
+      'http_x_original_uri',
+      'arg_state',
+      'request_body_file',
+    ];
+    const verdict = gateVerdictFor(({ read, write }) =>
+      write(
+        'deploy/staging/nginx.conf',
+        read('deploy/staging/nginx.conf').replace(
+          "rid=$upstream_http_x_request_id';",
+          `rid=$upstream_http_x_request_id '\n    '${leaky.map((name) => `$${name}`).join(' ')}';`,
+        ),
+      ),
+    );
+    for (const name of leaky) {
+      assert.ok(verdict.complains(`logs $${name}`), `$${name} was accepted:\n${verdict.text}`);
+    }
+  });
+
+  it('5a. `include` pulls in a file this gate cannot read', () => {
+    const verdict = gateVerdictFor(({ read, write }) =>
+      write(
+        'deploy/staging/nginx.conf',
+        read('deploy/staging/nginx.conf').replace(
+          '  access_log /dev/stdout prl_privacy;',
+          '  include /etc/nginx/extra/*.conf;\n  access_log /dev/stdout prl_privacy;',
+        ),
+      ),
+    );
+    assert.ok(verdict.complains('include /etc/nginx/extra/*.conf'), verdict.text);
+  });
+
+  it('5b. an nginx config inlined into a compose file the gate did not list', () => {
+    // The old NGINX_SOURCES was two elements long, so a whole second proxy
+    // configuration living in docker-compose.staging.yml was outside the gate.
+    const verdict = gateVerdictFor(({ read, write }) =>
+      write(
+        'docker-compose.staging.yml',
+        read('docker-compose.staging.yml').replace(
+          '  proxy:\n',
+          '  proxy:\n    environment:\n      PRL_PROXY_ALT_CONF: |\n' +
+            '        error_log /dev/stderr info;\n' +
+            '        http {\n' +
+            "          log_format leaky escape=default '$$request $$http_cookie';\n" +
+            '          access_log /dev/stdout leaky;\n' +
+            '        }\n',
+        ),
+      ),
+    );
+    assert.ok(verdict.complains('docker-compose.staging.yml:PRL_PROXY_ALT_CONF'), verdict.text);
+    assert.ok(verdict.complains('logs $request'), verdict.text);
+    assert.ok(verdict.complains('is at `info`'), verdict.text);
+  });
+
+  it("5c. `nginx -g 'error_log … info;'` beside a config the gate approved", () => {
+    // The nastiest of the five, because the reviewed file is untouched. Measured
+    // against a container running the SHIPPED deploy/staging/nginx.conf with
+    // `-g 'daemon off; error_log /dev/stderr info;'`:
+    //
+    //   2026/08/25 17:25:07 [error] 29#29: *3 connect() failed … request:
+    //   "GET /api/v1/session?code=SENTINELCODE123&state=SENTINELSTATE456 HTTP/1.1"
+    //
+    // The same container with `-g 'daemon off;'` logged the sentinel zero times.
+    const verdict = gateVerdictFor(({ read, write }) =>
+      write(
+        'docker-compose.staging.yml',
+        read('docker-compose.staging.yml').replace(
+          "'-g', 'daemon off;'",
+          "'-g', 'daemon off; error_log /dev/stderr info;'",
+        ),
+      ),
+    );
+    assert.ok(verdict.complains("nginx -g 'daemon off; error_log /dev/stderr info;'"), verdict.text);
+    assert.ok(verdict.complains('is at `info`'), verdict.text);
+  });
+
+  it('5d. a second proxy_intercept_errors, turned on where the first is off', () => {
+    // `.exec()` reads one match. A `location` block can turn back on what the
+    // `server` block turned off, and the old rule said nothing about it.
+    const verdict = gateVerdictFor(({ read, write }) =>
+      write(
+        'deploy/staging/nginx.conf',
+        read('deploy/staging/nginx.conf').replace(
+          '    location /api/ {\n',
+          '    location /api/ {\n      proxy_intercept_errors on;\n',
+        ),
+      ),
+    );
+    assert.ok(verdict.complains('proxy_intercept_errors is on'), verdict.text);
+  });
+
+  it('5e. `nginx -c` naming a config nothing in this repository accounts for', () => {
+    const verdict = gateVerdictFor(({ read, write }) =>
+      write(
+        'docker-compose.staging.yml',
+        read('docker-compose.staging.yml').replace(
+          "'-c', '/etc/nginx/nginx.conf'",
+          "'-c', '/etc/nginx/other.conf'",
+        ),
+      ),
+    );
+    assert.ok(verdict.complains('nginx -c /etc/nginx/other.conf'), verdict.text);
+  });
+});
+
+describe('the allowlist, and why it is one', () => {
+  /** A minimal but COMPLETE configuration, so only the format under test can fail. */
+  const around = (format, extra = '') => `
+    ${extra}
+    ${format}
+    access_log /dev/stdout prl_privacy;
+    error_log /dev/stderr crit;
+    proxy_intercept_errors off;
+    location = ${OIDC_CALLBACK_PATH} { error_log /dev/null crit; set $u "api:3001"; proxy_pass http://$u; }
+    location /api/ { set $u "api:3001"; proxy_pass http://$u; }
+  `;
+
+  it('refuses a variable nobody has reviewed, without knowing anything about it', () => {
+    // The property the whole inversion is for. `$prl_something_new` is not dangerous
+    // as far as this gate knows — that is the point. It is refused because nobody
+    // has written down that it is safe, which is the only rule that can hold against
+    // a variable family nginx has not shipped yet.
+    const findings = nginxFindings(around("log_format prl_privacy '$prl_something_new';"), 'unknown');
+    assert.ok(complainsAbout(findings, 'logs $prl_something_new, which is not on the reviewed allowlist'));
+  });
+
+  it('accepts every variable the shipped format uses, and each has a written reason', () => {
+    for (const [name, why] of ALLOWED_LOG_VARIABLES) {
+      assert.match(name, /^[a-z][a-z0-9_]*$/, `${name} is not a bare variable name`);
+      assert.ok(String(why).length > 8, `$${name} is on the allowlist with no reason beside it`);
+    }
+    for (const name of ['uri', 'is_args', 'request_method', 'status', 'upstream_http_x_request_id']) {
+      assert.ok(ALLOWED_LOG_VARIABLES.has(name), `$${name} is in the shipped format and not allowed`);
+    }
+  });
+
+  it('allows no variable that the incident list forbids', () => {
+    // The two lists are allowed to disagree in only one direction. If a name ever
+    // appears on both, the allowlist wins silently and D2 comes back through the
+    // rule that was written to stop it.
+    for (const { name } of FORBIDDEN_LOG_VARIABLES) {
+      assert.ok(!ALLOWED_LOG_VARIABLES.has(name), `$${name} is both allowed and forbidden`);
+      assert.ok(!REVIEWED_DERIVED_VARIABLES.has(name), `$${name} is both derived and forbidden`);
+    }
+  });
+
+  it('still says WHY for the thirteen names whose incident is written down', () => {
+    // The denylist no longer decides; it supplies the sentence. A refusal that says
+    // "the session cookie — a credential outright" gets read. One that says "not on
+    // the allowlist" gets argued with.
+    const findings = nginxFindings(around("log_format prl_privacy '$http_cookie';"), 'known');
+    const cookie = findings.find((finding) => finding.message.includes('logs $http_cookie'));
+    assert.ok(cookie, JSON.stringify(findings, null, 2));
+    assert.match(cookie.detail, /credential outright/);
+  });
+
+  it('accepts the safe $request_* variables the shipped format uses', () => {
+    // `$request_method`, `$request_time`, `$request_length` and `$request_id` are all
+    // safe and all distinct from `$request`. Under a denylist this needed a lookahead
+    // and the lookahead was load-bearing in both directions; under an allowlist it
+    // needs four entries, and the four are asserted here so that trimming the list
+    // cannot quietly reject the very format this gate enforces.
+    const findings = nginxFindings(
+      around(
+        "log_format prl_privacy escape=default '$request_method $uri $request_time $request_length $request_id';",
+      ),
+      'safe-variables',
+    );
+    assert.deepEqual(findings, [], JSON.stringify(findings, null, 2));
+  });
+
+  it('refuses escape=none, which turns a decoded $uri into a log-line forger', () => {
+    const findings = nginxFindings(around("log_format prl_privacy escape=none '$uri';"), 'escape');
+    assert.ok(complainsAbout(findings, 'sets escape=none'), JSON.stringify(findings, null, 2));
+  });
+
+  it('every reviewed derived variable is really derived, in both shipped configs', () => {
+    // `$prl_client_net` and `$prl_ua_class` are the two redactions. The assertion is
+    // that they are still computed from what they were reviewed as reducing — the
+    // name is not the redaction, the map is.
+    for (const [label, config] of SHIPPED) {
+      const maps = nginxMaps(nginxDirectives(stripNginxComments(config)));
+      for (const [name, reviewed] of REVIEWED_DERIVED_VARIABLES) {
+        assert.equal(derivedVariableProblem(name, reviewed, maps), null, `${label}: $${name}`);
+      }
+    }
+  });
+
+  it('refuses a redaction whose map has stopped redacting', () => {
+    // Four ways for `$prl_client_net` to keep its name and lose its meaning. Each is
+    // a config that would pass a gate checking only the log_format.
+    const maps = (text) => nginxMaps(nginxDirectives(stripNginxComments(text)));
+    const reviewed = REVIEWED_DERIVED_VARIABLES.get('prl_client_net');
+    assert.match(
+      derivedVariableProblem(
+        'prl_client_net',
+        reviewed,
+        maps('map $request_uri $prl_client_net { default "-"; }'),
+      ),
+      /reads \$request_uri/,
+    );
+    assert.match(
+      derivedVariableProblem(
+        'prl_client_net',
+        reviewed,
+        maps('map $remote_addr $prl_client_net { default "$remote_addr"; }'),
+      ),
+      /returns \$remote_addr, which is not a named capture/,
+    );
+    assert.match(
+      derivedVariableProblem(
+        'prl_client_net',
+        reviewed,
+        maps('map $remote_addr $prl_client_net { "~^(?<all>.*)$" "$all"; }'),
+      ),
+      /can match any character/,
+    );
+    assert.match(derivedVariableProblem('prl_client_net', reviewed, maps('')), /no `map`.*defines/);
+  });
+});
+
+describe('reading configuration the way nginx reads it', () => {
+  it('a `;` inside quotes does not end a directive', () => {
+    // Bypass 2, as the one-line property behind it.
+    const [directive] = nginxDirectives(`log_format x 'a;b' '$request';`);
+    assert.equal(directive.name, 'log_format');
+    assert.deepEqual(directive.args, ['x', 'a;b', '$request']);
+  });
+
+  it('a `{` inside quotes does not open a block', () => {
+    // `"~*(bot){2}"` in a map is a regex quantifier, not a nested block. A brace
+    // counter that disagreed would hand every later rule the wrong text.
+    const directives = nginxDirectives(
+      'map $a $b { "~*(bot){2}" "bot"; }\naccess_log /dev/stdout prl_privacy;',
+    );
+    assert.ok(directives.some((entry) => entry.name === 'access_log'));
+  });
+
+  it('keeps a quoted empty string, because a map rule turns on it', () => {
+    const maps = nginxMaps(
+      nginxDirectives(`map $http_upgrade $connection_upgrade { default upgrade; '' close; }`),
+    );
+    assert.deepEqual(maps.get('connection_upgrade')[0].entries, [
+      { key: 'default', value: 'upgrade' },
+      { key: '', value: 'close' },
+    ]);
+  });
+
+  it('finds directives at every nesting level, including inside location {}', () => {
+    const directives = nginxDirectives('http { server { location /a { error_log /dev/null crit; } } }');
+    assert.ok(directives.some((entry) => entry.name === 'error_log' && entry.args[1] === 'crit'));
+  });
+
+  it('reads both spellings of an nginx command line out of a compose file', () => {
+    const found = nginxInvocationsIn(
+      '    command: sh -c "exec nginx -c /tmp/nginx.conf -g \'daemon off;\'"\n' +
+        "    entrypoint: ['nginx', '-c', '/etc/nginx/nginx.conf', '-g', 'daemon off; error_log /dev/stderr info;']\n",
+    );
+    assert.deepEqual(found.configPaths, ['/tmp/nginx.conf', '/etc/nginx/nginx.conf']);
+    assert.deepEqual(found.globals, ['daemon off;', 'daemon off; error_log /dev/stderr info;']);
+  });
+
+  it('every -c path the shipped compose files name is one somebody accounted for', () => {
+    let seen = 0;
+    for (const [, compose] of COMPOSE_FILES) {
+      for (const path of nginxInvocationsIn(compose).configPaths) {
+        seen += 1;
+        assert.ok(REVIEWED_NGINX_CONFIG_PATHS.has(path), `${path} is not in REVIEWED_NGINX_CONFIG_PATHS`);
+      }
+    }
+    assert.ok(seen >= 2, `only ${seen} nginx -c path(s) found — the scan has stopped scanning`);
+  });
+
+  it('discovers the inline config and the command line without being told either name', () => {
+    // The sweep-of-nothing control for the half of this gate that has no list to
+    // fall back on. Both must be found in docker-compose.yml by discovery ALONE.
+    const found = discoveredNginxConfigs('docker-compose.yml', DEV_COMPOSE);
+    assert.ok(
+      found.some((entry) => entry.kind === 'inline' && entry.complete && entry.text.includes('log_format')),
+      'the inline nginx config was not discovered',
+    );
+    assert.ok(
+      found.some((entry) => entry.kind === 'global' && entry.text.includes('daemon off')),
+      'the nginx -g command line was not discovered',
+    );
+  });
+
+  it('does not mistake a block scalar of something else for nginx configuration', () => {
+    // Every compose file has block scalars that are shell, SQL or prose. Auditing one
+    // as nginx would produce failures nobody can act on, and the usual fix for a
+    // noisy gate is to switch it off.
+    const found = discoveredNginxConfigs(
+      'fixture.yml',
+      'services:\n  x:\n    environment:\n      SCRIPT: |\n        set -e\n        echo hello\n',
+    );
+    assert.deepEqual(found, []);
+  });
+
+  it('the braced spelling of a variable is the same variable', () => {
+    // Written by concatenation rather than as a literal: the repository's linter
+    // refuses a `${` inside a plain string, and the braced spelling is exactly what
+    // has to be asserted here — `${args}` is `$args` and a rule that missed it would
+    // be one character away from bypass 1.
+    const braced = `$${'{args}'}`;
+    assert.deepEqual(variablesIn(`$uri$is_args ${braced} $request_method`), [
+      'uri',
+      'is_args',
+      'args',
+      'request_method',
+    ]);
   });
 });

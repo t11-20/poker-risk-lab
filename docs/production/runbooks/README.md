@@ -10,27 +10,39 @@ That order is the point. Containment comes before diagnosis because during an in
 
 | Runbook | Triggered by |
 | --- | --- |
-| [api-unhealthy.md](api-unhealthy.md) | `ApiDown`, `ProcessRestartLoop`, `HandsFailing`, `TableActorFailing` |
+| [api-unhealthy.md](api-unhealthy.md) | `ApiDown`, `ProcessRestartLoop`, `HandsFailing`, `HandCompletionGap`, `TableActorFailing` |
+| [public-origin-unreachable.md](public-origin-unreachable.md) | `PublicOriginDown`, `PublicOriginProbeDown`, `TlsCertificateExpiringSoon`, `TlsCertificateExpiryImminent` — the proxy, TLS and the page server: the layer every other alert here is blind to |
 | [db-unavailable.md](db-unavailable.md) | `ApiNotReady` |
 | [db-saturation.md](db-saturation.md) | `DbPoolSaturated`, `ArchiveFailing` |
 | [room-ownership-contended.md](room-ownership-contended.md) | `RoomOwnershipFenced`, `RoomOwnershipRefused` — two API processes and one room |
 | [stuck-seat.md](stuck-seat.md) | `SeatReleaseFailing` |
+| [seat-entitlement-refused.md](seat-entitlement-refused.md) | `SeatEntitlementRefused`, `SeatNotRestored` — the enrolment guard turning people away, on a deployment running `PRL_ENROLMENT_REQUIRED=enforced` |
 | [retention-sweep-stalled.md](retention-sweep-stalled.md) | `RetentionSweepStalled` — the scheduled deletion of expired rows and abandoned guest accounts has stopped |
 | [websocket-spike.md](websocket-spike.md) | `WebSocketReconnectStorm`, `WebSocketConnectionsHigh`, `WebSocketRefusalSpike` |
 | [worker-saturation.md](worker-saturation.md) | `EventLoopBlocked`, `WorkerPoolQueueDeep`, `AnalysisTimeouts` |
-| [elevated-error-rate.md](elevated-error-rate.md) | `HttpErrorRateHigh`, `HttpLatencyP99High` |
+| [elevated-error-rate.md](elevated-error-rate.md) | `HttpErrorRateHigh`, `HttpLatencyP99High`, `HttpLatencyP95Degraded` |
+| [automated-abuse.md](automated-abuse.md) | `AuthFailureSpike`, `RateLimitBans` — credential stuffing, scripted callers, ban waves |
+| [metrics-cardinality-overflow.md](metrics-cardinality-overflow.md) | `MetricsCardinalityOverflow` — a metric folded into its overflow series and stopped being precise |
 | [failed-migration.md](failed-migration.md) | a migration step that did not exit 0 |
 | [failed-deployment.md](failed-deployment.md) | a deploy that did not reach a healthy state |
 | [rollback.md](rollback.md) | the decision to go back to the previous digest |
 | [backup-restore.md](backup-restore.md) | data loss, corruption, or a restore rehearsal |
 | [account-deletion-failure.md](account-deletion-failure.md) | a learner's erasure request did not complete |
-| [hidden-card-incident.md](hidden-card-incident.md) | any suspicion that hidden state reached a client |
+| [hidden-card-incident.md](hidden-card-incident.md) | `AuthzFailureSpike`, and any suspicion that hidden state reached a client. **Not** a hand that failed — see api-unhealthy.md |
 | [incorrect-coach-result.md](incorrect-coach-result.md) | a reported wrong probability, EV or ranking |
 | [leaked-secret.md](leaked-secret.md) | a credential is believed to be exposed |
 | [dependency-compromise.md](dependency-compromise.md) | a malicious or compromised package |
 | [unverified-image.md](unverified-image.md) | a release image whose signature does not verify |
 | [alerting-blind.md](alerting-blind.md) | `AlertmanagerNotificationsFailing`, `AlertmanagerDown` — and any incident found by a person rather than by a page |
 | [heartbeat-missing.md](heartbeat-missing.md) | `Watchdog` — the dead man's switch. The only runbook here opened because an alert **stopped**: the heartbeat this deployment sends to an external watcher has gone quiet |
+
+## The index above is checked, and this is why
+
+An alert's `runbook:` annotation in `deploy/staging/observability/alert-rules.yml` is what an operator actually follows at 3am, and for six of twenty-nine rules it pointed at a file that had never heard of the alert. The worst of them: `HandsFailing` — a **page**, whose own description says `interrupted_by_restart` after a deploy is expected once — opened `hidden-card-incident.md`, whose first instructions are to stop the affected surface, roll back to the last digest and wake the incident owner. An operator following that runbook would have rolled back production for a disclosure that was not happening.
+
+`existsSync` on the annotation was the only check there had ever been, and a file existing is not a file about this alert. `alerts:verify` check 1 now also requires the annotated runbook to name its alert **in its Detection section** — a cross-reference elsewhere in the file does not count, because the Detection table is where somebody decided this runbook treats this alert. `scripts/alert-delivery.test.mjs` runs the same check without a container, so it fails in a pull request rather than in a release rehearsal.
+
+So: **if you add an alert, add it to the Detection table of the runbook it opens, and to the index above.** The gate will tell you if you forget the first; nothing but this sentence will tell you about the second.
 
 ## Before you start, whatever the incident
 

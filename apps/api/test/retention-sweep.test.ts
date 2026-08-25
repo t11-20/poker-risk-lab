@@ -41,6 +41,7 @@ import { describe, it } from 'node:test';
 import { SESSION_ABSOLUTE_TTL_SECONDS } from '../src/auth/session.ts';
 import type { Sql } from '../src/db.ts';
 import {
+  FIRST_SWEEP_DELAY_MS,
   GUEST_RETENTION_SECONDS,
   runRetentionSweep,
   startRetentionSweep,
@@ -67,12 +68,20 @@ type GuestOutcome = 'erased' | 'came-back' | 'blocked';
  *
  * The session and login-attempt sweeps are one `DELETE` each. Erasing a guest goes through
  * `deleteAccount`, deliberately — the same self-verifying path `POST /me/delete` uses — so a
- * single erasure is six statements: the abandoned re-check under `FOR UPDATE`, the account lock,
- * the footprint count, the room closure, the session revocation, the delete, and the footprint
- * count again. They are answered here rather than stubbed out at a seam, because the loop under
- * test is the loop that issues them, and a fake that skipped straight to "one account gone" would
- * not notice a sweep that never opened a transaction at all. What this file does NOT assert is
- * what those statements mean; that is `retention-sweep-database.test.ts`, against real SQL.
+ * single erasure is eight statements: the bare `FOR UPDATE` on the account, the abandoned
+ * re-check as a separate statement, the account lock inside `deleteAccount`, the footprint count,
+ * the room closure, the session revocation, the delete, and the footprint count again. They are
+ * answered here rather than stubbed out at a seam, because the loop under test is the loop that
+ * issues them, and a fake that skipped straight to "one account gone" would not notice a sweep
+ * that never opened a transaction at all. What this file does NOT assert is what those statements
+ * mean; that is `retention-sweep-database.test.ts`, against real SQL.
+ *
+ * The lock and the re-check are two statements and not one on purpose, and this fake keeps them
+ * apart for the same reason `deleteAbandonedGuest` does: locking and asking in one statement
+ * answers the predicate from the snapshot it held before it blocked, which erased a student whose
+ * place was granted while the sweep waited. The `came-back` outcome is therefore decided by the
+ * RE-CHECK here, never by the lock — a fake that let the lock decide would pass against the
+ * single-statement version this replaced.
  */
 function fakeSql(plan: {
   readonly sessions: readonly number[];
@@ -121,9 +130,17 @@ function fakeSql(plan: {
       const pass = guestPass;
       return Promise.resolve(Array.from({ length: count }, (_, i) => ({ id: `usr_g${pass}_${i}` })));
     }
+    // The bare lock. It takes no predicate, so it can only answer "the row is there" — which is
+    // the whole point of splitting it out, and why the outcome is decided by the next branch.
     if (text.includes('from prl.users u') && text.includes('for update')) {
       const userId = String(values[0]);
       calls.transactions.push(userId);
+      return Promise.resolve([{ id: userId }]);
+    }
+    // The re-check, as its own statement and therefore its own snapshot. This is where an account
+    // that came back to life between being chosen and being locked disappears.
+    if (text.includes('from prl.users u')) {
+      const userId = String(values[0]);
       return Promise.resolve(outcomeOf(userId) === 'came-back' ? [] : [{ id: userId }]);
     }
     if (text.includes('count(*)')) {
@@ -189,25 +206,114 @@ function fakeSql(plan: {
   return { sql, calls };
 }
 
-/** A `setInterval`/`clearInterval` pair the test drives by hand. */
+/**
+ * The timers the schedule arms, driven by hand.
+ *
+ * `tick()` fires whatever is next due without the test having to know which kind it is: the FIRST
+ * tick is the one-shot that runs the first sweep at `FIRST_SWEEP_DELAY_MS`, and every tick after it
+ * is the interval that one-shot arms. Keeping one `tick()` is what let the cases below stay about
+ * what a sweep does rather than about which timer function the schedule happens to use — they read
+ * identically to before the first sweep stopped being the interval's first tick.
+ */
 function manualTimer(): {
+  readonly setTimeoutImpl: typeof setTimeout;
+  readonly clearTimeoutImpl: typeof clearTimeout;
   readonly setIntervalImpl: typeof setInterval;
   readonly clearIntervalImpl: typeof clearInterval;
   readonly tick: () => void;
   readonly cleared: () => boolean;
 } {
-  let callback: (() => void) | null = null;
+  let pendingTimeout: (() => void) | null = null;
+  let interval: (() => void) | null = null;
   let cleared = false;
   return {
+    setTimeoutImpl: ((fn: () => void) => {
+      pendingTimeout = fn;
+      return { id: 'fake-timeout' } as unknown as NodeJS.Timeout;
+    }) as unknown as typeof setTimeout,
+    clearTimeoutImpl: (() => {
+      cleared = true;
+      pendingTimeout = null;
+    }) as unknown as typeof clearTimeout,
     setIntervalImpl: ((fn: () => void) => {
-      callback = fn;
-      return { id: 'fake' } as unknown as NodeJS.Timeout;
+      interval = fn;
+      return { id: 'fake-interval' } as unknown as NodeJS.Timeout;
     }) as unknown as typeof setInterval,
     clearIntervalImpl: (() => {
       cleared = true;
     }) as unknown as typeof clearInterval,
-    tick: () => callback?.(),
+    tick: () => {
+      const once = pendingTimeout;
+      if (once !== null) {
+        pendingTimeout = null;
+        once();
+        return;
+      }
+      interval?.();
+    },
     cleared: () => cleared,
+  };
+}
+
+/**
+ * A clock a test advances, driving both a `setTimeout` and a `setInterval`.
+ *
+ * `manualTimer` above fires a tick on demand, which is right for "what does one sweep do" and
+ * useless for "how many sweeps does a process of a given lifetime get" — the question the first
+ * case below asks, and the one whose answer was zero. This one knows the DELAYS the schedule asked
+ * for, so a test can say "this process lived five hours" and get the number of sweeps a five-hour
+ * process actually gets.
+ */
+function virtualTimer(): {
+  readonly setTimeoutImpl: typeof setTimeout;
+  readonly clearTimeoutImpl: typeof clearTimeout;
+  readonly setIntervalImpl: typeof setInterval;
+  readonly clearIntervalImpl: typeof clearInterval;
+  readonly advance: (ms: number) => void;
+} {
+  interface Entry {
+    readonly fn: () => void;
+    readonly delay: number;
+    readonly repeating: boolean;
+    due: number;
+    cancelled: boolean;
+  }
+  const entries = new Map<object, Entry>();
+  let now = 0;
+  const arm = (fn: () => void, delay: number, repeating: boolean): NodeJS.Timeout => {
+    const handle = {};
+    entries.set(handle, { fn, delay, repeating, due: now + delay, cancelled: false });
+    return handle as unknown as NodeJS.Timeout;
+  };
+  const cancel = (handle: unknown): void => {
+    const entry = entries.get(handle as object);
+    if (entry !== undefined) entry.cancelled = true;
+  };
+  return {
+    setTimeoutImpl: ((fn: () => void, delay: number) =>
+      arm(fn, delay, false)) as unknown as typeof setTimeout,
+    clearTimeoutImpl: ((handle: unknown) => cancel(handle)) as unknown as typeof clearTimeout,
+    setIntervalImpl: ((fn: () => void, delay: number) =>
+      arm(fn, delay, true)) as unknown as typeof setInterval,
+    clearIntervalImpl: ((handle: unknown) => cancel(handle)) as unknown as typeof clearInterval,
+    advance: (ms) => {
+      const target = now + ms;
+      // Smallest-due-first, and re-read every round, because a callback may arm a new timer — which
+      // is exactly what a schedule whose first sweep is a one-shot does.
+      for (;;) {
+        let next: Entry | null = null;
+        for (const entry of entries.values()) {
+          if (entry.cancelled || entry.due > target) continue;
+          if (next === null || entry.due < next.due) next = entry;
+        }
+        if (next === null) break;
+        now = next.due;
+        if (next.repeating) next.due = now + next.delay;
+        else next.cancelled = true;
+        next.fn();
+      }
+      now = target;
+    },
   };
 }
 
@@ -344,6 +450,83 @@ describe('the abandoned-guest sweep', () => {
 });
 
 describe('the schedule', () => {
+  /**
+   * ##########################################################################
+   * ## A DEPLOYMENT REDEPLOYED MORE OFTEN THAN THE INTERVAL SWEPT NOTHING.  ##
+   * ## EVER. NOT LATE — NEVER.                                             ##
+   * ##########################################################################
+   *
+   * The first sweep used to be the first TICK of a six-hour interval, on the reasoning that "boot
+   * is the busiest moment a process has ... and there is nothing about an expired row that cannot
+   * wait six hours longer than it already has". The premise is right and the conclusion did not
+   * follow: a process that never reaches six hours of uptime never reaches its first sweep, so a
+   * deployment that ships twice a day removes nothing, for ever. Expired sessions, every abandoned
+   * federated sign-in attempt and every abandoned guest account accumulate with nothing failing —
+   * which is `docs/production/legal-register.md` L5's phrase, "nothing fails, data simply
+   * persists", and it is now a published promise on `/privacy` rather than a tidiness question.
+   *
+   * Nothing could see it either. `prl_retention_sweep_age_seconds` substitutes process uptime when
+   * this process has not swept, so it is RESET by the very restarts that cause the problem: a
+   * six-hourly redeploy draws a sawtooth peaking at 21,600 s against a `RetentionSweepStalled`
+   * threshold of 27,000 s. The comment on that gauge defends the substitution with "a process
+   * restarting often enough to hide a dead timer this way is already `ProcessRestartLoop`", and
+   * that rule is `changes(prl_process_start_time_seconds[15m]) >= 3` — four restarts a DAY is not
+   * within two orders of magnitude of it.
+   *
+   * Eight consecutive five-hour deployments is the shape of an ordinary week here. The assertion
+   * is `>= 8` and not `> 0` deliberately: one sweep in eight deploys would be a schedule that
+   * still depends on a process happening to live long enough.
+   */
+  it('sweeps on every deployment, however short (NEGATIVE CONTROL)', async () => {
+    const { sql } = fakeSql({ sessions: [0], attempts: [0] });
+    const FIVE_HOURS_MS = 5 * 60 * 60 * 1_000;
+    let sweeps = 0;
+    for (let deployment = 0; deployment < 8; deployment += 1) {
+      const clock = virtualTimer();
+      const handle = startRetentionSweep({
+        sql: () => sql,
+        onSwept: () => {
+          sweeps += 1;
+        },
+        onProblem: () => undefined,
+        ...clock,
+      });
+      clock.advance(FIVE_HOURS_MS);
+      await new Promise((resolve) => setImmediate(resolve));
+      handle.stop();
+    }
+    assert.ok(
+      sweeps >= 8,
+      `eight five-hour deployments produced ${sweeps} sweeps: a deployment that ships more often ` +
+        'than the sweep interval never enforces a retention period at all',
+    );
+  });
+
+  /**
+   * The arithmetic that makes the age gauge's uptime substitution defensible, asserted rather than
+   * left as a sentence in a comment.
+   *
+   * That gauge reports process uptime while this process has not yet swept, so it under-reports
+   * staleness across a restart. That is only acceptable while a process which fails to reach its
+   * first sweep is a process something ELSE is already paging about, and the something else is
+   * `ProcessRestartLoop` — `changes(prl_process_start_time_seconds[15m]) >= 3`. Three processes
+   * that each died before their first sweep therefore have to fit inside fifteen minutes, which is
+   * a statement about `FIRST_SWEEP_DELAY_MS` and nothing else. It was false by a factor of seventy
+   * when the first sweep was at T+6h.
+   *
+   * The literals are spelled out here because the rule lives in `deploy/staging/observability/`
+   * and cannot import anything. If that rule's window or threshold changes, this is what fails.
+   */
+  it('reaches its first sweep well inside the restart-loop window', () => {
+    const RESTART_LOOP_WINDOW_MS = 15 * 60 * 1_000;
+    const RESTART_LOOP_RESTARTS = 3;
+    assert.ok(
+      FIRST_SWEEP_DELAY_MS * RESTART_LOOP_RESTARTS < RESTART_LOOP_WINDOW_MS,
+      `a first sweep at T+${FIRST_SWEEP_DELAY_MS} ms means ${RESTART_LOOP_RESTARTS} processes can ` +
+        'each die before sweeping without ProcessRestartLoop firing, so nothing sees a dead sweep',
+    );
+  });
+
   it('does not sweep before the first tick', () => {
     // Boot is the busiest moment the process has, and an expired row can wait one interval longer
     // than it already has.

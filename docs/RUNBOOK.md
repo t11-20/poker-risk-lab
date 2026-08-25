@@ -99,7 +99,7 @@ The container stack has no such split: there is exactly one published origin (§
 | `pnpm run test:keyboard` | **Real keyboard journeys in real Chrome** over the DevTools Protocol: focus order, focus visibility, keyboard traps, the modal sheet, the bet-size slider, and one hand folded from the keyboard at a live table. Needs a **running production build** on :3000 and a running API — it is not started for you, because a dev build ships overlays that do not ship | ~2 min |
 | `pnpm run test:smoke` | End-to-end smoke against a running stack; `-- --strict` fails on warnings | seconds |
 | `pnpm run alerts:verify` | Brings Prometheus and Alertmanager up beside the **running staging stack**, checks all 29 alert rules load/agree/ground/evaluate, then **stops the API** and follows `ApiDown` through to a receiver, floods the limiter to follow `RateLimitBans` to the ticket tier, and finally follows the `Watchdog` heartbeat — including **stopping Alertmanager** so the dead man's switch is observed actually firing. `-- --skip-provoke` does the first four checks only and leaves the API alone; `-- --only-heartbeat` does those plus the heartbeat, also without touching the API | ~10 min |
-| `pnpm run alerts:ack` | Sends a **real page** through this deployment's Alertmanager and refuses to exit 0 until a person types back a one-time code that appears nowhere except in the delivered notification. **Fails loudly when nobody answers** inside `--within` (default 5m). Needs an Alertmanager to post to — the staging overlay, or `--alertmanager <url>` | the window |
+| `pnpm run alerts:ack` | Sends a **real page** through this deployment's Alertmanager and refuses to exit 0 until a person types back a one-time code, inside `--within` (default 5m) and inside five attempts. **Fails loudly when nobody answers.** It is evidence a cooperating operator produces for themselves, **not** an attestation against a hostile caller: the code travels through Alertmanager, which echoes it back unauthenticated, and the caller both chooses the URL and owns the process that mints the code | the window |
 | `pnpm run alerts:preflight` | Refuses a paging destination that is a placeholder, malformed, missing a credential, or routed to a receiver with nothing in it. Needs no stack and no containers. `-- --handshake` also speaks TCP/TLS/`EHLO`/`AUTH`/`QUIT` to the configured relay — never `MAIL FROM`, so it cannot send anybody a page. Run by `staging promote`, which refuses on it | seconds |
 | `pnpm run test:load` | WebSocket load harness against a local server | configurable |
 | `pnpm run test:all` | test + exhaustive + simulation + a11y + ax | ~5 min |
@@ -1140,7 +1140,9 @@ log driver, or a sidecar. Points that matter when you configure it:
 - [ ] **`pnpm run alerts:ack` exited 0 with this environment's `PRL_ALERT_*` variables set**, and
       the person who acknowledged it was the person actually on call — not whoever ran the
       command. It sends a real page through the real route tree carrying a one-time code that
-      appears nowhere except in the delivered notification, and fails loudly if nobody types it
+      is never printed on the passing path, and fails loudly if nobody types it back inside the
+      window or inside five attempts. It cannot prove a hostile caller did not read the code out of
+      an Alertmanager they control — see `alerts:ack`'s own closing paragraph
       back inside the window. Attach the `--out` record to the release notes: it carries who
       acknowledged, when, and how long they took.
 

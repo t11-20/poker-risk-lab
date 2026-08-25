@@ -456,8 +456,10 @@ export default function PrivacyPage(): ReactElement {
             called that code at all. Being <em>unusable</em> and being <em>gone</em> are still two different
             moments, and the gap between them is up to six hours: a sign-in attempt stops working after ten
             minutes and its row is removed at the next sweep, which is why the row can outlive the ten minutes
-            by several hours. The first sweep of a freshly started server runs six hours after it starts, not
-            at boot. The periods above are a policy; the sweep only enforces what the code already implements.
+            by several hours. The first sweep of a freshly started server runs a minute after it starts, and
+            every six hours after that. It used to wait a full six hours, which meant a server redeployed more
+            often than that never swept <em>anything</em> — the promises above were being kept by nobody. The
+            periods above are a policy; the sweep only enforces what the code already implements.
           </p>
           <CounselFlag clause={COUNSEL_CLAUSES['retention-and-deletion']} />
         </section>

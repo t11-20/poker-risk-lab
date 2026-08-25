@@ -927,7 +927,28 @@ function checkCohortSizing(
         'guest creation at its public default.',
     );
   }
+}
 
+/**
+ * The failed-outcome budget must stay below the ceiling. Checked on EVERY boot.
+ *
+ * ## Why this is not inside `checkCohortSizing`, which is where it used to live
+ *
+ * It was, and an adversarial review found that `checkCohortSizing` returns immediately when
+ * `COHORT_SIZE` is 0 — the shipped default, and the state `.env.example` calls the right one for a
+ * public instance. So the invariant was enforced only on the deployments that had declared a
+ * classroom, and not on the deployments this budget was written to protect. Measured against the
+ * code as it stood: `RATE_LIMIT_OIDC_FAILURE_MAX=10000` with the default ceiling of 60 and no
+ * `COHORT_SIZE` booted cleanly, while `.env.example` said in as many words that "the process
+ * refuses to boot if this is not below RATE_LIMIT_OIDC_MAX".
+ *
+ * The two checks were never the same kind of thing. Cohort sizing asks whether the configured
+ * limits can serve a class somebody declared, and has no answer when nobody declared one. This asks
+ * whether the two budgets still count different things, and the answer does not depend on who is
+ * signing in: a failure budget at or above the ceiling can never refuse anything the ceiling has
+ * not refused already, on any deployment at all.
+ */
+function checkSignInBudgets(rateLimit: RateLimitConfig, collect: Collector): void {
   if (rateLimit.oidcFailureMax >= rateLimit.oidcMax) {
     collect.problems.push(
       `RATE_LIMIT_OIDC_FAILURE_MAX (${rateLimit.oidcFailureMax}) is not below RATE_LIMIT_OIDC_MAX ` +
@@ -1145,6 +1166,10 @@ export function loadConfig(env: EnvRecord): AppConfig {
   // declared cohort servable, and before the throw so a sizing problem is reported alongside
   // every other one rather than on the next boot.
   checkCohortSizing(config.cohort, config.rateLimit, oidc !== null, collect);
+
+  // Unconditional, and deliberately not inside the call above: that one returns early when no
+  // cohort is declared, which is every public instance. See `checkSignInBudgets`.
+  checkSignInBudgets(config.rateLimit, collect);
 
   if (collect.problems.length > 0) throw new ConfigError(collect.problems);
 

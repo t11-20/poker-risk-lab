@@ -204,6 +204,13 @@ export interface ScenarioAttemptResponse {
  */
 export interface CoachReport {
   readonly street: string;
+  /**
+   * Every chip in the middle before hero's call, contested or not.
+   *
+   * `potOdds.pot` is the part of it hero could win, and the two differ only when hero is all-in
+   * for less than the bet. Both are published because a panel needs both: the price is against one
+   * and the chips on the table are the other.
+   */
   readonly potTotal: number;
   readonly toCall: number;
 
@@ -255,10 +262,26 @@ export interface EquitySummary {
 }
 
 export interface PotOddsSummary {
-  /** Chips already in the middle. */
+  /**
+   * Chips already in the middle **that hero could actually win**.
+   *
+   * The whole middle in every ordinary spot, and `CoachReport.potTotal` beside it always is. It is
+   * smaller exactly when hero is all-in for less than the bet in front of them: the excess of that
+   * bet is a side pot hero is not eligible for, and every figure in this summary is a figure about
+   * the pot hero can win rather than the pot on the table.
+   *
+   * This member used to be the whole middle, and `breakEvenEquity` and `oddsRatio` were computed
+   * from it. Measured heads-up at 5/10 with hero holding 40 against a 310 shove — 320 in the
+   * middle, 30 to call, 270 of it a side pot only villain is in — the panel published "10.7 to 1,
+   * you need 8.6%" where the answer is 1.67 to 1 and 37.5%. A price and the pot it is a price
+   * *into* have to be the same pot, or the ratio relates two different things.
+   *
+   * A renderer showing this next to the chips on the table should show both: see `CoachPanel`'s
+   * price section, which names the side pot rather than leaving a reader to reconcile the two.
+   */
   readonly pot: number;
   readonly toCall: number;
-  /** `toCall / (pot + toCall)` — the equity a call needs to break even. */
+  /** `toCall / (pot + toCall)` — the equity a call needs to break even, against the winnable pot. */
   readonly breakEvenEquity: number;
   /**
    * The price as "x to 1", or `null` when the call is free and there is no price.

@@ -424,10 +424,29 @@ under a real network partition.
    *An acknowledged test page.* `pnpm run alerts:ack` posts a real `severity: page` alert to this
    deployment's Alertmanager, so it travels the real route tree to the real receiver, carrying a
    one-time code in an alert **label** — which puts it in the `Subject:` a locked screen shows.
-   The command then refuses to exit 0 until a person types that code back inside `--within`.
-   There is no path to the code that does not go through the pager. **Demonstrated failing** with
+   The command then refuses to exit 0 until a person types that code back inside `--within` and
+   inside five attempts.
+
+   This paragraph used to end *"there is no path to the code that does not go through the pager."*
+   **That was false and an adversarial review demonstrated it**: the code is echoed back by
+   Alertmanager's own unauthenticated `GET /api/v2/alerts`, `--alertmanager` is a caller-supplied
+   URL, and the subject was printed on the command's own stdout six lines above a promise that it
+   was not. A robot read it off the screen and passed; another read it out of an Alertmanager it
+   controlled and passed with `attended: true`. There is no construction that keeps a secret from
+   its own caller, so the claim was **changed rather than patched**. What a pass now asserts, and
+   all it asserts: somebody was at a terminal, inside the window and inside five attempts, holding
+   a code this run generated and sent as a page through the named Alertmanager. That is evidence a
+   **cooperating** operator produces for themselves, not an attestation against a hostile one, and
+   the command's own closing paragraph and a `caveat` field in its record both say so.
+
+   What was fixed rather than re-described: the code is no longer printed on the passing path
+   (subjects render `(······ page)`), attempts are capped at five — measured at 106,450 guesses per
+   second through a real pty against a 30-bit space — and `rehearsal` is now derived from the
+   targeted Alertmanager's own config and from observing the page arrive, not from environment
+   variables. An all-defaults run that the old code announced as *"pages NOBODY"* relayed to
+   `smtp.sendgrid.example:587`; it is now refused. **Demonstrated failing** with
    a real terminal and nobody at it: `ACK FAILED — nobody acknowledged inside the window`, exit 1,
-   after the page had verifiably been delivered — `[FIRING:1] OperatorTestPage (7WU7HP page)`
+   after the page had verifiably been delivered — `[FIRING:1] OperatorTestPage (······ page)`
    captured at the SMTP sink, with the code in the subject a locked screen shows. The mechanism
    was separately rehearsed end to end against the repository's own `.invalid` sinks, which
    reports `ACK REHEARSED — the mechanism works. NO PERSON WAS INVOLVED.` and stamps the record

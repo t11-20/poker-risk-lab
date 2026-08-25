@@ -68,6 +68,7 @@ import { test } from 'node:test';
 import {
   applyAction,
   type Card,
+  contestablePotFor,
   createDeterministicRandomForTests,
   type HandState,
   legalActions,
@@ -82,6 +83,7 @@ import {
 import {
   buildCoachReport,
   type CoachInput,
+  deriveContestablePot,
   deriveLegalActions,
   maximumTo,
   minimumAggressiveTo,
@@ -303,6 +305,9 @@ function coachInputFor(spot: ScenarioSpot, state: HandState): CoachInput {
     street: spot.street,
     opponents: [{ label: 'villain', range: spot.opponentRange }],
     pot: spot.pot,
+    // A described scenario, so the derivation rather than the engine's layering — the same
+    // choice `POST /math/coach` makes, for the same reason.
+    contestablePot: deriveContestablePot(spot),
     toCall: spot.toCall,
     heroCommittedThisStreet: spot.heroCommittedThisStreet,
     heroStack: spot.heroStack,
@@ -544,6 +549,14 @@ function inputForPlayedHand(hand: PlayedHand, tellTheMinimum: boolean, tellTheAc
       range: parseRange('22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo', [...heroCards, ...view.board]),
     })),
     pot: view.potTotal,
+    // From the engine's own layering, exactly as `coachForView` does it. These are real played
+    // hands and several of them leave hero all-in for less than the bet in front of them.
+    contestablePot: contestablePotFor({
+      seats: view.seats,
+      heroSeat: own.seat,
+      callAmount: view.amountToCall,
+      potTotal: view.potTotal,
+    }).contestable,
     toCall: view.amountToCall,
     heroCommittedThisStreet: own.committedThisStreet,
     heroStack: own.stack,

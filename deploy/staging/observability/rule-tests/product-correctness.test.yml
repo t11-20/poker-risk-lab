@@ -1,0 +1,302 @@
+# ---------------------------------------------------------------------------
+# The rules unique to a poker table, and the four ways they were decoration.
+#
+#   * `HandsFailing` and `ArchiveFailing` had a `for:` exactly as long as their
+#     own range window. After a single step, `rate(x[10m])` and `increase(x[10m])`
+#     are non-zero for 10m minus one scrape interval — 9m45s here — so `for: 10m`
+#     asked the condition to hold for longer than it can, and neither alert could
+#     fire for anything. Both are reproduced below: the old spelling never leaves
+#     `pending`.
+#
+#   * `TableActorFailing` fired above 0.05/s sustained for ten minutes, which is
+#     thirty failures per ten minutes. Its own description is ONE stalled seat on
+#     a thirty-second action clock — two failures a minute. A permanently broken
+#     bot seat was fifteen times under the bar.
+#
+#   * `HandCompletionGap` subtracted two one-hour increases, which is (hands in
+#     flight now) minus (hands in flight an hour ago). Twenty healthy tables each
+#     holding a hand produce 20 on a threshold of 5. And with
+#     `prl_hands_completed_total` unprimed, the case it exists for — no hand ever
+#     completes — left the subtraction empty and unable to fire at all.
+#
+# Every rule here is asserted in both directions. The single-step input is not a
+# contrived shape: `rooms/registry.ts` increments `handsFailed` once, by
+# `abandoned.length`, when it reconciles the hands a restart interrupted.
+# ---------------------------------------------------------------------------
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # -------------------------------------------------------------------------
+  # HandsFailing
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: three hands abandoned by a restart, in one step, page immediately
+    input_series:
+      # Both reasons rendered from boot, which is what `primeLabels` buys: the
+      # step is 0 -> 3 rather than a series appearing at 3, and only the first of
+      # those is a rise `increase()` can see.
+      - series: 'prl_hands_failed_total{reason="interrupted_by_restart"}'
+        values: '0+0x40 3+0x300'
+      - series: 'prl_hands_failed_total{reason="room_closed"}'
+        values: '0+0x341'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HandsFailing"}'
+        eval_time: 5m
+        exp_samples: []
+      # 10m15s: the step landed at 10m15s and there is no `for:`, so the page is
+      # raised on the first evaluation that can see it.
+      - expr: 'ALERTS{alertname="HandsFailing"}'
+        eval_time: 11m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HandsFailing", alertstate="firing", severity="page"}'
+            value: 1
+      # This is the arithmetic that killed the old rule, stated as a number: the
+      # condition is true for 9m45s after a single step, and the old `for: 10m`
+      # wanted 10m of it.
+      - expr: 'sum(increase(prl_hands_failed_total[10m])) > 0'
+        eval_time: 19m45s
+        exp_samples:
+          - labels: '{}'
+            value: 3
+      - expr: 'sum(increase(prl_hands_failed_total[10m])) > 0'
+        eval_time: 20m
+        exp_samples: []
+
+  - interval: 15s
+    name: a deployment where no hand has ever failed does not page
+    input_series:
+      - series: 'prl_hands_failed_total{reason="interrupted_by_restart"}'
+        values: '0+0x300'
+      - series: 'prl_hands_failed_total{reason="room_closed"}'
+        values: '0+0x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HandsFailing"}'
+        eval_time: 11m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HandsFailing"}'
+        eval_time: 60m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # ArchiveFailing — the same defect one tier down, at 15m/15m
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: one archive write that failed raises a ticket
+    input_series:
+      - series: 'prl_archive_failures_total'
+        values: '0+0x40 1+0x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ArchiveFailing"}'
+        eval_time: 5m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ArchiveFailing"}'
+        eval_time: 15m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ArchiveFailing", alertstate="firing", severity="ticket"}'
+            value: 1
+      # 14m45s of truth against a `for:` that wanted 15m, which is why the old
+      # spelling never fired.
+      - expr: 'sum(increase(prl_archive_failures_total[15m])) > 0'
+        eval_time: 24m45s
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: 'sum(increase(prl_archive_failures_total[15m])) > 0'
+        eval_time: 25m
+        exp_samples: []
+
+  - interval: 15s
+    name: hand history that is persisting cleanly raises nothing
+    input_series:
+      - series: 'prl_archive_failures_total'
+        values: '0+0x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ArchiveFailing"}'
+        eval_time: 40m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # TableActorFailing
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: one bot seat stalling on a thirty-second clock pages after ten minutes
+    input_series:
+      # Two failures a minute — 0.5 per 15 s scrape — which is one seat that
+      # cannot act, timing out on every turn. Under the old `rate > 0.05/s` this
+      # is 0.033/s and silent forever.
+      - series: 'prl_table_actor_failures_total{reason="bot-policy"}'
+        values: '0+0.5x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="TableActorFailing", alertstate="pending"}'
+        eval_time: 9m
+        exp_samples:
+          - labels: 'ALERTS{alertname="TableActorFailing", alertstate="pending", severity="page"}'
+            value: 1
+      - expr: 'ALERTS{alertname="TableActorFailing", alertstate="firing"}'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="TableActorFailing", alertstate="firing", severity="page"}'
+            value: 1
+      # The old threshold, evaluated against the failure this alert is named
+      # after: fifteen times under the bar.
+      - expr: 'sum(rate(prl_table_actor_failures_total[10m])) > 0.05'
+        eval_time: 30m
+        exp_samples: []
+
+  - interval: 15s
+    name: a single actor failure that does not repeat never pages
+    input_series:
+      - series: 'prl_table_actor_failures_total{reason="bot-policy"}'
+        values: '0+0x40 1+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="TableActorFailing", alertstate="firing"}'
+        eval_time: 15m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="TableActorFailing", alertstate="firing"}'
+        eval_time: 30m
+        exp_samples: []
+
+  - interval: 15s
+    name: a burst of five failures that stops never pages
+    input_series:
+      # The window is shorter than the `for:` precisely so this cannot fire: five
+      # failures at once are true for 4m45s, and the rule wants ten minutes.
+      - series: 'prl_table_actor_failures_total{reason="bot-action-rejected"}'
+        values: '0+0x40 5+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="TableActorFailing", alertstate="firing"}'
+        eval_time: 15m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="TableActorFailing", alertstate="firing"}'
+        eval_time: 40m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # HandCompletionGap
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: twenty healthy tables each holding a hand raise nothing
+    input_series:
+      # Twenty tables dealing continuously. Every scrape has twenty hands in
+      # flight, so `started` runs exactly twenty ahead of `completed` forever.
+      # That is the healthy steady state and the number the old rule fired on.
+      - series: 'prl_hands_started_total'
+        values: '20+20x400'
+      - series: 'prl_hands_completed_total'
+        values: '0+20x400'
+      - series: 'prl_hands_failed_total{reason="room_closed"}'
+        values: '0+0x400'
+      - series: 'prl_hands_failed_total{reason="interrupted_by_restart"}'
+        values: '0+0x400'
+      - series: 'prl_rooms_live'
+        values: '20+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HandCompletionGap"}'
+        eval_time: 45m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HandCompletionGap"}'
+        eval_time: 90m
+        exp_samples: []
+
+  - interval: 15s
+    name: no hand ever completes, and the primed counter makes it visible
+    input_series:
+      # The catastrophe: hands are dealt and none settles. `prl_hands_completed_total`
+      # is present at zero from boot because it is primed, which is what makes the
+      # subtraction produce a number at all.
+      - series: 'prl_hands_started_total'
+        values: '0+20x400'
+      - series: 'prl_hands_completed_total'
+        values: '0+0x400'
+      - series: 'prl_hands_failed_total{reason="room_closed"}'
+        values: '0+0x400'
+      - series: 'prl_hands_failed_total{reason="interrupted_by_restart"}'
+        values: '0+0x400'
+      - series: 'prl_rooms_live'
+        values: '20+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HandCompletionGap", alertstate="firing"}'
+        eval_time: 25m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HandCompletionGap", alertstate="firing"}'
+        eval_time: 45m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HandCompletionGap", alertstate="firing", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: the same catastrophe with an unprimed completed counter is invisible to any subtraction
+    input_series:
+      # `prl_hands_completed_total` is ABSENT, which is what an unprimed counter
+      # looks like before its first increment — and in this failure there is never
+      # a first increment. `A - absent` is the empty vector, so no expression that
+      # subtracts it can fire, this one included. The fix is not in the rule: it is
+      # `primeLabels` in `observability/metrics.ts`, guarded by
+      # `apps/api/test/observability-metrics.test.ts`. This case is kept so that
+      # removing the priming fails something.
+      - series: 'prl_hands_started_total'
+        values: '0+20x400'
+      - series: 'prl_hands_failed_total{reason="room_closed"}'
+        values: '0+0x400'
+      - series: 'prl_hands_failed_total{reason="interrupted_by_restart"}'
+        values: '0+0x400'
+      - series: 'prl_rooms_live'
+        values: '20+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HandCompletionGap"}'
+        eval_time: 45m
+        exp_samples: []
+      - expr: 'sum(prl_hands_started_total) - sum(prl_hands_completed_total)'
+        eval_time: 45m
+        exp_samples: []
+
+  - interval: 15s
+    name: one hand vanishing among twenty healthy tables raises a ticket
+    input_series:
+      # Identical to the healthy case except that one hand was dealt and never
+      # settled, failed, or stayed in play: twenty-one unaccounted for against
+      # twenty rooms that could each still be holding one.
+      - series: 'prl_hands_started_total'
+        values: '21+20x400'
+      - series: 'prl_hands_completed_total'
+        values: '0+20x400'
+      - series: 'prl_hands_failed_total{reason="room_closed"}'
+        values: '0+0x400'
+      - series: 'prl_hands_failed_total{reason="interrupted_by_restart"}'
+        values: '0+0x400'
+      - series: 'prl_rooms_live'
+        values: '20+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HandCompletionGap", alertstate="firing"}'
+        eval_time: 25m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HandCompletionGap", alertstate="firing"}'
+        eval_time: 35m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HandCompletionGap", alertstate="firing", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: a hand counted as failed is accounted for and does not also raise the gap
+    input_series:
+      # Twenty tables, one of which was closed mid-hand. `LiveRoom.close()` counts
+      # that as `room_closed`, so the hand is accounted for and only the unexplained
+      # remainder is left for this rule. Without the `- failed` term every fenced
+      # room would raise a second, wrong ticket alongside `RoomOwnershipFenced`.
+      - series: 'prl_hands_started_total'
+        values: '21+20x400'
+      - series: 'prl_hands_completed_total'
+        values: '0+20x400'
+      - series: 'prl_hands_failed_total{reason="room_closed"}'
+        values: '1+0x400'
+      - series: 'prl_hands_failed_total{reason="interrupted_by_restart"}'
+        values: '0+0x400'
+      - series: 'prl_rooms_live'
+        values: '20+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HandCompletionGap"}'
+        eval_time: 45m
+        exp_samples: []

@@ -1,0 +1,186 @@
+# ---------------------------------------------------------------------------
+# The three security rules, each measured silent for an hour of the attack it
+# names.
+#
+#   * `AuthzFailureSpike` wanted more than 2 refused reads a SECOND. An
+#     enumeration at one request a second — a shell loop with `curl` in it —
+#     produced 3,600 refusals in an hour and never fired.
+#   * `AuthFailureSpike` wanted more than 5 failed sign-ins a second, which is
+#     7,200 an hour. Two a second, sustained, never fired.
+#   * `WebSocketRefusalSpike` wanted about 300 bad-Origin refusals per ten
+#     minutes. A hundred in ten minutes never fired.
+#
+# The rate limiter closes the other end: it bans a caller who ignores
+# `Retry-After`, so an attacker slow enough to stay unbanned sat under all three
+# at once and the band where these could fire was traffic `RateLimitBans` had
+# already reported. The thresholds are now near zero and the persistence lives in
+# the `for:`, with a window shorter than it — so a burst that stops cannot fire
+# them, and traffic that does not stop can.
+#
+# Each of the three has its old expression evaluated here too, against the exact
+# traffic it is named for, so the reproduction stays in the repository rather
+# than in a review comment.
+# ---------------------------------------------------------------------------
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # -------------------------------------------------------------------------
+  # AuthzFailureSpike — page
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: somebody walking room ids at one request a second pages after ten minutes
+    input_series:
+      # 15 refusals per 15 s scrape is one a second, which is a hand-run loop and
+      # is comfortably under the rate limiter's ban threshold.
+      - series: 'prl_authz_failures_total{reason="not_room_member"}'
+        values: '0+15x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AuthzFailureSpike", alertstate="pending"}'
+        eval_time: 9m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AuthzFailureSpike", alertstate="pending", severity="page"}'
+            value: 1
+      - expr: 'ALERTS{alertname="AuthzFailureSpike", alertstate="firing"}'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AuthzFailureSpike", alertstate="firing", severity="page"}'
+            value: 1
+      # The old threshold against the same hour of enumeration: silent.
+      - expr: 'sum(rate(prl_authz_failures_total[5m])) > 2'
+        eval_time: 60m
+        exp_samples: []
+
+  - interval: 15s
+    name: a few refusals from a learner following a dead link do not page
+    input_series:
+      # Three refusals, once: a link to a room they were removed from, clicked
+      # and retried.
+      - series: 'prl_authz_failures_total{reason="room_not_found_or_not_permitted"}'
+        values: '0+0x40 3+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AuthzFailureSpike"}'
+        eval_time: 15m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AuthzFailureSpike"}'
+        eval_time: 40m
+        exp_samples: []
+
+  - interval: 15s
+    name: a burst of twenty refusals that stops does not page
+    input_series:
+      # Above the threshold, and true for 4m45s against a `for:` of ten minutes.
+      # This is what the window being shorter than the `for:` buys.
+      - series: 'prl_authz_failures_total{reason="forbidden"}'
+        values: '0+0x40 20+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AuthzFailureSpike", alertstate="firing"}'
+        eval_time: 15m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AuthzFailureSpike", alertstate="firing"}'
+        eval_time: 40m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # AuthFailureSpike — ticket
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: credential stuffing at two attempts a second raises a ticket
+    input_series:
+      - series: 'prl_auth_failures_total{reason="not_authenticated"}'
+        values: '0+30x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AuthFailureSpike", alertstate="firing"}'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AuthFailureSpike", alertstate="firing", severity="ticket"}'
+            value: 1
+      # 7,200 failed sign-ins an hour, under the old threshold.
+      - expr: 'sum(rate(prl_auth_failures_total[5m])) > 5'
+        eval_time: 60m
+        exp_samples: []
+
+  - interval: 15s
+    name: the background of expired sessions and stale tabs raises nothing
+    input_series:
+      # One failure a minute across the whole deployment — a cohort of thirty
+      # with tabs left open overnight. Deliberately not zero: this counter has a
+      # real background rate and the threshold has to sit above it.
+      - series: 'prl_auth_failures_total{reason="session_expired"}'
+        values: '0+0.25x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AuthFailureSpike"}'
+        eval_time: 40m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AuthFailureSpike"}'
+        eval_time: 90m
+        exp_samples: []
+
+  - interval: 15s
+    name: a hundred failures at one deploy boundary and then nothing raises no ticket
+    input_series:
+      - series: 'prl_auth_failures_total{reason="csrf_failed"}'
+        values: '0+0x40 100+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AuthFailureSpike", alertstate="firing"}'
+        eval_time: 15m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AuthFailureSpike", alertstate="firing"}'
+        eval_time: 40m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # WebSocketRefusalSpike — ticket
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: a hundred bad-Origin refusals over ten minutes raises a ticket
+    input_series:
+      # 2.5 per 15 s is 100 per ten minutes — the measured-silent case.
+      - series: 'prl_websocket_refused_total{reason="bad_origin"}'
+        values: '0+2.5x400'
+      # The other refusal reasons must not contribute: only the Origin check is
+      # the one server-side defence a socket handshake has.
+      - series: 'prl_websocket_refused_total{reason="unauthenticated"}'
+        values: '0+40x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketRefusalSpike", alertstate="firing"}'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketRefusalSpike", alertstate="firing", severity="ticket"}'
+            value: 1
+      - expr: 'sum(rate(prl_websocket_refused_total{reason="bad_origin"}[10m])) > 0.5'
+        eval_time: 60m
+        exp_samples: []
+
+  - interval: 15s
+    name: one stray bad-Origin refusal raises nothing
+    input_series:
+      - series: 'prl_websocket_refused_total{reason="bad_origin"}'
+        values: '0+0x40 1+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketRefusalSpike", alertstate="firing"}'
+        eval_time: 15m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketRefusalSpike", alertstate="firing"}'
+        eval_time: 40m
+        exp_samples: []
+
+  - interval: 15s
+    name: an origin missing from PUBLIC_WEB_ORIGIN after a deploy raises a ticket
+    input_series:
+      # Every learner's socket refused, continuously, at a modest handshake rate.
+      # The cause is continuous rather than large, which is why the persistence
+      # is in the `for:` and not in the number.
+      - series: 'prl_websocket_refused_total{reason="bad_origin"}'
+        values: '0+0x20 0+1x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketRefusalSpike", alertstate="firing"}'
+        eval_time: 8m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketRefusalSpike", alertstate="firing"}'
+        eval_time: 18m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketRefusalSpike", alertstate="firing", severity="ticket"}'
+            value: 1

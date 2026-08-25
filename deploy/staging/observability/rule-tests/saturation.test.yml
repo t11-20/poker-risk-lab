@@ -1,0 +1,93 @@
+# ---------------------------------------------------------------------------
+# `WorkerPoolQueueDeep`, and a threshold the gauge could not reach.
+#
+# The rule was `avg_over_time(prl_worker_pool_queued[10m]) > 4`. The queue is
+# bounded at `size * QUEUE_SLOTS_PER_WORKER` — three slots per worker thread,
+# `apps/api/src/workers/pool.ts` — and the pool size is
+# `max(1, min(4, availableParallelism() - 1))` (`config.ts`). On a one- or
+# two-vCPU host that is one worker and three slots, so `prl_worker_pool_queued`
+# is capped at 3 and a rule asking for more than 4 describes a state the process
+# cannot enter. The first case below is that host with its queue permanently
+# full: every Coach analysis being refused, and an alert that cannot say so.
+#
+# The threshold is now derived from `prl_worker_pool_size`, so it is half the
+# queue limit on whatever host this is. The last two cases hold it to that on a
+# four-worker host, which is the half of the claim a one-worker test cannot make.
+# ---------------------------------------------------------------------------
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    name: a one-worker host with a permanently full queue raises a ticket
+    input_series:
+      # Three of three slots taken, for half an hour. Every `POST /analysis`
+      # arriving in this state is answered `service_unavailable`.
+      - series: 'prl_worker_pool_size'
+        values: '1+0x400'
+      - series: 'prl_worker_pool_queued'
+        values: '3+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WorkerPoolQueueDeep", alertstate="firing"}'
+        eval_time: 10m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WorkerPoolQueueDeep", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WorkerPoolQueueDeep", alertstate="firing", severity="ticket"}'
+            value: 1
+      # The old threshold, against a queue that is full and staying full. There
+      # is no state of this host that satisfies it.
+      - expr: 'avg_over_time(prl_worker_pool_queued[10m]) > 4'
+        eval_time: 40m
+        exp_samples: []
+
+  - interval: 15s
+    name: a queue that is busy but draining on a one-worker host raises nothing
+    input_series:
+      # One task waiting, on and off — the pool working. Half of three slots is
+      # 1.5, and this sits under it.
+      - series: 'prl_worker_pool_size'
+        values: '1+0x400'
+      - series: 'prl_worker_pool_queued'
+        values: '1+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WorkerPoolQueueDeep"}'
+        eval_time: 40m
+        exp_samples: []
+
+  - interval: 15s
+    name: five queued on a four-worker host is under half of twelve slots
+    input_series:
+      - series: 'prl_worker_pool_size'
+        values: '4+0x400'
+      - series: 'prl_worker_pool_queued'
+        values: '5+0x400'
+    promql_expr_test:
+      # Five would have cleared the old flat `> 4` on this host while the queue
+      # was less than half full, which is the same constant being wrong in the
+      # other direction.
+      - expr: 'ALERTS{alertname="WorkerPoolQueueDeep"}'
+        eval_time: 40m
+        exp_samples: []
+      - expr: 'avg_over_time(prl_worker_pool_queued[10m]) > 4'
+        eval_time: 40m
+        exp_samples:
+          - labels: '{}'
+            value: 5
+
+  - interval: 15s
+    name: seven queued on a four-worker host is past half of twelve slots
+    input_series:
+      - series: 'prl_worker_pool_size'
+        values: '4+0x400'
+      - series: 'prl_worker_pool_queued'
+        values: '7+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WorkerPoolQueueDeep", alertstate="firing"}'
+        eval_time: 30m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WorkerPoolQueueDeep", alertstate="firing", severity="ticket"}'
+            value: 1

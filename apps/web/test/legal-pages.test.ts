@@ -45,7 +45,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -535,6 +535,16 @@ describe('the retention periods on /privacy are the ones the code implements', (
   it('states the sweep interval and the sign-in window the code uses', () => {
     const privacy = flat(read(...PAGES.privacy));
     assert.ok(privacy.includes(`every ${word(sweepHours)} hours`), 'the sweep interval must match');
+    // The FIRST sweep is a separate constant from the interval, and the page states both. It said
+    // "six hours after it starts" for as long as that was true; when the first sweep moved to a
+    // minute — because a server redeployed more often than six hours had never swept anything at
+    // all — nothing failed, because nothing read this constant. It does now.
+    const firstSweepMinutes = constantProduct(API_RETENTION_SWEEP, 'FIRST_SWEEP_DELAY_MS') / 60_000;
+    assert.equal(firstSweepMinutes, 1, 'the first sweep runs a minute after start');
+    assert.ok(
+      privacy.includes('runs a minute after it starts'),
+      '/privacy must state when the FIRST sweep runs, not only the interval between sweeps',
+    );
     assert.ok(
       privacy.includes(`${word(attemptMinutes)} minutes`),
       'the sign-in attempt window must match OIDC_ATTEMPT_TTL_SECONDS',
@@ -784,9 +794,24 @@ describe('what /terms says about money, and the absence of a payment path', () =
    * a course and recording that somebody was charged for it are different facts, and the second one
    * needs a clause nobody here is competent to write — so a table that could hold a price fails this
    * file whatever `/terms` currently says.
+   *
+   * The second line is a correction, and the omission it repairs is the sharpest kind: an
+   * adversarial review put `prl.fees`, `prl.enrolment_fees`, `prl.tuition`, `prl.amounts_due`,
+   * `prl.currencies`, `prl.card_details` and `prl.stripe_customers` through this detector and every
+   * one of them was ACCEPTED. `stripe` is the worst of them, because `PAYMENT_WORDS` — the list used
+   * on dependencies and on source — has known the word all along; the table detector simply had a
+   * different list, and nothing held the two to each other. `prl.enrolment_fees` is the second
+   * worst: it matched `ENTITLEMENT_TABLE`, so in the enrolment-aware posture the page's own
+   * permission covered a table whose name says a fee was charged.
+   *
+   * The words are those `/terms` itself uses — "an amount, a currency or a price" — plus the fee
+   * vocabulary a course would actually arrive under, plus the payment brands. `fee` and `card` are
+   * matched at a word boundary on the SPLIT name, so `prl.discards` and `prl.coffee_breaks` do not
+   * fire; the assertion at the end of this group re-checks every real table in the schema against
+   * this pattern, which is what makes widening it safe to do.
    */
   const MONEY_TABLE =
-    /\b(payment|purchase|order|invoice|billing|receipt|refund|price|charge|checkout|transaction|wallet|ledger|subscription)/iu;
+    /\b(payment|purchase|order|invoice|billing|receipt|refund|price|charge|checkout|transaction|wallet|ledger|subscription)|\b(fees?|tuitions?|amounts?|currenc(y|ies)|cards?|costs?|balances?|credits?|remittances?|stripe|paypal|braintree|adyen|merchants?|iban)\b/iu;
 
   /**
    * Table names that mean somebody holds an entitlement. **Forbidden unless `/terms` says so.**
@@ -814,12 +839,19 @@ describe('what /terms says about money, and the absence of a payment path', () =
    *
    * An entry here is a claim that a human looked. If a file drops off this list its exemption dies
    * with it, which is the point — `assert` below fails on an entry that no longer matches anything.
+   *
+   * Keys are REPO-RELATIVE, and that is a correction. They used to be relative to whichever root
+   * happened to contain them, which had two consequences an adversarial review found: the two
+   * `packages/ui` entries were written as `../../../packages/…`, a path no root could ever produce,
+   * and the "an exemption that matches nothing must die" loop below skipped exactly those two by
+   * testing `startsWith('../')`. So the two entries read as evidence that somebody had scanned
+   * `packages/` and found the matches benign, and nothing had scanned `packages/` at all.
    */
   const ALLOWED: ReadonlyArray<readonly [string, string]> = [
-    ['app/privacy/page.tsx', 'the page denying that payment details are held'],
-    ['fixtures/learn-glossary.ts', 'the glossary definition of an ante'],
-    ['../../../packages/ui/src/styles/tokens.css', 'a typography note citing Stripe as a reference'],
-    ['../../../packages/ui/src/styles/components.css', 'a hatch pattern drawn from stripes'],
+    ['apps/web/src/app/privacy/page.tsx', 'the page denying that payment details are held'],
+    ['apps/web/src/fixtures/learn-glossary.ts', 'the glossary definition of an ante'],
+    ['packages/ui/src/styles/tokens.css', 'a typography note citing Stripe as a reference'],
+    ['packages/ui/src/styles/components.css', 'a hatch pattern drawn from stripes'],
   ];
 
   /** `createCheckoutSession` -> `create Checkout Session`, so a word boundary exists to match. */
@@ -846,6 +878,30 @@ describe('what /terms says about money, and the absence of a payment path', () =
     readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((entry) =>
       /\.(ts|tsx|css|sql)$/u.test(entry),
     );
+
+  /**
+   * Every source tree the payment scan reads, as `[repo-relative label, absolute path]`.
+   *
+   * The two app roots were the whole list, and an adversarial review demonstrated what that left
+   * out: `@stripe/stripe-js` added to `packages/ui/package.json` and a `createCheckoutSession`
+   * calling `loadStripe` written into `packages/ui/src/` passed all 59 tests in this file, while the
+   * identical function in `apps/api/src/` failed the tripwire. `packages/ui` is a React package —
+   * it is the single most plausible home for a checkout component in this repository.
+   *
+   * `packages/<name>/src` rather than `packages` itself: a recursive read of `packages` descends
+   * into `node_modules` and `dist` (4,454 and 1,253 entries measured), which would put a scanner
+   * whose findings must each be reviewed by a human over the whole dependency graph and the build
+   * output. The workspace packages are enumerated rather than listed, so a seventh one is scanned
+   * the day it lands rather than the day somebody remembers this file.
+   */
+  const SOURCE_ROOTS: ReadonlyArray<readonly [string, string]> = [
+    ['apps/web/src', SRC],
+    ['apps/api/src', resolve(REPO, 'apps', 'api', 'src')],
+    ...readdirSync(join(REPO, 'packages'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => [`packages/${entry.name}/src`, join(REPO, 'packages', entry.name, 'src')] as const)
+      .filter(([, dir]) => existsSync(dir)),
+  ];
 
   /** The sentence the clause used to open with, and the whole of the free-of-charge posture. */
   const FREE_OF_CHARGE = /This service is provided free of charge/u;
@@ -977,7 +1033,21 @@ describe('what /terms says about money, and the absence of a payment path', () =
   });
 
   it('no dependency that moves money has been added (TRIPWIRE)', () => {
-    const manifests = ['package.json', 'apps/api/package.json', 'apps/web/package.json'];
+    // Every manifest in the workspace, not just the three at the top. `pnpm-workspace.yaml` makes
+    // `packages/*` first-class, and an adversarial review demonstrated that `@stripe/stripe-js`
+    // added to `packages/ui/package.json` — the React package, the obvious home for a checkout
+    // component — passed this file untouched. A dependency list that reads three of nine manifests
+    // is a dependency list that describes a different repository from the one being shipped.
+    const manifests = [
+      'package.json',
+      'apps/api/package.json',
+      'apps/web/package.json',
+      ...readdirSync(join(REPO, 'packages'), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => `packages/${entry.name}/package.json`)
+        .filter((path) => existsSync(join(REPO, path))),
+    ];
+    assert.ok(manifests.length >= 9, `only ${manifests.length} manifests were found; the sweep is short`);
     let scanned = 0;
     for (const manifest of manifests) {
       const parsed = JSON.parse(readFileSync(join(REPO, manifest), 'utf8')) as {
@@ -1058,16 +1128,16 @@ describe('what /terms says about money, and the absence of a payment path', () =
   });
 
   it('no source file has grown a payment path (TRIPWIRE)', () => {
-    const roots = [SRC, resolve(REPO, 'apps', 'api', 'src')];
     const allowed = new Map(ALLOWED);
     const seen = new Set<string>();
     let scanned = 0;
-    for (const root of roots) {
+    assert.ok(SOURCE_ROOTS.length >= 8, `only ${SOURCE_ROOTS.length} source roots; the sweep is short`);
+    for (const [label, root] of SOURCE_ROOTS) {
       for (const relative of sourceFiles(root)) {
         const full = join(root, relative);
         scanned += 1;
         if (!PAYMENT_WORDS.test(splitIdentifiers(readFileSync(full, 'utf8')))) continue;
-        const key = relative.split(/[\\/]/u).join('/');
+        const key = `${label}/${relative.split(/[\\/]/u).join('/')}`;
         assert.ok(
           allowed.has(key),
           `${key} uses the vocabulary of a money-moving integration and is not on the reviewed ` +
@@ -1080,8 +1150,10 @@ describe('what /terms says about money, and the absence of a payment path', () =
         seen.add(key);
       }
     }
+    // No `continue` here any more. The skip it used to carry — `relative.startsWith('../')` —
+    // exempted precisely the two entries that no root could produce, so the check that an exemption
+    // must still match something was itself exempted for the two entries that matched nothing.
     for (const [relative] of ALLOWED) {
-      if (relative.startsWith('../')) continue;
       assert.ok(seen.has(relative), `${relative} is exempted but no longer matches; drop the exemption`);
     }
     assert.ok(scanned > 50, `only ${scanned} files were scanned; the sweep proved nothing`);
@@ -1127,6 +1199,41 @@ describe('what /terms says about money, and the absence of a payment path', () =
     // draft of this group: `\binvoice` has no boundary to find inside `course_invoices`.
     assert.doesNotMatch(splitIdentifiers('prl.course_invoices'), MONEY_TABLE, 'the miss, reproduced');
     assert.match(splitTableName('prl.course_invoices'), MONEY_TABLE, 'and the fix that closes it');
+
+    /*
+     * The vocabulary miss, found by an adversarial review, and pinned the same way (REGRESSION).
+     *
+     * Every name below was ACCEPTED by this detector. `prl.stripe_customers` is the one worth
+     * staring at: `PAYMENT_WORDS` has known the word `stripe` since this group was written, and
+     * this list simply did not — two detectors for the same subject with no assertion holding
+     * either to the other. `prl.enrolment_fees` is the second: it matches ENTITLEMENT_TABLE, so
+     * an honest `/terms` was unlocking a table whose name says a fee was charged.
+     */
+    for (const table of [
+      'prl.fees',
+      'prl.enrolment_fees',
+      'prl.tuition',
+      'prl.amounts_due',
+      'prl.currencies',
+      'prl.card_details',
+      'prl.stripe_customers',
+      'prl.balances',
+      'prl.credits',
+      'prl.remittances',
+    ]) {
+      assert.match(
+        splitTableName(table),
+        MONEY_TABLE,
+        `${table} names money and this detector accepted it. /terms tells a reader there is "no ` +
+          'column anywhere in its database that could hold an amount, a currency or a price"; a ' +
+          'table called this makes that sentence false.',
+      );
+    }
+    // And the words that merely CONTAIN one of the new ones, which must not fire — a detector that
+    // refused `prl.discards` in a poker schema is a detector somebody switches off.
+    for (const table of ['prl.discards', 'prl.coffee_breaks', 'prl.scorecards_v2', 'prl.hand_seats']) {
+      assert.doesNotMatch(splitTableName(table), MONEY_TABLE, `${table} is not a purchase`);
+    }
     // The tables that exist today, none of which may be read as a purchase.
     const tables = schemaTables();
     assert.ok(tables.length > 8);

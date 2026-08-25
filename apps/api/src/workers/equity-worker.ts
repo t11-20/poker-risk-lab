@@ -108,6 +108,21 @@ export interface CoachTask {
   readonly spec: WireSpec;
   readonly street: 'preflop' | 'flop' | 'turn' | 'river';
   readonly pot: number;
+  /**
+   * The part of `pot` hero can actually win. **Required, and required for the same reason
+   * `legalActions` is.**
+   *
+   * A learner all-in for less than the bet facing them cannot win the side pot their stack
+   * does not reach, and this type having no field for it is what let every surface behind
+   * this wire price the call against the whole middle. Measured heads-up at 5/10, hero 40
+   * against a 310 shove: "10.7 to 1, you need 8.6%" where the answer is 1.67 to 1 and
+   * 37.5%, and a call worth -4.2 chips published at +82.8. See `CoachInput.contestablePot`.
+   *
+   * Callers with seat states use `contestablePotFor` from `@prl/poker-engine`; callers
+   * describing a spot use `deriveContestablePot`. A task built without one is a compile
+   * error at the caller rather than a mispriced report at a learner.
+   */
+  readonly contestablePot: number;
   readonly toCall: number;
   /** Chips hero has already put out on this street. See `CoachInput`. */
   readonly heroCommittedThisStreet: number;
@@ -243,6 +258,9 @@ function runCoach(task: CoachTask): CoachReport {
     street: task.street,
     opponents,
     pot: task.pot,
+    // Passed straight through for the same reason `legalActions` is: a `?? task.pot` here
+    // would restore the defect the field exists to close, and would do it invisibly.
+    contestablePot: task.contestablePot,
     toCall: task.toCall,
     heroCommittedThisStreet: task.heroCommittedThisStreet,
     heroStack: task.heroStack,

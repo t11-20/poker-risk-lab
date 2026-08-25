@@ -229,9 +229,17 @@ export function parseKeylessPolicy(raw) {
  *
  *   * the resolved slug must still end in the policy's `repositoryName`, so an ambient
  *     `GITHUB_REPOSITORY` cannot point the verification at an unrelated repository;
- *   * the caller is told the source, and `image-provenance.mjs` REFUSES a committed keyless record
- *     that needed the fallback — an outsider checking this repository offline has no environment to
- *     resolve, and a record only they cannot verify is not provenance.
+ *   * the caller is told the source, and `supply-chain/keyless-provenance.mjs` REFUSES while a
+ *     COMMITTED `release-signatures.json` is in the keyless posture and the policy's owner is still
+ *     null — an outsider checking this repository offline has no environment to resolve, and a
+ *     record only they cannot verify is not provenance.
+ *
+ * `image-provenance.mjs` WARNS rather than refusing, and that asymmetry is deliberate rather than an
+ * oversight: the one legitimate use of the fallback is the signing workflow verifying its own
+ * signature on the run that made it, where `GITHUB_REPOSITORY` is the answer. It is worth being
+ * exact about, because an adversarial review found three places in this repository asserting that
+ * `image-provenance` refuses here, and what it does is print a yellow line and exit 0. While the
+ * owner is null, the identity that verifier trusts is chosen by the ENVIRONMENT it runs in.
  *
  * @param {object} policy
  * @param {Record<string, string|undefined>} env
@@ -480,16 +488,82 @@ function topLevelBlock(text, key) {
   return { inline, body };
 }
 
+/** `'id-token'` and `"write"` are the same tokens as `id-token` and `write`. */
+const unquote = (value) => value.trim().replace(/^(['"])([\s\S]*)\1$/, '$2');
+
 /** `name: value` pairs at one indentation level of a block. */
 function pairsAt(body, indent) {
   const pairs = new Map();
   for (const line of body) {
     if (indentOf(line) !== indent) continue;
-    const match = /^\s*([A-Za-z_][\w-]*):\s*(.*)$/.exec(line);
+    const match = /^\s*['"]?([A-Za-z_][\w-]*)['"]?:\s*(.*)$/.exec(line);
     if (match === null) continue;
-    pairs.set(match[1], (match[2] ?? '').trim());
+    pairs.set(match[1], unquote(match[2] ?? ''));
   }
   return pairs;
+}
+
+/**
+ * The wildcard key `permissions: write-all` sets. See `permissionsFrom`.
+ *
+ * A key rather than a boolean because both readers of a permission map are asking the same
+ * question — "can this mint an OIDC token" — and a second return value is a second thing one of
+ * them can forget to look at. `grantsIdTokenWrite` is what they call, and it knows about both.
+ */
+const ALL_SCOPES = '*';
+
+/**
+ * A `permissions:` value, in every shape GitHub accepts for it.
+ *
+ * Found by an adversarial review, and the finding was that this parser could only see ONE of them.
+ * It read a block mapping and nothing else, so all of the following declared `id-token: write` to
+ * GitHub and declared nothing at all to this gate — in a file whose whole promise is that exactly
+ * one job in exactly one workflow holds that grant:
+ *
+ *     permissions: write-all                       # the documented shorthand for every scope
+ *     permissions: {contents: read, id-token: write}
+ *     permissions:
+ *       'id-token': write                          # a quoted key
+ *       id-token: 'write'                          # a quoted value
+ *
+ * Measured before the fix, against `workflowsThatCanMintTokens` — the exact function the gate calls
+ * — every one of the four returned an empty list. The block-mapping form was the only one seen, so
+ * the rule was enforced against the spelling the repository's own workflows happen to use and no
+ * other. That is the shape of a guard that has only ever been shown its own inputs.
+ *
+ * `write-all` cannot be expanded into a list of scope names here: the set of scopes is GitHub's and
+ * changes without notice, and a list written out in this file would be one release behind the day
+ * it stops being complete. It is recorded as the wildcard `*` instead, which is what it means.
+ *
+ * @param {string} inline text after the colon on the `permissions:` line itself
+ * @param {string[]} body the block's lines, when it has one
+ * @param {number} indent the indentation the block's pairs sit at
+ */
+function permissionsFrom(inline, body, indent) {
+  const scalar = unquote(inline);
+  if (scalar === 'write-all') return new Map([[ALL_SCOPES, 'write']]);
+  if (scalar === 'read-all') return new Map([[ALL_SCOPES, 'read']]);
+  if (scalar.startsWith('{')) {
+    const pairs = new Map();
+    for (const entry of scalar.replace(/^\{|\}$/g, '').split(',')) {
+      const match = /^\s*['"]?([A-Za-z_][\w-]*)['"]?\s*:\s*(.*)$/.exec(entry);
+      if (match !== null) pairs.set(match[1], unquote(match[2] ?? ''));
+    }
+    return pairs;
+  }
+  return pairsAt(body, indent);
+}
+
+/**
+ * Can something holding these permissions mint an OIDC token?
+ *
+ * The one question both readers ask, in one place, so that a shape one of them learns about is a
+ * shape both of them learn about. `write-all` is a yes: it grants every scope, `id-token` included.
+ *
+ * @param {Map<string,string>} permissions
+ */
+export function grantsIdTokenWrite(permissions) {
+  return permissions.get('id-token') === 'write' || permissions.get(ALL_SCOPES) === 'write';
 }
 
 /**
@@ -539,7 +613,11 @@ export function parseWorkflowStructure(text) {
   const topLevelPermissions =
     permissions === null
       ? new Map()
-      : pairsAt(permissions.body, Math.min(...permissions.body.map(indentOf).concat([2])));
+      : permissionsFrom(
+          permissions.inline,
+          permissions.body,
+          Math.min(...permissions.body.map(indentOf).concat([2])),
+        );
 
   const jobs = new Map();
   const jobsBlock = topLevelBlock(text, 'jobs');
@@ -550,16 +628,22 @@ export function parseWorkflowStructure(text) {
     const flush = () => {
       if (current === null) return;
       const start = currentBody.findIndex(
-        (line) => indentOf(line) === jobIndent + 2 && /^\s*permissions:/.test(line),
+        (line) => indentOf(line) === jobIndent + 2 && /^\s*['"]?permissions['"]?:/.test(line),
       );
-      const block = [];
-      if (start !== -1) {
-        for (let i = start + 1; i < currentBody.length; i++) {
-          if (indentOf(currentBody[i]) <= jobIndent + 2) break;
-          block.push(currentBody[i]);
-        }
+      if (start === -1) {
+        jobs.set(current, new Map());
+        return;
       }
-      jobs.set(current, pairsAt(block, jobIndent + 4));
+      const header = currentBody[start];
+      const block = [];
+      for (let i = start + 1; i < currentBody.length; i++) {
+        if (indentOf(currentBody[i]) <= jobIndent + 2) break;
+        block.push(currentBody[i]);
+      }
+      // `permissions: write-all` and `permissions: {id-token: write}` put the whole grant on the
+      // header line and leave an EMPTY block behind them, which the previous reader turned into a
+      // job with no permissions at all. See `permissionsFrom`.
+      jobs.set(current, permissionsFrom(header.slice(header.indexOf(':') + 1), block, jobIndent + 4));
     };
     for (const line of jobsBlock.body) {
       const header = new RegExp(`^\\s{${jobIndent}}([A-Za-z_][\\w-]*):\\s*$`).exec(line);
@@ -669,7 +753,7 @@ export function workflowAgreementProblems(policy, { filename, text, declared }) 
   }
 
   // `id-token: write` — exactly one job, and never the workflow top level.
-  if (structure.topLevelPermissions.get('id-token') === 'write') {
+  if (grantsIdTokenWrite(structure.topLevelPermissions)) {
     problems.push(
       'id-token: write is granted at the WORKFLOW top level. Every job then inherits the ability to ' +
         "mint an OIDC token that Fulcio will bind to this repository's identity, including jobs that " +
@@ -677,7 +761,7 @@ export function workflowAgreementProblems(policy, { filename, text, declared }) 
     );
   }
   const minting = [...structure.jobs.entries()]
-    .filter(([, permissions]) => permissions.get('id-token') === 'write')
+    .filter(([, permissions]) => grantsIdTokenWrite(permissions))
     .map(([name]) => name);
   if (minting.length === 0) {
     problems.push(

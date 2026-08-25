@@ -174,4 +174,54 @@ describe('exactly one workflow may mint an OIDC token', () => {
     ]);
     assert.equal(minting[0].scope, 'the workflow top level');
   });
+
+  /**
+   * The four spellings this finder could not see, each one a real grant (REGRESSION).
+   *
+   * Found by an adversarial review. The two tests above use the block-mapping form, which is the
+   * form this repository's own workflows happen to use — so the rule "exactly one workflow may hold
+   * `id-token: write`" was enforced against one spelling and blind to every other. Measured against
+   * the code as it stood: all four cases below returned `[]`, and `security:keyless` reported a pass
+   * over a workflow that could mint a certificate carrying this repository's identity.
+   *
+   * `write-all` is the one that matters most. It is GitHub's documented shorthand for *every* scope,
+   * it is what somebody reaches for when a job fails with a permissions error, and it never writes
+   * the words `id-token` anywhere — so it is simultaneously the most likely edit and the one a
+   * substring search would never catch.
+   */
+  const INVISIBLE_GRANTS = [
+    ['write-all at the workflow top level', 'permissions: write-all\njobs:\n  build:\n    steps: []\n'],
+    ['write-all on a job', 'jobs:\n  build:\n    permissions: write-all\n    steps: []\n'],
+    [
+      'a flow mapping on a job',
+      'jobs:\n  build:\n    permissions: {contents: read, id-token: write}\n    steps: []\n',
+    ],
+    ['a quoted key', "jobs:\n  build:\n    permissions:\n      'id-token': write\n    steps: []\n"],
+  ];
+
+  for (const [label, text] of INVISIBLE_GRANTS) {
+    it(`sees an OIDC grant written as ${label} (REGRESSION)`, () => {
+      const minting = workflowsThatCanMintTokens([{ name: 'evil.yml', text }]);
+      assert.equal(
+        minting.length,
+        1,
+        `${label} grants id-token: write and this finder reported ${minting.length} grant(s). A ` +
+          'workflow that can mint a certificate carrying this repository’s identity must be ' +
+          'named whatever spelling it used to ask for the permission.',
+      );
+      assert.equal(minting[0].name, 'evil.yml');
+    });
+  }
+
+  it('does not read read-all, or a scope that is not id-token, as a grant (NEGATIVE CONTROL)', () => {
+    // The other direction. A finder that answered "yes" to everything would pass all four cases
+    // above and would fail the repository's own workflows, which is a gate nobody can keep green.
+    for (const text of [
+      'permissions: read-all\njobs:\n  build:\n    steps: []\n',
+      'jobs:\n  build:\n    permissions: {contents: read, packages: write}\n    steps: []\n',
+      "jobs:\n  build:\n    permissions:\n      id-token: 'read'\n    steps: []\n",
+    ]) {
+      assert.deepEqual(workflowsThatCanMintTokens([{ name: 'fine.yml', text }]), [], text);
+    }
+  });
 });

@@ -42,6 +42,10 @@ function flushDrawVsSet(overrides: Partial<CoachInput> = {}): CoachInput {
     opponentStacks: [400],
     bigBlind: 10,
     ...overrides,
+    // Stated after the spread, and derived from whatever `pot` ended up being: these spots all
+    // have hero covering the bet from a deep stack, so the pot hero can win is the whole middle.
+    // A test that means to describe a hero all-in for less overrides it and says so.
+    contestablePot: overrides.contestablePot ?? overrides.pot ?? 100,
   };
 }
 
@@ -62,6 +66,7 @@ test('a report never presents a figure without its assumptions', () => {
       street: 'preflop',
       opponents: [{ label: 'an opener', range: parseRange('77+, ATs+', parseCards('Ah Ad')) }],
       pot: 30,
+      contestablePot: 30,
       toCall: 20,
       heroCommittedThisStreet: 0,
       heroStack: 500,
@@ -74,6 +79,7 @@ test('a report never presents a figure without its assumptions', () => {
       street: 'river',
       opponents: [{ label: 'the button', range: exactRange(parseCards('Kh Qd')) }],
       pot: 220,
+      contestablePot: 220,
       toCall: 80,
       heroCommittedThisStreet: 0,
       heroStack: 300,
@@ -115,6 +121,7 @@ test('a sampled figure always carries its interval; an exact one reports null ra
       { label: 'a wide range', range: parseRange('22+, A2s+, KTs+, QJs, A9o+, KQo', parseCards('Ah Kh')) },
     ],
     pot: 30,
+    contestablePot: 30,
     toCall: 20,
     heroCommittedThisStreet: 0,
     heroStack: 500,
@@ -220,6 +227,7 @@ test('outs are reported with cards to come and omitted on the river', () => {
     street: 'river',
     opponents: [{ label: 'villain', range: exactRange(parseCards('Qs Qd')) }],
     pot: 100,
+    contestablePot: 100,
     toCall: 50,
     heroCommittedThisStreet: 0,
     heroStack: 400,
@@ -321,6 +329,10 @@ function nineOutFlushDraw(overrides: Partial<CoachInput> = {}): CoachInput {
     opponentStacks: [400],
     bigBlind: 10,
     ...overrides,
+    // Stated after the spread, and derived from whatever `pot` ended up being: these spots all
+    // have hero covering the bet from a deep stack, so the pot hero can win is the whole middle.
+    // A test that means to describe a hero all-in for less overrides it and says so.
+    contestablePot: overrides.contestablePot ?? overrides.pot ?? 100,
   };
 }
 
@@ -423,6 +435,10 @@ function eightOutStraightDraw(overrides: Partial<CoachInput> = {}): CoachInput {
     opponentStacks: [400],
     bigBlind: 10,
     ...overrides,
+    // Stated after the spread, and derived from whatever `pot` ended up being: these spots all
+    // have hero covering the bet from a deep stack, so the pot hero can win is the whole middle.
+    // A test that means to describe a hero all-in for less overrides it and says so.
+    contestablePot: overrides.contestablePot ?? overrides.pot ?? 100,
   };
 }
 
@@ -534,6 +550,7 @@ test('the shortcut is withheld where it cannot mean anything, and says why', () 
         street: 'flop',
         opponents: [{ label: 'ace high', range: exactRange(parseCards('As Kd')) }],
         pot: 100,
+        contestablePot: 100,
         toCall: 50,
         heroCommittedThisStreet: 0,
         heroStack: 400,
@@ -558,6 +575,7 @@ test('the shortcut is withheld where it cannot mean anything, and says why', () 
         street: 'river',
         opponents: [{ label: 'the button', range: exactRange(parseCards('Kh Qd')) }],
         pot: 220,
+        contestablePot: 220,
         toCall: 80,
         heroCommittedThisStreet: 0,
         heroStack: 300,
@@ -665,6 +683,10 @@ function countedTurn(overrides: Partial<CoachInput> = {}): CoachInput {
     // moved would make this test fail for a reason that has nothing to do with it.
     assumedFoldEquity: 0.35,
     ...overrides,
+    // Stated after the spread, and derived from whatever `pot` ended up being: these spots all
+    // have hero covering the bet from a deep stack, so the pot hero can win is the whole middle.
+    // A test that means to describe a hero all-in for less overrides it and says so.
+    contestablePot: overrides.contestablePot ?? overrides.pot ?? 400,
   };
 }
 
@@ -926,6 +948,7 @@ test('a hand that is drawing dead is priced as a pure bluff, with no equity cred
     street: 'river',
     opponents: [{ label: 'trip kings', range: exactRange(parseCards('Kh Kc')) }],
     pot: 140,
+    contestablePot: 140,
     toCall: 45,
     heroCommittedThisStreet: 0,
     heroStack: 500,
@@ -1041,6 +1064,7 @@ test('with nothing to call, fold is never ranked above check', () => {
         street: 'river',
         opponents: [{ label: 'trip kings', range: exactRange(parseCards('Kh Kc')) }],
         pot: 140,
+        contestablePot: 140,
         toCall: 0,
         heroCommittedThisStreet: 0,
         heroStack: 0,
@@ -1057,6 +1081,7 @@ test('with nothing to call, fold is never ranked above check', () => {
         street: 'river',
         opponents: [{ label: 'trip kings', range: exactRange(parseCards('Kh Kc')) }],
         pot: 140,
+        contestablePot: 140,
         toCall: 0,
         heroCommittedThisStreet: 0,
         heroStack: 500,
@@ -1075,6 +1100,7 @@ test('with nothing to call, fold is never ranked above check', () => {
         street: 'flop',
         opponents: [{ label: 'top pair', range: exactRange(parseCards('Ks Qd')) }],
         pot: 0,
+        contestablePot: 0,
         toCall: 0,
         heroCommittedThisStreet: 0,
         heroStack: 0,
@@ -1138,6 +1164,7 @@ test('no figure a report publishes, in a number or in a sentence, is a probabili
         street: 'flop',
         opponents: [{ label: 'ace high', range: exactRange(parseCards('As Kd')) }],
         pot: 100,
+        contestablePot: 100,
         toCall: 50,
         heroCommittedThisStreet: 0,
         heroStack: 400,
@@ -1156,6 +1183,7 @@ test('no figure a report publishes, in a number or in a sentence, is a probabili
         street: 'river',
         opponents: [{ label: 'trip kings', range: exactRange(parseCards('Kh Kc')) }],
         pot: 140,
+        contestablePot: 140,
         toCall: 45,
         heroCommittedThisStreet: 0,
         heroStack: 500,

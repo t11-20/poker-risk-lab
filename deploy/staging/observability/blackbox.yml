@@ -1,0 +1,102 @@
+# ---------------------------------------------------------------------------
+# Blackbox probe modules: the only thing in this stack that looks at the
+# deployment from OUTSIDE the application.
+#
+# ## The blind spot this closes
+#
+# Every other rule in `alert-rules.yml` reads a series the API exports about
+# itself, and Prometheus scrapes the API **directly on the compose network** at
+# `api:3001`. The API's own healthcheck targets its own container. So a total,
+# obvious, user-facing outage — nginx dead, TLS material unreadable, the
+# certificate expired, the Next.js page server gone, DNS wrong at the edge —
+# produces this: `up{job="prl-api"}` stays 1, `prl_readiness_state` stays 1, the
+# request counters simply go flat, and **not one rule keys on the absence of
+# traffic**. Every learner sees a dead site and every alert is green.
+#
+# It is not hypothetical that nothing watches this: `pnpm run staging up` does
+# check the public origin over TLS, with the CA, in 72 smoke checks — once, at
+# deploy time, and never again.
+#
+# A rule on "requests stopped arriving" is the obvious alternative and it is a bad
+# one on this deployment: an educational lab with a class of thirty has whole nights
+# with no traffic, so absence of requests is the healthy overnight state and a rule
+# on it would be silenced within a week. A synthetic request has no such ambiguity —
+# it is made every 15 seconds, by us, through the front door, and when it stops
+# working something is broken.
+#
+# ## What a probe here does and does not prove
+#
+# It proves: the proxy process is listening and terminating TLS; the certificate it
+# presents is valid, in date, and issued by the CA this deployment trusts; the
+# request is routed to the right upstream; that upstream answers 200; and the body
+# came from the application rather than from an error page. That is the entire
+# path between a learner's browser and the product, minus the network to the host.
+#
+# It does not prove: that DNS outside this host resolves, that a firewall lets a
+# learner in, or that Docker's port publishing works. See `prl-public-origin` in
+# prometheus.yml for why the probe cannot be aimed at the published port and stay
+# portable, and `docs/production/runbooks/public-origin-unreachable.md` for what
+# still has to be checked by hand from off the box.
+#
+# ## Why `server_name` is set, and why the target is not the public origin
+#
+# The staging public origin is `https://localhost:8443` and the leaf certificate's
+# only names are `localhost` and `127.0.0.1`. Inside a container `localhost` is that
+# container, so a probe cannot use the origin's own URL here; it goes to the proxy
+# by its compose service name instead. `server_name` then makes the handshake
+# present and verify the name the origin actually uses, so what is checked is the
+# certificate a learner is served rather than a different code path. A production
+# deployment points these same modules at its real origin URL and needs neither the
+# override nor `ca_file`.
+# ---------------------------------------------------------------------------
+
+modules:
+  # The learner's front door: the page server, through the proxy, over TLS.
+  learner_page_https:
+    prober: http
+    # Comfortably inside the 15 s scrape interval. A probe that outruns its own
+    # scrape reports a timeout that is the probe's fault rather than the site's.
+    timeout: 10s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      # `_next/static` appears in every server-rendered page of this app and in no
+      # error page any of the three tiers produces. Status alone would accept an
+      # nginx default page, a maintenance stub or a proxy answering for an upstream
+      # that is gone — "200" is a claim about the proxy, and this is a claim about
+      # the application.
+      fail_if_body_not_matches_regexp:
+        - '_next/static'
+      # The compose network is IPv4. The default preference is IPv6 with fallback,
+      # which turns every probe into a failed connection followed by a working one
+      # and makes `probe_duration_seconds` meaningless.
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+      tls_config:
+        # The staging CA, mounted read-only. Verification is the point: a probe with
+        # `insecure_skip_verify` would keep reporting success through an expired
+        # certificate, which is one of the two failures this file exists for.
+        ca_file: /etc/blackbox/tls/staging-ca.pem
+        server_name: localhost
+      headers:
+        Host: localhost
+
+  # The API's liveness route, reached the way a browser reaches it — through the
+  # proxy, not on the compose network. `ApiDown` already watches the API directly;
+  # this watches the ROUTE to it, which is the half that alert cannot see. When this
+  # fails and `ApiDown` is silent, the API is fine and the proxy is not.
+  api_health_https:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      fail_if_body_not_matches_regexp:
+        - '"status":"ok"'
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+      tls_config:
+        ca_file: /etc/blackbox/tls/staging-ca.pem
+        server_name: localhost
+      headers:
+        Host: localhost

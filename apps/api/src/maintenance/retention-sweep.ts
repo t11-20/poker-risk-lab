@@ -162,6 +162,13 @@ export interface RetentionSweepOptions {
    * a deploy close enough to be visible in a log somebody is watching.
    */
   readonly intervalMs?: number;
+  /**
+   * How long after start the FIRST sweep runs. See `startRetentionSweep`, where the number is
+   * argued and where the incident it closes is written down.
+   *
+   * A parameter only so a test can express a deployment's lifetime; nothing in the product sets it.
+   */
+  readonly firstSweepDelayMs?: number;
   /** Rows per statement. Passed straight to the repository's own `limit`. */
   readonly batchSize?: number;
   /**
@@ -194,8 +201,13 @@ export interface RetentionSweepOptions {
   /** Injected by the tests so a sweep can be driven without waiting six hours. */
   readonly setIntervalImpl?: typeof setInterval;
   readonly clearIntervalImpl?: typeof clearInterval;
+  /** The same, for the one-shot that runs the FIRST sweep. See `startRetentionSweep`. */
+  readonly setTimeoutImpl?: typeof setTimeout;
+  readonly clearTimeoutImpl?: typeof clearTimeout;
   readonly now?: () => number;
 }
+
+export const FIRST_SWEEP_DELAY_MS = 60_000;
 
 const DEFAULT_INTERVAL_MS = 6 * 60 * 60 * 1_000;
 const DEFAULT_BATCH_SIZE = 1_000;
@@ -351,10 +363,48 @@ export async function runRetentionSweep(
 /**
  * Starts the sweep and returns a handle that stops it.
  *
- * The first sweep runs on the first tick rather than immediately: boot is the busiest moment a
- * process has — migrations may still be settling, the worker pool is warming, and `/ready` has not
- * answered yet — and there is nothing about an expired row that cannot wait six hours longer than
- * it already has.
+ * ## The first sweep is a one-shot at `FIRST_SWEEP_DELAY_MS`, not the first tick of the interval
+ *
+ * ############################################################################
+ * ## A DEPLOYMENT THAT SHIPS MORE OFTEN THAN THE INTERVAL USED TO SWEEP     ##
+ * ## NOTHING. NOT LATE — NEVER.                                             ##
+ * ############################################################################
+ *
+ * This used to be one `setInterval`, so the first sweep was at T+6h, on the reasoning that "boot is
+ * the busiest moment a process has ... and there is nothing about an expired row that cannot wait
+ * six hours longer than it already has". The premise is right and is kept below. The conclusion did
+ * not follow: a process that never reaches six hours of uptime never reaches its first sweep, so a
+ * deployment that ships twice a day enforced no retention period at all, for its whole life.
+ * Reproduced in `test/retention-sweep.test.ts` — eight consecutive five-hour deployments, zero
+ * sweeps — and the population it silently retains is not a tidiness question: it is every expired
+ * session, every abandoned federated sign-in attempt, and every abandoned guest account, which is
+ * an account minted for every visitor who ever opened a lesson. `/privacy` publishes periods for
+ * all three.
+ *
+ * Nothing could see it, either, which is the half that let it survive. `prl_retention_sweep_age_
+ * seconds` substitutes PROCESS UPTIME while this process has not swept, so it is reset by the very
+ * restarts that cause the problem: a six-hourly redeploy draws a sawtooth peaking at 21,600 s
+ * against a `RetentionSweepStalled` threshold of 27,000 s, and never fires. That substitution is
+ * defended in `observability/metrics.ts` by "a process restarting often enough to hide a dead timer
+ * this way is already `ProcessRestartLoop`" — which is `changes(...[15m]) >= 3`, and four restarts
+ * a day is not within two orders of magnitude of it.
+ *
+ * That defence becomes TRUE at sixty seconds, and it is why the number is sixty rather than zero:
+ * three processes that each die before their first sweep now fit inside fifteen minutes, so the
+ * only restart pattern that can hide a dead sweep is one `ProcessRestartLoop` already pages for.
+ * The test asserts that arithmetic against the rule's own literals rather than leaving it here as a
+ * sentence. Sixty seconds is also comfortably past everything the original paragraph was protecting
+ * — migrations, the worker pool, the first `/ready` — while being shorter than any deploy cadence a
+ * human operates.
+ *
+ * No jitter, deliberately. Jitter is for a thundering herd across replicas, and `replicas: 1` is a
+ * correctness constraint here (ADR 0001, and `rooms/ownership.ts` enforces it), so there is exactly
+ * one process and nothing to spread.
+ *
+ * What this does NOT fix, stated because somebody will otherwise assume it did: the age gauge still
+ * cannot answer "did the PREVIOUS process sweep?", because it is derived from this process's
+ * uptime. A durable answer — the oldest `expires_at` still present, or a persisted marker — is a
+ * change to what the gauge reads and belongs with the alert rule it feeds.
  *
  * `unref()` so a sweep timer alone never keeps the process alive. A process whose only remaining
  * work is a maintenance timer should exit.
@@ -362,7 +412,12 @@ export async function runRetentionSweep(
 export function startRetentionSweep(options: RetentionSweepOptions): { stop: () => void } {
   const setIntervalFn = options.setIntervalImpl ?? setInterval;
   const clearIntervalFn = options.clearIntervalImpl ?? clearInterval;
+  const setTimeoutFn = options.setTimeoutImpl ?? setTimeout;
+  const clearTimeoutFn = options.clearTimeoutImpl ?? clearTimeout;
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
+  // Clamped to the interval so a caller that shortens the interval for a test does not get a first
+  // sweep that arrives after the second one would have.
+  const firstSweepDelayMs = Math.min(options.firstSweepDelayMs ?? FIRST_SWEEP_DELAY_MS, intervalMs);
 
   // Guards against a tick firing while the previous sweep is still running — possible if a sweep
   // ever takes longer than the interval, which a large first backlog on a slow database could.
@@ -370,7 +425,7 @@ export function startRetentionSweep(options: RetentionSweepOptions): { stop: () 
   // independent) but they would double the load at exactly the wrong moment.
   let running = false;
 
-  const timer = setIntervalFn(() => {
+  const sweep = (): void => {
     if (running) return;
     running = true;
     void runRetentionSweep(options)
@@ -379,16 +434,34 @@ export function startRetentionSweep(options: RetentionSweepOptions): { stop: () 
       .finally(() => {
         running = false;
       });
-  }, intervalMs);
+  };
 
   // `unref` is not on the fake timers a test injects, so it is called only when it exists.
-  if (typeof (timer as { unref?: () => void }).unref === 'function') {
-    (timer as { unref: () => void }).unref();
-  }
+  const unref = (timer: unknown): void => {
+    if (typeof (timer as { unref?: () => void }).unref === 'function') {
+      (timer as { unref: () => void }).unref();
+    }
+  };
+
+  let interval: ReturnType<typeof setInterval> | null = null;
+  let stopped = false;
+
+  const first = setTimeoutFn(() => {
+    // A `stop()` between arming this and it firing is an ordinary shutdown, and the fake timers a
+    // test injects do not all cancel. Checked rather than trusted, so a stopped schedule cannot
+    // start an interval nothing holds a handle to.
+    if (stopped) return;
+    sweep();
+    interval = setIntervalFn(sweep, intervalMs);
+    unref(interval);
+  }, firstSweepDelayMs);
+  unref(first);
 
   return {
     stop: () => {
-      clearIntervalFn(timer);
+      stopped = true;
+      clearTimeoutFn(first);
+      if (interval !== null) clearIntervalFn(interval);
     },
   };
 }

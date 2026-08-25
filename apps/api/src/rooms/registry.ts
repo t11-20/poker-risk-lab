@@ -1060,6 +1060,17 @@ export class RoomRegistry {
     //     nobody restarts the process — and then applies, months later, at a deploy nobody
     //     connected to it. The seat is left free, the learner keeps their membership and can watch,
     //     and their next `sit` gets the honest refusal with the sentence that tells them what to do.
+    //
+    //     "Left free" has to be made true in the DATABASE as well, and that is what the
+    //     `unseatMember` below is. `room_members_live_seat_key` is UNIQUE `(room_id, seat) WHERE
+    //     left_at IS NULL`, so a row that still names seat 3 holds seat 3 whether or not anybody
+    //     is in it: the live table would report the chair empty, the next learner to tap it would
+    //     be refused by that index with `seat_taken`, and it would stay that way for the life of
+    //     the room. That is the exact phantom-chair state `standFromTable` records having produced
+    //     once already — "the room summary showed the seat free, the next client to tap it was
+    //     refused for the rest of the process's life" — reached here instead. The write only nulls
+    //     `seat`; the membership and the STACK stay, so nothing the learner won is lost and a
+    //     re-entitled learner still buys in at what they had.
     //   * **A read that FAILS leaves the seat unrestored too**, because it goes through the catch
     //     below. That is fail-closed, and consistent with `buildRoom`, which refuses to open a room
     //     whose lease it cannot read. This path has already made two successful queries to get here
@@ -1074,11 +1085,33 @@ export class RoomRegistry {
       try {
         if (!member.is_bot && !(await this.entitledToResumeSeat(member.user_id))) {
           this.metrics.seatEntitlementRefusals.inc({ reason: 'seat_not_restored' });
+          // Fail-soft, and deliberately: a chair that could not be freed is a chair nobody else
+          // can take, which is a worse table than the one this open would otherwise refuse to
+          // produce at all. The refusal above already stands whether or not this write lands.
+          const freed = await this.store
+            .unseatMember(roomId, member.user_id)
+            .then(() => true)
+            .catch((error: unknown) => {
+              // Counted here because `seat-release` is `counted-at-source` in `classifyProblem`,
+              // and the source is this line: a log event whose counter never moves is a series an
+              // alert cannot see. The consequence is the one `seatReleaseFailures` names exactly —
+              // a chair the summary shows free that the next client is refused `seat_taken` for —
+              // so it is the same counter and the same runbook, not a new one.
+              this.metrics.seatReleaseFailures.inc({}, 1);
+              this.onProblem('a seat left empty by an expired enrolment could not be freed', {
+                event: 'seat-release',
+                roomId,
+                seat: member.seat,
+                error: String(error),
+              });
+              return false;
+            });
           this.onProblem('a recorded seat was not restored: its holder is no longer entitled to sit', {
             event: 'seat-entitlement',
             roomId,
             seat: member.seat,
             userId: member.user_id,
+            freed,
           });
           continue;
         }
@@ -1425,6 +1458,13 @@ export class RoomRegistry {
    */
   closeAll(): void {
     for (const roomId of [...this.rooms.keys()]) this.close(roomId);
+    // A room whose build is still in flight holds a lease and is NOT in `this.rooms` yet — the
+    // lease is taken first, deliberately, and `buildOwnedRoom` is several awaits long after it. So
+    // the loop above cannot see it, and without this line the entry is simply dropped when the
+    // process goes: the row stays, and the replacement process is refused that room for a whole
+    // `LEASE_TTL_MS`. `shutdown()` avoids reaching this by waiting for the build; this is the
+    // backstop for the callers that cannot wait, and for a build that never settles.
+    for (const roomId of [...this.leases.keys()]) this.releaseLeaseSoon(roomId);
     this.heartbeatTask?.cancel();
     this.heartbeatTask = null;
   }
@@ -1438,10 +1478,25 @@ export class RoomRegistry {
    * up to `LEASE_TTL_MS` — which is precisely the overlap window this whole mechanism exists to
    * make safe, turned into an outage instead.
    *
+   * ## Why the in-flight builds are waited for first
+   *
+   * `closeAll` can only close what is in `this.rooms`, and an open in flight is not: the lease is
+   * taken before `reconcileInterruptedHands` (which is a hard rule, argued in `buildRoom`) and the
+   * room is published several awaits later. A SIGTERM that lands in that gap used to produce two
+   * things at once, both reproduced — the lease was never released, so the replacement refused that
+   * room for a full TTL on a deploy that was otherwise seamless; and the build then published a
+   * `LiveRoom` with its table, bots and turn timer into a registry that had already shut down, with
+   * nothing left able to close them. Waiting is bounded: every await in a build is a query, and
+   * `db.ts` bounds every query at `DATABASE_STATEMENT_TIMEOUT_MS + 2,000` ms.
+   *
+   * `allSettled` and not `all`, because a build that FAILED has already released its own lease in
+   * `buildRoom`'s catch, and a rejection here must not skip the close below.
+   *
    * Never rejects. A release that fails is reported through `onProblem` inside the chain and the
    * lease expires on its own; a shutdown path that could throw here would be a deploy that hangs.
    */
   async shutdown(): Promise<void> {
+    await Promise.allSettled([...this.opening.values()]);
     this.closeAll();
     await this.releaseQueue;
   }
@@ -1560,11 +1615,48 @@ export class RoomRegistry {
    * whatever the reason, because past that point another process is about to become entitled to it
    * and we cannot prove we still hold it. `ownership.ts` has the argument for the three numbers and
    * for why this threshold is strictly below the TTL.
+   *
+   * ## Why the verdict is applied to `asked` and not to `this.leases`
+   *
+   * A beat is a database round trip, and `acquireLease` runs on the request path throughout it. So
+   * `this.leases` at the bottom of this method is not the map that was read at the top: any room
+   * opened while the statement was out there has been added to it, and that room was never in the
+   * `roomIds` the statement carried — so it cannot be in the answer either. Judging the current map
+   * against an answer to an older question read every one of those rooms as FENCED.
+   *
+   * `asked` holds the FENCE each room had when the statement left, not merely which rooms there
+   * were, because there are two ways a lease entry can be one this beat has nothing to say about.
+   * The common one is a room opened mid-beat. The other is a room that was closed and re-opened
+   * inside one beat: `close` releases the row and the re-open inserts it again, so a statement that
+   * executed in the gap between those two legitimately does not return it — and the entry it would
+   * be judging is a NEW acquisition at a NEW fence, which `acquire` increments on every acquisition
+   * for exactly this kind of question. Comparing the fence answers both with one test, and does it
+   * without consulting a clock: the tests here drive a manual clock that never advances, so any
+   * rule of the form "confirmed since the beat started" would be true of everything.
+   *
+   * Both halves of what that produced were reproduced against this class with a beat held open
+   * across an `open()`:
+   *
+   *   * if the eviction landed AFTER the build published the room, a table a learner had just
+   *     opened was closed under them, their sockets were closed with `serverShuttingDown`, and
+   *     `prl_api_room_fencings_total{reason="fenced"}` — a zero-tolerance series — rose for an
+   *     incident that had not happened;
+   *   * if it landed BEFORE the build's `this.rooms.set` (the build is several awaits long), the
+   *     eviction deleted a lease entry the room did not have yet and the room was then published
+   *     with NO entry in `this.leases`. Nothing renews a room that is not in that map, so its
+   *     `heartbeat_at` goes stale, this process never self-evicts because it holds no lease to
+   *     time out, and after `LEASE_TTL_MS` another process is entitled to take a room this one is
+   *     still dealing at. That is precisely the two-processes-one-room state the lease exists to
+   *     make impossible, reached through the guard instead of around it.
+   *
+   * A lease this beat has nothing to say about needs no verdict from it: `acquireLease` has just
+   * stamped its `confirmedAt`, and the next beat asks about it.
    */
   async heartbeatLeases(): Promise<void> {
     const ownership = this.ownership;
     if (ownership === null || this.leases.size === 0) return;
-    const roomIds = [...this.leases.keys()];
+    const asked = new Map([...this.leases].map(([roomId, lease]) => [roomId, lease.fence]));
+    const roomIds = [...asked.keys()];
     let renewed: readonly string[] | null = null;
     let failure: unknown = null;
     try {
@@ -1579,6 +1671,7 @@ export class RoomRegistry {
     const now = this.clock.now();
     const held = renewed === null ? null : new Set(renewed);
     for (const [roomId, lease] of [...this.leases]) {
+      if (asked.get(roomId) !== lease.fence) continue;
       if (held !== null) {
         if (held.has(roomId)) {
           lease.confirmedAt = now;
@@ -1626,7 +1719,16 @@ export class RoomRegistry {
         // sockets it failed to close are closed by their own heartbeat within two intervals.
       }
     }
-    this.onProblem(
+    // Guarded for the same reason the listener loop above is, and the omission was the same
+    // omission: the eviction has already happened, and nothing after this point may be able to
+    // undo it. A throwing hook here is not hypothetical — the production one is `app.log.warn`,
+    // and `test/room-ownership.test.ts` already provokes a build failure with "the log serialiser
+    // threw" — and its consequence was worse here than in the build. `heartbeatLeases` is called
+    // as `void this.heartbeatLeases().finally(...)`, so a rejection out of it is an UNHANDLED
+    // rejection, which Node's default handling turns into a dead process: a logger fault during a
+    // fencing took the API down, in the middle of the incident the fencing was reporting. It also
+    // skipped the release below.
+    this.report(
       reason === 'fenced'
         ? 'another API process took this room; it has been closed here'
         : 'this process could not renew the lease on a room and has stopped serving it',
@@ -1641,6 +1743,24 @@ export class RoomRegistry {
       },
     );
     if (reason === 'lease_expired') this.releaseLeaseSoon(roomId);
+  }
+
+  /**
+   * `onProblem`, for the handful of places where the report must not be able to undo the action.
+   *
+   * NOT a blanket replacement, and deliberately not: everywhere else, a hook that throws is a fault
+   * the caller should see, and `buildRoom` relies on exactly that to prove it gives a lease back
+   * when a build fails. This is for the paths where the safety property has ALREADY been achieved
+   * by the time the line is written — an eviction, a lease release — and where a throw would either
+   * skip the cleanup after it or escape into a promise nobody is awaiting.
+   */
+  private report(...args: Parameters<ProblemHook>): void {
+    try {
+      this.onProblem(...args);
+    } catch {
+      // There is nowhere left to report a reporting failure to. Swallowed rather than counted, for
+      // the reason the eviction listener loop gives: the thing that mattered has already happened.
+    }
   }
 
   /**
@@ -1663,7 +1783,13 @@ export class RoomRegistry {
         // Logged and swallowed, like an archive write and for the same reason: a failed release
         // must not wedge the chain for every later room, and it must not fail a shutdown. The cost
         // is bounded and worth naming — that one room is unopenable until its lease expires.
-        this.onProblem('a room lease could not be released; it will expire on its own', {
+        //
+        // Through `report`, because the swallowing is the point: this catch IS `releaseQueue`, and
+        // `shutdown()` awaits it and promises never to reject. A hook that threw in here put the
+        // rejection straight back into the chain, so a failing release plus a failing logger made
+        // the Fastify `onClose` hook reject — a deploy that fails on the way out, which is the one
+        // thing this path is written to prevent.
+        this.report('a room lease could not be released; it will expire on its own', {
           event: 'room-lease-release',
           roomId,
           ownerId: ownership.ownerId,

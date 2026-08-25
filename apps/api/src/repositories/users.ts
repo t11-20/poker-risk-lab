@@ -605,14 +605,11 @@ export async function deleteAccount(sql: Db, userId: string): Promise<AccountDel
  * ## The incident this shape prevents
  *
  * A sweep that selected ids and then deleted them in a later statement can delete an account that
- * became live in between. Here the second evaluation runs inside the deleting transaction under
- * `FOR UPDATE` on the account row, and PostgreSQL's `FOR UPDATE` conflicts with the `FOR KEY
- * SHARE` that any INSERT referencing that row must take — so a session, membership, hand seat or
- * enrolment cannot be created for an account while this holds the lock, and one created before it
- * is seen by the re-check. That covers the operator CLI as well as the request path: an instructor
- * enrolling a class at the same instant as a sweep tick either lands before the lock and is seen,
- * or blocks until the sweep has finished with that row. The check and the delete are therefore not two moments a race can live
- * between. Same reasoning as `consumeLoginAttempt` in `sessions.ts`, for the same reason.
+ * became live in between. So the fragment is evaluated a second time inside the deleting
+ * transaction, and `deleteAbandonedGuest` takes the row lock BEFORE it, in a statement of its own.
+ * That ordering is the whole of the guard and it is argued there, because getting it wrong is not
+ * visible from here: locking and asking in ONE statement passes every test, blocks for exactly as
+ * long as it should, and still answers from the snapshot it took before it blocked.
  */
 function abandonedGuestPredicate(sql: Db, cutoffSeconds: number) {
   return sql`
@@ -693,10 +690,48 @@ export async function findAbandonedGuests(sql: Db, query: AbandonedGuestQuery): 
  *
  * See `abandonedGuestPredicate`. The caller chose this id from a query that ran earlier, in
  * another transaction, against a snapshot that is now old. This is the evaluation that matters:
- * it runs under `FOR UPDATE`, in the transaction that does the deleting, so "still abandoned" and
- * "deleted" are the same moment. Returning null rather than throwing is deliberate — an account
- * that came back to life between the two is a correct outcome of a correct guard, not an error,
- * and the sweep counts it as not removed.
+ * it runs in the transaction that does the deleting, under a lock already held, so "still
+ * abandoned" and "deleted" are the same moment. Returning null rather than throwing is deliberate —
+ * an account that came back to life between the two is a correct outcome of a correct guard, not an
+ * error, and the sweep counts it as not removed.
+ *
+ * ## Why the lock is a statement of its own, and this is the whole of the fix
+ *
+ * ############################################################################
+ * ## LOCK, THEN ASK. ONE STATEMENT THAT DOES BOTH ANSWERS FROM THE SNAPSHOT ##
+ * ## IT TOOK BEFORE IT BLOCKED, WHICH IS THE SNAPSHOT WITHOUT THE ROW.      ##
+ * ############################################################################
+ *
+ * This used to be one `select u.id from prl.users u where u.id = $1 and <predicate> for update`,
+ * on the reasoning that `FOR UPDATE` conflicts with the `FOR KEY SHARE` an INSERT referencing the
+ * row must take — so nothing could be created for the account while the lock was held, and
+ * anything created before it would be seen. The first half is true. The second is not, and the
+ * gap between them destroyed a student's place in a course.
+ *
+ * Measured against Postgres 17 on a scratch database, with an `enrolments grant` transaction that
+ * had inserted and not yet committed: the sweep's statement **blocked for 1,124 ms** on exactly
+ * the lock conflict above, and then returned the account as abandoned anyway. Under READ
+ * COMMITTED a statement's snapshot is taken when the statement STARTS. Waiting on a row lock does
+ * not refresh it, and PostgreSQL re-checks a qual after such a wait only when the locked tuple was
+ * itself updated (EvalPlanQual) — an INSERT into `prl.enrolments` does not update `prl.users`, it
+ * only locks it. So the `not exists` had already been evaluated against a snapshot that predates
+ * the instructor's commit, and the answer survived the wait unchanged. The account went, and
+ * `enrolments_user_id_fkey` is ON DELETE CASCADE, so the place went with it — three weeks before
+ * the course, with nothing left that names the person, which is D9 all over again through a door
+ * D9's fix did not close.
+ *
+ * `consumeLoginAttempt` in `sessions.ts` was cited as the precedent and is not one: it is a single
+ * `UPDATE ... WHERE`, and an UPDATE is the case PostgreSQL does re-check.
+ *
+ * Two statements fix it. The bare `FOR UPDATE` blocks until the account is nobody else's business;
+ * the predicate then runs as a NEW statement, which takes a NEW snapshot, and that snapshot is
+ * after every transaction the lock made us wait for. Nothing can insert between them, because we
+ * hold the lock that would be needed to.
+ *
+ * The cost, stated because it is real: one extra round trip per candidate, inside a transaction
+ * this function was already opening, on a timer that runs four times a day and off every request
+ * path. That is the same trade the paragraph above makes for `deleteAccount`'s self-verification,
+ * and for the same reason.
  *
  * Requires a transaction handle for the reason `deleteAccount` does, and says so the same way.
  */
@@ -711,14 +746,22 @@ export async function deleteAbandonedGuest(
     });
   }
 
+  // Statement one: take the lock and nothing else. No predicate here on purpose — the predicate
+  // must not be answered from the snapshot this statement had before it started waiting.
   const locked = await sql<{ id: string }[]>`
+    select u.id from prl.users u where u.id = ${userId} for update
+  `;
+  if (locked[0] === undefined) return null;
+
+  // Statement two: a new statement, so a new snapshot, taken after every transaction the lock
+  // above made us wait for has committed. This is the evaluation that decides.
+  const abandoned = await sql<{ id: string }[]>`
     select u.id
       from prl.users u
      where u.id = ${userId}
        and ${abandonedGuestPredicate(sql, cutoffSeconds)}
-       for update
   `;
-  if (locked[0] === undefined) return null;
+  if (abandoned[0] === undefined) return null;
 
   return deleteAccount(sql, userId);
 }

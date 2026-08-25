@@ -27,7 +27,7 @@ CPU-bound work is crowding out everything else. Two distinct failures share this
 | Alert | Rule | Severity |
 | --- | --- | --- |
 | `EventLoopBlocked` | `prl_event_loop_delay_p99_seconds > 0.25` for 5 minutes | page |
-| `WorkerPoolQueueDeep` | `avg_over_time(prl_worker_pool_queued[10m]) > 4` for 15 minutes | ticket |
+| `WorkerPoolQueueDeep` | `avg_over_time(prl_worker_pool_queued[10m]) > scalar(max(prl_worker_pool_size)) * 3 / 2` for 15 minutes | ticket |
 | `AnalysisTimeouts` | > 5% of analyses time out over 10 minutes | ticket |
 
 ```bash

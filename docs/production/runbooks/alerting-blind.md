@@ -207,7 +207,7 @@ Delivery is not fixed because the counter stopped rising. It is fixed when somet
 1. `pnpm run alerts:preflight -- --handshake` — proves the relay accepts this deployment's
    credentials right now. This is the credential half and only the credential half.
 2. **`pnpm run alerts:ack`** — a real page through the real route tree, carrying a one-time code
-   that appears nowhere except in the delivered notification, and a bounded window in which a
+   that is never printed on the passing path, and a bounded window in which a
    person has to type it back. Nothing else establishes the last hop: a relay that accepts the
    mail and a gateway that silently drops it are indistinguishable from this end. It is a command,
    but its pass condition is still a person with a phone, and it fails loudly when nobody answers.

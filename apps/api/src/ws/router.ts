@@ -83,6 +83,7 @@ import type {
 } from '@prl/contracts';
 import { ERROR_MESSAGES, WS_CLOSE, WS_LIMITS, WS_PROTOCOL_VERSION, wsCloseForError } from '@prl/contracts';
 import type { Card, PlayerView, SeatView } from '@prl/poker-engine';
+import { contestablePotFor } from '@prl/poker-engine';
 import { type Street as BettingStreetName, buildCoachReport, type CoachAction } from '@prl/poker-math';
 import { STRENGTH_TABLE_ALLOWANCE_MS } from '../calc/parse.ts';
 import type { AppConfig } from '../config.ts';
@@ -1077,6 +1078,15 @@ interface CoachSituation {
   readonly street: BettingStreetName;
   readonly opponents: readonly SeatView[];
   readonly legalActions: readonly CoachAction[];
+  /**
+   * The part of `view.potTotal` hero could actually win, from the engine's own layering.
+   *
+   * Read once, here, for the same reason `legalActions` is: the task a thread runs and the report
+   * `coachForView` computes must not be able to disagree about it. It is the whole middle in every
+   * ordinary spot and less than it exactly when hero is all-in for less than the bet — the case
+   * that used to price a call against a side pot hero is not in.
+   */
+  readonly contestablePot: number;
   /** Hero's cards and the board: what no opponent can be holding. */
   readonly dead: readonly Card[];
   /** The range the caller named, or the default. Still a string: `top:NN` must not expand here. */
@@ -1131,12 +1141,25 @@ function readCoachSituation(view: PlayerView, options: CoachForViewOptions): Coa
           : `a Coach request arrived for seat ${own.seat} while seat ${String(view.toAct)} is to act`,
     });
   }
+  // Asked of the engine rather than derived from the view's numbers. `view.seats` carries every
+  // seat's street commitment and status, which is exactly what the layering rule reads, and
+  // `view.amountToCall` is already capped at hero's stack — so this is the same question the
+  // dealer answers when the hand is settled, asked one call early. Every seat is passed, folded
+  // ones included: their chips are in the middle and hero can win them.
+  const { contestable } = contestablePotFor({
+    seats: view.seats,
+    heroSeat: own.seat,
+    callAmount: view.amountToCall,
+    potTotal: view.potTotal,
+  });
+
   return {
     own,
     heroCards,
     street,
     opponents,
     legalActions,
+    contestablePot: contestable,
     dead: [...heroCards, ...view.board],
     notation: options.opponentRange ?? DEFAULT_COACH_RANGE,
   };
@@ -1197,6 +1220,7 @@ export function coachTaskForView(view: PlayerView, options: CoachForViewOptions)
     },
     street: situation.street,
     pot: view.potTotal,
+    contestablePot: situation.contestablePot,
     toCall: view.amountToCall,
     // Both taken from the view rather than derived: `to` is a total street commitment,
     // and the minimum is the engine's own, so no size the Coach publishes here can be
@@ -1241,6 +1265,7 @@ export function coachForView(view: PlayerView, options: CoachForViewOptions): Co
       range: assumedRange(situation.notation, situation.dead),
     })),
     pot: view.potTotal,
+    contestablePot: situation.contestablePot,
     toCall: view.amountToCall,
     heroCommittedThisStreet: situation.own.committedThisStreet,
     heroStack: situation.own.stack,

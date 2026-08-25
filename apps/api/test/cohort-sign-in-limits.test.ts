@@ -697,6 +697,11 @@ describe('a script that floods /auth/oidc/start and never calls back', () => {
     const config = testConfig({
       RATE_LIMIT_OIDC_MAX: String(ceiling),
       RATE_LIMIT_OIDC_WINDOW_MS: '1000',
+      // Stated rather than left to the default of 15, exactly as the test above states it. A
+      // ceiling of 4 with a failure budget of 15 is a configuration `checkSignInBudgets` now
+      // refuses on every boot rather than only on a boot that declared a cohort — the failure
+      // budget could never refuse anything the ceiling had not refused already.
+      RATE_LIMIT_OIDC_FAILURE_MAX: String(ceiling - 1),
     });
     const { app, store } = await harness(config, cohortRelyingParty());
 
@@ -937,6 +942,25 @@ describe('a declared cohort that the configured limits cannot serve', () => {
       }),
     );
     assertNames(problems, 'RATE_LIMIT_OIDC_FAILURE_MAX');
+  });
+
+  it('refuses that same failure budget with NO cohort declared (REGRESSION)', () => {
+    // Found by an adversarial review. The check above lived inside `checkCohortSizing`, which
+    // returns immediately when COHORT_SIZE is 0 — the shipped default, and the state `.env.example`
+    // calls the right one for a public instance. So the one deployment shape the failure budget was
+    // written to protect was the one shape that never checked it. Measured against the code as it
+    // stood: RATE_LIMIT_OIDC_FAILURE_MAX=10000 against a ceiling of 60 booted cleanly, while
+    // `.env.example` said "the process refuses to boot if this is not below RATE_LIMIT_OIDC_MAX".
+    //
+    // Both spellings of the violation, because `>=` and `>` are one character apart: equal to the
+    // ceiling makes the budget unreachable, above it makes it absurd, and neither can ever refuse
+    // anything the ceiling has not refused already.
+    for (const failureMax of ['60', '10000']) {
+      const problems = bootProblems(
+        cohortEnv({ RATE_LIMIT_OIDC_MAX: '60', RATE_LIMIT_OIDC_FAILURE_MAX: failureMax }),
+      );
+      assertNames(problems, 'RATE_LIMIT_OIDC_FAILURE_MAX');
+    }
   });
 
   it('checks nothing when no cohort is declared, so a public instance is unaffected', () => {
