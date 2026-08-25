@@ -579,6 +579,72 @@ describe('a script that starts sign-ins it cannot complete', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Property 2a — the budget cannot be spent BY SOMEBODY ELSE
+// ---------------------------------------------------------------------------
+
+/**
+ * Whose budget is it? It is keyed on the client ADDRESS, and that is a third party's opportunity.
+ *
+ * `GET /auth/oidc/callback` is a GET, so a page on any other site can make a visitor's browser
+ * issue it as a plain subresource load — an `<img>`, a `no-cors` `fetch`, a `<script>` tag. CORS
+ * does not stop the request being SENT, only the response being read; a GET carries no CSRF token;
+ * and no session is needed. So every one of those lands in the victim's address bucket.
+ *
+ * Measured against the code this test was written for, with `<img>`-shaped headers:
+ *
+ *     20 cross-site GETs to /auth/oidc/callback     -> 400 x15, then 429 x5
+ *     a real learner's /auth/oidc/start, same address -> 429, retryAfterSeconds 60
+ *
+ * Fifteen image tags on any page one student on a campus network visits locked the whole cohort
+ * out of signing in — which is the failure this entire file exists to prevent, handed to a third
+ * party for free. `routes/auth.ts` now charges a callback failure only once `acceptAttempt` has
+ * succeeded, which is the point at which the caller has presented the `__Host-`, `HttpOnly`,
+ * signed attempt cookie this server set on their browser. No other site can produce one.
+ *
+ * The control is the test above it: a script that starts a REAL flow and then fails at the token
+ * endpoint still spends the budget, and still meets `oidcFailureMax` exactly.
+ */
+describe('a hostile page pointing a victim’s browser at the callback', () => {
+  /** What a browser attaches to a no-cors subresource load from another site. */
+  const CROSS_SITE_SUBRESOURCE: Readonly<Record<string, string>> = {
+    origin: 'https://evil.test',
+    referer: 'https://evil.test/',
+    'sec-fetch-site': 'cross-site',
+    'sec-fetch-mode': 'no-cors',
+    'sec-fetch-dest': 'image',
+  };
+
+  it('cannot spend the victim address’s failure budget', async () => {
+    const config = testConfig();
+    const { app } = await harness(config, cohortRelyingParty());
+    const statuses: number[] = [];
+    // Comfortably past the budget: if any of these charged, the last few would be 429.
+    for (let attempt = 0; attempt < config.rateLimit.oidcFailureMax + 5; attempt += 1) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/api/v1/auth/oidc/callback?state=aaaaaaaa${attempt}`,
+        headers: CROSS_SITE_SUBRESOURCE,
+      });
+      statuses.push(response.statusCode);
+    }
+    assert.equal(
+      statuses.filter((status) => status === 429).length,
+      0,
+      `a cross-site caller exhausted the budget for an address that is not theirs: ${statuses.join(',')}`,
+    );
+
+    // The learner the attack was aimed at. This is the assertion that matters.
+    const victim = await app.inject({ method: 'GET', url: '/api/v1/auth/oidc/start' });
+    assert.equal(
+      victim.statusCode,
+      303,
+      `a learner behind the same address was refused a sign-in by somebody else's traffic: ${victim.payload}`,
+    );
+    await app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Property 2b — the script that never comes back
 // ---------------------------------------------------------------------------
 
@@ -744,29 +810,47 @@ describe('a script that floods /auth/oidc/start and never calls back', () => {
  * and an attacker holding 5,000 addresses already had 5,000 independent budgets.
  *
  * Both directions are driven, because only having one would leave the interesting half untested.
+ *
+ * ## Why every call below names its own `now`
+ *
+ * `refusalFor` returns `windowMs - (now - iterationStartMs)`, so an assertion on the exact figure
+ * is an assertion that the wall clock did not tick between the charge and the read. It does tick:
+ * measured on this machine, `evicts the least recently used key…` — a hundred charges and then a
+ * read — failed with `59999 !== 60000` on 1 run in 7, and the whole `test` gate (and therefore
+ * `pnpm run verify`) failed with it. The mechanism, made deterministic:
+ *
+ *     charge('addr-99', t); refusalFor('addr-99', t)     -> 60000
+ *     charge('addr-99', t); refusalFor('addr-99', t + 1) -> 59999
+ *
+ * `OutcomeBudget` already takes `now` on every method for exactly this reason, so the fix is to
+ * use it rather than to loosen the assertion to a range: the figure IS the `Retry-After` a caller
+ * is handed, and "about a minute" is not what this test is pinning.
  */
 describe('the outcome budgets bound their own memory', () => {
+  /** A fixed instant. Any value; what matters is that every call in a test shares one. */
+  const NOW = 1_700_000_000_000;
+
   it('evicts the least recently used key at capacity and never grows past it', () => {
     const budget = new OutcomeBudget({ max: 1, windowMs: 60_000, cache: 4 });
-    for (let key = 0; key < 100; key += 1) budget.charge(`addr-${key}`);
+    for (let key = 0; key < 100; key += 1) budget.charge(`addr-${key}`, NOW);
     assert.equal(budget.size(), 4, 'the map grew past its cache bound');
     // The most recent four survive; everything older is gone.
-    assert.equal(budget.refusalFor('addr-99'), 60_000);
-    assert.equal(budget.refusalFor('addr-0'), null, 'the oldest key should have been evicted');
+    assert.equal(budget.refusalFor('addr-99', NOW), 60_000);
+    assert.equal(budget.refusalFor('addr-0', NOW), null, 'the oldest key should have been evicted');
   });
 
   it('eviction can only ever PERMIT, which is why flushing it is not an attack', () => {
     const budget = new OutcomeBudget({ max: 1, windowMs: 60_000, cache: 4 });
-    budget.charge('victim');
-    assert.equal(budget.refusalFor('victim'), 60_000, 'the victim must be refused to begin with');
+    budget.charge('victim', NOW);
+    assert.equal(budget.refusalFor('victim', NOW), 60_000, 'the victim must be refused to begin with');
     // An attacker cycles addresses to push the victim out.
-    for (let key = 0; key < 50; key += 1) budget.charge(`attacker-${key}`);
+    for (let key = 0; key < 50; key += 1) budget.charge(`attacker-${key}`, NOW);
     // The victim is now PERMITTED, not refused. That is the only thing eviction can do, and it is
     // why a flushed map cannot be used to deny anybody service. If this ever asserts a refusal,
     // something has been added whose ABSENCE refuses — and that thing is a denial-of-service
     // channel keyed on a cache an anonymous caller controls.
     assert.equal(
-      budget.refusalFor('victim'),
+      budget.refusalFor('victim', NOW),
       null,
       'eviction produced a REFUSAL. An evicted entry must only ever loosen a budget, never ' +
         'tighten one, or filling this map becomes a way to lock other callers out',
@@ -777,11 +861,11 @@ describe('the outcome budgets bound their own memory', () => {
     // A caller who completes many sign-ins must not accumulate negative charge and then spend it
     // on a burst of abandoned starts.
     const budget = new OutcomeBudget({ max: 2, windowMs: 60_000 });
-    for (let credit = 0; credit < 50; credit += 1) budget.credit('addr');
-    assert.equal(budget.chargedFor('addr'), 0);
-    budget.charge('addr');
-    budget.charge('addr');
-    assert.equal(budget.refusalFor('addr'), 60_000, 'banked credit paid for a flood');
+    for (let credit = 0; credit < 50; credit += 1) budget.credit('addr', NOW);
+    assert.equal(budget.chargedFor('addr', NOW), 0);
+    budget.charge('addr', NOW);
+    budget.charge('addr', NOW);
+    assert.equal(budget.refusalFor('addr', NOW), 60_000, 'banked credit paid for a flood');
   });
 });
 
@@ -968,5 +1052,95 @@ describe('a declared cohort that the configured limits cannot serve', () => {
     // written for. A check that made every existing production process refuse to boot would be a
     // worse incident than the one it prevents.
     assert.equal(bootProblems(cohortEnv({})), null);
+  });
+});
+
+/**
+ * The two OIDC GET routes refuse a browser-declared subresource load.
+ *
+ * ## The incident
+ *
+ * An adversarial review measured this: CORS does not stop a cross-site *request*, only the reading
+ * of its response, so sixty `<img>` tags on any page one student on a campus network opens
+ * exhausted that whole address's unredeemed-start budget — and the next real learner to press sign
+ * in got a 429. A third party denying sign-in to an entire cohort for ten minutes, from a page
+ * nobody on the cohort's side controls.
+ *
+ * The budgets are address-keyed and must be (a route that ISSUES a session cannot be keyed by that
+ * session — measured, at the top of `routes/auth.ts`), so the budget itself cannot tell the
+ * attacker from the victim. What can is that a browser states what it is loading a URL *for*.
+ *
+ * ## Would this fail if the guard were unwired?
+ *
+ * These drive the real routes through `app.inject`, not a copy of the predicate. The first draft
+ * of this file asserted against a re-implementation living beside it, which would have passed
+ * against a route with no `preHandler` at all — the check would have been testing itself.
+ */
+describe('the OIDC GET routes and Fetch Metadata', () => {
+  const SUBRESOURCE_DESTS = ['image', 'script', 'style', 'iframe', 'empty', 'font'];
+  // The callback carries a schema-valid query on purpose. Fastify validates BEFORE `preHandler`,
+  // so a callback with no query string is rejected by the schema and the guard never runs — the
+  // first draft of these tests was green for that reason, on a route the guard was not protecting.
+  // `state` is required and must be 8..256 characters; it need not name a real attempt, because
+  // what is under test is which layer answers, not what the handler decides.
+  const ROUTES = ['/api/v1/auth/oidc/start', '/api/v1/auth/oidc/callback?state=probestate123&code=probecode'];
+
+  it('refuses every subresource destination a cross-site page could use (REGRESSION)', async () => {
+    const { app } = await harness(testConfig(), cohortRelyingParty());
+    try {
+      for (const url of ROUTES) {
+        for (const dest of SUBRESOURCE_DESTS) {
+          const response = await app.inject({ method: 'GET', url, headers: { 'sec-fetch-dest': dest } });
+          assert.equal(
+            response.statusCode,
+            400,
+            `${url} with sec-fetch-dest: ${dest} answered ${response.statusCode}`,
+          );
+        }
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('treats a top-level navigation exactly as it treats a caller with no header', async () => {
+    // Differential, deliberately. Both routes answer 400 on their own merits for a request with no
+    // query string, so asserting a status here would pass against a guard that was never wired.
+    // What the guard changes is that a SUBRESOURCE is refused where a navigation is not — so the
+    // assertion is that `document` and "no header at all" are indistinguishable, and that both
+    // differ from the subresource case measured above.
+    const { app } = await harness(testConfig(), cohortRelyingParty());
+    try {
+      for (const url of ROUTES) {
+        const navigation = await app.inject({
+          method: 'GET',
+          url,
+          headers: { 'sec-fetch-dest': 'document' },
+        });
+        const absent = await app.inject({ method: 'GET', url });
+        const subresource = await app.inject({
+          method: 'GET',
+          url,
+          headers: { 'sec-fetch-dest': 'image' },
+        });
+
+        // `requestId` is server-generated per request, so it differs on every call and is not
+        // part of what is being compared.
+        const shape = (payload: string): string => payload.replace(/"requestId":"[^"]*",?/u, '');
+
+        assert.equal(
+          shape(navigation.payload),
+          shape(absent.payload),
+          `${url}: a navigation was treated differently from a caller sending no header`,
+        );
+        assert.notEqual(
+          shape(subresource.payload),
+          shape(navigation.payload),
+          `${url}: an image load was treated the same as a navigation — the guard is not wired`,
+        );
+      }
+    } finally {
+      await app.close();
+    }
   });
 });

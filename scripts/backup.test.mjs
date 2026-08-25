@@ -62,10 +62,13 @@ import {
   isSafeDatabaseName,
   manifestSignature,
   manifestSignatureValid,
+  neutraliseGrantedBy,
   parseArgs,
   readInventory,
   resolveDirectory,
   selectForRetention,
+  sourceDatabaseOf,
+  sourceDatabases,
   unsafeArchiveFileNames,
   weekBucket,
 } from './backup.mjs';
@@ -113,13 +116,13 @@ const frameRegionStart = (header) => 8 + 4 + Buffer.byteLength(canonicalJson(hea
  *
  * `good` defaults to true; the retention tests turn it off to build the corrupt-newest case.
  */
-function backupAt(iso, { good = true, id = null } = {}) {
+function backupAt(iso, { good = true, id = null, source = null } = {}) {
   return {
-    id: id ?? `prl-test-${iso.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}`,
+    id: id ?? `prl-${source ?? 'test'}-${iso.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}`,
     createdAt: iso,
     createdAtMs: Date.parse(iso),
     manifestPath: `/nowhere/${iso}.manifest.json`,
-    manifest: { files: [] },
+    manifest: source === null ? { files: [] } : { files: [], source: { database: source } },
     bytes: 1024,
     signatureOk: good,
     problems: good ? [] : ['manifest signature does not verify'],
@@ -137,6 +140,59 @@ function dailySeries(days, endIso = '2026-08-22T02:00:00.000Z') {
 
 const POLICY = { daily: 7, weekly: 4, monthly: 6 };
 const idsOf = (list) => list.map((entry) => entry.id);
+
+// ---------------------------------------------------------------------------
+// The globals payload
+// ---------------------------------------------------------------------------
+
+describe('applying cluster globals', () => {
+  // The exact tail of this cluster's `pg_dumpall --globals-only`, decrypted from a real archive.
+  const GLOBALS = [
+    'CREATE ROLE prl_app;',
+    "ALTER ROLE prl_api WITH LOGIN PASSWORD 'SCRAM-SHA-256$4096:notarealverifier';",
+    'GRANT prl_app TO prl_api WITH INHERIT TRUE GRANTED BY poker;',
+    'GRANT prl_migrator TO prl_deployer WITH INHERIT TRUE GRANTED BY poker;',
+  ].join('\n');
+
+  it('NEGATIVE CONTROL: the GRANTED BY clause PostgreSQL 16 refuses is removed', () => {
+    // Measured against a virgin postgres:16-bookworm, running the shipped command from
+    // docs/production/disaster-recovery.md §5.4 for "a genuinely fresh cluster":
+    //
+    //   ✗ psql exited 3
+    //       ERROR:  permission denied to grant privileges as role "poker"
+    //       DETAIL:  The grantor must have the ADMIN option on role "prl_app".
+    //
+    // It fails as the new cluster's superuser and it fails again after `SET ROLE poker`. The
+    // cluster was left with five roles and zero memberships, and the restore never ran.
+    const { sql, stripped } = neutraliseGrantedBy(GLOBALS);
+    assert.equal(stripped, 2, 'both membership grants must be rewritten');
+    assert.doesNotMatch(sql, /GRANTED BY/i, 'no clause may survive; one is enough to fail the restore');
+    assert.match(sql, /GRANT prl_app TO prl_api WITH INHERIT TRUE;/, 'the membership itself is kept');
+    assert.match(sql, /GRANT prl_migrator TO prl_deployer WITH INHERIT TRUE;/);
+  });
+
+  it('leaves everything that is not a GRANT alone, including a password', () => {
+    // The verifier is the reason this payload is encrypted. A rewrite that touched it would be
+    // the worst possible bug in this function: the roles would restore and nobody could log in.
+    const { sql } = neutraliseGrantedBy(GLOBALS);
+    assert.match(sql, /ALTER ROLE prl_api WITH LOGIN PASSWORD 'SCRAM-SHA-256\$4096:notarealverifier';/);
+    assert.match(sql, /^CREATE ROLE prl_app;$/m);
+  });
+
+  it('does not rewrite a line that merely mentions the words', () => {
+    const text = "SELECT 'granted by poker';\nCOMMENT ON ROLE prl_app IS 'granted by poker';";
+    const { sql, stripped } = neutraliseGrantedBy(text);
+    assert.equal(stripped, 0);
+    assert.equal(sql, text);
+  });
+
+  it('is a no-op on a globals dump that has no grantor recorded', () => {
+    const text = 'CREATE ROLE prl_app;\nGRANT prl_app TO prl_api;';
+    const { sql, stripped } = neutraliseGrantedBy(text);
+    assert.equal(stripped, 0);
+    assert.equal(sql, text);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Retention
@@ -233,6 +289,63 @@ describe('retention selection', () => {
     const removed = plan.delete.find((entry) => entry.id === broken.id);
     assert.ok(removed !== undefined, 'it must not silently be kept');
     assert.match(removed.reason, /createdAt/);
+  });
+
+  it('NEGATIVE CONTROL: one directory, two source databases — each keeps its own newest good', () => {
+    // Reproduced against the pre-fix code, with two real archives in one directory and the
+    // shipped 7/4/6 policy: a 149.8 MiB archive of `poker_risk_lab` (944,297 rows) taken at
+    // 18:28 was planned for deletion, and a 77.6 KiB archive of an empty
+    // `poker_risk_lab_restored` taken ten minutes later was kept as "newest good backup (never
+    // deleted)". Both are the ONLY copy of their database. Consolidating archives off the
+    // backed-up host is what docs/production/disaster-recovery.md §5.5 asks for, so a shared
+    // directory is the recommended posture and not an abuse.
+    const big = backupAt('2026-08-25T18:28:44.000Z', { source: 'poker_risk_lab' });
+    const small = backupAt('2026-08-25T18:38:52.000Z', { source: 'poker_risk_lab_restored' });
+    const plan = selectForRetention([small, big], POLICY);
+    assert.deepEqual(idsOf(plan.delete), [], 'neither database may lose its only backup');
+    assert.equal(plan.keep.length, 2);
+    for (const kept of plan.keep) {
+      assert.ok(
+        kept.reasons.includes('newest good backup (never deleted)'),
+        `${kept.id} must be protected in its own group, got ${kept.reasons.join(', ')}`,
+      );
+    }
+  });
+
+  it('NEGATIVE CONTROL: a zero policy keeps one survivor PER source database, not one overall', () => {
+    // The sharpest form: `--daily 0 --weekly 0 --monthly 0` with two sources. Grouping by
+    // directory leaves exactly one archive alive and the other database with none at all.
+    const plan = selectForRetention(
+      [
+        ...dailySeries(5).map((entry) => ({
+          ...entry,
+          id: `${entry.id}-a`,
+          manifest: { files: [], source: { database: 'alpha' } },
+        })),
+        ...dailySeries(5).map((entry) => ({
+          ...entry,
+          id: `${entry.id}-b`,
+          manifest: { files: [], source: { database: 'beta' } },
+        })),
+      ],
+      { daily: 0, weekly: 0, monthly: 0 },
+    );
+    assert.equal(plan.keep.length, 2, 'one survivor for alpha and one for beta');
+    assert.deepEqual(
+      plan.keep.map((entry) => sourceDatabaseOf(entry)).sort(),
+      ['alpha', 'beta'],
+      'the survivors must be one of each, not two of whichever is newest',
+    );
+  });
+
+  it('reports the distinct source databases in an inventory', () => {
+    const inventory = [
+      backupAt('2026-08-25T03:00:00.000Z', { source: 'beta' }),
+      backupAt('2026-08-25T02:00:00.000Z', { source: 'alpha' }),
+      backupAt('2026-08-24T02:00:00.000Z', { source: 'alpha' }),
+    ];
+    assert.deepEqual(sourceDatabases(inventory), ['beta', 'alpha']);
+    assert.deepEqual(sourceDatabases([backupAt('2026-08-25T02:00:00.000Z')]), [null]);
   });
 
   it('keeps everything when the policy is wider than the history', () => {

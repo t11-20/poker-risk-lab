@@ -41,7 +41,11 @@
 #
 #          docker compose ps                # service states, with health
 #          pnpm run db:migrate:status       # what has been applied
-#          pnpm run db:reset                # drop, migrate, seed again
+#          pnpm run db:reset --confirm-database poker_risk_lab
+#                                           # drop, migrate, seed again. The name has to match
+#                                           # the database DATABASE_MIGRATION_URL/DATABASE_URL
+#                                           # is on: NODE_ENV is not a guard for a command run
+#                                           # from the host.
 #          pnpm run db:down                 # stop postgres (volume survives)
 #          docker compose down -v           # stop everything AND delete the data
 #

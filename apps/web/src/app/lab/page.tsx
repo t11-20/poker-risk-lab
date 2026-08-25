@@ -35,6 +35,7 @@ import { FILTER_ANY, type FilterOption, ScenarioFilters } from '../../components
 import { scenarioListFixture } from '../../fixtures/scenarios.ts';
 import { API_PATHS, apiGet, isApiUnavailable } from '../../lib/api.ts';
 import { difficultyLabel, streetLabel, topicLabel } from '../../lib/lab-labels.ts';
+import { readerCallOptions } from '../../lib/server-session.ts';
 import '../../styles/page.css';
 import '../../styles/lab.css';
 
@@ -95,9 +96,26 @@ interface LabData {
   readonly fromFixture: boolean;
 }
 
+/**
+ * The list, with the reader's own attempt marks.
+ *
+ * ## The defect the `readerCallOptions()` is here for
+ *
+ * `ScenarioSummary.attempted` is a PER-READER fact — `content.ts` derives it from
+ * `callerUserId(request)` and answers `false` for everybody when there is none. A server render
+ * carries no cookie unless one is forwarded (see `lib/api.ts` on why), and this call forwarded
+ * none, so the request was anonymous by construction and every one of the thirty-six cards read
+ * "Not yet attempted" for every learner, for ever. `/record` on the same session says "Scenarios
+ * tried: 7" and lists their ids. `/learn`, `/record` and `/review` all already forward it; this
+ * page was the one that did not.
+ */
 async function loadScenarios(): Promise<LabData> {
+  const reader = await readerCallOptions();
   try {
-    return { response: await apiGet<ScenarioListResponse>(API_PATHS.scenarios()), fromFixture: false };
+    return {
+      response: await apiGet<ScenarioListResponse>(API_PATHS.scenarios(), reader),
+      fromFixture: false,
+    };
   } catch (error) {
     // Only an absent or broken API selects the fixture. Anything else — an auth failure, a protocol
     // mismatch, a 404 on this collection path — is a real condition the reader should see, so it is
@@ -105,7 +123,19 @@ async function loadScenarios(): Promise<LabData> {
     // does not serve, which is how the whole app came to render six fixture scenarios in place of
     // the thirty-six the API ships.
     if (!isApiUnavailable(error)) throw error;
-    return { response: scenarioListFixture(), fromFixture: true };
+    // The bundled copy's attempt marks are somebody's idea of a plausible session and belong to
+    // nobody: `ATTEMPTED` in `src/fixtures/scenarios.ts` hard-codes two ids to `true`, so a
+    // first-time visitor arriving during an outage was told "You have worked through this one"
+    // about two scenarios they have never opened. They are dropped rather than shown, and the
+    // note below says so — the same answer `LESSONS_FALLBACK` gives for the read/unread marks.
+    const bundled = scenarioListFixture();
+    return {
+      response: {
+        ...bundled,
+        scenarios: bundled.scenarios.map((scenario) => ({ ...scenario, attempted: false })),
+      },
+      fromFixture: true,
+    };
   }
 }
 
@@ -195,8 +225,10 @@ export default async function LabIndexPage({
         <p className="prl-source-note prl-note">
           <span className="prl-label prl-label--accent">Fixture data</span> The scenario API is not reachable,
           so this list comes from the typed fixture in{' '}
-          <code className="prl-mono">src/fixtures/scenarios.ts</code>. Every figure in it was computed by the
-          real analysis functions, but no server was involved in this page.
+          <code className="prl-mono">src/fixtures/scenarios.ts</code>. The scenarios and their questions are
+          real, and the analysis behind each one was produced by the real functions — but this is a partial
+          copy rather than the full set, and nothing here knows which of them you have attempted, so every
+          card reads as unattempted whatever you have actually done.
         </p>
       ) : null}
 

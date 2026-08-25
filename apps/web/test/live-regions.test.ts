@@ -179,6 +179,12 @@ describe('the Coach’s arrival is announced', () => {
     assert.equal(refused.coach, null);
     assert.equal(refused.coachRequest, null);
     assert.match(refused.announcement, /review afterwards/u);
+    // And it KEEPS the server's own wording, which is the only thing this client actually learns
+    // about why the analysis is off at this table. See the block at the bottom of this file.
+    assert.equal(
+      refused.coachRefusal,
+      'The Coach is available in review after the hand, not while it is being played at this difficulty.',
+    );
   });
 
   it('says nothing for an answer to a request nobody made', () => {
@@ -634,5 +640,130 @@ describe('a field that cannot be used says so on the field', () => {
 
   it('marks the invite-code field invalid when the server refused the code', () => {
     assert.match(read('app', 'play', 'LiveTable.tsx'), /aria-invalid=\{refused \? true : undefined\}/u);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Why the Coach is off, and the difference between knowing and assuming
+// ---------------------------------------------------------------------------
+
+/**
+ * The panel used to state a cause it had never observed.
+ *
+ * ## What a reader saw
+ *
+ * Live Coach goes off in two unrelated ways, and the panel printed one sentence for both:
+ *
+ *     "The Coach is available afterwards in review, not during this hand.
+ *      Expert keeps the analysis off the table so the style is the thing you are reading."
+ *
+ * That sentence names a difficulty. This page knows the difficulty in exactly one of the two
+ * cases — when it opened an Expert Legends match itself, from its own `?difficulty=expert`. The
+ * other case is a `coach_not_available` refusal from the server: a fact about whichever table the
+ * reader happens to be at, carrying no difficulty the client can read. Its wording was discarded
+ * (`coachProblem` is set to null for this code) and the Expert sentence printed in its place.
+ *
+ * Measured in Chrome 151 against the built app, with the API up. Play a hand at
+ * `/play?profile=vocal-aggressor&difficulty=expert`, then open plain `/play`. `chooseRoom` reuses
+ * the room the reader already owns, so:
+ *
+ *     (a) /play?profile=…&difficulty=expert   heading "Heads-up against this style"
+ *     (b) plain /play                          heading "Six-handed table"
+ *
+ * printed the *identical* Expert sentence. On (b) the reader chose no difficulty, the page passed
+ * no `legendMatch`, and the only thing it had learned was that the server had said no.
+ *
+ * ## What is asserted
+ *
+ * The reducer half is driven for real. The mapping from "what was established" to "which sentence"
+ * lives in `app/play/LiveTable.tsx` and is read from source, with the sentence that must NOT be
+ * reachable from a refusal named explicitly.
+ */
+describe('the Coach panel says the reason that applies, not the one that reads best', () => {
+  const REFUSAL =
+    'The Coach is available in review after the hand, not while it is being played at this difficulty.';
+
+  const refusedState = (): ReturnType<typeof tableReducer> => {
+    const asked = tableReducer(EMPTY_TABLE_STATE, {
+      kind: 'coachRequested',
+      requestId: 'coach-1',
+      key: '',
+    });
+    return tableReducer(asked, {
+      kind: 'frame',
+      frame: {
+        type: 'error',
+        requestId: 'coach-1',
+        error: { code: 'coach_not_available', message: REFUSAL, requestId: 'coach-1' },
+      },
+    });
+  };
+
+  it('keeps the server’s own wording for a refusal, rather than throwing it away', () => {
+    assert.equal(EMPTY_TABLE_STATE.coachRefusal, null, 'nothing has been refused yet');
+    assert.equal(refusedState().coachRefusal, REFUSAL);
+  });
+
+  it('does not treat any other refusal as a statement about the difficulty', () => {
+    const asked = tableReducer(EMPTY_TABLE_STATE, {
+      kind: 'coachRequested',
+      requestId: 'coach-2',
+      key: '',
+    });
+    const rateLimited = tableReducer(asked, {
+      kind: 'frame',
+      frame: {
+        type: 'error',
+        requestId: 'coach-2',
+        error: {
+          code: 'rate_limited',
+          message: 'You are doing that too quickly. Give it a moment.',
+          requestId: 'coach-2',
+        },
+      },
+    });
+    assert.equal(rateLimited.coachRefusal, null);
+    assert.equal(rateLimited.coachDuringHand, true, 'a rate limit does not turn live Coach off');
+  });
+
+  it('resets with the table, so a fresh table does not inherit another table’s refusal', () => {
+    const reset = tableReducer(refusedState(), { kind: 'reset' });
+    assert.equal(reset.coachRefusal, null);
+    assert.equal(reset.coachDuringHand, true);
+  });
+
+  it('routes the two causes to two sentences, and only one of them names Expert', () => {
+    const hook = read('lib', 'use-live-table.ts');
+    const panel = read('app', 'play', 'LiveTable.tsx');
+
+    // The hook decides WHAT was established. Expert first, because that is the stronger claim:
+    // this page opened the match, so the difficulty is its own parameter.
+    assert.match(hook, /options\.legendMatch\?\.difficulty === 'expert'\s*\?\s*\{ kind: 'expertLegends' \}/u);
+    assert.match(hook, /kind: 'refusedByServer', serverReason: table\.coachRefusal/u);
+
+    // The panel turns that into copy, and the Expert sentence is reachable from exactly one arm.
+    assert.match(
+      withoutComments(panel),
+      /off\.kind === 'expertLegends' \? EXPERT_COACH_REASON : refusedCoachReason\(off\.serverReason\)/u,
+    );
+    // A refusal's sentence is the server's own words. It must not mention a difficulty this page
+    // never saw — the whole defect in one assertion.
+    assert.doesNotMatch(
+      withoutComments(panel).replace(/const EXPERT_COACH_REASON =[\s\S]*?';/u, ''),
+      /Expert keeps the analysis off the table/u,
+      'the Expert wording appears somewhere other than the one constant it belongs to',
+    );
+
+    // NEGATIVE CONTROL: the old mapping, fed to the same detector. One boolean, one sentence.
+    const old = 'if (!live.coachDuringHand) return { coachUnavailableReason: EXPERT_COACH_REASON };';
+    assert.doesNotMatch(
+      withoutComments(panel),
+      /if \(!live\.coachDuringHand\) return \{ coachUnavailableReason: EXPERT_COACH_REASON \};/u,
+    );
+    assert.match(
+      old,
+      /if \(!live\.coachDuringHand\) return \{ coachUnavailableReason: EXPERT_COACH_REASON \};/u,
+      'the detector does not fire on the line it exists to refuse',
+    );
   });
 });

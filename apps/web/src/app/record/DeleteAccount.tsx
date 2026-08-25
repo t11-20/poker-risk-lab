@@ -48,10 +48,44 @@
  * it does to what ("Permanently delete my account"), never "OK" or "Yes". The outcome is announced
  * through a live region that is in the DOM from the first render for the reason `UnitsReset`
  * states: a region that arrives with its text is missed by several screen readers.
+ *
+ * ## Why this component owns its whole panel, and why `RecordPage` renders it unconditionally
+ *
+ * ### The defect
+ *
+ * Deleting an account left the deleted account's record on the screen. This component swapped only
+ * its own subtree, and everything `RecordPage` had server-rendered above it — the finished lesson
+ * ids, the attempted scenario ids, the hands played and the lifetime net — stayed exactly where it
+ * was, directly under a receipt reading "Nothing on this page refers to you any more." Measured in
+ * Chrome 151 against the built app with the API up: one hand played, then deleted. After the
+ * receipt appeared, `/record` still read "Hands played 1", "Units, net, all time 0 units" and the
+ * three lists, for as long as the tab stayed open. On a shared machine that is the whole of what
+ * the deletion was for.
+ *
+ * ### Why `router.refresh()` alone was measured and REVERTED
+ *
+ * A refresh re-renders the server component with no session, so the panel above goes. It also took
+ * the receipt with it: `RecordPage` hid this entire panel whenever `record.state === 'signedOut'`,
+ * which is exactly the state a successful deletion produces. The receipt names counts — how many
+ * sign-ins, quiz answers, scenario decisions and seats went, and what was kept with the reader's
+ * name taken off it — and it is the one thing on the page a reader cannot go and look up
+ * afterwards, because the account it describes no longer exists. Trading it for the refresh is a
+ * worse page than the defect.
+ *
+ * ### What is done instead
+ *
+ * The conditional moved into this client component, so the receipt is on the client side of it and
+ * survives the refresh. `RecordPage` renders this unconditionally and passes `deletable`; this
+ * component renders nothing at all for a reader who has no account to delete, the control for a
+ * reader who has one, and the receipt for a reader who has just used it — whatever `deletable`
+ * then says. Because the element is always in the same slot of `RecordPage`'s children, React
+ * reconciles it as the same instance across the refresh and `useState` is preserved, which is what
+ * Next's own `router.refresh()` contract promises ("without losing unaffected client-side React").
  */
 
 import { ACCOUNT_DELETE_CONFIRMATION } from '@prl/contracts';
-import { Button, Callout, pluralise } from '@prl/ui';
+import { Button, Callout, Panel, pluralise } from '@prl/ui';
+import { useRouter } from 'next/navigation';
 import { type FormEvent, type ReactElement, useId, useState } from 'react';
 import { deleteAccount, fetchSession } from '@/lib/api.ts';
 
@@ -86,11 +120,27 @@ type DeleteState =
   | { readonly state: 'done'; readonly outcome: Outcome }
   | { readonly state: 'failed'; readonly message: string };
 
-export function DeleteAccount(): ReactElement {
+export interface AccountDeletionProps {
+  /**
+   * Whether there is an account to delete — every state except `signedOut`.
+   *
+   * Not a tidiness rule: there is no account to delete when nobody is signed in, so the control
+   * could only ever produce a 401, and offering an irreversible action that cannot work is worse
+   * than not offering it. `unavailable` is a different case and keeps the control — that reader
+   * has an account, and whether they can leave must not depend on whether their figures loaded.
+   *
+   * It is deliberately NOT a condition on the receipt below. A successful deletion signs the
+   * reader out, so this goes false in the very same refresh that the receipt has to survive.
+   */
+  readonly deletable: boolean;
+}
+
+export function AccountDeletion({ deletable }: AccountDeletionProps): ReactElement | null {
   const [deletion, setDeletion] = useState<DeleteState>({ state: 'closed' });
   const [typed, setTyped] = useState('');
   const fieldId = useId();
   const hintId = useId();
+  const router = useRouter();
 
   const confirmed = matchesConfirmation(typed);
 
@@ -129,121 +179,162 @@ export function DeleteAccount(): ReactElement {
           roomsCreated: result.data.anonymised.roomsCreated,
         },
       });
+      /*
+        The half that actually removes the deleted account's record from the screen.
+
+        `RecordPage` is a per-reader server render carrying the session cookie, and the deletion
+        has just invalidated it — so re-running it is what turns the panel above into "there is no
+        session to read a record with". Fired after the state is set, not before: this component's
+        own subtree is on the client side of the refresh and keeps the receipt, and a refresh that
+        landed first would briefly draw a page with neither the record nor the receipt on it.
+      */
+      router.refresh();
     })();
   };
 
-  if (deletion.state === 'done') {
-    const { outcome } = deletion;
-    return (
-      <div className="prl-stack">
+  /*
+    Nothing to show a reader with no account and no receipt. The two conditions are separate on
+    purpose — see `deletable` above and the module header: after a successful deletion this reader
+    has no account AND has a receipt, and that is the case the old structure could not render.
+  */
+  if (!deletable && deletion.state !== 'done') return null;
+
+  return (
+    <Panel title="Delete your account" eyebrow="Irreversible" index={3} headingLevel={2}>
+      {deletion.state === 'done' ? (
+        /*
+          The receipt, and the reason this whole panel moved inside a client component. It is on
+          the client side of `router.refresh()`, so the refresh that clears the record above cannot
+          take it with it. The counts it names describe an account that no longer exists, so this
+          is the last and only place a reader can read them.
+        */
         <Callout tone="insight" title="Your account has been deleted">
           <p className="prl-prose">
-            {`Gone for good: ${pluralise(outcome.sessions, 'sign-in')}, ` +
-              `${pluralise(outcome.lessonsCompleted, 'lesson')} marked as read, ` +
-              `${pluralise(outcome.quizAttempts, 'quiz answer')}, ` +
-              `${pluralise(outcome.scenarioAttempts, 'scenario decision')} and ` +
-              `${pluralise(outcome.roomMemberships, 'seat')} at a table.`}
+            {`Gone for good: ${pluralise(deletion.outcome.sessions, 'sign-in')}, ` +
+              `${pluralise(deletion.outcome.lessonsCompleted, 'lesson')} marked as read, ` +
+              `${pluralise(deletion.outcome.quizAttempts, 'quiz answer')}, ` +
+              `${pluralise(deletion.outcome.scenarioAttempts, 'scenario decision')} and ` +
+              `${pluralise(deletion.outcome.roomMemberships, 'seat')} at a table.`}
           </p>
           <p className="prl-prose">
-            {`Kept, with your name taken off them: ${pluralise(outcome.handSeats, 'seat')} in hands that ` +
-              `were played, and ${pluralise(outcome.roomsCreated, 'table')} you created — now closed. ` +
-              'Those hands belong to the other people who were in them as much as to you, so they stay, ' +
-              'with nothing in them pointing back at you.'}
+            {`Kept, with your name taken off them: ${pluralise(deletion.outcome.handSeats, 'seat')} in ` +
+              `hands that were played, and ${pluralise(deletion.outcome.roomsCreated, 'table')} you ` +
+              'created — now closed. Those hands belong to the other people who were in them as much as ' +
+              'to you, so they stay, with nothing in them pointing back at you.'}
           </p>
           <p className="prl-prose">
             You are signed out. Nothing on this page refers to you any more, and opening a table again starts
             a brand-new account with no connection to the old one.
           </p>
         </Callout>
-      </div>
-    );
-  }
-
-  return (
-    <div className="prl-stack">
-      {deletion.state === 'closed' ? (
-        <p className="prl-btn-row">
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setTyped('');
-              setDeletion({ state: 'confirming' });
-            }}
-          >
-            Delete my account
-          </Button>
-        </p>
       ) : (
-        <form className="prl-stack" onSubmit={run}>
-          <Callout tone="warning" title="This cannot be undone">
-            <p className="prl-prose">
-              Deleted outright: your sign-ins, the lessons you have marked as read, every quiz answer, every
-              scenario decision, and your seat at every table — the ones you are sitting at and the ones you
-              have left.
-            </p>
-            <p className="prl-prose">
-              Kept, with your name removed: the hands you have played, and any table you created. A hand
-              belongs to everybody who was in it — deleting it would erase it from their history too — so your
-              seat in it stays, holding what it was dealt and what it won or lost, and stops naming anybody.
-              Tables you created are closed and stop naming you; they are not deleted, because the hands
-              played at them would go with them.
-            </p>
-            <p className="prl-prose">
-              There is no recovery, no undo and no grace period. We cannot put this back for you afterwards,
-              and neither can you.
-            </p>
-          </Callout>
-
-          <div className="prl-field">
-            <label className="prl-field__label" htmlFor={fieldId}>
-              {`To confirm, type ${ACCOUNT_DELETE_CONFIRMATION}`}
-            </label>
-            <input
-              className="prl-input"
-              id={fieldId}
-              name="confirm"
-              type="text"
-              autoComplete="off"
-              autoCapitalize="none"
-              spellCheck={false}
-              maxLength={64}
-              aria-describedby={hintId}
-              value={typed}
-              onChange={(event) => setTyped(event.target.value)}
-            />
-            <p className="prl-field__hint" id={hintId}>
-              {'Typing the words is the second of the two deliberate steps this needs. Capital letters ' +
-                'and stray spaces are fine. The button below stays switched off until the field reads ' +
-                `“${ACCOUNT_DELETE_CONFIRMATION}”.`}
-            </p>
-          </div>
-
-          <p className="prl-btn-row">
-            <Button variant="primary" type="submit" disabled={!confirmed || deletion.state === 'working'}>
-              {deletion.state === 'working' ? 'Deleting…' : 'Permanently delete my account'}
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setTyped('');
-                setDeletion({ state: 'closed' });
-              }}
-              disabled={deletion.state === 'working'}
-            >
-              Keep my account
-            </Button>
+        <>
+          {/*
+            The panel's own copy, and it is written in the future tense — so it is rendered only
+            while it is still about something that has not happened. The control expands into the
+            full list of what goes and what stays before anything can be pressed. Everything true
+            about that list is enforced in `db/migrations/0004_account_deletion.sql` and proved in
+            `apps/api/test/account-deletion.test.ts`, which is what stops these sentences from
+            becoming a claim nobody checks.
+          */}
+          <p className="prl-prose">
+            You can close this account and take your record with you. Your sign-ins, the lessons you have
+            marked as read, your quiz answers, your scenario decisions and your seat at every table are
+            deleted outright — there is no recovery and no grace period.
           </p>
-        </form>
+          <p className="prl-prose">
+            Two things are kept rather than deleted, with your name removed from them: the hands you have
+            played, and any table you created. A hand belongs to everybody who was in it — deleting it would
+            erase it from their history too — so the seat stays and stops naming anybody. Tables you created
+            are closed and detached for the same reason: the hands played at them would go with them.
+          </p>
+
+          {deletion.state === 'closed' ? (
+            <p className="prl-btn-row">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setTyped('');
+                  setDeletion({ state: 'confirming' });
+                }}
+              >
+                Delete my account
+              </Button>
+            </p>
+          ) : (
+            <form className="prl-stack" onSubmit={run}>
+              <Callout tone="warning" title="This cannot be undone">
+                <p className="prl-prose">
+                  Deleted outright: your sign-ins, the lessons you have marked as read, every quiz answer,
+                  every scenario decision, and your seat at every table — the ones you are sitting at and the
+                  ones you have left.
+                </p>
+                <p className="prl-prose">
+                  Kept, with your name removed: the hands you have played, and any table you created. A hand
+                  belongs to everybody who was in it — deleting it would erase it from their history too — so
+                  your seat in it stays, holding what it was dealt and what it won or lost, and stops naming
+                  anybody. Tables you created are closed and stop naming you; they are not deleted, because
+                  the hands played at them would go with them.
+                </p>
+                <p className="prl-prose">
+                  There is no recovery, no undo and no grace period. We cannot put this back for you
+                  afterwards, and neither can you.
+                </p>
+              </Callout>
+
+              <div className="prl-field">
+                <label className="prl-field__label" htmlFor={fieldId}>
+                  {`To confirm, type ${ACCOUNT_DELETE_CONFIRMATION}`}
+                </label>
+                <input
+                  className="prl-input"
+                  id={fieldId}
+                  name="confirm"
+                  type="text"
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  maxLength={64}
+                  aria-describedby={hintId}
+                  value={typed}
+                  onChange={(event) => setTyped(event.target.value)}
+                />
+                <p className="prl-field__hint" id={hintId}>
+                  {'Typing the words is the second of the two deliberate steps this needs. Capital letters ' +
+                    'and stray spaces are fine. The button below stays switched off until the field reads ' +
+                    `“${ACCOUNT_DELETE_CONFIRMATION}”.`}
+                </p>
+              </div>
+
+              <p className="prl-btn-row">
+                <Button variant="primary" type="submit" disabled={!confirmed || deletion.state === 'working'}>
+                  {deletion.state === 'working' ? 'Deleting…' : 'Permanently delete my account'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setTyped('');
+                    setDeletion({ state: 'closed' });
+                  }}
+                  disabled={deletion.state === 'working'}
+                >
+                  Keep my account
+                </Button>
+              </p>
+            </form>
+          )}
+        </>
       )}
 
       {/*
-        In the DOM from the first render, empty. A live region that arrives at the same moment as
-        its text is missed by several screen readers, and the failure message here is the only
-        thing telling the reader their account is still there.
+        In the DOM from the first render, empty, and still mounted alongside the receipt so it is
+        never re-inserted. A live region that arrives at the same moment as its text is missed by
+        several screen readers, and the failure message here is the only thing telling the reader
+        their account is still there.
       */}
       <p className="prl-note" role="status">
         {deletion.state === 'failed' ? deletion.message : ''}
       </p>
-    </div>
+    </Panel>
   );
 }

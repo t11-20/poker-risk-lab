@@ -202,7 +202,7 @@ before it checks whether release artefacts exist.)
 | `pnpm run db:migrate:status` | Show applied and pending. Reads `DATABASE_MIGRATION_URL`, so it needs a migration identity — see the note below |
 | `pnpm run db:roles` | Create the cluster-wide `prl_migrator`/`prl_app` roles. Only needed before a **restore** (§11.4); `db:migrate` creates them otherwise |
 | `pnpm run db:seed` | Apply dev seeds, **including the `prl_api`/`prl_deployer` login roles** (**refuses under `NODE_ENV=production`**) |
-| `pnpm run db:reset` | Drop and recreate the schema (**refuses under `NODE_ENV=production`**). Leaves the cluster-wide roles alone |
+| `pnpm run db:reset --confirm-database <name>` | Drop and recreate the schema. **Refuses unless `<name>` is the database the connection is actually on**, and also refuses under `NODE_ENV=production`. Leaves the cluster-wide roles alone |
 | `pnpm run db:setup` | up → wait → migrate → seed |
 | `pnpm run db:verify` | Assert the **live** schema's security properties (§5) |
 | `pnpm run db:down` | Stop PostgreSQL |

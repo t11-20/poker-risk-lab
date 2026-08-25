@@ -1617,6 +1617,34 @@ const TURN_REGION = /prl-play__decision>prl-live-region/u;
 /** How long 3.6 sits on its own turn without acting. The assertion says ten seconds; this is it. */
 const TURN_DWELL_MS = 10_000;
 
+/**
+ * How far short of `TURN_DWELL_MS` a measured dwell may fall and still count as ten seconds.
+ *
+ * ## Why there is a tolerance at all
+ *
+ * The dwell is `setTimeout(10_000)` bracketed by two `Date.now()` reads, and neither end is exact.
+ * `setTimeout` is a *minimum* by specification, timer resolution is coarsened by browsers and by
+ * the platform, and `Date.now()` is a wall clock that can be stepped by NTP mid-measurement. One
+ * run of this gate failed with
+ *
+ *     the run waited 9999ms on its own turn, not the 10000ms this assertion asks for
+ *
+ * — a one millisecond shortfall, in a release gate, on a check about whether a live region was
+ * rewritten. That is a false failure: nothing the assertion is about could differ between 9,999ms
+ * and 10,000ms of state frames, and a gate that fails on a 1ms wall-clock shortfall costs more
+ * than it catches — the cost being that a red `verify` stops meaning "something is wrong".
+ *
+ * ## Why it is 250ms and not larger
+ *
+ * The guard this bound protects is real and is stated in the failure message: a SHORT wait can miss
+ * a re-announcement and then report a silence it never observed. 250ms is two orders of magnitude
+ * below the ten seconds being asked for (2.5%) and far below the interval at which this app pushes
+ * whole-state frames, so a dwell inside the tolerance has still seen many frames. Anything that
+ * genuinely cut the dwell short — a `settle` that returned early, a `dwellMs` that was never
+ * passed, a hand that ended — is off by seconds, not by milliseconds, and is still caught.
+ */
+const TURN_DWELL_TOLERANCE_MS = 250;
+
 /** The reader's own decision, echoed by the reducer. `spokenDecision` in `use-live-table.ts`. */
 const FOLD_ECHO = /^You chose to fold\./u;
 
@@ -2008,10 +2036,14 @@ const LIVE_TABLE_CHECKS = [
     what: 'the turn sentence is announced once, and ten seconds of state frames do not repeat it',
     decide: (e) => {
       if (!e.reachedTurn) return fail('the hand never reached this seat, so nothing was dwelt on');
-      if (e.dwellMs < TURN_DWELL_MS) {
+      // Not `< TURN_DWELL_MS`: `setTimeout` is a minimum, `Date.now()` is a wall clock, and this
+      // gate has failed on a ONE millisecond shortfall. See `TURN_DWELL_TOLERANCE_MS` for the
+      // measurement and for why the bound is still worth having.
+      if (e.dwellMs < TURN_DWELL_MS - TURN_DWELL_TOLERANCE_MS) {
         return fail(
-          `the run waited ${e.dwellMs}ms on its own turn, not the ${TURN_DWELL_MS}ms this assertion ` +
-            'asks for. A shorter wait can miss a re-announcement and report silence it never observed',
+          `the run waited ${e.dwellMs}ms on its own turn, more than ${TURN_DWELL_TOLERANCE_MS}ms short ` +
+            `of the ${TURN_DWELL_MS}ms this assertion asks for. A shorter wait can miss a ` +
+            're-announcement and report silence it never observed',
         );
       }
       if (e.turnOpenedAt === null)

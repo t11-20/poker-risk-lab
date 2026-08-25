@@ -40,6 +40,7 @@ import { ACCOUNT_DELETE_CONFIRMATION } from '@prl/contracts';
 import { buildApp, registerRoutes } from '../src/app.ts';
 import { closeDatabase, configureDatabase, getSql, isDatabaseConfigured } from '../src/db.ts';
 import { resetAppMetricsForTests } from '../src/observability/metrics.ts';
+import { awaitPendingAuditWrites } from '../src/observability/telemetry.ts';
 import authRoutes from '../src/routes/auth.ts';
 import { DB_SKIP_REASON, testConfig } from './helpers/hands-app.ts';
 
@@ -101,6 +102,16 @@ interface AuditRow {
  */
 async function waitForAuditRow(event: string, since: Date): Promise<AuditRow | null> {
   const sql = getSql();
+  // Wait on the WRITE, not on a clock. `recordSecurityAudit` is fire-and-forget by design — a
+  // security event must never delay the request it describes — which made it unobservable here,
+  // so this used to poll. That got worse rather than better: the deadline went from five seconds
+  // to fifteen, and then failed at 15,036 ms inside `pnpm run verify`, because the write queues
+  // behind every other API test on the shared pool. A third raise would have failed later.
+  //
+  // The poll below is KEPT as a backstop rather than deleted. `awaitPendingAuditWrites` settles
+  // the write; the row still has to become visible to this connection, and on a shared pool that
+  // is not the same instant. What the poll no longer has to absorb is the write itself.
+  await awaitPendingAuditWrites();
   const deadline = Date.now() + AUDIT_DEADLINE_MS;
   while (Date.now() < deadline) {
     const rows = await sql<AuditRow[]>`

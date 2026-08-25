@@ -898,10 +898,57 @@ export class WsRouter {
   private broadcastExcept(roomId: string, skip: WsConnection | null): void {
     const room = this.registry.get(roomId);
     if (room === null) return;
+    this.dropDepartedSockets(roomId);
     const summary = toRoomSummary(room);
     for (const connection of this.socketsIn(roomId)) {
       if (connection === skip || connection.closed) continue;
       this.sendState(connection, summary);
+    }
+  }
+
+  /**
+   * Closes the sockets of anyone who is no longer a member of the room they are watching.
+   *
+   * ## The defect
+   *
+   * `onHello` checks membership — `registry.require`, or `reopenFor`'s two durable reads — and the
+   * socket is never asked again. `POST /rooms/:roomId/leave` drops the membership durably and in
+   * memory, so a FRESH `hello` from the departed learner is correctly refused
+   * `room_not_found_or_not_permitted`; the socket they already had went on receiving the private
+   * table. Measured against the code this was written for, after `leaveRoom` for that learner:
+   *
+   *     ex-member's socket -> {"type":"event","event":{"kind":"playerJoined",...}}
+   *                        -> {"type":"state","room":{...members:[...]},...}
+   *     ex-member's fresh hello -> {"type":"error","error":{"code":"room_not_found_or_not_permitted"}}
+   *
+   * An invite-only table is invite-only for the duration, not only at the door. The frames carry
+   * the roster, the seats, the stacks and — once a hand is dealt — the spectator's view of it.
+   *
+   * ## Why it is checked here rather than announced by the registry
+   *
+   * Because the check is a `Map` lookup and this is the one place every outbound frame passes
+   * through. An event on the registry would have to be raised by `leaveRoom` and by every future
+   * path that ends a membership, and a path that forgot to raise it would be this defect again
+   * with no test to notice. Asking the question where the frame is about to go cannot be forgotten
+   * by a new caller.
+   *
+   * The cost is that a departure is acted on at the next table change rather than at the instant
+   * it happens. That is not a hole: nothing is SENT between the two, because the next thing sent
+   * is what triggers this. It is bounded, it is `O(sockets in the room)`, and it is the same
+   * comparison `registry.require` makes.
+   */
+  private dropDepartedSockets(roomId: string): void {
+    const room = this.registry.get(roomId);
+    if (room === null) return;
+    for (const connection of this.socketsIn(roomId)) {
+      if (connection.closed) continue;
+      const userId = connection.principal.userId;
+      if (room.member(userId) !== null || room.record.ownerUserId === userId) continue;
+      // 4403 and not 4401: the session is fine, the table is not theirs any more. That is what
+      // `describeClose` in `apps/web/src/lib/table-socket.ts` renders as "not your table", which is
+      // exactly right for somebody who has just left it, and it is permanent — a reconnect would
+      // be refused by `onHello` for the same reason.
+      this.closeConnection(connection, WS_CLOSE.forbidden, 'no longer a member of this table');
     }
   }
 
@@ -914,6 +961,10 @@ export class WsRouter {
 
   private onTableChange(roomId: string, notice: TableNotice): void {
     const serverTimeMs = this.clock.now();
+    // BEFORE the events, not only before the state below: an `action` or `showdown` event is a
+    // frame about a private table like any other, and `broadcast` at the end of this method would
+    // be too late to keep it from somebody who has left. See `dropDepartedSockets`.
+    this.dropDepartedSockets(roomId);
     for (const connection of this.socketsIn(roomId)) {
       if (connection.closed) continue;
       // Events first, then state. An event is for animation and the action log and is never

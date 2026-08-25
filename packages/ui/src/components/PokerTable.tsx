@@ -272,6 +272,9 @@ export function PokerTable(props: PokerTableProps): ReactElement {
               <Seat
                 key={`seat-${seat.seat}`}
                 seat={seat}
+                /* The phase, so a settled hand is described in the past tense and drops its live
+                   badges. `SeatStatus` alone cannot say which; see rule 3 in `Seat.tsx`. */
+                street={view.street}
                 name={seatLabel(seat, seatNames)}
                 ringIndex={index}
                 ringCount={seats.length}
@@ -287,6 +290,7 @@ export function PokerTable(props: PokerTableProps): ReactElement {
           <div className="prl-table__hero">
             <Seat
               seat={hero}
+              street={view.street}
               name={seatLabel(hero, seatNames)}
               ringIndex={heroIndex}
               ringCount={seats.length}

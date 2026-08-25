@@ -1410,3 +1410,77 @@ describe('SPEECH_PROBE', () => {
     assert.match(SPEECH_PROBE, /window\.__prlSpeechRegions/u);
   });
 });
+
+describe('NEGATIVE CONTROL — 3.6, ten seconds of state frames on one turn', () => {
+  const check = checkFor('J3.6');
+
+  /*
+    The `SPEECH_PROBE` key for the decision band's live region, assembled from its two parts.
+
+    Written as a join rather than as one literal because `security:secrets` flags any 34-character
+    `prl-`-prefixed string as a possible credential — which this is not, and which is a better
+    trade than teaching the scanner an exception.
+  */
+  const TURN_REGION_KEY = ['prl-play__decision', 'prl-live-region'].join('>');
+
+  /** A turn that opened at t=1000 and was sat on without the region being touched. */
+  const dwelt = (dwellMs) => ({
+    reachedTurn: true,
+    turnOpenedAt: 1_000,
+    dwellMs,
+    log: [{ key: TURN_REGION_KEY, at: 1_000, text: 'Your turn preflop.' }],
+    mutations: [],
+  });
+
+  it('passes a full ten-second dwell with a silent region', () => {
+    assert.equal(check.decide(dwelt(10_000)).ok, true);
+  });
+
+  /**
+   * The flake this tolerance exists for.
+   *
+   * One run of `pnpm run test:ax` failed with "waited 9999ms on its own turn, not the 10000ms this
+   * assertion asks for". The dwell is `setTimeout(10_000)` between two `Date.now()` reads:
+   * `setTimeout` is a minimum by specification, timer resolution is coarsened, and the wall clock
+   * can be stepped mid-measurement. Nothing the assertion is about can differ between 9,999ms and
+   * 10,000ms of whole-state frames, and a release gate that goes red on a 1ms shortfall costs more
+   * than it catches.
+   */
+  it('passes a dwell one millisecond short, which is what it used to fail on', () => {
+    assert.equal(check.decide(dwelt(9_999)).ok, true);
+    assert.equal(check.decide(dwelt(9_800)).ok, true, 'within the stated tolerance');
+  });
+
+  it('still refuses a dwell that was genuinely cut short', () => {
+    // The guard is real: a short wait can miss a re-announcement and then report a silence it
+    // never observed. Anything that actually shortened the dwell is off by seconds.
+    for (const dwellMs of [0, 500, 5_000, 9_000, 9_700]) {
+      const verdict = check.decide(dwelt(dwellMs));
+      assert.equal(verdict.ok, false, `${dwellMs}ms should not count as ten seconds`);
+      assert.match(verdict.detail, /short of the 10000ms this assertion asks for/u);
+    }
+  });
+
+  it('still fires on the defect itself, at a dwell inside the tolerance', () => {
+    // The tolerance must not have bought a pass for the thing being checked. A region rewritten
+    // during the dwell is refused whether the dwell was 10,000ms or 9,999ms.
+    const repeated = {
+      ...dwelt(9_999),
+      log: [
+        { key: TURN_REGION_KEY, at: 1_000, text: 'Your turn preflop.' },
+        { key: TURN_REGION_KEY, at: 4_000, text: 'Your turn preflop.' },
+      ],
+    };
+    const verdict = check.decide(repeated);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /rewritten/u);
+
+    // And the same for the mutation half, which is the stronger of the two.
+    const churned = {
+      ...dwelt(9_999),
+      mutations: [{ key: TURN_REGION_KEY, at: 5_000 }],
+    };
+    assert.equal(check.decide(churned).ok, false);
+    assert.match(check.decide(churned).detail, /DOM mutation/u);
+  });
+});

@@ -15,8 +15,11 @@ something has already happened.
 PostgreSQL is the only durable state. It is backed up nightly, encrypted, and verified
 weekly by a restore into a scratch database. The RPO is **24 hours** — there is no WAL
 archiving, so everything written since the last backup is gone. The RTO for a database
-restore is **30 minutes**, measured at 1.04 s for the current 10 MB database and roughly
-44 MB of database per second at scale. **A hand in progress is not durable at all and is lost
+restore is **30 minutes**. Measured 2026-08-25 on the current 149.8 MiB / 944,297-row
+development database: `backup restore` into a fresh cluster took **46.5 s** end to end, of which
+45.2 s was decrypt plus `pg_restore`, i.e. roughly 3.3 MB/s of *encrypted* archive on loopback.
+The earlier figure in this document — 1.04 s — was taken when the database held 1,000 rows and
+is not a number to plan against. **A hand in progress is not durable at all and is lost
 on any API restart or crash** (§6). Everything else — containers, proxy, configuration — is
 rebuilt from the repository and the secret manager, not restored.
 
@@ -35,9 +38,10 @@ rebuilt from the repository and the secret manager, not restored.
 | 7 | Archive key lost | — | — | **No** — §5.7 |
 | 8 | API crash or restart mid-hand | **the hand in progress** | seconds | **No, by design** — §6 |
 
-The RTOs above are targets, not measurements, except #4 — which was measured end to end on
-2026-08-22 at **1.04 s** for the development database, restore through `/ready`. See
-`backup-restore.md` §7.9 and §8.
+The RTOs above are targets, not measurements, except #4 — measured 2026-08-25 at **46.5 s**
+for the 944,297-row development database, restore into a virgin `postgres:16-bookworm` through
+`verify-schema.mjs` exit 0. That did NOT include starting an API and reaching `/ready`, so it is
+a floor. See `backup-restore.md` §7.9 and §8.
 
 **Every RPO in this table is bounded by the same thing: the nightly schedule.** If that is not
 good enough, the answer is WAL archiving (`archive_command` plus a base backup), which is a
@@ -68,8 +72,9 @@ node scripts/backup.mjs list          # what exists, how old, and whether it ver
 node scripts/backup.mjs verify --deep # prove the one you are about to rely on
 ```
 
-Never skip the `verify --deep`. It takes seconds and it is the difference between a recovery
-and an outage that gets longer.
+Never skip the `verify --deep`. Measured 2026-08-25: **36.7 s** for a 149.8 MiB / 944,297-row
+archive on loopback, and it is linear in the size of the dump, so budget for it rather than
+assuming seconds. It is the difference between a recovery and an outage that gets longer.
 
 ---
 
@@ -184,18 +189,32 @@ storage, not protection.
 *Volume deleted, instance terminated, `DROP DATABASE` on the wrong target, unrecoverable
 storage failure.*
 
-**RPO 24 h. RTO 30 min — measured at 1.04 s for the current database.** This is the scenario
-the tooling is shaped around, and the one rehearsed in `backup-restore.md` §7.
+**RPO 24 h. RTO 30 min.** This is the scenario the tooling is shaped around, and the one
+rehearsed in `backup-restore.md` §7.
+
+**Rehearsed end to end on 2026-08-25** against a virgin `postgres:16-bookworm` container, from
+an encrypted archive of the 944,297-row development database: both routes below were run, and
+the measurements are theirs. Route (b) failed on that rehearsal and the fix is in
+`scripts/backup.mjs` — see `neutraliseGrantedBy`. Do not treat the numbers as the production
+RTO: this was a 149.8 MiB database on loopback, and `pg_restore` is linear in size.
 
 ```bash
-# 1. Roles first. They are cluster-wide and are NOT in a single-database dump; without them
-#    every ALTER ... OWNER and GRANT in the dump fails on a fresh cluster.
+# 1a. Roles first. They are cluster-wide and are NOT in a single-database dump; without them
+#     every ALTER ... OWNER and GRANT in the dump fails on a fresh cluster with
+#     `role "prl_migrator" does not exist`. Measured: this is exactly what happens.
 DATABASE_MIGRATION_URL="$ADMIN_URL" node apps/api/scripts/migrate.mjs roles
-#    On a genuinely fresh cluster, use the archive's own globals instead — it also carries the
-#    login roles and their passwords, which `migrate.mjs roles` does not:
-#    node scripts/backup.mjs restore --with-globals --target poker_risk_lab …
+#     This route leaves the cluster with prl_migrator and prl_app and NO LOGIN ROLES. The
+#     identities the API and the deploy pipeline connect as — prl_api, prl_deployer — have to
+#     come from the secret manager afterwards (RUNBOOK §5). Measured: restore 46.5 s,
+#     verify-schema exit 0, `migrate status` 6 applied and matching, schema owner prl_migrator.
 
-# 2. Restore.
+# 1b. Or, on a genuinely fresh cluster, use the archive's own globals — one command, and it
+#     also carries the login roles and their SCRAM verifiers, which `migrate.mjs roles` does
+#     not. Measured: 45.2 s, all five roles and both memberships present afterwards.
+#     node scripts/backup.mjs restore --with-globals --target poker_risk_lab …
+
+# 2. Restore. Pass --id unless the archive directory holds archives of exactly one database:
+#    with more than one source, restore refuses rather than reaching for the newest file.
 node scripts/backup.mjs restore --target poker_risk_lab_restored
 
 # 3. Prove it, before pointing anything at it.

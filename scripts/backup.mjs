@@ -1187,6 +1187,47 @@ export async function readInventory(directory, material) {
   return backups;
 }
 
+/**
+ * Which database an archive was taken FROM, or null when the manifest does not say.
+ *
+ * Read from the manifest body rather than parsed out of the id. The id is
+ * `prl-<database>-<stamp>`, and a database name may itself contain a hyphen — no, it may not
+ * (`isSafeDatabaseName`), but the id is also the field an attacker who can write to the
+ * archive directory controls most cheaply, and `source.database` is under the HMAC.
+ */
+export const sourceDatabaseOf = (backup) => backup?.manifest?.source?.database ?? null;
+
+/** Every distinct source database in an inventory, in first-seen order. Null groups as `null`. */
+export function sourceDatabases(inventory) {
+  const seen = [];
+  for (const backup of inventory) {
+    const source = sourceDatabaseOf(backup);
+    if (!seen.includes(source)) seen.push(source);
+  }
+  return seen;
+}
+
+/**
+ * The archive a command should act on.
+ *
+ * ## The defect this exists for
+ *
+ * "The newest archive" is only a meaningful default while every archive in the directory came
+ * from the SAME database. docs/production/disaster-recovery.md §5.5 makes the opposite the
+ * required posture — "the archives and the key must not live only on the host being backed
+ * up" — and the cheapest way to satisfy that is one archive store fed by more than one host.
+ *
+ * Measured, with two source databases in one directory: a 149.8 MiB archive of
+ * `poker_risk_lab` (944,297 rows) taken at 18:28 and a 77.6 KiB archive of an empty
+ * `poker_risk_lab_restored` taken at 18:38. `restore --target …` with no `--id` chose the
+ * empty one, restored it, compared it against ITS OWN manifest's census, and printed PASS.
+ * Nothing in the output said the archive was of a different database — the id says so and
+ * nothing reads it.
+ *
+ * So an ambiguous directory is refused rather than resolved by timestamp. Naming the sources
+ * is the whole point of the message: an operator who did not know two hosts shared a directory
+ * finds out here rather than after the restore.
+ */
 function selectArchive(inventory, id) {
   if (id !== null && id !== undefined) {
     const found = inventory.find((backup) => backup.id === id);
@@ -1194,6 +1235,15 @@ function selectArchive(inventory, id) {
     return found;
   }
   if (inventory.length === 0) throw new BackupError('no archives in this directory');
+  const sources = sourceDatabases(inventory);
+  if (sources.length > 1) {
+    throw new BackupError(
+      `this directory holds archives of ${sources.length} different databases ` +
+        `(${sources.map((name) => name ?? '<unnamed>').join(', ')}), so "the newest archive" does not ` +
+        'name one thing',
+      'pass --id explicitly — `pnpm run backup list` shows every archive and its source',
+    );
+  }
   return inventory[0];
 }
 
@@ -1250,6 +1300,29 @@ export function weekBucket(date) {
  * archive must not be able to hold a slot and evict the intact one beneath it. Broken
  * backups are still deletable — they are what `--apply` is for once an operator has looked
  * at them — but they can never displace something that works.
+ *
+ * ## The policy is applied per source database, and the defect that is for
+ *
+ * Every rule above says "the newest", and until this existed "the newest" meant the newest
+ * file in the directory regardless of which database it was a copy of. Measured, with two
+ * source databases in one archive directory and the shipped 7/4/6 policy:
+ *
+ *     ✓ keep    prl-poker_risk_lab_restored-20260825T183852Z   77.6 KiB
+ *           newest good backup (never deleted), daily 2026-08-25, weekly 2026-W35, monthly 2026-08
+ *     · would delete prl-poker_risk_lab-20260825T182844Z      149.8 MiB
+ *           outside the 7/4/6 daily/weekly/monthly window
+ *
+ * The 149.8 MiB archive was the ONLY copy of a 944,297-row database, and the summary under
+ * that plan still read "The newest good backup is never in the delete set, whatever the policy
+ * says." It was true of the directory and false of every database in it. Two hosts writing to
+ * one archive store — which §5.5 of docs/production/disaster-recovery.md effectively requires,
+ * since the archives must not live only on the host being backed up — is enough, and a weekly
+ * `prune --apply` then destroys one host's entire backup set on its first run.
+ *
+ * So each source database gets its own buckets and its own never-deleted newest good archive.
+ * An archive whose manifest names no source groups under `null`, which is what a manifest this
+ * script wrote before `source.database` existed would do — grouping it with the named ones
+ * would be a guess, and the safe direction is a group of its own that keeps its own newest.
  */
 export function selectForRetention(backups, policy) {
   const usable = backups
@@ -1262,28 +1335,38 @@ export function selectForRetention(backups, policy) {
     else if (!existing.includes(reason)) existing.push(reason);
   };
 
-  const newestGood = usable.find((backup) => backup.good === true) ?? null;
-  if (newestGood !== null) note(newestGood, 'newest good backup (never deleted)');
+  const groups = new Map();
+  for (const backup of usable) {
+    const source = sourceDatabaseOf(backup);
+    const existing = groups.get(source);
+    if (existing === undefined) groups.set(source, [backup]);
+    else existing.push(backup);
+  }
 
   const tiers = [
     { bucket: dayBucket, limit: policy.daily, label: 'daily' },
     { bucket: weekBucket, limit: policy.weekly, label: 'weekly' },
     { bucket: monthBucket, limit: policy.monthly, label: 'monthly' },
   ];
-  for (const tier of tiers) {
-    const representatives = new Map();
-    for (const backup of usable) {
-      if (backup.good !== true) continue;
-      const key = tier.bucket(new Date(backup.createdAtMs));
-      if (!representatives.has(key)) representatives.set(key, backup);
-    }
-    // Buckets are inserted newest-first because `usable` is sorted that way, so the first
-    // `limit` entries are the most recent ones.
-    let kept = 0;
-    for (const [key, backup] of representatives) {
-      if (kept >= tier.limit) break;
-      note(backup, `${tier.label} ${key}`);
-      kept += 1;
+  for (const group of groups.values()) {
+    const newestGood = group.find((backup) => backup.good === true) ?? null;
+    if (newestGood !== null) note(newestGood, 'newest good backup (never deleted)');
+
+    for (const tier of tiers) {
+      const representatives = new Map();
+      for (const backup of group) {
+        if (backup.good !== true) continue;
+        const key = tier.bucket(new Date(backup.createdAtMs));
+        if (!representatives.has(key)) representatives.set(key, backup);
+      }
+      // Buckets are inserted newest-first because `usable` is sorted that way, so the first
+      // `limit` entries are the most recent ones.
+      let kept = 0;
+      for (const [key, backup] of representatives) {
+        if (kept >= tier.limit) break;
+        note(backup, `${tier.label} ${key}`);
+        kept += 1;
+      }
     }
   }
 
@@ -1938,9 +2021,87 @@ async function restoreInto(ctx, database, encryptedPath, material) {
   await feedTool(run, decryptFrames(createReadStream(encryptedPath), { material }));
 }
 
+/**
+ * Removes the `GRANTED BY <role>` clause from role-membership grants.
+ *
+ * ## The defect this exists for
+ *
+ * PostgreSQL 16 records a grantor for every role membership, and `pg_dumpall --globals-only`
+ * emits it. This cluster's globals dump ends with, verbatim:
+ *
+ *     GRANT prl_app TO prl_api WITH INHERIT TRUE GRANTED BY poker;
+ *     GRANT prl_migrator TO prl_deployer WITH INHERIT TRUE GRANTED BY poker;
+ *
+ * `poker` is the SOURCE cluster's bootstrap superuser, and on a fresh cluster the roles were
+ * created by the NEW cluster's superuser, so nobody holds the admin option as `poker`. Measured
+ * against a virgin `postgres:16-bookworm`, running the shipped `restore --with-globals`:
+ *
+ *     ✗ psql exited 3
+ *         ERROR:  permission denied to grant privileges as role "poker"
+ *         DETAIL:  The grantor must have the ADMIN option on role "prl_app".
+ *
+ * Being a superuser does not help: the same statement fails as `postgres`, and it fails again
+ * after `SET ROLE poker` even though the dump has just made `poker` a superuser too. So the
+ * one command docs/production/disaster-recovery.md §5.4 offers for "a genuinely fresh cluster"
+ * — the RTO-defining path in §5.5 — could not have worked anywhere, and it left the cluster
+ * with five roles and no memberships, which is `prl_api` able to log in and read nothing.
+ *
+ * Dropping the clause makes the restoring superuser the grantor. That is a real difference and
+ * it is the right one: the grantor is a fact about how the OLD cluster was administered, and
+ * `pg_auth_members.grantor` on the new cluster should name whoever actually rebuilt it. Every
+ * membership is restored; nothing is widened.
+ *
+ * Applied only to lines that begin a GRANT, so a password or a role name that happens to
+ * contain the words cannot be rewritten.
+ */
+export function neutraliseGrantedBy(sqlText) {
+  let stripped = 0;
+  const out = sqlText
+    .split('\n')
+    .map((line) => {
+      if (!/^\s*GRANT\s/i.test(line)) return line;
+      const rewritten = line.replace(/\s+GRANTED\s+BY\s+(?:"(?:[^"]|"")+"|[A-Za-z_][\w$]*)(?=\s*;)/i, '');
+      if (rewritten !== line) stripped += 1;
+      return rewritten;
+    })
+    .join('\n');
+  return { sql: out, stripped };
+}
+
+/** A globals dump is roles and nothing else; anything near this size is not one. */
+const MAX_GLOBALS_BYTES = 8 * 1024 * 1024;
+
 async function applyGlobals(ctx, encryptedPath, material) {
-  const run = startTool('psql', psqlArgs(ctx.maintenanceDatabase), ctx, { stdin: 'pipe' });
-  await feedTool(run, decryptFrames(createReadStream(encryptedPath), { material }));
+  // Buffered rather than streamed, unlike the database payload. A globals dump is kilobytes
+  // (1.9 KiB for this cluster), it has to be rewritten before psql sees it, and a rewrite that
+  // has to work across frame boundaries would be a second thing to get wrong.
+  const parts = [];
+  let bytes = 0;
+  for await (const chunk of decryptFrames(createReadStream(encryptedPath), { material })) {
+    bytes += chunk.length;
+    if (bytes > MAX_GLOBALS_BYTES) {
+      throw new BackupError(
+        `the globals payload is over ${humanBytes(MAX_GLOBALS_BYTES)}`,
+        'a `pg_dumpall --globals-only` of this cluster is kilobytes; this archive is not one',
+      );
+    }
+    parts.push(chunk);
+  }
+  const { sql, stripped } = neutraliseGrantedBy(Buffer.concat(parts).toString('utf8'));
+  if (stripped > 0) {
+    bang(
+      `rewrote ${stripped} role-membership grant(s) to drop GRANTED BY`,
+      'the grantor becomes the identity running this restore; PostgreSQL 16 refuses the recorded ' +
+        'one on any cluster that did not create the role — see `neutraliseGrantedBy`',
+    );
+  }
+  // --single-transaction, for the same reason `restoreInto` has it: without it a refusal partway
+  // through leaves the cluster with some of the roles, some of the memberships and no way to
+  // tell which. That was the observed state after the failure above.
+  const run = startTool('psql', psqlArgs(ctx.maintenanceDatabase, ['--single-transaction']), ctx, {
+    stdin: 'pipe',
+  });
+  await feedTool(run, [Buffer.from(sql, 'utf8')]);
 }
 
 async function commandRestore(options, ctx, material, directory) {
@@ -2039,7 +2200,11 @@ async function commandList(options, _ctx, material, directory) {
 
   for (const backup of inventory) {
     const reasons = keptIds.get(backup.id);
-    const label = `${backup.id}  ${humanBytes(backup.bytes)}`;
+    // The source database is printed on every line because retention and `restore`'s default
+    // are now per-database: a reader who cannot see the grouping cannot check the decision.
+    const label = `${backup.id}  ${humanBytes(backup.bytes)}  ${dim(
+      `of ${sourceDatabaseOf(backup) ?? '<unnamed>'}`,
+    )}`;
     if (!backup.good) bang(label, backup.problems.join('; '));
     else if (reasons === undefined) say(`  ${dim('·')} ${label}  ${dim('would be pruned')}`);
     else tick(label, reasons.join(', '));
@@ -2050,6 +2215,13 @@ async function commandList(options, _ctx, material, directory) {
   say(`    good        ${inventory.filter((backup) => backup.good).length}`);
   say(`    on disk     ${humanBytes(inventory.reduce((sum, backup) => sum + backup.bytes, 0))}`);
   say(`    policy      ${policy.daily} daily / ${policy.weekly} weekly / ${policy.monthly} monthly`);
+  say(
+    `    sources     ${
+      sourceDatabases(inventory)
+        .map((n) => n ?? '<unnamed>')
+        .join(', ') || '(none)'
+    }`,
+  );
   say(`\n  ${inventory.length > 0 ? green(bold('PASS')) : yellow(bold('EMPTY'))} inventory read`);
   say(
     dim(
@@ -2151,7 +2323,18 @@ async function commandPrune(options, _ctx, material, directory) {
     return 1;
   }
   say(`\n  ${green(bold('PASS'))} ${options.apply ? 'prune applied' : 'prune plan (nothing deleted)'}`);
-  say(dim('\n  The newest good backup is never in the delete set, whatever the policy says.\n'));
+  // "of every source database" is the load-bearing half. Without it this line was true of the
+  // directory and false of each database in it — see `selectForRetention`.
+  say(
+    dim(
+      '\n  The newest good backup OF EVERY SOURCE DATABASE is never in the delete set, whatever\n' +
+        `  the policy says. Sources here: ${
+          sourceDatabases(inventory)
+            .map((n) => n ?? '<unnamed>')
+            .join(', ') || '(none)'
+        }\n`,
+    ),
+  );
   if (options.json) console.log(JSON.stringify({ policy, applied: options.apply, plan }));
   return 0;
 }

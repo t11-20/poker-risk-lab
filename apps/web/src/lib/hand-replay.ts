@@ -509,6 +509,40 @@ function walkDecisions(input: WalkInput): WalkResult {
   return { steps, street, potInMiddle, disagrees };
 }
 
+/**
+ * Settles the tallies for the terminal frame: every seat's stack AFTER the pot has been awarded.
+ *
+ * ## The defect this exists for
+ *
+ * `Tally.stack` is only ever `startingStack − posted − Σ amountPaid`. It goes down as the hand is
+ * walked and nothing ever puts anything back, because a decision list carries what was *paid* and
+ * never what was *won*. The terminal frame therefore drew every seat's stack at the moment before
+ * the pot moved — and the comment above it said, and still says, that this frame "is the only
+ * place the reader sees the final stacks".
+ *
+ * Measured on `/review/hand-0042` in Chrome 151, walking to Step 11 of 11 through the product's own
+ * "Next decision" button: the winner's plate read `STACK 245`, the loser's plate read `STACK 245`,
+ * `StepMetrics` read `YOUR STACK 245 UNITS`, and on the same screen the page head read
+ * `NET TO YOU +765 units GAINED` and the result row read `You +765 units GAINED`. The reader began
+ * the hand with 1,000, won 765, and was shown 245 — the same figure as the seat they beat.
+ *
+ * `HandReviewSeat.net` is the server's own settled figure and is already on the wire (it is what
+ * `ResultRow` prints), so the final stack is `startingStack + net` and is not reconstructed here.
+ * It is applied only when the hand actually completed: an abandoned hand has no award to add, and
+ * `net` for one would describe a settlement that never happened.
+ */
+function settleTallies(tallies: ReadonlyMap<number, Tally>, review: HandReviewResponse): Map<number, Tally> {
+  const settled = new Map<number, Tally>();
+  for (const [seat, tally] of tallies) settled.set(seat, { ...tally });
+  if (review.hand.completedAt === null) return settled;
+  for (const seat of review.seats) {
+    const tally = settled.get(seat.seat);
+    if (tally === undefined) continue;
+    tally.stack = seat.startingStack + seat.net;
+  }
+  return settled;
+}
+
 /** Sweeps the finished street's bets into the middle and returns what moved. */
 function sweepStreet(tallies: Map<number, Tally>): number {
   let moved = 0;
@@ -611,6 +645,10 @@ export function buildHandReplay(review: HandReviewResponse): HandReplay {
 
   // The terminal frame. Worth a step of its own: it is the only place the reader sees the final
   // stacks, and a replay that stops at the last decision never shows what the hand cost.
+  //
+  // `settleTallies` is what makes that sentence true — see its header for the measurement. The
+  // walked tallies are the stacks BEFORE the pot was awarded, and drawing them here showed a
+  // winner sitting at the same figure as the seat they had just beaten.
   potInMiddle += sweepStreet(tallies);
   const terminalStreet: Street = review.hand.completedAt === null ? walk.street : 'complete';
   steps.push({
@@ -618,7 +656,7 @@ export function buildHandReplay(review: HandReviewResponse): HandReplay {
     decision: null,
     view: buildView({
       review,
-      tallies,
+      tallies: settleTallies(tallies, review),
       street: terminalStreet,
       potTotal: review.hand.potTotal,
       toAct: null,

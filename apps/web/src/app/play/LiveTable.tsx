@@ -67,20 +67,91 @@ import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
 import { type LiveTable as LiveTableModel, useLiveTable } from '@/lib/use-live-table.ts';
 
+/**
+ * Why the Coach panel is empty, when it is empty because live Coach is off at this table.
+ *
+ * ## The defect these two exist for
+ *
+ * There was one sentence, and it was printed for both of the ways that happens.
+ * `EXPERT_COACH_REASON` names a difficulty — and the client only knows the difficulty in ONE of
+ * them: when this page opened the match itself, from its own `?difficulty=expert`. The other way
+ * is a `coach_not_available` refusal from the server, which is a fact about whatever table the
+ * reader is at and carries no difficulty this page can read. The refusal's own wording was thrown
+ * away and this sentence printed in its place.
+ *
+ * Measured in Chrome 151 against the built app: play a hand at
+ * `/play?profile=vocal-aggressor&difficulty=expert`, then open plain `/play`. `chooseRoom` reuses
+ * the room the reader already owns, so the second page is headed "Six-handed table", passes no
+ * `legendMatch`, and printed the identical sentence about Expert — a difficulty it had never been
+ * told and the reader had not chosen on that page.
+ *
+ * So: the Expert sentence only where Expert is a thing this page knows, and the server's own
+ * words everywhere else. `useLiveTable` decides which; see `CoachOff`.
+ */
 const EXPERT_COACH_REASON =
   'The Coach is available afterwards in review, not during this hand. Expert keeps the analysis off the table so the style is the thing you are reading.';
+
+/**
+ * The refusal, in the server's words plus what this page can honestly add.
+ *
+ * The added sentence says where the rule lives and where the analysis is instead — both true
+ * whatever produced the refusal — and names no difficulty, because none was observed.
+ */
+function refusedCoachReason(serverReason: string): string {
+  return (
+    `${serverReason} That is a setting of the table you are at rather than anything about this ` +
+    'hand, and the full analysis is on the hand’s review page afterwards.'
+  );
+}
+
+function coachOffReason(off: NonNullable<LiveTableModel['coachOff']>): string {
+  return off.kind === 'expertLegends' ? EXPERT_COACH_REASON : refusedCoachReason(off.serverReason);
+}
+
+/**
+ * The panel's own default sentence is "with no table state there is nothing to price", and it is
+ * TRUE only while there is no table state. These two are the cases where there is one.
+ *
+ * ## The defect
+ *
+ * `CoachUnavailable` in `components/TableStage.tsx` cannot tell "nothing has been asked for" from
+ * "something was asked for and has not come back", because it is handed a report or a null. So the
+ * panel printed a sentence denying the existence of the very table drawn beside it, for the whole
+ * of every round trip. Measured in Chrome 151 at a live table with the API on the same machine:
+ * the request went out at 6,683ms and the report landed at 8,034ms, and for that whole window the
+ * panel read "No analysis — the Coach prices the decision in front of you, so with no table state
+ * there is nothing to price." The server allows the analysis a three-second budget, so a loaded
+ * deployment holds that sentence on screen more than twice as long.
+ *
+ * It was not a flicker in the worst case either: before the `welcome` fix in
+ * `lib/use-live-table.ts`, a request lost with its socket was never re-issued and this sentence
+ * was what the reader was left with permanently.
+ */
+const COACH_IN_FLIGHT_REASON =
+  'The analysis of this decision has been asked for and has not come back yet. It is computed ' +
+  'server-side from your own redacted view, which takes a moment; nothing is estimated here while ' +
+  'you wait.';
+
+const COACH_NOT_ASKED_REASON =
+  'There is no analysis of this spot. The Coach prices a decision, so it is computed when one is ' +
+  'yours to make — use "Refresh the analysis" to ask for it now.';
 
 function coachUnavailableProps(
   live: LiveTableModel,
 ): { readonly coachUnavailableReason: string } | Record<string, never> {
-  if (!live.coachDuringHand) return { coachUnavailableReason: EXPERT_COACH_REASON };
-  if (live.coachProblem === null) return {};
-  return {
-    coachUnavailableReason:
-      `The server sent an analysis this page could not read: ${live.coachProblem}. ` +
-      'It was refused rather than shown in part. The table itself is unaffected — it is drawn ' +
-      'from separate frames.',
-  };
+  if (live.coachOff !== null) return { coachUnavailableReason: coachOffReason(live.coachOff) };
+  if (live.coachProblem !== null) {
+    return {
+      coachUnavailableReason:
+        `The server sent an analysis this page could not read: ${live.coachProblem}. ` +
+        'It was refused rather than shown in part. The table itself is unaffected — it is drawn ' +
+        'from separate frames.',
+    };
+  }
+  if (live.table.coachRequest !== null) return { coachUnavailableReason: COACH_IN_FLIGHT_REASON };
+  // Only when there is genuinely no table state does the panel's own default sentence hold.
+  if (live.table.view !== null) return { coachUnavailableReason: COACH_NOT_ASKED_REASON };
+  return {};
 }
 
 /** One sentence per transport state, in the reader's terms rather than the protocol's. */
@@ -249,7 +320,7 @@ function ConnectionControls({
     seated ? 'seated' : 'standing',
     live.readerSeat === null ? 'full' : 'free',
     table.betweenHands ? 'between' : 'in-hand',
-    live.coachDuringHand ? 'coach' : 'no-coach',
+    live.coachOff === null ? 'coach' : 'no-coach',
   ].join('/');
 
   /**
@@ -325,7 +396,7 @@ function ConnectionControls({
         </Button>
       ) : null}
 
-      {isLive && seated && !table.betweenHands && live.coachDuringHand ? (
+      {isLive && seated && !table.betweenHands && live.coachOff === null ? (
         <Button variant="ghost" onClick={live.askCoach}>
           Refresh the analysis
         </Button>

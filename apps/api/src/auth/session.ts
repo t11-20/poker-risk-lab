@@ -107,6 +107,17 @@ export interface SessionAccount {
 export interface ResolvedSession {
   readonly sessionId: string;
   readonly user: SessionAccount;
+  /**
+   * When this server stops honouring the session — the row's own `expires_at`.
+   *
+   * Carried on the request because a *connection* can outlive it. Every REST request re-reads the
+   * row, so the expiry is enforced there by `findValidByToken`'s `expires_at > now()` and nothing
+   * else needs to know the value. A WebSocket is authenticated once, at the upgrade, and then
+   * never again: without this field the hub has no way to bound a socket by the lifetime of the
+   * credential that opened it, and the ceiling `SESSION_ABSOLUTE_TTL_SECONDS` exists to impose is
+   * simply not applied to a socket at all. See `ws/hub.ts`.
+   */
+  readonly expiresAt: Date;
 }
 
 /** A live session and its account, as the store returns them. */
@@ -249,6 +260,85 @@ export function fingerprintsFor(request: FastifyRequest, secret: string): Sessio
 }
 
 // ---------------------------------------------------------------------------
+// Revocation, announced
+// ---------------------------------------------------------------------------
+
+/**
+ * What was revoked: one session, or every session an account holds.
+ *
+ * Both forms exist because both happen. Signing out and signing in again each end exactly one
+ * session and know its id; erasing an account revokes every session the learner holds inside the
+ * deletion transaction, and the ids of the other devices' sessions never come back out of it.
+ */
+export interface SessionRevocation {
+  readonly sessionId?: string;
+  readonly userId?: string;
+}
+
+/**
+ * Listeners for "a session stopped being honoured".
+ *
+ * ## Why this exists
+ *
+ * Revocation was enforced only where the cookie is re-read, which is every REST request and no
+ * WebSocket. `ws/hub.ts` resolves the session once, during the upgrade, and the router never asks
+ * again — so `POST /auth/logout`, `POST /me/delete` and a second sign-in all left the learner's
+ * open socket fully live. Measured against the shipped code: with the session row deleted, the
+ * socket still answered `sit` with an `ack` and `ping` with a `pong`, and was never closed.
+ *
+ * That is the difference between "revoked" and "revoked for anything that bothers to check". A
+ * stolen cookie whose holder has a socket open keeps a live, authenticated channel to the table
+ * after the victim signs out, and an erased account keeps one after the account is gone.
+ *
+ * ## Why a notifier rather than a lookup
+ *
+ * The alternative is for the hub to re-resolve every open socket's session on a timer, which
+ * means a database query per socket per interval on a path that today touches the database only
+ * when it refuses an upgrade. Revocation is rare and already flows through exactly three places
+ * in this module and one in `routes/auth.ts`; announcing it there costs nothing and is exact.
+ *
+ * ## Module scope, and what that costs
+ *
+ * The same trade `plugins/security.ts` makes for `allowedOrigins`: a process builds one server,
+ * so one bus is enough, and a test process that builds several has every hub subscribe to it. A
+ * revocation raised by one app is therefore offered to every hub in the process — which is
+ * harmless, because a session id is unique and a hub closes only the sockets whose principal
+ * matches. If a process ever needs two genuinely isolated servers, this becomes instance state
+ * and the hub takes it from the instance.
+ */
+const revocationListeners = new Set<(revocation: SessionRevocation) => void>();
+
+/**
+ * Subscribes to revocations. Returns the unsubscribe, which callers MUST use.
+ *
+ * A listener left behind holds a closed hub's router alive and, on the next revocation, closes
+ * sockets through it — the same leak `ws/hub.ts` drops its eviction listener to avoid.
+ */
+export function onSessionRevoked(listener: (revocation: SessionRevocation) => void): () => void {
+  revocationListeners.add(listener);
+  return () => revocationListeners.delete(listener);
+}
+
+/**
+ * Announces a revocation that has already been written.
+ *
+ * Called AFTER the store has been updated, never before: a listener that closed a socket for a
+ * revocation that then failed to commit would sign somebody out of a session that is still live.
+ * A throwing listener must not fail the request that revoked — the revocation itself has already
+ * succeeded, and the caller is entitled to its 204.
+ */
+export function noteSessionRevoked(revocation: SessionRevocation): void {
+  for (const listener of [...revocationListeners]) {
+    try {
+      listener(revocation);
+    } catch {
+      // Deliberately swallowed and deliberately not logged from here: this module has no logger,
+      // and every listener in the process is one of ours with its own error handling.
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Issue and destroy
 // ---------------------------------------------------------------------------
 
@@ -267,12 +357,18 @@ export async function issueSession(reply: FastifyReply, user: SessionAccount): P
   const store = app.sessionStore;
 
   const previous = request.session;
-  if (previous !== null) await store.revoke(previous.sessionId);
+  if (previous !== null) {
+    await store.revoke(previous.sessionId);
+    // Announced after the write, so anything holding a connection opened under the old session
+    // learns that it is over. Without this, signing in again leaves the previous session's
+    // sockets live — the credential is revoked and the channel it opened is not.
+    noteSessionRevoked({ sessionId: previous.sessionId });
+  }
 
   const issued = await store.create(user.id, fingerprintsFor(request, config.sessionCookieSecret));
   reply.setCookie(sessionCookieName(config), issued.token, cookieOptions(config, issued.expiresAt));
 
-  request.session = { sessionId: issued.sessionId, user };
+  request.session = { sessionId: issued.sessionId, user, expiresAt: issued.expiresAt };
   request.sessionRejection = null;
   // No token, no user id, no display name. `logging.ts` would censor the first and third anyway,
   // and the request log line already carries enough to correlate.
@@ -289,7 +385,12 @@ export async function issueSession(reply: FastifyReply, user: SessionAccount): P
 export async function destroySession(reply: FastifyReply): Promise<void> {
   const request = reply.request;
   const session = request.session;
-  if (session !== null) await reply.server.sessionStore.revoke(session.sessionId);
+  if (session !== null) {
+    await reply.server.sessionStore.revoke(session.sessionId);
+    // A sign-out that leaves the learner's WebSocket open is not a sign-out. See
+    // `onSessionRevoked`.
+    noteSessionRevoked({ sessionId: session.sessionId });
+  }
   clearSessionCookie(reply, request.server.appConfig);
   request.session = null;
   request.sessionRejection = null;
@@ -337,7 +438,7 @@ async function resolveSession(request: FastifyRequest, store: SessionStore): Pro
   if (found === null) return refused('unknown');
 
   return {
-    session: { sessionId: found.sessionId, user: found.user },
+    session: { sessionId: found.sessionId, user: found.user, expiresAt: found.expiresAt },
     rejection: null,
     clear: false,
     refresh: shouldRefresh(Date.now(), found.expiresAt)
@@ -458,6 +559,11 @@ export const sessionPlugin: FastifyPluginAsync<SessionPluginOptions> = (app, opt
       const expiresAt = await options.store.extendExpiry(refresh.sessionId);
       if (expiresAt === null) return;
       await options.store.touchLastSeen(refresh.userId);
+      // The row moved, so what is attached to this request has to move with it. It matters on
+      // exactly one route — the WebSocket upgrade reads `request.session.expiresAt` and bounds the
+      // socket by it — and there the stale value would close a perfectly live socket early.
+      const current = request.session;
+      if (current !== null) request.session = { ...current, expiresAt };
       const config = request.server.appConfig;
       reply.setCookie(sessionCookieName(config), refresh.token, cookieOptions(config, expiresAt));
     } catch (error) {

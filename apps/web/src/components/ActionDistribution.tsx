@@ -52,10 +52,35 @@ export interface ActionDistributionProps {
   /** Names the group, e.g. "Action mix over 400 trials". Required: an unlabelled bar is a shape. */
   readonly label: string;
   readonly entries: readonly ActionShare[];
-  /** The most likely action, marked with a word as well as by its position. */
+  /**
+   * The most likely action, marked with a word as well as by its position.
+   *
+   * **It has to be one of `entries[].action`, taken from that list rather than rebuilt** — this is
+   * matched with `===` and there is no normalisation to fall back on. `ProfileComparisonEntry`
+   * satisfies this by construction: the API sets `modalAction: distribution[0].action`, out of the
+   * very array it is sending. A caller that formats a number of its own has to agree with a
+   * formatter in another package, and `mostLikelyAction` below exists so that nobody has to.
+   *
+   * ## The defect that rule is written for
+   *
+   * `PostHandComparison` used to build this string itself, with `@prl/ui`'s grouping `formatChips`
+   * — `"raise to 1,200"`. The entries come from `@prl/poker-ai`'s `describeAction`, which formats
+   * with a private `String(value)` — `"raise to 1200"`. So for any sizing of a thousand or more the
+   * two never matched, no row was marked, and nothing said so. Starting stacks are 1,000, so it was
+   * reachable in ordinary play and silent whenever it happened.
+   */
   readonly modalAction?: string;
   readonly className?: string;
 }
+
+/**
+ * Re-exported from `lib/action-distribution.ts` rather than defined here.
+ *
+ * It moved to a leaf module so it could be tested: this file is a `.tsx`, and `node --test` in
+ * this repository cannot load one. Same shape and same reason as `lib/quiz-tolerance.ts`. That
+ * file's header carries the measurement and the rule.
+ */
+export { mostLikelyAction } from '@/lib/action-distribution.ts';
 
 /**
  * Series letter per action verb, fixed so the mapping is stable across every column and screen.

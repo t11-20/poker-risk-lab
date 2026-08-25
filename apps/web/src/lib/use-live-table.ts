@@ -185,6 +185,31 @@ export interface TableState {
    * refusal). Default true: private tables and educational/realistic matches keep the panel.
    */
   readonly coachDuringHand: boolean;
+  /**
+   * The server's OWN wording for a `coach_not_available` refusal, kept rather than thrown away.
+   *
+   * ## The defect this exists for
+   *
+   * `coachDuringHand` records THAT live Coach is off and says nothing about why, and the two ways
+   * it goes false are not the same fact:
+   *
+   *   - this page opened an Expert Legends match, so the client chose the difficulty itself and
+   *     knows it — `options.legendMatch.difficulty`;
+   *   - the server refused a request with `coach_not_available`, which is a statement about the
+   *     table the reader is at and carries no difficulty the client can read.
+   *
+   * The panel printed one sentence for both — "Expert keeps the analysis off the table so the
+   * style is the thing you are reading" — a claim about a difficulty this page never observed.
+   * Measured in Chrome 151 against the built app: play a hand at
+   * `/play?profile=vocal-aggressor&difficulty=expert`, then open plain `/play`. `chooseRoom` reuses
+   * the room the reader already owns, so the second page is headed "Six-handed table", passed no
+   * `legendMatch` at all, and printed the identical Expert sentence — the only thing it had
+   * actually learned being the refusal, whose own wording it had discarded.
+   *
+   * Null while live Coach is on, and null when it is off for a reason the client established
+   * itself. `app/play/LiveTable.tsx` is where the two become sentences.
+   */
+  readonly coachRefusal: string | null;
   readonly pending: PendingDecision | null;
   readonly submission: TableSubmission | null;
   /** The server's own wording for the last refusal that was not about a decision. */
@@ -222,6 +247,7 @@ export const EMPTY_TABLE_STATE: TableState = {
   coachRequest: null,
   coachProblem: null,
   coachDuringHand: true,
+  coachRefusal: null,
   pending: null,
   submission: null,
   notice: null,
@@ -363,6 +389,23 @@ export function spokenDecision(action: TableAction): string {
 export const COACH_READY_ANNOUNCEMENT =
   'The analysis of this decision is ready in the Coach panel, below the table on a narrow screen.';
 export const COACH_FAILED_ANNOUNCEMENT = 'The analysis could not be shown.';
+
+/**
+ * Why an analysis never left this browser, per refusal — and never "the server said no".
+ *
+ * The same rule as `SUBMISSION_FOR` below, applied to the other frame a reader waits for. A Coach
+ * request that `sendRaw` refuses is refused HERE, by this page, and saying nothing at all leaves a
+ * panel that will never fill beside a table that is working perfectly. Neither of these is retried
+ * automatically: nothing is holding the request, so the sentence has to say what the reader can do.
+ */
+const COACH_NOT_SENT: Readonly<Record<'rate-limited' | 'undeliverable', string>> = {
+  'rate-limited':
+    'This page refused to exceed the rate limit the protocol sets for one socket, so the request ' +
+    'never left your browser. Nothing is holding it — ask again in a moment.',
+  undeliverable:
+    'This page could not put the request on the wire, so it never reached the table. Nothing is ' +
+    'holding it — ask again, and if it happens twice the connection itself is the thing to reload.',
+};
 
 /**
  * What a reader is told when a hand starts, and it is not announced on its own.
@@ -526,6 +569,9 @@ function onErrorFrame(state: TableState, frame: Extract<WsServerMessage, { type:
       coach: null,
       coachProblem: reviewOnly ? null : frame.error.message,
       coachDuringHand: reviewOnly ? false : state.coachDuringHand,
+      // The server's own wording, kept. It is the only thing this client actually learns about
+      // why the analysis is off at this table — see `coachRefusal` on `TableState`.
+      coachRefusal: reviewOnly ? frame.error.message : state.coachRefusal,
       announcement: reviewOnly
         ? 'The Coach is off during this hand. It is available in review afterwards.'
         : `${COACH_FAILED_ANNOUNCEMENT} ${frame.error.message}`,
@@ -562,6 +608,16 @@ function onFrame(state: TableState, frame: WsServerMessage): TableState {
         // Per socket, so a reconnect starts the ordering again from zero.
         revision: 0,
         notice: null,
+        // An outstanding analysis belonged to the socket that has just been replaced, and no
+        // answer to it is ever coming: the `requestId` was minted by this client and matched by
+        // the server against the connection it arrived on. Leaving the request open was half of a
+        // real defect — see the `welcome` note in `useLiveTable`'s `onFrame` for the other half
+        // and for the frame log that measured it.
+        //
+        // `coach` is deliberately NOT cleared. A report already on screen still describes the spot
+        // it was computed for, and that spot is unchanged by the socket going away; `onStateFrame`
+        // drops it the moment the spot actually moves.
+        coachRequest: null,
       };
     case 'state':
       return onStateFrame(state, frame);
@@ -782,6 +838,27 @@ export type JoinPhase =
   | { readonly state: 'refused'; readonly message: string }
   | { readonly state: 'joined'; readonly roomName: string };
 
+/**
+ * Why the Coach panel is not analysing this hand, when it is not — and by what evidence.
+ *
+ * Two members rather than a boolean, because the panel used to have only a boolean and printed the
+ * FIRST member's sentence whenever either held. See `coachRefusal` on `TableState` above for the
+ * measurement, and `app/play/LiveTable.tsx` for the two sentences.
+ */
+export type CoachOff =
+  /**
+   * This page asked for an Expert Legends match, so the difficulty is the page's own parameter and
+   * "Expert keeps the analysis off the table" is a thing it knows rather than a thing it inferred.
+   */
+  | { readonly kind: 'expertLegends' }
+  /**
+   * The server refused with `coach_not_available`. That is a fact about the table the reader is at
+   * — which they may have reached by invite code, or by `chooseRoom` reusing a room they own — and
+   * it carries no difficulty this client can read. `serverReason` is the API's own wording, which
+   * is the most this page can honestly say.
+   */
+  | { readonly kind: 'refusedByServer'; readonly serverReason: string };
+
 export interface LiveTable {
   readonly phase: SetupPhase;
   readonly status: TableSocketStatus | null;
@@ -807,8 +884,15 @@ export interface LiveTable {
   readonly report: CoachReport | null;
   /** Why the Coach panel is empty, when it is empty for a reason worth naming. */
   readonly coachProblem: string | null;
-  /** False on Expert Legends (and after a `coach_not_available` refusal). */
-  readonly coachDuringHand: boolean;
+  /**
+   * Why live Coach is off at this table, or null while it is on.
+   *
+   * A discriminated pair rather than a boolean, because the two ways it goes off are two different
+   * facts and the panel used to state the first one for both. See `coachRefusal` on `TableState`
+   * for the measurement; the wording lives in `app/play/LiveTable.tsx`, which is the right place
+   * for copy, and this is the right place for what was actually established.
+   */
+  readonly coachOff: CoachOff | null;
   readonly seatNames: Readonly<Record<number, string>>;
   readonly highlightedCards: readonly number[];
   readonly isMyTurn: boolean;
@@ -928,10 +1012,13 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const pendingRef = useRef<PendingDecision | null>(null);
   const viewRef = useRef<PlayerView | null>(null);
   const coachAskedRef = useRef<string | null>(null);
+  /** The outstanding Coach request, readable from a frame callback. See the `welcome` case below. */
+  const coachRequestRef = useRef<TableState['coachRequest']>(null);
   const setupRef = useRef<AbortController | null>(null);
 
   pendingRef.current = table.pending;
   viewRef.current = table.view;
+  coachRequestRef.current = table.coachRequest;
 
   const { socketFactory, scheduler, url, legendMatch } = options;
 
@@ -1102,6 +1189,38 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         if (frame.type === 'welcome') {
           const replay = pendingRef.current;
           if (replay !== null) handle.action(replay);
+          /**
+           * A Coach request does NOT survive its socket, so the memo of having asked is dropped.
+           *
+           * ## The defect this is the second half of
+           *
+           * A `coach` frame is asked for once and answered once, and the `requestId` is matched by
+           * the server against the connection the request arrived on. So a request that was
+           * outstanding when the socket went away is never answered — and `coachAskedRef` still
+           * held the key of that spot, so the effect below refused to ask again for it. Nothing
+           * else in this file asks either: `onStateFrame` only closes the request when the spot
+           * MOVES, and after a reconnect the spot is usually exactly where it was.
+           *
+           * Measured in Chrome 151 against a live table, by swallowing one inbound `coach` frame
+           * and then closing the socket from the page. The frame log, in order:
+           *
+           *     6683ms out      requestCoach
+           *     8035ms DROPPED  coach
+           *    12750ms close    4999
+           *    13314ms out      hello
+           *    13315ms in       welcome
+           *    13316ms in       state
+           *
+           * No second `requestCoach` was ever sent. The table came back live, it was still the
+           * reader's turn, and the Coach panel sat on "No analysis" for as long as the page was
+           * open — beside a fully drawn table, saying there was no table state to price.
+           *
+           * Read BEFORE the dispatch above commits: `coachRequestRef` is assigned during render,
+           * so it still holds the pre-`welcome` value here — the same arrangement `pendingRef`
+           * uses one line up. It is guarded rather than unconditional so that a reconnect with
+           * nothing outstanding does not re-ask for an analysis that is already on screen.
+           */
+          if (coachRequestRef.current !== null) coachAskedRef.current = null;
         }
       },
       ...(socketFactory === undefined ? {} : { socketFactory }),
@@ -1173,9 +1292,24 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     const handle = socketRef.current;
     if (handle === null) return;
     const requestId = newRequestId('coach');
-    coachAskedRef.current = decisionKey(viewRef.current);
-    dispatch({ kind: 'coachRequested', requestId, key: coachAskedRef.current });
-    handle.requestCoach(requestId);
+    const asked = decisionKey(viewRef.current);
+    // Sent BEFORE the state change, and the state change carries what happened to it — the same
+    // order, for the same reason, as `act` above. `requestCoach` used to be called last and its
+    // answer thrown away, so a request this page had REFUSED to send still opened a pending
+    // request in the reducer: the report on screen was cleared, the panel fell back to its empty
+    // state, and nothing on the page said why or that nothing was coming.
+    const delivery = handle.requestCoach(requestId);
+    coachAskedRef.current = asked;
+    if (delivery === 'rate-limited' || delivery === 'undeliverable') {
+      // No automatic retry, deliberately: nothing is holding the request, so a silent re-ask would
+      // spend another token against the same limit. The sentence and the "Refresh the analysis"
+      // control are the affordance, exactly as `not-sent` is for a decision.
+      dispatch({ kind: 'coachFailed', reason: COACH_NOT_SENT[delivery] });
+      return;
+    }
+    // `disconnected` keeps the request open on purpose. It never went out either, but a reconnect
+    // IS coming, and the `welcome` handler above drops `coachAskedRef` so the effect asks again.
+    dispatch({ kind: 'coachRequested', requestId, key: asked });
   }, []);
 
   /**
@@ -1185,14 +1319,42 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
    * Coach requests a minute the server allows. Asking before it is the reader's turn would price a
    * decision nobody is being asked to make.
    */
-  const coachDuringHand = options.legendMatch?.difficulty === 'expert' ? false : table.coachDuringHand;
+  /**
+   * Why live Coach is off, and by what evidence — see `CoachOff`.
+   *
+   * The Legends branch is checked FIRST because it is the stronger claim: this page opened the
+   * match itself, so the difficulty is its own parameter rather than something read off a refusal.
+   * A refusal that arrives at such a table adds nothing the page did not already know.
+   */
+  const coachOff: CoachOff | null =
+    options.legendMatch?.difficulty === 'expert'
+      ? { kind: 'expertLegends' }
+      : table.coachRefusal !== null
+        ? { kind: 'refusedByServer', serverReason: table.coachRefusal }
+        : null;
+  const coachDuringHand = coachOff === null && table.coachDuringHand;
+
+  /**
+   * Whether an analysis is outstanding, as a dependency rather than a ref read.
+   *
+   * It is what re-runs this effect after a reconnect. `welcome` clears the request the dead socket
+   * was carrying, so this flips true → false in the same commit that drops `coachAskedRef` — and
+   * without it the effect would never run again, because `isMyTurn` and `key` are both unchanged
+   * by a reconnect that lands the reader back in the spot they were already in.
+   *
+   * It also stops two requests overlapping on the ordinary path: `coachRequested` sets it, so a
+   * re-render between the ask and the answer cannot spend a second one of the thirty Coach
+   * requests a minute the server allows.
+   */
+  const coachOutstanding = table.coachRequest !== null;
 
   useEffect(() => {
     if (!coachDuringHand) return;
     if (!isMyTurn || key === '') return;
+    if (coachOutstanding) return;
     if (coachAskedRef.current === key) return;
     askCoach();
-  }, [coachDuringHand, isMyTurn, key, askCoach]);
+  }, [coachDuringHand, isMyTurn, key, coachOutstanding, askCoach]);
 
   const turn = useMemo<TurnClock | null>(() => {
     if (table.deadlineMs === null || table.room === null || table.betweenHands) return null;
@@ -1219,7 +1381,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     turn,
     report,
     coachProblem: table.coachProblem,
-    coachDuringHand,
+    coachOff,
     seatNames,
     highlightedCards,
     isMyTurn,

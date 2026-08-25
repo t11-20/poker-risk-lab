@@ -83,6 +83,9 @@ function withSignedInCaller(app: FastifyInstance, userId: string): void {
   app.addHook('preHandler', (request, _reply, done) => {
     request.session = {
       sessionId: 'ses_contentroutestest000000',
+      // Far enough out that nothing here exercises expiry; the field is required because a
+      // WebSocket is bounded by it (see `ws/hub.ts`).
+      expiresAt: new Date(Date.now() + 3_600_000),
       user: { id: userId, kind: 'guest', displayName: 'Test Learner', createdAt: new Date().toISOString() },
     };
     done();

@@ -53,7 +53,7 @@
 
 import type { ReactElement } from 'react';
 import { cx } from '../cx.ts';
-import { formatChips, formatOdds, formatPoints, formatUnits } from '../format.ts';
+import { formatChips, formatOdds, formatPoints, formatUnits, NOT_AVAILABLE } from '../format.ts';
 import { useCountUp } from '../motion/useCountUp.ts';
 import { NOT_A_PROBABILITY, normaliseProbability } from '../probability.ts';
 
@@ -114,16 +114,40 @@ const DEFAULT_DECIMALS: Readonly<Record<MetricFormat, number>> = {
 };
 
 /**
- * `odds` and `number` have no unit of their own — `formatOdds` already says "to 1", and a
- * bare count's unit is whatever the label says it is.
+ * The unit a format supplies when the caller does not, given the figure it will sit beside.
+ *
+ * `odds` and `number` have no unit of their own — `formatOdds` already says "to 1", and a bare
+ * count's unit is whatever the label says it is.
+ *
+ * ## Why this is a function and not the map it used to be
+ *
+ * Two of these have a singular, and a constant cannot know which one applies. `Metric` puts the
+ * unit in its own element (rule 3) precisely so it can sit at label size — which also means it
+ * cannot go through `formatUnits`, the formatter that owns the word and gets this right. So the
+ * map rendered **"1 units"** and **"1 points"**, in a component the whole design leans on, in
+ * every place a figure can be one: `/record`'s lifetime net after a single unit won or lost, an
+ * expected value that rounds to 1, a driving trait shown as a count.
+ *
+ * The rule matches `formatUnits` exactly — the numeric value of the RENDERED body decides, so
+ * `1.0` at one decimal is still "unit" — rather than being a second opinion about the same word.
  */
-const DEFAULT_UNIT: Readonly<Record<MetricFormat, string | null>> = {
-  number: null,
-  percent: '%',
-  units: 'units',
-  points: 'points',
-  odds: null,
-};
+function defaultUnit(format: MetricFormat, text: string): string | null {
+  switch (format) {
+    case 'percent':
+      return '%';
+    case 'units':
+      return isOne(text) ? 'unit' : 'units';
+    case 'points':
+      return isOne(text) ? 'point' : 'points';
+    default:
+      return null;
+  }
+}
+
+/** Whether a rendered figure reads as one. Grouped digits and a sign are stripped, as `format.ts` does. */
+function isOne(text: string): boolean {
+  return Math.abs(Number(text.replaceAll(',', ''))) === 1;
+}
 
 /** Shape, not colour. Redundant with the sign in the text, which is the point. */
 const DIRECTION_GLYPH: Readonly<Record<MetricDeltaDirection, string>> = {
@@ -177,12 +201,26 @@ function valueText(value: number, format: MetricFormat, decimals: number): strin
   return formatChips(value, { decimals });
 }
 
-/** Hide `%` when the figure is a refusal or an absence, so we do not print "not a probability %". */
+/**
+ * The unit to draw beside a figure — or nothing, when the figure is not a quantity.
+ *
+ * ## Both halves of this used to be wrong
+ *
+ * The suppression was `percent`-only, so it stopped `"not a probability %"` and let through
+ * **`"— units"`** and **`"— points"`**: `formatChips` renders a non-finite value as the em dash
+ * `NOT_AVAILABLE`, and the unit was appended to it regardless. A dash is the absence of a figure,
+ * and "— units" reads as a quantity of nothing rather than as nothing.
+ *
+ * And the fallback was a constant per format, which is why a figure of exactly one was labelled
+ * `"1 units"`. See `defaultUnit`.
+ *
+ * A unit the CALLER passed is used as given: `unit="of 1"` and `unit="units"` are the caller's own
+ * words and this component does not conjugate somebody else's string. Suppression on a
+ * non-quantity still applies, because that is about the figure and not about the word.
+ */
 function unitFor(props: FigureProps, text: string): string | null {
-  if (props.format === 'percent' && (text === NOT_A_PROBABILITY || !Number.isFinite(props.value))) {
-    return null;
-  }
-  return props.unit;
+  if (text === NOT_AVAILABLE || text === NOT_A_PROBABILITY) return null;
+  return props.unit === undefined ? defaultUnit(props.format, text) : props.unit;
 }
 
 interface ResolvedDelta {
@@ -223,14 +261,19 @@ interface FigureProps {
   readonly value: number;
   readonly format: MetricFormat;
   readonly decimals: number;
-  readonly unit: string | null;
+  /**
+   * The caller's unit, `null` for "no unit at all", or `undefined` for "whatever this format
+   * supplies". The third case is not the same as the first and cannot be collapsed into it: the
+   * format's own unit depends on the figure, and the figure is not known until it is rendered.
+   */
+  readonly unit: string | null | undefined;
   readonly interval: string | undefined;
 }
 
 /** What a screen reader hears: the label, the real figure, its unit and its interval. */
 function spokenFigure(props: FigureProps, text: string): string {
   const parts = [`${props.label}:`, text];
-  if (props.unit !== null) parts.push(props.unit);
+  if (props.unit !== null && props.unit !== undefined) parts.push(props.unit);
   if (props.interval !== undefined) parts.push(props.interval);
   return parts.join(' ');
 }
@@ -312,7 +355,9 @@ export function Metric(props: MetricProps): ReactElement {
     value,
     format,
     decimals,
-    unit: unit === undefined ? DEFAULT_UNIT[format] : unit,
+    // Passed through as-is, `undefined` included: which unit a format supplies depends on the
+    // figure it will sit beside, and that is not known until `unitFor` has one. See `defaultUnit`.
+    unit,
     interval,
   };
   const resolvedDelta = delta === undefined ? null : resolveDelta(delta, format, decimals);

@@ -111,52 +111,107 @@ export async function generateMetadata({
   };
 }
 
+/**
+ * What KIND of measurement a row holds, because the table has two and used to render one.
+ *
+ * ## The defect
+ *
+ * Every row went through `formatProbability(...) ?? NOT_A_PROBABILITY`, with a comment saying "a
+ * measured frequency out of a simulation: a probability, so it goes through the domain". Seven of
+ * the eight are. The eighth, `averageBetSizeAsPotFraction`, is a mean of pot fractions and is
+ * legitimately greater than 1 — which `packages/ui/src/probability.ts`'s own header says in as
+ * many words: "the ones that hold a pot fraction (a bet size as a share of the pot…) deliberately
+ * do not [go through the domain], because those are legitimately greater than 1 and refusing them
+ * would be the same conflation in reverse."
+ *
+ * Measured in Chrome 151 against the running API: `/legends/old-school-pressure` rendered the row
+ * `Average bet size · not a probability · ± 1.5 points` for a perfectly ordinary average of
+ * 1.0685 × the pot. A reader was shown a refusal where a figure belongs, on a page whose whole
+ * subject is what a style measurably does.
+ *
+ * The interval column was wrong on that row too, and for the same reason: `confidenceHalfWidth` is
+ * the binomial half-width of the FREQUENCIES. A mean of ratios has a different sampling
+ * distribution and this page has no figure for it, so the honest cell says so rather than
+ * borrowing one that does not apply.
+ */
+type ObservedKind = 'frequency' | 'potFraction';
+
+/**
+ * The interval cell for a row the frequencies' interval does not describe.
+ *
+ * Not an em dash on its own: a bare dash in a numeric column reads as a missing measurement, and
+ * this one is not missing — it is a different quantity with a different sampling distribution that
+ * this page has no figure for. Saying which is the whole point.
+ */
+const NO_INTERVAL = 'not a frequency';
+
 interface ObservedRow {
   readonly label: string;
   readonly value: number;
   readonly note: string;
+  readonly kind: ObservedKind;
 }
 
-/** The observed frequencies, in the order a hand actually produces them. */
+/** The observed figures, in the order a hand actually produces them. */
 function observedRows(observed: ProfileObservedStats): readonly ObservedRow[] {
   return [
-    { label: 'Hands entered voluntarily', value: observed.vpip, note: 'Its VPIP over the run.' },
+    {
+      label: 'Hands entered voluntarily',
+      value: observed.vpip,
+      note: 'Its VPIP over the run.',
+      kind: 'frequency',
+    },
     {
       label: 'Hands raised preflop',
       value: observed.pfr,
       note: 'Its PFR, which cannot exceed the row above.',
+      kind: 'frequency',
     },
     {
       label: 'Re-raised preflop',
       value: observed.threeBetFrequency,
       note: 'How often it three-bet an opener.',
+      kind: 'frequency',
     },
     {
       label: 'Aggression',
       value: observed.aggressionFrequency,
       note: 'Bets and raises as a share of its actions.',
+      kind: 'frequency',
     },
     {
       label: 'Bluffing',
       value: observed.bluffFrequency,
       note: 'Bets with a hand that could not win at showdown.',
+      kind: 'frequency',
     },
     {
       label: 'Reached showdown',
       value: observed.wentToShowdown,
       note: 'How often the hand was decided by cards.',
+      kind: 'frequency',
     },
     {
       label: 'Folded to a bet',
       value: observed.foldToBetFrequency,
       note: 'The frequency its card describes as folding under pressure.',
+      kind: 'frequency',
     },
     {
       label: 'Average bet size',
       value: observed.averageBetSizeAsPotFraction,
-      note: 'As a fraction of the pot, across every bet it made.',
+      note: 'As a fraction of the pot, across every bet it made. A pot-sized bet is 1.00.',
+      kind: 'potFraction',
     },
   ];
+}
+
+/** The figure, in the domain the row actually lives in. See `ObservedKind` for the defect. */
+function observedFigure(row: ObservedRow): string {
+  if (row.kind === 'frequency') return formatProbability(row.value) ?? NOT_A_PROBABILITY;
+  // A share of the pot, so never refused for exceeding 1. `formatChips` still answers the em dash
+  // for a value that is not a finite number, which is the only refusal this figure can earn.
+  return `${formatChips(row.value, { decimals: 2 })} × pot`;
 }
 
 /**
@@ -182,7 +237,7 @@ function ObservedTable({
   return (
     <div className="prl-stack">
       <p className="prl-legend-observed__note">
-        {`${note} Every figure below carries the same sampling interval of ${halfWidth}, and several of the differences between profiles are narrower than that — which is the whole reason the interval is printed rather than implied.`}
+        {`${note} Every FREQUENCY below carries the same sampling interval of ${halfWidth}, and several of the differences between profiles are narrower than that — which is the whole reason the interval is printed rather than implied. The average bet size is a mean of pot fractions rather than a frequency, so that interval does not describe it and is not printed against it.`}
       </p>
       <div className="prl-legend-table-wrap">
         <table className="prl-legend-table">
@@ -204,14 +259,16 @@ function ObservedTable({
               <tr key={row.label}>
                 <th scope="row">{row.label}</th>
                 {/*
-                  A measured frequency out of a simulation: a probability, so it goes through the
-                  domain. A run that somehow published a rate above 1 must say so rather than
-                  print it beside a confidence interval as though it were a finding.
+                  A measured FREQUENCY out of a simulation is a probability, so it goes through the
+                  domain: a run that somehow published a rate above 1 must say so rather than print
+                  it beside a confidence interval as though it were a finding. A pot fraction is not
+                  one and must not be refused for exceeding 1 — see `ObservedKind` for the row that
+                  was, and what a reader was shown in place of it.
                 */}
+                <td className="prl-legend-table__figure">{observedFigure(row)}</td>
                 <td className="prl-legend-table__figure">
-                  {formatProbability(row.value) ?? NOT_A_PROBABILITY}
+                  {row.kind === 'frequency' ? `± ${halfWidth}` : NO_INTERVAL}
                 </td>
-                <td className="prl-legend-table__figure">{`± ${halfWidth}`}</td>
                 <td>{row.note}</td>
               </tr>
             ))}

@@ -7,7 +7,7 @@
  *   node apps/api/scripts/migrate.mjs down
  *   node apps/api/scripts/migrate.mjs roles
  *   node apps/api/scripts/migrate.mjs seed
- *   node apps/api/scripts/migrate.mjs reset
+ *   node apps/api/scripts/migrate.mjs reset --confirm-database <name>
  *
  * Dependency-free apart from `postgres` (porsager/postgres), which the API already
  * depends on. A migration runner that pulls in a framework to move some SQL
@@ -83,9 +83,11 @@
  * errors thrown from inside the driver) is passed through a redactor that strips
  * anything shaped like a connection URL or a password parameter first.
  *
- * **`seed` and `reset` refuse to run when NODE_ENV=production.** `seed` writes
- * fixture rows; `reset` drops the schema. Neither has any business near real
- * learner data. `reset` leaves the cluster-wide roles alone — they may be shared
+ * **`seed` and `reset` refuse to run when NODE_ENV=production, and `reset` also
+ * refuses unless it is told which database it is emptying.** `seed` writes fixture
+ * rows; `reset` drops the schema. Neither has any business near real learner data,
+ * and NODE_ENV alone does not keep them away from it — see `refuseUnconfirmedReset`
+ * for why, and for the measurement. `reset` leaves the cluster-wide roles alone — they may be shared
  * with other databases, and dropping them is not this script's decision.
  *
  * Seed files are deliberately *not* recorded in the ledger. They are fixtures,
@@ -128,6 +130,11 @@ const LOCK_NAMESPACE = 'poker-risk-lab/db/migrations';
 const DEFAULT_LOCK_WAIT_MS = 30_000;
 /** How long a migration waits for a table lock before giving up. */
 const STATEMENT_LOCK_TIMEOUT = '10s';
+/**
+ * A custom GUC (the dot is what makes it settable without a prior definition) used as a
+ * transaction-local witness that a file did not close the transaction under us. See `applyFile`.
+ */
+const TRANSACTION_WITNESS = 'prl.migration_transaction';
 
 const COMMANDS = ['up', 'down', 'status', 'roles', 'seed', 'reset'];
 
@@ -839,10 +846,26 @@ function displayPath(path) {
   return inside === '' || inside.startsWith('..') ? path : inside;
 }
 
+/**
+ * Thrown when a file ended the transaction this runner opened for it.
+ *
+ * Carried as its own class so `applyFailure` can tell the two cases apart: an ordinary SQL
+ * error really did roll everything back, and this one did not.
+ */
+class TransactionEscaped extends Error {
+  name = 'TransactionEscaped';
+}
+
 function applyFailure(file, label, error) {
   const path = displayPath(file.path);
+  // The headline sentence is the one an operator acts on at 3am, so it must never be a guess.
+  // See `applyFile`: a file containing a bare `COMMIT;` ends this runner's transaction, and
+  // everything before that point is durable no matter what fails afterwards.
+  const escaped = error instanceof TransactionEscaped;
   const lines = [
-    `${label} ${file.version} failed. Nothing it contained was applied.`,
+    escaped
+      ? `${label} ${file.version} ENDED ITS OWN TRANSACTION. Part of it is already committed.`
+      : `${label} ${file.version} failed. Nothing it contained was applied.`,
     '',
     `  file:   ${path}`,
     `  error:  ${error?.message ?? String(error)}`,
@@ -860,9 +883,19 @@ function applyFailure(file, label, error) {
 
   lines.push(
     '',
-    'Each file is applied inside one transaction, so that transaction has been rolled back and ' +
-      'this database is exactly as it was before the run started. Fix the file and run again; ' +
-      'files that had already been applied are recorded in the ledger and will not be repeated.',
+    escaped
+      ? 'This runner opens ONE transaction per file, and this file closed it — a bare `COMMIT;` ' +
+          '(or a `ROLLBACK;`, or a procedure that commits) does that. Everything the file executed ' +
+          'before that point is DURABLE, and nothing was recorded in prl.schema_migrations, so a ' +
+          'retry will replay the whole file and fail on what the first half already created.\n\n' +
+          'Nothing this runner can do will undo it. Inspect the database, undo the committed half ' +
+          'by hand, and remove the transaction-control statement from the file. If the file needs ' +
+          'a statement that cannot run inside a transaction (`CREATE INDEX CONCURRENTLY` is the ' +
+          'usual one), it cannot be a migration here — see the note at the top of 0002.'
+      : 'Each file is applied inside one transaction, so that transaction has been rolled back ' +
+          'and this database is exactly as it was before the run started. Fix the file and run ' +
+          'again; files that had already been applied are recorded in the ledger and will not be ' +
+          'repeated.',
   );
   return new MigrateError(lines.join('\n'));
 }
@@ -882,7 +915,35 @@ export async function applyFile(sql, file, recordInLedger, label) {
     await sql.begin(async (tx) => {
       // SET takes no parameters, so this is the parameterised way to set one.
       await tx`select set_config('lock_timeout', ${STATEMENT_LOCK_TIMEOUT}, true)`;
+      // A transaction-local witness, checked again below.
+      //
+      // ## The defect this exists for
+      //
+      // "One transaction per file" is asserted by this runner's own failure message — "that
+      // transaction has been rolled back and this database is exactly as it was before the run
+      // started" — and a file can simply end the transaction. Measured, with a file containing
+      // `CREATE TABLE prl.rev_half_a …; COMMIT; CREATE TABLE prl.rev_half_b …;` twice (the
+      // second a deliberate duplicate): the runner printed "Nothing it contained was applied",
+      // exited 1, recorded no ledger row — and `prl.rev_half_a` was durably present. The retry
+      // a deploy pipeline performs then failed with a DIFFERENT error, `relation "rev_half_a"
+      // already exists`, and `up` could never succeed again without hand surgery.
+      //
+      // The only signal the old code had was a PostgreSQL NOTICE, `there is no transaction in
+      // progress`, which it printed as an unremarkable `·` line and ignored.
+      //
+      // `set_config(..., true)` is transaction-local, so the value cannot survive a COMMIT. The
+      // token is per-call so a leftover session GUC from an earlier statement cannot satisfy it.
+      const witness = createHash('sha256')
+        .update(`${file.version}${startedAt}${Math.random()}`)
+        .digest('hex');
+      await tx`select set_config(${TRANSACTION_WITNESS}, ${witness}, true)`;
       await tx.unsafe(file.sql);
+      const [seen] = await tx`select current_setting(${TRANSACTION_WITNESS}, true) as value`;
+      if (seen?.value !== witness) {
+        throw new TransactionEscaped(
+          'the transaction this runner opened for the file was closed by the file itself',
+        );
+      }
       if (recordInLedger) {
         await tx`
           insert into prl.schema_migrations (version, checksum)
@@ -1093,12 +1154,60 @@ async function dropSchema(sql) {
   if (assumedRole) await sql.unsafe('reset role');
 }
 
+/**
+ * Refuses a `reset` that has not named the database it is about to empty.
+ *
+ * ## The defect this exists for
+ *
+ * Until this existed, the ONLY thing standing between `reset` and every learner row was
+ * `NODE_ENV === 'production'`. Three facts make that not a guard:
+ *
+ *  * `NODE_ENV` describes the *process*, and `reset` is documented to be run from an operator's
+ *    host — docker-compose.yml says so in as many words ("Migrations are run from the host, not
+ *    from inside the api container"). An operator's shell does not have production's NODE_ENV.
+ *  * The repository's own `.env` sets `NODE_ENV=development`, and `pnpm run db:reset` loads it
+ *    with `--env-file-if-exists`. Measured: with NODE_ENV unset in the shell, the script sees
+ *    `development`. So the checked-in file supplies the value that disarms the guard.
+ *  * Nothing whatsoever looked at `DATABASE_MIGRATION_URL`, which is the variable that actually
+ *    decides what gets dropped.
+ *
+ * Reproduced: with `DATABASE_MIGRATION_URL` pointed at a database holding 944,297 rows and
+ * NODE_ENV unset, `migrate.mjs reset` printed one yellow `!` line and emptied it. No prompt, no
+ * TTY check, no second flag. By contrast `backup restore` — which destroys strictly less — asks
+ * up to three times (`--target`, `--drop-existing`, `--overwrite-live-database`).
+ *
+ * The acknowledgement is bound to the TARGET rather than being a bare `--yes`, which is the
+ * property that matters: a `pnpm run db:reset --confirm-database poker_risk_lab_dev` recalled
+ * from shell history refuses against any other database instead of emptying it.
+ */
+export function refuseUnconfirmedReset(database, confirmed) {
+  if (confirmed === database) return;
+  throw new MigrateError(
+    [
+      `\`reset\` drops schema prl and everything in it. It is connected to "${database}".`,
+      '',
+      confirmed === null
+        ? '  Say which database you mean, and it has to be that one:'
+        : `  You named "${confirmed}", but this connection is to "${database}".`,
+      '',
+      `    node apps/api/scripts/migrate.mjs reset --confirm-database ${database}`,
+      '',
+      'NODE_ENV is not a guard here: `reset` runs from an operator host, where NODE_ENV is',
+      "whatever that shell has, and the repository's own .env sets it to development.",
+      'DATABASE_MIGRATION_URL is what decides which database this empties, so the',
+      'acknowledgement names the database rather than the intent.',
+    ].join('\n'),
+  );
+}
+
 async function commandReset(sql, options) {
   refuseInProduction('reset');
 
   // Named from the server, not parsed out of the connection string, so nothing
   // secret is anywhere near this line.
   const [target] = await sql`select current_database() as database, current_user as role`;
+  // Before the lock and before the drop: a refusal that has changed nothing is the point.
+  refuseUnconfirmedReset(target.database, options.confirmDatabase ?? null);
   warn(`dropping schema prl in database "${target.database}" as "${target.role}"`);
 
   await withLock(sql, options.lockWaitMs, async () => {
@@ -1121,20 +1230,32 @@ function usage() {
   line('  status                 show applied and pending migrations');
   line('  roles                  create the cluster-wide prl_migrator/prl_app roles (before a restore)');
   line('  seed                   apply db/seeds/*.sql (never with NODE_ENV=production)');
-  line('  reset                  drop schema prl, then apply every migration again');
+  line('  reset --confirm-database <name>');
+  line('                         drop schema prl, then apply every migration again. The name must');
+  line('                         match the database the connection is actually on.');
   line();
   line(`${dim('  DATABASE_MIGRATION_URL')}     the migrating identity; preferred over DATABASE_URL`);
   line(`${dim('  DATABASE_URL')}               fallback; never printed`);
   line(`${dim('  PRL_MIGRATE_LOCK_WAIT_MS')}   how long to wait for the migration lock (default 30000)`);
 }
 
-function parseArgs(argv) {
-  const options = { command: null, allowMissing: false, help: false };
-  for (const arg of argv) {
+export function parseArgs(argv) {
+  const options = { command: null, allowMissing: false, help: false, confirmDatabase: null };
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
     if (arg === '--help' || arg === '-h') {
       options.help = true;
     } else if (arg === '--allow-missing') {
       options.allowMissing = true;
+    } else if (arg === '--confirm-database') {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith('-')) {
+        throw new MigrateError('--confirm-database needs the name of the database to drop.');
+      }
+      options.confirmDatabase = value;
+      index += 1;
+    } else if (arg.startsWith('--confirm-database=')) {
+      options.confirmDatabase = arg.slice('--confirm-database='.length);
     } else if (arg.startsWith('-')) {
       throw new MigrateError(`Unknown option "${arg}". Try --help.`);
     } else if (options.command === null) {

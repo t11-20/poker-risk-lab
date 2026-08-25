@@ -417,6 +417,45 @@ export type SecurityAuditEvent =
   | 'security.rate_limit.banned';
 
 /**
+ * The audit writes that have been started and not yet settled.
+ *
+ * ## Why this exists, and why it is not a queue
+ *
+ * The write in `recordSecurityAudit` is deliberately fire-and-forget: a security event must never
+ * delay or fail the request it describes. That is right in production, and it makes the write
+ * **unobservable to a test**, which is why `test/security-audit-trail.test.ts` polls for the row.
+ *
+ * Polling made that suite flaky in a way that got worse rather than better. It shares one
+ * process-wide pool with every other API test, so the write queues behind whatever else is in
+ * flight; the deadline was raised from five seconds to fifteen, and then failed at **15,036 ms**
+ * inside `pnpm run verify`. A third raise would buy a few hundred more tests of headroom and fail
+ * again, because the number was never the problem — waiting on a clock for something that has a
+ * handle is.
+ *
+ * `awaitPendingAuditWrites()` gives the test that handle. Nothing in production calls it, and the
+ * set is bounded by concurrency rather than by history: an entry removes itself when it settles.
+ */
+const pendingAuditWrites = new Set<Promise<unknown>>();
+
+function trackAuditWrite(write: Promise<unknown>): void {
+  pendingAuditWrites.add(write);
+  void write.finally(() => {
+    pendingAuditWrites.delete(write);
+  });
+}
+
+/**
+ * Resolve once every audit write started before this call has settled.
+ *
+ * For tests. A write started *after* this call is not waited for, and does not need to be: the
+ * caller has already had the HTTP response for the thing whose audit row it wants, so the route
+ * has returned and `recordSecurityAudit` has been reached.
+ */
+export async function awaitPendingAuditWrites(): Promise<void> {
+  await Promise.allSettled([...pendingAuditWrites]);
+}
+
+/**
  * Writes one audit entry, and never lets it fail the thing it describes.
  *
  * ## Why this wrapper exists at all
@@ -460,13 +499,15 @@ export function recordSecurityAudit(
     });
   };
   try {
-    void auditRepository
-      .record(getSql(), {
-        event: entry.event,
-        userId: entry.userId ?? null,
-        ...(entry.detail === undefined ? {} : { detail: entry.detail }),
-      })
-      .catch(report);
+    trackAuditWrite(
+      auditRepository
+        .record(getSql(), {
+          event: entry.event,
+          userId: entry.userId ?? null,
+          ...(entry.detail === undefined ? {} : { detail: entry.detail }),
+        })
+        .catch(report),
+    );
   } catch (error) {
     // `getSql()` or `record`'s synchronous validation threw. Same treatment: reported, swallowed.
     report(error);

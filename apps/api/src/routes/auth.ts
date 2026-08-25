@@ -59,6 +59,7 @@ import type { SessionAccount, SessionStore } from '../auth/session.ts';
 import {
   destroySession,
   issueSession,
+  noteSessionRevoked,
   requireSession,
   SESSION_ABSOLUTE_TTL_SECONDS,
   sessionPlugin,
@@ -372,8 +373,26 @@ async function sessionUserFor(account: SessionAccount, users: UserStore): Promis
  *
  * The CSRF token is minted for everybody, signed in or not, and that is not an oversight: the
  * first mutating request a new visitor makes is `POST /auth/guest`, which needs a token, so a
- * token issued only to authenticated callers would be unreachable. `generateCsrf` rotates the
- * paired secret cookie, which is exactly what should happen when the session changes.
+ * token issued only to authenticated callers would be unreachable.
+ *
+ * ## What `generateCsrf` does NOT do
+ *
+ * This comment used to say it "rotates the paired secret cookie, which is exactly what should
+ * happen when the session changes". Read `generateCsrfCookie` in
+ * `@fastify/csrf-protection@8.0.1`: it unsigns the existing `prl_csrf` cookie and mints a NEW
+ * secret only when there is not already a usable one. So the secret survives sign-in, sign-out and
+ * account deletion, and a token minted while anonymous still verifies afterwards.
+ *
+ * That is not a hole, and the reason is worth writing down rather than assuming — the rotation
+ * this comment claimed was never what made the scheme work. Double submit is sound because a
+ * cross-site page cannot READ or WRITE the secret: the cookie is `__Host-` prefixed in production
+ * (so no sibling subdomain can plant one), `HttpOnly` (so script cannot read it), signed (so it
+ * cannot be forged), and the token has to arrive in an `x-csrf-token` header, which a cross-origin
+ * request cannot carry without a preflight that only an allowlisted origin is granted. None of
+ * those depends on the secret being fresh.
+ *
+ * Anyone reaching for rotation as a security property — "the old tab's token stopped working after
+ * sign-in" — should note that it is not one this code has.
  */
 async function sessionResponse(
   reply: FastifyReply,
@@ -661,6 +680,59 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
       done();
     };
 
+    /**
+     * Callbacks that proved they belong to a sign-in this server started.
+     *
+     * ## The defect this closes
+     *
+     * `chargeFailedOutcome` charges any 4xx, and the budget is keyed on the client ADDRESS —
+     * which it must be, because the route issues a session. Put those two facts together and the
+     * budget is spendable by somebody who is not the caller: `GET /auth/oidc/callback?state=…` is
+     * a GET, so a page on any other site can make a visitor's browser issue it as a plain
+     * subresource load. CORS does not stop the REQUEST, only the reading of the response; there is
+     * no CSRF token on a GET; and no session is needed. Measured against the shipped code, with
+     * `<img>`-shaped headers (`sec-fetch-mode: no-cors`, `origin: https://evil.test`):
+     *
+     *     20 cross-site GETs to the callback   -> 400 x15 then 429 x5
+     *     a legitimate learner's /auth/oidc/start from the same address -> 429, retryAfter 60
+     *
+     * Fifteen image tags on any page one student on a campus network visits therefore locked the
+     * whole cohort out of signing in for the rest of the window — the exact failure the cohort
+     * work exists to prevent, reachable by a third party for free.
+     *
+     * ## Why membership of this set is the right condition
+     *
+     * The budget's own argument (see the header of `plugins/outcome-budget.ts`) is that a failure
+     * is worth counting because "a script cannot produce" the thing that separates a real sign-in
+     * from a fake one. That thing is `acceptAttempt`: the single-use attempt row, matched against
+     * a `state` and a PKCE verifier carried in a cookie THIS SERVER set on the browser one request
+     * earlier. A hostile third party cannot make a victim's browser present one, because it cannot
+     * write a `__Host-`, `HttpOnly`, signed cookie for our origin.
+     *
+     * It is also the line past which a failure COSTS something: everything before it is refused
+     * from memory and one indexed read, and everything after it has spent an outbound request to
+     * the identity provider. So the requests that are now uncharged are exactly the ones that were
+     * never expensive, and every request the original measurement counted — a script that starts a
+     * real flow and then fails at the token endpoint — is still counted. `refusingRelyingParty` in
+     * `test/cohort-sign-in-limits.test.ts` drives that case and still meets its fifteen.
+     *
+     * A `WeakSet` rather than a request decorator: it is two call sites in one closure, it cannot
+     * be read or set by anything else in the process, and it holds no request after the response.
+     */
+    const provenAttempts = new WeakSet<FastifyRequest>();
+
+    const chargeProvenCallbackFailure = (
+      request: FastifyRequest,
+      reply: FastifyReply,
+      done: (error?: Error) => void,
+    ) => {
+      if (!provenAttempts.has(request)) {
+        done();
+        return;
+      }
+      chargeFailedOutcome(request, reply, done);
+    };
+
     app.post<{ Body: GuestBody | undefined }>(
       '/auth/guest',
       { config: guestRateLimit, schema: { body: { $ref: 'prl:createGuestBody#' } } },
@@ -714,6 +786,50 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
     });
 
     /**
+     * Refuse an OIDC GET that a browser says is a subresource load rather than a navigation.
+     *
+     * ## The incident this closes
+     *
+     * Both OIDC GET routes are top-level navigations by construction: a learner clicks sign in, and
+     * the provider redirects their browser back. Neither is ever loaded as an image, a script or a
+     * fetch. But CORS does not stop a cross-site *request* — only the reading of its response — so any
+     * page a learner visits could make their browser issue them. An adversarial review measured what
+     * that buys an attacker: sixty `<img>` tags on any page one student on a campus network opens
+     * exhausts the whole address's unredeemed-start budget, and the next real learner to press sign in
+     * gets a 429. A third party denies sign-in to an entire cohort for ten minutes, for free, from a
+     * page nobody on the cohort's side controls.
+     *
+     * The budgets themselves are address-keyed and must be — a route that issues a session cannot be
+     * keyed by that session, which is measured and argued at the top of this file. So the budget
+     * cannot distinguish the attacker from the victim. What CAN distinguish them is that a browser
+     * tells us, in `Sec-Fetch-Dest`, what it is loading the URL *for*.
+     *
+     * ## Why this fails open on an absent header
+     *
+     * `Sec-Fetch-Dest` is sent by every current browser and by no `curl`. Absent means "not a browser
+     * that speaks Fetch Metadata", which includes a very old client and every command-line caller,
+     * and refusing those would break sign-in for them to stop an attack they cannot mount — a
+     * cross-site request only exists because a browser made it, and a browser that can be made to
+     * issue one sends the header. Present-and-not-`document` is the only refusal, and it is exactly
+     * the case that cannot be a person pressing a button.
+     *
+     * This is a deliberate constraint on the sign-in path, added before a real provider is wired
+     * rather than after, because the cohort work this protects assumes OIDC is how a class arrives.
+     */
+    const refuseNonNavigationOidc = (
+      request: FastifyRequest,
+      _reply: FastifyReply,
+      done: (error?: Error) => void,
+    ): void => {
+      const dest = request.headers['sec-fetch-dest'];
+      if (typeof dest === 'string' && dest !== '' && dest !== 'document') {
+        done(new AppError('invalid_request'));
+        return;
+      }
+      done();
+    };
+
+    /**
      * `GET /auth/oidc/start` — begin a sign-in.
      *
      * `redirectAfter` is a PATH, enforced by `oidcStartQuerySchema`. Restating why, because this is
@@ -731,7 +847,7 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
         // Both budgets guard the start: the failed-outcome one because a start can fail against
         // the provider, and the unredeemed one because a start that SUCCEEDS is the whole of what
         // a start flood produces.
-        preHandler: [refuseWhenFailing, refuseWhenTooManyUnredeemed],
+        preHandler: [refuseNonNavigationOidc, refuseWhenFailing, refuseWhenTooManyUnredeemed],
         onResponse: chargeFailedOutcome,
         schema: { querystring: { $ref: 'prl:oidcStartQuery#' } },
       },
@@ -790,8 +906,11 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
         // Only the failed-outcome budget. A callback REDEEMS an attempt row rather than writing
         // one, so refusing it for having too many outstanding would be refusing the one request
         // that reduces them.
-        preHandler: refuseWhenFailing,
-        onResponse: chargeFailedOutcome,
+        preHandler: [refuseNonNavigationOidc, refuseWhenFailing],
+        // …and only once the callback has proved it belongs to a sign-in this server started.
+        // See `provenAttempts`: without that condition the budget is spendable, against a victim's
+        // address, by any page the victim happens to visit.
+        onResponse: chargeProvenCallbackFailure,
         schema: { querystring: { $ref: 'prl:oidcCallbackQuery#' } },
       },
       async (request, reply) => {
@@ -842,6 +961,10 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
         }
 
         const attempt = await acceptAttempt(request, query, store);
+        // Past this line the caller has presented the attempt cookie this server set on their
+        // browser, so a failure from here on is one only somebody who genuinely started a sign-in
+        // could produce — and the only kind that costs an outbound request. See `provenAttempts`.
+        provenAttempts.add(request);
         if (query.code === undefined) {
           throw new AppError('oidc_exchange_failed', {
             logDetail: 'callback carried neither code nor error',
@@ -933,6 +1056,12 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
       async (request, reply) => {
         const session = requireSession(request);
         const deleted = await store.users.deleteAccount(session.user.id);
+        // Announced by USER, not by session id: the transaction above revoked every session the
+        // learner held and the other devices' ids never leave it. `destroySession` below announces
+        // this one anyway; this is what reaches the rest. Placed after the commit, so nothing is
+        // closed for an erasure that did not happen — and before the response, so a socket cannot
+        // be told about a hand at a table belonging to an account that no longer exists.
+        if (deleted !== null) noteSessionRevoked({ userId: session.user.id });
         // Null means the row had already gone — a retry of a request whose answer never arrived,
         // or a guest swept between the session read and this statement. The cookie is still
         // cleared and the answer is still 401, because "there is no such account" and "you are

@@ -3,8 +3,9 @@
  * whether the decision is theirs.
  *
  * Extracted out of `PokerTable` because a seat is the densest object on the screen and it has
- * three separate correctness rules of its own — hidden cards, the three-cue active state, and
- * forced colors — none of which is easy to see when it is a nested function in a 300-line table.
+ * four separate correctness rules of its own — hidden cards, the three-cue active state, what a
+ * status means once the hand is over, and forced colors — none of which is easy to see when it is
+ * a nested function in a 300-line table.
  *
  * ## 1. A face-down card is face-down because the SERVER said nothing
  *
@@ -31,7 +32,25 @@
  * full accent ring — a state rather than a clock — and the seconds remain as text inside it. Each
  * of the three cues survives at least one of those conditions killing the others.
  *
- * ## 3. Folded and sitting-out swap the SURFACE, never the opacity
+ * ## 3. A settled hand is described in the past tense, and wears no live badges
+ *
+ * `SeatStatus` describes a seat's participation *in the current hand*, and the engine keeps sending
+ * it after the hand is over — `street: 'complete'` with everybody's last status still on them. Read
+ * as present tense that is wrong on every unfolded seat.
+ *
+ * Measured on the built app at `/play?state=complete` — the settled fixture, and the same component
+ * the live table draws when the last frame of a hand arrives. Two seats read **"in the hand"** and
+ * the viewer's own seat, which had just won the main pot with an ace-high flush, read **"all in"**
+ * and wore an **"all in" chip**. Nothing was in any hand: the pot had been awarded.
+ *
+ * So `complete` gets its own wording, and the chip — which is a badge about the seat's live state,
+ * "this seat has no decisions left in this hand" — is not drawn at all, because that is true of
+ * every seat once the hand is over and on the winner it reads as money still in the middle.
+ *
+ * `showdown` is deliberately NOT included: the cards are down but the pot has not been awarded, so
+ * a seat that has not folded genuinely is still in the hand.
+ *
+ * ## 4. Folded and sitting-out swap the SURFACE, never the opacity
  *
  * That rule lives in the stylesheet, but it is worth knowing here: `opacity: 0.6` on a whole plate
  * dims the text with it and silently takes a 4.5:1 label under the floor. A folded seat is still
@@ -51,13 +70,22 @@
 import type { ReactElement } from 'react';
 import { cx, type StyleWithVars } from '../cx.ts';
 import { formatChips } from '../format.ts';
-import type { SeatStatus, SeatView } from '../view-types.ts';
+import type { SeatStatus, SeatView, Street } from '../view-types.ts';
 import { CardRow } from './CardRow.tsx';
 import { Chip } from './Chip.tsx';
 import { type TurnClock, TurnTimer } from './TurnTimer.tsx';
 
 export interface SeatProps {
   readonly seat: SeatView;
+  /**
+   * The phase the hand is in, from `PlayerView.street`.
+   *
+   * Required rather than defaulted: `SeatStatus` alone cannot say whether "all in" is a commitment
+   * still standing or something that happened, and a component that guessed "still playing" would
+   * be wrong in exactly the state a reader is most likely to be looking at — the settled frame at
+   * the end of a hand. See rule 3 in the module comment.
+   */
+  readonly street: Street;
   /** Display name. `playerId` is an opaque id and is never shown. */
   readonly name: string;
   /**
@@ -86,12 +114,31 @@ export interface SeatProps {
   readonly className?: string;
 }
 
+/** What a seat's status means while the hand is still being played. */
 const STATUS_TEXT: Readonly<Record<SeatStatus, string>> = {
   active: 'in the hand',
   folded: 'folded',
   allIn: 'all in',
   sittingOut: 'sitting out',
 };
+
+/**
+ * And what it means once the pot has been awarded. See rule 3 in the module comment.
+ *
+ * Past tense for the two that were about a hand in progress, unchanged for the two that were not:
+ * "folded" already describes something that happened, and a seat sitting out is still sitting out.
+ */
+const SETTLED_STATUS_TEXT: Readonly<Record<SeatStatus, string>> = {
+  active: 'still in at the end',
+  folded: 'folded',
+  allIn: 'went all in',
+  sittingOut: 'sitting out',
+};
+
+/** The pot has been awarded and nobody is in anything. `showdown` is not this; see rule 3. */
+function isSettled(street: Street): boolean {
+  return street === 'complete';
+}
 
 const STATUS_CLASS: Readonly<Record<SeatStatus, string>> = {
   active: '',
@@ -127,10 +174,11 @@ export function seatRingPosition(index: number, count: number): StyleWithVars {
 }
 
 export function Seat(props: SeatProps): ReactElement {
-  const { seat, name, ringIndex, ringCount, turn = null, highlightedCards, highlightLabel } = props;
+  const { seat, street, name, ringIndex, ringCount, turn = null, highlightedCards, highlightLabel } = props;
   const { as = 'li', className } = props;
 
   const Tag = as;
+  const settled = isSettled(street);
   const holeCards = seat.holeCards;
   const faceDown = holeCards === null;
   const isHoldingCards = seat.status === 'active' || seat.status === 'allIn';
@@ -170,7 +218,13 @@ export function Seat(props: SeatProps): ReactElement {
               to act
             </Chip>
           ) : null}
-          {seat.status === 'allIn' ? (
+          {/*
+            A live badge, so it is gone once the hand is. "All in" on this plate means the seat has
+            put its stack in and has no decisions left in this hand — true of every seat after the
+            pot is awarded, and on the seat that just WON the pot it reads as a commitment still
+            outstanding. The status line below keeps the fact in the past tense.
+          */}
+          {seat.status === 'allIn' && !settled ? (
             <Chip tone="caution" pill>
               all in
             </Chip>
@@ -201,7 +255,7 @@ export function Seat(props: SeatProps): ReactElement {
         <dd className="prl-seat__stat-value">{formatChips(seat.committedThisStreet)}</dd>
       </dl>
 
-      <p className="prl-seat__status">{STATUS_TEXT[seat.status]}</p>
+      <p className="prl-seat__status">{(settled ? SETTLED_STATUS_TEXT : STATUS_TEXT)[seat.status]}</p>
 
       {seat.status === 'sittingOut' ? null : (
         <CardRow

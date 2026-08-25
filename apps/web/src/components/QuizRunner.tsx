@@ -84,7 +84,7 @@
  */
 
 import type { ContentId, Quiz, QuizQuestion } from '@prl/contracts';
-import { Button, Callout, Chip, Formula, formatChips, formatIndex, Metric, Panel, withKeys } from '@prl/ui';
+import { Button, Callout, Chip, Formula, formatIndex, Metric, Panel, withKeys } from '@prl/ui';
 import Link from 'next/link';
 import { type ReactElement, useEffect, useRef, useState } from 'react';
 import { useCalculationOutcome } from '@/components/LiveCalculation.tsx';
@@ -95,7 +95,7 @@ import {
   figureFormat,
   figureValue,
   formatQuizValue,
-  QUIZ_UNIT_DECIMALS,
+  formatTolerance,
   QUIZ_UNIT_WORDS,
   withinTolerance,
 } from '@/lib/learn-calculations.ts';
@@ -420,7 +420,7 @@ function NumericQuestion(props: {
           </p>
         ) : null}
         <p className="prl-field__hint" id={hintId}>
-          {`Anything within ${formatChips(question.tolerance, { decimals: QUIZ_UNIT_DECIMALS[question.unit] })} ${QUIZ_UNIT_WORDS[question.unit]} of the computed figure is accepted. Work it out roughly — the point is the method, not the decimal place.`}
+          {`Anything within ${formatTolerance(question.tolerance, question.unit)} ${QUIZ_UNIT_WORDS[question.unit]} of the computed figure is accepted. Work it out roughly — the point is the method, not the decimal place.`}
         </p>
       </div>
 
