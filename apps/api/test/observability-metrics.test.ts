@@ -596,3 +596,52 @@ describe('no metric label carries anything secret or identifying', () => {
     assert.deepEqual(leakedLabels(legitimate), []);
   });
 });
+
+describe('counters whose alerts are zero-tolerance are primed at zero', () => {
+  /**
+   * The defect, measured against staging rather than reasoned about.
+   *
+   * A counter series is created by its first `inc()`. Until then the exposition has no line for
+   * it, and `rate()`/`increase()` are computed only from samples inside their range — Prometheus
+   * does not assume a series that appears mid-range began at zero, so `1, 1, 1` has an increase
+   * of 0. The first occurrence of a counted event is therefore invisible to any alert keyed on
+   * its rate.
+   *
+   * `docs/production/alerts.md` writes exactly those alerts that way, on the stated grounds that
+   * there is no acceptable background rate: `RateLimitBans` on
+   * `increase(prl_rate_limit_events_total{kind="banned"}[15m]) > 0` and `ArchiveFailing` on
+   * `rate(prl_archive_failures_total[15m]) > 0`.
+   *
+   * What was measured: a flood drove the staging limiter past its ban threshold, the counter read
+   * `prl_rate_limit_events_total{kind="banned"} 1`, and `RateLimitBans` never fired. One recorded
+   * ban — the dedupe working — and an alert that could not see it.
+   */
+  it('renders the banned and limited series before anything is limited', () => {
+    const metrics = new AppMetrics();
+    const text = metrics.render();
+    assert.match(
+      text,
+      /prl_rate_limit_events_total\{kind="banned"\} 0/,
+      'a ban that is the first ever ban must be a rise from zero, not a series appearing',
+    );
+    assert.match(text, /prl_rate_limit_events_total\{kind="limited"\} 0/);
+  });
+
+  it('renders the archive-failure series before anything fails', () => {
+    // The metric whose own documentation says nothing else surfaces the failure, because play
+    // deliberately continues when an archive write fails.
+    assert.match(new AppMetrics().render(), /prl_archive_failures_total 0/);
+  });
+
+  it('a primed series still counts normally, so priming costs nothing (POSITIVE CONTROL)', () => {
+    // Without this, the two assertions above would also hold for a counter that had been broken
+    // into always reporting zero.
+    const metrics = new AppMetrics();
+    metrics.rateLimitEvents.inc({ kind: 'banned' });
+    metrics.archiveFailures.inc();
+    const text = metrics.render();
+    assert.match(text, /prl_rate_limit_events_total\{kind="banned"\} 1/);
+    assert.match(text, /prl_archive_failures_total 1/);
+    assert.match(text, /prl_rate_limit_events_total\{kind="limited"\} 0/, 'priming must not move a sibling');
+  });
+});

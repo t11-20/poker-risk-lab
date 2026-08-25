@@ -240,6 +240,11 @@ export class AppMetrics {
     name: `${PREFIX}_rate_limit_events_total`,
     help: 'Rate-limit outcomes: limited (429 returned) or banned (over the ban threshold).',
     labelNames: ['kind'],
+    // Both values, from boot. `RateLimitBans` fires on `increase(...{kind="banned"}[15m]) > 0`,
+    // and without a zero to rise from the FIRST ban is invisible to it — measured against
+    // staging, where a real ban sat in the counter at 1 and the rule stayed silent. See
+    // `primeLabels` in registry.ts. The set is closed and has two members.
+    primeLabels: [{ kind: 'limited' }, { kind: 'banned' }],
   });
 
   /** "Are sign-ins failing?" Reason comes from a closed set at the call site. */
@@ -336,6 +341,11 @@ export class AppMetrics {
   readonly archiveFailures = this.registry.counter({
     name: `${PREFIX}_archive_failures_total`,
     help: 'Hand-archive writes that failed. Play continues; history is incomplete.',
+    // No labels, so there is exactly one series and priming it is unambiguous. `ArchiveFailing`
+    // is zero-tolerance (`rate(...[15m]) > 0`) and this is the metric whose whole point is that
+    // nothing else shows the failure — play deliberately continues when an archive write fails.
+    // A first failure that its own alert cannot see is the worst version of that.
+    primeLabels: [{}],
   });
 
   // --- Analysis ------------------------------------------------------------

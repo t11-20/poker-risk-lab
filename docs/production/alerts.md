@@ -223,6 +223,14 @@ sum(rate(prl_authz_failures_total[5m])) > 2
 sum(increase(prl_rate_limit_events_total{kind="banned"}[15m])) > 0
 ```
 
+**Why the counter is primed at zero:** a counter series is created by its first increment, and
+`increase()` is computed only from samples inside its range — Prometheus does not assume a series
+that appears mid-range began at zero. So the FIRST ban was invisible to this rule, which is the
+one occurrence a zero-tolerance alert most needs to catch. Measured against staging: a real ban sat
+in the counter at 1 and this rule stayed silent. `prl_rate_limit_events_total` now renders both
+`kind` values at zero from boot (`primeLabels` in `observability/registry.ts`), so the 0 → 1 step
+is visible. The same reasoning applies to `ArchiveFailing`, which is primed for the same reason.
+
 **Why bans and not 429s:** a 429 is the limiter doing its job for an ordinary busy client. A **ban** means the caller went far past the limit while ignoring `Retry-After`, which is a script rather than a person.
 
 ### `WebSocketRefusalSpike` — ticket

@@ -764,6 +764,90 @@ async function main() {
           pass('a page did not also raise a ticket', 'severity routing holds, checked after settling');
         }
       }
+
+      /**
+       * Check 6: the OTHER tier.
+       *
+       * Everything above proves the paging half. Until this existed, the ticket receiver had
+       * never received anything — so "a page did not also raise a ticket" was consistent with a
+       * ticket route that was broken, misconfigured or pointed at nothing, and half the two-tier
+       * rule at the top of `docs/production/alerts.md` was asserted only by its own absence.
+       *
+       * `RateLimitBans` is the right rule to provoke for it: `increase(...[15m]) > 0` with no
+       * `for:`, so one recorded ban is enough and the whole thing takes a scrape interval rather
+       * than four minutes. It is also a rule an operator genuinely wants to trust, since it is the
+       * one that distinguishes a script from a busy person.
+       *
+       * The flood runs INSIDE the api container, against its own loopback address. Through the
+       * proxy it would be keyed on the forwarded client address and would consume the same guest
+       * budget the smoke test needs; from in here it is one bucket, deterministic, and touches
+       * nothing a later run depends on.
+       */
+      section('6. RateLimitBans, provoked: a ticket must reach the ticket receiver and not the pager');
+      const flood = await run('docker', [
+        'compose',
+        ...COMPOSE,
+        'exec',
+        '-T',
+        'api',
+        'node',
+        '-e',
+        // 700 requests: the shipped defaults are a 300/minute global limit and a ban 200 past it,
+        // so a ban is recorded somewhere past 500. Sequential on purpose — a burst of 700 parallel
+        // sockets measures the accept queue rather than the limiter.
+        "const base='http://127.0.0.1:'+(process.env.PORT||3001)+'/api/v1/ready';" +
+          '(async()=>{let banned=0,ok=0;for(let i=0;i<700;i+=1){' +
+          'const r=await fetch(base).catch(()=>null);if(r===null)continue;' +
+          'if(r.status===200)ok+=1;if(r.status===429)banned+=1;}' +
+          'console.log(JSON.stringify({ok,refused:banned}));})()',
+      ]);
+      if (flood.code !== 0) {
+        fail(
+          'the limiter could be driven past its ban threshold',
+          flood.stderr.trim().split('\n').slice(-2).join(' | '),
+        );
+      } else {
+        pass('the limiter was driven past its ban threshold', flood.stdout.trim().split('\n').pop() ?? '');
+
+        // The metric first: if no ban was recorded there is nothing for the rule to fire on, and a
+        // silent `RateLimitBans` would then be correct rather than broken. Distinguishing the two
+        // is the difference between a test and a coin toss.
+        const banned = await measureUntil(
+          async () => {
+            const result = await getJson(
+              `${PROMETHEUS}/api/v1/query?query=${encodeURIComponent('sum(increase(prl_rate_limit_events_total{kind="banned"}[15m]))')}`,
+            );
+            return Number(result?.data?.result?.[0]?.value?.[1] ?? 0) > 0;
+          },
+          120_000,
+          2_000,
+        );
+        if (banned === null) {
+          fail('a ban was recorded in the metrics', 'prl_rate_limit_events_total{kind="banned"} never rose');
+        } else {
+          pass('a ban was recorded in the metrics', `${(banned / 1000).toFixed(0)}s after the flood`);
+
+          const ticketed = await measureUntil(
+            () => notificationsFor(sink.received, '/ticket', 'RateLimitBans', 'firing').length > 0,
+            180_000,
+            1_000,
+          );
+          if (ticketed === null) {
+            fail('the ticket receiver was notified', 'no POST to /ticket named RateLimitBans');
+          } else {
+            pass('the ticket receiver was notified', `${(ticketed / 1000).toFixed(0)}s later, on /ticket`);
+          }
+
+          // The mirror of the assertion above, and the half that was never tested: a ticket must
+          // not wake anybody up.
+          const paged = notificationsFor(sink.received, '/page', 'RateLimitBans', 'firing');
+          if (paged.length > 0) {
+            fail('a ticket did not also page', `${paged.length} notification(s) reached /page`);
+          } else {
+            pass('a ticket did not also page', 'both tiers are now proven, in both directions');
+          }
+        }
+      }
     }
   } finally {
     sink.close();
