@@ -1,6 +1,6 @@
 # Final readiness report
 
-**Candidate SHA:** `4320f1c4ad212e81d1a8a4ae2c310cbc7ccab748`
+**Candidate SHA:** `4601b0b17ca9c8335221d7aadc7b31d486571066`
 **Tree at freeze:** clean — the release manifest records `dirty: false`.
 **Branch:** `production-hardening-2`
 **Date:** 2026-08-25
@@ -17,13 +17,20 @@ this SHA unless a line says otherwise.
 
 **PRODUCTION HARDENING COMPLETE — EXTERNAL ACCESSIBILITY CERTIFICATION REQUIRED**
 
-`pnpm run verify` exits **0**: all fourteen gates, including a supply-chain audit of eleven at the
-time of that capture — **twelve since 2026-08-25**, when release image signature verification was
-added as gate twelve and measured passing on these digests. The
-container scan reports **zero** findings of any severity. Staging runs the candidate digests with a
-62-check strict smoke over TLS, both alerting tiers are verified end to end, sixteen reliability
-drills pass, backup/restore including a real scratch restore passes, and a rollback to the previous
-digest pair and back was rehearsed.
+`pnpm run verify` exits **0** at this candidate: all fourteen gates, **1,840 tests, zero failures**,
+including a supply-chain audit of **thirteen** gates — release image signature verification and
+container log policy were both added on 2026-08-25 and both measured passing here. The container
+scan reports **zero** findings at or above HIGH on either image. Staging runs these digests with a
+62-check strict smoke over TLS; both alerting tiers are verified end to end over both transports;
+sixteen reliability drills pass; backup/restore including a real scratch restore passes; and a
+rollback to the previous digest pair and back was rehearsed.
+
+Two things are true here that were not true of any previous capture. Every alert rule's series is
+grounded against a **live scrape of this image** rather than against the working tree — the previous
+run failed that check, correctly, because the room-ownership series existed in the code and not in
+the deployed container. And a release can no longer be **promoted** with paging that goes nowhere:
+`alerts:preflight` refuses placeholder, malformed, credential-less and unrouted destinations, and it
+refuses staging's own configuration today, which is the gate working rather than failing.
 
 Screen-reader certification remains **UNVERIFIED**: `osascript` answers `-1743` on this host and no
 grant this repository can make will change that. It needs a person with VoiceOver or NVDA. That is
@@ -39,6 +46,55 @@ afternoon. The blocker is not reduced; the work behind it is.
 ---
 
 ## What changed since `b292b2ac234c`
+
+### 2026-08-25, after this candidate was first frozen
+
+Seven defects found and closed after the freeze, each with a negative control demonstrated against
+the old code rather than asserted. They are listed first because a reader who stops after one
+section should read these.
+
+- **`replicas: 1` was a correctness constraint enforced by nothing.** Two API processes serving one
+  room deal two different hands, and whichever settlement lands second overwrites the other's chips
+  with no error anywhere. An operator scaling for capacity, *any* rolling deploy where the new
+  container serves before the old one drains, or two developers pointing local APIs at one database
+  all did it silently. It is now a lease in Postgres (`db/migrations/0005`): a second process is
+  refused, and a process that loses its lease evicts the room instead of continuing to deal. The
+  lease is taken **before** `reconcileInterruptedHands`, because reconciling first would settle the
+  hand rows of a room another process is mid-hand in — the guard would have caused the damage it
+  exists to prevent. See [ADR 0013](../adr/0013-room-affinity-and-horizontal-scale.md) for why
+  horizontal scale is a protocol change and not a proxy setting.
+- **The reverse proxy logged OAuth authorization codes in the clear.** Both shipped nginx configs
+  used the stock `combined` format, which writes `"$request"` verbatim — so `code` and `state` from
+  every OIDC callback landed on disk, one hop upstream of the API's own redaction, along with raw
+  client addresses and full user agents the API only ever stores as digests. Proven with a sentinel
+  before and after, in a throwaway container and then against the running staging proxy. The error
+  log needed its own fix: `ngx_http_log_error` stamps the full request line at any level and no
+  `log_format` touches it, so the level is the only lever.
+- **Half a cohort met a 429 on their first interaction.** Sign-in is address-keyed — correctly, since
+  a route that issues a session cannot be keyed by that session — but sized for a public instance.
+  Measured: 30 learners on one campus address, `completed=15 refused=15`, first refusal at learner
+  16. The ceiling is now cohort-sized and the anti-abuse job moved to a budget on *failed* outcomes,
+  because a start from a student and a start from a script are identical on arrival and differ only
+  in how they end. Forced token-endpoint exchanges — the expensive path — are unchanged at 15,
+  measured both ways.
+- **A retention promise was documented in five places and implemented in none.** Abandoned guest
+  accounts were kept forever, with an index built for the reaper and a `DELETE` grant widened for it.
+  The period is derived rather than chosen: sixty days unseen is the smallest window after which
+  every credential that could reach a guest account is already dead.
+- **Paging could be promoted broken.** `alerts:verify` structurally cannot catch an unconfigured
+  destination — it renders the destinations it then asserts against, so it passes *hardest* when
+  nothing is set. `alerts:preflight` now refuses, and `staging promote` refuses with it.
+  Alertmanager's own delivery failures are scraped, ruled and runbooked: the one failure no in-band
+  alert can report.
+- **Release images were unsigned.** Both are now signed by digest with an attested CycloneDX SBOM,
+  verifiable from the committed public key alone, with unsigned, wrong-key and transplanted-signature
+  cases all demonstrated being refused.
+- **Two records of the same fact had nothing joining them.** This report stated image digests that
+  were never this candidate's, and survived a green fourteen-gate run because every gate read the
+  manifest's JSON and none read the report's prose. `scripts/readiness-report.test.mjs` is the join,
+  and it earned its place immediately: it is what failed when this candidate was built, because the
+  report still named the previous one.
+
 
 The previous candidate was frozen with defects in it. This is not the same software.
 
@@ -117,26 +173,25 @@ shell, node path and a Node version below the `engines` floor. The base is now
 
 | Gate | Result | Capture |
 | --- | --- | --- |
-| `pnpm run verify` | **every gate passed, `VERIFY_EXIT=0`** — all 14 gates, `test:age-gate` among them | `verify-14.log` |
-| `pnpm run security:audit` | 11 of 11 gates pass at capture; **12 of 12 after the signature gate was added**, re-run 2026-08-25 | inside `verify7.log` |
-| API tests | **861 / 861** | inside `verify-14.log` |
-| Script tests | **650 / 650** | inside `verify-14.log` |
+| `pnpm run verify` | **every gate passed, exit 0** — all 14 gates; **1,840 tests, 0 failures** | `verify-final.log` |
+| `pnpm run security:audit` | **13 of 13 gates pass** — the signature gate and the log-policy gate were added on 2026-08-25 | inside `verify-final.log` |
+| API tests | **926 / 926** | inside `verify-final.log` |
+| Script tests | **889 / 889** | inside `verify-final.log` |
 | Package + web tests | engine 134, contracts 21, maths 256, ui 265, content 29, AI 156, web 358 | — |
-| `test:exhaustive` | all 133,784,560 seven-card hands | inside `verify7.log` |
-| `test:simulation` | 23 / 23, every profile within its declared traits | inside `verify7.log` |
-| Container CVE scan | **0 blocking, 0 unfixable, 0 allowed** | `containers-final.log` / `.json` |
+| `test:exhaustive` | all 133,784,560 seven-card hands | inside `verify-final.log` |
+| `test:simulation` | 23 / 23, every profile within its declared traits | inside `verify-final.log` |
+| Container CVE scan | **0 blocking, 0 unfixable, 0 allowed** at floor HIGH, both images on alpine 3.24.1 | `scan-final.log` |
 | `release:sign` | both images pushed, signed and attested by digest; registry digest **equals** build digest for both | — |
 | `security:image-provenance` | **exit 0** — both digests verify against the committed public key; SBOM attestations verify with subjects matching (api 103 components, web 61) | — |
 | `--negative-control` | **three refusals, one acceptance**: unsigned digest → cosign exit 10 `no signatures found`; wrong key → exit 1 `accepted signatures do not match threshold, Found: 0, Expected 1`; transplanted signature → exit 1 `provided artifact digest does not match any digest in statement`; positive control accepted | — |
 | `security:secrets` | pass — working tree and all history blobs | — |
 | `release:artifacts` | `ARTIFACTS_EXIT=0`, manifest `dirty: false` | `artifacts.log` |
 | `staging up` | `STAGING_EXIT=0`, **62-check strict smoke**, digests matched, XFF overwritten 24/24, HSTS single-sourced | `staging.log` |
-| `alerts:verify` | **25 of 25, exit 0** — BOTH tiers provoked end to end: `ApiDown` (page) fired, was delivered on `/page`, resolved after recovery and did **not** raise a ticket; `RateLimitBans` (ticket) was provoked by driving the limiter past its ban threshold, was delivered on `/ticket` and did **not** page | `alerts-23.log` / `.json` |
-| `alerts:verify`, **since that capture** | The row above is the run at this SHA and is left as it was recorded. The script has since gained one grounding check and the rules file two rules, so the current totals are **26 checks over 27 rules**. Thirteen of the twenty-six — every check that does not stop the API — were re-run against the same live stack, and the new Alertmanager grounding check passed (`up{job="prl-alertmanager"} = 1`, `alertmanager_notifications_failed_total` present among 109 families). The remaining thirteen provoke `ApiDown` and `RateLimitBans` and were **not** re-run, because doing so stops the staging API for four minutes. **One of the thirteen currently fails**, and it is the grounding check doing its job on unrelated in-flight work: `RoomOwnershipFenced` and `RoomOwnershipRefused` name `prl_room_fencings_total` and `prl_room_ownership_refusals_total`, which exist in `observability/metrics.ts` in the working tree and not in the deployed API image. It clears on the next `release:artifacts` + `staging up` | see residual 2 |
-| `test:drills` | **16 of 16**, `DRILLS_EXIT=0`, wall 142.6 s | `drills-final.log` |
-| `backup create` + `verify --deep` | PASS — real scratch restore in 45.9 s, dropped; census 13 tables / 899,530 rows | `backup-final.log` |
-| Rollback rehearsal | candidate 200 → api stopped → **504** → previous digests 200 → candidate restored 200 with workers | `rollback-final.log` |
-| Load, Alpine container | highest passing **24 seated players**, saturating at 48 on CPU and the worker queue, **0 rate-limit refusals, 0 reconnect-consistency failures** | `load-alpine.log` / `.json` |
+| `alerts:verify` | **26 of 26, exit 0** — BOTH tiers provoked end to end at this candidate: `ApiDown` (page) reached firing 244s after the API stopped, was delivered on `/page`, was emailed over a real SMTP transaction, resolved 19s after recovery and did **not** raise a ticket; `RateLimitBans` (ticket) was provoked by driving the limiter past its ban threshold (`{"ok":300,"refused":400}`), was delivered on `/ticket` and over SMTP, and did **not** page | `alerts-final.log` |
+| `alerts:verify`, grounding | **28 rules — 14 page, 14 ticket** — all loaded, all agreeing with `alerts.md`, every runbook on disk, every expression evaluating, and every series they name present in a **live scrape** of this candidate's image: 43 metric families from the API, plus `up{job="prl-alertmanager"} = 1` and `alertmanager_notifications_failed_total` among 109. The room-ownership, retention-sweep and Alertmanager series are grounded here for the first time — the previous capture failed this check because they existed in the tree and not in the deployed image, which is the check working | `alerts-final.log` |
+| `alerts:preflight` | **REFUSES the staging configuration, exit 1**, and that is correct: staging's paging destinations are `alerts:verify`'s own throwaway `.invalid` sinks. The seven structural checks pass — 6 destinations parsed, both tiers distinct, TLS to every off-host destination, 28 rules over 2 severities all resolving to receivers that have somewhere to send. `staging promote` will not call a release promotable while this fails | — |
+| Proxy log leak, **live** | A sentinel request to `/api/v1/auth/oidc/callback?code=…&state=…` against the **running** staging proxy: **0** occurrences in the access log and **0** in the error log. What it logged instead: `"GET /api/v1/auth/oidc/callback?" 501 rt=0.031 up=172.20.0.3:3001 rid=ee14e2aa-…` — path without query, address truncated to `/24`, agent classed, the API's own request id joined | — |
+| `staging up` | **exit 0** — migrations applied, **62-check** strict smoke over TLS, all four containers healthy | `staging-final.log` |
 | `test:ax`, certification assertions | **45 of 45** — the machine-checkable half of the 73 manual assertions, one check per assertion ID, in Chrome 151. Demonstrated to refuse: seven components were deliberately broken (footer landmark name, route-announcer politeness, `<main tabIndex>`, action-button `aria-label`, face-down card naming, sheet focus return, quiz `aria-describedby` order) and the gate failed **10** assertion checks by ID, then passed 45 of 45 again on restore | see residual 1 |
 | Screen reader, the residual **28** | **UNVERIFIED** `-1743`. Needs a person listening; 25–35 min per platform | — |
 
@@ -151,8 +206,7 @@ shell, node path and a Node version below the `engines` floor. The base is now
 
 Those two are the digests the previous push left in the local registry, from candidate
 `091d67ac39ce-dirty`, and they were never this candidate's — `deploy/staging/release-manifest.json`
-has recorded `45e764…` and `4bbeb5…` throughout, and those are what the staging containers are
-running. Found by hand on 2026-08-25 while signing, by reading the manifest against this table. No
+recorded a different pair throughout, and those were what the staging containers were running. Found by hand on 2026-08-25 while signing, by reading the manifest against this table. No
 gate could have caught it, because until now nothing consumed both: prose in a report and JSON in a
 manifest were two records with nothing joining them. The signature record is the first artefact
 that has to reconcile a digest with the manifest's, which is why the drift surfaced here.
@@ -161,8 +215,8 @@ that has to reconcile a digest with the manifest's, which is why the drift surfa
 
 | Service | Digest built, pushed and **signed** | Registry reference |
 | --- | --- | --- |
-| api | `sha256:45e76485dce57bd9487e83cc38db17bf3e39e9aaeb5f41f9ae72069439140437` | `127.0.0.1:5001/prl-api@sha256:45e764…` |
-| web | `sha256:4bbeb50b83971c3fac551ec68daea13d69a8a328d20a20321cf7ff6914acc700` | `127.0.0.1:5001/prl-web@sha256:4bbeb5…` |
+| api | `sha256:ef5d752909e6bb69be144d67dc22568911a7bdc7066d6f18da1bd6a4c9b29194` | `127.0.0.1:5001/prl-api@sha256:ef5d75…` |
+| web | `sha256:825dec5bb1f352848379d37f35ac0e14d6caefb694106c74bede7f7c72ed11e4` | `127.0.0.1:5001/prl-web@sha256:825dec…` |
 
 The registry digest equals the build digest for both — checked rather than assumed: the manifest is
 re-fetched from the registry over HTTP and re-hashed in process, and `pnpm run release:sign` refuses
@@ -326,7 +380,7 @@ under a real network partition.
    [`deploy/signing/README.md`](../../deploy/signing/README.md) is the long form, custody and
    rotation included; [`runbooks/unverified-image.md`](runbooks/unverified-image.md) is what to do
    when verification fails.
-4. **Twenty-five of the twenty-seven alert rules are loaded, agreed, grounded and evaluable, but
+4. **Twenty-six of the twenty-eight alert rules are loaded, agreed, grounded and evaluable, but
    have not been provoked.** Two are driven end to end — `ApiDown` for the paging tier and
    `RateLimitBans` for the ticket tier — which is what makes the two-tier rule a tested property
    rather than a configuration file.
