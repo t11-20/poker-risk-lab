@@ -6,6 +6,42 @@
 **Date:** 2026-08-25
 **Host:** Darwin arm64, Node v24.18.0, pnpm 11.10.0
 
+> ## ⚠ STALE — the header above was advanced without re-measuring anything below
+>
+> **Read this before quoting any number in this document.** Commit `37d6ccc8ba54` changed exactly
+> three lines of this report — the candidate SHA and the two image digests — and nothing else. Those
+> three are the only fields `scripts/readiness-report.test.mjs` joins to the release manifest, so
+> they were the only three that had to move. Every measurement below still describes candidate
+> **`6677dfcc2ae7`**, which is `HEAD~3` and **13,004 inserted lines across 132 files** behind the
+> SHA in the header. The three commits since each recorded a different test count in their own
+> messages — `5845bdd` 2,137, `6c806f0` 2,162, `37d6ccc` 2,174 — while the Verdict below still says
+> 2,065.
+>
+> Re-measured on 2026-08-26 at `37d6ccc8ba54` (`pnpm run test`, this host):
+>
+> | Claim below | States | Measured at `37d6ccc` |
+> | --- | ---: | ---: |
+> | engine / contracts / AI | 134 / 21 / 156 | 134 / 21 / 156 — unchanged |
+> | poker-math | 256 | **260** |
+> | ui | 265 | **287** |
+> | content | 29 | **30** |
+> | web | 358 | **425** |
+> | API tests | 965 | **990** |
+> | Script tests | 889 | **1,159 — and 3 of them FAIL** |
+> | Total | 2,065 | **3,462** (the breakdown above already summed to 3,073, not 2,065) |
+> | Alert rules | 29 — 14 page, 14 ticket, 1 heartbeat | **35 — 16 page, 18 ticket, 1 heartbeat** |
+> | Rules unprovoked | 26 of 29 | **32 of 35** |
+>
+> **`pnpm run verify` does not exit 0 on this tree.** The three failing script tests are
+> `readiness-report.test.mjs` itself, refusing this document: the manifest on this machine records
+> `37d6ccc8ba54` and digests `sha256:1b3b295f…` / `sha256:26defe9b…`, and this report names
+> `6c806f0a6688` and `sha256:4477ca00…` / `sha256:5cb1bd82…`. That is the join doing its job. It
+> stays red until somebody re-freezes a candidate and re-measures — which is a release owner's
+> decision and a run of `verify`, `staging up` and `alerts:verify`, not a text edit.
+>
+> Corrections that could be made without re-running anything have been made in place and are marked.
+> The stamped capture rows in *Gates from this SHA* are **not** edited, per this document's own rule.
+
 This candidate supersedes `b292b2ac234c`. That one was frozen with two open blockers and a
 disagreement between two reviews; reconciling the disagreement found defects neither review had,
 and an adversarial audit of the whole repository found more. Everything below is measured against
@@ -460,7 +496,8 @@ under a real network partition.
    holiday nobody put in the rota, or the gateway decommissioned three months from now. Closing it
    needs a person on a real device (`alerts:ack`, exit 0, with this environment's `PRL_ALERT_*`
    set) and a snitch somebody else runs (`PRL_ALERT_HEARTBEAT_WEBHOOK_URL`, armed, grace period at
-   least three intervals). Both are checklist items in `docs/RUNBOOK.md` §go-live. What changed is
+   least three intervals). Both are checklist items in `docs/RUNBOOK.md` §11.7, the pre-deployment
+   checklist — there is no §go-live in that file. What changed is
    that each of those checkboxes now has a command behind it that produces a dated artefact and
    fails loudly when it cannot — where before, both were an instruction to remember something.
 3. **Images are signed by a locally-held key; they are not bound to a builder.** *Rewritten
@@ -472,7 +509,8 @@ under a real network partition.
    `127.0.0.1:5001` and **signed by digest**, each carrying a **signed CycloneDX SBOM attestation**
    of its own contents (api 103 components, web 61). `pnpm run security:image-provenance` verifies
    both against the committed public key `deploy/signing/cosign.pub` and **needs no private key** —
-   verification is something a deployer can do. It is gate twelve of `security:audit`, and it is a
+   verification is something a deployer can do. It is gate fourteen of `security:audit` — the last
+   in the `GATES` array, corrected 2026-08-26 from "twelve" — and it is a
    refusal rather than a report: it fails on an unsigned digest, on a digest signed by another key,
    on a transplanted signature, on a signature record that names no images, on an attestation whose
    subject is a different artefact, and on an attestation over an empty predicate. Three of those
@@ -553,8 +591,11 @@ under a real network partition.
    [`deploy/signing/README.md`](../../deploy/signing/README.md) is the long form, custody, rotation
    and the keyless policy included; [`runbooks/unverified-image.md`](runbooks/unverified-image.md) is
    what to do when verification fails.
-4. **Twenty-six of the twenty-nine alert rules are loaded, agreed, grounded and evaluable, but
-   have not been provoked.** Three are driven end to end — `ApiDown` for the paging tier,
+4. **32 of the 35 alert rules are loaded, agreed, grounded and evaluable, but
+   have not been provoked.** (Corrected 2026-08-26: this read "Twenty-six of the twenty-nine" and
+   was written when the file held 29. `deploy/staging/observability/alert-rules.yml` holds **35 —
+   16 page, 18 ticket, 1 heartbeat**; `node scripts/alert-preflight.mjs` prints the same count.
+   `scripts/readiness-report.test.mjs` now joins this sentence to that file.) Three are driven end to end — `ApiDown` for the paging tier,
    `RateLimitBans` for the ticket tier, and `Watchdog` for the heartbeat — which is what makes the
    two-tier rule, and the third destination beside it, tested properties rather than configuration.
 5. **The legal register is not closed.** `legal-review-requirements.md` is a launch blocker in its

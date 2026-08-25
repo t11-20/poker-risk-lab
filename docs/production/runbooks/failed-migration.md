@@ -23,7 +23,7 @@ node --env-file-if-exists=.env apps/api/scripts/verify-schema.mjs
 
 `status` reports what is applied, what is pending, and whether a checksum disagrees. `verify-schema.mjs` asserts the *shape* — column counts, index counts, specific constraints, ownership and role privileges — so it catches the dangerous case that `status` cannot: a migration recorded as applied whose effect is not actually present.
 
-The runner takes a **PostgreSQL advisory lock** before doing anything, so two deploys cannot migrate at once. A migration that appears to hang is often waiting for that lock, and the wait is bounded by `MIGRATION_LOCK_TIMEOUT_MS` (default 30,000 ms).
+The runner takes a **PostgreSQL advisory lock** before doing anything, so two deploys cannot migrate at once. A migration that appears to hang is often waiting for that lock, and the wait is bounded by `PRL_MIGRATE_LOCK_WAIT_MS` (default 30,000 ms; `apps/api/scripts/migrate.mjs` reads this name and no other — `migrate.mjs --help` prints it).
 
 ## Immediate containment
 

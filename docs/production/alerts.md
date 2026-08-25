@@ -621,7 +621,7 @@ vector(1)
 Every rule above is also `deploy/staging/observability/alert-rules.yml`, which a real
 Prometheus loads. This file is the reasoning — the threshold, why that number and not
 another, what a human does first — and that file is the behaviour. They must not disagree,
-and two checks make sure they cannot drift quietly:
+and three checks make sure they cannot drift quietly (this said "two" while listing three):
 
 - `pnpm run alerts:verify` compares the alert names and severities in the two files and
   fails on any difference, against a live Prometheus.
@@ -867,7 +867,7 @@ A rule that has never fired is a rule that has never been tested. Each of the fo
 | `ApiNotReady`, `DbPoolSaturated` | `pnpm run test:drills --only postgres-outage`, `--only pool-exhaustion` |
 | `EventLoopBlocked`, `WorkerPoolQueueDeep`, `AnalysisTimeouts` | `pnpm run test:drills --only slow-simulation`; `pnpm run test:load` at a concurrency past the measured saturation point |
 | `HandsFailing`, `HandCompletionGap` | `pnpm run test:drills --only sigterm-mid-hand` |
-| `WebSocketReconnectStorm` | `pnpm run test:drills --only websocket-disconnect` |
+| `WebSocketReconnectStorm` | `pnpm run test:drills --only ws-disconnect-mid-hand` |
 | `RateLimitBans` | `pnpm run test:smoke --strict` (section 12 floods the guest limiter by design) |
 | `MetricsCardinalityOverflow` | covered by a unit test that pushes a metric past the cap |
 | `PublicOriginDown` | `docker compose ... stop proxy`, or point the probe at a target that is not there |

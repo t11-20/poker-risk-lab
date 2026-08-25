@@ -32,7 +32,7 @@ Request counters going flat is not a signal here and a rule on it would be a mis
 | Alert | Rule | Severity |
 | --- | --- | --- |
 | `PublicOriginDown` | `probe_success{job="prl-public-origin"} == 0` for 2 minutes | page |
-| `PublicOriginProbeDown` | `up{job="prl-public-origin"} == 0` for 10 minutes | ticket |
+| `PublicOriginProbeDown` | `absent(up{job="prl-public-origin"}) or up{job="prl-public-origin"} == 0` for 10 minutes | ticket |
 | `TlsCertificateExpiringSoon` | earliest certificate expiry under 21 days | ticket |
 | `TlsCertificateExpiryImminent` | earliest certificate expiry under 3 days | page |
 

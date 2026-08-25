@@ -242,7 +242,17 @@ Neither was defined anywhere in this repository before this document.
 | | Target | How it is measured | Measured 2026-08-22 |
 | --- | --- | --- | --- |
 | **RPO** | **24 hours** | age of the newest *good* archive (`backup list`) | schedule interval; nightly timer at 02:30 UTC |
-| **RTO** | **30 minutes** | restore, `db:verify`, API answering `/ready` | **1.04 s** (10 MB dev database, §7) |
+| **RTO** | **30 minutes** | restore, `db:verify`, API answering `/ready` | **1.04 s** on a **10 MB / ~1,000-row** database (§7) — **do not plan against this** |
+
+**That 1.04 s is not an RTO and this table used to present it as one.** It is the floor for a
+database two orders of magnitude smaller than the development one. `disaster-recovery.md` §2 retires
+it and quotes 46.5 s for the 149.8 MiB / 944,297-row development database; that figure is **not
+reproduced anywhere in this repository** — neither §7.9 nor §8 below contains it, and its scratch
+directory is gone — so treat it as a datum somebody recorded rather than as evidence you can re-run.
+§8's own synthetic probe is the largest reproducible measurement here: 1,260 MB / 2,000,000 rows,
+`restore 28.75 s`. The only honest statement is that no restore of a production-sized database has
+been measured in a way this repository can replay, and the 30-minute target has never been
+approached from below by a run anybody can point at.
 
 ### Why 24 hours, and what it would take to do better
 

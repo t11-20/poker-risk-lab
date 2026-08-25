@@ -17,7 +17,7 @@ PostgreSQL is not answering. The API process is fine.
 
 | Alert | Threshold |
 | --- | --- |
-| `ApiNotReady` | `prl_readiness_state == 0` for 5 minutes |
+| `ApiNotReady` | `min_over_time(prl_readiness_state[5m]) == 0`, `for: 5m` |
 | `ReadinessFlapping` | more than 6 transitions in 30 minutes |
 
 Five minutes, not immediately, because a brief blip during a failover is expected and self-healing — the load balancer has already stopped sending traffic, which is the mechanism doing its job.

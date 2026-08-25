@@ -13,7 +13,7 @@ supersedes the old one, and the old one is marked. That history is the point.
 | [0001](0001-modular-monolith.md) | A modular monolith with a pure core | Accepted |
 | [0002](0002-server-authoritative-engine.md) | The engine is the sole authority on legality | Accepted |
 | [0003](0003-redaction-by-construction.md) | Redact by constructing a narrower type, not by deleting fields | Accepted |
-| [0004](0004-merkle-deck-commitment.md) | Per-card Merkle commitment instead of hashing the deck | Accepted (supersedes 0004-draft) |
+| [0004](0004-merkle-deck-commitment.md) | Per-card Merkle commitment instead of hashing the deck | Accepted (supersedes the original hash-of-deck design — there is no `0004-draft` record and there never was) |
 | [0005](0005-exact-then-monte-carlo.md) | Exact enumeration when it fits, bounded Monte Carlo otherwise | Accepted |
 | [0006](0006-no-hardcoded-odds-in-content.md) | Content stores situations, never computed numbers | Accepted |
 | [0007](0007-supply-chain-policy.md) | Release-blocking supply-chain gates | Accepted |

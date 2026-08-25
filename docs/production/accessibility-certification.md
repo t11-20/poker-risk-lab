@@ -1,6 +1,11 @@
 # Screen-reader certification procedure
 
-**Candidate SHA:** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`
+**Candidate SHA:** `b292b2ac234cb586f253ad42ec0ef4d949fa332b` — **for section 10's captured
+`osascript` errors only.** Corrected 2026-08-26: `scripts/ax-assertions.mjs` did not exist at that
+commit (`git cat-file -e b292b2a:scripts/ax-assertions.mjs` → no such object; it first appears at
+`d191473`), so the 65-of-72 claim below cannot be evidence taken at the stamped SHA. The assertion
+inventory *is* held to the code by `scripts/screen-reader-certify.test.mjs` and
+`scripts/readiness-report.test.mjs`, which is where its currency comes from — not from this header.
 
 **Status on this candidate (2026-08-23, this host): BLOCKED — UNVERIFIED.**
 Section 10 records exactly why, with the errors captured on this SHA. Nothing in this repository
@@ -287,7 +292,9 @@ literally the recipe the row gives:
   `/api/*` in Chrome the way 3.20 does cannot produce this state, because the fetch that fails is
   the server's and not the browser's.
 
-The three fixtures are what moved nineteen rows. Journey 3 was **10 of 21** `auto` because
+The three fixtures are what moved seventeen rows (this said "nineteen" until 2026-08-26; the three
+figures immediately below add to 10 + 6 + 1 = 17, and one of those, 3.3, moved because of a bug fix
+rather than a fixture). Journey 3 was **10 of 21** `auto` because
 `/play?state=decision` renders the table's component tree without a socket; it is now **20 of 21**,
 driven against `/play` itself. Journey 6 was **0 of 7** because the scrubbable replay needs a hand in
 a database and `/legends/hand-review/demo` renders `PostHandComparison`, a different component with

@@ -153,3 +153,19 @@ tuning.
   people would require new data, a defensible basis for the claim, permissions, and a rewrite
   of `labelling.ts`, `profiles.ts` and `legends.ts` — because the current types have nowhere to
   put such a claim. That is the intended cost.
+
+## Amendment 2026-08-26 — the backstop's stated gap has been closed
+
+The Consequences section says the impersonation guard's "pattern list does not catch a proper noun
+followed by a mental-state verb". **That has not been true since the patterns were added to
+`packages/poker-ai/src/labelling.ts`**, and the record is corrected here rather than edited,
+because an accepted ADR is not rewritten. Two patterns now stand:
+
+* `\b\p{Lu}\p{L}+\s+(?:thinks?|feels?|believes?|senses?|intends?|wants?|remembers?)\b` — the exact
+  shape the sentence above says is uncaught.
+* `\b(?:he|him|his|she|her|hers|himself|herself)\b`, case-insensitive — **any** gendered pronoun,
+  which is broader than the four-verb limitation `docs/AI-LEGENDS.md` L7 used to describe.
+
+The *decision* is unchanged and so is the reason it was made: the guard is still a backstop, the
+structural control is still what prevents impersonation, and a pattern list still catches only the
+shapes it knows. What is no longer accurate is the specific gap this record names as open.

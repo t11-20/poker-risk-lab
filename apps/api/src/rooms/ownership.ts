@@ -35,6 +35,16 @@
  * whether the room has changed hands since it last looked, and so any write that later wants to
  * carry "the ownership generation that produced it" has a number to carry.
  *
+ * It is NOT monotonic for the life of the room, and `db/migrations/0005_room_ownership.sql`'s
+ * header says it is. The header is wrong and cannot be corrected in place (migrations are
+ * roll-forward only; editing an applied file stops migrations everywhere), so the correction lives
+ * here. `release` DELETES the row, so the next `acquire` is an INSERT and starts again at 1 —
+ * `test/room-ownership-database.test.ts` asserts exactly that. The counter is monotonic across
+ * TAKEOVERS, which is what the fencing argument actually needs, and it restarts across a
+ * release-and-reacquire. Anything comparing fences across a gap in which the row may have been
+ * deleted is comparing two different things; `RoomRegistry.releaseLeaseSoon` says what it does
+ * about that.
+ *
  * Nothing carries it today. No row in `prl.hands`, `prl.hand_actions` or `prl.room_members` has a
  * fence column, so **the database will not refuse a write from a fenced process** — a stale write
  * already in flight when the fencing happens lands normally. What stops those writes is the
@@ -251,8 +261,14 @@ export interface RoomOwnership {
    * A room asked for and missing from the answer has been fenced. The caller must stop serving it.
    */
   readonly heartbeat: (roomIds: readonly string[]) => Promise<readonly string[]>;
-  /** Gives one lease back. Scoped to `ownerId`, so it can never release somebody else's. */
-  readonly release: (roomId: string) => Promise<boolean>;
+  /**
+   * Gives one lease back.
+   *
+   * Scoped to `ownerId`, so it can never release somebody else's, and to `fence`, so it can never
+   * release a LATER generation of our own — a release is queued and can arrive after the room has
+   * been given up and taken again. `repositories/room-ownership.ts` has the measurement.
+   */
+  readonly release: (roomId: string, fence: number) => Promise<boolean>;
   /** Who holds a room, for the refusal's log line. Null when nobody does any more. */
   readonly holderOf: (roomId: string) => Promise<LeaseHolder | null>;
 }
@@ -278,7 +294,7 @@ export function postgresRoomOwnership(sql: () => Db, ownerId: string = instanceO
       return { roomId, fence: lease.fence, acquiredAt: lease.acquiredAt };
     },
     heartbeat: (roomIds) => ownershipRepository.heartbeat(sql(), { ownerId, roomIds }),
-    release: (roomId) => ownershipRepository.release(sql(), { roomId, ownerId }),
+    release: (roomId, fence) => ownershipRepository.release(sql(), { roomId, ownerId, fence }),
     holderOf: async (roomId) => {
       const row = await ownershipRepository.read(sql(), roomId);
       if (row === null) return null;

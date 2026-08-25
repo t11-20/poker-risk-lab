@@ -52,7 +52,7 @@ one that is absent, because it reads as protection.
 
 Banned outright, at every version: `keyv`, `cacheable`, `flat-cache`,
 `file-entry-cache`, `cacheable-request`, `cache-manager`, `@cacheable/*`, `@antv/*`,
-`echarts-for-react`, `size-sensor`, `timeago.js`, `jest-canvas-mock`.
+`echarts-for-react`, `size-sensor`, `timeago.js`, `jest-canvas-mock`. **Banned by scope prefix as well**, which this paragraph omitted until 2026-08-26: `@tanstack/*`, `@mistralai/*` and `@opensearch-project/*`. `scripts/supply-chain/denied-packages.mjs` is the list; a contributor reaching for `@tanstack/react-query` on the strength of this paragraph would have been refused by the gate and surprised.
 
 Also banned: `npx`, `pnpm dlx`, remote installer pipes (`curl … | bash`), and any tool
 fetched at build time rather than pinned.

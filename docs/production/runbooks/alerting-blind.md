@@ -202,7 +202,7 @@ file. `node scripts/alert-delivery.mjs --render-config` writes both again.
 ## Verification
 
 Delivery is not fixed because the counter stopped rising. It is fixed when something was
-**delivered**, and there are two honest ways to establish that:
+**delivered**, and there are three honest ways to establish that (this said "two" while listing three):
 
 1. `pnpm run alerts:preflight -- --handshake` — proves the relay accepts this deployment's
    credentials right now. This is the credential half and only the credential half.

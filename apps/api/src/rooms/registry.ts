@@ -1742,7 +1742,10 @@ export class RoomRegistry {
         ...(cause === null ? {} : { error: String(cause) }),
       },
     );
-    if (reason === 'lease_expired') this.releaseLeaseSoon(roomId);
+    // The generation is passed explicitly because this method deleted the map entry at the top, so
+    // `releaseLeaseSoon` can no longer read it — and a release with no generation is one that says
+    // nothing about which acquisition it is giving back.
+    if (reason === 'lease_expired') this.releaseLeaseSoon(roomId, lease?.fence ?? null);
   }
 
   /**
@@ -1767,17 +1770,63 @@ export class RoomRegistry {
    * Queues the release of one lease, so `shutdown()` can wait for every one of them.
    *
    * Owner-scoped in the repository, which is what makes it safe to call for a room we may already
-   * have lost: the delete matches nothing and answers false. Calling it for a room we never held is
-   * also safe and is why there is no membership check here — `close()` runs for every room whether
-   * or not this registry enforces a lease at all.
+   * have lost: the delete matches nothing and answers false.
+   *
+   * ## Why the fence is read HERE and carried into the chain
+   *
+   * ############################################################################
+   * ## A QUEUED RELEASE IS A STATEMENT ABOUT ONE GENERATION OF ONE LEASE.     ##
+   * ############################################################################
+   *
+   * The queue is serial and the release runs an unbounded time after this call — however long
+   * every release ahead of it takes. On the path that queues the most of them at once (a database
+   * slow enough that every beat is abandoned at its deadline, so every room is evicted
+   * `lease_expired`) each of those is a query that runs to its own 7,000 ms deadline before it
+   * fails, so the chain outlives the outage; the database recovers, the learners reconnect, and
+   * the rooms are re-acquired by THIS process at a new fence while the chain is still draining.
+   *
+   * Owner scoping cannot see that, because this process is the owner both times. Reproduced
+   * against this class with the release chain held open across an eviction and a re-open: the
+   * stale release deleted the row the re-open had just taken, the next beat found no row for a
+   * room this process was serving, and it evicted the room as `fenced` — a table closed under a
+   * learner and `prl_api_room_fencings_total{reason="fenced"}` raised for an incident that had not
+   * happened. Between the delete and that beat the room had no lease row at all while this process
+   * was dealing at it, which is the state the whole table exists to refuse.
+   *
+   * A room with no entry in `this.leases` is not released, and that is the point rather than an
+   * omission: without a generation there is nothing this call can say that is true a second later.
+   * Every caller that holds a lease has an entry — `close()` and `closeAll()` run over rooms this
+   * process opened, `buildRoom`'s catch runs after `acquireLease` set one, and `evict` reads the
+   * entry before it deletes it and passes what it read.
    */
-  private releaseLeaseSoon(roomId: string): void {
+  private releaseLeaseSoon(roomId: string, fence: number | null = null): void {
     const ownership = this.ownership;
     if (ownership === null) return;
+    const generation = fence ?? this.leases.get(roomId)?.fence ?? null;
     this.leases.delete(roomId);
+    if (generation === null) return;
     this.releaseQueue = this.releaseQueue
       .then(async () => {
-        await ownership.release(roomId);
+        // The second half of the same guard, and it is needed because the fence is NOT monotonic
+        // across a release: `release` DELETES the row, so the next `acquire` is an INSERT and
+        // starts again at 1 — `test/room-ownership-database.test.ts` asserts exactly that ("a
+        // released lease leaves no row, so the next holder starts again"). So a stale release for
+        // generation 1 can match a fresh generation 1, if the row went in between by some other
+        // hand: a rolling-deploy neighbour that took the room after the TTL and released it, and
+        // then this process re-opened it. The fence cannot see that; this can. If the room is back
+        // in `this.leases` we are serving it again, and a release is simply wrong.
+        //
+        // What the pair does NOT close, stated rather than implied: a release this check has
+        // already waved through, whose DELETE then executes at Postgres AFTER the row was removed
+        // by somebody else and re-inserted here at a reused fence. Reaching it needs a dispatched
+        // statement to sit unexecuted for longer than `LEASE_TTL_MS` — long enough for a
+        // neighbouring process to take the room on expiry and give it back — while the re-open's
+        // INSERT, issued later, executes first. A database in that state has already failed the
+        // re-open. Closing it properly means a generation that survives a delete, which means not
+        // deleting; and releasing by expiry instead of by delete costs every deploy a whole TTL of
+        // refusals, which is the trade `db/migrations/0005` argues at length and gets right.
+        if (this.leases.has(roomId)) return;
+        await ownership.release(roomId, generation);
       })
       .catch((error: unknown) => {
         // Logged and swallowed, like an archive write and for the same reason: a failed release

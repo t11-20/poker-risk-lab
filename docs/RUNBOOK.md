@@ -98,7 +98,7 @@ The container stack has no such split: there is exactly one published origin (§
 | `pnpm run test:a11y` | Static accessibility audit of the rendered pages. Starts web on **:3000** itself, or pass `--no-start --base-url <url>` | ~30 s |
 | `pnpm run test:keyboard` | **Real keyboard journeys in real Chrome** over the DevTools Protocol: focus order, focus visibility, keyboard traps, the modal sheet, the bet-size slider, and one hand folded from the keyboard at a live table. Needs a **running production build** on :3000 and a running API — it is not started for you, because a dev build ships overlays that do not ship | ~2 min |
 | `pnpm run test:smoke` | End-to-end smoke against a running stack; `-- --strict` fails on warnings | seconds |
-| `pnpm run alerts:verify` | Brings Prometheus and Alertmanager up beside the **running staging stack**, checks all 29 alert rules load/agree/ground/evaluate, then **stops the API** and follows `ApiDown` through to a receiver, floods the limiter to follow `RateLimitBans` to the ticket tier, and finally follows the `Watchdog` heartbeat — including **stopping Alertmanager** so the dead man's switch is observed actually firing. `-- --skip-provoke` does the first four checks only and leaves the API alone; `-- --only-heartbeat` does those plus the heartbeat, also without touching the API | ~10 min |
+| `pnpm run alerts:verify` | Brings Prometheus and Alertmanager up beside the **running staging stack**, checks all 35 alert rules load/agree/ground/evaluate, then **stops the API** and follows `ApiDown` through to a receiver, floods the limiter to follow `RateLimitBans` to the ticket tier, and finally follows the `Watchdog` heartbeat — including **stopping Alertmanager** so the dead man's switch is observed actually firing. `-- --skip-provoke` does the first four checks only and leaves the API alone; `-- --only-heartbeat` does those plus the heartbeat, also without touching the API | ~10 min |
 | `pnpm run alerts:ack` | Sends a **real page** through this deployment's Alertmanager and refuses to exit 0 until a person types back a one-time code, inside `--within` (default 5m) and inside five attempts. **Fails loudly when nobody answers.** It is evidence a cooperating operator produces for themselves, **not** an attestation against a hostile caller: the code travels through Alertmanager, which echoes it back unauthenticated, and the caller both chooses the URL and owns the process that mints the code | the window |
 | `pnpm run alerts:preflight` | Refuses a paging destination that is a placeholder, malformed, missing a credential, or routed to a receiver with nothing in it. Needs no stack and no containers. `-- --handshake` also speaks TCP/TLS/`EHLO`/`AUTH`/`QUIT` to the configured relay — never `MAIL FROM`, so it cannot send anybody a page. Run by `staging promote`, which refuses on it | seconds |
 | `pnpm run test:load` | WebSocket load harness against a local server | configurable |
@@ -1003,9 +1003,14 @@ $ pnpm run db:migrate:status            # DATABASE_MIGRATION_URL; prl_deployer i
   · 4 applied and matching, 0 pending                    → exit 0
 ```
 
-`db/migrations/` holds four files, and a restored database that reports fewer than the
-directory holds is a restore of an older release, not a broken one — `db:migrate` is the
-remedy, not `db:reset`.
+**That transcript is a capture from 2026-08-22 and is left as captured; it is no longer the
+expected output.** `db/migrations/` holds **six** files today — `0005_room_ownership.sql` and
+`0006_cohort_enrolments.sql` landed on 2026-08-25 — so a healthy restore of the current release
+reports `6 applied and matching, 0 pending`. Count the directory rather than trusting this
+number: `ls db/migrations/*.sql | wc -l` is the reference, and a restored database that reports
+fewer than the directory holds is a restore of an older release, not a broken one — `db:migrate`
+is the remedy, not `db:reset`. `0006` is the migration the enrolment guard depends on, so a
+database stopped at `0004` will refuse seats it should grant.
 
 Test the restore on a schedule. A backup nobody has restored is a hypothesis, and `pg_restore`
 exiting 0 is not the test — `db:verify` exiting 0 is. `pnpm run db:migrate:status` on the

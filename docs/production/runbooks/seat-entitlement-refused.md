@@ -18,8 +18,8 @@ Read [README.md](README.md) first.
 
 | Alert | Rule | Severity |
 | --- | --- | --- |
-| `SeatEntitlementRefused` | `increase(prl_seat_entitlement_refusals_total{reason="not_entitled"}[10m]) > 5` | ticket |
-| `SeatNotRestored` | `increase(prl_seat_entitlement_refusals_total{reason="seat_not_restored"}[15m]) > 0` | ticket |
+| `SeatEntitlementRefused` | `sum(increase(prl_seat_entitlement_refusals_total{reason="not_entitled"}[10m])) > 5` | ticket |
+| `SeatNotRestored` | `sum(increase(prl_seat_entitlement_refusals_total{reason="seat_not_restored"}[15m])) > 0` | ticket |
 
 The `reason` label is a closed set of two, and summing them is a mistake — they are different operator questions:
 

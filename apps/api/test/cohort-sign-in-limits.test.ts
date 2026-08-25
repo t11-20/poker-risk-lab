@@ -642,6 +642,121 @@ describe('a hostile page pointing a victim’s browser at the callback', () => {
     );
     await app.close();
   });
+
+  /**
+   * The same hazard on the OTHER route, which the first fix left open.
+   *
+   * `provenAttempts` gated the CALLBACK. `/auth/oidc/start` kept an unconditional
+   * `chargeFailedOutcome`, and a start is refused with a 400 in two ways a third party reaches for
+   * nothing. Measured against the code that shipped the callback fix, on this harness:
+   *
+   *     20 cross-site <img>-shaped GETs to /auth/oidc/start
+   *       -> 400 x20 (`refuseNonNavigationOidc`), every one charged to the victim's address
+   *       -> the victim's own /auth/oidc/start    429, retryAfterSeconds 60
+   *       -> the victim's own /auth/oidc/callback 429, retryAfterSeconds 60
+   *
+   * Note what the attacker sees: twenty 400s and never a 429. They are refused by the
+   * Fetch-Metadata guard on every request while the victim pays for all of them, so the attack is
+   * quieter than the callback one it replaced and costs fifteen requests rather than sixty.
+   */
+  it('cannot spend it through the START route either (REGRESSION)', async () => {
+    const config = testConfig();
+    const { app } = await harness(config, cohortRelyingParty());
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt < config.rateLimit.oidcFailureMax + 5; attempt += 1) {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/v1/auth/oidc/start',
+        headers: CROSS_SITE_SUBRESOURCE,
+      });
+      statuses.push(response.statusCode);
+    }
+
+    const victim = await app.inject({ method: 'GET', url: '/api/v1/auth/oidc/start' });
+    assert.equal(
+      victim.statusCode,
+      303,
+      `a learner behind the same address was refused a sign-in by somebody else's traffic to ` +
+        `the start route: ${victim.payload} (attacker saw ${statuses.join(',')})`,
+    );
+    await app.close();
+  });
+
+  /**
+   * The door `refuseNonNavigationOidc` cannot close, and the reason this is not a duplicate.
+   *
+   * Fastify validates the query string BEFORE `preHandler`, so a start whose `redirectAfter` is
+   * not a site-relative path is refused by the SCHEMA and no guard of ours ever runs. Measured
+   * against the code that shipped the Fetch-Metadata guard:
+   *
+   *     17 cross-site GETs to /auth/oidc/start?redirectAfter=https%3A%2F%2Fevil.test%2Fx
+   *       -> 400 x17 from the schema, every one charged
+   *       -> the victim's own /auth/oidc/start   429
+   *
+   * No `sec-fetch-dest` is needed and none is sent here on purpose: the point is that a layer
+   * ABOVE the guard produced the refusal, so a fix that lives in a `preHandler` cannot be what
+   * closes it. Only refusing to charge for anything that never reached the handler does.
+   */
+  /**
+   * The positive control on the two above, and the thing that stops them being satisfied by
+   * deleting the charge.
+   *
+   * A start that fails INSIDE the handler — the provider unreachable, discovery refusing — has
+   * spent an outbound request and is exactly what the failed-outcome budget was sized for. It must
+   * still be charged, or "do not charge for what never reached the handler" becomes "do not charge
+   * for anything" and a script driving start-after-start against a broken provider is bounded only
+   * by the ceiling.
+   */
+  it('still charges a start that fails inside the handler — the positive control', async () => {
+    const config = testConfig();
+    const unreachable: OidcRelyingParty = {
+      discovery: () => Promise.reject(new Error('the provider is unreachable')),
+      authorizationUrl: () => Promise.reject(new Error('the provider is unreachable')),
+      exchangeCode: () => Promise.reject(new Error('the provider is unreachable')),
+      verifyIdToken: () => Promise.reject(new Error('the provider is unreachable')),
+    };
+    const { app } = await harness(config, unreachable);
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt < config.rateLimit.oidcFailureMax + 2; attempt += 1) {
+      const response = await app.inject({ method: 'GET', url: '/api/v1/auth/oidc/start' });
+      statuses.push(response.statusCode);
+    }
+    assert.ok(
+      statuses.includes(429),
+      `a caller forcing ${String(config.rateLimit.oidcFailureMax + 2)} failed starts was never ` +
+        `refused; the failed-outcome budget is not being charged at all: ${statuses.join(',')}`,
+    );
+    await app.close();
+  });
+
+  it('cannot spend it with a start the SCHEMA refuses, above every guard (REGRESSION)', async () => {
+    const config = testConfig();
+    const { app } = await harness(config, cohortRelyingParty());
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt < config.rateLimit.oidcFailureMax + 2; attempt += 1) {
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/v1/auth/oidc/start?redirectAfter=https%3A%2F%2Fevil.test%2Fx',
+        headers: { origin: 'https://evil.test', 'sec-fetch-site': 'cross-site' },
+      });
+      statuses.push(response.statusCode);
+    }
+    // The control on the control: if these stopped being 400s the assertion below would pass for
+    // the wrong reason — a query the schema accepts is not the case under test.
+    assert.ok(
+      statuses.every((status) => status === 400),
+      `the malformed starts must be refused by the schema, not answered: ${statuses.join(',')}`,
+    );
+
+    const victim = await app.inject({ method: 'GET', url: '/api/v1/auth/oidc/start' });
+    assert.equal(
+      victim.statusCode,
+      303,
+      `a learner behind the same address was refused a sign-in by somebody else's malformed ` +
+        `traffic: ${victim.payload}`,
+    );
+    await app.close();
+  });
 });
 
 // ---------------------------------------------------------------------------

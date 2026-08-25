@@ -669,29 +669,18 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
       done(rateLimitError(refusalMs / 1_000));
     };
 
-    const chargeFailedOutcome = (
-      request: FastifyRequest,
-      reply: FastifyReply,
-      done: (error?: Error) => void,
-    ) => {
-      if (reply.statusCode >= 400 && reply.statusCode !== 429) {
-        oidcFailures.charge(addressRateLimitKey(request, config));
-      }
-      done();
-    };
-
     /**
-     * Callbacks that proved they belong to a sign-in this server started.
+     * The OIDC requests whose failure is the CALLER'S to pay for.
      *
      * ## The defect this closes
      *
-     * `chargeFailedOutcome` charges any 4xx, and the budget is keyed on the client ADDRESS —
-     * which it must be, because the route issues a session. Put those two facts together and the
-     * budget is spendable by somebody who is not the caller: `GET /auth/oidc/callback?state=…` is
-     * a GET, so a page on any other site can make a visitor's browser issue it as a plain
-     * subresource load. CORS does not stop the REQUEST, only the reading of the response; there is
-     * no CSRF token on a GET; and no session is needed. Measured against the shipped code, with
-     * `<img>`-shaped headers (`sec-fetch-mode: no-cors`, `origin: https://evil.test`):
+     * The failed-outcome budget is keyed on the client ADDRESS — which it must be, because these
+     * routes issue a session (measured, at the top of this file). Charge every 4xx and the budget
+     * becomes spendable by somebody who is not the caller: both OIDC routes are GETs, so a page on
+     * any other site can make a visitor's browser issue them as plain subresource loads. CORS does
+     * not stop the REQUEST, only the reading of the response; there is no CSRF token on a GET; and
+     * no session is needed. Measured with `<img>`-shaped headers (`sec-fetch-mode: no-cors`,
+     * `origin: https://evil.test`):
      *
      *     20 cross-site GETs to the callback   -> 400 x15 then 429 x5
      *     a legitimate learner's /auth/oidc/start from the same address -> 429, retryAfter 60
@@ -700,37 +689,66 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
      * whole cohort out of signing in for the rest of the window — the exact failure the cohort
      * work exists to prevent, reachable by a third party for free.
      *
+     * ## Why this set covers the START route too, and why the first fix did not
+     *
+     * ############################################################################
+     * ## THE SAME HAZARD EXISTED ON TWO ROUTES AND THE GUARD WENT ON ONE.       ##
+     * ############################################################################
+     *
+     * That fix gated only the CALLBACK, on membership of an `acceptAttempt` that had succeeded.
+     * `/auth/oidc/start` kept an unconditional `chargeFailedOutcome`, and a start is refused with
+     * a 400 in two ways a third party can reach for nothing — measured against the code that
+     * shipped the callback fix, on the same harness:
+     *
+     *     20 cross-site <img>-shaped GETs to /auth/oidc/start
+     *       (refused 400 x20 by `refuseNonNavigationOidc`, every one of them charged)
+     *       -> the victim's own /auth/oidc/start   429, retryAfter 60
+     *       -> the victim's own /auth/oidc/callback 429, retryAfter 60
+     *
+     *     17 cross-site GETs to /auth/oidc/start?redirectAfter=https%3A%2F%2Fevil.test%2Fx
+     *       (refused 400 by the SCHEMA, which Fastify runs BEFORE `preHandler`, so the
+     *        Fetch-Metadata guard never even runs)
+     *       -> the victim's own /auth/oidc/start   429
+     *
+     * The second door is the one that matters: `refuseNonNavigationOidc` cannot close it, because
+     * validation refuses the request before any `preHandler` is reached. Fifteen image tags with a
+     * malformed query lock a whole campus address out of signing in, and the attacker never even
+     * sees the 429 — they are refused by the guard while the victim pays.
+     *
      * ## Why membership of this set is the right condition
      *
      * The budget's own argument (see the header of `plugins/outcome-budget.ts`) is that a failure
      * is worth counting because "a script cannot produce" the thing that separates a real sign-in
-     * from a fake one. That thing is `acceptAttempt`: the single-use attempt row, matched against
-     * a `state` and a PKCE verifier carried in a cookie THIS SERVER set on the browser one request
-     * earlier. A hostile third party cannot make a victim's browser present one, because it cannot
-     * write a `__Host-`, `HttpOnly`, signed cookie for our origin.
+     * from a fake one. On the callback that thing is `acceptAttempt`: the single-use attempt row,
+     * matched against a `state` and a PKCE verifier carried in a cookie THIS SERVER set on the
+     * browser one request earlier. A hostile third party cannot make a victim's browser present
+     * one, because it cannot write a `__Host-`, `HttpOnly`, signed cookie for our origin.
      *
-     * It is also the line past which a failure COSTS something: everything before it is refused
-     * from memory and one indexed read, and everything after it has spent an outbound request to
-     * the identity provider. So the requests that are now uncharged are exactly the ones that were
-     * never expensive, and every request the original measurement counted — a script that starts a
-     * real flow and then fails at the token endpoint — is still counted. `refusingRelyingParty` in
+     * On the start there is no such credential and there cannot be — a start is the request that
+     * has nothing yet. The line there is entering the HANDLER, which is the same line by the other
+     * measure: it is the point past which a failure COSTS something. Everything before it is
+     * refused from memory (the schema, the Fetch-Metadata guard, the budgets themselves), and
+     * everything after it has spent a discovery fetch, an authorization-URL build and an attempt
+     * row. So the requests that are now uncharged are exactly the ones that were never expensive,
+     * and every request the original measurement counted — a script that starts a real flow and
+     * then fails at the provider — is still counted. `refusingRelyingParty` in
      * `test/cohort-sign-in-limits.test.ts` drives that case and still meets its fifteen.
      *
-     * A `WeakSet` rather than a request decorator: it is two call sites in one closure, it cannot
-     * be read or set by anything else in the process, and it holds no request after the response.
+     * A `WeakSet` rather than a request decorator: it is three call sites in one closure, it
+     * cannot be read or set by anything else in the process, and it holds no request after the
+     * response.
      */
-    const provenAttempts = new WeakSet<FastifyRequest>();
+    const chargeableOidcFailures = new WeakSet<FastifyRequest>();
 
-    const chargeProvenCallbackFailure = (
+    const chargeFailedOutcome = (
       request: FastifyRequest,
       reply: FastifyReply,
       done: (error?: Error) => void,
     ) => {
-      if (!provenAttempts.has(request)) {
-        done();
-        return;
+      if (chargeableOidcFailures.has(request) && reply.statusCode >= 400 && reply.statusCode !== 429) {
+        oidcFailures.charge(addressRateLimitKey(request, config));
       }
-      chargeFailedOutcome(request, reply, done);
+      done();
     };
 
     app.post<{ Body: GuestBody | undefined }>(
@@ -852,6 +870,12 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
         schema: { querystring: { $ref: 'prl:oidcStartQuery#' } },
       },
       async (request, reply) => {
+        // The handler has been entered, so this request is past everything that refuses from
+        // memory — the schema, the Fetch-Metadata guard and both budgets — and is about to spend a
+        // discovery fetch and an attempt row. Only from here is a failure the caller's to pay for.
+        // See `chargeableOidcFailures` for what a third party did with the version that charged
+        // every 400 this route produced.
+        chargeableOidcFailures.add(request);
         const party = requireRelyingParty(relyingParty);
         const wanted = request.query.redirectAfter;
         // Re-checked rather than trusted. The schema and this must agree, and if they ever drift
@@ -908,9 +932,9 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
         // that reduces them.
         preHandler: [refuseNonNavigationOidc, refuseWhenFailing],
         // …and only once the callback has proved it belongs to a sign-in this server started.
-        // See `provenAttempts`: without that condition the budget is spendable, against a victim's
-        // address, by any page the victim happens to visit.
-        onResponse: chargeProvenCallbackFailure,
+        // See `chargeableOidcFailures`: without that condition the budget is spendable, against a
+        // victim's address, by any page the victim happens to visit.
+        onResponse: chargeFailedOutcome,
         schema: { querystring: { $ref: 'prl:oidcCallbackQuery#' } },
       },
       async (request, reply) => {
@@ -963,8 +987,9 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
         const attempt = await acceptAttempt(request, query, store);
         // Past this line the caller has presented the attempt cookie this server set on their
         // browser, so a failure from here on is one only somebody who genuinely started a sign-in
-        // could produce — and the only kind that costs an outbound request. See `provenAttempts`.
-        provenAttempts.add(request);
+        // could produce — and the only kind that costs an outbound request. See
+        // `chargeableOidcFailures`.
+        chargeableOidcFailures.add(request);
         if (query.code === undefined) {
           throw new AppError('oidc_exchange_failed', {
             logDetail: 'callback carried neither code nor error',

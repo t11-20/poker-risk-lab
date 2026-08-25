@@ -158,7 +158,7 @@ export async function heartbeat(
 }
 
 /**
- * Gives the lease back, scoped to the owner.
+ * Gives the lease back, scoped to the owner AND to the generation being given back.
  *
  * `and owner_id = ...` is not defensive tidiness, it is the correctness of the statement. Without
  * it, a process that had already been fenced would delete the lease of the process that legitimately
@@ -166,16 +166,48 @@ export async function heartbeat(
  * is the same two-processes-one-room state this table exists to make impossible, reached through
  * the cleanup path instead of the open path.
  *
- * Returns true when a row went. False means we did not hold it, which is not an error: it is what a
- * fenced process sees on its way out, and there is nothing for it to do about that.
+ * ## Why `and fence = ...`, which is not the same statement
+ *
+ * ############################################################################
+ * ## THE OWNER SCOPE DOES NOT PROTECT US FROM OURSELVES. THE FENCE DOES.    ##
+ * ############################################################################
+ *
+ * A release is QUEUED by `RoomRegistry.releaseLeaseSoon` and runs on a serial chain, so the gap
+ * between "this room was given up" and "the row was actually deleted" is unbounded — it is however
+ * long every release ahead of it takes, and on the path that produces the most of them at once
+ * (a database slow enough that every beat is abandoned at its deadline, so every room is evicted
+ * `lease_expired` and every release is queued) each one of those is a query that runs to its own
+ * 7,000 ms deadline before it fails. The database then recovers, the learners reconnect, and the
+ * rooms are RE-ACQUIRED by this same process at a new fence long before the chain has drained.
+ *
+ * The stale release that arrives after that is owner-scoped and this process IS the owner, so
+ * without the fence it deletes the row the re-open had just taken. Reproduced against
+ * `RoomRegistry` with the release chain held open across an eviction and a re-open: the row was
+ * deleted, the very next beat found no row for a room this process was serving and evicted it as
+ * `fenced` — closing a table under a learner and raising `prl_api_room_fencings_total{reason=
+ * "fenced"}`, a zero-tolerance series, for an incident that had not happened. And between the
+ * delete and that beat the room had NO lease row at all while this process was dealing at it,
+ * which is the two-processes-one-room state the table exists to refuse, reached through the
+ * cleanup path.
+ *
+ * `fence` is exactly the fencing token for this: it increments on every acquisition, so "the
+ * generation that asked to be released" and "the generation in the row" are comparable, and a
+ * release for a generation that has been superseded matches nothing. This is the first caller to
+ * use the column for what the migration header says it is for.
+ *
+ * Returns true when a row went. False means we did not hold that generation of it, which is not an
+ * error: it is what a fenced process sees on its way out, and what a superseded release sees, and
+ * there is nothing for either to do about it.
  */
 export async function release(
   handle: Db,
-  input: { readonly roomId: string; readonly ownerId: string },
+  input: { readonly roomId: string; readonly ownerId: string; readonly fence: number },
 ): Promise<boolean> {
   const rows = await handle<{ room_id: string }[]>`
     delete from prl.room_ownership
-     where room_id = ${input.roomId} and owner_id = ${input.ownerId}
+     where room_id = ${input.roomId}
+       and owner_id = ${input.ownerId}
+       and fence = ${input.fence}
     returning room_id
   `;
   return rows.length > 0;

@@ -1,10 +1,21 @@
 # Runbooks
 
-One file per situation. Every one has the same seven sections, in the same order:
+One file per situation. **Most** have the same seven sections, in the same order — and the exceptions are named below, because `scripts/alert-delivery.mjs` rests its Detection-section check on this claim and a blanket "every one" is what let five files drift out of the shape without anybody noticing:
 
 **Symptoms → Detection → Immediate containment → Diagnosis → Recovery → Verification → Escalation**
 
 That order is the point. Containment comes before diagnosis because during an incident the instinct is to understand first, and understanding is slower than stopping the bleeding. Verification comes before escalation because "we fixed it" is a claim until something independent says so.
+
+**Five files do not have that shape**, and knowing which is worth more than a claim that none exist:
+
+| File | How it differs |
+| --- | --- |
+| `leaked-secret.md` | **no `## Detection` section at all** — it opens on "The secrets this system has, and what each one is worth" |
+| `stuck-seat.md` | Symptoms, Detection, then four sections of its own; no Immediate containment / Diagnosis / Recovery / Verification / Escalation |
+| `room-ownership-contended.md` | ten sections; Diagnosis is renamed, and there is a trailing "If it keeps happening" |
+| `account-deletion-failure.md`, `public-origin-unreachable.md` | eight sections — one extra, ahead of Symptoms |
+
+`scripts/alert-delivery.mjs` check 1 requires every rule's `runbook:` target to have a `## Detection` section that names the alert, so `leaked-secret.md` is only tolerated because no rule points at it.
 
 ## Index
 

@@ -379,9 +379,9 @@ document exists to avoid, so it is written down as two separate answers.
 | Session, **absolute** | *was not stated at all* | **60 days from `created_at`**, hard ceiling | `apps/api/src/auth/session.ts:75` |
 | Revoked session row | 1 day after revocation | Eligible at +24 h, deleted at the next 6-hourly tick → **24–30 h** | `sessions.ts:67,350-368` |
 | Sign-in attempt | 10 minutes | Unusable at 10 min; **row removed at the next tick → up to ~6 h 10 min** | `sessions.ts:50,501-511` |
-| Sweep cadence | every 6 hours | 6 h, batch 1 000, ≤100 passes/kind/sweep, **not env-overridable**, first tick at T+6 h not at boot | `apps/api/src/maintenance/retention-sweep.ts`; `apps/api/src/server.ts` |
+| Sweep cadence | every 6 hours | 6 h, batch 1 000, ≤100 passes/kind/sweep, **not env-overridable**, first tick **60 s after boot** (`FIRST_SWEEP_DELAY_MS = 60_000`), then every 6 h | `apps/api/src/maintenance/retention-sweep.ts`; `apps/api/src/server.ts` |
 | Everything else | until you delete your account | **Correct — no sweep exists for any other table** | `apps/api/src/maintenance/retention-sweep.ts` |
-| Abandoned guest accounts | *not stated anywhere* | **60 days unseen, and only if provably dead** — no live session, no membership, no hand seat, no room. Implemented 2026-08-25; the period is DERIVED from the session ceiling, not chosen | §4 D4, `apps/api/src/maintenance/retention-sweep.ts` |
+| Abandoned guest accounts | *not stated anywhere* | **60 days unseen, and only if provably dead** — no live session, no membership, no hand seat, no room **and no enrolment** (five clauses, not the four this row used to list). Implemented 2026-08-25; the period is DERIVED from the session ceiling, not chosen | §4 D4, `apps/api/src/maintenance/retention-sweep.ts` |
 | Backups | *was not stated at all* | **Up to ~6 months**, newest good one never pruned | `scripts/backup.mjs:188-190,1238-1247` |
 | Container logs (all services) | *not stated at all* | **Size-capped, not time-limited.** Every service in all three compose files: api 20m×5, proxy 10m×5, the rest 10m×3. That bounds the disk; it is **not** a retention period, and none is implemented | §2.11, §4 D2, §7 E12 |
 | `prl.audit_log` | until you delete your account | Correct — but rows survive deletion with `user_id` NULL, and nothing ever removes them | `0001_initial.sql:855-856,953` |
@@ -427,7 +427,8 @@ an account rolls back rather than reporting a deletion that did not happen
 (`users.ts:352-369,482-494`). This is
 unusually strong and worth telling counsel: the erasure is not a promise, it is checked.
 
-Almost none of the work is in TypeScript. Five of the eight foreign keys act by themselves, and
+Almost none of the work is in TypeScript. **All nine** foreign keys referencing `prl.users` act by
+themselves — six CASCADE, three SET NULL — and
 PostgreSQL executes a referential action with the **constraint owner's** privileges — which is how
 the erasure removes rows from tables `prl_app` holds no DELETE on, without ever granting it
 (`users.ts:391-403`). The audit row for the deletion is written with `user_id` NULL from the start,
@@ -670,7 +671,7 @@ the index that was built for it. Three things about it matter to this document.
 
 *It erases through the same path as `POST /me/delete`.* Candidates go through `deleteAccount`
 (§3.1), one transaction each — so the policy in `db/migrations/0004_account_deletion.sql` exists in
-one place, and every erasure carries the same self-verification: the eight tables naming the learner
+one place, and every erasure carries the same self-verification: the nine tables naming the learner
 are counted before and after inside the transaction, and anything left behind rolls the erasure back
 rather than committing a partial one. An unattended timer is exactly where that check earns its
 cost.
@@ -698,12 +699,13 @@ would delete accounts whose owners could still return, which is L5's decision to
 rows that are provably unreachable, which is the defect. It is written as the constant rather than
 as a literal, and a test fails if the two ever disagree.
 
-**What this does NOT do, and it is a live inaccuracy.** `/privacy` §5 still tells readers that
-"your account row, your progress, your answers and your hand history" are kept "until you delete
-your account". That is now false for a guest account unseen for sixty days, and the sentence is on a
-page this change deliberately did not touch (`apps/web/` is held by other work in this session).
-**E11 below.** It is a page edit, not a decision — the fact it must state is settled and stated
-here.
+**This was recorded as a live inaccuracy on `/privacy`, and it is CLOSED — corrected 2026-08-26.**
+The entry used to say that §5 still promised "until you delete your account" with no sixty-day
+exception. `apps/web/src/app/privacy/page.tsx` now reads "…is kept until you delete your account,
+**with one exception described next**", and states the sixty-day guest rule and the five conditions
+under it; `apps/web/test/legal-pages.test.ts` fails the build if that sentence goes. E11 below is
+done. Left here rather than deleted because a register that quietly drops an entry gives counsel no
+way to tell a resolved question from one nobody asked.
 
 **Observability.** `prl_retention_rows_deleted_total{kind}` counts what went, primed at zero. The
 harder half is that a sweep which silently stops running is invisible: "removed nothing" and "did
@@ -1036,7 +1038,8 @@ survival* — but no longer *on the basis that the service is free*, and it now 
 whether the operator may exercise any of it without owing the reader something is not settled there.
 
 **(c)** Minimal disclaimer, premise withdrawn, no limitation of liability at all. The clause a
-lawyer has to replace is one paragraph and one `CounselFlag`, both in §8.
+lawyer has to replace is one paragraph and one `CounselFlag`, both in **§9 (Liability)** — this read
+"§8" until 2026-08-26, and §8 is Availability, which carries a different clause (L11).
 
 **(d)** Any answer is prose replacing that paragraph, plus removing `liability-and-warranty` from
 `COUNSEL_CLAUSES`. **Done, 2026-08-25:** the free-of-charge premise is out of the question text
@@ -1056,7 +1059,8 @@ publicly discussed general tendencies and not from anyone's hand histories. Educ
 runs over every learner-facing string at load and over every generated commentary string, and
 `ModelReasoning` has no field capable of holding a mental state. Disclaimers are structured data:
 there is no code path producing a profile card without them. Some subjects are dead, which changes
-nothing. (`legal-review-requirements.md:238-259`; `docs/AI-LEGENDS.md`.)
+nothing. (`legal-review-requirements.md` entry 9, `ai-legend-naming` — this cited `:238-259`, which is
+entry 10, `enrolment-and-fees`; `docs/AI-LEGENDS.md`.)
 
 **(c)** **`PRL_LEGEND_NAMING` is unset and must stay unset** until this is answered in writing.
 Unset resolves to `archetype` — generic style names only — and ADR 0011 makes the safe mode the
@@ -1198,11 +1202,14 @@ must be kept about a paying student — enrolment, attendance, assessment, compl
 long, and does any of that conflict with the erasure in §3?
 
 **(b) Accessibility.** `docs/PRODUCT-GUARDRAILS.md:119` states **WCAG 2.2 AA "treated as a
-functional requirement rather than a polish item"** — a binding internal commitment. Three automated
+functional requirement rather than a polish item"** — a binding internal commitment. **Two** automated
 gates run in `verify` and each is a *necessary condition only*: `test:a11y` (static rules over
-server-rendered HTML), `test:keyboard` (real Chrome, focus order, traps, a whole hand folded from
-the keyboard) and `test:ax` (the computed accessibility tree, including that no hidden card's
-accessible name states a rank or suit). **None of them involves a screen reader.**
+server-rendered HTML) and `test:ax` (the computed accessibility tree, including that no hidden card's
+accessible name states a rank or suit). A third, `test:keyboard` (real Chrome, focus order, traps, a
+whole hand folded from the keyboard), exists and is **not** in `verify`, `test` or `test:all` — it is
+run by hand against a running production build, so no release is gated on it. This entry counted it
+as a release gate until 2026-08-26, which overstated the evidence behind the accessibility
+commitment by exactly one gate. **None of the three involves a screen reader.**
 `docs/production/accessibility-certification.md:5-9` is unambiguous: *"BLOCKED — UNVERIFIED. Nothing
 in this repository has ever heard this application read aloud, and no gate in it can."* It is
 residual 1 of `final-readiness-report.md` and the only item standing between the release and a PASS.
@@ -1320,7 +1327,8 @@ which point the migration detector re-fires on a table nobody touched. All five 
 * **`apps/web/src/app/privacy/page.tsx`** — corrected the session retention period (14-day *idle*
   window plus the **60-day absolute ceiling**, which appeared nowhere); corrected the sign-in-attempt
   entry to distinguish "stops working" from "is removed"; added the sweep-latency gap and the fact
-  that the first sweep is at T+6 h, not boot; added a §6 paragraph stating that **deletion does not
+  that the first sweep is at T+6 h, not boot — **wrong since the one-shot landed; it is T+60 s, and
+  this line is left with its correction rather than deleted**; added a §6 paragraph stating that **deletion does not
   reach backups** and how long the shipped policy keeps them; narrowed the `prl.sessions` "never
   written anywhere" claim to "never written to the database"; added the `prl.room_ownership`
   inventory entry.
@@ -1387,7 +1395,8 @@ Independent of any legal answer, with file paths.
   the index built for it (`db/migrations/0002_indexes_and_constraints.sql:51-55`) and scheduled from
   `apps/api/src/maintenance/retention-sweep.ts`, erasing through `deleteAccount` so that the policy
   in `0004_account_deletion.sql` exists once. Never removes an account with a live session, a
-  membership, a hand seat or a room, at any age. **The cutoff was L5 and L5 is still open**, so the
+  membership, a hand seat, a room **or an enrolment**, at any age — five clauses in the predicate,
+  and this sentence listed four until 2026-08-26. **The cutoff was L5 and L5 is still open**, so the
   period is derived rather than chosen: sixty days unseen, being the session absolute ceiling and
   therefore the point at which no cookie can reach the account any more. If counsel answers L5 with
   a different period, one constant changes. D4.
@@ -1424,7 +1433,7 @@ Independent of any legal answer, with file paths.
 * **E11 · `/privacy` §5 no longer describes guest retention correctly.** *(Created by the E5
   work, and the only inaccuracy it introduced.)* The page says everything other than sessions and
   sign-in attempts is "kept until you delete your account". Since 2026-08-25 an abandoned guest
-  account — no live session, no membership, no hand seat, no room — is erased sixty days after it
+  account — no live session, no membership, no hand seat, no room, no enrolment — is erased sixty days after it
   was last seen. The paragraph at `apps/web/src/app/privacy/page.tsx` §5 must say so, and §6's
   description of what deletion removes now has a second way to be triggered. Deliberately not done
   in the same change: `apps/web/` was held by other work in this session. This is a statement of

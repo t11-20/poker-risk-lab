@@ -73,17 +73,31 @@ without a network hop, a second deployment, or a second failure mode.
 | Package | May depend on | Must never |
 | --- | --- | --- |
 | `@prl/poker-engine` | nothing | do I/O, read a clock, use `Math.random`, hold mutable module state |
-| `@prl/poker-math` | `poker-engine` | do I/O, be non-deterministic without an explicit seed |
+| `@prl/poker-math` | `contracts`, `poker-engine` | do I/O, be non-deterministic without an explicit seed |
 | `@prl/contracts` | `poker-engine` (types only) | contain runtime logic |
-| `@prl/content` | `contracts`, `poker-engine` | contain a pre-computed odds figure |
+| `@prl/content` | `contracts`, `poker-engine`, `poker-math` | contain a pre-computed odds figure |
+| `@prl/poker-ai` | `contracts`, `poker-engine`, `poker-math` | name a real person as the subject of a claim (§ `docs/AI-LEGENDS.md`), use `Math.random` |
 | `@prl/ui` | `contracts`, `poker-math` | fetch data, hold app state, import `@prl/content` |
 | `apps/api` | all packages | trust a client-supplied fact about game state |
-| `apps/web` | `contracts`, `ui`, `poker-math` | import `@prl/content`, or compute anything authoritative |
+| `apps/web` | `content`, `contracts`, `poker-engine`, `poker-math`, `ui` | ship `@prl/content` into a **client** component, or compute anything authoritative |
+
+**This table is read out of the `package.json` files, and was wrong in four rows until
+2026-08-26.** `poker-math`'s dependency on `contracts`, `content`'s on `poker-math`, and `web`'s on
+`poker-engine` were all missing, `@prl/poker-ai` was absent from the table entirely, and the
+`apps/web` row said "must never import `@prl/content`" — which the code has not obeyed for some
+time. Check it with `node -e "for (const p of [...]) console.log(require(p).dependencies)"` rather
+than by reading.
 
 Two of these are worth expanding.
 
-**`@prl/content` is server-only.** It reads its JSON with `node:fs`. The browser gets
-content over the API instead. This avoids the JSON-import spelling incompatibility
+**`@prl/content` is server-only *in the browser-bundle sense*, and the rule is narrower than it
+used to be stated.** It reads its JSON with `node:fs`, so it cannot run in a browser. It **is**
+imported by `apps/web` — `app/learn/[lessonId]/page.tsx` and `app/lab/[scenarioId]/page.tsx` both
+do, and it is a declared dependency — but only from React **Server** Components, which run in Node
+and never reach the client bundle. The enforceable rule is therefore "never from a `'use client'`
+module", not "never from `apps/web`", and nothing currently enforces it: the old blanket wording
+read as though something did. `packages/content/src/index.ts`'s own header carries the same stale
+claim. Where the browser needs content it gets it over the API instead. This avoids the JSON-import spelling incompatibility
 between Node's ESM resolver (`with { type: 'json' }`) and bundlers (which want it
 absent), and it reflects the real requirement: content has to pass through the server
 anyway to be merged with the caller's progress and to have its live figures computed.

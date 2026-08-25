@@ -44,7 +44,7 @@ The manifest names both digests as one release and they should move as one. Two 
 
 A tag is a pointer and can be repointed; a digest is the artefact. `image: prl-api@sha256:…` resolves to exactly those bytes or to nothing at all. A rollback expressed as a tag is a rollback to whatever that tag means today.
 
-The honest caveat, the same one [`deployment.md`](deployment.md) §2 makes: today these are **local BuildKit image-store digests**, not registry-attested ones. They cannot be two different images, and nothing signed them. A rollback across machines needs a registry digest, and there is no registry in this repository.
+The honest caveat, the same one [`deployment.md`](deployment.md) §2 makes: today these are **local BuildKit image-store digests**, not registry-attested ones. They cannot be two different images, and nothing signed them. A rollback across machines needs a registry digest reachable from both. `deploy/registry/` provides one — `pnpm run release:artifacts -- --push` records it in the manifest — but it listens on `127.0.0.1:5001`, so it is only the release machine's own registry until somebody points `--registry` at a real one.
 
 ### What a rollback costs
 
@@ -110,7 +110,7 @@ It is a command rather than an unrecognised argument on purpose: a deploy pipeli
 
 The contract is: **the previous release's code must run correctly against the schema the current release applied.** That is a property of each migration, decided when it is written, and it is what makes an application rollback possible at all.
 
-There are four applied migrations today: `0001_initial.sql`, `0002_indexes_and_constraints.sql`, `0003_bot_seat_recovery.sql`, `0004_account_deletion.sql`.
+There are six applied migrations today: `0001_initial.sql`, `0002_indexes_and_constraints.sql`, `0003_bot_seat_recovery.sql`, `0004_account_deletion.sql`, `0005_room_ownership.sql`, `0006_cohort_enrolments.sql`.
 
 ### Changes the previous release tolerates
 
@@ -195,4 +195,4 @@ Stated plainly, because this repository enforces the rule on itself: **documenta
 - **No rollback has ever been executed here.** There is no registry, no deploy target and no production environment in this repository, so the "redeploy the previous digest" step has never run anywhere.
 - **The digest identity check and the promotion of a verified digest are both proven; what is not proven is that either survives a registry.** This bullet used to say a green attestation and a completed promotion did not exist, because the two defects staging found were fixed after that run and `staging up` had not been re-run. It has since been re-run: `deploy/staging/staging-verified.json` records `2026-08-22T18:55:36Z`, commit `b292b2ac234c`, `dirty: false`, all four checks true, and `staging promote` reporting promotable and byte-identical — see [`staging.md`](staging.md) §8 and [`staging-verification.md`](staging-verification.md). `staging promote` was separately measured refusing an unverified digest and refusing a mismatched one, printing both values. The residual is that those digests live in a **local BuildKit store and are not registry-attested**, so nothing here shows the same digest being pulled by a host that did not build it.
 - **The `0003` rollback incompatibility in §5 is read from the migration file, not measured.**
-- **The restore path *is* measured**, on 2026-08-22, end to end at 1.04 s for the development database, including authorisation checks against restored data — [`backup-restore.md`](backup-restore.md) §7. That is the one reversal in this system with real evidence behind it.
+- **The restore path *is* measured**, on 2026-08-22, end to end at 1.04 s — but for a **10 MB, ~1,000-row** database, not the development one, and this bullet said "the development database" until 2026-08-26. It is a floor, not an RTO. [`disaster-recovery.md`](disaster-recovery.md) §2 retires it; [`backup-restore.md`](backup-restore.md) §7 and §8 carry what was actually run. That the reversal *works* has real evidence behind it; how long it takes on a real database does not.

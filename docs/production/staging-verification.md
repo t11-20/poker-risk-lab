@@ -2,11 +2,27 @@
 
 **Candidate SHA (images):** `68394b3df5dc51f45fa7409a3541c224861dad49`
 
-> **Superseded.** Everything below describes the `b292b2a` candidate on Debian bookworm-slim.
-> The current candidate is `68394b3`, on `node:24.18.0-alpine3.24`, whose scan reports **zero**
-> findings of any severity — the CVE section below is history, not a live figure. Its staging run
-> passed 62 strict-smoke checks with the proxy as the single source of HSTS. See
-> [`final-readiness-report.md`](final-readiness-report.md).
+> **SUPERSEDED — the whole document, not only the CVE section.** Everything below describes the
+> `b292b2a` candidate on Debian bookworm-slim. It is kept as a capture; **do not use any figure in
+> it to verify a running deployment.** Three specific traps, each of which has been read as current
+> at least once:
+>
+> * **HSTS.** Line 39 below records `max-age=31536000; includeSubDomains`. The proxy no longer sends
+>   `includeSubDomains` — `deploy/staging/nginx.conf` sets `proxy_hide_header
+>   Strict-Transport-Security` and then `add_header Strict-Transport-Security "max-age=31536000"`,
+>   deliberately, so that the proxy is the single source and the API's helmet header is not the one
+>   the browser obeys. A verifier who "fixes" nginx to match line 39 restores the duplicate-header
+>   defect.
+> * **The alert inventory.** The 22-rule table below is two-thirds of the current file:
+>   `deploy/staging/observability/alert-rules.yml` holds **35** rules (16 page, 18 ticket, 1
+>   heartbeat), and the runbook directory holds 25 files.
+> * **The image digests.** The digests below resolve to nothing on any machine today.
+>   `deploy/staging/release-manifest.json` is the only live record.
+>
+> The container scan reports zero findings **at or above its HIGH floor** — `container-scan.mjs`
+> passes `--severity HIGH,CRITICAL` to trivy, so MEDIUM and LOW were never requested and "zero of
+> any severity" (which this banner used to say) is not a measurement anybody took. See
+> [`final-readiness-report.md`](final-readiness-report.md), which carries its own staleness banner.
 
 **Previous candidate SHA (images):** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`
 **Host log SHA:** `{SCRATCH}/staging.log` was stamped `c969163` because HEAD had moved to a docs-only commit when `staging up` started. The manifest it deployed is this SHA (`dirty=false`).

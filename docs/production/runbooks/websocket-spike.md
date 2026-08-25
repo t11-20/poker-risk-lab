@@ -15,9 +15,16 @@ Connection volume, churn, or refusals are far above this deployment's normal.
 
 | Alert | Rule | Severity |
 | --- | --- | --- |
-| `WebSocketReconnectStorm` | open rate more than 3× the hourly close-rate baseline, for 10 minutes | ticket |
-| `WebSocketConnectionsHigh` | `prl_websocket_connections` above the measured ceiling, for 10 minutes | ticket |
-| `WebSocketRefusalSpike` | `prl_websocket_refused_total{reason="bad_origin"}` rising | ticket |
+| `WebSocketReconnectStorm` | `sum(rate(prl_websocket_opened_total[5m])) * 60 > max(prl_websocket_connections) + 5`, for 10 minutes | ticket |
+| `WebSocketConnectionsHigh` | `prl_websocket_connections > 67` — 70% of the 96 at which one instance saturated in [`load-test.md`](../load-test.md) — for 10 minutes | ticket |
+| `WebSocketRefusalSpike` | `sum(increase(prl_websocket_refused_total{reason="bad_origin"}[5m])) > 0`, for 10 minutes | ticket |
+
+The reconnect-storm bar is **churn, not volume**: opens per minute against the number of sockets
+actually standing. It is *not* a multiple of a close-rate baseline — that was the previous
+expression, and [`alerts.md`](../alerts.md) records why it was replaced: `rate(opened[5m]) > 3 *
+rate(closed[1h])` fired on any deployment busier by day than by night, and could not fire at all
+before the first socket had ever closed. `for: 10m` is on all three rules; one stray refusal is
+silent by design.
 
 ```bash
 curl -sS -H "Authorization: Bearer $METRICS_TOKEN" "$API/metrics" | grep -E \
@@ -124,7 +131,7 @@ pnpm run test:smoke --strict
 If the fix was a proxy timeout, verify with a socket held open past the old timeout rather than by reading the configuration. The drill exists for this:
 
 ```bash
-pnpm run test:drills --only websocket-disconnect
+pnpm run test:drills --only ws-disconnect-mid-hand
 ```
 
 ## Escalation

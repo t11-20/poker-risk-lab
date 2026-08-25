@@ -89,9 +89,9 @@ Three independent readings of the digest are taken and compared — `--iidfile`,
 
 ### What "digest" means here, precisely
 
-There is no container registry in this project and nothing is pushed. The digest is the one BuildKit's exporter assigns in the local image store. It is content-addressed: two builds producing different bytes cannot share it, and `image: prl-api@sha256:…` in a compose file resolves to exactly that image or to nothing.
+By default nothing is pushed, and the digest is the one BuildKit's exporter assigns in the local image store. It is content-addressed: two builds producing different bytes cannot share it, and `image: prl-api@sha256:…` in a compose file resolves to exactly that image or to nothing.
 
-It is **not** registry-attested. Nobody signed it and no registry vouches for it, and it exists only on the machine that built it. The manifest says so in its own `digestKind` field:
+**There is a registry now, and this paragraph used to deny it.** `deploy/registry/` runs a loopback registry on `127.0.0.1:5001`; `pnpm run release:artifacts -- --push` pushes both images, re-fetches each manifest and records the registry digest beside the build digest; `pnpm run release:sign` signs by digest and refuses if the two disagree. What stays true is the narrower claim: a loopback registry on the release machine is **not a third party**, so a registry digest from it is not third-party attestation, and it is not resolvable from any other machine. `scripts/release-artifacts.mjs` writes whichever `digestKind` applies — the un-pushed one reads:
 
 > local BuildKit image-store manifest digest (--iidfile). Content-addressed and stable, but not registry-attested: nothing is pushed, so no registry vouches for it.
 
@@ -105,7 +105,7 @@ GitHub gives each job a fresh machine, so the images built in `build` do not exi
 
 ## 3. Stage 1 — gates
 
-`pnpm run security:audit` runs **eleven** gates, each in its own child process so one crashing gate cannot prevent the others reporting: policy in effect, source encoding hygiene, denied packages, dependency shapes, Shai-Hulud IOC sweep, **committed credentials**, CI + container pinning, integrity + release age, OSV vulnerabilities, SBOM generation, and container image CVEs. Then lint, `build:packages`, typecheck. (This paragraph said "ten gates" and its list omitted the secret scan; the count and the order are the `GATES` array in `scripts/supply-chain/audit.mjs`.)
+`pnpm run security:audit` runs **fourteen** gates, each in its own child process so one crashing gate cannot prevent the others reporting, in this order: policy in effect, source encoding hygiene, denied packages, dependency shapes, Shai-Hulud IOC sweep, **committed credentials**, CI + container pinning, **keyless signing identity**, **log policy**, integrity + release age, OSV vulnerabilities, SBOM generation, container image CVEs, and **release image signatures**. Then lint, `build:packages`, typecheck. (This paragraph has said "ten" and then "eleven"; the count and the order are the `GATES` array in `scripts/supply-chain/audit.mjs`, and `security:audit` prints the count on its first line. The last three landed on 2026-08-25.)
 
 The install is `pnpm install --frozen-lockfile --ignore-scripts`: this job installs a dependency graph in order to decide whether it is safe, so it must not run that graph's install-time hooks first.
 
@@ -135,7 +135,7 @@ The job's default `DATABASE_URL` names a **login role that is only a member of `
 
 ## 5. Stage 4 — the container CVE scan
 
-Ten supply-chain gates examine the npm dependency graph and the repository in forensic detail, and until this one existed **nothing looked inside the artefact that actually ships**. The images carry a Node runtime and an OS package set, none of which appears in `pnpm-lock.yaml`. A CVE in zlib or perl-base was, as far as this repository's release audit was concerned, not a thing that could exist.
+The other supply-chain gates examine the npm dependency graph and the repository in forensic detail, and until this one existed **nothing looked inside the artefact that actually ships**. The images carry a Node runtime and an OS package set, none of which appears in `pnpm-lock.yaml`. A CVE in zlib or perl-base was, as far as this repository's release audit was concerned, not a thing that could exist.
 
 That gate is also what moved the base image. On Debian bookworm-slim it reported 60 unfixed findings across the two images — 52 HIGH and 8 CRITICAL, 14 distinct CVEs, every one of them from the base's 88 OS packages and none from this project's code. None of them blocked, because the policy is not to block on a finding with no upstream fix; the scanner's own header says the right answer to a growing number is a different base image. The base is now `node:24.18.0-alpine3.24` with 18 OS packages, and the same scan reports **0 findings, blocking or otherwise**, with `--include-unfixed` agreeing.
 
@@ -282,7 +282,7 @@ Everything below was measured on 2026-08-22. Nothing else here is claimed as ver
 | `node scripts/supply-chain/ci-pinning.mjs --freshness` | 0 | all 3 pinned tags re-resolved against the registry, drifted 0 |
 | `node scripts/supply-chain/container-scan.mjs` | 0 | trivy 0.72.0, floor HIGH; api and web 30 findings each, all unfixable; 0 blocking, 0 allowed |
 | the same, against the **pre-fix** web image | 1 | 8 blocking findings under `/usr/local/lib/node_modules/npm` |
-| `node scripts/supply-chain/audit.mjs` | 0 | all gates pass, container gate included — 10 of them on that date, 11 now that the secret scan is in the array |
+| `node scripts/supply-chain/audit.mjs` | 0 | all gates pass, container gate included — 10 of them on that date; the array holds **fourteen** today |
 | `node scripts/supply-chain/audit.mjs --skip-containers` | 2 | `1 network gate(s) skipped — NOT a valid release audit.` |
 | `node scripts/staging.mjs up` | 1 | stack verified; the smoke test then found two application defects (53 passed, 2 failed). No attestation written — correct behaviour |
 | `node scripts/staging.mjs status` | 0 | both images match the manifest; `attestation absent — nothing has been verified` |

@@ -291,13 +291,17 @@ describe('the ownership statements', () => {
     const released = await ownershipRepository.release(sql, {
       roomId: 'room_abcdefgh',
       ownerId: 'api_host_1_deadbeef',
+      fence: 4,
     });
     assert.equal(released, false, 'no row came back, so we did not hold it');
     const statement = calls[0];
     assert.ok(statement !== undefined);
     assert.match(statement.text, /delete\s+from\s+prl\.room_ownership/i);
     assert.match(statement.text, /owner_id\s*=/i, 'an unscoped delete steals the lease it should respect');
-    assert.deepEqual(statement.values, ['room_abcdefgh', 'api_host_1_deadbeef']);
+    // The generation, too. A release is queued and can arrive after the room has been given up and
+    // taken again by this same process, and the owner scope cannot tell those two apart.
+    assert.match(statement.text, /fence\s*=/i, 'a release with no generation can delete a later one');
+    assert.deepEqual(statement.values, ['room_abcdefgh', 'api_host_1_deadbeef', 4]);
   });
 
   it('offers the lease to a holder that has stopped renewing, and to nobody else', async () => {
@@ -873,6 +877,159 @@ describe('giving the lease back', () => {
     await stubborn.shutdown();
     const problem = problems.find((entry) => entry.detail.event === 'room-lease-release');
     assert.ok(problem !== undefined, 'a lease that could not be given back must reach the log');
+    await registry.shutdown();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A release that arrives after the room has been taken again
+// ---------------------------------------------------------------------------
+
+/**
+ * A `RoomOwnership` that models the ROW rather than the answer.
+ *
+ * `fakeOwnership` above answers `release: true` unconditionally and keeps no state, which is right
+ * for the cases it serves — they are about what the registry does with each verdict — and is
+ * exactly why it cannot see the defect below: a fake whose release deletes nothing cannot delete
+ * the wrong thing. This one keeps one row per room and applies the same scoping the four
+ * statements in `repositories/room-ownership.ts` apply, and it can hold a release OPEN, which is
+ * what a serial release chain draining behind a slow database looks like from in here.
+ */
+function rowBackedOwnership(ownerId = 'api_test_1_aaaaaaaa'): {
+  readonly ownership: RoomOwnership;
+  readonly rows: Map<string, { ownerId: string; fence: number }>;
+  readonly hold: () => void;
+  readonly drain: () => void;
+  readonly setThrow: (error: Error | null) => void;
+} {
+  const rows = new Map<string, { ownerId: string; fence: number }>();
+  let throwOnHeartbeat: Error | null = null;
+  let held = false;
+  const pending: (() => void)[] = [];
+  const ownership: RoomOwnership = {
+    ownerId,
+    acquire: (roomId): Promise<RoomLease | null> => {
+      const row = rows.get(roomId);
+      if (row === undefined) {
+        rows.set(roomId, { ownerId, fence: 1 });
+        return Promise.resolve({ roomId, fence: 1, acquiredAt: new Date() });
+      }
+      if (row.ownerId !== ownerId) return Promise.resolve(null);
+      row.fence += 1;
+      return Promise.resolve({ roomId, fence: row.fence, acquiredAt: new Date() });
+    },
+    heartbeat: (roomIds): Promise<readonly string[]> =>
+      throwOnHeartbeat !== null
+        ? Promise.reject(throwOnHeartbeat)
+        : Promise.resolve(roomIds.filter((id) => rows.get(id)?.ownerId === ownerId)),
+    release: (roomId, fence): Promise<boolean> =>
+      new Promise((resolve) => {
+        // Asserted rather than tolerated: the whole property under test is that the registry says
+        // WHICH generation it is giving back, so a caller that stopped passing one has to fail here
+        // rather than quietly satisfy a comparison against `undefined`.
+        assert.equal(typeof fence, 'number', 'a release must name the generation it gives back');
+        const run = (): void => {
+          const row = rows.get(roomId);
+          if (row !== undefined && row.ownerId === ownerId && row.fence === fence) {
+            rows.delete(roomId);
+            resolve(true);
+            return;
+          }
+          resolve(false);
+        };
+        if (held) pending.push(run);
+        else run();
+      }),
+    holderOf: () => Promise.resolve(null),
+  };
+  return {
+    ownership,
+    rows,
+    hold: () => {
+      held = true;
+    },
+    drain: () => {
+      held = false;
+      for (const run of pending.splice(0)) run();
+    },
+    setThrow: (error) => {
+      throwOnHeartbeat = error;
+    },
+  };
+}
+
+/**
+ * The release is QUEUED, so it can land in a world that has moved on.
+ *
+ * `releaseLeaseSoon` puts every release on one serial chain and returns; the delete runs however
+ * long every release ahead of it takes. The path that queues the most of them at once is also the
+ * path that makes each one slowest: a database slow enough that every beat is abandoned at its
+ * deadline evicts every room `lease_expired` and queues a release for each, and each of those runs
+ * to its own 7,000 ms deadline before it fails. The database then recovers and the learners
+ * reconnect long before the chain has drained.
+ *
+ * The stale release that arrives after that is owner-scoped and this process IS the owner, so
+ * before the fence was added to the statement it deleted the row the re-open had just taken.
+ * Measured on the sequence below, against the release with no `and fence = ...`:
+ *
+ *     rows after the chain drained   {}                      (the fresh lease was deleted)
+ *     evictions                      lease_expired, FENCED   (a table closed under a learner)
+ *
+ * The second one is the damage. `prl_api_room_fencings_total{reason="fenced"}` is a zero-tolerance
+ * series and it rose for an incident that had not happened — and between the delete and that beat
+ * the room had no lease row at all while this process was dealing at it, so any other process was
+ * entitled to take it. That is the two-processes-one-room state the whole table exists to refuse,
+ * reached through the cleanup path.
+ */
+describe('a release queued before the room was given up and taken again', () => {
+  it('does not delete the lease the re-open just took (NEGATIVE CONTROL)', async () => {
+    const fake = rowBackedOwnership();
+    const metrics = new AppMetrics();
+    const clock = createManualClock();
+    const evictions: { roomId: string; reason: string }[] = [];
+    const registry = new RoomRegistry({
+      clock,
+      metrics,
+      random: createSecureRandom(),
+      ownership: fake.ownership,
+    });
+    registry.onEviction((roomId, reason) => evictions.push({ roomId, reason }));
+
+    await registry.open({ record: record('room_reopen01') });
+    assert.equal(registry.leaseFor('room_reopen01')?.fence, 1);
+
+    // The database goes slow. Every beat is abandoned, and once the last confirmed renewal is
+    // older than the step-down threshold this process gives the room up and QUEUES the release.
+    fake.hold();
+    fake.setThrow(new Error('the database is unreachable'));
+    await registry.heartbeatLeases();
+    clock.advance(LEASE_SELF_EVICT_AFTER_MS);
+    await registry.heartbeatLeases();
+    assert.deepEqual(evictions, [{ roomId: 'room_reopen01', reason: 'lease_expired' }]);
+
+    // It recovers, and the learner reconnects. The room is taken again, at a new generation.
+    fake.setThrow(null);
+    await registry.open({ record: record('room_reopen01') });
+    assert.equal(registry.leaseFor('room_reopen01')?.fence, 2, 'the re-open must be a new generation');
+
+    // Only NOW does the queued release reach the database.
+    fake.drain();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.ok(
+      fake.rows.has('room_reopen01'),
+      'a release from the previous generation deleted the lease the re-open had just taken',
+    );
+
+    // The consequence, asserted separately because it is the one a learner sees: with the row
+    // gone, the next beat finds nothing for a room this process is serving and evicts it.
+    await registry.heartbeatLeases();
+    assert.equal(
+      evictions.filter((entry) => entry.reason === 'fenced').length,
+      0,
+      `the room was fenced by this process's own stale release: ${JSON.stringify(evictions)}`,
+    );
+    assert.ok(registry.get('room_reopen01') !== null, 'the table was closed under the learner');
     await registry.shutdown();
   });
 });

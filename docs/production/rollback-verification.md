@@ -8,8 +8,20 @@
 > is unchanged; the digests are now
 > api `sha256:bbfd0269b879…` / web `sha256:7c2c1ce9ff1c…`.
 
+> **None of the digests in this document resolve to anything today (noted 2026-08-26).** All four in
+> the table below, and the two in the banner above, appear nowhere else in this repository or its
+> history — no manifest, no signature record, no compose file. `deploy/staging/release-manifest.json`
+> and `deploy/staging/release-signatures.json` are the only live records of what exists.
+> **Do not attempt a rollback from the digests here**; take the current pair from the manifest and
+> the previous pair from whatever built it. This document is evidence that the *sequence* works,
+> which it still is; it is not a source of image identities.
+>
+> The banner above also disagrees with the line below it about which release "previous" means —
+> `b292b2ac234c` there, `4a17e3cec3a6` in the table. That was never reconciled.
+
 **Previous images SHA:** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`
 **Capture:** `{SCRATCH}/rollback.log` (host SHA at run time `53faed7`, docs-only vs the image SHA).
+The `{SCRATCH}` directory named below no longer exists, so nothing here can be re-read.
 
 `{SCRATCH}`:
 `/var/folders/7s/l9fr0tyd4wn9vp8qhg9yv7g80000gn/T/grok-goal-843cf6607006/implementer`

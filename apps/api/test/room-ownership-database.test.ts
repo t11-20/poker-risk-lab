@@ -409,6 +409,7 @@ describe('the room lease, against a real database', { skip: skipReason }, () => 
       const strangerReleased = await ownershipRepository.release(sql(), {
         roomId,
         ownerId: stranger.ownerId,
+        fence: 1,
       });
       assert.equal(strangerReleased, false, 'a release that is not ours must match no row');
 
@@ -416,9 +417,29 @@ describe('the room lease, against a real database', { skip: skipReason }, () => 
       assert.ok(row !== null, 'the lease was deleted by a process that never held it');
       assert.equal(row.owner_id, holder.ownerId);
 
-      // The positive control: the real holder can, so the assertion above is about the SCOPE rather
-      // than about release being broken.
-      assert.equal(await ownershipRepository.release(sql(), { roomId, ownerId: holder.ownerId }), true);
+      // The other half of the scope, and it is not the same statement. A release is queued by
+      // `releaseLeaseSoon` and runs an unbounded time later, so the holder's OWN release for a
+      // generation it has since given up and taken again must also match nothing — otherwise it
+      // deletes a lease this process is currently dealing under. See `release` in
+      // `repositories/room-ownership.ts` for the reproduction.
+      const staleGeneration = await ownershipRepository.release(sql(), {
+        roomId,
+        ownerId: holder.ownerId,
+        fence: Number(row.fence) + 1,
+      });
+      assert.equal(staleGeneration, false, 'a release naming another generation must match no row');
+      assert.ok(await ownershipRepository.read(sql(), roomId), 'the wrong generation deleted the row');
+
+      // The positive control: the real holder at the real generation can, so the assertions above
+      // are about the SCOPE rather than about release being broken.
+      assert.equal(
+        await ownershipRepository.release(sql(), {
+          roomId,
+          ownerId: holder.ownerId,
+          fence: Number(row.fence),
+        }),
+        true,
+      );
       assert.equal(await ownershipRepository.read(sql(), roomId), null);
     } finally {
       await holder.registry.shutdown();

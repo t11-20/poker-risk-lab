@@ -20,7 +20,7 @@ Read [README.md](README.md) first — in particular, restarting this service **d
 | `ApiDown` | no successful scrape for 2 minutes |
 | `ProcessRestartLoop` | `prl_process_start_time_seconds` changed 3+ times in 15 minutes |
 | `HandsFailing` | hands abandoned without settling, with a `reason` the code recognised |
-| `HandCompletionGap` | more hands started than completed over an hour, for **no** recognised reason |
+| `HandCompletionGap` | started − completed − failed exceeds `sum(prl_rooms_live)` — hands gone for **no** recognised reason — `for: 30m` |
 | `TableActorFailing` | a seat actor cannot produce an action |
 
 `HandsFailing` pages and `HandCompletionGap` is a ticket, and they are not the same finding. The first counts failures something in the code knew about and labelled; the second is arithmetic on two counters and catches hands that vanished for a reason nobody wrote a counter for. **`HandCompletionGap` firing while `prl_hands_failed_total` is flat is the more interesting of the two** — it means a hand ended in a path that reports nothing — and §Alive but wrong is where it is diagnosed.

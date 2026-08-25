@@ -102,3 +102,22 @@ generator and the OSV client are hand-written rather than pulled from npm.
   credential exposure.
 * There is no flag that turns any gate off. The only escape hatch is an OSV allowlist
   entry, which requires a reason and an expiry date, and fails once it lapses.
+
+## Amendment 2026-08-26 — the count in the Decision section is stale, and this record is not edited
+
+**The Decision above says "Eleven gates". `scripts/supply-chain/audit.mjs` runs fourteen, and
+`security:audit` prints the number on its first line.** The record is left as written, because an
+accepted ADR is not edited — but its own sentence invites a reader to check the list against the
+`GATES` array, and doing that today produces a disagreement rather than a match. So the delta is
+recorded here instead:
+
+| # | Gate | In the numbered list above |
+| ---: | --- | --- |
+| 8 | **keyless signing identity** (`keyless-provenance.mjs`) | no — added 2026-08-25 |
+| 9 | **log policy** (`log-policy.mjs`) | no — added 2026-08-25 |
+| 14 | **release image signatures** (`image-provenance.mjs`) | no — added 2026-08-25 |
+
+The other eleven are unchanged in name and order. Nothing about the *decision* — every gate
+release-blocking, no flag that turns one off, the OSV allowlist as the only escape hatch — has
+changed; three gates were added under it. `docs/SECURITY.md` and `docs/VERIFICATION.md` both carry
+fourteen. Read the count off `audit.mjs`, never off a document.

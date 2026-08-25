@@ -62,7 +62,7 @@ measurement error — it is the difference between a run the harness produced a 
 figure for and a run in which it refused to.
 
 Three runs were made against the same API tree to establish which is which
-(`git diff 4a17e3c HEAD -- apps/api packages apps/web` is still empty, so this is the same
+(`git diff 4a17e3c b292b2a -- apps/api packages apps/web` was empty when this was written, so it was the same
 application code as the frozen candidate). Captures are stamped with the API's rate-limit
 configuration, because that is the variable:
 

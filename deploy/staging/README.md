@@ -361,7 +361,7 @@ retention sweep after 60 days, and their enrolment rows cascade away with them.
 
 `docker-compose.observability.yml` adds a Prometheus and an Alertmanager beside this
 stack, and `pnpm run alerts:verify` uses them to answer a question staging could not
-answer before: do the twenty-nine rules in `docs/production/alerts.md` load, agree with
+answer before: do the **thirty-five** rules in `docs/production/alerts.md` (this said twenty-nine until 2026-08-26; `grep -c '^\s*- alert:' observability/alert-rules.yml` is the reference) load, agree with
 that document, name series that exist, evaluate, and — for three of them, driven for
 real — fire, route by severity and arrive at a receiver.
 
@@ -394,9 +394,15 @@ Two things to know before running it:
   gitignored, `scripts/supply-chain/secret-scan.mjs` asserts that rule, and the script
   deletes it on the way out unless `--keep-up` was passed.
 
-Both receivers are a webhook sink the script runs on this host. Production replaces two
-`PRL_ALERT_*` variables, from which `observability/alertmanager.template.yml` is rendered at
-bring-up. Both tiers are delivered over a webhook and a real SMTP transaction; what is not
+All **three** receivers — page, ticket and heartbeat — are a webhook sink the script runs on this
+host, plus its own SMTP sink. Production replaces **twelve** `PRL_ALERT_*` variables, from which
+`observability/alertmanager.template.yml` is rendered at bring-up:
+`PRL_ALERT_PAGE_WEBHOOK_URL`, `PRL_ALERT_TICKET_WEBHOOK_URL`, `PRL_ALERT_HEARTBEAT_WEBHOOK_URL`,
+`PRL_ALERT_HEARTBEAT_INTERVAL`, `PRL_ALERT_PAGE_EMAIL_TO`, `PRL_ALERT_TICKET_EMAIL_TO`,
+`PRL_ALERT_EMAIL_FROM`, `PRL_ALERT_SMTP_SMARTHOST`, `PRL_ALERT_SMTP_HELLO`,
+`PRL_ALERT_SMTP_USERNAME`, `PRL_ALERT_SMTP_PASSWORD`, `PRL_ALERT_SMTP_REQUIRE_TLS`. This said
+"two" and "both receivers" until 2026-08-26; a deployer who set two shipped a half-configured
+Alertmanager, and only `alerts:preflight` would have caught it. Both tiers are delivered over a webhook and a real SMTP transaction; what is not
 rehearsed is a provider accepting real credentials, and somebody being awake.
 
 ---

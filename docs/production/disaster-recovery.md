@@ -38,10 +38,18 @@ rebuilt from the repository and the secret manager, not restored.
 | 7 | Archive key lost | — | — | **No** — §5.7 |
 | 8 | API crash or restart mid-hand | **the hand in progress** | seconds | **No, by design** — §6 |
 
-The RTOs above are targets, not measurements, except #4 — measured 2026-08-25 at **46.5 s**
+The RTOs above are targets, not measurements, except #4 — recorded 2026-08-25 at **46.5 s**
 for the 944,297-row development database, restore into a virgin `postgres:16-bookworm` through
 `verify-schema.mjs` exit 0. That did NOT include starting an API and reaching `/ready`, so it is
-a floor. See `backup-restore.md` §7.9 and §8.
+a floor.
+
+**Caveat added 2026-08-26, and read it before quoting the number.** `46.5`, `45.2` and `36.7`
+appear nowhere in this repository except this file: `backup-restore.md` §7.9 records
+`TOTAL_ms=1039` for a 10 MB database and §8 records `restore 28.75s` for a 1,260 MB synthetic
+probe, and the `{SCRATCH}` directory the run wrote to no longer exists. The two also do not
+reconcile — 46.5 s for 149.8 MiB is ~3.3 MiB/s where §8's larger restore managed ~10 MiB/s — so
+at least one of them is not describing this pipeline. Treat 46.5 s as a datum somebody recorded,
+not as evidence a reviewer can replay, and re-run it before it decides anything.
 
 **Every RPO in this table is bounded by the same thing: the nightly schedule.** If that is not
 good enough, the answer is WAL archiving (`archive_command` plus a base backup), which is a
@@ -150,7 +158,9 @@ save, and it cannot bring back data a forward migration removed. So:
    additive-first, so the older release runs against the newer schema. Leave the schema alone.
 2. **Restore the last good archive into a scratch database** and diff the affected tables
    against live. This is what tells you the blast radius, and it is not guessable.
-3. **Write the next migration** — `0005`, never an edit to `0004` — that repairs the rows.
+3. **Write the next migration** — the next free number, never an edit to an applied file — that
+   repairs the rows. (`db/migrations/` holds `0001`–`0006` today, so the next one is `0007`; this
+   step used to name `0005`, which has been taken since 2026-08-25.)
    Applied migrations are immutable, contents and filename, and the checksum ledger enforces it.
 4. If the damage is unrepairable by SQL, treat it as §5.3.
 
