@@ -99,21 +99,119 @@ export function hasSessionCookie(cookieHeader: string | null): boolean {
 }
 
 /**
+ * True for a prefetch under either spelling: a request for a page nobody has opened.
+ *
+ * `next-router-prefetch` is what the App Router sends. `purpose: prefetch` is the older, wider
+ * convention that a browser (`<link rel="prefetch">`), a corporate proxy or a link scanner may send
+ * on its own, and it says nothing about what the SERVER will do with it.
+ *
+ * This is the test for "was this request the reader's idea", which is the question minting an
+ * account turns on. It is NOT the test for "will this be answered with a page" — see
+ * `isRouterPrefetch`, and see the comment on the proxy `matcher`, where confusing the two served
+ * the whole of a gated page to anybody who set one header.
+ */
+export function isPrefetch(headers: Headers): boolean {
+  if (isRouterPrefetch(headers)) return true;
+  return headers.get('purpose') === 'prefetch';
+}
+
+/**
+ * True for a prefetch NEXT ITSELF will honour: one it answers with a routing stub, not with a page.
+ *
+ * The distinction is narrow and it was measured, because getting it wrong is not visible from
+ * reading the code. `next-router-prefetch` is the only header that changes what Next renders: with
+ * it, `/play` answers with 264 bytes of segment tree and no page content at all. `purpose:
+ * prefetch` changes nothing on the server — the same request carrying it instead is answered with
+ * the complete 38KB document, table and all.
+ *
+ * So a request wearing `purpose: prefetch` is a request for the page, whatever it calls itself, and
+ * everything that acts on pages — the age gate, the Content-Security-Policy — has to treat it as
+ * one. Only this narrow test may be used to decide "there is no page here to protect".
+ *
+ * `next-router-segment-prefetch` is deliberately not checked: it is one of Next's `FLIGHT_HEADERS`
+ * and is stripped before middleware, so a test for it would be a line that reads as if it works.
+ */
+export function isRouterPrefetch(headers: Headers): boolean {
+  return headers.get('next-router-prefetch') !== null;
+}
+
+/**
  * True for a top-level document navigation, as opposed to the several other things a page fetches.
  *
  * `Sec-Fetch-Dest` is the authoritative signal and every browser this app supports sends it. The
  * two Next-specific headers are checked as well because an RSC navigation is `empty`, not
- * `document`, and a prefetch must never create an account for a page the reader never opened.
+ * `document`, and a router prefetch is answered with a stub rather than with a document.
+ *
+ * This answers what SHAPE a request is, not what should be done about it. In particular a request
+ * carrying `purpose: prefetch` and `sec-fetch-dest: document` is a document navigation by this
+ * test and reported as one, because Next answers it with a whole document — the caller that must
+ * not mint an account for it says so itself, at its own call site, with `isPrefetch`.
  */
 export function isDocumentNavigation(headers: Headers): boolean {
   if (headers.get('rsc') !== null) return false;
-  if (headers.get('next-router-prefetch') !== null) return false;
-  if (headers.get('purpose') === 'prefetch') return false;
+  if (isRouterPrefetch(headers)) return false;
   const dest = headers.get('sec-fetch-dest');
   // A missing header means a client that does not send it (curl, a health check). Treating that as
   // a document is the safe reading: it is a real request for a page, and it is the shape the
   // release smoke test uses.
   return dest === null || dest === 'document';
+}
+
+/**
+ * True for an IN-APP router navigation: what a reader clicking a `<Link>` produces, where no
+ * document request happens at all and the router fetches an RSC payload instead.
+ *
+ * Nothing in the guest bootstrap wants this — minting an account is a document-navigation-only
+ * decision, and this file says why at length above. It lives here because this is the module that
+ * owns "what shape of request is this", and the alternative is `src/proxy.ts` growing a second,
+ * drifting copy of the same judgement for the age gate, which is the one caller that needs it.
+ *
+ * ## Why the `rsc` header cannot be the test, though it is the obvious one
+ *
+ * It was, and it did not work. Next strips its own `FLIGHT_HEADERS` — `rsc`,
+ * `next-router-state-tree`, `next-router-prefetch`, `next-router-segment-prefetch`,
+ * `next-hmr-refresh` — from the request BEFORE middleware runs. The line is in
+ * `next/dist/server/web/adapter.js` and it is commented "Headers should only be stripped for
+ * middleware"; the values are put back onto the response as `x-middleware-request-*` afterwards, so
+ * the renderer still sees them and only the middleware does not. The effect is total:
+ * `headers.get('rsc')` is null on every request middleware will ever be handed, including the
+ * router navigations it is trying to catch.
+ *
+ * That is a silent failure of exactly the kind this repository keeps writing about. A gate written
+ * against `rsc` reads correctly, passes every unit test that constructs a `Headers` by hand, gates
+ * every document navigation it is pointed at — and lets a reader through on a single in-app click,
+ * because the header it is looking for was deleted upstream. It was measured, in a real Chrome,
+ * against a real production build, by `scripts/age-gate-audit.mjs`, which exists for this.
+ *
+ * ## What is used instead
+ *
+ * `Sec-Fetch-Dest: empty` — the value a browser puts on a `fetch()`. Combined with the matcher's
+ * prefetch exclusion and with `isDocumentNavigation` handling `document` and the absent-header
+ * case, that partitions every request for a page route into: a document, a prefetch, or a fetch
+ * made by page script. The third is the router, and on the routes this is used for there is
+ * nothing else it could be — this app's own `fetch` calls all go to `/api/*`, which the proxy
+ * matcher excludes.
+ *
+ * A browser too old to send `Sec-Fetch-*` at all falls into `isDocumentNavigation`'s null case and
+ * is treated as a document, which is the safe direction: it is gated rather than let through.
+ *
+ * The `rsc` test is kept, above the `Sec-Fetch-Dest` one and knowing it is dead today, because it
+ * costs a line and the failure it would prevent is a runtime that stops stripping the header while
+ * ALSO not sending `Sec-Fetch-*` — a client that would otherwise slip between the two tests.
+ *
+ * ## Why GET and HEAD only
+ *
+ * A Server Action is a POST to the page's own URL with `Sec-Fetch-Dest: empty`, and answering one
+ * with a redirect would break it rather than gate it. This app has no Server Actions today (there
+ * is no `'use server'` anywhere in `apps/web`), so the restriction changes nothing now and stops a
+ * future one from being broken by a control that was never aimed at it. A Server Action can only
+ * be invoked from a page the reader has already been served, which is the request that IS gated.
+ */
+export function isRouterNavigation(headers: Headers, method: string): boolean {
+  if (isRouterPrefetch(headers)) return false;
+  if (method !== 'GET' && method !== 'HEAD') return false;
+  if (headers.get('rsc') !== null) return true;
+  return headers.get('sec-fetch-dest') === 'empty';
 }
 
 /** Everything the caller has to do with the result: cookies to forward, and cookies to return. */

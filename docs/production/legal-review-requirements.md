@@ -281,10 +281,49 @@ Engineering work that this review unblocks or depends on. None of it closes a re
    `scripts/keyboard-audit.mjs` drives `/play` directly and fails outright, which is the correct
    behaviour and always was. The shipped default (no gate) still avoids the question entirely,
    which remains one of the three reasons it is the default.
-5. **The gate has no browser-level test.** The pure decisions are covered by
-   `apps/web/test/age-gate.test.ts`; that a redirect and a `Set-Cookie` actually reach a browser,
-   and that an in-app router navigation is gated as well as a document navigation, needs a running
-   server and is not covered anywhere yet.
+5. **Done: the gate has a browser-level test, and it found the gate broken.** This read: "The gate
+   has no browser-level test. The pure decisions are covered by `apps/web/test/age-gate.test.ts`;
+   that a redirect and a `Set-Cookie` actually reach a browser, and that an in-app router
+   navigation is gated as well as a document navigation, needs a running server and is not covered
+   anywhere yet." `scripts/age-gate-audit.mjs` — `pnpm run test:age-gate` — is that test, and the
+   half this follow-up singled out was the half that was wrong.
+
+   **The defect it found.** The proxy decided whether a request was an in-app router navigation by
+   reading the `rsc` header, which is what the App Router sends. Next deletes that header, with the
+   rest of its `FLIGHT_HEADERS`, before middleware runs. So the branch was dead: **with the gate
+   switched on, a reader who clicked "Play" in the site header from any page went straight to the
+   tables, every time.** Only a hard document navigation was ever gated. It found a second one
+   beside it: the proxy matcher excluded `purpose: prefetch` on the reasoning that a prefetch is
+   not a document, and that header changes nothing on the server — such a request was answered with
+   the complete page, ungated and with no Content-Security-Policy on it. Both are fixed
+   (`isRouterNavigation` and `isRouterPrefetch` in `apps/web/src/lib/guest-bootstrap.ts`), and the
+   pure halves of both are now in `apps/web/test/guest-bootstrap.test.ts` so an ordinary `pnpm test`
+   catches a regression without needing a build.
+
+   **What is now covered**, against a production build the harness starts itself, with the gate
+   switched on at a threshold of 21 (deliberately not the built-in default, so a server that
+   ignored its configuration could not pass): a document navigation to a gated route is redirected
+   with a real 303 and a real `Location`; the declaration's `Set-Cookie` is the shape a browser
+   over plain HTTP will keep, records the threshold rather than a flag, is refused when it names a
+   lower one, and is stored and honoured by a real Chrome that pressed the real button; an in-app
+   router navigation is gated, measured both as a request shape and by clicking the real `<Link>`
+   and asserting that the click travelled as a router fetch rather than as a page load; a router
+   prefetch is not gated and its payload carries neither the page nor the interstitial; and
+   `PRL_AGE_GATE_SCOPE=site` gates `/`, `/learn` and `/lab` while leaving `/age-check`, `/terms`,
+   `/privacy` and `/responsible-use` open. Every refusal has a request beside it that must succeed,
+   and the run refuses to pass unless it refused something, allowed something, and used a browser.
+
+   **What is still not covered.** Nothing here is run by `pnpm run verify` yet. It needs a
+   production build, which that gate list does already produce before it reaches the browser
+   harnesses — `test:ax` and `test:csp` depend on the same thing — so the natural place for it is
+   directly after `test:csp`, at a cost of about twenty seconds and one more Chrome launch. Adding
+   a release gate is a decision for whoever owns the release, not for the change that wrote the
+   harness, so it is recorded here as a recommendation rather than taken. It is one
+   browser: Chrome. It is plain HTTP, so the `__Host-` cookie name and the `x-forwarded-proto` path
+   a TLS deployment takes are untested, and what is asserted instead is the other half — that over
+   http the cookie is *not* `__Host-` and *not* `Secure`, which is the case that would otherwise be
+   a silent redirect loop. And none of it says anything about the shipped configuration, which has
+   no gate: that is entry 1 above, and it is still open.
 
 ---
 

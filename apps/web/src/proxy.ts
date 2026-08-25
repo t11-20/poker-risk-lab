@@ -27,8 +27,12 @@
  * Static assets under `/_next/static` are immutable files served by the same origin; a CSP on them
  * protects nothing and running this function per chunk would mint a nonce per asset. `/api/*` is
  * excluded too — it is rewritten to the API (`next.config.ts`), which sets its own security headers
- * through `@fastify/helmet`, and a nonce forwarded to it would be noise. Prefetches are skipped
- * because they are not a document. Everything else — every HTML route, including 404s and errors —
+ * through `@fastify/helmet`, and a nonce forwarded to it would be noise. A ROUTER prefetch is
+ * skipped because Next answers it with a routing stub rather than with a document, so there is no
+ * page there to protect — and note the word "router": a request merely carrying `purpose: prefetch`
+ * IS answered with the whole document, was skipped here on the assumption that it was not, and so
+ * arrived with no policy on it at all. `scripts/age-gate-audit.mjs` measured that and
+ * the matcher below now says so. Everything else — every HTML route, including 404s and errors —
  * gets the policy, because "the page that got a policy" and "the page an attacker aims at" must
  * not be different sets.
  *
@@ -52,13 +56,23 @@
  * It is the wrong question for a gate, by one case. A reader already on `/learn` who clicks through
  * to `/play` does not make a document request at all — the router fetches an RSC payload, which
  * `isDocumentNavigation` correctly reports as not a document. A gate that skipped it would be walked
- * around by a single in-app click, which is not a gate. So the gate also fires on an RSC request
- * that is a NAVIGATION, and on nothing else: a prefetch is still excluded, because redirecting one
+ * around by a single in-app click, which is not a gate. So the gate also fires on a router
+ * NAVIGATION, and on nothing else: a ROUTER prefetch is still excluded, because redirecting one
  * puts a redirect into the router's cache for a page the reader never asked for.
  *
- * If Next ever declined to follow a middleware redirect on an RSC request, the failure mode is the
- * client falling back to a hard navigation — which arrives here as a document request and is gated
- * again. There is no path through this that renders a gated page.
+ * **This was wrong from the day the gate landed until `scripts/age-gate-audit.mjs` measured it.**
+ * The test for a router navigation was `request.headers.get('rsc') !== null`, which is the header
+ * the router sends and is the obvious answer — and Next deletes every one of its `FLIGHT_HEADERS`,
+ * `rsc` included, before middleware runs. So the branch was dead, every in-app click walked through
+ * a gate that was on, and the only thing that was ever gated was a document navigation. Nothing in
+ * the repository could have caught it: the pure decision is correct and its unit tests construct
+ * the header by hand, and no harness had ever clicked a link with the gate switched on.
+ * `isRouterNavigation` in `src/lib/guest-bootstrap.ts` carries the mechanism and the replacement.
+ *
+ * If Next ever declined to follow a middleware redirect on a router navigation, the failure mode is
+ * the client falling back to a hard navigation — which arrives here as a document request and is
+ * gated again. There is no path through this that renders a gated page. That claim is a measurement
+ * now rather than an argument: `pnpm run test:age-gate` clicks the link in a real Chrome.
  *
  * ## Nonce generation
  *
@@ -74,6 +88,8 @@ import {
   GUEST_MINT_TIMEOUT_MS,
   hasSessionCookie,
   isDocumentNavigation,
+  isPrefetch,
+  isRouterNavigation,
   mintGuestSession,
   pathNeedsGuest,
 } from '@/lib/guest-bootstrap.ts';
@@ -143,20 +159,23 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 /**
  * True for a request the age gate may act on: a document navigation, or a router navigation.
  *
- * `isDocumentNavigation` is reused rather than reimplemented — it is the same judgement, and two
- * copies of "what counts as a navigation" would drift. What is added is the one case it correctly
- * excludes and the gate needs: an RSC request that is a NAVIGATION rather than a prefetch. See the
- * header note for why leaving that out is a gate a single in-app click walks around.
+ * Both tests are `src/lib/guest-bootstrap.ts`'s rather than reimplemented here — it is the same
+ * judgement, and two copies of "what counts as a navigation" would drift. What this adds is the
+ * one case the guest bootstrap correctly excludes and the gate needs: an in-app router navigation.
+ * See the header note for why leaving that out is a gate a single in-app click walks around, and
+ * `isRouterNavigation`'s own comment for why the obvious way to detect one does not work.
  *
- * A prefetch is excluded twice over — by `isDocumentNavigation` and by the explicit test here —
- * because the second branch would otherwise let one through.
+ * A ROUTER prefetch is excluded three times over — by the `matcher` below, by
+ * `isDocumentNavigation` and by `isRouterNavigation` — because a prefetch and a router navigation
+ * are the same request but for one header, and letting one through the second branch would put a
+ * redirect into the router's cache for a page nobody asked for. The wider `purpose: prefetch`
+ * spelling is deliberately NOT excluded: Next answers such a request with the whole page, so the
+ * page is what the reader gets, and a gate that stepped aside for it would be stepping aside for a
+ * delivery of the very thing it exists to hold back.
  */
 function isGateableNavigation(request: NextRequest): boolean {
-  const prefetch =
-    request.headers.get('next-router-prefetch') !== null || request.headers.get('purpose') === 'prefetch';
-  if (prefetch) return false;
   if (isDocumentNavigation(request.headers)) return true;
-  return request.headers.get('rsc') !== null;
+  return isRouterNavigation(request.headers, request.method);
 }
 
 /**
@@ -192,6 +211,12 @@ function isSecureRequest(request: NextRequest): boolean {
 async function bootstrapGuest(request: NextRequest, forwarded: Headers): Promise<readonly string[]> {
   if (!pathNeedsGuest(request.nextUrl.pathname)) return [];
   if (hasSessionCookie(request.headers.get('cookie'))) return [];
+  // The WIDE prefetch test, and it is stated here rather than folded into `isDocumentNavigation`
+  // because it is this caller's rule and not a fact about the request's shape. Minting turns on
+  // "was this the reader's idea": a `<link rel="prefetch">`, or a link scanner walking the site,
+  // must not create an account for a page nobody has opened, even though Next answers such a
+  // request with a whole document and the age gate is therefore right to gate it.
+  if (isPrefetch(request.headers)) return [];
   if (!isDocumentNavigation(request.headers)) return [];
 
   try {
@@ -226,12 +251,24 @@ export const config = {
      * because the alternative — listing the routes that DO need a policy — is a list that goes
      * stale the first time somebody adds a page, and goes stale silently.
      */
+    /*
+     * `next-router-prefetch` is the ONLY prefetch header listed here, and the omission of the
+     * other one is the point.
+     *
+     * `purpose: prefetch` used to be listed beside it, on the reasoning that a prefetch is not a
+     * document. That reasoning was measured and it is false: `purpose: prefetch` changes nothing
+     * about what Next renders. A request for `/play` carrying it is answered with the complete
+     * 38KB document — the table, the whole page — while the same request carrying
+     * `next-router-prefetch` is answered with 264 bytes of routing stub and no page content at all.
+     *
+     * So while it was listed, any client that set one header was served a gated page in full, with
+     * no age gate applied to it and no Content-Security-Policy on it. `scripts/age-gate-audit.mjs`
+     * found that; `src/lib/guest-bootstrap.ts` `isRouterPrefetch` is where the distinction lives
+     * now. A request that will be answered with a page is a document, whatever it calls itself.
+     */
     {
       source: '/((?!api|_next/static|_next/image|favicon.ico).*)',
-      missing: [
-        { type: 'header', key: 'next-router-prefetch' },
-        { type: 'header', key: 'purpose', value: 'prefetch' },
-      ],
+      missing: [{ type: 'header', key: 'next-router-prefetch' }],
     },
   ],
 };
