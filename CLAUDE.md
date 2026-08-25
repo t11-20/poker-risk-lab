@@ -1,8 +1,17 @@
 # Working in this repository
 
 Poker Risk Lab is an educational **play-money** No-Limit Hold'em lab: probability, risk/reward, EV
-and variance. No real money, ever. Nothing takes payment, and `apps/web/test/legal-pages.test.ts`
-trips if that changes, because `/terms` §7 promises a reader the service is free.
+and variance. No real money, ever. Nothing in it can take money — no processor, no checkout, and no
+column that could hold an amount, a currency or a price — and `apps/web/test/legal-pages.test.ts`
+trips if that changes, in a dependency, a table name or the source.
+
+`/terms` §7 no longer says the service is free. Since `db/migrations/0006_cohort_enrolments.sql` the
+schema records **who holds a place in a course and on whose authority**, and an enrolment record says
+nothing about money: a scholarship cohort and a paid one produce identical rows, because the grant
+happens out of band. So that test now reads `/terms` to decide which of two postures the page is in
+and holds the page and `db/migrations` to the same answer **in both directions** — an enrolment table
+with a page that still says "free of charge" fails, and a page describing an enrolment record no
+migration creates fails too. Money-table names fail unconditionally in either posture.
 
 This file exists because it did not, and briefs kept pointing at it. Everything below is checkable
 against the repo — if a statement here and the code disagree, the code is right and this is a bug.
@@ -20,7 +29,25 @@ verify's fourteen, and the two get confused.
 
 Gates outside `verify` because they need a deployment: `alerts:verify`, `alerts:preflight`,
 `staging`, `backup`, `test:load`, `test:drills`, `release:artifacts`, `release:sign`,
-`certify:screen-reader`.
+`certify:screen-reader`. `pnpm run staging up` runs the strict smoke test — **72 checks** over TLS
+against the deployed images, which is where several guards get their only continuous exercise.
+
+## Enrolment
+
+`PRL_ENROLMENT_REQUIRED` is `off` by default and gates exactly one thing when `enforced`: **taking a
+seat**. Lessons, the Lab and the glossary stay open — that is the surface a prospective student
+browses. The guard lives at a single choke point in `rooms/registry.ts`, not on the routes, because
+there are three ways to reach a seat (REST, the WebSocket `sit` frame, a Legends match) and a fourth
+would otherwise arrive ungated.
+
+Grants are an **operator CLI** (`pnpm run enrolments`), never an HTTP admin API — there is no admin
+role in this system and adding a privilege surface above a learner for a class of thirty buys very
+little. `prl_app`, the request-path role, holds **SELECT only** on both enrolment tables: the API can
+ask who is entitled and cannot enrol, extend or un-revoke anybody. Writes need
+`DATABASE_MIGRATION_URL`.
+
+Enrolment records **who holds a place and on whose authority** — never an amount. A scholarship
+cohort and a paid one produce identical rows.
 
 ## House style
 

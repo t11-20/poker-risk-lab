@@ -184,13 +184,44 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
         socket. An alert fires on insertion, which is why the node is conditional rather than
         always-present-and-empty — the opposite of the rule for a polite region.
       */}
-      {table.notice === null ? null : (
+      {/*
+        One refusal gets its own panel, and it is the only one that needs one.
+
+        `enrolment_required` means this deployment serves a taught course and this account is not
+        in one that is running. Every other notice here is a momentary thing the reader can just
+        try again — a seat somebody took first, a hand already started — and the generic panel is
+        the right size for those. This one is permanent until somebody else acts, so the generic
+        heading ("The server refused something") would be the whole of what the reader learns, and
+        the button they pressed would look broken rather than refused.
+
+        The server's own sentence is shown unchanged and unlabelled by a code: it is the one place
+        in this app that already says what to do about it, and repeating "(enrolment_required)"
+        after it — which the generic branch does deliberately, so a reader can quote a code at
+        support — would put a machine token in the middle of the one message written for a person.
+
+        There is no "get access" control here, and there must not be. This software has no way to
+        take money, holds no amount, currency or price anywhere in its schema, and nobody reading
+        this page can enrol themselves: a button here could only lie about what pressing it does.
+        What is offered instead is the true alternative — everything else on the site is open.
+      */}
+      {table.notice !== null && table.noticeCode === 'enrolment_required' ? (
+        <div role="alert">
+          <Callout tone="warning" title="A seat at a table is part of a course">
+            <p>{table.notice}</p>
+            <p>
+              Nothing else on this site is affected. The lessons, the Scenario Lab, the glossary and the
+              Legends pages are open to everybody, and none of them needs a seat at a table.
+            </p>
+          </Callout>
+        </div>
+      ) : null}
+      {table.notice !== null && table.noticeCode !== 'enrolment_required' ? (
         <div role="alert">
           <Callout tone="warning" title="The server refused something">
             {table.notice}
           </Callout>
         </div>
-      )}
+      ) : null}
     </>
   );
 }

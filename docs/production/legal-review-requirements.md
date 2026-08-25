@@ -1,7 +1,15 @@
 # Legal review requirements
 
 **Status:** Launch blocker · **Applies to:** every deployment · **Drafted:** 2026-08-22 ·
-**Document revision under review:** `0.1-draft`
+**Revised:** 2026-08-25 · **Page text revision under review:** `0.2-draft`
+(`apps/web/src/lib/legal-config.ts`)
+
+**What the 2026-08-25 revision changed:** entries **10** and **11** are new, added with
+`db/migrations/0006_cohort_enrolments.sql` and the `/terms` §7/§8 rewrite. Entry **5**'s premise
+("…and that the software is offered free of charge") was **withdrawn rather than answered**, because
+this software can no longer establish it. `/terms` section numbers moved: liability §8→§9, regulatory
+status §9→§10, governing law §10→§11. `docs/production/legal-register.md` carries the facts and the
+reasoning; this document remains the machine-checked list of markers.
 
 This is the list of things a lawyer has to decide before this software is offered to the public,
 and the list of settings that have to be decided with them. It exists because the three documents
@@ -79,7 +87,7 @@ identity documents.
 
 ### 3. `play-money-classification` — Whether this is a regulated product anywhere it will be offered
 
-**Appears on:** `/terms` §9, `/responsible-use` §6.
+**Appears on:** `/terms` §10, `/responsible-use` §6.
 
 Does a product with no stake, no purchase, no prize and no cash-out fall within any gambling,
 lottery, skill-gaming or advertising regime in the places this deployment is offered?
@@ -99,7 +107,7 @@ lottery, skill-gaming or advertising regime in the places this deployment is off
 
 ### 4. `governing-law` — Governing law and where a dispute is heard
 
-**Appears on:** `/terms` §10.
+**Appears on:** `/terms` §11.
 
 Which law governs these terms, which forum hears a dispute, and does that choice survive against a
 consumer resident elsewhere? Consumer-protection rules in several jurisdictions override a
@@ -111,11 +119,17 @@ writing one would be exactly the kind of conclusion this document exists to refu
 
 ### 5. `liability-and-warranty` — Warranty disclaimer and limitation of liability
 
-**Appears on:** `/terms` §8.
+**Appears on:** `/terms` §9.
 
 What may this deployment lawfully disclaim and limit, given that parts of a broad exclusion are
-unenforceable against consumers in several jurisdictions, and that the software is offered free of
-charge?
+unenforceable against consumers in several jurisdictions?
+
+**The premise this entry used to carry has been withdrawn, not answered.** It read "…and that the
+software is offered free of charge". That was true when it was written and stopped being a premise
+anybody here can assert on 2026-08-25, when `db/migrations/0006_cohort_enrolments.sql` added a record
+of who holds a place in a course. An enrolment is granted out of band, so this software cannot tell
+whether a place was paid for, and a scholarship cohort and a paid one produce identical rows.
+**Counsel must answer for both, because the code cannot distinguish them.**
 
 *Facts counsel can rely on:* the shipped text says only that the software is provided as it is and
 that the authors make no warranty; it contains no cap, no exclusion list and no indemnity. The
@@ -218,6 +232,67 @@ that is supposed to prompt this question.
   the model does not reproduce how that person plays and is not affiliated with or approved by them.
 * Some of the profiles under consideration are attributed to players who have died. That changes
   nothing about the analysis: being unable to object is not a reason to be less careful.
+
+### 10. `enrolment-and-fees` — What an enrolment record means, and what the operator has sold
+
+**Appears on:** `/terms` §7. **Added 2026-08-25**, with `db/migrations/0006_cohort_enrolments.sql`.
+Corresponds to entry **L10** of [`legal-register.md`](legal-register.md), which carries the facts in
+full.
+
+What, if anything, has the operator sold? Which contract terms and pre-contract disclosures must be
+presented before that sale, on which page and by whom? And do terms displayed here bind a purchase
+completed somewhere this software cannot see? **Counsel must answer for the free case too** — a
+scholarship or employer-funded cohort produces exactly the same rows.
+
+*Facts counsel can rely on,* every one read out of `db/migrations/0006_cohort_enrolments.sql`:
+
+* **This software still cannot take money.** No processor, no dependency that moves money, no
+  checkout route, and **no amount, currency or price column** — in that file or anywhere in the
+  schema (`:25-30`; `0001_initial.sql:4-9` says the same and is still true).
+  `apps/web/test/legal-pages.test.ts` fails the build on a dependency, a table name or a source file
+  that changes this, in every posture the page can be in.
+* **An enrolment record does not establish that money changed hands.** It records that somebody
+  **is** entitled and **who said so**. The `reference` column is an opaque external string the schema
+  never parses — a purchase-order number, a row id in a finance system nobody here can read, a
+  registry entry, or the literal word `scholarship` (`:32-37`, `:333-335`).
+* What is actually stored: cohort key, name and period (`:215-243`); and per enrolment the cohort,
+  the account, when it was granted, `granted_by` as free text naming the authority (`:277-281`), the
+  `reference` (`:285-289`), a start, an optional expiry, and a revocation triple that is either
+  wholly absent or wholly present (`:294-321`).
+* **Entitlement is the intersection of two periods** — the enrolment's and the cohort's (`:83-99`).
+  A cohort that has ended entitles nobody however its enrolments are written.
+* **There is no privileged HTTP surface.** The runtime role holds `SELECT` and nothing else on both
+  tables (`:387-388`); enrolment happens through an operator command connecting as the migrating
+  identity, which no request handler can reach (`:143-162`).
+* Every account is still created automatically for any visitor, so **an unenrolled reader and an
+  enrolled one are the same kind of account**, differing only by the presence of a row.
+
+### 11. `refunds-and-cancellation` — Refunds, cancellation, and what an interruption costs the reader
+
+**Appears on:** `/terms` §8. **Added 2026-08-25.** Corresponds to entry **L11** of
+[`legal-register.md`](legal-register.md).
+
+If a place in a course was paid for, what refund, cancellation or cooling-off right must be offered,
+does it survive the student starting the course, and where must it be stated? What does the operator
+owe a reader whose access ends because the deployment was taken down, reset or changed — which
+`/terms` §8 reserves the right to do? And what should deleting an account do to a place in a course
+that has not expired?
+
+*Facts counsel can rely on:*
+
+* **There is no refund concept at any layer.** No amount, no order, no receipt, and nothing that
+  could record that money went back. Revoking an enrolment ends access and returns nothing.
+* **Revocation is a record, not an erasure.** `revoked_at`, `revoked_by` and `revoked_reason` are
+  written into the row and the row stays; a `CHECK` refuses a partial revocation, so a withdrawal
+  with no stated reason cannot be recorded at all (`0006:294-321`, `:339-342`).
+* **Deleting an account destroys the enrolment.** `user_id` is `ON DELETE CASCADE` (`0006:269-270`,
+  argued at `:168-193`), so `POST /me/delete` removes every place the reader held, live or revoked,
+  with no notion of an outstanding entitlement to preserve, void or refund. That is a deliberate
+  decision, not an oversight, and it is a decision counsel may need to overturn.
+* **`/terms` §8 no longer disclaims availability on the basis of being free**, because that basis is
+  no longer assertable. It now states the technical facts and says outright that whether the operator
+  may exercise them without owing the reader something is not settled by the page. Replacing that
+  paragraph with real prose is what closes this entry.
 
 ---
 

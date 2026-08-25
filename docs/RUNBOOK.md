@@ -440,6 +440,7 @@ Full list with descriptions in `.env.example`. The ones that matter:
 | `MONTE_CARLO_MAX_SAMPLES` | api | Server-side ceiling. The schema also caps the request. |
 | `TRUST_PROXY` | api | Only enable when the API is reachable **exclusively** through a proxy you control — it makes `X-Forwarded-For` trusted, and therefore spoofable by anyone who can reach the API directly. The local stack leaves it off because it publishes the API port for tooling. |
 | `COHORT_SIZE` / `COHORT_ENTRY` | api | How many learners sign in together from **one** address, and through which door. Changes no limit; makes the server **refuse to boot** when the sign-in limits cannot serve that number. Set it for any deployment serving a class. See §7.1. |
+| `PRL_ENROLMENT_REQUIRED` | api | `off` (default) or `enforced`. `enforced` means a learner needs a live enrolment to **take a seat at a table**; nothing else is gated. Not a boolean — an unrecognised value refuses the boot. See §7.2. |
 
 Build-time only, and they will not work at runtime:
 
@@ -511,6 +512,60 @@ COHORT_SIZE=30
 COHORT_ENTRY=oidc
 RATE_LIMIT_OIDC_MAX=60
 ```
+
+### 7.2 Requiring an enrolment to take a seat
+
+`PRL_ENROLMENT_REQUIRED` is `off` or `enforced`, and defaults to `off`. It is **not a boolean**:
+`true`, `on` and `1` are refused at boot (exit 78) naming the variable, because the operator who
+types one of those has decided to enforce and believes they have.
+
+**What `enforced` gates, and what it does not.** One thing: taking a seat at a table. A learner
+with no live enrolment gets `enrolment_required` — 403 from `POST /rooms/:roomId/sit`, and an
+`error` frame from the WebSocket `sit` frame, with a message telling them to ask whoever enrols
+their class. Both transports run the same method (`RoomRegistry.sitAtTable`), so there is no way to
+gate one and leave the other open. A room re-opened after a restart also does not give a chair back
+to somebody whose enrolment has since expired or been withdrawn; bot seats are never checked.
+
+Open in both postures, deliberately: `/learn`, the Scenario Lab, the glossary, the Legends pages,
+creating a table, joining one by invite code, and watching a table over a socket. That is the
+surface somebody deciding whether to enrol is browsing.
+
+**Turning it on is two steps, and the order matters.**
+
+```
+# 1. Write the class list FIRST. This needs DATABASE_MIGRATION_URL: prl_app holds
+#    SELECT and nothing else on prl.enrolments, so the API cannot enrol anybody and
+#    there is deliberately no admin route.
+pnpm run enrolments cohort-create --key spring-2026 --name "Spring 2026" \
+                                  --starts 2026-03-02 --ends 2026-06-26
+pnpm run enrolments grant --cohort spring-2026 --by "J. Okafor" \
+                          --reference PO-4471 --file class.txt
+pnpm run enrolments list  --cohort spring-2026
+
+# 2. Then set the switch and roll the API.
+PRL_ENROLMENT_REQUIRED=enforced
+```
+
+Between step 2 and step 1 — that is, if they are done the other way round — every learner is
+refused a seat. Nothing is lost and no row is written; they are simply all turned away until the
+grants land.
+
+**Turning it off** is the same switch, back to `off`, and a roll. It leaves every enrolment row
+where it is, so turning it on again needs no re-grant.
+
+**Watching it.** `prl_seat_entitlement_refusals_total` is primed at zero and carries two reasons:
+`not_entitled` (somebody asked for a seat and was refused — a spike on the morning a class starts
+means the class list is wrong, and `pnpm run enrolments show --user <id>` says why for one person)
+and `seat_not_restored` (a room re-opened and a recorded chair was not given back, because its
+holder is no longer entitled). It is not substitutable by
+`prl_api_errors_total{code="enrolment_required"}`, which cannot see socket refusals at all.
+
+**Staging runs this ON.** `docker-compose.staging.yml` sets `PRL_ENROLMENT_REQUIRED=enforced` and
+`pnpm run staging up` passes `--expect-enrolment enforced` to the smoke test, which proves both
+directions over TLS on every deploy — an enrolled learner seated and an unenrolled one refused,
+over REST and over a real `sit` frame. It grants and then revokes its own throwaway enrolments
+through `apps/api/scripts/enrolments.mjs`, using the same migrating identity the migration step
+uses. A staging run that finds the deployment behaving as `off` fails the deploy.
 
 ## 8. Verifying a hand yourself
 

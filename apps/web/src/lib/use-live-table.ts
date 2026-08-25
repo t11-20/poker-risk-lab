@@ -63,7 +63,7 @@
  * the region speaks once per turn rather than once per frame.
  */
 
-import type { CoachReport, CreateRoomRequest, RoomSummary, WsServerMessage } from '@prl/contracts';
+import type { CoachReport, CreateRoomRequest, ErrorCode, RoomSummary, WsServerMessage } from '@prl/contracts';
 import type { PlayerView, TableAction, TurnClock } from '@prl/ui';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { TableSubmission } from '@/components/TableStage.tsx';
@@ -179,6 +179,20 @@ export interface TableState {
   readonly submission: TableSubmission | null;
   /** The server's own wording for the last refusal that was not about a decision. */
   readonly notice: string | null;
+  /**
+   * The contract code that refusal came with, so the UI can say more than "the server refused
+   * something" when it has something more to say.
+   *
+   * Kept beside `notice` rather than parsed back out of it. `notice` is prose meant for a person
+   * and its wording is allowed to change; the code is the contract, and a screen that branches on
+   * a substring of a sentence breaks the first time somebody improves the sentence.
+   *
+   * Exactly one branch reads it today — `enrolment_required`, which needs a heading and a next
+   * step rather than a generic refusal panel (see `ConnectionNotices` in `app/play/LiveTable.tsx`).
+   * Every other code keeps the general treatment, which is right: a seat somebody else took a
+   * moment ago needs no explanation beyond the sentence.
+   */
+  readonly noticeCode: ErrorCode | null;
 }
 
 export const EMPTY_TABLE_STATE: TableState = {
@@ -200,6 +214,7 @@ export const EMPTY_TABLE_STATE: TableState = {
   pending: null,
   submission: null,
   notice: null,
+  noticeCode: null,
 };
 
 export type TableEvent =
@@ -215,7 +230,7 @@ export type TableEvent =
   | { readonly kind: 'submit'; readonly pending: PendingDecision; readonly delivery: SendOutcome }
   | { readonly kind: 'coachRequested'; readonly requestId: string; readonly key: string }
   | { readonly kind: 'coachFailed'; readonly reason: string }
-  | { readonly kind: 'notice'; readonly message: string | null }
+  | { readonly kind: 'notice'; readonly message: string | null; readonly code?: ErrorCode | null }
   | { readonly kind: 'reset' };
 
 /** Identifies one decision: a hand, and the point in it the view was drawn at. */
@@ -429,7 +444,7 @@ function onStateFrame(state: TableState, frame: Extract<WsServerMessage, { type:
 function onAckFrame(state: TableState, frame: Extract<WsServerMessage, { type: 'ack' }>): TableState {
   const pending = state.pending;
   if (pending === null || pending.requestId !== frame.requestId) {
-    return { ...state, notice: null };
+    return { ...state, notice: null, noticeCode: null };
   }
   const applied = frame.appliedSequence;
   const detail =
@@ -460,7 +475,7 @@ function onErrorFrame(state: TableState, frame: Extract<WsServerMessage, { type:
   }
   const pending = state.pending;
   if (pending === null || pending.requestId !== frame.requestId) {
-    return { ...state, notice: `${frame.error.message} (${frame.error.code})` };
+    return { ...state, notice: `${frame.error.message} (${frame.error.code})`, noticeCode: frame.error.code };
   }
   const stale = frame.error.code === 'stale_action_sequence';
   return {
@@ -653,6 +668,7 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
         // had gone, a hand somebody else started); a decision's fate belongs to the region that is
         // labelled "What happened to your decision", where there is exactly one of it.
         notice: null,
+        noticeCode: null,
       };
     case 'coachRequested':
       // The key is kept, not just the id. It is the only record of which decision the answer will
@@ -678,7 +694,7 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
         announcement: `${COACH_FAILED_ANNOUNCEMENT} ${event.reason}`,
       };
     case 'notice':
-      return { ...state, notice: event.message };
+      return { ...state, notice: event.message, noticeCode: event.code ?? null };
     case 'reset':
       return EMPTY_TABLE_STATE;
     default:

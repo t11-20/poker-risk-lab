@@ -303,7 +303,7 @@ export async function rename(sql: Db, userId: string, displayName: string): Prom
  * delete has run, inside the same transaction, so this is a report on the state that is about to
  * be committed and not a prediction made before it. That matters because most of the work is done
  * by referential actions rather than by statements in this function: `deleteAccount` issues one
- * DELETE and PostgreSQL decides what happens to the other seven tables. A summary composed from
+ * DELETE and PostgreSQL decides what happens to the other eight tables. A summary composed from
  * what the code intended would be exactly as wrong as the schema, and it is the schema that was
  * wrong before migration 0004.
  */
@@ -327,6 +327,16 @@ export interface AccountDeletionSummary {
     readonly quizAttempts: number;
     readonly scenarioAttempts: number;
     readonly roomMemberships: number;
+    /**
+     * Entitlements this account held, in any cohort, live or already withdrawn.
+     *
+     * They go with the account (`enrolments_user_id_fkey` is ON DELETE CASCADE, argued in
+     * `db/migrations/0006_cohort_enrolments.sql`): an enrolment describes one person and nobody
+     * else, and one naming an account that no longer exists entitles nobody. The RECORD that the
+     * grant and the revocation happened survives in `prl.audit_log` with `user_id` NULL, which is
+     * where the authority and the external reference remain readable afterwards.
+     */
+    readonly enrolments: number;
   };
   /** Rows that still exist and no longer name this learner. */
   readonly anonymised: {
@@ -346,6 +356,7 @@ interface AccountFootprintRow {
   readonly hand_seats: number;
   readonly audit_events: number;
   readonly rooms_owned: number;
+  readonly enrolments: number;
 }
 
 /**
@@ -366,7 +377,8 @@ async function accountFootprint(sql: Db, userId: string): Promise<AccountFootpri
       (select count(*) from prl.room_members       where user_id = ${userId})::int as room_members,
       (select count(*) from prl.hand_seats         where user_id = ${userId})::int as hand_seats,
       (select count(*) from prl.audit_log          where user_id = ${userId})::int as audit_events,
-      (select count(*) from prl.rooms  where owner_user_id = ${userId})::int as rooms_owned
+      (select count(*) from prl.rooms  where owner_user_id = ${userId})::int as rooms_owned,
+      (select count(*) from prl.enrolments        where user_id = ${userId})::int as enrolments
   `;
   const row = rows[0];
   if (row === undefined) {
@@ -382,8 +394,12 @@ async function accountFootprint(sql: Db, userId: string): Promise<AccountFootpri
  * ## The policy, because a reader here should not have to open the migration
  *
  *   REMOVED     `prl.sessions`, `prl.lesson_progress`, `prl.quiz_attempts`,
- *               `prl.scenario_attempts` and `prl.room_members` — every seat at every table, live
- *               or long departed.
+ *               `prl.scenario_attempts`, `prl.room_members` — every seat at every table, live
+ *               or long departed — and `prl.enrolments`, every entitlement the account held.
+ *               An enrolment describes one person and nobody else, and one naming an account
+ *               that no longer exists entitles nobody; the operator's RECORD of the grant and
+ *               the withdrawal survives in `prl.audit_log`, anonymised like everything else
+ *               there. `db/migrations/0006_cohort_enrolments.sql` argues it.
  *   DETACHED    `prl.hand_seats.user_id`, `prl.audit_log.user_id` and
  *               `prl.rooms.owner_user_id` become NULL. The hand, its actions, its board, its
  *               commitment root and its reveal proofs are untouched.
@@ -397,12 +413,12 @@ async function accountFootprint(sql: Db, userId: string): Promise<AccountFootpri
  *
  * ## Almost none of the work is in this function, deliberately
  *
- * Five of the eight foreign keys referencing `prl.users` do their half by themselves — four
+ * Every one of the nine foreign keys referencing `prl.users` does its half by itself — six
  * CASCADE, three SET NULL — and PostgreSQL executes a referential action with the CONSTRAINT
  * owner's privileges rather than the connected role's. So the erasure removes rows from tables
- * `prl_app` holds no DELETE on (`prl.quiz_attempts`, `prl.scenario_attempts`, `prl.room_members`)
- * and nulls a column in a table it holds no UPDATE on (`prl.audit_log`) without any of those
- * grants being made. Writing the deletes out by hand here would have required exactly those
+ * `prl_app` holds no DELETE on (`prl.quiz_attempts`, `prl.scenario_attempts`, `prl.room_members`,
+ * and since 0006 `prl.enrolments`, on which it holds nothing but SELECT) and nulls a column in a
+ * table it holds no UPDATE on (`prl.audit_log`) without any of those grants being made. Writing the deletes out by hand here would have required exactly those
  * grants, and would then have let any other request path remove any other learner's rows.
  *
  * The consequence is that the schema, not this function, decides what erasure means — which is
@@ -510,6 +526,7 @@ export async function deleteAccount(sql: Db, userId: string): Promise<AccountDel
       quizAttempts: before.quiz_attempts,
       scenarioAttempts: before.scenario_attempts,
       roomMemberships: before.room_members,
+      enrolments: before.enrolments,
     },
     anonymised: {
       handSeats: before.hand_seats,
@@ -561,14 +578,40 @@ export async function deleteAccount(sql: Db, userId: string): Promise<AccountDel
  * a day by accident. The population this sweep is for — the account minted automatically for
  * every visitor who opens a lesson and never comes back — has none of these rows.
  *
+ * `not exists (an enrolment)` — **added 2026-08-25, and the one clause here whose absence could
+ * have destroyed a record somebody was owed.** Found by the legal review as D9, not by a test,
+ * because the sequence that reaches it is ordinary rather than contrived and 0006 sets it up
+ * itself: `enrolments.starts_at` exists "so that a class can be enrolled in advance of the day it
+ * opens". Enrol a January cohort for a course that opens in April; a student whose only visit was
+ * the one that minted their guest account is unseen for sixty days in March, and this sweep erases
+ * them — and `enrolments_user_id_fkey` is ON DELETE CASCADE, so their place goes with them, three
+ * weeks before the course begins. `granted_by` and `reference` survive in `prl.audit_log` with
+ * `user_id` NULL, so the operator's history is intact and the ENTITLEMENT is unreconstructable,
+ * because nothing left names the person.
+ *
+ * Deliberately ANY enrolment, with no predicate on `revoked_at` or `expires_at`, which is the same
+ * shape (and the same argument) as the membership clause above: a revoked place two years ago
+ * still means this is not an anonymous sign-up, whether such an account should ever be swept is
+ * L5's question rather than an engineer's, and the two errors are not the same size — keeping a row
+ * nobody needs costs a row, and erasing a student three weeks before their course costs a student.
+ *
+ * It is also the only clause here with no index behind it: `enrolments_live_user_idx` is partial on
+ * `revoked_at IS NULL` and cannot serve a question that includes revoked rows. That is accepted
+ * rather than overlooked. The query is a hash anti-join against a table with one row per grant ever
+ * made, evaluated four times a day, against `prl.hand_seats` in the same statement — which is
+ * orders of magnitude larger and is the one that decides the plan. A plain index on
+ * `prl.enrolments (user_id)` is a one-line migration if that ever stops being true.
+ *
  * ## The incident this shape prevents
  *
  * A sweep that selected ids and then deleted them in a later statement can delete an account that
  * became live in between. Here the second evaluation runs inside the deleting transaction under
  * `FOR UPDATE` on the account row, and PostgreSQL's `FOR UPDATE` conflicts with the `FOR KEY
- * SHARE` that any INSERT referencing that row must take — so a session, membership or hand seat
- * cannot be created for an account while this holds the lock, and one created before it is seen
- * by the re-check. The check and the delete are therefore not two moments a race can live
+ * SHARE` that any INSERT referencing that row must take — so a session, membership, hand seat or
+ * enrolment cannot be created for an account while this holds the lock, and one created before it
+ * is seen by the re-check. That covers the operator CLI as well as the request path: an instructor
+ * enrolling a class at the same instant as a sweep tick either lands before the lock and is seen,
+ * or blocks until the sweep has finished with that row. The check and the delete are therefore not two moments a race can live
  * between. Same reasoning as `consumeLoginAttempt` in `sessions.ts`, for the same reason.
  */
 function abandonedGuestPredicate(sql: Db, cutoffSeconds: number) {
@@ -585,6 +628,7 @@ function abandonedGuestPredicate(sql: Db, cutoffSeconds: number) {
     and not exists (select 1 from prl.room_members m where m.user_id = u.id)
     and not exists (select 1 from prl.hand_seats  h where h.user_id = u.id)
     and not exists (select 1 from prl.rooms       r where r.owner_user_id = u.id)
+    and not exists (select 1 from prl.enrolments  e where e.user_id = u.id)
   `;
 }
 

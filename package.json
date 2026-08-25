@@ -65,6 +65,7 @@
     "security:hygiene": "node scripts/supply-chain/repo-hygiene.mjs",
     "db:roles": "node --env-file-if-exists=.env apps/api/scripts/migrate.mjs roles",
     "db:verify": "node --env-file-if-exists=.env apps/api/scripts/verify-schema.mjs",
+    "enrolments": "node --env-file-if-exists=.env apps/api/scripts/enrolments.mjs",
     "test:smoke": "node scripts/smoke-test.mjs",
     "backup": "node scripts/backup.mjs",
     "release:artifacts": "node scripts/release-artifacts.mjs",

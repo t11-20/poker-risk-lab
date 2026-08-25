@@ -117,6 +117,15 @@ const USER_REFERENCE_ACTIONS = [
     'a room cascades to its hands, so CASCADE here would destroy the hand history of everybody ' +
       'who ever played at that table; RESTRICT made every learner who had created one undeletable',
   ],
+  [
+    'enrolments_user_id_fkey',
+    'c',
+    'an enrolment describes one person in one cohort and nobody else, so it goes with the account ' +
+      'exactly as a room membership does. The RECORD that the grant and the revocation happened ' +
+      'survives in prl.audit_log with user_id NULL, which is where an operator can still answer ' +
+      '"on what authority, against which reference" about an account that has been erased ' +
+      '(db/migrations/0006_cohort_enrolments.sql; legal register 3.1)',
+  ],
 ];
 
 /**
@@ -178,6 +187,21 @@ const APP_TABLE_GRANTS = [
     'the room lease (migration 0005). DELETE is the odd one and is argued in that file: a lease row ' +
       'is a statement about the present rather than history, and releasing it by deleting it is what ' +
       'lets a deploy hand a room over at once instead of stranding it for a whole lease TTL',
+  ],
+  [
+    'cohorts',
+    'SELECT',
+    'the class list (migration 0006). Read-only for the request path: an entitlement check has to ' +
+      'join it, and nothing a learner can reach may create or re-date a cohort',
+  ],
+  [
+    'enrolments',
+    'SELECT',
+    'who is entitled and until when (migration 0006). The NARROWEST grant in this schema, and ' +
+      'deliberately narrower than the append-only ledgers: the request path must be able to ask ' +
+      'whether somebody is entitled and must not be able to enrol anybody, extend its own access ' +
+      'or erase a revocation. Grant and revoke run from apps/api/scripts/enrolments.mjs as the ' +
+      'migrating identity, which no HTTP handler can reach',
   ],
   [
     'schema_migrations',

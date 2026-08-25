@@ -98,6 +98,8 @@ const MIGRATION_PREFIXES: Readonly<Record<IdKind, string>> = {
   quizAttempt: 'qatt_',
   scenarioAttempt: 'satt_',
   auditEvent: 'aud_',
+  cohort: 'coh_',
+  enrolment: 'enr_',
 };
 
 const ID_KINDS = Object.keys(ID_PREFIXES) as readonly IdKind[];

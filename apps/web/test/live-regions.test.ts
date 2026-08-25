@@ -437,13 +437,35 @@ describe('a refusal interrupts, and everything else is polite', () => {
     );
   });
 
-  it('wraps the server’s other refusals in an alert too', () => {
-    const live = read('app', 'play', 'LiveTable.tsx');
+  it('wraps the server’s other refusals in an alert too, in EVERY branch', () => {
+    // `notice` is the server refusing something that was not a decision — a seat that had gone, a
+    // hand somebody else started, a rate limit — and it was once silent: a plain Callout with no
+    // live-region ancestor, so the reader pressed a button and nothing said anything.
+    //
+    // There are two branches now, because `enrolment_required` needs a heading and a next step of
+    // its own rather than "The server refused something". A split is exactly how one of them
+    // quietly becomes a silent Callout again, so both are checked AND the number of branches is
+    // asserted — a third one added without an alert must fail here rather than pass because the
+    // two named patterns still match.
+    const live = withoutComments(read('app', 'play', 'LiveTable.tsx'));
+    const branches = live.match(/\{table\.notice\s*(?:!==|===)\s*null/gu) ?? [];
+    assert.equal(
+      branches.length,
+      2,
+      `expected exactly two conditional renders of table.notice, found ${branches.length}. Every ` +
+        'one of them has to be inside a role="alert", and this count is what stops a new branch ' +
+        'from being added silently.',
+    );
     assert.match(
       live,
-      /\{table\.notice === null \? null : \(\s*<div role="alert">/u,
-      '`notice` is the server refusing something that was not a decision — a seat that had gone, a ' +
-        'hand somebody else started, a rate limit — and it was silent',
+      /\{table\.notice !== null && table\.noticeCode === 'enrolment_required' \? \(\s*<div role="alert">/u,
+      'the enrolment refusal is permanent until an operator acts, so it is the one the reader most ' +
+        'needs announced rather than merely drawn',
+    );
+    assert.match(
+      live,
+      /\{table\.notice !== null && table\.noticeCode !== 'enrolment_required' \? \(\s*<div role="alert">/u,
+      'every other refusal keeps the generic alert it has always had',
     );
   });
 

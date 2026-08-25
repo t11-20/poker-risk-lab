@@ -194,6 +194,41 @@ export interface CohortConfig {
   readonly entry: CohortEntry;
 }
 
+/**
+ * Whether a live enrolment is required to take a seat at a table (`PRL_ENROLMENT_REQUIRED`).
+ *
+ * ## What it gates, and what it deliberately does not
+ *
+ * `enforced` means one thing: `RoomRegistry.sitAtTable` refuses a learner for whom
+ * `enrolments.entitlementFor` answers null, with `enrolment_required`. It gates TAKING A SEAT and
+ * nothing else. `/learn`, the Lab, the glossary, the Legends pages, creating a room, joining one
+ * by invite code and watching a table from a socket all stay exactly as open as they were, because
+ * that is the surface a prospective student browses and gating it would be gating the shop window
+ * rather than the course.
+ *
+ * ## Why the default is `off`, and why that does not make this decoration
+ *
+ * An open public instance is a legitimate deployment of this product — most of what it teaches is
+ * free reading — and every deployment that exists today runs without an enrolment table having
+ * meant anything. A default of `enforced` would turn one migration into an outage for all of them.
+ *
+ * The usual cost of a default-off guard is that nobody ever sees it refuse, so it rots. That is
+ * closed by running staging with it ON: `docker-compose.staging.yml` sets `enforced` on the api
+ * service, and `scripts/smoke-test.mjs` section 13 drives both directions over TLS — an enrolled
+ * learner seated, an unenrolled one refused, over REST and over the socket — on every
+ * `pnpm run staging up`. The switch's `off` behaviour is covered by the unit tests, which run the
+ * whole matrix regardless of what any deployment is set to.
+ *
+ * ## Why an enum of two rather than a boolean
+ *
+ * `readBoolean` accepts `true/1/yes` and `false/0/no`, and this is a value an operator will one
+ * day want a third setting for — "warn but allow", to find out how many learners a cohort list
+ * missed before the class starts. A boolean would have to be replaced to get there; an enum gets
+ * a value added. Nothing here promises that third value exists, and adding one means writing what
+ * it does at the refusal site.
+ */
+export type EnrolmentRequirement = 'off' | 'enforced';
+
 export interface DatabaseConfig {
   readonly url: string;
   /** Upper bound on server-side connections. See the pool note in `db.ts`. */
@@ -255,6 +290,15 @@ export interface AppConfig {
 
   /** The declared classroom behind one address, and which doors it uses. See `CohortConfig`. */
   readonly cohort: CohortConfig;
+
+  /**
+   * Whether a live enrolment is required to TAKE A SEAT at a table. See `EnrolmentRequirement`.
+   *
+   * Read by `routes/index.ts`, which binds the registry's entitlement port accordingly. Nothing
+   * else in the process reads it, and nothing else may: a second reader is a second place for the
+   * enforcement decision to be made, and one of them would eventually be the one nobody looks at.
+   */
+  readonly enrolmentRequired: EnrolmentRequirement;
 
   /**
    * Whether to believe `X-Forwarded-For`.
@@ -766,6 +810,35 @@ function readCohortEntry(env: EnvRecord, collect: Collector): CohortEntry {
   return found;
 }
 
+/** The legal values of `PRL_ENROLMENT_REQUIRED`, in the order the refusal message lists them. */
+const ENROLMENT_REQUIREMENTS = ['off', 'enforced'] as const;
+
+/**
+ * Parses `PRL_ENROLMENT_REQUIRED`. Defaults to `off`; see `EnrolmentRequirement`.
+ *
+ * An unrecognised value is a boot refusal rather than a fallback to the default, and the direction
+ * matters more here than for most of this file. The realistic typo is `PRL_ENROLMENT_REQUIRED=true`
+ * or `=on` from somebody who expected a boolean — an operator who has decided to enforce and
+ * believes they have. Silently taking `off` from that would leave a cohort's tables open to the
+ * whole internet while the deployment's own configuration says otherwise, and nothing anywhere
+ * would say so. So it names both legal values and stops the process (exit 78).
+ */
+function readEnrolmentRequirement(env: EnvRecord, collect: Collector): EnrolmentRequirement {
+  const value = trimmed(env, 'PRL_ENROLMENT_REQUIRED');
+  if (value === undefined) return 'off';
+  const lowered = value.toLowerCase();
+  const found = ENROLMENT_REQUIREMENTS.find((entry) => entry === lowered);
+  if (found === undefined) {
+    collect.problems.push(
+      `PRL_ENROLMENT_REQUIRED must be one of ${ENROLMENT_REQUIREMENTS.join(', ')}, got "${value}". ` +
+        'It is not a boolean: "enforced" means a learner needs a live enrolment to take a seat, ' +
+        '"off" means seating is open to anybody with a session.',
+    );
+    return 'off';
+  }
+  return found;
+}
+
 /**
  * Requests one learner is expected to make against the OIDC ceiling inside one window.
  *
@@ -1038,6 +1111,8 @@ export function loadConfig(env: EnvRecord): AppConfig {
       size: readInt(env, 'COHORT_SIZE', { min: 0, max: 10_000, fallback: 0 }, collect),
       entry: readCohortEntry(env, collect),
     },
+
+    enrolmentRequired: readEnrolmentRequirement(env, collect),
 
     metricsToken: readMetricsToken(env, nodeEnv, collect),
     rateLimitResetToken: readRateLimitResetToken(env, nodeEnv, collect),

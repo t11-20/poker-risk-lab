@@ -66,6 +66,13 @@
  * Exit codes: 0 pass, 1 any failure (or any warning under --strict), 0 for --help.
  */
 
+import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** The repository root, so the enrolment CLI can be found however this script was invoked. */
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
@@ -99,6 +106,37 @@ const DEFAULTS = {
    * 90 seconds with a diagnosis rather than hanging a release gate for one.
    */
   maxWaitSeconds: 90,
+  /**
+   * What this run expects `PRL_ENROLMENT_REQUIRED` to be on the deployment it is pointed at.
+   *
+   * `discover` accepts either posture and asserts whichever one it finds, which is right for a
+   * developer stack: the shipped default is `off`, and proving that an open instance seats anybody
+   * is a real check rather than a skip. `scripts/staging.mjs` passes `enforced`, because staging is
+   * the deployment that runs the guard ON and a run that could not exercise it there must fail
+   * rather than quietly report the open behaviour.
+   */
+  expectEnrolment: 'discover',
+};
+
+/** The legal values of `--expect-enrolment`. */
+const ENROLMENT_EXPECTATIONS = ['discover', 'off', 'enforced'];
+
+/**
+ * The cohort this harness enrols its throwaway guests into.
+ *
+ * Created once per database and then reused forever, because a cohort with enrolments in it is not
+ * a row anybody may remove — `enrolments.cohort_id` is `ON DELETE RESTRICT` and no role holds
+ * DELETE on the table. That is the schema working, not an obstacle: the accounts this run creates
+ * are guests that the retention sweep erases after 60 days, and `enrolments.user_id` is ON DELETE
+ * CASCADE, so the rows go with the accounts that own them. What this run cleans up itself is the
+ * ENTITLEMENT, by revoking it — which is an UPDATE that keeps the record, and is the only shape of
+ * withdrawal this schema has.
+ */
+const SMOKE_COHORT = {
+  key: 'smoke-test',
+  name: 'Smoke test cohort',
+  by: 'scripts/smoke-test.mjs',
+  reference: 'smoke-test-harness',
 };
 
 const HELP = `Poker Risk Lab smoke test — walks the critical journeys against a running API.
@@ -115,6 +153,12 @@ Options:
   --no-reset              Never call the reset control, even with a token, so the
                           wait-out fallback is the thing under test
   --max-wait <seconds>    Bound on the wait-out fallback       (default ${DEFAULTS.maxWaitSeconds})
+  --expect-enrolment <v>  discover | off | enforced            (default ${DEFAULTS.expectEnrolment},
+                          env PRL_SMOKE_ENROLMENT_REQUIRED). What PRL_ENROLMENT_REQUIRED is
+                          expected to be on the deployment under test. "enforced" makes a run
+                          that cannot exercise the seat guard a FAILURE rather than a note.
+  --migration-url <dsn>   Migrating identity, for writing the enrolment the enforced direction
+                          needs (env DATABASE_MIGRATION_URL). Never printed.
   -h, --help              Print this and exit 0
 
 Exit codes: 0 pass, 1 any failure (or any warning under --strict).
@@ -124,6 +168,8 @@ const STRING_OPTIONS = new Map([
   ['--origin', 'apiOrigin'],
   ['--web-origin', 'webOrigin'],
   ['--reset-token', 'resetToken'],
+  ['--expect-enrolment', 'expectEnrolment'],
+  ['--migration-url', 'migrationUrl'],
 ]);
 
 const NUMERIC_OPTIONS = new Map([['--max-wait', 'maxWaitSeconds']]);
@@ -172,6 +218,12 @@ export function parseArgs(argv, env = process.env) {
     resetToken: env['PRL_RATE_LIMIT_RESET_TOKEN'] ?? env['RATE_LIMIT_RESET_TOKEN'] ?? '',
     noReset: false,
     maxWaitSeconds: Number(env['PRL_SMOKE_MAX_WAIT_SECONDS'] ?? DEFAULTS.maxWaitSeconds),
+    // What the deployment under test is expected to have set for PRL_ENROLMENT_REQUIRED, or
+    // `discover` to accept whichever posture it is in. See `sectionEnrolment`.
+    expectEnrolment: env['PRL_SMOKE_ENROLMENT_REQUIRED'] ?? DEFAULTS.expectEnrolment,
+    // The MIGRATING identity, which is the only one that can write an enrolment: `prl_app` holds
+    // SELECT and nothing else on prl.enrolments, on purpose. Never printed; see `redactUrl`.
+    migrationUrl: env['DATABASE_MIGRATION_URL'] ?? '',
     help: false,
   };
 
@@ -212,6 +264,12 @@ export function parseArgs(argv, env = process.env) {
 
   options.apiOrigin = requireHttpOrigin('--origin', options.apiOrigin);
   options.webOrigin = requireHttpOrigin('--web-origin', options.webOrigin);
+  if (!ENROLMENT_EXPECTATIONS.includes(options.expectEnrolment)) {
+    throw new Error(
+      '--expect-enrolment (or PRL_SMOKE_ENROLMENT_REQUIRED) must be one of ' +
+        `${ENROLMENT_EXPECTATIONS.join(', ')}, got "${options.expectEnrolment}"`,
+    );
+  }
   if (!Number.isInteger(options.maxWaitSeconds) || options.maxWaitSeconds < 0) {
     // Names the environment variable as well as the flag, because the value can arrive from
     // either and "got NaN" sends the reader looking at a command line that does not mention it.
@@ -731,6 +789,141 @@ async function playOneHandOverSocket(client, roomId, seat, timeoutMs = 30_000) {
   return observed;
 }
 
+/**
+ * Opens a socket, handshakes, sends ONE `sit` frame, and reports what came back.
+ *
+ * ## Why this exists next to `playOneHandOverSocket`
+ *
+ * That helper plays a whole hand and treats any `error` frame as a failure, which is exactly right
+ * for what it proves and exactly wrong here: the subject IS the error frame. This one asks the one
+ * question the seat guard is about — what does the server do with a `sit` from this session — and
+ * reports the answer as data rather than as a verdict.
+ *
+ * ## The three things it reports and why each matters
+ *
+ * `welcomed` — the handshake succeeded. It must, in BOTH directions: watching a table is not the
+ * course, and a deployment that refused the upgrade to an unenrolled learner would have gated the
+ * shop window rather than the seat.
+ *
+ * `errorCode` — the refusal, as a contract code. A bare 403 would be a bad answer to a student.
+ *
+ * `closeCode` — null when the socket was left open, which is the required behaviour for this
+ * refusal: it is permanent, so closing would send an honest client into a reconnect loop against
+ * something only an operator can lift, and it would throw away the panel that displays the reason.
+ *
+ * Never throws, like every other helper here: a failure is reported through the caller's `bad()`.
+ */
+async function sitOverSocket(client, roomId, seat, timeoutMs = 20_000) {
+  const url = new URL('/api/v1/ws', options.apiOrigin);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  const observed = { welcomed: false, acked: false, errorCode: null, closeCode: null, error: null };
+
+  await new Promise((resolve) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      observed.error = error;
+      clearTimeout(timer);
+      if (socket.readyState === WebSocket.OPEN) socket.close(1000, 'smoke test complete');
+      resolve();
+    };
+    const timer = setTimeout(() => finish('timed out waiting for an answer to the sit frame'), timeoutMs);
+    const socket = new WebSocket(url, {
+      headers: { cookie: client.cookieHeader, origin: options.webOrigin },
+    });
+
+    socket.addEventListener('open', () => {
+      socket.send(
+        JSON.stringify({
+          type: 'hello',
+          protocolVersion: WS_PROTOCOL_VERSION,
+          roomId,
+          clientNonce: 'enrolment-nonce-1',
+        }),
+      );
+    });
+    socket.addEventListener('close', (event) => {
+      observed.closeCode = event.code;
+      finish(observed.welcomed ? null : `socket closed with ${event.code} before the handshake`);
+    });
+    socket.addEventListener('error', () => finish('websocket error'));
+    socket.addEventListener('message', (message) => {
+      let frame;
+      try {
+        frame = JSON.parse(typeof message.data === 'string' ? message.data : String(message.data));
+      } catch {
+        finish('a frame did not parse as JSON');
+        return;
+      }
+      if (frame.type === 'welcome') {
+        observed.welcomed = true;
+        socket.send(JSON.stringify({ type: 'sit', seat, requestId: 'req-enrolsit1' }));
+        return;
+      }
+      if (frame.type === 'error') {
+        observed.errorCode = frame.error?.code ?? 'unknown';
+        // Deliberately does NOT finish immediately. The point of the next moment is to see whether
+        // the server ALSO closes the socket, which is the behaviour under test — a permanent
+        // refusal that closed the connection would put an honest client into a reconnect loop. The
+        // `close` listener settles the run if it happens; this short timer settles it if it does
+        // not. Short because both the frame and any close arrive in the same round trip, and
+        // waiting out the full deadline would add twenty seconds per refusal to a release gate.
+        setTimeout(() => finish(null), REFUSAL_OBSERVATION_MS);
+        return;
+      }
+      if (frame.type === 'ack' && frame.requestId === 'req-enrolsit1') {
+        observed.acked = true;
+        finish(null);
+      }
+    });
+  });
+
+  return observed;
+}
+
+/** How long a refused sit is watched for a close frame that must not arrive. */
+const REFUSAL_OBSERVATION_MS = 1_000;
+
+// ---------------------------------------------------------------------------
+// The enrolment CLI, as an operator would run it
+// ---------------------------------------------------------------------------
+
+/**
+ * Runs `apps/api/scripts/enrolments.mjs`, which is the ONLY way an enrolment can be written.
+ *
+ * ## Why this shells out instead of connecting to the database itself
+ *
+ * Because the privilege model says it must, and because the alternative is a second copy of the
+ * grant statement. `db/migrations/0006_cohort_enrolments.sql` grants `prl_app` — the role the API
+ * connects as — SELECT and nothing else on `prl.cohorts` and `prl.enrolments`, so the running
+ * server cannot enrol anybody and there is no HTTP route that could. The write needs
+ * `DATABASE_MIGRATION_URL`, the migrating identity, which this harness has only when its caller
+ * hands it one. Running the operator's own tool means this run exercises the documented path
+ * rather than a private one that could drift from it.
+ *
+ * ## What is redacted
+ *
+ * The DSN goes in through the environment and never onto a command line (where `ps` would show it)
+ * and never into the output: the CLI redacts every connection string it prints, and the caller
+ * below prints only the exit status and the tail of the message.
+ */
+function runEnrolmentCli(args) {
+  const result = spawnSync(process.execPath, [join(REPO_ROOT, 'apps/api/scripts/enrolments.mjs'), ...args], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    env: { ...process.env, DATABASE_MIGRATION_URL: options.migrationUrl, NO_COLOR: '1' },
+  });
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
+  return { ok: result.status === 0, status: result.status, output };
+}
+
+/** The last non-empty line of the CLI's output, which is where its verdict is. */
+function lastLine(output) {
+  const lines = output.split('\n').filter((line) => line.trim() !== '');
+  return (lines.at(-1) ?? '').trim().slice(0, 200);
+}
+
 // ---------------------------------------------------------------------------
 // Guest creation, counted and recoverable
 // ---------------------------------------------------------------------------
@@ -983,7 +1176,306 @@ async function sectionGuestSession() {
   if (authed.json?.user?.id !== undefined) ok('the session persists across requests', authed.json.user.id);
   else bad('session persistence', `got ${authed.status} ${authed.text.slice(0, 120)}`);
 
-  return alice;
+  // The account id as well as the client. The enrolment section needs it, because the operator CLI
+  // resolves people by `usr_` id or by OIDC subject and a guest has only the first.
+  return { client: alice, userId: authed.json?.user?.id ?? user?.id ?? '' };
+}
+
+/**
+ * Enrolment and the seat guard: BOTH directions, over BOTH transports, against the live deployment.
+ *
+ * ## Why this section is unnumbered, and why it runs here
+ *
+ * Unnumbered for the same reason `Rate-limit isolation` is: it is not one of the numbered journeys,
+ * it prepares the ones that follow. It runs immediately after the guest session because section 7
+ * has Alice take a seat and play a hand — so on a deployment with `PRL_ENROLMENT_REQUIRED=enforced`,
+ * which is what staging runs, Alice has to be enrolled before section 7 or three later sections
+ * fail for a reason that has nothing to do with rooms, hidden information or hand history. That is
+ * the same mistake `createGuestSession` exists to stop making, one subsystem along.
+ *
+ * ## What it proves, and how the posture is decided
+ *
+ * The posture is DISCOVERED rather than assumed: a fresh guest who has never been enrolled asks for
+ * a seat, and what comes back says which mode the server is in. That makes the discovery probe and
+ * the negative direction the same request — there is no way for this to report "enforced" without
+ * having watched a refusal happen.
+ *
+ * Enforced, four cells, all four asserted:
+ *
+ *   * unenrolled over REST      -> 403 enrolment_required
+ *   * unenrolled over wss       -> an `error` frame carrying enrolment_required, socket LEFT OPEN
+ *   * enrolled over wss         -> `ack`, seated
+ *   * enrolled over REST        -> 200, seated
+ *
+ * Off (the shipped default, and what a developer stack runs): the same first request seats the
+ * learner, and that is asserted too. It is not a skip — it is the control, run on every developer
+ * and CI run of this script, that says the guard is absent exactly where it is meant to be absent.
+ *
+ * ## Where the enrolment comes from, given that the API cannot write one
+ *
+ * `prl_app` holds SELECT and nothing else on `prl.enrolments`, deliberately and by GRANT, so there
+ * is no request this harness could make that would enrol anybody — which is the property being
+ * relied on, not an inconvenience. The write goes through `apps/api/scripts/enrolments.mjs` as the
+ * MIGRATING identity, from `DATABASE_MIGRATION_URL`, which `scripts/staging.mjs` already computes
+ * for the migration step and now also hands to this run.
+ *
+ * A deployment that enforces, reached by a run with no migrating identity, is a FAILURE rather than
+ * a note: the whole positive direction is unprovable, and quietly reporting three of four cells is
+ * how a gate starts passing over less than it says.
+ *
+ * ## What it leaves behind
+ *
+ * Two revocations and a cohort. The cohort stays — `enrolments.cohort_id` is ON DELETE RESTRICT and
+ * no role holds DELETE — and is reused by every later run. The entitlements are withdrawn by
+ * `revokeEnrolments` at the very end of the run (not here, because Alice needs hers for sections 7
+ * and 8), which is an UPDATE that keeps the record of the grant and its withdrawal. The guest
+ * accounts themselves are erased by the retention sweep after 60 days, and `enrolments.user_id` is
+ * ON DELETE CASCADE, so the rows go with them.
+ */
+async function sectionEnrolment(alice, aliceUserId) {
+  section('Enrolment and the seat guard');
+
+  /**
+   * Puts a second session into the probe table by invite code, the way a second learner arrives.
+   *
+   * A second session is what both branches below need for their socket half, and for the same
+   * reason: the first one is already in seat 0 by then, and a second `sit` from the SAME session is
+   * answered `already_seated` whatever this deployment's entitlement posture is. That is a check
+   * that passes or fails for a reason unrelated to the guard, which is worse than no check.
+   */
+  const joinProbeTable = async (client, inviteCode) => {
+    if (typeof inviteCode !== 'string') return false;
+    const joined = await client.request('POST', '/api/v1/rooms/join', { inviteCode });
+    if (joined.status === 200 || joined.status === 201) return true;
+    bad('enrolment probe', `a second session could not join the probe table: ${joined.status}`);
+    return false;
+  };
+
+  // A guest who has never been enrolled and never will be until this section says so. Separate
+  // from Alice on purpose: the refusal has to be observed against an account in the state a real
+  // prospective student is in, and Alice is about to be enrolled.
+  const carol = createClient('carol');
+  const seed = await carol.request('GET', '/api/v1/auth/session');
+  if (typeof seed.json?.csrfToken === 'string') carol.setCsrf(seed.json.csrfToken);
+  const guest = await createGuestSession(carol, 'Carol');
+  if (typeof guest.json?.csrfToken === 'string') carol.setCsrf(guest.json.csrfToken);
+  const carolUserId = guest.json?.user?.id;
+  if (typeof carolUserId !== 'string') {
+    bad('enrolment probe', `the guest response carried no user id: ${guest.text.slice(0, 160)}`);
+    return { enforced: false, enrolled: [] };
+  }
+
+  // Creating a table is NOT the course and must stay open, so this is asserted rather than assumed.
+  // Somebody deciding whether to enrol can still open a table and look at it; what they cannot do
+  // is take a seat at one.
+  const created = await carol.request('POST', '/api/v1/rooms', {
+    name: 'Enrolment probe table',
+    maxSeats: 3,
+    smallBlind: 5,
+    bigBlind: 10,
+    startingStack: 1000,
+  });
+  const roomId = created.json?.room?.id;
+  const inviteCode = created.json?.inviteCode;
+  if ((created.status === 200 || created.status === 201) && typeof roomId === 'string') {
+    ok('an unenrolled learner can still create a table', 'the guard is on the seat, not the door');
+  } else {
+    bad('enrolment probe', `could not create a table: ${created.status} ${created.text.slice(0, 160)}`);
+    return { enforced: false, enrolled: [] };
+  }
+
+  // THE PROBE, and the negative direction, in one request.
+  const refusedRest = await carol.request('POST', `/api/v1/rooms/${roomId}/sit`, { seat: 0 });
+  const restCode = refusedRest.json?.error?.code ?? '';
+  const enforced = refusedRest.status === 403 && restCode === 'enrolment_required';
+
+  if (!enforced && refusedRest.status !== 200) {
+    bad(
+      'seat guard',
+      `sitting answered ${refusedRest.status} ${restCode || refusedRest.text.slice(0, 140)}, which is ` +
+        'neither the open behaviour (200) nor the enforced one (403 enrolment_required)',
+    );
+    return { enforced: false, enrolled: [] };
+  }
+
+  if (options.expectEnrolment !== 'discover' && (options.expectEnrolment === 'enforced') !== enforced) {
+    bad(
+      'seat guard posture',
+      `this run was told to expect PRL_ENROLMENT_REQUIRED=${options.expectEnrolment} and the server ` +
+        `behaves as ${enforced ? 'enforced' : 'off'}. Either the deployment is not configured the ` +
+        'way the caller believes, or the guard is not wired into the image it is running.',
+    );
+    return { enforced, enrolled: [] };
+  }
+
+  if (!enforced) {
+    ok('an unenrolled learner is seated', 'PRL_ENROLMENT_REQUIRED is off, which is the shipped default');
+    // A SECOND session for the socket half, not Carol again. Carol is now in seat 0, and a second
+    // `sit` from her is answered `already_seated` whatever the entitlement posture is — which is a
+    // check that proves nothing about the guard and passes for the wrong reason. Measured: it
+    // reported `no ack; last code already_seated` and read as a socket-path failure.
+    const joinedForSocket = await joinProbeTable(alice, inviteCode);
+    const openSocket = joinedForSocket ? await sitOverSocket(alice, roomId, 1) : null;
+    if (openSocket?.acked === true) {
+      ok('and seated over the socket too', 'a second session, so the seat is genuinely free');
+    } else {
+      bad(
+        'seat guard (off)',
+        openSocket === null
+          ? 'the second session could not join the probe table'
+          : (openSocket.error ?? `no ack; last code ${String(openSocket.errorCode)}`),
+      );
+    }
+    await alice.request('POST', `/api/v1/rooms/${roomId}/leave`);
+    note(
+      'the ENFORCED direction was not exercised here, because this deployment does not enforce. ' +
+        '`pnpm run staging up` runs a stack that does, and passes --expect-enrolment enforced so ' +
+        'that a run which cannot exercise it there fails instead of printing this line.',
+    );
+    return { enforced: false, enrolled: [] };
+  }
+
+  ok('an unenrolled learner is refused a seat over REST', `403 ${restCode}`);
+  const message = refusedRest.json?.error?.message ?? '';
+  if (/enrols? your class|not enrolled/i.test(message)) {
+    ok('the refusal tells the learner what to do', `"${message.slice(0, 80)}…"`);
+  } else {
+    bad('refusal quality', `the message is not actionable: "${message.slice(0, 160)}"`);
+  }
+  if (/[$£€]|\bUSD\b|\bprice\b|\bpay\b/i.test(message)) {
+    bad('refusal quality', 'the refusal implies a transaction; this software cannot take money');
+  }
+
+  const refusedSocket = await sitOverSocket(carol, roomId, 0);
+  if (!refusedSocket.welcomed) {
+    bad('seat guard (socket)', refusedSocket.error ?? 'the handshake itself failed');
+  } else if (refusedSocket.errorCode === 'enrolment_required') {
+    ok('an unenrolled learner is refused a seat over the socket', 'a real sit frame, over wss');
+  } else if (refusedSocket.acked) {
+    bad(
+      'seat guard (socket)',
+      'THE SOCKET PATH IS NOT GATED. REST refused this session and the sit frame seated it, which ' +
+        'is worse than no guard at all: the deployment reads as enforced and is not.',
+    );
+  } else {
+    bad('seat guard (socket)', `expected enrolment_required, got ${String(refusedSocket.errorCode)}`);
+  }
+  if (refusedSocket.closeCode === null) {
+    ok('the refusal left the socket open', 'a permanent refusal must not drive a reconnect loop');
+  } else {
+    bad(
+      'seat guard (socket)',
+      `the socket was closed ${refusedSocket.closeCode} for a refusal that is permanent. A client ` +
+        'that reconnects against it will do so forever; the refusal belongs in a frame.',
+    );
+  }
+
+  // ---- The positive direction, which needs a write the API cannot make ----
+  if (options.migrationUrl.trim() === '') {
+    bad(
+      'seat guard (enrolled)',
+      'this deployment enforces and this run has no DATABASE_MIGRATION_URL, so no enrolment can be ' +
+        'written and the ENROLLED direction cannot be exercised. prl_app holds SELECT and nothing ' +
+        'else on prl.enrolments, on purpose, so there is no request that would do it instead. Pass ' +
+        '--migration-url or set DATABASE_MIGRATION_URL.',
+    );
+    return { enforced, enrolled: [] };
+  }
+
+  const cohort = runEnrolmentCli([
+    'cohort-create',
+    '--key',
+    SMOKE_COHORT.key,
+    '--name',
+    SMOKE_COHORT.name,
+    '--starts',
+    '2020-01-01',
+  ]);
+  // A cohort that already exists is the normal case from the second run onwards, and the CLI says
+  // so by name. Anything else is a real failure.
+  if (cohort.ok) note(`created the ${SMOKE_COHORT.key} cohort`);
+  else if (/already taken/i.test(cohort.output)) note(`reusing the existing ${SMOKE_COHORT.key} cohort`);
+  else {
+    bad('enrolment CLI', `cohort-create exited ${cohort.status}: ${lastLine(cohort.output)}`);
+    return { enforced, enrolled: [] };
+  }
+
+  const grant = runEnrolmentCli([
+    'grant',
+    '--cohort',
+    SMOKE_COHORT.key,
+    '--by',
+    SMOKE_COHORT.by,
+    '--reference',
+    SMOKE_COHORT.reference,
+    '--user',
+    carolUserId,
+    '--user',
+    aliceUserId,
+  ]);
+  if (grant.ok) {
+    ok('two learners enrolled through the operator CLI', 'as the migrating identity, never the API');
+  } else {
+    bad('enrolment CLI', `grant exited ${grant.status}: ${lastLine(grant.output)}`);
+    return { enforced, enrolled: [] };
+  }
+
+  const seatedSocket = await sitOverSocket(carol, roomId, 0);
+  if (seatedSocket.acked) {
+    ok('an enrolled learner takes a seat over the socket', 'the same frame that was refused a moment ago');
+  } else {
+    bad(
+      'seat guard (enrolled, socket)',
+      seatedSocket.error ?? `expected an ack, got ${String(seatedSocket.errorCode)}`,
+    );
+  }
+
+  // Alice reaches the same table the way a second learner does, and sits over REST.
+  const joinedForRest = await joinProbeTable(alice, inviteCode);
+  const seatedRest = joinedForRest
+    ? await alice.request('POST', `/api/v1/rooms/${roomId}/sit`, { seat: 1 })
+    : { status: 0, json: { error: { code: 'never joined the probe table' } } };
+  if (seatedRest.status === 200) {
+    ok('an enrolled learner takes a seat over REST', 'both transports, both directions, over TLS');
+  } else {
+    bad(
+      'seat guard (enrolled, REST)',
+      `expected 200, got ${seatedRest.status} ${seatedRest.json?.error?.code ?? ''}`,
+    );
+  }
+  // Alice leaves this table, so section 7 finds her at exactly one room: her own.
+  await alice.request('POST', `/api/v1/rooms/${roomId}/leave`);
+
+  return { enforced, enrolled: [carolUserId, aliceUserId] };
+}
+
+/**
+ * Withdraws the entitlements this run granted, at the end of the run.
+ *
+ * A revocation and not a delete, because that is the only withdrawal this schema has: the row stays
+ * with `revoked_at`, `revoked_by` and `revoked_reason` set, which is what makes "was their access
+ * withdrawn, when and why?" answerable, and `prl_app` holds no DELETE on the table in any case. The
+ * accounts are throwaway guests; the retention sweep erases them after 60 days and the enrolment
+ * rows cascade away with them.
+ *
+ * Reported rather than silent, and a failure here is a real failure: an entitlement this harness
+ * granted and could not withdraw is a row somebody has to clean up by hand.
+ */
+function revokeEnrolments(userIds) {
+  if (userIds.length === 0) return;
+  section('Enrolment cleanup');
+  const revoke = runEnrolmentCli([
+    'revoke',
+    '--cohort',
+    SMOKE_COHORT.key,
+    '--by',
+    SMOKE_COHORT.by,
+    '--reason',
+    'smoke test run finished',
+    ...userIds.flatMap((userId) => ['--user', userId]),
+  ]);
+  if (revoke.ok) ok(`withdrew ${userIds.length} entitlement(s) this run granted`, lastLine(revoke.output));
+  else bad('enrolment cleanup', `revoke exited ${revoke.status}: ${lastLine(revoke.output)}`);
 }
 
 /** 3. CSRF is actually enforced. */
@@ -1639,7 +2131,10 @@ async function main() {
 
   await sectionHealth();
   await sectionIsolation();
-  const alice = await sectionGuestSession();
+  const { client: alice, userId: aliceUserId } = await sectionGuestSession();
+  // Before section 7, deliberately: on a deployment that enforces, Alice cannot take a seat or play
+  // a hand until she is enrolled, and sections 7, 8 and 9 would all fail naming the wrong subsystem.
+  const enrolment = await sectionEnrolment(alice, aliceUserId);
   await sectionCsrf();
   await sectionContent(alice);
   await sectionCalculation(alice);
@@ -1650,6 +2145,8 @@ async function main() {
   await sectionWebHeaders();
   await sectionGuestBootstrap();
   await sectionRateLimiting();
+  // Last, so that everything above ran with the entitlements it needed.
+  revokeEnrolments(enrolment.enrolled);
 
   console.log(`\n${BOLD}Summary${RESET}`);
   console.log(`  ${GREEN}${passed} check(s) passed${RESET}`);

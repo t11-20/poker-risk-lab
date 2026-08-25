@@ -393,6 +393,62 @@ describe('the retention sweep, against a real database', { skip: skipReason }, (
     }
   });
 
+  it('never touches a guest holding an enrolment, however long it has been (NEGATIVE CONTROL)', async () => {
+    // ########################################################################
+    // ## THE CASE THAT WAS MISSING FOR AS LONG AS prl.enrolments EXISTED    ##
+    // ########################################################################
+    //
+    // Found by the legal review of `db/migrations/0006_cohort_enrolments.sql` as D9, not by a test,
+    // and the sequence is ordinary rather than contrived. `enrolments.starts_at` exists so that a
+    // class can be enrolled BEFORE the day it opens; a student whose only visit was the one that
+    // minted their guest account is unseen for sixty days some weeks later; and until the clause in
+    // `abandonedGuestPredicate` existed, this sweep erased them — taking their place with them,
+    // because `enrolments_user_id_fkey` is ON DELETE CASCADE.
+    //
+    // What makes it the worst case in this file is that it is unreconstructable afterwards. The
+    // audit entry survives with `user_id` NULL, so the operator still has "somebody was granted a
+    // place on this authority against this reference" and no way at all to learn who.
+    //
+    // Deliberately a REVOKED enrolment and a cohort that has not started: both are the shapes a
+    // predicate written to look only at live entitlements would miss, and neither makes the account
+    // an anonymous sign-up.
+    const enrolled = await makeGuest('-400 days');
+    const withdrawn = await makeGuest('-400 days');
+    const cohortId = `coh_sweep${randomBytes(6).toString('hex')}`;
+    try {
+      await withAdminSql(async (admin) => {
+        await admin`
+          insert into prl.cohorts (id, key, name, starts_at, ends_at)
+          values (${cohortId}, ${`sweep-probe-${randomBytes(4).toString('hex')}`},
+                  ${'Sweep probe cohort'}, now() + interval '30 days', now() + interval '120 days')
+        `;
+        await admin`
+          insert into prl.enrolments (id, cohort_id, user_id, granted_by, reference)
+          values (${`enr_sweep${randomBytes(6).toString('hex')}`}, ${cohortId}, ${enrolled},
+                  ${'J. Okafor'}, ${'registry-row-88'})
+        `;
+        await admin`
+          insert into prl.enrolments
+            (id, cohort_id, user_id, granted_by, reference, revoked_at, revoked_by, revoked_reason)
+          values (${`enr_sweep${randomBytes(6).toString('hex')}`}, ${cohortId}, ${withdrawn},
+                  ${'J. Okafor'}, ${'registry-row-89'}, now(), ${'J. Okafor'}, ${'place transferred'})
+        `;
+      });
+
+      const result = await runRetentionSweep({ sql, batchSize: 500, maxPasses: 10 });
+
+      assert.equal(await userAlive(enrolled), true, 'the sweep erased a student with a place waiting');
+      assert.equal(await userAlive(withdrawn), true, 'the sweep erased an account with a withdrawn place');
+      assert.equal(result.guestAccountsBlocked, 0, 'neither should have been attempted at all');
+    } finally {
+      await withAdminSql(async (admin) => {
+        await admin`delete from prl.enrolments where cohort_id = ${cohortId}`;
+        await admin`delete from prl.cohorts where id = ${cohortId}`;
+      });
+      await dropFixtures([], [enrolled, withdrawn]);
+    }
+  });
+
   it('works through a backlog larger than one batch', async () => {
     // The same property the session sweep has, and it is not free here: the guest sweep chooses a
     // bounded batch and then erases each account in its own transaction, so "kept going" has to be

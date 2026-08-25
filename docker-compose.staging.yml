@@ -248,6 +248,35 @@ services:
       # NODE_ENV=production, which is exactly right and is why staging does it in
       # SQL with a generated value instead.
       DATABASE_URL: postgres://${PRL_STAGING_API_DB_USER:?set it in deploy/staging/.env.staging}:${PRL_STAGING_API_DB_PASSWORD:?set it in deploy/staging/.env.staging (pnpm run staging init generates one)}@postgres:5432/${PRL_STAGING_DB_NAME:?set it in deploy/staging/.env.staging}
+      # ENFORCED here, and a literal rather than a `${...:?}` interpolation.
+      #
+      # `PRL_ENROLMENT_REQUIRED` gates ONE thing: taking a seat at a table. Its
+      # shipped default is `off`, because an open public instance is a legitimate
+      # deployment and every deployment that predates the switch is one — and a
+      # default-off guard is decoration unless something exercises it
+      # continuously. This line is what exercises it. Staging runs the guard ON,
+      # `scripts/staging.mjs` passes `--expect-enrolment enforced` to the smoke
+      # test, and that run proves BOTH directions over TLS on every deploy: an
+      # enrolled learner seated and an unenrolled one refused, over REST and over
+      # a real `sit` frame. A run that finds this deployment behaving as `off`
+      # FAILS rather than reporting the open behaviour, so deleting this line
+      # breaks the gate instead of quietly disarming it.
+      #
+      # Not in .env.staging, unlike every secret here, for two reasons. It is not
+      # a secret and has no generated value, so the header's "every variable is
+      # ${VAR:?}" rule — which exists so that a defaulted SECRET cannot ship in a
+      # public repository — is not what it is protecting against. And requiring
+      # it would break `staging status` and `staging logs` for anybody whose
+      # deploy/staging/.env.staging predates this line, which is the same
+      # argument written out at `pull_policy` above.
+      #
+      # The smoke test needs an enrolment to exist, and the API cannot write one:
+      # migration 0006 grants prl_app SELECT and nothing else on prl.enrolments.
+      # `scripts/staging.mjs` therefore hands the smoke run the same
+      # DATABASE_MIGRATION_URL it used for the migration step, and the run drives
+      # `apps/api/scripts/enrolments.mjs` — the operator's own tool — to grant and
+      # then revoke. No enrolment is ever written by anything reachable over HTTP.
+      PRL_ENROLMENT_REQUIRED: enforced
       # The origin the BROWSER uses: the proxy's published https origin. Not the
       # API's, not web's — neither of which a browser ever sees. It is matched
       # EXACTLY on CSRF checks and on every WebSocket upgrade, so a wrong value

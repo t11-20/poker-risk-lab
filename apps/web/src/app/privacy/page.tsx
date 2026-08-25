@@ -53,6 +53,48 @@
  * does without saying what it cannot reach: backups are sealed snapshots, and the shipped policy in
  * `scripts/backup.mjs` keeps one for up to six months.
  *
+ * ## The proxy paragraph in §4 described a leak that had been fixed
+ *
+ * It said the reverse proxy "writes a conventional access log: one line per request carrying your
+ * *raw* IP address, your *full* User-Agent string, the complete request line including anything in
+ * the query string, and the page you came from", and that a federated sign-in's parameters were in
+ * it too. That was true of `combined`, which is what both shipped configurations used when the
+ * paragraph was written. Both were rewritten in the same commit as the paragraph
+ * (`deploy/staging/nginx.conf:237-266`, `docker-compose.yml:591-626`): a `log_format prl_privacy`
+ * built on `$uri`, which has no query string in it; `$remote_addr` mapped to a /24 or a /48, and to
+ * the bare word `ip6` where it cannot be truncated confidently; the user agent reduced to one of
+ * four classes; no `$http_referer` at all; and `error_log crit` with `/dev/null` on the OIDC
+ * callback, because nginx stamps the request line onto its own error messages in a shape no
+ * `log_format` controls.
+ *
+ * So the page was overstating the exposure, which sounds harmless and is not: a policy that
+ * describes a worse system than the one running teaches its own readers that it is not written from
+ * the code, and the next inaccuracy in the other direction gets the same credence. §4 now describes
+ * `prl_privacy`, and says plainly that a network prefix is reduction and not anonymisation.
+ *
+ * ## §2, §5, §6 and §7 had to learn about enrolment
+ *
+ * `db/migrations/0006_cohort_enrolments.sql` added `prl.cohorts` and `prl.enrolments`, and the
+ * inventory test failed on both, which is what it is for. Everything the page now says about them is
+ * read out of that file: what the columns are (`:215-243`, `:262-322`), that there is no amount and
+ * no currency column in it or anywhere else (`:25-30`), that the `reference` is opaque and may be
+ * the literal word `scholarship` (`:32-37`, `:333-335`), that a withdrawal is an `UPDATE` and never
+ * a delete (`:339-342`), that the runtime role is granted `SELECT` and nothing else on either table
+ * (`:387-388`), and that deleting an account takes the enrolment with it by `ON DELETE CASCADE`
+ * (`:269-270`, argued at `:168-193`). Nothing sweeps either table — `retention-sweep.ts` removes
+ * expired sessions, expired sign-in attempts and abandoned guest accounts, and nothing else — so §5
+ * says so rather than leaving "everything else" to cover a category nobody thought about.
+ *
+ * The half of that worth reading twice is in §6, and it is not visible from the migration alone.
+ * Every grant, supersession and revocation writes an append-only `prl.audit_log` row in the SAME
+ * transaction as the change (`apps/api/src/repositories/enrolments.ts:504,516,570`), and a grant's
+ * `detail` carries the external `reference` (`:516-523`). `audit_log.user_id` is `ON DELETE SET
+ * NULL` (`0001_initial.sql:855-856`), so erasure removes the enrolment row and leaves a detached row
+ * saying that on a date, on somebody's authority, against that reference, a place was granted and
+ * later ended. That is a real and defensible design — a withdrawal an operator cannot evidence is
+ * worth nothing — and it is exactly the kind of thing a reader is entitled to be told rather than
+ * left to infer from a referential action, so §2 and §6 both say it.
+ *
  * `robots` is not overridden here, for the reason written out on `/terms`.
  */
 
@@ -169,6 +211,30 @@ const INVENTORY: readonly InventoryEntry[] = [
       'from them at all.',
   },
   {
+    table: 'prl.cohorts',
+    what:
+      'Nothing about you. One row per identified class of learners: a short handle an operator types ' +
+      '(something like spring-2026-risk-lab), a display name, when the class starts and when it ends ' +
+      'if it has a scheduled end. There is no account identifier in this table and no column that ' +
+      'could hold one.',
+  },
+  {
+    table: 'prl.enrolments',
+    what:
+      'Only if this deployment enrols people. One row for each place you hold, or have held, in one ' +
+      'of the classes above: which class, when the place was granted, the name or process an operator ' +
+      'typed as the authority for granting it, one opaque reference to whatever arrangement was made ' +
+      'outside this system, when your access begins, when it expires if it does, and — if the place ' +
+      'is withdrawn — when, by whom and for what stated reason. A withdrawal is written into the row, ' +
+      'never removed, which is what keeps “was this withdrawn, when and why?” answerable. ' +
+      'There is no amount, no currency, no price and no receipt in it, here or anywhere else in this ' +
+      'schema, so this record cannot tell anybody whether your place was paid for: the reference may ' +
+      'be an order number in a finance system nobody here can read, or it may be the word ' +
+      'scholarship. The application itself may only read these two tables — it holds no permission to ' +
+      'create, change or remove a row in either, and an enrolment is granted by an operator running a ' +
+      'command, never through this website.',
+  },
+  {
     table: 'prl.lesson_progress',
     what: 'Which lessons you have opened, which you reached the end of, and when you last looked at one.',
   },
@@ -193,7 +259,11 @@ const INVENTORY: readonly InventoryEntry[] = [
       'where the event is about an account, an event name, a timestamp and a small structured ' +
       'detail. The detail is pre-redacted, and a constraint in the database refuses a row whose ' +
       'detail names a token, a password, an IP address, a user agent, an invite code, the deck, a ' +
-      'commitment salt or hole cards.',
+      'commitment salt or hole cards. Granting, replacing or withdrawing a place in a class also ' +
+      'writes a row here, in the same operation as the change itself, carrying which class, who ' +
+      'authorised it, the reason for a withdrawal and — for a grant — the external reference. That ' +
+      'is what makes the record of a withdrawal outlive the row it was written against; see ' +
+      'section 6 for what deleting your account does and does not do to it.',
   },
 ];
 
@@ -322,21 +392,28 @@ export default function PrivacyPage(): ReactElement {
           </p>
           <p>
             <strong>
-              The web server in front of the application is a separate log, and it is not redacted.
+              The web server in front of the application writes a second log, and it is reduced rather than
+              redacted.
             </strong>{' '}
             Everything above describes the application’s own log. Requests reach the application through a
-            reverse proxy, and the proxy configuration this project ships writes a conventional access log:
-            one line per request carrying your <em>raw</em> IP address, your <em>full</em> User-Agent string,
-            the complete request line including anything in the query string, and the page you came from. None
-            of the redaction described above applies to it, because none of it is written by the application.
-            If you sign in through an identity provider, the provider sends you back to a URL with single-use
-            sign-in parameters in the query string, and that URL is in this log too.
+            reverse proxy, which writes its own line per request: the time, your address{' '}
+            <em>truncated to its network</em> — the first three groups of an IPv4 address, the first three of
+            an IPv6 one, and an address that cannot be truncated confidently is logged as nothing but the word{' '}
+            <code>ip6</code> — a <em>class</em> of user agent rather than the string itself (browser, tool,
+            bot or none), the method, the path <em>without</em> its query string, the status, the size and
+            timings. The page you came from is not logged, your cookies are not logged, and nothing that
+            follows a <code>?</code> in a URL is logged, which is what keeps the single-use parameters of a
+            federated sign-in off disk.
           </p>
           <p>
-            This is said here rather than left to be discovered because the paragraphs above would otherwise
-            read as a promise the whole system does not keep. Where those lines are sent, who can read them,
-            and how long they are kept are decisions of whoever operates this deployment; nothing in this
-            software rotates or deletes them, and no retention period for them is configured anywhere in it.
+            Be clear about what that is and is not. A network prefix is <em>reduction</em>, not anonymisation
+            — it is a weaker property than the keyed digest the application stores, because it identifies a
+            neighbourhood rather than nobody, and it is the strongest thing a web server of this kind can do.
+            It is kept rather than dropped because when the application is the thing that is broken, this is
+            the only log that can tell an operator whether one caller is failing or a thousand. Where those
+            lines are sent, who can read them and how long they are kept are decisions of whoever operates
+            this deployment: the shipped configuration bounds how much is kept on disk and nothing in this
+            software bounds how long.
           </p>
         </section>
 
@@ -349,8 +426,17 @@ export default function PrivacyPage(): ReactElement {
             <strong>sixty days from creation</strong>: a learner who visits at least once a week keeps one
             session row for up to sixty days, and then has to sign in again. A revoked session becomes
             removable a day after revocation, and an unfinished sign-in stops being usable after ten minutes.
-            Everything else — your account row, your progress, your answers and your hand history — is kept
-            until you delete your account, with one exception described next.
+            Everything else — your account row, your progress, your answers, your hand history and any place
+            you hold in a class — is kept until you delete your account, with one exception described next.
+          </p>
+          <p>
+            <strong>An enrolment is not swept, and expiring is not the same as being deleted.</strong> When a
+            place in a class expires or is withdrawn it stops entitling you to anything, and the row stays
+            exactly where it was — that is the point of it: an operator has to be able to answer “was this
+            person’s access withdrawn, when, and why?” long afterwards, and a deleted row answers nothing.
+            Nothing in this software ever removes an enrolment row on a schedule. Deleting your account
+            removes them, as section 6 says. How long a record of who was in a class may be kept is one of the
+            questions marked below.
           </p>
           <p>
             <strong>Guest accounts you stop using are removed for you.</strong> A guest account has no email
@@ -359,8 +445,9 @@ export default function PrivacyPage(): ReactElement {
             above. Sixty days after a guest account was last seen it is therefore unreachable by anybody, and
             it is erased on the same schedule as the sweeps below. An account is only ever taken when it is
             genuinely finished with: never while a session is still live, never while it still holds a seat at
-            a table, a place in a room, or a room of its own — at any age. The erasure is the same operation
-            as section 6, with the same guarantees; nothing about it is a shortcut.
+            a table, a place in a room, or a room of its own, and never while it holds a place in a class — at
+            any age. The erasure is the same operation as section 6, with the same guarantees; nothing about
+            it is a shortcut.
           </p>
           <p>
             <strong>An honest note about the sweeps.</strong> The code that removes expired sessions and
@@ -386,13 +473,21 @@ export default function PrivacyPage(): ReactElement {
           <ul>
             <li>
               <strong>Removed.</strong> Your account row, every session, every lesson you had marked as read,
-              every quiz answer, every scenario attempt, and your seat at every table you have ever joined.
+              every quiz answer, every scenario attempt, your seat at every table you have ever joined, and
+              every place you hold or have held in a class — including revoked and expired ones. An enrolment
+              names one person and nobody else, and one naming an account that no longer exists entitles
+              nobody, so it goes with the account rather than being detached from it. The class itself
+              remains: it never named you.
             </li>
             <li>
               <strong>Detached from you.</strong> Your seats in hands that have been played, your rows in the
               audit log, and any private table you created. The rows survive; they stop naming anybody. Tables
               you owned are closed first, because a table whose owner has gone can never be closed by anyone
-              afterwards.
+              afterwards. Read this one carefully if you have been enrolled in a class: the enrolment row
+              itself is removed, but the audit-log rows written when it was granted and withdrawn are detached
+              rather than deleted, so an operator can still see that on a date, on somebody’s authority,
+              against a particular external reference, a place in a class was granted and later ended — with
+              you no longer named in it.
             </li>
             <li>
               <strong>Kept, in full.</strong> Every hand — its actions, its board, its deck commitment and its
@@ -428,6 +523,14 @@ export default function PrivacyPage(): ReactElement {
             fonts loaded from anywhere. The only outbound connection it can make is to an identity provider,
             and only if this deployment has configured one and you choose to sign in through it — in which
             case that provider learns that you signed in here.
+          </p>
+          <p>
+            One thing points outwards without any connection being made. If you have been enrolled in a class,
+            your enrolment row carries a reference that an operator typed, and that reference is meaningful in
+            some system outside this one — a finance record, a registry, a spreadsheet. This application never
+            sends anything to that system, never reads from it, and does not know what kind of system it is.
+            What it means is that somebody holding both this database and that one can join them, and only the
+            operator can tell you what the other one is.
           </p>
           <CounselFlag clause={COUNSEL_CLAUSES['international-transfer']} />
           <CounselFlag clause={COUNSEL_CLAUSES['operator-identity']} />

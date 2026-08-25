@@ -42,7 +42,8 @@
  *     self-verifying path `POST /me/delete` uses, so the policy in
  *     `db/migrations/0004_account_deletion.sql` exists once. See `deleteAbandonedGuest`.
  *   * **"Abandoned" is read from the database, not from a clock.** No account with a live
- *     session, a room membership, a hand seat or a room of its own is ever taken, at any age.
+ *     session, a room membership, a hand seat, a room of its own or an enrolment in any cohort is
+ *     ever taken, at any age.
  *     Deleting a learner who is sitting at a live table is a far worse defect than keeping a dead
  *     row, so the guard is a lock and a predicate rather than an argument about timestamps. See
  *     `abandonedGuestPredicate` in `repositories/users.ts`.
@@ -124,8 +125,8 @@ import { deleteAbandonedGuest, findAbandonedGuests } from '../repositories/users
  * spelled separately are two numbers that will not agree.
  *
  * It is not the safety mechanism. The sweep never removes an account with a live session, a
- * membership, a hand seat or a room, whatever this says — see `abandonedGuestPredicate` in
- * `repositories/users.ts`. This decides how long a *dead* account is kept, and nothing else.
+ * membership, a hand seat, a room or an enrolment, whatever this says — see
+ * `abandonedGuestPredicate` in `repositories/users.ts`. This decides how long a *dead* account is kept, and nothing else.
  */
 export const GUEST_RETENTION_SECONDS = SESSION_ABSOLUTE_TTL_SECONDS;
 

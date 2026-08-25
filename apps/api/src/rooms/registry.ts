@@ -71,6 +71,7 @@ import type { Db } from '../repositories/sql.ts';
 import * as usersRepository from '../repositories/users.ts';
 import { type DurableBotSeat, describeRefusal, durableProfile, rehydrateBotSeat } from './bot-profile.ts';
 import { BotRunner, type BotSeatSpec } from './bots.ts';
+import type { SeatEntitlement } from './entitlement.ts';
 import { LEASE_HEARTBEAT_INTERVAL_MS, LEASE_SELF_EVICT_AFTER_MS, type RoomOwnership } from './ownership.ts';
 import {
   type ArchivedDeal,
@@ -671,6 +672,19 @@ export interface RoomRegistryOptions {
    * persisting anyway.
    */
   readonly ownership?: RoomOwnership | null;
+  /**
+   * Who may take a seat, or `null` for a deployment that does not gate seating.
+   *
+   * Null is the shipped default (`PRL_ENROLMENT_REQUIRED=off`) and the historical behaviour: any
+   * member of a room may sit at it. `routes/index.ts` passes `postgresSeatEntitlement(getSql)`
+   * when the config says `enforced`, and `test/wiring.test.ts` asserts that correspondence in both
+   * directions rather than trusting the call site to keep saying so — the same guard, for the same
+   * reason, as `ownership` above.
+   *
+   * See `rooms/entitlement.ts` for why the decision arrives as a port rather than as a `getSql()`
+   * inside this file.
+   */
+  readonly entitlement?: SeatEntitlement | null;
 }
 
 /** Why a room was taken away from this process. Both are `prl_room_fencings_total{reason=...}`. */
@@ -723,6 +737,8 @@ export class RoomRegistry {
 
   /** The lease, or null for a registry that does not enforce one. See `RoomRegistryOptions`. */
   private readonly ownership: RoomOwnership | null;
+  /** Who may sit, or null for a deployment that does not gate seating. See `rooms/entitlement.ts`. */
+  private readonly entitlement: SeatEntitlement | null;
   /** One entry per room this process believes it owns. Keyed the same way `rooms` is. */
   private readonly leases = new Map<string, HeldLease>();
   /** The renewal timer, armed only while at least one lease is held. */
@@ -750,6 +766,7 @@ export class RoomRegistry {
     this.onProblem = options.onProblem ?? ((): void => undefined);
     this.metrics = options.metrics ?? appMetrics();
     this.ownership = options.ownership ?? null;
+    this.entitlement = options.entitlement ?? null;
     // Read at scrape time from the map itself, never mirrored on open and close: a mirror drifts
     // the first time somebody adds a path that removes a room and forgets the decrement, and a
     // gauge that is quietly wrong during an incident is worse than no gauge (see `Gauge.setFrom`).
@@ -1027,9 +1044,44 @@ export class RoomRegistry {
     // died with the process. A rehydrated bot therefore starts with no read on the table, which
     // is a real difference and is stated here rather than papered over — it is also what a
     // genuinely new opponent would have, so it costs the learner nothing they can be misled by.
+    //
+    // ## Restoring a chair is a way to end up seated, so it is gated too
+    //
+    // This loop is the third and last call site of `table.sit` (the others are `sitAtTable` and
+    // `seatBot`), and it is the one that seats somebody with nobody asking. `PRL_ENROLMENT_REQUIRED`
+    // therefore applies here as well, and the decision is explicit rather than inherited:
+    //
+    //   * **A bot is never asked.** A bot has a user row and can never have an enrolment, so
+    //     checking one would empty every Legends table on the first restart. `is_bot` is the whole
+    //     of the exemption and it is read from the durable row, not inferred.
+    //   * **A learner who is no longer entitled does NOT get the chair back.** Their access
+    //     expired, or was withdrawn, while they were sitting in it. Giving it back would mean a
+    //     revocation quietly stops applying to the one person it was aimed at, for as long as
+    //     nobody restarts the process — and then applies, months later, at a deploy nobody
+    //     connected to it. The seat is left free, the learner keeps their membership and can watch,
+    //     and their next `sit` gets the honest refusal with the sentence that tells them what to do.
+    //   * **A read that FAILS leaves the seat unrestored too**, because it goes through the catch
+    //     below. That is fail-closed, and consistent with `buildRoom`, which refuses to open a room
+    //     whose lease it cannot read. This path has already made two successful queries to get here
+    //     (`store.byId` and `store.membersOfRooms`), so a database that cannot answer this one has
+    //     failed the open rather than merely this seat.
+    //
+    // The refusal is NOT reported as `seat-retake`. See `classifyProblem` in
+    // `observability/telemetry.ts`: that event is an actor failure, meaning a seat that owes an
+    // action and will not produce one, and this seat owes nothing because nobody is in it.
     for (const member of members) {
       if (member.seat === null) continue;
       try {
+        if (!member.is_bot && !(await this.entitledToResumeSeat(member.user_id))) {
+          this.metrics.seatEntitlementRefusals.inc({ reason: 'seat_not_restored' });
+          this.onProblem('a recorded seat was not restored: its holder is no longer entitled to sit', {
+            event: 'seat-entitlement',
+            roomId,
+            seat: member.seat,
+            userId: member.user_id,
+          });
+          continue;
+        }
         await room.table.sit({
           userId: member.user_id,
           displayName: member.display_name,
@@ -1156,9 +1208,37 @@ export class RoomRegistry {
    * table is then told, and if *it* refuses — which means the two copies had drifted — the
    * database seat is given back, so a refused sit never leaves a seat allocated to somebody who is
    * not at the table.
+   *
+   * ## THIS IS THE ONE PLACE A PERSON TAKES A SEAT
+   *
+   * ############################################################################
+   * ## BOTH TRANSPORTS ARRIVE HERE. `POST /rooms/:roomId/sit` AND THE SOCKET   ##
+   * ## `sit` FRAME CALL THIS METHOD AND NOTHING ELSE, WHICH IS WHY THE         ##
+   * ## ENTITLEMENT CHECK IS HERE AND NOT IN EITHER OF THEM.                    ##
+   * ############################################################################
+   *
+   * A guard on the REST route with the socket left open is worse than no guard: it reads as
+   * enforced, every test of it passes, and the whole product is reachable through the frame
+   * nobody guarded. `routes/rooms.ts` already says the two transports "run the same method" so
+   * they cannot drift; this is what that property is for. `test/rooms.test.ts` drives the REST
+   * route and `test/ws-router.test.ts` drives a real `sit` frame, and both are asserted rather
+   * than argued from this comment.
+   *
+   * ## Why the entitlement check is before every other check but `require`
+   *
+   * `require` stays first, and must: it is what makes "no such room" and "not your room"
+   * indistinguishable, and answering `enrolment_required` to a stranger who guessed a room id
+   * would confirm the room exists. After that, this runs BEFORE the durable membership read, the
+   * units read and `seatMember`, so a learner who may not sit never causes a durable write that
+   * has to be given back, and never has their units read to answer a question their units do not
+   * decide.
+   *
+   * `insufficient_units` is a nearby refusal and a deliberately different one: units are a thing
+   * the learner can fix themselves (`POST /me/units/reset`), and an enrolment is not.
    */
   async sitAtTable(roomId: string, principal: RoomPrincipal, seat: number): Promise<void> {
     const room = this.require(roomId, principal.userId);
+    await this.requireEntitledToSit(principal.userId, roomId, seat);
     const member = await this.store.memberOf(roomId, principal.userId);
     if (member === null) {
       throw new AppError('not_room_member', { logDetail: `not a live member of ${roomId}` });
@@ -1191,6 +1271,42 @@ export class RoomRegistry {
       isBot: false,
       botProfile: null,
     });
+  }
+
+  /**
+   * Refuses a seat to somebody this deployment does not consider entitled to one.
+   *
+   * Returns without asking anything when `entitlement` is null, which is `PRL_ENROLMENT_REQUIRED`
+   * unset or `off` — the shipped default, and every deployment that predates the switch.
+   *
+   * The `logDetail` names the room and the seat and NOT the reason the person is not entitled,
+   * because this call cannot know it: `SeatEntitlement.entitledToSit` answers a boolean on purpose
+   * (see its comment). An operator asking "why was this learner refused?" runs
+   * `pnpm run enrolments show --user <id>`, which is the tool that can answer it, against a
+   * database the request path is not allowed to write.
+   */
+  private async requireEntitledToSit(userId: string, roomId: string, seat: number): Promise<void> {
+    if (this.entitlement === null) return;
+    if (await this.entitlement.entitledToSit(userId)) return;
+    this.metrics.seatEntitlementRefusals.inc({ reason: 'not_entitled' });
+    throw new AppError('enrolment_required', {
+      logDetail: `no live enrolment entitles this account to seat ${seat} at ${roomId}`,
+    });
+  }
+
+  /**
+   * Whether a durably recorded seat may be given back to the person the row names.
+   *
+   * `true` with no query at all when this deployment does not gate seating, which keeps a room
+   * re-open on an open public instance exactly as cheap as it was — no extra round trip per seated
+   * member, per restart, per room.
+   *
+   * Not `async`: the null branch has nothing to await, and returning the port's promise directly is
+   * the shape `biome` insists on for a method whose only asynchrony is its callee's.
+   */
+  private entitledToResumeSeat(userId: string): Promise<boolean> {
+    if (this.entitlement === null) return Promise.resolve(true);
+    return this.entitlement.entitledToSit(userId);
   }
 
   /**
@@ -1347,6 +1463,18 @@ export class RoomRegistry {
    */
   get enforcesOwnership(): boolean {
     return this.ownership !== null;
+  }
+
+  /**
+   * True when this registry refuses a seat to somebody who holds no live enrolment.
+   *
+   * The same accessor, for the same reason, as `enforcesOwnership`: `test/wiring.test.ts` asserts
+   * that the ASSEMBLED app's registry agrees with `PRL_ENROLMENT_REQUIRED` in both directions, and
+   * losing the one line in `routes/index.ts` that binds it would be invisible everywhere else —
+   * every test green, every room opening, every learner seated, and the whole switch inert.
+   */
+  get enforcesEntitlement(): boolean {
+    return this.entitlement !== null;
   }
 
   /**

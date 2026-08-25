@@ -56,6 +56,7 @@
  */
 
 export * as audit from './audit.ts';
+export * as enrolments from './enrolments.ts';
 export * as hands from './hands.ts';
 export * as hashing from './hashing.ts';
 export * as ids from './ids.ts';

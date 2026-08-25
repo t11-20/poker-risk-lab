@@ -425,6 +425,43 @@ export class AppMetrics {
     primeLabels: [{ reason: 'fenced' }, { reason: 'lease_expired' }],
   });
 
+  // --- Entitlement ---------------------------------------------------------
+  /**
+   * "Is anybody being turned away from a seat, and how?"
+   *
+   * Only ever moves on a deployment running `PRL_ENROLMENT_REQUIRED=enforced`. On an open public
+   * instance it sits at zero forever, which is the correct reading and is exactly why it is
+   * PRIMED: a counter series is created by its first increment, so an unprimed one is absent from
+   * every scrape until the first refusal, and `increase(...[1h])` over a series that has never
+   * been scraped sees no rise — it has nothing to subtract from. The first refusal is the one an
+   * operator most wants to see (a class list that missed somebody, on the morning of the class),
+   * and it is precisely the one an unprimed counter hides. Same argument, same measurement, as
+   * `rateLimitEvents{kind="banned"}`.
+   *
+   * The two reasons are different operator questions and must not be summed blindly:
+   *
+   *   * `not_entitled` — somebody asked for a seat and was told no. That is a person at a keyboard
+   *     right now, and a spike of it on the hour a cohort starts means the class list is wrong.
+   *   * `seat_not_restored` — a room was re-opened after a restart and a chair recorded in
+   *     `room_members` was NOT given back, because whoever was sitting in it is no longer
+   *     entitled. Nobody is being refused anything they just asked for; an expiry or a revocation
+   *     took effect at the next restart rather than at the moment of the write. It is worth
+   *     separating because it is the only one that can move with nobody using the product.
+   *
+   * NOT substitutable by `prl_api_errors_total{code="enrolment_required"}`: that counts REST
+   * responses, so it misses every socket refusal (a `sit` frame is answered with an error FRAME
+   * and no HTTP status) and misses `seat_not_restored` entirely, which no request ever sees.
+   *
+   * No identifier here, rule 2 at the top of this file. Which learner, which room and which seat
+   * go to the log line beside it.
+   */
+  readonly seatEntitlementRefusals = this.registry.counter({
+    name: `${PREFIX}_seat_entitlement_refusals_total`,
+    help: 'Seats refused because the learner holds no live enrolment, by how the seat was reached.',
+    labelNames: ['reason'],
+    primeLabels: [{ reason: 'not_entitled' }, { reason: 'seat_not_restored' }],
+  });
+
   // --- Retention -----------------------------------------------------------
   /**
    * "Is the retention promise being kept, and by how much?"

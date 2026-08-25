@@ -1387,18 +1387,41 @@ async function commandUp(options) {
   let smokePassed = null;
   if (options.smoke) {
     section('smoke test (through the staging origin, over TLS)');
-    const smoke = run(process.execPath, ['scripts/smoke-test.mjs', '--origin', origin.origin, '--strict'], {
-      stream: true,
-      env: {
-        ...process.env,
-        PRL_WEB_ORIGIN: origin.origin,
-        // Read once at process start, which is why the polls above use
-        // node:https with an explicit `ca` instead. The smoke test is a fresh
-        // process, so the variable works there and the whole run — including the
-        // wss:// upgrade — verifies the chain properly.
-        NODE_EXTRA_CA_CERTS: CA_CERT,
+    const smoke = run(
+      process.execPath,
+      [
+        'scripts/smoke-test.mjs',
+        '--origin',
+        origin.origin,
+        '--strict',
+        // This stack runs `PRL_ENROLMENT_REQUIRED=enforced` (docker-compose.staging.yml), so the
+        // smoke run must PROVE the seat guard rather than discover whichever posture it finds. With
+        // this, a run that sees an unenrolled learner seated fails the deploy — which is the whole
+        // point of staging carrying a switch whose shipped default is off. See `sectionEnrolment`.
+        '--expect-enrolment',
+        'enforced',
+      ],
+      {
+        stream: true,
+        env: {
+          ...process.env,
+          PRL_WEB_ORIGIN: origin.origin,
+          // The migrating identity, so the smoke run can WRITE the enrolment the enforced direction
+          // needs. It cannot get one any other way: migration 0006 grants prl_app — the role the API
+          // connects as — SELECT and nothing else on prl.cohorts and prl.enrolments, so no request
+          // to the running server can enrol anybody. The run drives
+          // `apps/api/scripts/enrolments.mjs` with this, exactly as an operator would, and revokes
+          // what it granted at the end. Same value as the migration step above; never on a command
+          // line, where `ps` would show it.
+          DATABASE_MIGRATION_URL: migrationUrl,
+          // Read once at process start, which is why the polls above use
+          // node:https with an explicit `ca` instead. The smoke test is a fresh
+          // process, so the variable works there and the whole run — including the
+          // wss:// upgrade — verifies the chain properly.
+          NODE_EXTRA_CA_CERTS: CA_CERT,
+        },
       },
-    });
+    );
     smokePassed = smoke.status === 0;
     if (smokePassed) tick('the smoke test passed against the staging origin');
     else cross('the smoke test failed against the staging origin', `exit ${smoke.status}`);
@@ -1784,10 +1807,28 @@ async function main() {
         cross('PRL_STAGING_PUBLIC_ORIGIN is unusable', origin.problem);
         break;
       }
-      const smoke = run(process.execPath, ['scripts/smoke-test.mjs', '--origin', origin.origin, '--strict'], {
-        stream: true,
-        env: { ...process.env, PRL_WEB_ORIGIN: origin.origin, NODE_EXTRA_CA_CERTS: CA_CERT },
-      });
+      // The same two arguments `commandUp` passes, and for the same reasons: this stack runs
+      // `PRL_ENROLMENT_REQUIRED=enforced`, so the run must PROVE the seat guard rather than report
+      // whichever posture it finds, and it needs the migrating identity to write the enrolment the
+      // enforced direction depends on. A `staging smoke` that was weaker than the one inside
+      // `staging up` would be a second, quieter gate over the same stack.
+      const smokeMigrationUrl =
+        `postgres://${encodeURIComponent(entries.get('PRL_STAGING_DB_SUPERUSER') ?? '')}:` +
+        `${encodeURIComponent(entries.get('PRL_STAGING_DB_SUPERUSER_PASSWORD') ?? '')}` +
+        `@127.0.0.1:${entries.get('PRL_STAGING_DB_PORT')}/${entries.get('PRL_STAGING_DB_NAME')}`;
+      const smoke = run(
+        process.execPath,
+        ['scripts/smoke-test.mjs', '--origin', origin.origin, '--strict', '--expect-enrolment', 'enforced'],
+        {
+          stream: true,
+          env: {
+            ...process.env,
+            PRL_WEB_ORIGIN: origin.origin,
+            NODE_EXTRA_CA_CERTS: CA_CERT,
+            DATABASE_MIGRATION_URL: smokeMigrationUrl,
+          },
+        },
+      );
       if (smoke.status !== 0) cross('the smoke test failed', `exit ${smoke.status}`);
       else tick('the smoke test passed');
       break;

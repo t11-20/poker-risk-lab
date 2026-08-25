@@ -69,6 +69,7 @@ export type ProblemEvent =
   | 'room-lease-refused'
   | 'room-fenced'
   | 'room-lease-release'
+  | 'seat-entitlement'
   // rooms/table.ts
   | 'turn-timeout'
   | 'engine-rejection'
@@ -104,6 +105,7 @@ export const PROBLEM_EVENTS: readonly ProblemEvent[] = [
   'room-lease-refused',
   'room-fenced',
   'room-lease-release',
+  'seat-entitlement',
   'turn-timeout',
   'engine-rejection',
   'departed-seat-fold',
@@ -182,11 +184,23 @@ export function classifyProblem(event: ProblemEvent): ProblemClass {
     // the process can resolve and which has its own page-tier alert. `rooms/registry.ts` increments
     // `prl_room_ownership_refusals_total` and `prl_room_fencings_total` at the moment it decides,
     // because only that code knows which of the two reasons a fencing had.
+    //
+    // `seat-entitlement` joins them, and is deliberately NOT `seat-retake` even though it is
+    // raised from the same loop and means "this chair was not given back". `seat-retake` is an
+    // ACTOR failure — "it is somebody's turn and nothing is going to act", which the turn clock
+    // has to resolve — and a seat left free on purpose is the opposite of that: nobody is in it,
+    // nobody is waiting on it, and no clock has anything to do. Reusing the nearest existing kind
+    // is the mistake `docs/production/runbooks/stuck-seat.md` records being made once already,
+    // where an archive failure and a stuck chair became one indistinguishable series and sent
+    // somebody to the wrong subsystem. `rooms/registry.ts` increments
+    // `prl_seat_entitlement_refusals_total{reason="seat_not_restored"}` at the moment it decides,
+    // because only that code knows which of the two reasons a refusal had.
     case 'archive-write':
     case 'hands-interrupted':
     case 'seat-release':
     case 'room-lease-refused':
     case 'room-fenced':
+    case 'seat-entitlement':
       return 'counted-at-source';
     // `engine-rejection` is deliberately NOT an actor failure: it is the engine refusing an
     // action a client submitted, the caller is told `illegal_action`, and it is already counted

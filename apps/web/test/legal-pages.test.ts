@@ -361,27 +361,31 @@ describe('the documents are reachable, and are not in the numbered navigation', 
   });
 });
 
-describe('the inventory accounts for every table in the schema', () => {
-  /**
-   * Every `CREATE TABLE prl.x` in `db/migrations`, which is the set `/privacy` has to account for.
-   *
-   * `prl.schema_migrations` is excluded: it is the migration ledger, it holds nothing about a
-   * reader, and the runtime role is granted nothing on it at all.
-   */
-  function schemaTables(): readonly string[] {
-    const dir = join(REPO, 'db', 'migrations');
-    const sql = readdirSync(dir)
-      .filter((file) => file.endsWith('.sql'))
-      .map((file) => readFileSync(join(dir, file), 'utf8'))
-      .join('\n');
-    const found = new Set<string>();
-    for (const match of sql.matchAll(/create table (?:if not exists )?prl\.([a-z_]+)/giu)) {
-      const name = match[1];
-      if (name !== undefined && name !== 'schema_migrations') found.add(name);
-    }
-    return [...found].sort();
+/**
+ * Every `CREATE TABLE prl.x` in `db/migrations`, which is the set `/privacy` has to account for.
+ *
+ * `prl.schema_migrations` is excluded: it is the migration ledger, it holds nothing about a
+ * reader, and the runtime role is granted nothing on it at all.
+ *
+ * At module scope rather than inside the inventory group because the payment tripwire below needs
+ * the same set, and two scanners over the same directory drift: the day one learns a new statement
+ * shape and the other does not, one of them starts passing over a table nobody is looking at.
+ */
+function schemaTables(): readonly string[] {
+  const dir = join(REPO, 'db', 'migrations');
+  const sql = readdirSync(dir)
+    .filter((file) => file.endsWith('.sql'))
+    .map((file) => readFileSync(join(dir, file), 'utf8'))
+    .join('\n');
+  const found = new Set<string>();
+  for (const match of sql.matchAll(/create table (?:if not exists )?prl\.([a-z_]+)/giu)) {
+    const name = match[1];
+    if (name !== undefined && name !== 'schema_migrations') found.add(name);
   }
+  return [...found].sort();
+}
 
+describe('the inventory accounts for every table in the schema', () => {
   it('names every table that holds anything about a reader', () => {
     const tables = schemaTables();
     // The non-empty-set assertion. A renamed directory or a changed statement shape would otherwise
@@ -687,36 +691,78 @@ describe('the detectors catch a real violation', () => {
 });
 
 /**
- * §7 of `/terms` and the absence of a payment path are one fact, and must fail together.
+ * What `/terms` says about money and what `db/migrations` does about it are one fact, and must fail
+ * together.
  *
  * ## The defect this exists for
  *
- * A compliance audit of this repo found that `/terms` §7 opens "This service is provided free of
- * charge" — while the product was being prepared to charge students a course fee. That reads like a
- * stale sentence somebody forgot to edit. It is not, and treating it as a copy-edit is the trap.
+ * A compliance audit found that `/terms` §7 opened "This service is provided free of charge" while
+ * the product was being prepared to onboard students onto a course. That reads like a stale sentence
+ * somebody forgot to edit. It was not, and treating it as a copy-edit was the trap: the clause was
+ * *load-bearing on being free*. What followed the first six words was "with no promise that it will
+ * be available, that your data will survive, or that any particular feature will continue to
+ * exist… it may be taken down, reset or changed at any time" — reasonable to somebody who paid
+ * nothing, indefensible to somebody who paid for a course, and worse still if "free of charge" were
+ * simply swapped for "for a fee", which would leave a document promising a paying student nothing at
+ * all and looking deliberate about it.
  *
- * The clause is *load-bearing on being free*. What follows the first six words is "with no promise
- * that it will be available, that your data will survive, or that any particular feature will
- * continue to exist… it may be taken down, reset or changed at any time". Every one of those is a
- * reasonable thing to say to somebody who paid nothing, and none of them survives contact with a
- * paying student. Swapping "free of charge" for "for a fee" would leave a document that promises
- * nothing to somebody who has been charged — which is worse than the contradiction it replaced,
- * because it looks deliberate.
+ * ## What fired, and why it was right to
  *
- * Right now the sentence is TRUE: an exhaustive search of this repo found no payment path at all,
- * no enrolment record, and no way to tell a paid user from an unpaid one. So the honest thing is to
- * leave it standing and make it impossible for the first commit that takes money to slip past it.
+ * `prl.cohorts` and `prl.enrolments` landed: a durable record of who holds a place in a course, on
+ * whose authority, against a reference to an arrangement made outside this system. The migration
+ * detector below fired on the table name, at the moment somebody was holding the change that made
+ * the clause false. That is exactly what it was built to do, and the answer was to rewrite the
+ * clause rather than to exempt the table.
+ *
+ * ## The subtlety this group now encodes
+ *
+ * **An enrolment record does not establish that money changed hands.** A scholarship cohort, an
+ * employer-funded class and a paid course produce identical rows, because the grant happens out of
+ * band and no column in this schema can hold an amount, a currency or a price. So there is no single
+ * true sentence for every deployment, and the page cannot simply be flipped from one assertion to
+ * the other.
+ *
+ * What IS invariant is that the page and the schema must agree. `/terms` may take one of exactly two
+ * positions, and this group holds it to whichever one the schema is in:
+ *
+ *  * **free-of-charge** — the page says the service is provided free of charge, and `db/migrations`
+ *    creates no table that records an entitlement.
+ *  * **enrolment-aware** — the page has stopped saying that, says instead what an enrolment record
+ *    holds and that it implies nothing about money, and hands both commercial halves (what the
+ *    enrolment bought; what a cancellation or an interruption is worth) to `COUNSEL_CLAUSES`. In
+ *    that case `db/migrations` must actually create the record the page describes.
+ *
+ * ## Why the assertion is conditional rather than exempted
+ *
+ * The alternative was an allowlist entry for `enrolments`, and it is the wrong shape for a reason
+ * worth writing down: an exemption is a claim about a table, evaluated once, by whoever added it.
+ * The property that actually matters is a claim about *two files agreeing*, and it has to be
+ * re-evaluated on every run. Under the conditional shape the enrolment table is permitted **only for
+ * as long as `/terms` keeps saying the honest thing about it**; delete the disclosure paragraphs, or
+ * drop one of the two counsel flags, and the migration detector starts firing again on a table that
+ * has not changed. An exemption cannot do that, because it does not know what the page says.
+ *
+ * It runs in both directions, which is the half an exemption could never have: a `/terms` rewritten
+ * to describe an enrolment record that no migration creates is a false factual claim on a legal
+ * page, and fails here too.
+ *
+ * ## What kept its teeth, unconditionally
+ *
+ * A real payment path still fails in every posture, in all three of the places one would have to
+ * show up: a dependency, a table name that means money moved, or a call in the source. Nothing about
+ * enrolment relaxes any of those — the whole point of the split is that recording an entitlement and
+ * taking money are different things, so the detector for the second must not have been widened to
+ * accommodate the first.
  *
  * ## Would this fail if the behaviour broke?
  *
- * That is the whole design. This is not a guard on today's text — today's text is fine. It is a
- * tripwire on the change that makes today's text false, and it watches three independent places a
- * payment path would have to show up in: a dependency, a table, or the source. Any one of them
- * fires and this test names the clause that has to be rewritten, at the moment somebody is holding
- * the code that made it necessary. The negative controls below feed each detector a synthetic
- * violation, because a tripwire nobody has ever seen trip is a comment.
+ * The negative-control test at the end feeds every detector the thing it exists to catch — a payment
+ * SDK, a payment table, a camelCase checkout call — and feeds the new conditional shape a `/terms`
+ * that says the wrong thing: one still claiming the service is free, one describing enrolment with a
+ * counsel flag dropped, and one claiming both at once. A tripwire nobody has watched trip is a
+ * comment.
  */
-describe('the free-of-charge clause and the absence of a payment path', () => {
+describe('what /terms says about money, and the absence of a payment path', () => {
   /**
    * Words that only appear in a system that moves money — matched with word boundaries, because
    * `sepa` is inside `separate` and `stripe` is inside a CSS hatch pattern, and a detector that
@@ -732,12 +778,39 @@ describe('the free-of-charge clause and the absence of a payment path', () => {
     /\b(stripe|braintree|adyen|paypal|payments?|checkout|invoices?|billing|merchant|iban|cardholder|paywall|subscribe_?to_?plan)\b/iu;
 
   /**
-   * Known-benign occurrences, each pinned to its file and its reason.
+   * Table names that mean money moved. **Forbidden in every posture, always.**
+   *
+   * This is the list that must never learn a new exception. Recording that somebody holds a place in
+   * a course and recording that somebody was charged for it are different facts, and the second one
+   * needs a clause nobody here is competent to write — so a table that could hold a price fails this
+   * file whatever `/terms` currently says.
+   */
+  const MONEY_TABLE =
+    /\b(payment|purchase|order|invoice|billing|receipt|refund|price|charge|checkout|transaction|wallet|ledger|subscription)/iu;
+
+  /**
+   * Table names that mean somebody holds an entitlement. **Forbidden unless `/terms` says so.**
+   *
+   * Deliberately separate from `MONEY_TABLE` rather than a carve-out inside it. An entitlement is not
+   * a purchase — this repository's whole position rests on that distinction — and collapsing the two
+   * lists would either let a payment table through or make the honest enrolment record permanently
+   * unrepresentable.
+   */
+  const ENTITLEMENT_TABLE = /\b(enrolment|enrollment|entitlement|cohort|admission|licen[cs]e)/iu;
+
+  /**
+   * Known-benign occurrences of `PAYMENT_WORDS` in the source, each pinned to its file and reason.
    *
    * Two of these are `/privacy` DENYING that payment details are held — the exact sentence that
    * would have to change first, so it is right that the scanner sees it and right that it is listed
    * here rather than excluded by a blanket path rule. One is the glossary defining an ante. Two are
    * CSS: a typography note citing Stripe's website, and a hatch pattern made of stripes.
+   *
+   * `app/terms/page.tsx` and `lib/legal-config.ts` both make the same denial and are deliberately
+   * NOT here. Their wording was chosen to make it without using any of the scanned words, so both
+   * files stay inside the scanner's reach — a legal page and the clause register are plausible
+   * places for somebody to describe a buying flow in prose, and each file left out of this list is
+   * one fewer place a real integration could sit unread.
    *
    * An entry here is a claim that a human looked. If a file drops off this list its exemption dies
    * with it, which is the point — `assert` below fails on an entry that no longer matches anything.
@@ -752,18 +825,154 @@ describe('the free-of-charge clause and the absence of a payment path', () => {
   /** `createCheckoutSession` -> `create Checkout Session`, so a word boundary exists to match. */
   const splitIdentifiers = (source: string): string => source.replace(/([a-z0-9])([A-Z])/gu, '$1 $2');
 
+  /**
+   * A table identifier reduced to space-separated words: `prl.course_invoices` -> `prl course
+   * invoices`.
+   *
+   * `splitIdentifiers` alone is not enough for a table name, and the negative control below is how
+   * that was found — the same way the camelCase miss was found, one naming convention along.
+   * `\binvoice` does not match `course_invoices`, because `_` is a word character and there is no
+   * boundary in the middle of a snake_case identifier. Every table in this schema is snake_case, so
+   * the spelling a real purchase table would arrive under was, again, the one spelling the detector
+   * could not see.
+   *
+   * Kept separate from `splitIdentifiers` rather than folded into it: that one runs over whole source
+   * files, where `PAYMENT_WORDS` matches `subscribe_to_plan` with its underscores intact, and
+   * splitting them there would break the pattern it was written for.
+   */
+  const splitTableName = (table: string): string => splitIdentifiers(table).replace(/[_.]/gu, ' ');
+
   const sourceFiles = (root: string): readonly string[] =>
     readdirSync(root, { recursive: true, encoding: 'utf8' }).filter((entry) =>
       /\.(ts|tsx|css|sql)$/u.test(entry),
     );
 
-  it('says the service is free, in those words', () => {
-    // If this stops matching, everything below is guarding a sentence that is no longer there and
-    // would keep passing while the clause said something else entirely.
-    assert.match(
-      flat(read(...PAGES.terms)),
-      /This service is provided free of charge/u,
-      '/terms §7 no longer opens with the free-of-charge claim — the tripwire below is now pointed at nothing',
+  /** The sentence the clause used to open with, and the whole of the free-of-charge posture. */
+  const FREE_OF_CHARGE = /This service is provided free of charge/u;
+
+  /**
+   * The enrolment-aware posture, as four sentences the page has to be carrying.
+   *
+   * Four rather than one, and each one a separate named requirement, because the dangerous state is
+   * the HALF rewrite: somebody deletes the paragraph that says an enrolment implies nothing about
+   * money and leaves the one that says an enrolment exists, and the page now reads as a confirmation
+   * that readers were charged. Each entry names what it is holding the page to, so a failure says
+   * which claim went missing rather than "the regex stopped matching".
+   *
+   * Matched against `flat()`, never the raw source: this is prose, the formatter reflows it to 110
+   * columns, and a test that fails because a word moved to the next line is a test people delete.
+   */
+  const ENROLMENT_DISCLOSURES: ReadonlyArray<readonly [string, RegExp]> = [
+    [
+      'that the software cannot take money and cannot tell a paying reader from any other',
+      /cannot take money, and it cannot tell whether you paid/u,
+    ],
+    [
+      'that no column can hold a price — the checkable half, and the one a reader can verify',
+      /no column anywhere in its database that could hold an amount, a currency or a price/u,
+    ],
+    [
+      'that an enrolment record is not evidence of a fee — a scholarship cohort produces the same rows',
+      /An enrolment record is not evidence that money changed hands/u,
+    ],
+    [
+      'that what the place cost, and what it bought, are outside this software rather than stated here',
+      /are all outside this software, and this page would be inventing them/u,
+    ],
+  ];
+
+  /** The two clauses the enrolment-aware posture must hand to counsel rather than assert. */
+  const ENROLMENT_CLAUSES: readonly CounselClauseId[] = ['enrolment-and-fees', 'refunds-and-cancellation'];
+
+  interface MoneyPosture {
+    /** True while the page still makes the unconditional free-of-charge claim. */
+    readonly claimsFree: boolean;
+    /** Named disclosures the page carries, and the ones it does not. */
+    readonly discloses: readonly string[];
+    readonly missing: readonly string[];
+    /** Counsel clauses the page renders, and the ones it should and does not. */
+    readonly flagged: readonly CounselClauseId[];
+    readonly unflagged: readonly CounselClauseId[];
+  }
+
+  /**
+   * The document, with the source file's own commentary about the document removed.
+   *
+   * Found the hard way, twice. The header of `app/terms/page.tsx` explains this rewrite by QUOTING
+   * the clause it replaced, and the posture reader — which decides what the page says by looking for
+   * that exact sentence — read the quotation as a live claim and reported the page as asserting both
+   * positions at once. A reader is shown the JSX and never the comments above it, so the comments
+   * come out before anything here decides what the page says. Without this, the only way to document
+   * the change honestly would have been to stop quoting the sentence being changed.
+   */
+  const withoutComments = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//gu, ' ');
+
+  function readMoneyPosture(termsSource: string): MoneyPosture {
+    const document = withoutComments(termsSource);
+    const prose = flat(document);
+    const discloses: string[] = [];
+    const missing: string[] = [];
+    for (const [name, pattern] of ENROLMENT_DISCLOSURES) {
+      (pattern.test(prose) ? discloses : missing).push(name);
+    }
+    const flagged = ENROLMENT_CLAUSES.filter((id) => rendersClause(document, id));
+    return {
+      claimsFree: FREE_OF_CHARGE.test(prose),
+      discloses,
+      missing,
+      flagged,
+      unflagged: ENROLMENT_CLAUSES.filter((id) => !flagged.includes(id)),
+    };
+  }
+
+  const POSTURE = readMoneyPosture(read(...PAGES.terms));
+
+  /**
+   * The one boolean everything below keys off: is `/terms` completely in the enrolment-aware
+   * posture? Anything short of complete is not it, which is what stops a half-rewrite from
+   * unlocking the migration detector.
+   */
+  const ENROLMENT_AWARE =
+    !POSTURE.claimsFree && POSTURE.missing.length === 0 && POSTURE.unflagged.length === 0;
+
+  it('/terms takes one of the two honest positions on money, and takes it whole (TRIPWIRE)', () => {
+    assert.ok(ENROLMENT_DISCLOSURES.length === 4, 'the disclosure list must not have quietly emptied');
+    if (POSTURE.claimsFree) {
+      assert.deepEqual(
+        POSTURE.discloses,
+        [],
+        '/terms says the service is provided free of charge AND describes an enrolment record. Those ' +
+          'are two different positions and a reader cannot be shown both: either the deployment ' +
+          'enrols people, in which case drop the free-of-charge claim, or it does not, in which case ' +
+          'drop the enrolment paragraphs.',
+      );
+      assert.deepEqual(
+        POSTURE.flagged,
+        [],
+        '/terms still claims the service is free while flagging the enrolment clauses for counsel',
+      );
+    } else {
+      assert.deepEqual(
+        POSTURE.missing,
+        [],
+        '/terms has stopped saying the service is provided free of charge without saying what ' +
+          'replaced it. The enrolment-aware posture is these sentences together; a page carrying ' +
+          'some of them is the half-rewrite this group exists to catch. Missing: ' +
+          POSTURE.missing.join('; '),
+      );
+      assert.deepEqual(
+        POSTURE.unflagged,
+        [],
+        'a /terms that describes enrolment must hand the commercial half to counsel rather than ' +
+          'assert it. Unflagged: ' +
+          POSTURE.unflagged.join(', '),
+      );
+    }
+    assert.equal(
+      ENROLMENT_AWARE,
+      !POSTURE.claimsFree,
+      'the two postures must be exhaustive and exclusive; if this fails the detectors below are ' +
+        'keyed to a page that says neither thing, and are guarding nothing',
     );
   });
 
@@ -781,9 +990,10 @@ describe('the free-of-charge clause and the absence of a payment path', () => {
         assert.doesNotMatch(
           splitIdentifiers(name),
           PAYMENT_WORDS,
-          `${manifest} depends on "${name}". If this product now takes money, /terms §7 promises a ` +
-            'paying student no availability, no data survival and no notice before it is taken down. ' +
-            'Rewrite the clause before shipping the integration.',
+          `${manifest} depends on "${name}". Recording an enrolment does not need one of these, and ` +
+            'this assertion holds in every posture: if this deployment now takes money, the terms ' +
+            'have to say what was bought and what is owed for it, and neither /terms nor anybody ' +
+            'here has written that.',
         );
       }
     }
@@ -793,17 +1003,58 @@ describe('the free-of-charge clause and the absence of a payment path', () => {
   it('no table that records a purchase has been created (TRIPWIRE)', () => {
     const migrations = readdirSync(join(REPO, 'db', 'migrations')).filter((name) => name.endsWith('.sql'));
     assert.ok(migrations.length >= 5, 'no migrations were read; the scan proved nothing');
+    // Which of the two ways the page can be short of enrolment-aware, so the failure below names the
+    // one that is actually true. "The clause still says the service is free" is wrong and misleading
+    // when what happened is that somebody deleted a counsel flag from an otherwise honest page.
+    const shortfall = POSTURE.claimsFree
+      ? 'The clause still tells the reader the service is provided free of charge, and promises them ' +
+        'no availability, no data survival and no notice before it is taken down.'
+      : `The clause has stopped saying the service is free without finishing the job. Missing prose: ${
+          POSTURE.missing.join('; ') || 'none'
+        }. Clauses described but not handed to counsel: ${POSTURE.unflagged.join(', ') || 'none'}.`;
     for (const name of migrations) {
       const sql = readFileSync(join(REPO, 'db', 'migrations', name), 'utf8');
       for (const [, table] of sql.matchAll(/create\s+table\s+(?:if\s+not\s+exists\s+)?([\w.]+)/giu)) {
+        const split = splitTableName(table ?? '');
         assert.doesNotMatch(
-          splitIdentifiers(table ?? ''),
-          /\b(payment|order|purchase|invoice|billing|subscription|enrolment|enrollment|entitlement|receipt)/iu,
-          `${name} creates "${table}". A table that records a purchase means somebody is being ` +
-            'charged, and /terms §7 still tells them the service is free and promises them nothing.',
+          split,
+          MONEY_TABLE,
+          `${name} creates "${table}". A table that records a charge means somebody is being billed ` +
+            'through this system, which is a different fact from somebody holding a place in a ' +
+            'course, and no wording on /terms unlocks it. This assertion is unconditional.',
         );
+        if (!ENROLMENT_AWARE) {
+          assert.doesNotMatch(
+            split,
+            ENTITLEMENT_TABLE,
+            `${name} creates "${table}", and /terms is not honest about it. ${shortfall} That is a ` +
+              'reasonable thing to say to somebody who was given the service for nothing, and not to ' +
+              'somebody who holds a place in a course. Rewrite §7 and §8; do not exempt the table.',
+          );
+        }
       }
     }
+  });
+
+  it('/terms and db/migrations agree about whether enrolment exists (TRIPWIRE)', () => {
+    const tables = schemaTables();
+    assert.ok(
+      tables.length > 8,
+      `only ${String(tables.length)} tables were scanned; the sweep proved nothing`,
+    );
+    const entitlement = tables.filter((table) => ENTITLEMENT_TABLE.test(splitTableName(table)));
+    assert.equal(
+      ENROLMENT_AWARE,
+      entitlement.length > 0,
+      ENROLMENT_AWARE
+        ? '/terms describes an enrolment record and NO migration in db/migrations creates one. A ' +
+            'factual claim on a legal page about what the software stores has to be true of the ' +
+            'schema, and this one is not. Either the migration was reverted and §7 has to go back to ' +
+            'the free-of-charge position, or it never landed.'
+        : `db/migrations creates ${entitlement.map((table) => `prl.${table}`).join(', ')} while /terms ` +
+            'is still in the free-of-charge posture. This is the drift the whole group exists to ' +
+            'prevent, read from the other end.',
+    );
   });
 
   it('no source file has grown a payment path (TRIPWIRE)', () => {
@@ -819,8 +1070,12 @@ describe('the free-of-charge clause and the absence of a payment path', () => {
         const key = relative.split(/[\\/]/u).join('/');
         assert.ok(
           allowed.has(key),
-          `${key} mentions money and is not on the reviewed list. If a payment path has been added, ` +
-            'rewrite /terms §7 — it promises a paying student nothing at all.',
+          `${key} uses the vocabulary of a money-moving integration and is not on the reviewed ` +
+            'list. Recording an enrolment needs none of these words. If a real one has been added, ' +
+            'the terms have to say what was bought and what is owed for it, and they do not — that ' +
+            'is a clause for counsel, not an entry on ALLOWED. If instead this is prose DENYING that ' +
+            'money is taken, either reword it as app/terms/page.tsx and lib/legal-config.ts do, or ' +
+            'add it to ALLOWED with the reason a human checked.',
         );
         seen.add(key);
       }
@@ -833,10 +1088,10 @@ describe('the free-of-charge clause and the absence of a payment path', () => {
   });
 
   it('each tripwire fires on a synthetic violation (NEGATIVE CONTROL)', () => {
-    // The three detectors, fed the thing they exist to catch. Without this the group above passes
-    // on a repo that has no payment path AND on a detector that can no longer see one.
+    // The detectors, fed the thing they exist to catch. Without this the group above passes on a
+    // repo that has no payment path AND on a detector that can no longer see one.
     assert.match(splitIdentifiers('@stripe/stripe-js'), PAYMENT_WORDS, 'a payment SDK must be recognised');
-    assert.match(splitIdentifiers('prl.payments'), /\b(payment|order|purchase)/iu, 'a payment table');
+    assert.match(splitTableName('prl.payments'), MONEY_TABLE, 'a payment table');
     assert.match(
       splitIdentifiers('const session = await createCheckoutSession();'),
       PAYMENT_WORDS,
@@ -850,6 +1105,83 @@ describe('the free-of-charge clause and the absence of a payment path', () => {
       PAYMENT_WORDS,
       'a socket subscription is not a payment plan',
     );
+  });
+
+  it('a money table is refused in BOTH postures, and an entitlement table only in one (NEGATIVE CONTROL)', () => {
+    // The property that makes the conditional shape safe: rewriting /terms buys an enrolment record
+    // and nothing else. If MONEY_TABLE ever matched what ENTITLEMENT_TABLE matches, or the reverse,
+    // an honest page would have unlocked a payment table.
+    for (const table of ['prl.payments', 'prl.orders', 'prl.course_invoices', 'prl.unit_ledger']) {
+      assert.match(splitTableName(table), MONEY_TABLE, `${table} must be refused whatever /terms says`);
+      assert.doesNotMatch(splitTableName(table), ENTITLEMENT_TABLE, `${table} is not an entitlement`);
+    }
+    for (const table of ['prl.enrolments', 'prl.enrollments', 'prl.cohorts', 'prl.entitlements']) {
+      assert.match(splitTableName(table), ENTITLEMENT_TABLE, `${table} must be seen`);
+      assert.doesNotMatch(
+        splitTableName(table),
+        MONEY_TABLE,
+        `${table} must not be read as a purchase - it is the distinction the whole rewrite rests on`,
+      );
+    }
+    // The snake_case miss, pinned as its own case because it is the one that got through the first
+    // draft of this group: `\binvoice` has no boundary to find inside `course_invoices`.
+    assert.doesNotMatch(splitIdentifiers('prl.course_invoices'), MONEY_TABLE, 'the miss, reproduced');
+    assert.match(splitTableName('prl.course_invoices'), MONEY_TABLE, 'and the fix that closes it');
+    // The tables that exist today, none of which may be read as a purchase.
+    const tables = schemaTables();
+    assert.ok(tables.length > 8);
+    for (const table of tables.filter((name) => !ENTITLEMENT_TABLE.test(splitTableName(name)))) {
+      assert.doesNotMatch(
+        splitTableName(table),
+        MONEY_TABLE,
+        `prl.${table} is a real table in this schema and the money detector claims it is a purchase`,
+      );
+    }
+  });
+
+  it('the posture reader rejects a /terms that says the wrong thing (NEGATIVE CONTROL)', () => {
+    // The new conditional shape, fed each way it can be got wrong. Every fixture below is built by
+    // mutating the REAL page, so a fixture cannot drift into agreeing with a detector that has
+    // stopped working.
+    const real = read(...PAGES.terms);
+    assert.equal(
+      ENROLMENT_AWARE,
+      readMoneyPosture(real).claimsFree === false,
+      'the real page, as a baseline',
+    );
+
+    // 1. The state that fired this rewrite: the old clause, with the enrolment record in the schema.
+    const stillFree = readMoneyPosture(
+      '<h2>7. Availability</h2><p>This service is provided free of charge and with no promise that ' +
+        'it will be available, that your data will survive, or that any particular feature will ' +
+        'continue to exist.</p>',
+    );
+    assert.equal(stillFree.claimsFree, true, 'the shipped sentence must still be recognised');
+    assert.equal(stillFree.missing.length, ENROLMENT_DISCLOSURES.length, 'and carries no disclosure');
+    assert.equal(stillFree.flagged.length, 0);
+
+    // 2. The half-rewrite: says an enrolment record exists, dropped the sentence saying it implies
+    //    nothing about money. This page reads as a confirmation that the reader was charged.
+    const halfway = readMoneyPosture(
+      real.replace('An enrolment record is not evidence that money changed hands', 'Enrolment is recorded'),
+    );
+    assert.equal(halfway.claimsFree, false);
+    assert.equal(halfway.missing.length, 1, 'exactly the deleted disclosure must be reported missing');
+    assert.ok(
+      halfway.missing[0]?.includes('scholarship cohort'),
+      `the failure must name the claim that went missing, got ${JSON.stringify(halfway.missing)}`,
+    );
+
+    // 3. The flag dropped: the page describes the enrolment and then asserts the commercial half by
+    //    saying nothing about it, which is the exact failure COUNSEL_MARKER exists to prevent.
+    const unflagged = readMoneyPosture(real.replace("COUNSEL_CLAUSES['refunds-and-cancellation']", ''));
+    assert.deepEqual(unflagged.unflagged, ['refunds-and-cancellation']);
+    assert.equal(unflagged.missing.length, 0, 'the prose is untouched; only the flag went');
+
+    // 4. Both at once — a page that says the service is free AND describes enrolment.
+    const both = readMoneyPosture(`${real}<p>This service is provided free of charge.</p>`);
+    assert.equal(both.claimsFree, true);
+    assert.ok(both.discloses.length > 0, 'and the contradiction is visible to the reader, not inferred');
   });
 });
 
@@ -922,6 +1254,64 @@ describe('the guest retention promise on /privacy', () => {
       /seat at a table, a place in a room, or a room of its own/u,
       '/privacy must say what else protects an account from the sweep',
     );
+  });
+
+  /**
+   * The page lists what protects an account; the predicate decides it. They must not drift.
+   *
+   * They already did once, quietly and in the direction that matters. `db/migrations/0006_cohort_
+   * enrolments.sql` made `prl.enrolments.user_id` `ON DELETE CASCADE`, so an account taken by this
+   * sweep takes its enrolments with it — and a class enrolled in advance of the day it opens (0006
+   * argues for exactly that at `:72-73`) is a student erased weeks before their course begins. The
+   * predicate gained a fifth clause for it. The page listed four things and would have gone on
+   * listing four.
+   *
+   * Counted rather than named, because the failure mode is a clause being ADDED and the page not
+   * following. A test that checked the four it knew about would have passed over the fifth, which is
+   * the whole defect.
+   */
+  it('names every protection the predicate actually implements', () => {
+    const users = readFileSync(resolve(REPO, 'apps', 'api', 'src', 'repositories', 'users.ts'), 'utf8');
+    const start = users.indexOf('function abandonedGuestPredicate');
+    assert.ok(start > 0, 'abandonedGuestPredicate has moved or been renamed; this assertion needs it');
+    const predicate = users.slice(start, users.indexOf('}', users.indexOf('`;', start)));
+    const guarded = [...predicate.matchAll(/from prl\.(\w+)/gu)].map((match) => match[1] ?? '');
+    assert.ok(guarded.length >= 4, `the predicate scanned as ${JSON.stringify(guarded)}; that is not it`);
+
+    // What the page must say for each table the predicate consults. A table here with no phrase is a
+    // deliberate failure: somebody has to write the sentence.
+    const PHRASES: Readonly<Record<string, RegExp>> = {
+      sessions: /never while a session is still live/u,
+      room_members: /a place in a room/u,
+      hand_seats: /seat at a table/u,
+      rooms: /a room of its own/u,
+      enrolments: /never while it holds a place in a class/u,
+    };
+    const privacy = flat(read(...PAGES.privacy));
+    for (const table of guarded) {
+      const phrase = PHRASES[table];
+      assert.ok(
+        phrase !== undefined,
+        `the sweep now spares an account because of prl.${table}, and /privacy has no wording for ` +
+          'it. That is a promise to a reader about when their account is safe, so the page has to ' +
+          'learn the new one rather than this test learning to ignore it.',
+      );
+      assert.match(privacy, phrase, `/privacy must say that prl.${table} protects an account`);
+    }
+  });
+
+  it('catches a protection the page has not learned about (NEGATIVE CONTROL)', () => {
+    // The detector above, fed a predicate with a clause nobody has written a sentence for. Without
+    // this it could be passing because the scan found nothing, or because every table happened to
+    // have a phrase already.
+    const scan = (predicate: string): readonly string[] =>
+      [...predicate.matchAll(/from prl\.(\w+)/gu)].map((match) => match[1] ?? '');
+    assert.deepEqual(
+      scan('and not exists (select 1 from prl.enrolments e) and not exists (select 1 from prl.trophies t)'),
+      ['enrolments', 'trophies'],
+      'the scan must see both clauses',
+    );
+    assert.deepEqual(scan("u.kind = 'guest'"), [], 'and see nothing where there is nothing');
   });
 
   it('catches a page that promises erasure on the wrong period (NEGATIVE CONTROL)', () => {

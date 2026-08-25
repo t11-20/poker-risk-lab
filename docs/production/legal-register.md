@@ -1,29 +1,49 @@
 # Legal register — the decisions counsel has to make, and the facts each one rests on
 
-**Status:** Launch blocker, OPEN · **This document closes nothing** · **Drafted:** 2026-08-25
-**Branch:** `production-hardening-2` · **Page text revision under review:** `0.1-draft`
-(`apps/web/src/lib/legal-config.ts:77`)
+**Status:** Launch blocker, OPEN · **This document closes nothing** · **Drafted:** 2026-08-25 ·
+**Revised:** 2026-08-25 (enrolment)
+**Branch:** `production-hardening-2` · **Page text revision under review:** `0.2-draft`
+(`apps/web/src/lib/legal-config.ts`, `LEGAL_REVISION`)
 
 This is input to a lawyer. It contains no legal advice, asserts compliance with no regime, and
 answers none of its own questions. An engineer may not close an entry in it.
 
 It exists because [`final-readiness-report.md`](final-readiness-report.md) residual 5 records the
-legal register as an open launch blocker, and because the product is about to change in a way the
-existing documents do not describe: **a fee is about to be charged, and students are about to be
-onboarded.** Every document in this repository that a reader can see still says the service is free.
+legal register as an open launch blocker, and because the product changed in a way the existing
+documents did not describe: **students are about to be onboarded onto courses.**
+
+> ## Correction, 2026-08-25 — this document's own framing was wrong
+>
+> The paragraph above used to read *"a fee is about to be charged, and students are about to be
+> onboarded"*, and every entry below was written under that premise. **That premise was an
+> assumption, not a finding.** `db/migrations/0006_cohort_enrolments.sql` landed on 2026-08-25 and
+> records who holds a place in a course, on whose authority, against an opaque external
+> `reference` — and **it records nothing about money, because it cannot** (`:25-30`). The grant
+> happens out of band. A scholarship cohort, an employer-funded class and a paid course produce
+> byte-identical rows, and the `reference` may literally be the word `scholarship` (`:32-37`).
+>
+> So **"a fee is charged" is not a fact about this system and this register may not assert it.** The
+> fact is that entitlement is now recorded and the *basis* for it is deliberately outside this
+> software. Where an entry below asks a question premised on a fee, the question is still worth
+> asking — a deployment that charges is plainly one of the cases — but it must be asked for the free
+> case too, and L10 and L11 now say so explicitly. An engineer who assumed the fee and wrote it into
+> the terms would have made the same class of error this document exists to prevent, in the other
+> direction.
 
 ## How this relates to `legal-review-requirements.md`
 
 [`legal-review-requirements.md`](legal-review-requirements.md) is **mechanically coupled** to the
-product: `apps/web/test/legal-pages.test.ts:180` fails if a clause is in `COUNSEL_CLAUSES`
-(`apps/web/src/lib/legal-config.ts:154`) and not named in that file, and the pages fail if they
+product: `apps/web/test/legal-pages.test.ts` fails if a clause is in `COUNSEL_CLAUSES`
+(`apps/web/src/lib/legal-config.ts`, `COUNSEL_CLAUSES`) and not named in that file, and the pages fail if they
 render a clause the register does not assign them. **Do not delete it and do not fold it into this
 one.** It is the machine-checked list of markers on the pages.
 
 This document is the other half: the facts underneath each decision, verified against the code and
-cited to file and line, plus the four decisions the paid course adds that have no marker on any page
-yet because the pages do not know about the fee. Entries L1–L9 correspond to that file's entries 1–9
-by name. Entries L10–L13 are new and have no page marker — which is itself a finding (§7, E5).
+cited to file and line, plus the four decisions that onboarding students onto courses adds. Entries
+L1–L9 correspond to that file's entries 1–9 by name. **L10 and L11 now correspond to its entries 10
+and 11** — they were added on 2026-08-25 with the `/terms` rewrite, so they are marked on the page,
+in `COUNSEL_CLAUSES` and in the review document, and the three are held in step by the test. **L12
+and L13 still have no marker on any page, which remains a finding** (§7, E14).
 
 **Every factual claim below was read out of the working tree on 2026-08-25 and cited. Where a stated
 fact and the code disagreed, the disagreement is recorded in §4 rather than smoothed over.**
@@ -33,8 +53,19 @@ while this was written: unrelated work landed during the review, including
 `db/migrations/0005_room_ownership.sql` (§2.8, D5) and `apps/api/test/cohort-sign-in-limits.test.ts`
 (§1). Every line number here was read after those landed and re-verified at the end, but a register
 is only as current as the schema underneath it. **Re-check §2 against `db/migrations/` before this
-is sent to counsel.** `apps/web/test/legal-pages.test.ts:385` will refuse a new table that `/privacy`
+is sent to counsel.** `apps/web/test/legal-pages.test.ts` will refuse a new table that `/privacy`
 does not account for, which is the mechanism that makes "re-check" a gate and not a good intention.
+**It has now refused twice** — `prl.room_ownership` (D5), then `prl.cohorts` and `prl.enrolments`
+(§2.9).
+
+**The caveat applied again, harder, later on 2026-08-25.** `db/migrations/0006_cohort_enrolments.sql`
+and the API code that reads it landed *during* this revision, and the API-side files were moved in
+and out of the working tree while it was being written. Every claim below about
+`db/migrations/0006_cohort_enrolments.sql` was read from that file and is stable — a migration cannot
+be edited once applied (`apps/api/scripts/migrate.mjs` records a sha256 and aborts on a mismatch).
+**Claims about `apps/api/src/repositories/users.ts` are flagged where they appear and each carries
+the command that re-checks it.** Nothing here should be taken as current about that file without
+running the check beside it.
 
 ---
 
@@ -67,17 +98,35 @@ deposits, top-ups or subscriptions **tied to units**" — a course fee is not ti
 does not cross that guardrail. The distinction counsel needs is therefore clean and defensible:
 **money buys lessons; money never buys, becomes, or is redeemed for anything at a poker table.**
 
-The second is a defect. **Because there is no payment code, the fee is collected somewhere this
-system cannot see, and this system therefore has no enrolment record, no entitlement, no refund
-mechanism, no receipt, and no record that anybody paid anything.** It also still tells every reader,
-in the shipped terms, that the service is free — `apps/web/src/app/terms/page.tsx:247`: *"This
-service is provided free of charge…"* — and asks counsel a question premised on that
-(`apps/web/src/lib/legal-config.ts:203`: *"…and that the software is offered free of charge?"*).
-That is now false, and it is false in a document a paying customer will be shown. See §4 D1.
+The second was a defect and is now half closed. **Because there is no code that takes money,
+whatever is exchanged for a place in a course is exchanged somewhere this system cannot see.** When
+this was first written the consequence was total: no enrolment record, no entitlement, no record
+that anybody had been admitted to anything, and a shipped `/terms` telling every reader the service
+was free.
 
-Work on paying cohorts has already begun in the API: `apps/api/test/cohort-sign-in-limits.test.ts`
-opens *"A paying cohort's first five minutes. Thirty students on one campus, office or VPN egress
-address open the app together and sign in."* So this is not hypothetical.
+`db/migrations/0006_cohort_enrolments.sql` (§2.9) closed the first half. **There is now a durable
+record of entitlement** — who holds a place, in which cohort, on whose authority, against an opaque
+external `reference`, until when, and whether it was withdrawn and why. What is still absent, and
+absent on purpose, is anything about money: no refund mechanism, no receipt, no amount, no way for
+this system to know what — if anything — was exchanged.
+
+**Read that carefully, because it is the distinction the rest of this document now turns on.** An
+enrolment record does **not** establish that a fee was paid. `0006:32-37` is explicit that the
+`reference` may be a purchase-order number, a row in a finance system nobody here can read, a
+registry entry, **or the literal word `scholarship`**, and that this schema "does not know, and must
+never learn, which of those it is". So the correct statement of the position is: *money buys
+lessons where a deployment charges for them; this software records only that somebody was admitted,
+and never by whom or for what.*
+
+`/terms` no longer says the service is free — see §4 D1, now fixed — and the question at
+`apps/web/src/lib/legal-config.ts` that was premised on it has had the premise withdrawn rather than
+answered (L8).
+
+Cohort onboarding is not hypothetical: `apps/api/test/cohort-sign-in-limits.test.ts` opens *"A
+paying cohort's first five minutes. Thirty students on one campus, office or VPN egress address open
+the app together and sign in."* Note in passing that the word *paying* in that test's own prose is
+an assumption of the same kind this document had to correct in itself — the rate limiter neither
+knows nor cares.
 
 ---
 
@@ -196,7 +245,54 @@ column that could hold an account id. Listed because the inventory must account 
 because saying "nothing" is a fact somebody checked rather than a table somebody forgot. Added to
 `/privacy` by this change — see §4 D5.
 
-### 2.9 Who can read it
+### 2.9 `prl.cohorts` and `prl.enrolments` — entitlement, and on whose authority
+
+Added by `db/migrations/0006_cohort_enrolments.sql` on 2026-08-25, after the first draft of this
+document. `apps/web/test/legal-pages.test.ts` failed on both tables, which is the coupling working
+for the second time (D5 was the first). Every line below was read out of that file.
+
+**`prl.cohorts` (`:215-243`) holds nothing about any person.** `key` (a typed handle, 3–64 chars,
+`^[a-z0-9]+(-[a-z0-9]+)*$`, `:222-226`), `name` (2–120 chars, trimmed, `:228-232`), `starts_at`,
+nullable `ends_at`, `created_at`. There is no account column and none that could hold one. The
+table's own `COMMENT` says it: *"Holds nothing about any person and nothing about what anything
+cost"* (`:245-247`).
+
+**`prl.enrolments` (`:262-322`) — one person's place in one cohort.**
+
+| Field | What it is | Why held | Where it comes from |
+|---|---|---|---|
+| `id` | `enr_` + random (`:263-264`) | Primary key | Server |
+| `cohort_id` | FK → `cohorts`, **ON DELETE RESTRICT** (`:266-267`) | Which class. RESTRICT so a cohort with enrolments cannot be removed and take the record of everybody in it (`:54-61`) | Operator |
+| `user_id` | FK → `users`, **ON DELETE CASCADE** (`:269-270`) | Whose place | Operator |
+| `granted_at` | timestamptz (`:272`) | When the entitlement was created | Server |
+| `granted_by` | text, 2–128, trimmed (`:277-281`) | **On whose authority.** Free text and deliberately not a foreign key: there is no instructor table and no admin role in this product (`:330-332`) | **Typed by an operator** |
+| `reference` | text, 1–200, trimmed, **NOT NULL** (`:285-289`) | An **opaque external identifier** — a purchase-order number, a row id in a finance system nobody here can read, a registry entry, or the word `scholarship`. Never parsed here (`:32-37`, `:333-335`) | **Typed by an operator** |
+| `starts_at` / `expires_at` | timestamptz, expiry nullable (`:291-292`) | The person's window. NULL expiry is not "forever" — the cohort's `ends_at` still bounds it (`:336-338`) | Operator |
+| `revoked_at` / `revoked_by` / `revoked_reason` | all-or-nothing triple (`:294-321`) | Withdrawal, with its authority and its reason. A `CHECK` refuses a partial revocation, so a withdrawal nobody can account for cannot be recorded at all (`:313-319`) | Operator |
+
+**The fact counsel most needs from this section: there is no amount, currency, price or receipt
+column here or anywhere in the schema, and this system therefore cannot say whether a place was
+paid for** (`:25-30`; `0001_initial.sql:4-9` is unchanged and still true). Entitlement is the
+intersection of the enrolment's window and the cohort's (`:83-99`), so a cohort that has ended
+entitles nobody however its enrolments are written.
+
+**Reach.** `prl_app` — the request path — is granted **`SELECT` and nothing else** on both tables
+(`:387-388`), the narrowest verb set in the schema. There is no privileged HTTP surface: enrolment
+happens through `apps/api/scripts/enrolments.mjs` connecting as the migrating identity, which no
+request handler can reach (`:143-162`). An injection that reaches the runtime role can read who is
+enrolled and cannot enrol anybody, extend its own access, or erase a revocation.
+
+**History, and what survives an erasure.** Every grant, supersession and revocation writes an
+append-only `prl.audit_log` row in the **same transaction** as the change
+(`apps/api/src/repositories/enrolments.ts:504,516,570`), and a grant's `detail` carries the external
+`reference` (`:516-523`). `user_id` on the enrolment is CASCADE, so `POST /me/delete` removes the
+enrolment row; `audit_log.user_id` is SET NULL (`0001_initial.sql:855-856`), so what remains is a
+detached row saying that on a date, on somebody's authority, against that reference, a place was
+granted and later ended. **Counsel should be told both halves plainly:** the erasure is real, and the
+external reference an operator typed outlives it in a table nothing ever sweeps. `/privacy` §2 and
+§6 now say so.
+
+### 2.10 Who can read it
 
 | Identity | Reach | Cited |
 |---|---|---|
@@ -210,7 +306,7 @@ because saying "nothing" is a fact somebody checked rather than a table somebody
 list it** — that section says "Three roles" and shows a table with two rows, neither of which is the
 one that can read every hole card ever dealt. See §4 D3.
 
-### 2.10 Where it is copied to
+### 2.11 Where it is copied to
 
 * **Backups.** `pg_dump` as `prl_backup`, encrypted, nightly at 02:30 UTC
   (`deploy/backup/prl-backup.timer:18`), verified and pruned Sundays at 04:00
@@ -275,7 +371,7 @@ document exists to avoid, so it is written down as two separate answers.
 * **The SMTP smarthost**, if alerting is configured. Carries alert content and the on-call
   addresses, not learner data (`deploy/staging/observability/alertmanager.template.yml:104-114,146-163`).
 
-### 2.11 Retention actually implemented
+### 2.12 Retention actually implemented
 
 | Category | Stated | **Implemented** | Cited |
 |---|---|---|---|
@@ -287,8 +383,9 @@ document exists to avoid, so it is written down as two separate answers.
 | Everything else | until you delete your account | **Correct — no sweep exists for any other table** | `apps/api/src/maintenance/retention-sweep.ts` |
 | Abandoned guest accounts | *not stated anywhere* | **60 days unseen, and only if provably dead** — no live session, no membership, no hand seat, no room. Implemented 2026-08-25; the period is DERIVED from the session ceiling, not chosen | §4 D4, `apps/api/src/maintenance/retention-sweep.ts` |
 | Backups | *was not stated at all* | **Up to ~6 months**, newest good one never pruned | `scripts/backup.mjs:188-190,1238-1247` |
-| Container logs (all services) | *not stated at all* | **Size-capped, not time-limited.** Every service in all three compose files: api 20m×5, proxy 10m×5, the rest 10m×3. That bounds the disk; it is **not** a retention period, and none is implemented | §2.10, §4 D2, §7 E12 |
+| Container logs (all services) | *not stated at all* | **Size-capped, not time-limited.** Every service in all three compose files: api 20m×5, proxy 10m×5, the rest 10m×3. That bounds the disk; it is **not** a retention period, and none is implemented | §2.11, §4 D2, §7 E12 |
 | `prl.audit_log` | until you delete your account | Correct — but rows survive deletion with `user_id` NULL, and nothing ever removes them | `0001_initial.sql:855-856,953` |
+| `prl.enrolments` / `prl.cohorts` | until you delete your account | **No sweep exists and none is planned.** An expired or revoked enrolment is kept deliberately — a withdrawal an operator cannot evidence is worth nothing. Account deletion removes the enrolment by CASCADE; the audit rows about it survive detached | §2.9, `0006:269-270`, `retention-sweep.ts` |
 
 ---
 
@@ -303,7 +400,18 @@ the route cannot be aimed at somebody else (`:671-673`) — and refuses a pool h
 transaction (`users.ts:418-422`).
 
 **REMOVED** — `prl.sessions`, `prl.lesson_progress`, `prl.quiz_attempts`, `prl.scenario_attempts`,
-`prl.room_members` (every seat, live or long departed).
+`prl.room_members` (every seat, live or long departed), and since 2026-08-25 `prl.enrolments` —
+every place held, live, expired or revoked, by `ON DELETE CASCADE` (`0006:269-270`). The reasoning
+is 0004's own, applied unchanged: an enrolment is one person's record and nobody else's, and one
+naming an account that no longer exists entitles nobody (`0006:168-193`).
+
+> **Re-check before this is sent to counsel.** The referential action above is in the migration and
+> is stable. Whether `accountFootprint` — the self-verification described next — *counts* the
+> enrolment table is a separate question in `apps/api/src/repositories/users.ts`, and that file was
+> being edited by other work while this section was written; it was read both with and without a
+> ninth count. Deletion removes the row either way, because the CASCADE does it; what is at stake is
+> only whether a half-erasure would be caught. Count the `count(*) from prl.` subqueries in
+> `accountFootprint` — eight means `prl.enrolments` sits outside the check.
 
 **DETACHED to NULL** — `prl.hand_seats.user_id`, `prl.audit_log.user_id`,
 `prl.rooms.owner_user_id`. Rooms the learner created are **closed first, in the same transaction**
@@ -313,9 +421,10 @@ transaction (`users.ts:418-422`).
 **KEPT IN FULL** — every hand: actions, board, commitment root, reveal proofs. A hand is a shared
 record; four other people were in it (`0004_account_deletion.sql:30-32`).
 
-**It verifies itself.** `accountFootprint` counts eight tables before and again after, inside the
-same transaction, and throws if anything survives — so a schema that half-erased an account rolls
-back rather than reporting a deletion that did not happen (`users.ts:352-369,482-494`). This is
+**It verifies itself.** `accountFootprint` counts the tables naming the learner before and again
+after, inside the same transaction, and throws if anything survives — so a schema that half-erased
+an account rolls back rather than reporting a deletion that did not happen
+(`users.ts:352-369,482-494`). This is
 unusually strong and worth telling counsel: the erasure is not a promise, it is checked.
 
 Almost none of the work is in TypeScript. Five of the eight foreign keys act by themselves, and
@@ -341,6 +450,12 @@ so the log never briefly points at an account that asked to stop existing
 6. **Metrics.** Nothing to reach — no identifiers exist there.
 7. **`prl.audit_log` rows.** Detached, never removed.
 8. **The identity provider.** Outside this system entirely.
+9. **The audit rows written when a place in a course was granted and withdrawn.** Detached, never
+   removed, and a grant's `detail` carries the external `reference` an operator typed
+   (`apps/api/src/repositories/enrolments.ts:516-523`). So after an erasure the operator can still
+   see that on a date, on an authority, against that reference, a place was granted and later ended
+   — with nobody named. Deliberate and defensible; also a thing a reader must be told, and
+   `/privacy` §2 and §6 now tell them.
 
 ### 3.3 There is no data-export path, and for a paying user that is a gap
 
@@ -348,7 +463,8 @@ The complete route inventory contains no export endpoint. The closest thing is
 `GET /me/progress` (`apps/api/src/routes/progress.ts:97`), which returns progress only — not the
 account row, not sessions, not memberships, not hand history in a portable form, not audit entries.
 The word "portability" appears in this repository exactly twice, both times inside a question for
-counsel (`apps/web/src/lib/legal-config.ts:212`, `legal-review-requirements.md:129`).
+counsel (`apps/web/src/lib/legal-config.ts`, `data-controller-and-rights`;
+`legal-review-requirements.md` entry 6).
 
 Stated plainly: **a paying student who asks for a copy of their data can be given one only by an
 operator running SQL by hand.** Whether that is required is L4/L6; that it does not exist is fact.
@@ -360,21 +476,54 @@ Scoped fix at §7 E1.
 
 Ordered by how much they matter. D1, D2 and D4 were found by this review.
 
-### D1 — The shipped terms tell a paying customer the service is free
+### D1 — The shipped terms told a reader with a place in a course that the service is free
 
-`apps/web/src/app/terms/page.tsx:247`: *"This service is provided free of charge and with no promise
-that it will be available, that your data will survive, or that any particular feature will continue
-to exist. It may be taken down, reset or changed at any time by whoever runs it."*
+**Fixed, and no legal question was answered doing it.**
 
-A fee changes the meaning of every clause in that sentence. `apps/web/src/lib/legal-config.ts:203`
-also asks counsel a question that is premised on the service being free, so the register itself is
-now asking the wrong question. `/privacy` similarly tells readers there are "no payment details"
-in the schema (`apps/web/src/app/privacy/page.tsx`, `prl.users` entry) — still true of *this*
-schema, and materially incomplete once payment happens elsewhere.
+`/terms` §7 read: *"This service is provided free of charge and with no promise that it will be
+available, that your data will survive, or that any particular feature will continue to exist. It
+may be taken down, reset or changed at any time by whoever runs it."*
 
-**Not fixed here.** The replacement wording is a commercial and legal decision (L10, L11), not a
-copy-edit, and writing one would be exactly the conclusion this document refuses to draw. It is the
-highest-priority item on the list.
+**The clause was load-bearing on being free.** Every promise it withheld was withheld on the basis
+of the first six words. Reasonable to somebody who paid nothing; indefensible to somebody who paid
+for a course. And the obvious repair — swapping "free of charge" for "for a fee" — would have been
+worse than the contradiction, because it leaves a document promising a paying student nothing at all
+and looking deliberate about it. It would also have asserted the fee, which §1's correction shows
+this system cannot establish.
+
+`apps/web/test/legal-pages.test.ts` fired on `prl.enrolments` when 0006 landed, which is what it was
+built for.
+
+**What was done, 2026-08-25.** The clause was split along the line between what the software *is*
+and what the operator *owes*, and only the first half was written by engineers.
+
+* **`/terms` §7 — "What access to this costs, and what the software records about it"** — factual,
+  and every sentence checkable against `db/migrations/0006_cohort_enrolments.sql`: that this software
+  cannot take money and cannot tell whether a reader paid; that no column in its database can hold an
+  amount, a currency or a price; what an enrolment record contains; that a withdrawal is written down
+  rather than erased; that a place ends when the cohort's own period ends; and — the sentence the
+  whole rewrite turns on — that **an enrolment record is not evidence that money changed hands**,
+  because a scholarship group, a class of employees and a paid course produce identical rows and the
+  `reference` may be the word `scholarship`.
+* **`/terms` §8 — "Availability"** — keeps the technical half of the old clause, which was always
+  true and is a description of how the thing is built rather than a term somebody chose, and then
+  says outright that it does **not** settle whether the operator may exercise any of it without
+  owing the reader something.
+* **Two new entries in `COUNSEL_CLAUSES`** carry the commercial halves to a lawyer instead of
+  asserting them: `enrolment-and-fees` on §7 (L10) and `refunds-and-cancellation` on §8 (L11). Both
+  are rendered on the page with `COUNSEL_MARKER` and both are entries 10 and 11 of
+  `legal-review-requirements.md`, so the three cannot drift.
+* **The premise inside `liability-and-warranty` was withdrawn, not answered** — see L8.
+* `LEGAL_REVISION` moved to `0.2-draft` and `LEGAL_DRAFTED_ON` to 2026-08-25, because §12 of the
+  terms promises a reader that the revision changes when the text does and that line is the whole of
+  the notification mechanism this product has.
+
+**Nothing here closes L10 or L11.** What closed is a false sentence shipping to a reader. The
+replacement states facts and marks the decisions; it does not make them.
+
+`/privacy` was also wrong in the same direction and is fixed: it now carries `prl.cohorts` and
+`prl.enrolments` in the inventory, says what an enrolment holds, that nothing sweeps it, that
+account deletion removes it, and that the audit rows about it survive detached (§2.9, §3).
 
 ### D2 — The reverse proxy logged raw IP addresses, full user agents and OIDC authorization codes — **fixed**
 
@@ -449,7 +598,7 @@ clean and changed nothing.
   and the log an incident is reconstructed from), proxy 10m × 5, postgres / web / prometheus /
   alertmanager 10m × 3. Postgres is the interesting one — near-silent today because this stack sets
   no `log_min_duration_statement`, and two orders of magnitude louder the afternoon somebody sets
-  one to chase a slow query and forgets. See §2.10 for why there is no logrotate and why a size cap
+  one to chase a slow query and forgets. See §2.11 for why there is no logrotate and why a size cap
   is not a retention period.
 
 Re-run against the same throwaway container, the same request produced, on both configs:
@@ -467,7 +616,7 @@ urt=0.001 rid=<the API's request id>`, so the diagnostic value is real rather th
 #### What is still open
 
 The disk-exhaustion half is closed. **What a size cap cannot do is implement a retention period**,
-and this document must not let one be mistaken for the other — §2.10 says so at length and §7 E12
+and this document must not let one be mistaken for the other — §2.11 says so at length and §7 E12
 carries the remaining item.
 
 #### The gate
@@ -572,8 +721,9 @@ comment cannot do.
 
 ### D5 — `prl.room_ownership` was not in the inventory
 
-`db/migrations/0005_room_ownership.sql` landed during this review and `apps/web/test/legal-pages.test.ts:385`
-correctly failed: every table in `db/migrations` must be accounted for on `/privacy`. **Fixed** — the
+`db/migrations/0005_room_ownership.sql` landed during this review and
+`apps/web/test/legal-pages.test.ts` correctly failed: every table in `db/migrations` must be accounted for on
+`/privacy`. **Fixed** — the
 table holds no personal data and now says so. This is the coupling test working exactly as intended.
 
 ### D6 — Retention periods on `/privacy` disagreed with the code
@@ -606,6 +756,76 @@ verbatim as `err.message`, because `err` is a serialized key the recursive scrub
 `packages/poker-math/src/ranges.ts:297,318`). Room ids, hand ids and seat indices are logged by
 design and are pseudonymous but joinable. E6.
 
+### D9 — The abandoned-guest sweep and a live entitlement — **checked; the clause is there**
+
+**Recorded as a check rather than a defect, because the timing matters and a register that says
+"found a bug" about a state nobody shipped is not worth having.**
+
+The sweep erases a guest account sixty days after it was last seen, *provided the account is provably
+dead*. "Provably dead" is `abandonedGuestPredicate` in `apps/api/src/repositories/users.ts`. When
+0006 landed it read: no live session, no `prl.room_members` row, no `prl.hand_seats` row, no owned
+room — **four facts, none of them an enrolment.** `prl.enrolments.user_id` is `ON DELETE CASCADE`
+(`0006:269-270`), so an account taken by the sweep takes its enrolments with it.
+
+**Why that would have been the worst thing in this document.** The sequence is ordinary, and 0006
+anticipates its first half itself: `starts_at` "exists so that a class can be enrolled in advance of
+the day it opens" (`:72-73`). Enrol a January cohort for a course opening in April; a student who was
+given a guest account by visiting once and did not come back is erased in March, three weeks before
+their course begins, along with the record that they were admitted to it. `granted_by` and
+`reference` survive in `prl.audit_log` with `user_id` NULL, so the *operator's* history is intact —
+and the entitlement is gone and cannot be reconstructed, because nothing left names the person. The
+derivation that justifies sixty days ("every credential that could reach this account is already
+dead", D4) is sound about the *account* and says nothing about whether a third party's record of it
+may be destroyed.
+
+**Verified 2026-08-25, after the enrolment work settled:** the clause is present.
+
+```
+$ grep -c "not exists (select 1 from prl" apps/api/src/repositories/users.ts
+4
+    and not exists (select 1 from prl.enrolments  e where e.user_id = u.id)
+```
+
+`accountFootprint` also counts the enrolment table, so the erasure's self-verification covers it
+(nine `count(*) from prl.` subqueries, not eight).
+
+**One thing for counsel, and it is not closed by the clause being there.** The predicate is the
+**broad** form — *any* enrolment protects the account, including one revoked two years ago. That is
+the safe direction (keeping a row nobody needs costs a row; erasing a student before their course
+costs the student), and whether it is the *right* direction is **L5's question, not an engineer's**:
+an account whose only enrolment was revoked long ago is arguably as dead as one that never had one,
+and narrowing the clause to unrevoked-and-unexpired is a retention decision, not a tidy-up.
+
+**And the page had to learn it, which is now mechanical.** `/privacy` §5 listed the four things that
+protect an account from the sweep and would have gone on listing four. It now names the fifth, and
+`legal-pages.test.ts` **enumerates the tables `abandonedGuestPredicate` consults and requires a
+sentence on the page for each one** — counted, never named, because the failure mode is a clause
+being *added* and the page not following, and a test that knew today's four would have passed over
+the fifth in silence. Demonstrated by deleting the sentence from the page: *"/privacy must say that
+prl.enrolments protects an account"*. E13, done.
+
+### D10 — `/privacy` §4 described a leak that had already been fixed — **fixed**
+
+The page said the reverse proxy "writes a conventional access log: one line per request carrying
+your *raw* IP address, your *full* User-Agent string, the complete request line including anything
+in the query string, and the page you came from", and that a federated sign-in's parameters were in
+it. That was true of `combined` and it is **not true of what ships**: both configurations were
+rewritten in the same commit as the paragraph (`deploy/staging/nginx.conf:237-266`,
+`docker-compose.yml:591-626`) — `$uri` rather than `$request`, the client address mapped to a /24 or
+a /48, the user agent reduced to a class, no `$http_referer`, `error_log crit`, and `/dev/null` on
+the OIDC callback. D2 above records the measurement.
+
+This document said "**The page was fixed** (see §6)" and §6 said the paragraph had been *added*.
+Both were true of the paragraph and neither noticed that the paragraph then described the old
+configuration. So the register asserted a fix that its own page text contradicted, which is the
+failure mode a register is supposed to make impossible.
+
+Overstating an exposure sounds harmless. It is not: a policy that describes a worse system than the
+one running teaches its reader that it was not written from the code, and the next error — in the
+other direction — inherits that credence. §4 now describes `prl_privacy`, and says in as many words
+that a network prefix is *reduction* and not anonymisation, which is a weaker property than the
+keyed HMAC the application stores.
+
 ---
 
 ## 5. The register
@@ -623,7 +843,8 @@ that change the required details?**
 
 **(b)** The software is open source and runnable by anyone. Pages render `PRL_LEGAL_OPERATOR` and
 `PRL_LEGAL_CONTACT` from the server environment, never from a build-time constant, so one image
-serves every deployer (`apps/web/src/lib/legal-config.ts:45-51`). Unset renders a visible
+serves every deployer (`apps/web/src/lib/legal-config.ts`, `readLegalDeployment`). Unset renders a
+visible
 "not supplied by this deployment" marker rather than a plausible default (`:19-21`).
 
 **(c)** Unset. Both variables are commented placeholders in `.env.example:411-412`. Every reader
@@ -631,7 +852,7 @@ today sees the gap marker.
 
 **(d)** Any answer is two environment variables plus a redeploy. If counsel requires a registered
 number, address or VAT identifier, that is either more variables or a rewritten `<dl>` block in
-`apps/web/src/app/terms/page.tsx:108-119` and `privacy/page.tsx`.
+the `prl-legal__meta` block on `/terms` and on `/privacy`.
 
 **(e)** Low if answered, total if not: a paid course sold by a party who does not identify itself is
 the failure mode that makes every other clause unenforceable and every contact obligation unmet.
@@ -723,7 +944,7 @@ and which statutory rights — access, rectification, erasure, **portability**, 
 offered to whom? **Does taking a fee change the basis for any category from whatever it is today?**
 
 **(b)** §2 is the inventory and it is checked against the schema by
-`apps/web/test/legal-pages.test.ts:385`, which fails if a migration adds a table `/privacy` does not
+`apps/web/test/legal-pages.test.ts`, which fails if a migration adds a table `/privacy` does not
 account for — it fired during this review (D5). Note in particular: an account is created for a
 visitor **automatically**, on opening a lesson, without being asked for anything
 (`apps/web/src/app/privacy/page.tsx` §1). Rectification of a display name exists (rename). **Access
@@ -745,7 +966,7 @@ visitor, and the operator currently has no tool but manual SQL.
 rather than **detached**? **How long may backups keep an erased learner's rows?** **How long may the
 proxy access log keep raw addresses?**
 
-**(b)** The full implemented picture is §2.11 — including that the page **understated** the session
+**(b)** The full implemented picture is §2.12 — including that the page **understated** the session
 period until this change (D6), that **abandoned guest accounts are now erased after sixty days unseen** (D4), that
 **backups hold erased rows for up to ~6 months** and that **the proxy log has no retention at all**
 (D2). Deleting hand history is not a policy toggle: `prl_app` holds **no DELETE privilege** on
@@ -773,7 +994,7 @@ or disclosure does that require? **Who administers the backup host, given the ro
 
 **(b)** The application makes **no outbound connection** other than to its own database and, if
 configured, an OIDC provider — no analytics, no error reporting, no CDN, no remote font; the CSP has
-no host for any of them (`apps/web/src/lib/csp.ts:79,136`). Reach is the table at §2.9, and
+no host for any of them (`apps/web/src/lib/csp.ts:79,136`). Reach is the table at §2.10, and
 **`prl_backup` holds `pg_read_all_data`** (`deploy/backup/README.md:62`). `PRL_LEGAL_HOSTING_REGION`
 is what the page displays.
 
@@ -793,7 +1014,7 @@ being theoretical.**
 clause, no class-action waiver and no forum selection in the shipped text**, because writing one
 would be the conclusion this process exists to refuse (`legal-review-requirements.md:104-106`).
 
-**(c)** Unset. `apps/web/src/app/terms/page.tsx:274-275` is a bare marker.
+**(c)** Unset. `/terms` §11 is a bare marker and nothing else.
 
 **(d)** Real prose, replacing the marker and removing the clause from `COUNSEL_CLAUSES` — the two
 are coupled, so neither can be done alone (`legal-review-requirements.md:26-30`).
@@ -802,19 +1023,24 @@ are coupled, so neither can be done alone (`legal-review-requirements.md:26-30`)
 
 ### L8 · `liability-and-warranty` — disclaimer and limitation
 
-**(a)** What may this deployment lawfully disclaim and limit? **The existing question in the code
-says "given that the software is offered free of charge" — that premise is about to be false, and
-the question has to be re-asked without it.**
+**(a)** What may this deployment lawfully disclaim and limit? **The premise has been withdrawn, not
+answered.** The question in the code used to end "…and that the software is offered free of charge".
+That premise is not one this software can establish any more (§1), so it was removed rather than
+replaced with the opposite: **counsel must answer for a deployment that charges and one that does
+not, because the code cannot distinguish them.**
 
 **(b)** Shipped text says only that the software is provided as it is and the authors make no
-warranty; **no cap, no exclusion list, no indemnity**
-(`apps/web/src/app/terms/page.tsx:256-260`). The `LICENSE` covers the software, not the service a
-deployer offers. `/terms` §7 currently disclaims availability *and data survival* on the basis that
-the service is free (`:247-251`).
+warranty; **no cap, no exclusion list, no indemnity** (`/terms` §9). The `LICENSE` covers the
+software, not the service a deployer offers. `/terms` §8 still disclaims availability *and data
+survival* — but no longer *on the basis that the service is free*, and it now says outright that
+whether the operator may exercise any of it without owing the reader something is not settled there.
 
-**(c)** Minimal disclaimer, free-of-charge premise, no limitation of liability at all.
+**(c)** Minimal disclaimer, premise withdrawn, no limitation of liability at all. The clause a
+lawyer has to replace is one paragraph and one `CounselFlag`, both in §8.
 
-**(d)** Any answer is prose plus a rewritten question at `apps/web/src/lib/legal-config.ts:196-204`.
+**(d)** Any answer is prose replacing that paragraph, plus removing `liability-and-warranty` from
+`COUNSEL_CLAUSES`. **Done, 2026-08-25:** the free-of-charge premise is out of the question text
+(`apps/web/src/lib/legal-config.ts`, `liability-and-warranty`), with the reason recorded beside it.
 
 **(e)** High. A broad exclusion drafted against consumers who paid is the classic unenforceable
 clause, and "your data may not survive" reads very differently to someone holding a receipt.
@@ -843,56 +1069,95 @@ attributed-mode disclaimer already exists.
 **(e)** High, and commercial use raises it: a fee turns "an educational project displays a name" into
 "a paid product features a name".
 
-### L10 · `paid-course-terms` — what the fee buys — **NEW**
+### L10 · `enrolment-and-fees` — what an enrolment is, and what was sold
 
-**(a)** What exactly does a student purchase — access for a period, a cohort place, a licence to
-material? Which contract terms must be presented **before** payment, where is payment taken, and who
-is the seller? Are pre-contract disclosures required, and must they appear on a page this
-application serves, given payment happens elsewhere?
+**NOW MARKED ON `/terms` §7.**
 
-**(b)** No payment code exists (§1). The application cannot present terms at a checkout it does not
-have, cannot record acceptance, and cannot gate anything on payment: there is no entitlement column,
-no cohort table, and no enrolment record anywhere in `db/migrations/`. Every account is created
-automatically for any visitor (`/privacy` §1), so **paid and unpaid users are indistinguishable to
-this system**. `apps/api/test/cohort-sign-in-limits.test.ts` shows cohort onboarding is being built
-against the rate limiter, not against any notion of entitlement.
+*Renamed from `paid-course-terms`. The old slug asserted the fee, which §1's correction shows this
+system cannot establish; the entry number is unchanged so an answer can still cite "L10".*
+`enrolment-and-fees` is now a live clause id in `COUNSEL_CLAUSES`, rendered on `/terms` §7 with
+`COUNSEL_MARKER`, and entry 10 of `legal-review-requirements.md`. **The finding that it had no page
+marker is closed. The question is not.**
 
-**(c)** The terms say the service is free (D1). Nothing records that anyone paid.
+**(a)** What exactly does a student get, and what — if anything — has the operator sold? Which
+contract terms and pre-contract disclosures must be presented **before** any sale, on which page and
+by whom? Do terms displayed here bind a purchase completed somewhere this software cannot see? And
+**does the answer differ for a cohort enrolled for nothing**, since the record is identical?
 
-**(d)** *Fee collected entirely off-platform, access ungated* → this system needs no payment code,
-but `/terms` must stop saying "free of charge" and must describe the relationship accurately, and
-counsel must decide whether terms shown here bind a purchase made elsewhere. *Access must be gated
-on payment* → substantial new work: entitlement, enrolment, a link between an external payment
-identity and `prl.users`, and a fresh privacy inventory covering it. *Acceptance must be recorded* →
-a new table, a new inventory entry, a new retention period.
+**(b)** — all verified against `db/migrations/0006_cohort_enrolments.sql` (§2.9):
 
-**(e)** Very high. This is the entry that makes the others urgent, and answering it wrongly in the
-"ungated" direction is cheap to fix while answering it wrongly in the "gated" direction means
-building a payment-adjacent subsystem into a codebase whose central guarantee is that it has none.
+* **There is still no code that takes money**, and `apps/web/test/legal-pages.test.ts` fails the
+  build on a dependency, a table name or a source file that changes that — in every posture the page
+  can be in. Recording entitlement did not widen that detector by one word.
+* **An enrolment records THAT somebody is entitled and WHO SAID SO**, never what anything cost. The
+  `reference` is opaque and may be the word `scholarship` (`:32-37`, `:333-335`).
+* Entitlement is the intersection of the enrolment's window and the cohort's (`:83-99`), so a cohort
+  that has ended entitles nobody however its enrolments are written.
+* **There is no privileged HTTP surface.** `prl_app` holds `SELECT` and nothing else on both tables
+  (`:387-388`); enrolment is an operator command connecting as the migrating identity
+  (`apps/api/scripts/enrolments.mjs`), unreachable from any handler (`:143-162`).
+* **Nothing is gated on entitlement yet.** Every account is still created automatically for any
+  visitor, and no route consults `prl.enrolments` to decide what a reader may see. An enrolled
+  reader and an unenrolled one currently get the same product.
+* **Acceptance of terms is not recorded anywhere**, and there is no column that could hold it.
 
-### L11 · `refunds-and-cancellation` — **NEW**
+**(c)** `/terms` §7 states the facts above and hands this question to counsel. It asserts no
+commercial term.
 
-**(a)** What refund, cancellation and cooling-off rights must be offered for a paid educational
-service in each place it is sold? Does a cooling-off right survive a student starting the course?
-Must a refund policy be shown before purchase, and where?
+**(d)** *Fee collected entirely off-platform, access ungated* → §7's wording already fits; counsel
+must decide whether terms shown here bind a purchase made elsewhere and what must be disclosed
+before it. *Access must be gated on entitlement* → the read now exists and is indexed for a request
+path (`0006:358-373`); the work is the gating decision, the routes, and what an ungated reader is
+shown. *Acceptance must be recorded* → a new column or table, a new inventory entry, a new retention
+period. *Pre-contract disclosures must appear on a page this application serves* → new page, and it
+must be reachable without an account, like the other three.
 
-**(b)** The word "refund" appears nowhere in the repository. There is no refund route, no order
-record, no receipt, no entitlement to revoke, and no way for this system to know a refund happened.
-`/terms` §7 reserves the right to take the service down or reset it at any time
-(`apps/web/src/app/terms/page.tsx:247-251`) — a clause written for a free service, sitting directly
-against any refund promise. `POST /me/delete` erases an account irreversibly and immediately
-(§3.1), with no notion of an outstanding entitlement to preserve or void.
+**(e)** Very high. Answering wrongly in the "ungated" direction is cheap to fix; answering wrongly in
+the "gated" direction means building an entitlement-enforcing subsystem into a product whose central
+guarantee is that skill here converts into nothing.
 
-**(c)** Nothing. There is no refund concept at any layer.
+### L11 · `refunds-and-cancellation` — refunds, cancellation and interruption
+
+**NOW MARKED ON `/terms` §8.**
+
+Now a live clause id in `COUNSEL_CLAUSES`, rendered on `/terms` §8, entry 11 of
+`legal-review-requirements.md`. **The missing-marker finding is closed; the question is open.**
+
+**(a)** What refund, cancellation and cooling-off rights must be offered where a place is sold? Does
+a cooling-off right survive a student starting the course? Must the policy be shown before purchase,
+and where, given the purchase happens off-platform? **What does the operator owe a reader whose
+access ends because the deployment was taken down, reset or changed** — which `/terms` §8 reserves
+the right to do? And **what should deleting an account do to a place that has not expired?**
+
+**(b)**
+
+* The word "refund" still appears nowhere in the application. No amount, no order, no receipt,
+  nothing that could record money going back. **Revoking an enrolment ends access and returns
+  nothing.**
+* **Revocation is a record, not an erasure.** `revoked_at`, `revoked_by` and `revoked_reason` are
+  written into the row and the row stays; a `CHECK` refuses a partial revocation, so a withdrawal
+  with no stated reason cannot be recorded at all (`0006:294-321`, `:339-342`). A re-grant after a
+  revocation works, because the unique index is partial on `revoked_at IS NULL` (`:354-356`).
+* **`POST /me/delete` destroys the enrolment.** CASCADE (`0006:269-270`), no notion of an outstanding
+  entitlement to preserve, void or refund, and the deletion is irreversible and immediate (§3.1).
+  That is a deliberate decision (`0006:168-193`) and one counsel may need to overturn — the audit
+  rows survive, so the *operator's* record does, but the *student's* entitlement does not.
+* **`/terms` §8 no longer rests on the service being free.** It states the technical facts and says
+  that whether the operator may exercise them without owing the reader something is not settled
+  there. Replacing that paragraph with real prose is what closes this entry.
+* **Nothing in this software can be told that a refund happened**, so any refund policy is enforced
+  by an operator running a revocation by hand.
+
+**(c)** No refund concept at any layer. Access can be withdrawn; nothing can be returned.
 
 **(d)** *Statutory cooling-off applies* → the policy must be presented before purchase, which is off
-this platform, and §7's "may be taken down at any time" must be reconciled with it. *Refunds revoke
-access* → requires L10's gating to exist first. *Refunds are handled entirely by the payment
-provider* → still needs a stated policy on `/terms` and a decision about what deleting an account
-does to a live entitlement.
+this platform, and §8 must be reconciled with it. *Refunds revoke access* → the mechanism exists
+(`revoke`); what does not exist is any link between a refund event and this system. *Deletion must
+not destroy an unexpired entitlement* → a change to `0004`'s referential action and to
+`deleteAccount`, and a decision about what an entitlement naming nobody would mean.
 
-**(e)** High and immediate: this is the first thing a dissatisfied student looks for, and the first
-thing a consumer regulator asks for.
+**(e)** High and immediate: the first thing a dissatisfied student looks for and the first thing a
+consumer regulator asks for.
 
 ### L12 · `sub-processors` — who else touches the data — **NEW**
 
@@ -904,15 +1169,18 @@ about each, and which need a written processing agreement?
 | Party | Present? | What it gets | Cited |
 |---|---|---|---|
 | **OIDC identity provider** | Only if configured | That a subject signed in here and when. Receives no learner content. **Scope requested is `openid profile`, which entitles it to return more claims than are used** | `apps/api/src/auth/oidc.ts:124,818-823` |
-| **Hosting / infrastructure** | Always | Everything, including backups and the proxy access log — which since D2 was fixed carries a /24 rather than a raw IP, and no query strings | §2.9, §2.10, D2 |
+| **Hosting / infrastructure** | Always | Everything, including backups and the proxy access log — which since D2 was fixed carries a /24 rather than a raw IP, and no query strings | §2.10, §2.11, D2 |
 | **SMTP smarthost** | Only if alerting configured | Alert content and on-call addresses; **no learner data** | `deploy/staging/observability/alertmanager.template.yml:104-114,146-163` |
 | **Container registry** | Optional | Images. No personal data | `deploy/registry/` |
-| **Payment provider** | **Unknown — outside this system entirely** | Whatever the operator gives it | §1 |
+| **Whoever the operator collects from, if anybody** | **Unknown — outside this system entirely** | Whatever the operator gives them. **This application sends nothing and receives nothing**; the only trace is the opaque `reference` an operator typed into an enrolment, which is meaningful in some other system and never parsed here (`0006:32-37`) | §1, §2.9 |
+| **The system that `reference` points into** | Only where an operator uses one | Nothing — the join runs the other way. Somebody holding both this database and that one can link a person to a record there, and only the operator knows what "there" is | §2.9 |
 | Analytics, error reporting, CDN, remote fonts, advertising | **None. Not disabled — absent** | — | CSP has no host for any: `apps/web/src/lib/csp.ts:79,136` |
 
 **(c)** Nothing is disclosed as a sub-processor anywhere; `/privacy` §7 says "by default, nobody"
-and names the identity provider as the only outbound connection — accurate about the application,
-silent about hosting and the payment provider.
+and names the identity provider as the only outbound connection. Since 2026-08-25 it also carries a
+paragraph saying that an enrolment's `reference` "is meaningful in some system outside this one",
+that this application never contacts that system, and that only the operator can say what it is.
+Still accurate about the application and still silent about hosting.
 
 **(d)** *Disclosure list required* → a new `/privacy` section, and the list depends on operator
 choices this repository cannot know. *Processing agreements required* → commercial work outside the
@@ -971,26 +1239,95 @@ supposed to remember about a student.**
 
 ## 6. What this review changed
 
-Code and prose only; no legal question was answered and no blocker was closed.
+Code and prose only; **no legal question was answered and no blocker was closed.**
+
+### The 2026-08-25 revision, after `db/migrations/0006_cohort_enrolments.sql`
+
+* **`apps/web/src/app/terms/page.tsx`** — §7 rewritten and split in two. The old §7 ("This service
+  is provided free of charge…") is gone; §7 now states, from the migration, what an enrolment record
+  holds and that it implies nothing about money, and §8 keeps the technical availability facts and
+  says outright that they do not settle what the operator owes. Sections 8–11 renumbered to 9–12.
+  The full argument is in D1 and in the file's own header.
+* **`apps/web/src/lib/legal-config.ts`** — two new clauses, `enrolment-and-fees` and
+  `refunds-and-cancellation`; the free-of-charge premise removed from `liability-and-warranty`'s
+  question with the reason recorded beside it; `LEGAL_REVISION` → `0.2-draft`, `LEGAL_DRAFTED_ON` →
+  2026-08-25.
+* **`apps/web/src/app/privacy/page.tsx`** — `prl.cohorts` and `prl.enrolments` added to the
+  inventory; §2's `prl.audit_log` entry now says that enrolment events are written there and that a
+  grant's detail carries the external reference; §5 says nothing sweeps an enrolment and that
+  expiring is not deleting; §6 says deletion removes the enrolment and detaches the audit rows about
+  it; §7 says the reference points into a system this application never contacts. **And §4 was
+  corrected**, having described a proxy log leak that had already been fixed — D10.
+* **`docs/production/legal-review-requirements.md`** — entries 10 and 11 added with the facts from
+  0006; entry 5's free-of-charge premise withdrawn; `/terms` section numbers in entries 3, 4 and 5
+  updated for the renumbering.
+* **`apps/web/test/legal-pages.test.ts`** — the payment tripwire rebuilt. See below.
+* **`apps/web/test/honesty-claims.test.ts`** — the assertion that `/terms` still makes the honest
+  version of the availability claim was keyed to a label ending "on a service that is free". It now
+  reads the page's prose with comments stripped and asserts **three** things rather than one: the
+  no-availability sentence, the sentence saying the technical disclaimer does not settle the
+  commercial question, and the sentence saying an enrolment is not evidence of a fee. The second and
+  third are the ones somebody tidying the clause would delete first, because they read like hedges.
+
+### What the tripwire became, and why it is conditional rather than exempted
+
+The group in `legal-pages.test.ts` fired on `prl.enrolments`, correctly. It was **not** weakened, and
+no exemption was added for the table. Instead:
+
+* **`/terms` may take one of exactly two postures**, and the test reads the page to decide which:
+  *free-of-charge*, or *enrolment-aware* (four named disclosure sentences present, the free-of-charge
+  claim absent, and both new counsel clauses flagged). A page carrying some of that and not the rest
+  fails — the half-rewrite is the dangerous state, because a page that says an enrolment exists and
+  drops the sentence saying it implies nothing about money reads as a confirmation that readers were
+  charged.
+* **Table names are split into two lists.** Money words (`payment`, `purchase`, `order`, `invoice`,
+  `price`, `charge`, `ledger`…) fail **unconditionally, in every posture**. Entitlement words
+  (`enrolment`, `cohort`, `entitlement`…) fail **unless `/terms` is completely enrolment-aware**.
+  Recording an entitlement and taking money are different facts, and the second detector was not
+  widened by one word to accommodate the first.
+* **It runs in both directions.** A `/terms` rewritten to describe an enrolment record that no
+  migration creates is a false factual claim on a legal page, and fails here too.
+
+Why this shape and not an allowlist entry: **an exemption is a claim about a table, evaluated once,
+by whoever added it. The property that matters is that two files agree, and it has to be
+re-evaluated on every run.** Under the conditional shape the table is permitted only for as long as
+the page keeps saying the honest thing about it — delete a disclosure paragraph or drop one counsel
+flag and the migration detector starts firing again on a table that has not changed. An exemption
+cannot do that, because it does not know what the page says.
+
+**Two detector bugs were found by negative controls while doing this**, both the same bug in
+different clothes:
+
+1. `\binvoice` does not match `course_invoices` — `_` is a word character, so there is no boundary
+   inside a snake_case identifier, and every table in this schema is snake_case. The fix is a
+   `splitTableName` that splits on `_` and `.` as well as case transitions. This is the exact
+   sibling of the `createCheckoutSession` miss the original group was built around.
+2. The posture reader read the page's own **header comment** — which quotes the clause it replaced —
+   as a live claim, and reported the page as taking both positions at once. A detector keyed to a
+   sentence cannot tell a claim from a quotation of one, so the reader now strips block comments
+   before deciding what the page says. Without that, the only way to document the change honestly
+   would have been to stop quoting the sentence being changed.
+
+**Every detector was demonstrated firing on a real violation**, not only on synthetic strings: a
+`@stripe/stripe-js` dependency added to `apps/web/package.json`; a `prl.course_payments` table in a
+throwaway migration file (which the snake_case fix is what catches); a `createCheckoutSession()` call
+in a throwaway source file; `/terms` reverted to the old free-of-charge clause; and — the property
+an exemption could never have — `/terms` left honest in prose with **one counsel flag deleted**, at
+which point the migration detector re-fires on a table nobody touched. All five were reverted.
+
+### The earlier passes, retained
 
 * **`apps/web/src/app/privacy/page.tsx`** — corrected the session retention period (14-day *idle*
   window plus the **60-day absolute ceiling**, which appeared nowhere); corrected the sign-in-attempt
   entry to distinguish "stops working" from "is removed"; added the sweep-latency gap and the fact
   that the first sweep is at T+6 h, not boot; added a §6 paragraph stating that **deletion does not
-  reach backups** and how long the shipped policy keeps them; added a §4 paragraph stating that
-  **the reverse proxy writes a separate, unredacted access log** carrying the raw IP, the full user
-  agent, the whole query string and, on the OIDC callback, the sign-in parameters; narrowed the
-  `prl.sessions` "never written anywhere" claim to "never written to the database"; added the
-  `prl.room_ownership` inventory entry.
-* **`apps/web/test/legal-pages.test.ts`** — a new group that **reads the four constants out of the
-  API source** (`SESSION_TTL_SECONDS`, `SESSION_ABSOLUTE_TTL_SECONDS`, `OIDC_ATTEMPT_TTL_SECONDS`,
-  `DEFAULT_INTERVAL_MS`) and fails if `/privacy` and the code disagree again, plus four negative
-  controls: the exact sentence that shipped is rejected, a page naming the idle window but not the
-  ceiling is caught, a constant that stops being a product of literals fails loudly rather than
-  reading as some other number, and a period whose wording nobody added throws instead of being
-  spelled numerically.
+  reach backups** and how long the shipped policy keeps them; narrowed the `prl.sessions` "never
+  written anywhere" claim to "never written to the database"; added the `prl.room_ownership`
+  inventory entry.
+* **`apps/web/test/legal-pages.test.ts`** — a group that **reads the four retention constants out of
+  the API source** and fails if `/privacy` and the code disagree again, plus four negative controls.
 
-`pnpm run lint` clean · `pnpm run typecheck` clean · `pnpm --filter @prl/web test` **374/374**.
+`pnpm --filter @prl/web test` **388/388** · `biome check` clean on every file touched.
 
 ---
 
@@ -1005,7 +1342,7 @@ Code and prose only; no legal question was answered and no blocker was closed.
 | **L6** international transfer | Facts established; one variable |
 | **L7** governing law | Awaiting prose only |
 | **L9** legend naming | Safe default shipped and locked; awaiting written permission |
-| **L12** sub-processors | List established (§5 L12); disclosure is a drafting decision |
+| **L12** sub-processors | List established (§5 L12); disclosure is a drafting decision. **Still has no marker on any page** — E14 |
 
 ### Counsel decides, then engineering acts
 
@@ -1014,9 +1351,9 @@ Code and prose only; no legal question was answered and no blocker was closed.
 | **L2** age threshold | Config only — **unless** counsel says self-declaration is insufficient (identity documents, new threat model) or that `/lab` and `/review` must be gated (E8) |
 | **L4** rights | Portability → **E1** |
 | **L5** retention | Deleting hand history → migration + grants + a decision about other players. Guest expiry → **E5, done** on a derived period; a different answer is one constant. Backup window → policy change |
-| **L8** liability | Prose, plus rewriting the question at `legal-config.ts:196-204` |
-| **L10** paid-course terms | Ungated → prose (**E9**). Gated → a substantial new subsystem |
-| **L11** refunds | Ungated → prose. Revocation → depends on L10 |
+| **L8** liability | Prose only. **The question has been re-asked without the free-of-charge premise (done)**; what remains is replacing the paragraph in `/terms` §9 |
+| **L10** enrolment and fees | **Marked on `/terms` §7 (done)**, and the record it describes exists. Ungated → prose. Gated on entitlement → the read exists and is indexed (`0006:358-373`); the work is the gating decision and the routes |
+| **L11** refunds and cancellation | **Marked on `/terms` §8 (done)**. Ungated → prose. Revocation → the mechanism exists; the missing link is between a refund event and this system. Deletion must not destroy a live entitlement → a change to 0004's referential action |
 | **L13** accessibility & records | Certification needs a person, not code (**E10**). Completion records need a guardrail change and a migration |
 
 ### Engineering work items, open now
@@ -1066,9 +1403,24 @@ Independent of any legal answer, with file paths.
   `/review` and `/legends` are ungated at that scope. Either widen the list or document the choice
   where a deployer reads it. Blocked on L2. **The register text should not describe `play` as "the
   simulated tables" without this caveat.**
-* **E9 · `/terms` says the service is free.** `apps/web/src/app/terms/page.tsx:247` and the premise
-  inside `apps/web/src/lib/legal-config.ts:203`. Blocked on L10/L11 for the wording, **but the
-  false sentence should not ship to a paying student whatever the final text turns out to be.** D1.
+* **E9 · `/terms` says the service is free. — DONE, 2026-08-25.** The clause was split rather than
+  reworded: §7 states what an enrolment record is and that it implies nothing about money, §8 keeps
+  the technical availability facts and says outright that they do not settle what the operator owes,
+  and both commercial halves went to `COUNSEL_CLAUSES` as `enrolment-and-fees` and
+  `refunds-and-cancellation`. The premise inside `legal-config.ts` was withdrawn, not answered. **No
+  legal question was answered and L10/L11 are still open** — what closed is a false sentence shipping
+  to a reader. D1, §6.
+* **E13 · `/privacy` §5 did not list the fifth thing that protects a guest account. — DONE,
+  2026-08-25.** The page named a live session, a seat at a table, a place in a room and a room of its
+  own; a place in a class protects an account too. The sentence is there, and the drift is now
+  mechanical rather than remembered: the test enumerates the tables `abandonedGuestPredicate`
+  consults and demands a sentence on the page for each, so a sixth clause fails the build with the
+  table named. D9.
+* **E14 · L12 and L13 have no marker on any page.** L10 and L11 acquired one on 2026-08-25 and the
+  mechanism worked; the same is not true of sub-processors or of record-keeping. Sub-processors is a
+  `/privacy` §7 clause and would be a fourth clause on that page — the register is deliberately short
+  (`legal-config.ts` says why), so this is a judgement about whether the disclosure belongs inline or
+  as prose, not an oversight to close by reflex. §5 L12, L13.
 * **E11 · `/privacy` §5 no longer describes guest retention correctly.** *(Created by the E5
   work, and the only inaccuracy it introduced.)* The page says everything other than sessions and
   sign-in attempts is "kept until you delete your account". Since 2026-08-25 an abandoned guest
@@ -1082,14 +1434,14 @@ Independent of any legal answer, with file paths.
   `docs/production/accessibility-certification.md`. L13.
 * **E12 · Container logs have a size cap and no retention period.** Split out of E2, because they
   are different questions and closing one was being read as closing both. Every container log is now
-  bounded in SIZE (§2.10); nothing bounds it in TIME. A 100 MiB api log holds months at ten requests
+  bounded in SIZE (§2.11); nothing bounds it in TIME. A 100 MiB api log holds months at ten requests
   a minute and an afternoon under load, so "operational logs are kept for N days" is not a claim
   this deployment can make. logrotate is **not** the fix and must not be added — the Docker daemon
   owns these files, and renaming one out from under it leaves the daemon writing to an unlinked
-  inode (§2.10). The fix is either a log driver that ships to a store with a time-based policy, or a
+  inode (§2.11). The fix is either a log driver that ships to a store with a time-based policy, or a
   periodic sweep of the daemon's log directory that is honest about racing the daemon. Blocked on
   L7 for the number, **not** blocked for the mechanism: the mechanism can be built before anyone
-  decides what N is. §2.10, §2.11, D2.
+  decides what N is. §2.11, §2.12, D2.
 
 ---
 

@@ -232,11 +232,34 @@ describe('the legal surface claims nothing it cannot stand behind', () => {
     );
     assert.match(privacy, /keyed HMAC/u);
 
-    const terms = read('app', 'terms', 'page.tsx').replace(/\s+/gu, ' ');
+    const terms = proseOf(read('app', 'terms', 'page.tsx')).replace(/\s+/gu, ' ');
     assert.match(
       terms,
       /no promise that it will be available/u,
-      'in place of a guarantee, on a service that is free and may be reset at any time',
+      'in place of a guarantee, on a service that may be reset at any time',
+    );
+    // The label on the assertion above used to end "on a service that is free and may be reset at
+    // any time", and the clause it guards used to open "This service is provided free of charge".
+    // That premise went when db/migrations/0006_cohort_enrolments.sql added a record of who holds a
+    // place in a course: an enrolment is granted out of band, so the software cannot tell whether a
+    // place was paid for, and withholding availability from somebody who paid is not the same act as
+    // withholding it from somebody who was given the thing.
+    //
+    // Which makes the sentence above only half of the honest claim now, and the missing half is the
+    // one a reader is actually owed: that the page is NOT deciding what the operator owes them. That
+    // is the sentence somebody tidying the clause would delete first, because it reads like a hedge
+    // rather than a term, so it gets its own assertion.
+    assert.match(
+      terms,
+      /whether the operator may do any of it without owing you something/u,
+      '/terms must still say that the technical disclaimer does not settle the commercial question. ' +
+        'Deleting it leaves a page that reads as though it had been settled.',
+    );
+    assert.match(
+      terms,
+      /An enrolment record is not evidence that money changed hands/u,
+      'and must still say that an enrolment implies nothing about money, which is what stops the ' +
+        'clause above being read as a disclaimer aimed at people who paid',
     );
   });
 

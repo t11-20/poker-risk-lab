@@ -321,9 +321,38 @@ Not "it started". In order:
    drops the upstream's copy;
 7. the smoke test, `--strict`, over https: guest sessions, CSRF enforcement,
    content, calculation, rooms, the hidden-information property over a **real
-   `wss://` WebSocket**, hand-history isolation, the CSP on the rendered page, and
-   rate limiting;
+   `wss://` WebSocket**, hand-history isolation, the CSP on the rendered page,
+   the **seat guard in both directions** (see below), and rate limiting;
 8. the `X-Forwarded-For` overwrite proof described above.
+
+### The seat guard runs ON here, and that is the whole reason it is not decoration
+
+`PRL_ENROLMENT_REQUIRED` ships defaulting to `off` — an open public instance is a
+legitimate deployment and every deployment that predates the switch is one. A
+default-off guard that nothing exercises is decoration, so this stack sets
+`enforced` in `docker-compose.staging.yml` and `staging up` passes
+`--expect-enrolment enforced` to the smoke test. That run proves all four cells
+over TLS on every deploy:
+
+| | REST `POST /rooms/:roomId/sit` | socket `sit` frame |
+| --- | --- | --- |
+| not enrolled | 403 `enrolment_required` | `error` frame, socket **left open** |
+| enrolled | 200, seated | `ack`, seated |
+
+A run that finds this stack behaving as `off` **fails** rather than reporting the
+open behaviour, so deleting the compose line breaks the gate instead of quietly
+disarming it. The socket half is not optional: a guard on the REST route with the
+frame left open reads as enforced and is not, which is worse than no guard.
+
+The run needs an enrolment to exist, and **the API cannot write one** — migration
+0006 grants `prl_app` SELECT and nothing else on `prl.cohorts` and
+`prl.enrolments`, and there is deliberately no admin route. So `staging.mjs` hands
+the smoke run the same `DATABASE_MIGRATION_URL` it used for the migration step,
+and the run drives `apps/api/scripts/enrolments.mjs` — the operator's own tool — to
+create a reusable `smoke-test` cohort, grant its two throwaway guests, and **revoke
+them at the end of the run**. The cohort stays: `enrolments.cohort_id` is
+`ON DELETE RESTRICT` and no role holds DELETE. The guest accounts are erased by the
+retention sweep after 60 days, and their enrolment rows cascade away with them.
 
 ## Alerting, as an overlay
 
