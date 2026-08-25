@@ -22,3 +22,4 @@ supersedes the old one, and the old one is marked. That history is the point.
 | [0010](0010-no-public-matchmaking-or-chat.md) | No public matchmaking and no free-text chat | Accepted |
 | [0011](0011-strategy-profiles-not-celebrity-simulation.md) | Modelled strategy profiles, not celebrity simulation | Accepted |
 | [0012](0012-probabilistic-policies-and-no-llm-in-the-loop.md) | Probabilistic policies, and no LLM in the decision loop | Accepted |
+| [0013](0013-room-affinity-and-horizontal-scale.md) | Room affinity, and why horizontal scale is a protocol change | Accepted |

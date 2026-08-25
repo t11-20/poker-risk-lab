@@ -139,3 +139,85 @@ because `JSON.stringify(Infinity)` is `null`. Negative controls for both are in
 `scripts/load-test.test.mjs`. In the run above, the fix is visible at the 48-player level:
 its bound is exactly 50 ms, it is the highest passing level, and it no longer carries a
 spurious pool-exhaustion diagnosis.
+
+---
+
+## Sizing a cohort
+
+Everything above is a **saturation** measurement: how hard one process can be driven before
+it starts refusing. That is the right question for finding the bottleneck and the wrong
+question for "how many students can I enrol", and this section exists because the two were
+being read as the same number.
+
+### Why you cannot read a cohort size off the tables
+
+A harness "player" has **think time 0 ms** — it acts the instant it is asked. A learner
+reads the board, looks at the Coach, and acts perhaps once every ten or twenty seconds. The
+tables therefore do not say "24 people fit". They say "24 zero-think actors fit", which is
+a different and much heavier thing per person.
+
+The useful currency is **actions per second**, not player count. Converting the measured
+runs, using the ~12.5 actions per hand that the idle-host run's two columns imply
+(2,472 act/s at 11,817 hands/min) — a derived figure, not a measured one, and stable only
+because the seat count was the same:
+
+| Run | Highest passing | Hands/min | Actions/s |
+| --- | ---: | ---: | ---: |
+| Idle host, one process | 72 | 12,862 | 2,696 (measured) |
+| Container, contended host | 48 | 7,509 | ~1,565 (derived) |
+
+A learner acting once every twelve seconds contributes about **0.08 actions/s**. Dividing
+one by the other gives a number in the tens of thousands, and that number is **wrong** —
+which is the point of stating it. Action throughput is not what runs out first for
+human-paced players.
+
+### What actually runs out first for a cohort
+
+Two costs are paid per **room**, continuously, and do not fall when players slow down:
+
+- **State frames.** Under ADR 0009 every change sends a whole redacted frame to every
+  socket in the room. Think time delays the change; it does not make the frame smaller or
+  the fan-out narrower.
+- **Turn timers.** One per seat with a decision pending, ticking whether or not anybody is
+  thinking.
+
+And one cost is paid per **request**, and is by far the most expensive thing a learner can
+ask for: a **Coach** call, which is bounded Monte Carlo on the worker pool (ADR 0005). The
+worker queue is the resource that fired at saturation in both runs. A class told to "press
+the Coach button on every street" generates a load profile with almost nothing in common
+with the ramps above.
+
+So size by **concurrent seated players and their Coach rate**, not by hands per minute.
+
+### The one honest procedure
+
+The zero-think ramp is a **conservative proxy at equal room count**: 24 zero-think players
+at `--seats 3` is 8 rooms, and 8 rooms of real learners cost strictly less. So a ramp that
+passes at N players over R rooms is evidence that R rooms of learners are comfortable — and
+evidence about nothing else.
+
+Measure on the machine you will actually run on, with the limits production will actually
+have:
+
+```bash
+# Ramp to the room count your cohort implies (cohort ÷ seats per room), not to a player
+# count you hope to serve. Drive the container, not a host process.
+node scripts/load-test.mjs --ramp 8,16,24,32 --seats 3
+```
+
+Then read the **stop criterion**, not the top row. A run that ends on `refusal-rate-limited`
+has measured your rate-limit configuration and not your machine — the harness now says so at
+the number rather than three lines below it, and the reconciliation above is what that
+warning was written from.
+
+Numbers measured anywhere else, including everything in this file, are evidence about the
+**shape** of the bottleneck — CPU and the Monte Carlo worker queue, with the event loop
+close behind — and are not a capacity for your deployment.
+
+### The ceiling that no measurement moves
+
+One API process serves every room, and that is a correctness constraint rather than a
+sizing choice: see [ADR 0013](../adr/0013-room-affinity-and-horizontal-scale.md). Vertical
+scale is available and buys exactly the resources that run out here. Horizontal scale is a
+protocol change and is not in this release, so no configuration you can write today serves
+hundreds of *concurrent seated* players.
