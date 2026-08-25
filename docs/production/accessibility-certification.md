@@ -343,7 +343,46 @@ Resize to 390 x 844, or use a phone-sized window.
 
 ---
 
-## 8. Results
+## 8. Running it
+
+`pnpm run certify:screen-reader` walks a reviewer through every assertion in this document, in
+order, and writes the result to `accessibility-certification-result.json`.
+
+It reads the assertions **out of this file** rather than carrying a copy, so editing a journey here
+changes what the session asks. `scripts/screen-reader-certify.test.mjs` asserts that the parse
+agrees with the per-section counts in §9 below — a harness that quietly matched fewer rows would
+otherwise produce a complete-looking session covering part of the document, which is exactly what
+the first version of it did (10 of 73).
+
+```
+pnpm run certify:screen-reader                 # start, or resume where you stopped
+pnpm run certify:screen-reader -- --preflight  # check the environment, answer nothing
+pnpm run certify:screen-reader -- --section G  # the global assertions only
+pnpm run certify:screen-reader -- --check      # is the recorded result current?
+```
+
+Three things it enforces that a paper form cannot:
+
+- **It refuses to call an incomplete session a pass.** Every assertion answered, no `FAIL`, no
+  `SILENT`, or the verdict is NOT CERTIFIED.
+- **A `FAIL` or a `SILENT` must quote what was announced.** "It said the wrong thing" is not a
+  defect report; the words are the entire subject matter here.
+- **The result is stamped with the commit it was run against**, and `--check` calls it stale once
+  `HEAD` moves. A screen reader speaks the build it was given and no other.
+
+### On error -1743
+
+Every release report this project has produced records this certification as UNVERIFIED, citing
+`osascript` error **-1743**. That is accurate about what it says and misleading about what it
+means: **-1743 refuses an AGENT permission to drive VoiceOver. It does not stop a person.** Pressing
+Command + F5 and listening needs no Automation grant. The grant in §3 is needed only if you intend
+to script the reader; a human certification does not.
+
+What has actually been missing is somebody sitting down for half an hour. That is what this is for.
+
+---
+
+## 9. Results
 
 **Build under test:** `_______________________` (git SHA)
 **Date:** `____________`  **Reviewer:** `____________________`

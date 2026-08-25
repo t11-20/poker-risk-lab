@@ -66,7 +66,8 @@
     "backup": "node scripts/backup.mjs",
     "release:artifacts": "node scripts/release-artifacts.mjs",
     "staging": "node scripts/staging.mjs",
-    "alerts:verify": "node scripts/alert-delivery.mjs"
+    "alerts:verify": "node scripts/alert-delivery.mjs",
+    "certify:screen-reader": "node scripts/screen-reader-certify.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",

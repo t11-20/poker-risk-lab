@@ -1,0 +1,165 @@
+# ---------------------------------------------------------------------------
+# Alertmanager, for the staging stack only — as a TEMPLATE, not as the file
+# Alertmanager reads.
+#
+# `scripts/alert-delivery.mjs` renders this into `alertmanager.yml` next to it
+# before it brings the overlay up, exactly as it already renders `metrics-token`
+# from `PRL_STAGING_METRICS_TOKEN`. That rendered file is gitignored, because it
+# is per-deployment configuration rather than source.
+#
+#     node scripts/alert-delivery.mjs --render-config   # render and stop
+#     pnpm run alerts:verify                            # render, bring up, prove
+#
+# ## Why a template and not a file with the destinations written into it
+#
+# This file used to name two URLs on `host.docker.internal:9099` — the sink the
+# verification script runs — and every document about it ended the same way:
+# "production replaces two URLs and changes nothing else". That sentence is the
+# admission. A destination that can only be changed by editing a tracked file is
+# a destination that gets changed on a laptop, at the wrong moment, by somebody
+# who is already having a bad night, and the change is invisible to review
+# because it never lands in a commit.
+#
+# Alertmanager does not expand environment variables in its own configuration —
+# it is one of the few Prometheus-ecosystem components that flatly refuses to,
+# on the grounds that a config file should be reproducible from itself. That
+# leaves exactly two honest options: render the file from a template at bring-up,
+# or ship a second file and tell people to overlay it. The first is chosen here
+# because this repository already does it for a credential, and because a
+# rendered file can be shown, diffed and archived, which an overlay cannot.
+#
+# ## The substitution language, in full
+#
+# `${NAME}` is replaced by the value of `NAME`. A `${NAME}` with no value is an
+# error rather than an empty string — the failure mode being avoided is an
+# Alertmanager that starts happily with `url: ` and silently notifies nobody.
+#
+# `# @if NAME` … `# @endif` keeps the enclosed lines only when `NAME` has a
+# non-empty value. That is what makes each destination optional: a deployment
+# that pages by email and files tickets by webhook sets three values and the
+# blocks it did not fill in are not emitted at all. `renderAlertmanagerConfig`
+# in `scripts/alert-delivery.mjs` refuses to render a receiver with no
+# destination left in it, because a receiver Alertmanager accepts and that
+# notifies nothing is the exact shape of this blocker.
+#
+# The directives are YAML comments on purpose, so this file still reads as the
+# configuration it becomes.
+#
+# ## What a deployment sets
+#
+# | Variable | Default (staging rehearsal) | What it is |
+# | --- | --- | --- |
+# | `PRL_ALERT_PAGE_WEBHOOK_URL` | the local sink's `/page` | PagerDuty Events API v2, Opsgenie, or a Slack relay |
+# | `PRL_ALERT_TICKET_WEBHOOK_URL` | the local sink's `/ticket` | the ticket queue's intake webhook |
+# | `PRL_ALERT_PAGE_EMAIL_TO` | `oncall@…invalid` | email-to-SMS, an email-to-PagerDuty address, or a shared inbox |
+# | `PRL_ALERT_TICKET_EMAIL_TO` | `tickets@…invalid` | the ticket queue's intake address |
+# | `PRL_ALERT_SMTP_SMARTHOST` | the local SMTP sink | `host:port` of the relay that accepts the mail |
+# | `PRL_ALERT_EMAIL_FROM` | `alertmanager@…invalid` | envelope sender; providers reject mail from a domain they do not know |
+# | `PRL_ALERT_SMTP_HELLO` | `localhost` | the name given in `EHLO` |
+# | `PRL_ALERT_SMTP_REQUIRE_TLS` | `false` | **must be `true` anywhere the relay is not on the same host** |
+# | `PRL_ALERT_SMTP_USERNAME` | unset | enables SMTP AUTH; the password comes from a file, never from here |
+#
+# Any of the four destination variables may be set to the empty string to drop
+# that destination, as long as each tier keeps at least one.
+#
+# ## The password is a file, not a value in here
+#
+# `smtp_auth_password_file` rather than `smtp_auth_password`, mounted at
+# `/etc/alertmanager/smtp-password` by `docker-compose.observability.yml` and
+# written by `alert-delivery.mjs` from `PRL_ALERT_SMTP_PASSWORD` at mode 0600,
+# for the same reason `metrics-token` is a file: the rendered configuration is
+# the artefact somebody pastes into a bug report, and a submission password in
+# it is a credential in a chat log. It is also why the rendered file is 0644 and
+# the password file is not.
+#
+# ## `continue: false` on the paging route is still the important line
+#
+# Route matching in Alertmanager is first-match-wins per branch, and a `page`
+# alert must not also raise a ticket: two notifications for one incident is how
+# a ticket queue becomes something nobody reads. The default receiver is the
+# catch-all for an alert whose severity label is neither value, which
+# `alert-delivery.mjs` treats as a configuration error rather than a routing
+# outcome — every rule in `alert-rules.yml` is checked to carry one of the two.
+#
+# The route tree below is byte-for-byte what it was before the receivers became
+# configurable, and that is deliberate: it is the part that is verified in both
+# directions — a page that does not raise a ticket, and a ticket that does not
+# page — and a change to it would have to re-earn that.
+#
+# ## group_wait is short here and would not be in production
+#
+# 5 s, so a verification run finishes in a minute rather than in five. Production
+# wants the default 30 s so that a burst of related alerts arrives as one
+# notification. The value is called out here because it is the one setting in
+# this file that is tuned for the test rather than for the deployment.
+# ---------------------------------------------------------------------------
+
+global:
+  resolve_timeout: 1m
+# @if PRL_ALERT_SMTP_SMARTHOST
+  # SMTP defaults for every `email_configs` below. Put here rather than repeated
+  # per receiver so that a deployment changes its relay in one place; only the
+  # recipient differs between the two tiers, and the recipient is the thing the
+  # two tiers are about.
+  smtp_smarthost: '${PRL_ALERT_SMTP_SMARTHOST}'
+  smtp_from: '${PRL_ALERT_EMAIL_FROM}'
+  smtp_hello: '${PRL_ALERT_SMTP_HELLO}'
+  # Alertmanager defaults this to true, which is the right default and the wrong
+  # one for a sink on the same host with no certificate. It is a variable rather
+  # than a constant so that turning it off is a deployment's recorded decision.
+  smtp_require_tls: ${PRL_ALERT_SMTP_REQUIRE_TLS}
+# @endif
+# @if PRL_ALERT_SMTP_USERNAME
+  smtp_auth_username: '${PRL_ALERT_SMTP_USERNAME}'
+  smtp_auth_password_file: /etc/alertmanager/smtp-password
+# @endif
+
+route:
+  receiver: tickets
+  group_by: ['alertname']
+  group_wait: 5s
+  group_interval: 10s
+  repeat_interval: 1h
+  routes:
+    - matchers:
+        - severity = "page"
+      receiver: paging
+      continue: false
+      group_wait: 5s
+    - matchers:
+        - severity = "ticket"
+      receiver: tickets
+      continue: false
+
+receivers:
+  - name: paging
+# @if PRL_ALERT_PAGE_WEBHOOK_URL
+    webhook_configs:
+      # In the rehearsal this is host.docker.internal, which Docker Desktop
+      # resolves and which the compose overlay's `host-gateway` entry makes work
+      # on Linux too. In a deployment it is whatever accepts a JSON POST:
+      # PagerDuty's Events API v2, Opsgenie, or a relay in front of Slack.
+      - url: '${PRL_ALERT_PAGE_WEBHOOK_URL}'
+        send_resolved: true
+# @endif
+# @if PRL_ALERT_PAGE_EMAIL_TO
+    email_configs:
+      # Email is not a lesser transport here. A great many teams page through it —
+      # an email-to-SMS gateway, a provider's inbound address, a shared inbox with
+      # a phone rule on it — and it is the only paging transport this repository
+      # can rehearse end to end without an account somewhere, because SMTP is a
+      # protocol rather than an API key.
+      - to: '${PRL_ALERT_PAGE_EMAIL_TO}'
+        send_resolved: true
+# @endif
+  - name: tickets
+# @if PRL_ALERT_TICKET_WEBHOOK_URL
+    webhook_configs:
+      - url: '${PRL_ALERT_TICKET_WEBHOOK_URL}'
+        send_resolved: true
+# @endif
+# @if PRL_ALERT_TICKET_EMAIL_TO
+    email_configs:
+      - to: '${PRL_ALERT_TICKET_EMAIL_TO}'
+        send_resolved: true
+# @endif

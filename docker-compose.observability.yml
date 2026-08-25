@@ -26,15 +26,34 @@
 # ## What this proves, and what it does not
 #
 # It proves the delivery path: a metric condition on the real API becomes a firing
-# rule in a real Prometheus, is routed by severity in a real Alertmanager, and
-# arrives at a receiver. `docs/production/alerts.md` needed that, because until it
-# existed the document ended by admitting it described intent.
+# rule in a real Prometheus, is routed by severity in a real Alertmanager, and is
+# handed to a receiver over two different transports. One is an HTTP webhook. The
+# other is SMTP: Alertmanager opens a TCP connection, speaks EHLO / MAIL FROM /
+# RCPT TO / DATA to a server that answers in the protocol, and delivers an RFC822
+# message whose envelope recipient, `Subject:` and body are asserted against what
+# the routing intended. That message is byte-for-byte the one a provider's relay
+# would have received.
 #
-# It does not prove that a human is reached. There is no PagerDuty here and no
-# ticket queue; both receivers are a local webhook sink that
-# `scripts/alert-delivery.mjs` runs while it watches. Production replaces two URLs
-# in alertmanager.yml. That last hop — the one that ends at somebody's phone — is
-# still unrehearsed, and the readiness report says so.
+# It does not prove that a pager rings. The SMTP server on the other end is
+# `scripts/alert-delivery.mjs`'s own sink, not a relay that forwards anywhere, and
+# the webhook sink is likewise local. What is unrehearsed is now precisely three
+# things and no longer the whole last hop: that a provider accepts the credentials
+# a deployment gives it, that the address configured is one somebody's phone
+# actually watches, and that the person holding the phone is awake.
+#
+# ## alertmanager.yml is rendered, not committed
+#
+# The file mounted below does not exist in a clean checkout.
+# `deploy/staging/observability/alertmanager.template.yml` is the source, and
+# `alert-delivery.mjs` renders it — substituting the deployment's own webhook URLs,
+# email recipients and SMTP relay — before it brings these containers up, the same
+# way it already renders `metrics-token`. Bringing the overlay up by hand therefore
+# needs one command first:
+#
+#     node scripts/alert-delivery.mjs --render-config
+#
+# The alternative was a tracked file whose destinations are changed by editing it,
+# which is what made "no human is paged" a residual for as long as it was one.
 # ---------------------------------------------------------------------------
 
 name: poker-risk-lab-staging
@@ -95,10 +114,21 @@ services:
       - --config.file=/etc/alertmanager/alertmanager.yml
       - --storage.path=/alertmanager
     volumes:
+      # Rendered by `scripts/alert-delivery.mjs` from alertmanager.template.yml;
+      # gitignored, because it names this deployment's real paging destinations.
       - ./deploy/staging/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # The SMTP submission password, referenced by `smtp_auth_password_file` when
+      # a deployment sets PRL_ALERT_SMTP_USERNAME. Written every run — empty when
+      # no username is configured — because a bind mount whose source is missing
+      # resolves to a DIRECTORY, and Alertmanager reports that as an unreadable
+      # password rather than as a missing file.
+      - ./deploy/staging/observability/smtp-password:/etc/alertmanager/smtp-password:ro
     ports:
       - '127.0.0.1:${PRL_STAGING_ALERTMANAGER_PORT:-9093}:9093'
     extra_hosts:
+      # The webhook sink and the SMTP sink both run on the host, so both the
+      # `url:` and the `smtp_smarthost:` in the rendered config resolve through
+      # this entry.
       - 'host.docker.internal:host-gateway'
     read_only: true
     tmpfs:

@@ -142,10 +142,20 @@ under a real network partition.
 
 ## Residual — what is still open, in order of how much it matters
 
-1. **Screen-reader certification is UNVERIFIED and cannot be done from here.** `osascript` answers
-   `-1743`; the fix is a person granting Automation access to their terminal *and then listening*.
-   [`accessibility-certification.md`](accessibility-certification.md) carries the procedure and the
-   exact blocker. **This is the only item that keeps this candidate from a PASS string.**
+1. **Screen-reader certification is UNVERIFIED.** It needs a person to listen, and nobody has.
+   **This is the only item that keeps this candidate from a PASS string.**
+
+   The reason previously recorded for it — `osascript` error `-1743` — is accurate about what the
+   machine said and misleading about what it means. **-1743 refuses an AGENT permission to drive
+   VoiceOver; it does not stop a person.** Pressing Command + F5 and listening needs no Automation
+   grant. What has been missing is not a permission, it is half an hour of somebody's attention.
+
+   `pnpm run certify:screen-reader` is now the way to spend it: it reads all 73 assertions out of
+   [`accessibility-certification.md`](accessibility-certification.md), holds the reviewer's place
+   across a resumable session, requires a quoted announcement for every `FAIL` and `SILENT`,
+   refuses to call an incomplete run a pass, and stamps the result with the commit it was run
+   against so `--check` calls it stale the moment `HEAD` moves. It does not certify anything — it
+   records what a person heard, which is the part a machine cannot do.
 2. **No human is paged.** Alert delivery is verified to a receiver and the two-tier routing is
    enforced by configuration; the last hop — a real paging provider and a real ticket queue — is two
    URLs in `alertmanager.yml` and is not deployed.
