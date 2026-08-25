@@ -711,11 +711,13 @@ not.**
 6. **Test both themes and both motion settings.** Four combinations, all of which must be
    legible and usable.
 7. Run **`pnpm run verify`** before claiming done. It is the release gate and it is the whole
-   list: eleven gates including `lint`, `typecheck`, `build`, `test`, `design:contrast` and
-   `test:a11y`, each reported `PASS`/`FAIL`, all of them run even after one fails. The `&&` chain
-   this line used to give stopped at the first failure and omitted `design:contrast` — the gate
-   that checks the contrast ratios this document claims — so it could report success on a build
-   that broke them.
+   list: fourteen gates including `lint`, `typecheck`, `build`, `test`, `design:contrast` and
+   `test:a11y`, each reported `PASS`/`FAIL`, all of them run even after one fails. (This said
+   *eleven*, which was the count when the line was written; the loop in `package.json` has since
+   gained `test:ax`, `test:csp` and `test:age-gate`, and that loop is the authority.) The `&&`
+   chain this line used to give stopped at the first failure and omitted `design:contrast` — the
+   gate that checks the contrast ratios this document claims — so it could report success on a
+   build that broke them.
 
 ---
 

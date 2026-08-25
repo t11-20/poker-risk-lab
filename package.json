@@ -59,7 +59,7 @@
     "security:pinning": "node scripts/supply-chain/ci-pinning.mjs",
     "security:containers": "node scripts/supply-chain/container-scan.mjs",
     "deps:quarantine": "node scripts/supply-chain/quarantine.mjs",
-    "verify": "failed=''; for gate in security:audit security:hygiene lint build typecheck design:contrast test test:a11y test:ax test:csp test:exhaustive test:simulation db:verify; do printf '\\n=== verify gate: %s ===\\n' \"$gate\"; if pnpm run \"$gate\"; then printf '=== PASS %s ===\\n' \"$gate\"; else printf '=== FAIL %s ===\\n' \"$gate\"; failed=\"$failed $gate\"; fi; done; if [ -n \"$failed\" ]; then printf '\\n=== verify FAILED. These gates did not pass:%s ===\\n' \"$failed\" >&2; exit 1; fi; printf '\\n=== verify: every gate passed ===\\n'",
+    "verify": "failed=''; for gate in security:audit security:hygiene lint build typecheck design:contrast test test:a11y test:ax test:csp test:age-gate test:exhaustive test:simulation db:verify; do printf '\\n=== verify gate: %s ===\\n' \"$gate\"; if pnpm run \"$gate\"; then printf '=== PASS %s ===\\n' \"$gate\"; else printf '=== FAIL %s ===\\n' \"$gate\"; failed=\"$failed $gate\"; fi; done; if [ -n \"$failed\" ]; then printf '\\n=== verify FAILED. These gates did not pass:%s ===\\n' \"$failed\" >&2; exit 1; fi; printf '\\n=== verify: every gate passed ===\\n'",
     "security:hygiene": "node scripts/supply-chain/repo-hygiene.mjs",
     "db:roles": "node --env-file-if-exists=.env apps/api/scripts/migrate.mjs roles",
     "db:verify": "node --env-file-if-exists=.env apps/api/scripts/verify-schema.mjs",

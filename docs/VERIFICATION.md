@@ -491,11 +491,14 @@ The honest section.
 
 ### What the release gate actually enforces
 
-`pnpm run verify` runs **thirteen** gates, reports each, and exits non-zero if any failed. Every
+`pnpm run verify` runs **fourteen** gates, reports each, and exits non-zero if any failed. Every
 section of this document is mapped onto it here, because "we check that" and "the release checks
-that" are different sentences and this project has confused them before. (This said *eleven*, which
-was the count before `test:ax` and `test:csp` joined the loop in `package.json`; read the count off
-that loop, not off this sentence.)
+that" are different sentences and this project has confused them before. (This said *eleven*, then
+*thirteen*: eleven was the count before `test:ax` and `test:csp` joined the loop in `package.json`,
+and thirteen was right until `test:age-gate` joined it. Read the count off that loop, not off this
+sentence. Nothing in the table below maps onto `test:age-gate` — it enforces a control this document
+makes no claim about, and `docs/production/legal-review-requirements.md` follow-up 5 is where it is
+described.)
 
 | This document's claim | Enforced by |
 | --- | --- |

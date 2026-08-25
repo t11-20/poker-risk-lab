@@ -207,6 +207,18 @@ groups:
             quiet", which is very hard to trace backwards.
           runbook: docs/production/runbooks/api-unhealthy.md
 
+      - alert: SeatReleaseFailing
+        expr: sum(increase(prl_seat_release_failures_total[15m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: A chair was not released after its player left
+          description: >-
+            The live table shows the seat free and the database still records the departed player in
+            it, so every attempt to take it is refused with seat_taken. Nothing retries and nothing
+            else surfaces it. Contained, and it will not heal on its own.
+          runbook: docs/production/runbooks/stuck-seat.md
+
       - alert: ArchiveFailing
         expr: sum(rate(prl_archive_failures_total[15m])) > 0
         for: 15m

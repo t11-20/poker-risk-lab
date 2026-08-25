@@ -87,7 +87,15 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -110,6 +118,36 @@ const bold = (s) => paint('1', s);
 const red = (s) => paint('31', s);
 const green = (s) => paint('32', s);
 const yellow = (s) => paint('33', s);
+
+// --- output ---------------------------------------------------------------
+
+/**
+ * The run's reporter, and the list of everything that went wrong.
+ *
+ * Module scope rather than local to `main()` for one concrete reason: `pushAll`
+ * reports through `tick` and `cross`, and it is defined up here because the
+ * registry work is a section of its own. Declaring these inside `main()` would
+ * put them out of that function's reach.
+ *
+ * `failures` is the verdict rather than decoration — `cross` appends to it, and
+ * both the exit code and the decision to write a manifest are read off its
+ * length. A reporter that only printed would let a failed artefact check
+ * publish an image.
+ */
+const failures = [];
+const tick = (line, detail) => {
+  console.log(`${green('  ✓')} ${line}`);
+  if (detail) console.log(dim(`      ${detail}`));
+};
+const cross = (line, detail) => {
+  failures.push(detail === undefined ? line : `${line} — ${detail}`);
+  console.log(`${red('  ✗')} ${line}`);
+  if (detail) console.log(dim(`      ${detail}`));
+};
+const bang = (line, detail) => {
+  console.log(`${yellow('  !')} ${line}`);
+  if (detail) console.log(dim(`      ${detail}`));
+};
 
 // --- options --------------------------------------------------------------
 
@@ -798,237 +836,263 @@ async function pushAll(images, registry) {
 
 // --- run ------------------------------------------------------------------
 
-let options;
-try {
-  options = parseArgs(process.argv.slice(2));
-} catch (err) {
-  console.error(red(`release:artifacts — ${err.message}`));
-  process.exit(1);
-}
+/**
+ * Everything the command line does, in a function.
+ *
+ * ## The defect this exists for
+ *
+ * This block used to sit at module scope, so `import` RAN it. That made the file
+ * impossible to test — `scripts/release-artifacts.test.mjs` did not exist because
+ * merely importing the module to reach `probeRoot` and `filesystemProblems` would
+ * `docker build` both images, push them if `--push` were in this process's argv,
+ * and overwrite `deploy/staging/release-manifest.json`. It was found the hard way:
+ * a one-line import written to check the filesystem probe kicked off a real image
+ * build against a machine with a staging stack running on it.
+ *
+ * `apps/api/scripts/migrate.mjs`, `scripts/backup.mjs` and
+ * `scripts/reliability-drills.mjs` all carry the same guard for the same reason.
+ * The most expensive and least reversible script in the repository was the one
+ * without it.
+ */
+async function main() {
+  let options;
+  try {
+    options = parseArgs(process.argv.slice(2));
+  } catch (err) {
+    console.error(red(`release:artifacts — ${err.message}`));
+    process.exit(1);
+  }
 
-if (options.help) {
-  console.log(HELP);
-  process.exit(0);
-}
-
-console.log(bold('\nRelease artefacts'));
-
-const failures = [];
-const tick = (line, detail) => {
-  console.log(`${green('  ✓')} ${line}`);
-  if (detail) console.log(dim(`      ${detail}`));
-};
-const cross = (line, detail) => {
-  failures.push(detail === undefined ? line : `${line} — ${detail}`);
-  console.log(`${red('  ✗')} ${line}`);
-  if (detail) console.log(dim(`      ${detail}`));
-};
-const bang = (line, detail) => {
-  console.log(`${yellow('  !')} ${line}`);
-  if (detail) console.log(dim(`      ${detail}`));
-};
-
-let server;
-try {
-  server = dockerVersion();
-} catch (err) {
-  console.error(red(`  ✗ ${err.message}\n`));
-  process.exit(1);
-}
-
-const git = gitProvenance();
-const tag = options.tag ?? `${git.shortSha ?? 'local'}${git.dirty === true ? '-dirty' : ''}`;
-const manifestPath = resolve(REPO_ROOT, options.manifest);
-// parseArgs has already refused anything unusable, so this cannot carry a problem.
-const registry = parseRegistryHost(options.registry);
-
-console.log(dim(`  docker   ${server}`));
-console.log(dim(`  commit   ${git.sha ?? '(not a git checkout)'}${git.dirty === true ? ' (dirty)' : ''}`));
-console.log(dim(`  tag      ${tag}`));
-console.log(dim(`  manifest ${options.manifest}`));
-console.log(dim(`  registry ${options.push ? registry.host : 'none (--push not given)'}\n`));
-
-if (git.dirty === true) {
-  bang(
-    'the working tree is dirty',
-    'the manifest records this. `pnpm run staging promote` refuses a dirty manifest, because a ' +
-      'commit sha that does not describe the bytes that were built is not provenance.',
-  );
-}
-
-if (!options.force) {
-  const existing = existingManifestFor(manifestPath, git.sha);
-  if (existing !== null) {
-    console.log(bold('\nAlready built'));
-    for (const { service } of ARTEFACTS) {
-      console.log(`  ${green('✓')} ${service}  ${dim(existing.images[service].reference)}`);
-    }
-    // `--push` on an already-built commit pushes what is there rather than
-    // refusing, and that is the whole point of the refusal: publishing an
-    // artefact must never be a reason to build a second one. Re-pushing an
-    // artefact already in the registry is a no-op on the wire and re-runs every
-    // verification, which is what makes this safe to type twice.
-    if (options.push) {
-      await pushAll(existing.images, registry);
-      if (failures.length === 0) {
-        existing.digestKind = digestKindFor(existing.images);
-        existing.pushedAt = new Date().toISOString();
-        writeFileSync(manifestPath, `${JSON.stringify(existing, null, 2)}\n`);
-        tick(`manifest updated with the registry digests (${options.manifest})`);
-        if (options.json) console.log(JSON.stringify(existing, null, 2));
-        console.log(green(bold('\nPASS — the existing artefacts are now fetchable by registry digest.\n')));
-        process.exit(0);
-      }
-      console.log(red(bold(`\nFAIL — ${failures.length} problem(s), the manifest was left untouched:`)));
-      for (const failure of failures) console.log(red(`    - ${failure}`));
-      console.log('');
-      process.exit(1);
-    }
-    console.log(
-      dim(
-        '\n  A valid manifest for this exact commit already exists and both images are still present.\n' +
-          '  Building again would produce a different artefact from the same source, which is the\n' +
-          '  thing this script exists to prevent. Pass --force if that is genuinely what you want.\n' +
-          '  (--push publishes these existing artefacts without rebuilding them.)\n',
-      ),
-    );
+  if (options.help) {
+    console.log(HELP);
     process.exit(0);
   }
-}
 
-const scratch = mkdtempSync(join(tmpdir(), 'prl-release-'));
-const images = {};
+  console.log(bold('\nRelease artefacts'));
 
-try {
-  for (const artefact of ARTEFACTS) {
-    const reference = `${artefact.repository}:${tag}`;
-    const iidFile = join(scratch, `${artefact.service}.iid`);
-    const args = ['build', '--file', artefact.dockerfile, '--tag', reference, '--iidfile', iidFile];
-    if (options.noCache) args.push('--no-cache');
-    args.push('.');
-
-    console.log(bold(`▸ ${artefact.service}  ${dim(artefact.dockerfile)}`));
-    const startedAt = Date.now();
-    const build = run('docker', args, { stream: options.verbose });
-    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
-    if (build.status !== 0) {
-      cross(`docker build failed for ${artefact.service} after ${elapsed}s`);
-      if (!options.verbose) {
-        // Buffered until now precisely so that a successful build is three lines
-        // and a failed one is the whole log.
-        console.error(build.stdout);
-        console.error(build.stderr);
-      }
-      break;
-    }
-
-    const iidDigest = readFileSync(iidFile, 'utf8').trim();
-    if (!DIGEST.test(iidDigest)) {
-      cross(`--iidfile produced something that is not a digest for ${artefact.service}`, iidDigest);
-      break;
-    }
-    const meta = inspectImage(reference, iidDigest);
-    tick(`built ${reference} in ${elapsed}s`, `${iidDigest}  (${(meta.sizeBytes / 1e6).toFixed(0)} MB)`);
-
-    const problems = checkArtefact(reference, meta, (detail) => console.log(dim(`      ${detail}`)));
-    for (const problem of problems) cross(`${artefact.service}: ${problem}`);
-
-    images[artefact.service] = {
-      service: artefact.service,
-      dockerfile: artefact.dockerfile,
-      repository: artefact.repository,
-      tag: reference,
-      digest: meta.digest,
-      // What a compose file and `docker run` take. The tag is beside it for a
-      // human; this is the identity.
-      reference: `${artefact.repository}@${meta.digest}`,
-      sizeBytes: meta.sizeBytes,
-      createdAt: meta.createdAt,
-      user: meta.user,
-      repoDigests: meta.repoDigests,
-    };
+  let server;
+  try {
+    server = dockerVersion();
+  } catch (err) {
+    console.error(red(`  ✗ ${err.message}\n`));
+    process.exit(1);
   }
-} catch (err) {
-  cross('the build was abandoned', err?.message ?? String(err));
-} finally {
-  rmSync(scratch, { recursive: true, force: true });
-}
 
-const built = Object.keys(images).length;
+  const git = gitProvenance();
+  const tag = options.tag ?? `${git.shortSha ?? 'local'}${git.dirty === true ? '-dirty' : ''}`;
+  const manifestPath = resolve(REPO_ROOT, options.manifest);
+  // parseArgs has already refused anything unusable, so this cannot carry a problem.
+  const registry = parseRegistryHost(options.registry);
 
-// Only after every artefact check has passed. Pushing an image that failed a
-// check would put it one `docker pull` away from any machine on the network,
-// which is the opposite of what a gate is for.
-if (options.push && built === ARTEFACTS.length && failures.length === 0) {
-  await pushAll(images, registry);
-}
+  console.log(dim(`  docker   ${server}`));
+  console.log(dim(`  commit   ${git.sha ?? '(not a git checkout)'}${git.dirty === true ? ' (dirty)' : ''}`));
+  console.log(dim(`  tag      ${tag}`));
+  console.log(dim(`  manifest ${options.manifest}`));
+  console.log(dim(`  registry ${options.push ? registry.host : 'none (--push not given)'}\n`));
 
-if (built === ARTEFACTS.length && failures.length === 0) {
-  const manifest = {
-    schema: MANIFEST_SCHEMA,
-    builtAt: new Date().toISOString(),
-    commit: git,
-    toolchain: { node: process.version, dockerServer: server },
-    // Stated in the artefact itself so that nobody reading the manifest has to
-    // find this file to learn what kind of digest they are looking at.
-    digestKind: digestKindFor(images),
-    images,
-  };
-  mkdirSync(dirname(manifestPath), { recursive: true });
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  tick(`manifest written to ${options.manifest}`);
-  if (options.json) console.log(JSON.stringify(manifest, null, 2));
-}
+  if (git.dirty === true) {
+    bang(
+      'the working tree is dirty',
+      'the manifest records this. `pnpm run staging promote` refuses a dirty manifest, because a ' +
+        'commit sha that does not describe the bytes that were built is not provenance.',
+    );
+  }
 
-console.log(bold('\nSummary'));
-console.log(`  images built     ${built}/${ARTEFACTS.length}`);
-console.log(
-  `  artefact checks  ${failures.length === 0 ? green('all passed') : red(`${failures.length} failed`)}`,
-);
-for (const { service } of ARTEFACTS) {
-  const image = images[service];
-  console.log(`  ${service.padEnd(16)} ${image ? dim(image.reference) : red('not built')}`);
-  if (image?.registry != null) console.log(`  ${''.padEnd(16)} ${dim(image.registry.reference)}`);
-}
+  if (!options.force) {
+    const existing = existingManifestFor(manifestPath, git.sha);
+    if (existing !== null) {
+      console.log(bold('\nAlready built'));
+      for (const { service } of ARTEFACTS) {
+        console.log(`  ${green('✓')} ${service}  ${dim(existing.images[service].reference)}`);
+      }
+      // `--push` on an already-built commit pushes what is there rather than
+      // refusing, and that is the whole point of the refusal: publishing an
+      // artefact must never be a reason to build a second one. Re-pushing an
+      // artefact already in the registry is a no-op on the wire and re-runs every
+      // verification, which is what makes this safe to type twice.
+      if (options.push) {
+        await pushAll(existing.images, registry);
+        if (failures.length === 0) {
+          existing.digestKind = digestKindFor(existing.images);
+          existing.pushedAt = new Date().toISOString();
+          writeFileSync(manifestPath, `${JSON.stringify(existing, null, 2)}\n`);
+          tick(`manifest updated with the registry digests (${options.manifest})`);
+          if (options.json) console.log(JSON.stringify(existing, null, 2));
+          console.log(green(bold('\nPASS — the existing artefacts are now fetchable by registry digest.\n')));
+          process.exit(0);
+        }
+        console.log(red(bold(`\nFAIL — ${failures.length} problem(s), the manifest was left untouched:`)));
+        for (const failure of failures) console.log(red(`    - ${failure}`));
+        console.log('');
+        process.exit(1);
+      }
+      console.log(
+        dim(
+          '\n  A valid manifest for this exact commit already exists and both images are still present.\n' +
+            '  Building again would produce a different artefact from the same source, which is the\n' +
+            '  thing this script exists to prevent. Pass --force if that is genuinely what you want.\n' +
+            '  (--push publishes these existing artefacts without rebuilding them.)\n',
+        ),
+      );
+      process.exit(0);
+    }
+  }
 
-if (built !== ARTEFACTS.length || failures.length > 0) {
-  console.log(red(bold('\nFAIL — no manifest was written.')));
+  const scratch = mkdtempSync(join(tmpdir(), 'prl-release-'));
+  const images = {};
+
+  try {
+    for (const artefact of ARTEFACTS) {
+      const reference = `${artefact.repository}:${tag}`;
+      const iidFile = join(scratch, `${artefact.service}.iid`);
+      const args = ['build', '--file', artefact.dockerfile, '--tag', reference, '--iidfile', iidFile];
+      if (options.noCache) args.push('--no-cache');
+      args.push('.');
+
+      console.log(bold(`▸ ${artefact.service}  ${dim(artefact.dockerfile)}`));
+      const startedAt = Date.now();
+      const build = run('docker', args, { stream: options.verbose });
+      const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+      if (build.status !== 0) {
+        cross(`docker build failed for ${artefact.service} after ${elapsed}s`);
+        if (!options.verbose) {
+          // Buffered until now precisely so that a successful build is three lines
+          // and a failed one is the whole log.
+          console.error(build.stdout);
+          console.error(build.stderr);
+        }
+        break;
+      }
+
+      const iidDigest = readFileSync(iidFile, 'utf8').trim();
+      if (!DIGEST.test(iidDigest)) {
+        cross(`--iidfile produced something that is not a digest for ${artefact.service}`, iidDigest);
+        break;
+      }
+      const meta = inspectImage(reference, iidDigest);
+      tick(`built ${reference} in ${elapsed}s`, `${iidDigest}  (${(meta.sizeBytes / 1e6).toFixed(0)} MB)`);
+
+      const problems = checkArtefact(reference, meta, (detail) => console.log(dim(`      ${detail}`)));
+      for (const problem of problems) cross(`${artefact.service}: ${problem}`);
+
+      images[artefact.service] = {
+        service: artefact.service,
+        dockerfile: artefact.dockerfile,
+        repository: artefact.repository,
+        tag: reference,
+        digest: meta.digest,
+        // What a compose file and `docker run` take. The tag is beside it for a
+        // human; this is the identity.
+        reference: `${artefact.repository}@${meta.digest}`,
+        sizeBytes: meta.sizeBytes,
+        createdAt: meta.createdAt,
+        user: meta.user,
+        repoDigests: meta.repoDigests,
+      };
+    }
+  } catch (err) {
+    cross('the build was abandoned', err?.message ?? String(err));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+
+  const built = Object.keys(images).length;
+
+  // Only after every artefact check has passed. Pushing an image that failed a
+  // check would put it one `docker pull` away from any machine on the network,
+  // which is the opposite of what a gate is for.
+  if (options.push && built === ARTEFACTS.length && failures.length === 0) {
+    await pushAll(images, registry);
+  }
+
+  if (built === ARTEFACTS.length && failures.length === 0) {
+    const manifest = {
+      schema: MANIFEST_SCHEMA,
+      builtAt: new Date().toISOString(),
+      commit: git,
+      toolchain: { node: process.version, dockerServer: server },
+      // Stated in the artefact itself so that nobody reading the manifest has to
+      // find this file to learn what kind of digest they are looking at.
+      digestKind: digestKindFor(images),
+      images,
+    };
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    tick(`manifest written to ${options.manifest}`);
+    if (options.json) console.log(JSON.stringify(manifest, null, 2));
+  }
+
+  console.log(bold('\nSummary'));
+  console.log(`  images built     ${built}/${ARTEFACTS.length}`);
+  console.log(
+    `  artefact checks  ${failures.length === 0 ? green('all passed') : red(`${failures.length} failed`)}`,
+  );
+  for (const { service } of ARTEFACTS) {
+    const image = images[service];
+    console.log(`  ${service.padEnd(16)} ${image ? dim(image.reference) : red('not built')}`);
+    if (image?.registry != null) console.log(`  ${''.padEnd(16)} ${dim(image.registry.reference)}`);
+  }
+
+  if (built !== ARTEFACTS.length || failures.length > 0) {
+    console.log(red(bold('\nFAIL — no manifest was written.')));
+    console.log(
+      dim(
+        '  Downstream steps read the manifest, so a partial build cannot be deployed by accident.\n' +
+          '  Fix the failure above and run this again.\n',
+      ),
+    );
+    process.exit(1);
+  }
+
+  console.log(green(bold('\nPASS — both images built once and recorded.')));
   console.log(
     dim(
-      '  Downstream steps read the manifest, so a partial build cannot be deployed by accident.\n' +
-        '  Fix the failure above and run this again.\n',
+      '\n  These digests are the ONLY artefacts that should reach staging or production.\n' +
+        '  Next: `pnpm run security:containers`, then `pnpm run staging up`.\n' +
+        '  Caveat: this proves the images assemble and are shaped correctly. It proves nothing\n' +
+        '  about whether they serve a hand — that is the staging smoke test — and nothing about\n' +
+        '  known vulnerabilities in them, which is the container scan.\n',
     ),
   );
-  process.exit(1);
+  if (options.push) {
+    console.log(
+      dim(
+        '  Both artefacts are also in the registry, and each registry digest was re-fetched,\n' +
+          '  re-hashed here and pulled back by digest. Another machine that can reach the registry\n' +
+          '  can obtain exactly these bytes; a digest pull cannot return different ones.\n' +
+          '  What that is NOT: a signature. Nothing here signs, attests or notarises anything, so\n' +
+          '  the registry copy proves content identity and says nothing about provenance — who\n' +
+          '  built it, from what source, or whether anybody stands behind it. That needs cosign\n' +
+          '  (or an equivalent) in CI, and there is none in this environment.\n',
+      ),
+    );
+  } else {
+    console.log(
+      dim(
+        '  These digests are local to this machine: nothing was pushed, so no other machine can\n' +
+          '  resolve them. `--push` adds a registry digest — see deploy/registry/README.md.\n',
+      ),
+    );
+  }
 }
 
-console.log(green(bold('\nPASS — both images built once and recorded.')));
-console.log(
-  dim(
-    '\n  These digests are the ONLY artefacts that should reach staging or production.\n' +
-      '  Next: `pnpm run security:containers`, then `pnpm run staging up`.\n' +
-      '  Caveat: this proves the images assemble and are shaped correctly. It proves nothing\n' +
-      '  about whether they serve a hand — that is the staging smoke test — and nothing about\n' +
-      '  known vulnerabilities in them, which is the container scan.\n',
-  ),
-);
-if (options.push) {
-  console.log(
-    dim(
-      '  Both artefacts are also in the registry, and each registry digest was re-fetched,\n' +
-        '  re-hashed here and pulled back by digest. Another machine that can reach the registry\n' +
-        '  can obtain exactly these bytes; a digest pull cannot return different ones.\n' +
-        '  What that is NOT: a signature. Nothing here signs, attests or notarises anything, so\n' +
-        '  the registry copy proves content identity and says nothing about provenance — who\n' +
-        '  built it, from what source, or whether anybody stands behind it. That needs cosign\n' +
-        '  (or an equivalent) in CI, and there is none in this environment.\n',
-    ),
-  );
-} else {
-  console.log(
-    dim(
-      '  These digests are local to this machine: nothing was pushed, so no other machine can\n' +
-        '  resolve them. `--push` adds a registry digest — see deploy/registry/README.md.\n',
-    ),
-  );
+/**
+ * True when this file was started from the command line rather than imported.
+ *
+ * realpath on both sides, matching `scripts/reliability-drills.mjs`, so a checkout
+ * reached through a symlink still recognises itself — `pnpm`'s workspace layout is
+ * a farm of them. A path that cannot be resolved is treated as "not us": the cost
+ * of being wrong in that direction is a script that does nothing, and the cost of
+ * being wrong in the other is an unattended `docker build`.
+ */
+function startedFromCommandLine() {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
 }
+
+if (startedFromCommandLine()) await main();

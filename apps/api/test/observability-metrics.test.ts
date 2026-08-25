@@ -633,15 +633,36 @@ describe('counters whose alerts are zero-tolerance are primed at zero', () => {
     assert.match(new AppMetrics().render(), /prl_archive_failures_total 0/);
   });
 
+  /**
+   * The same argument, for the same reason, one subsystem over.
+   *
+   * A seat is released when the hand it was in settles, and the durable write that frees
+   * `room_members.seat` hangs off that settlement. When it fails nothing else sees it: the room
+   * summary is built from the live table, which has already dropped the chair, so it advertises a
+   * seat the database refuses — and nothing retries. The FIRST stuck chair is the one worth
+   * paging on, and priming is what makes it a rise from zero rather than a series appearing.
+   *
+   * Run against the counter with `primeLabels` removed: `prl_seat_release_failures_total` is
+   * absent from the exposition entirely and this fails on the match, exactly as the two above do.
+   */
+  it('renders the seat-release series before any chair is stuck', () => {
+    assert.match(new AppMetrics().render(), /prl_seat_release_failures_total 0/);
+  });
+
   it('a primed series still counts normally, so priming costs nothing (POSITIVE CONTROL)', () => {
     // Without this, the two assertions above would also hold for a counter that had been broken
     // into always reporting zero.
     const metrics = new AppMetrics();
     metrics.rateLimitEvents.inc({ kind: 'banned' });
     metrics.archiveFailures.inc();
+    // By two, because this counter counts CHAIRS rather than passes: one settlement can fail to
+    // free several at once, and a primed series must add to what is already there rather than
+    // replace it.
+    metrics.seatReleaseFailures.inc({}, 2);
     const text = metrics.render();
     assert.match(text, /prl_rate_limit_events_total\{kind="banned"\} 1/);
     assert.match(text, /prl_archive_failures_total 1/);
+    assert.match(text, /prl_seat_release_failures_total 2/);
     assert.match(text, /prl_rate_limit_events_total\{kind="limited"\} 0/, 'priming must not move a sibling');
   });
 });

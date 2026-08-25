@@ -185,6 +185,34 @@ sum(rate(prl_table_actor_failures_total[10m])) > 0.05
 **Why:** a bot seat that cannot produce an action stalls a table without producing an error anywhere a user-facing alert would see. The turn clock eventually folds it, so the symptom a learner reports is "the table went quiet", which is very hard to trace backwards.
 **First action:** the `reason` label is a closed set from the typed problem events; each value has a distinct cause. → [`runbooks/api-unhealthy.md`](runbooks/api-unhealthy.md).
 
+### `SeatReleaseFailing` — ticket
+
+```
+sum(increase(prl_seat_release_failures_total[15m])) > 0
+```
+
+**Why zero tolerance:** a seat is released when a hand *settles*, not when the player asks to leave.
+If that write fails, nothing is waiting for it — play has already continued — so the in-memory table
+frees the chair, the durable row keeps it, and the two disagree until the room is reopened. The
+chair is unusable for the life of the process and **nothing retries**.
+
+**Why a ticket and not a page:** nothing is broken right now. The table plays, the other seats work,
+and no chips or hand history are at risk. One chair is unusable and will stay that way, which is a
+working-hours problem rather than a wake-up.
+
+**Why it is not `ArchiveFailing`:** it used to be. `seat-release` was not in the `ProblemEvent`
+union, so the nearest available kind was `archive-write` — and an operator was told hand history was
+being lost, with that runbook, when what had failed was freeing a chair.
+`prl_api_errors_total{code="seat_taken"}` cannot substitute either: that is what this looks like
+from outside and it is indistinguishable from two learners racing for the same chair, which is
+ordinary.
+
+**Why the counter is primed at zero:** a counter series is created by its first increment, and
+`increase()` cannot see a rise from a value that was never scraped — so without priming, the first
+stuck chair would be invisible to the rule that exists for it. Same reason as `RateLimitBans`.
+
+**First action:** → [`runbooks/stuck-seat.md`](runbooks/stuck-seat.md).
+
 ### `ArchiveFailing` — ticket
 
 ```

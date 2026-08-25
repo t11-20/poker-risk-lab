@@ -17,7 +17,7 @@ this SHA unless a line says otherwise.
 
 **PRODUCTION HARDENING COMPLETE — EXTERNAL ACCESSIBILITY CERTIFICATION REQUIRED**
 
-`pnpm run verify` exits **0**: all thirteen gates, including a supply-chain audit of eleven. The
+`pnpm run verify` exits **0**: all fourteen gates, including a supply-chain audit of eleven. The
 container scan reports **zero** findings of any severity. Staging runs the candidate digests with a
 62-check strict smoke over TLS, both alerting tiers are verified end to end, sixteen reliability
 drills pass, backup/restore including a real scratch restore passes, and a rollback to the previous
@@ -100,7 +100,7 @@ shell, node path and a Node version below the `engines` floor. The base is now
 
 | Gate | Result | Capture |
 | --- | --- | --- |
-| `pnpm run verify` | **every gate passed, `VERIFY_EXIT=0`** — 13 gates | `verify7.log` |
+| `pnpm run verify` | **every gate passed, `VERIFY_EXIT=0`** — 14 gates, `test:age-gate` among them | `verify-final3.log` |
 | `pnpm run security:audit` | 11 of 11 gates pass | inside `verify7.log` |
 | API tests | **852 / 852** | inside `verify7.log` |
 | Script tests | **560 / 560** | inside `verify7.log` |

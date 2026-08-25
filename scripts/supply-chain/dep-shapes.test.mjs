@@ -31,7 +31,7 @@ import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { checkInstalledLifecycleHooks, checkLockfileShape, checkWorkspaceManifests } from './dep-shapes.mjs';
-import { Gate, lockfileText, requireStoreCoverage } from './lib.mjs';
+import { Gate, lockfileText, requireStoreCoverage, storeCoverage } from './lib.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -381,6 +381,153 @@ describe('the install-hook scan refuses to pass over nothing', () => {
     assert.deepEqual(gate.failures, []);
     assert.match(gate.notes.join('\n'), /104\/162/);
     assert.match(gate.notes.join('\n'), /inspected from the registry/);
+  });
+
+  // -------------------------------------------------------------------------
+  // Why a gate failed, not just that it did
+  //
+  // `storeCoverage` computed `skippedManifestPresent` — whether
+  // `node_modules/.modules.yaml`, pnpm's own record of the optional dependencies
+  // it skipped for this platform, could be read — and nothing read it. A computed
+  // value nothing reads is the shape of the four gates that judged fewer things
+  // than they claimed, so it had to become load-bearing or be deleted.
+  //
+  // It is load-bearing, but not as a VERDICT. When the record is unreadable the
+  // skipped set is empty, so every version absent from disk lands in
+  // `uninspected` and the gate fails there regardless; a second failure for the
+  // same condition would be decoration. What it decides is the DIAGNOSIS, and the
+  // two diagnoses send an operator to two different places:
+  //
+  //   * record readable, these versions not in it   the store and the lockfile
+  //                                                 really have diverged
+  //   * record unreadable                           the store may be intact and
+  //                                                 only pnpm's account of it
+  //                                                 gone, and the list is now
+  //                                                 EVERY absent version rather
+  //                                                 than the unexplained ones
+  //
+  // Printing the first in the second situation sends somebody hunting a
+  // divergence that is not there — on this machine, past 58 platform-skipped
+  // Linux binaries it would name as evidence of it.
+  //
+  // So the control below is the real condition rather than a hand-written
+  // coverage object: three throwaway repository roots, each with a real
+  // `node_modules/.pnpm` and a real `.modules.yaml` (parsed / absent / present
+  // but carrying no `skipped:` key), fed through the real `storeCoverage` into
+  // the real `requireStoreCoverage`. Each asserts its own text AND the absence of
+  // the other's, because a message that misattributes a failure is worse than no
+  // message at all.
+  //
+  // `platformSkippedVersions` and `storeCoverage` take a root for exactly this;
+  // see the note on `platformSkippedVersions` in lib.mjs.
+  // -------------------------------------------------------------------------
+
+  /** A throwaway repository root with a real virtual store, and the record or not. */
+  function repoWithStore(modulesYaml) {
+    const root = scratch();
+    mkdirSync(join(root, 'node_modules', '.pnpm'), { recursive: true });
+    if (modulesYaml !== undefined) writeFileSync(join(root, 'node_modules', '.modules.yaml'), modulesYaml);
+    return root;
+  }
+
+  // One installed, one a platform-skipped optional, one genuinely unaccounted for.
+  const SHARP = '@img/sharp-linux-x64@0.35.3';
+  const resolved = new Map([
+    ['fastify@5.11.3', {}],
+    [SHARP, {}],
+    ['evil@1.0.0', {}],
+  ]);
+  const installed = new Map([['fastify@5.11.3', {}]]);
+
+  /** The detail `requireStoreCoverage` prints for a root in a given state. */
+  function detailFor(root) {
+    const gate = new Gate('t');
+    const coverage = storeCoverage(resolved, installed, root);
+    const passed = requireStoreCoverage(gate, coverage, 'the install-hook scan');
+    return { coverage, passed, text: failureText(gate) };
+  }
+
+  const RECORD_READABLE = /the store and the lockfile genuinely disagree/;
+  const RECORD_MISSING = /node_modules\/\.modules\.yaml could not be read/;
+
+  it('blames the store when pnpm DOES record what it skipped', () => {
+    const { coverage, passed, text } = detailFor(
+      repoWithStore(JSON.stringify({ skipped: [SHARP], hoistPattern: ['*'] })),
+    );
+    assert.equal(coverage.skippedManifestPresent, true);
+    assert.deepEqual(coverage.platformSkipped, [SHARP], 'the record should account for the optional');
+    assert.deepEqual(coverage.uninspected, ['evil@1.0.0'], 'only the unexplained version is unexplained');
+    assert.equal(passed, false);
+    assert.match(text, RECORD_READABLE);
+    assert.doesNotMatch(text, RECORD_MISSING, 'blamed a missing record that was right there');
+  });
+
+  it('blames the missing RECORD, not the store, when .modules.yaml is absent', () => {
+    const { coverage, passed, text } = detailFor(repoWithStore(undefined));
+    assert.equal(coverage.skippedManifestPresent, false);
+    assert.deepEqual(coverage.platformSkipped, []);
+    // The misattribution risk, made visible: the platform-skipped optional is now
+    // in the unexplained list, and the old text would have offered it as proof
+    // that the store and the lockfile disagree.
+    assert.deepEqual(coverage.uninspected, [SHARP, 'evil@1.0.0'].sort());
+    assert.equal(passed, false);
+    assert.match(text, RECORD_MISSING);
+    assert.doesNotMatch(text, RECORD_READABLE, 'sent the reader after a divergence it had not established');
+  });
+
+  it('does not mistake a .modules.yaml that exists for one it could read', () => {
+    // `present` is "the skipped set was found", not "the file was there". A
+    // block-YAML record with no `skipped:` key parses as neither JSON nor a list.
+    const { coverage, text } = detailFor(repoWithStore("hoistPattern:\n  - '*'\nvirtualStoreDir: .pnpm\n"));
+    assert.equal(coverage.skippedManifestPresent, false);
+    assert.match(text, RECORD_MISSING);
+    assert.doesNotMatch(text, RECORD_READABLE);
+  });
+
+  it('reads a block-YAML skipped list, and blames the store again once it can', () => {
+    // The fallback path in `platformSkippedVersions`, which exists because a
+    // future pnpm could stop writing JSON. If it broke, this root would silently
+    // become the "record missing" case and the diagnosis would flip.
+    const { coverage, text } = detailFor(repoWithStore(`skipped:\n  - ${SHARP}\nvirtualStoreDir: .pnpm\n`));
+    assert.equal(coverage.skippedManifestPresent, true);
+    assert.deepEqual(coverage.platformSkipped, [SHARP]);
+    assert.match(text, RECORD_READABLE);
+    assert.doesNotMatch(text, RECORD_MISSING);
+  });
+
+  it('changes only the reason: both states still FAIL, with the same headline', () => {
+    // The flag must not become a verdict of its own. The gate fails either way —
+    // `uninspected` is non-empty in both — and the headline is identical; only
+    // the remedy differs.
+    const withRecord = detailFor(repoWithStore(JSON.stringify({ skipped: [SHARP] })));
+    const without = detailFor(repoWithStore(undefined));
+    assert.equal(withRecord.passed, false);
+    assert.equal(without.passed, false);
+    assert.match(withRecord.text, /could not inspect 1 resolved package version/);
+    assert.match(without.text, /could not inspect 2 resolved package version/);
+    assert.notEqual(withRecord.text, without.text, 'the two states printed the same detail');
+  });
+
+  it('says nothing about the record when there is nothing unexplained to explain', () => {
+    // A complete store: the diagnosis is for the failure path only, and must not
+    // leak into a passing run.
+    const root = repoWithStore(JSON.stringify({ skipped: [SHARP] }));
+    const gate = new Gate('t');
+    const passed = requireStoreCoverage(
+      gate,
+      storeCoverage(
+        new Map([
+          ['fastify@5.11.3', {}],
+          [SHARP, {}],
+        ]),
+        installed,
+        root,
+      ),
+      'the install-hook scan',
+    );
+    assert.equal(passed, true);
+    assert.deepEqual(gate.failures, []);
+    assert.match(gate.notes.join('\n'), /skipped for this platform/);
   });
 
   it('FAILS on an installed package that declares a postinstall hook', () => {

@@ -348,6 +348,35 @@ export class AppMetrics {
     primeLabels: [{}],
   });
 
+  /**
+   * "Is a chair stuck holding somebody who has already left?"
+   *
+   * A seat is released when the hand it was in SETTLES, not when its player asked to leave, and
+   * the durable write that frees `room_members.seat` hangs off that settlement
+   * (`LiveRoom.releaseDeparted`). When that write fails there is nothing else to see it: the room
+   * summary is built from the live table, which has already dropped the chair, so it advertises a
+   * seat the database will refuse — and nothing retries, so it stays refused for the life of the
+   * process. The first a human hears of it is a learner who cannot sit down.
+   *
+   * Its own metric rather than a label on `archiveFailures`, which is where this used to report
+   * for want of an event name of its own. `ArchiveFailing` is zero-tolerance and its runbook is
+   * about hand history: an operator paged by it for a stuck chair is being sent to the wrong
+   * subsystem with the wrong instructions.
+   *
+   * NOT substitutable by `prl_api_errors_total{code="seat_taken"}`. That is what the failure looks
+   * like from the outside, and it is indistinguishable from two people legitimately racing for the
+   * same chair — which is a normal thing that happens and must not page anybody.
+   *
+   * Counted in seats rather than in failures, because "three chairs are stuck" and "one release
+   * pass failed" are different sizes of incident. No labels, so priming is unambiguous; primed
+   * for the reason `archiveFailures` is, so that the first stuck chair is a rise from zero.
+   */
+  readonly seatReleaseFailures = this.registry.counter({
+    name: `${PREFIX}_seat_release_failures_total`,
+    help: 'Durable seat releases that failed. The chair stays occupied by a player who has left.',
+    primeLabels: [{}],
+  });
+
   // --- Analysis ------------------------------------------------------------
   /** "Is the Coach slow, and is it slow because of queueing or because of the work?" */
   readonly analysisDuration = this.registry.histogram(

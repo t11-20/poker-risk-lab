@@ -313,12 +313,16 @@ Engineering work that this review unblocks or depends on. None of it closes a re
    `/privacy` and `/responsible-use` open. Every refusal has a request beside it that must succeed,
    and the run refuses to pass unless it refused something, allowed something, and used a browser.
 
-   **What is still not covered.** Nothing here is run by `pnpm run verify` yet. It needs a
-   production build, which that gate list does already produce before it reaches the browser
-   harnesses — `test:ax` and `test:csp` depend on the same thing — so the natural place for it is
-   directly after `test:csp`, at a cost of about twenty seconds and one more Chrome launch. Adding
-   a release gate is a decision for whoever owns the release, not for the change that wrote the
-   harness, so it is recorded here as a recommendation rather than taken. It is one
+   **It is a release gate.** `test:age-gate` sits in the `pnpm run verify` loop directly after
+   `test:csp` — eleventh of the fourteen, in run order. The production build it needs is already
+   guaranteed there — `build` runs ahead of the browser harnesses, and `test:ax` and `test:csp`
+   depend on exactly the same thing — so it costs about twenty seconds and one more Chrome launch
+   and changes nothing else about the gate's shape. The reason it is in the list rather than beside
+   it: this is the only check in the repository that exercises the age gate switched **on**, the
+   gate is off by default so every other gate runs past it, and the defect above survived from the
+   day the gate landed precisely because nothing did this.
+
+   **What is still not covered.** It is one
    browser: Chrome. It is plain HTTP, so the `__Host-` cookie name and the `x-forwarded-proto` path
    a TLS deployment takes are untested, and what is asserted instead is the other half — that over
    http the cookie is *not* `__Host-` and *not* `Secure`, which is the case that would otherwise be

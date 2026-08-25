@@ -64,6 +64,7 @@ export type ProblemEvent =
   | 'hands-interrupted'
   | 'reconcile-read'
   | 'seat-retake'
+  | 'seat-release'
   | 'bot-rehydrate'
   // rooms/table.ts
   | 'turn-timeout'
@@ -95,6 +96,7 @@ export const PROBLEM_EVENTS: readonly ProblemEvent[] = [
   'hands-interrupted',
   'reconcile-read',
   'seat-retake',
+  'seat-release',
   'bot-rehydrate',
   'turn-timeout',
   'engine-rejection',
@@ -133,9 +135,14 @@ export type ProblemHook = (message: string, detail: ProblemDetail) => void;
  *   gets `prl_table_actor_failures_total` and the event as its reason.
  * - `counted-at-source` — already counted by the module that raised it, against a metric that
  *   needs a number the hook does not carry. `archive-write` increments
- *   `prl_archive_failures_total` inside `rooms/registry.ts`, and `hands-interrupted` increments
- *   `prl_hands_failed_total` *by the number of hands it closed*. Counting either again here
- *   would double it.
+ *   `prl_archive_failures_total` inside `rooms/registry.ts`, `hands-interrupted` increments
+ *   `prl_hands_failed_total` *by the number of hands it closed*, and `seat-release` increments
+ *   `prl_seat_release_failures_total` by the number of chairs it could not free. Counting any of
+ *   them again here would double it.
+ *
+ *   Counting at the source rather than here also means the number is right for a registry built
+ *   with its own `onProblem` — every test, and any future embedder — instead of depending on the
+ *   one consumer in `routes/index.ts` being wired up.
  * - `logged-only` — worth a log line and not worth a series. A subscriber that threw, a socket
  *   send that failed on an already-dead socket, an audit row that could not be written: each is
  *   real, none is a question an operator would put on a dashboard, and every metric costs
@@ -156,8 +163,15 @@ export function classifyProblem(event: ProblemEvent): ProblemClass {
     case 'timeout-rejection':
     case 'departed-seat-fold':
       return 'actor';
+    // `seat-release` is deliberately NOT folded into `archive-write`, which is where it used to
+    // report for want of a name of its own. The two are different subsystems with different
+    // consequences and different runbooks: an archive failure loses hand history while play
+    // continues, and a seat-release failure leaves a chair durably occupied by somebody who has
+    // left — the summary shows it free, the next client to tap it is refused `seat_taken`, and
+    // nothing retries. Paging the archive runbook for that sends somebody to the wrong system.
     case 'archive-write':
     case 'hands-interrupted':
+    case 'seat-release':
       return 'counted-at-source';
     // `engine-rejection` is deliberately NOT an actor failure: it is the engine refusing an
     // action a client submitted, the caller is told `illegal_action`, and it is already counted

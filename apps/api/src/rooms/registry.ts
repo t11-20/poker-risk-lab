@@ -458,26 +458,49 @@ export class LiveRoom {
     const releaseSeat = this.releaseSeat;
     this.releaseQueue = this.releaseQueue
       .then(async () => {
-        for (const userId of departed) await releaseSeat(userId);
-      })
-      .catch((error: unknown) => {
-        // Logged and swallowed, like an archive write, so one failed release cannot wedge the
-        // chain for every later departure. The cost is honest: the seat row stays occupied until
-        // something else frees it, and the summary and the row disagree until then.
+        // Per seat, not per pass. One settlement can free several chairs at once — two players
+        // who both stood up mid-hand leave on the same notice — and a single `await` over the
+        // whole list would let the first failure strand every chair behind it, silently. That is
+        // the same shape as the defect this whole mechanism exists to close: work that must
+        // happen, skipped because something unrelated went wrong first.
+        const stuck: string[] = [];
+        let lastError: unknown = null;
+        for (const userId of departed) {
+          try {
+            await releaseSeat(userId);
+          } catch (error) {
+            stuck.push(userId);
+            lastError = error;
+          }
+        }
+        if (stuck.length === 0) return;
+
+        // Counted here, at the source, for the reason `classifyProblem` gives: `seat-release` is
+        // `counted-at-source`, so the consumer in `routes/index.ts` deliberately does not count it
+        // again. By the number of CHAIRS, not by one — three stuck chairs and one failed pass are
+        // different sizes of incident, and only this loop knows which it was.
         //
-        // Reported as `archive-write`, and counted here for the same reason `archiveNotice`
-        // counts its own: this is the same class of failure — a durable write a live room owed,
-        // which must not be allowed to stop play — and `archive-write` is `counted-at-source` in
-        // `observability/telemetry.ts`, so the module that raises it is the module that must
-        // increment. The message distinguishes the two in the log. Give this its own
-        // `ProblemEvent` the day an operator needs to alert on released seats separately.
-        this.metrics.archiveFailures.inc();
-        onProblem('a released seat could not be freed', {
-          event: 'archive-write',
+        // Its own counter rather than `archiveFailures`, which is where this reported before
+        // `seat-release` existed: `ArchiveFailing` is zero-tolerance and its runbook is about
+        // losing hand history, so a stuck chair paging it sends somebody to the wrong subsystem.
+        // See `AppMetrics.seatReleaseFailures`.
+        this.metrics.seatReleaseFailures.inc({}, stuck.length);
+        // Logged and swallowed, like an archive write: a failed release must not wedge the chain
+        // for every later departure. The cost is honest and is why this is alertable at all — the
+        // row stays seated, the summary (built from the live table) says the chair is free, and
+        // nothing retries, so the next learner to tap it is refused `seat_taken` until a restart.
+        onProblem('a seat could not be released after its player left', {
+          event: 'seat-release',
           roomId: this.record.id,
-          users: departed,
-          error: String(error),
+          users: stuck,
+          error: String(lastError),
         });
+      })
+      .catch(() => {
+        // A backstop, not the handler: every `releaseSeat` rejection is caught per seat above, so
+        // the only way here is `onProblem` or the counter throwing. Nothing is swallowed silently
+        // that this class could have reported — what it prevents is an unhandled rejection, and a
+        // chain that stays rejected and skips every departure after this one.
       });
   }
 

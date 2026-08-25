@@ -113,10 +113,13 @@ function fakeStore(): {
   readonly seats: Map<string, number | null>;
   readonly stacks: Map<string, number>;
   readonly left: Set<string>;
+  /** Users whose `unseatMember` rejects, so a release failure can be driven deliberately. */
+  readonly unseatRefuses: Set<string>;
 } {
   const seats = new Map<string, number | null>();
   const stacks = new Map<string, number>();
   const left = new Set<string>();
+  const unseatRefuses = new Set<string>();
   const refuse = (name: string): never => {
     throw new AppError('internal_error', { logDetail: `the fake store has no ${name}` });
   };
@@ -155,6 +158,9 @@ function fakeStore(): {
     // Both of these are partial on `left_at IS NULL` in the real schema, so a member who has left
     // is untouched by either. Mirrored here so a test cannot pass on a write the database refuses.
     unseatMember: (_roomId, userId) => {
+      // A rejected write, not a silent no-op: the point of the failure test is what the room does
+      // when the database refuses, and a fake that swallowed it would prove nothing.
+      if (unseatRefuses.has(userId)) return Promise.reject(new Error(`unseat refused for ${userId}`));
       if (!left.has(userId)) seats.set(userId, null);
       return Promise.resolve();
     },
@@ -166,7 +172,7 @@ function fakeStore(): {
     createBotUser: () => refuse('createBotUser'),
     readUnits: () => Promise.resolve(100_000),
   };
-  return { store, seats, stacks, left };
+  return { store, seats, stacks, left, unseatRefuses };
 }
 
 /**
@@ -571,6 +577,111 @@ describe('leaving the room mid-hand drops the membership when the hand settles',
     } finally {
       registry.closeAll();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// When the seat release itself fails
+// ---------------------------------------------------------------------------
+
+describe('a seat that could not be released is reported as its own kind of failure', () => {
+  /**
+   * Two players stand mid-hand, so both chairs are freed by ONE settlement notice, and the store
+   * refuses the first of them.
+   *
+   * Two things are under test and neither is visible with a single departure: that one refused
+   * write does not strand the chair behind it, and that the counter measures CHAIRS rather than
+   * passes.
+   */
+  async function stuckChair(): Promise<{
+    readonly stuck: string;
+    readonly alsoLeaving: string;
+    readonly seats: Map<string, number | null>;
+    readonly metrics: AppMetrics;
+    readonly problems: readonly ProblemDetail[];
+  }> {
+    const { store, seats, stacks, left, unseatRefuses } = fakeStore();
+    const metrics = new AppMetrics();
+    const problems: ProblemDetail[] = [];
+    const registry = new RoomRegistry({
+      store,
+      clock: createManualClock(),
+      random: createSecureRandom(),
+      nextHandId: incrementingHandIds(),
+      archive: stackWritingArchive(stacks, left, []),
+      metrics,
+      onProblem: (_message, detail) => problems.push(detail),
+    });
+    try {
+      const room = await registry.open({
+        record: recordFor('room_z5_stuck', 'usr_owner'),
+        members: PLAYERS.map((userId) => ({
+          userId,
+          displayName: userId,
+          isBot: false,
+          botProfile: null,
+        })),
+      });
+      for (const [seat, userId] of PLAYERS.entries()) {
+        await registry.sitAtTable('room_z5_stuck', { userId, displayName: userId }, seat);
+      }
+      await room.table.startHand();
+      // The blinds, so both leavers are certainly in the live hand and certainly leave together
+      // when it settles rather than one of them leaving at once.
+      const stuck = forcedBetUser(room.table, 'bigBlind');
+      const alsoLeaving = forcedBetUser(room.table, 'smallBlind');
+      unseatRefuses.add(stuck);
+
+      await registry.standFromTable('room_z5_stuck', stuck);
+      await registry.standFromTable('room_z5_stuck', alsoLeaving);
+      await foldItOut(room.table);
+      await drainArchive();
+      return { stuck, alsoLeaving, seats, metrics, problems };
+    } finally {
+      registry.closeAll();
+    }
+  }
+
+  /**
+   * The routing this closes.
+   *
+   * `ProblemEvent` had no name for a failed seat release, so it reported as `archive-write` and
+   * incremented `prl_archive_failures_total`. Run against that code, this test printed
+   * `event archive-write | archiveFailures 1 | seatReleaseFailures 0` — an operator paged by
+   * `ArchiveFailing`, which is zero-tolerance, would have opened the hand-history runbook for a
+   * chair nobody can sit in. It now prints `event seat-release | archiveFailures 0 |
+   * seatReleaseFailures 1`.
+   */
+  it('reports seat-release, not archive-write, and counts it on its own metric', async () => {
+    const { stuck, metrics, problems } = await stuckChair();
+
+    const reported = problems.filter((detail) => detail.event === 'seat-release');
+    assert.equal(reported.length, 1, `expected one seat-release problem, saw ${problems.length}`);
+    assert.deepEqual(reported[0]?.users, [stuck], 'the log line names the chair that is stuck');
+    assert.equal(metrics.seatReleaseFailures.get(), 1, 'one chair could not be freed');
+    assert.equal(
+      metrics.archiveFailures.get(),
+      0,
+      'a stuck chair must not page the archive alert — different subsystem, different runbook',
+    );
+    assert.equal(
+      metrics.tableActorFailures.get({ reason: 'seat-release' }),
+      0,
+      'nor be counted as a seat actor that failed to act: nothing is waiting to act',
+    );
+  });
+
+  /**
+   * Run against a `releaseDeparted` whose loop was a single `await` over the whole list — the
+   * shape this replaced — and `usr_c`'s chair came back `2` instead of `null`: the first refusal
+   * threw out of the loop and every chair behind it was skipped without a word. That is the same
+   * defect this file is about, one level down.
+   */
+  it('still frees the chairs behind the one that failed', async () => {
+    const { alsoLeaving, seats, metrics } = await stuckChair();
+
+    assert.equal(seats.get(alsoLeaving), null, 'one refused write must not strand the next chair');
+    assert.equal(metrics.seatReleaseFailures.get(), 1, 'and only the chair that failed is counted');
   });
 });
 
