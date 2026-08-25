@@ -90,7 +90,9 @@ describe('the harness reads the whole document', () => {
 
   it('does not mistake a separator or a header row for an assertion', () => {
     const parsed = assertionsIn(
-      ['| # | Step | Assertion | Result |', '|---|---|---|---|', '| 1.1 | Load `/x` | It speaks. | |'].join('\n'),
+      ['| # | Step | Assertion | Result |', '|---|---|---|---|', '| 1.1 | Load `/x` | It speaks. | |'].join(
+        '\n',
+      ),
     );
     assert.deepEqual(
       parsed.map((entry) => entry.id),
