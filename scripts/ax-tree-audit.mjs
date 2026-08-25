@@ -188,6 +188,26 @@ const EXPECTED_LIVE_REGIONS = [{ politeness: 'polite', atLeast: 1 }];
 // ===========================================================================
 
 /**
+ * Where the second web app listens, and what it is for.
+ *
+ * Assertion 8.2 is about the **web server's** own fetch failing, not the browser's, so it cannot be
+ * reached the way 3.20 is: blocking `/api/*` in Chrome leaves the server render untouched, and the
+ * page still arrives with live data in it. What it needs is a Next process whose `PRL_API_ORIGIN`
+ * points at nothing — and taking the API away from the process every other assertion shares would
+ * take the live table, the replayed hand and `/lab` with it.
+ *
+ * So the gate runs a **second** `next start` off the same build, on its own port, with a dead API
+ * origin, and visits one page on it. Nothing else in the run touches it, and it costs one Next boot.
+ *
+ * `127.0.0.1:1` rather than a spare high port: binding port 1 needs root, so "nothing is listening
+ * there" is a property of the operating system rather than an assumption about this host. A stale
+ * server on a random port would serve live data and the assertion would fail for a reason that has
+ * nothing to do with accessibility.
+ */
+const OFFLINE_WEB_ORIGIN = process.env.PRL_WEB_OFFLINE_ORIGIN ?? 'http://127.0.0.1:3459';
+const DEAD_API_ORIGIN = 'http://127.0.0.1:1';
+
+/**
  * Defaults mirror `.env.example` and the two existing audits: the web app on 3000, the API on 3001.
  * `PRL_WEB_ORIGIN` is the variable `scripts/keyboard-audit.mjs` already honours, so a developer who
  * has set it for one audit does not have to set a second name for this one.
@@ -195,6 +215,7 @@ const EXPECTED_LIVE_REGIONS = [{ politeness: 'polite', atLeast: 1 }];
 const DEFAULTS = {
   baseUrl: process.env.PRL_WEB_ORIGIN ?? 'http://127.0.0.1:3000',
   apiUrl: process.env.PRL_API_ORIGIN ?? 'http://127.0.0.1:3001',
+  offlineUrl: OFFLINE_WEB_ORIGIN,
   start: false,
   withApi: false,
   headful: false,
@@ -218,6 +239,8 @@ ${bold('pnpm run test:ax')} — accessibility-TREE audit, in real Chrome
   Server
     --base-url <url>      web app origin                   (default ${DEFAULTS.baseUrl})
     --api-url <url>       API origin                       (default ${DEFAULTS.apiUrl})
+    --offline-url <url>   where the second web app, the one with no API behind it, is put
+                          for assertion 8.2                (default ${DEFAULTS.offlineUrl})
     --start               start the web app rather than using one already running
     --with-api            also start the API (only with --start)
     --ready-timeout <s>   how long to wait for a server    (default ${DEFAULTS.readyTimeoutSeconds})
@@ -270,6 +293,9 @@ function parseArgs(argv) {
         break;
       case '--api-url':
         options.apiUrl = need();
+        break;
+      case '--offline-url':
+        options.offlineUrl = need();
         break;
       case '--json':
         options.json = need();
@@ -1381,12 +1407,27 @@ async function auditRoute(page, journey, route, baseUrl) {
  * "the slider has no name" and does not say "3.13" leaves somebody grepping the document.
  *
  * A page whose `gather` throws fails every assertion on it rather than skipping them. The whole
- * point of the split is that these 63 rows are no longer in the human session; a page that quietly
+ * point of the split is that these 65 rows are no longer in the human session; a page that quietly
  * audited nothing would take them out of BOTH.
  */
-async function runAssertions(page, baseUrl, wanted) {
+async function runAssertions(page, origins, wanted) {
   for (const route of wanted) {
     section(`${route.title}  ${dim(`${route.path}${route.viewport === undefined ? '' : ' · narrow'}`)}`);
+    // A route may name a different origin than the app under test — 8.2's is the second web app,
+    // the one with no API behind it. `null` means that server did not come up, and every check on
+    // the route says so rather than being skipped: a route audited against nothing would take its
+    // assertions out of the automated set AND out of the human session at once.
+    const baseUrl = origins[route.origin ?? 'default'] ?? null;
+    if (baseUrl === null) {
+      for (const check of route.checks) {
+        bad(
+          `${check.id} — ${check.what}`,
+          `this assertion runs against the "${route.origin}" server, which did not start. Nothing ` +
+            'was checked; see the startup failure above',
+        );
+      }
+      continue;
+    }
     let evidence = null;
     let gatherError = null;
     try {
@@ -1502,6 +1543,37 @@ async function main() {
         ? ASSERTION_ROUTES
         : ASSERTION_ROUTES.filter((route) => options.assertions.includes(route.key));
 
+    // The second web app, started only when something in this run actually needs it. See
+    // `OFFLINE_WEB_ORIGIN`: it exists so that 8.2 can reach the bundled-copy path without taking
+    // the API away from every other assertion in the run.
+    const origins = { default: options.baseUrl, offline: null };
+    if (!options.skipAssertions && wantedAssertions.some((route) => route.origin === 'offline')) {
+      const offline = new ManagedServer(
+        'web with no API behind it',
+        ['--filter', '@prl/web', 'start'],
+        options.offlineUrl,
+        {
+          NODE_ENV: 'production',
+          PRL_API_ORIGIN: DEAD_API_ORIGIN,
+          PORT: portFromOrigin(options.offlineUrl),
+        },
+      );
+      servers.push(offline);
+      console.log(dim('  starting a second web app with no API behind it, for 8.2...'));
+      offline.start();
+      try {
+        await offline.waitUntilReady(options.readyTimeoutSeconds);
+        origins.offline = options.offlineUrl;
+      } catch (error) {
+        // Recorded and carried on. This server is a fixture for one assertion; letting it abort the
+        // run would cost the other sixty-odd their check as well.
+        bad(
+          'offline web app',
+          `${error instanceof Error ? error.message : String(error)}. 8.2 cannot be checked without it`,
+        );
+      }
+    }
+
     await withChrome(options.headful, async (page) => {
       if (!options.skipJourneys) {
         for (const journey of wanted) {
@@ -1520,7 +1592,7 @@ async function main() {
       }
       if (!options.skipAssertions) {
         console.log(
-          bold(`\n${'═'.repeat(70)}\nCertification assertions — the machine-checkable half of the 73`),
+          bold(`\n${'═'.repeat(70)}\nCertification assertions — the machine-checkable half of the 72`),
         );
         console.log(
           dim(
@@ -1528,7 +1600,7 @@ async function main() {
               '  here is a regression in a fact one of its manual assertions rests on.',
           ),
         );
-        await runAssertions(page, options.baseUrl, wantedAssertions);
+        await runAssertions(page, origins, wantedAssertions);
       }
     });
 

@@ -331,12 +331,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
       <Panel title="The situation" eyebrow="Scenario" index={2} headingLevel={2}>
         <p className="prl-stage__question">{scenario.question}</p>
         <p className="prl-note">{scenario.facingAction}</p>
-        <PokerTable
-          view={view}
-          seatNames={seatNames}
-          title={`${scenario.title} — ${scenario.street}`}
-          announcement=""
-        />
+        <PokerTable view={view} seatNames={seatNames} title={`${scenario.title} — ${scenario.street}`} />
         <p className="prl-note">
           This table is read-only and the cards are fixed: a scenario is a stated situation, not a dealt hand,
           so there is no deck behind it and nothing to prove about one.

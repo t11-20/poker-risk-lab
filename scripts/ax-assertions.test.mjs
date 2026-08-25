@@ -17,12 +17,12 @@
  * Yes, and it was checked by breaking things rather than by reasoning about them. There are two
  * layers:
  *
- *   1. **A blanket control over all 45.** Every `decide` is handed a page that produced nothing —
- *      no landmarks, no headings, no controls, no announcements — and must refuse it. A check that
- *      passed an empty page is a check that can never fail, and that failure mode is silent: it
- *      reports a green assertion for the rest of its life. This is the control that catches a
- *      `decide` written with an early `return pass(...)`, or one reading a field `gather` no longer
- *      produces.
+ *   1. **A blanket control over every check in the registry.** Every `decide` is handed a page that
+ *      produced nothing — no landmarks, no headings, no controls, no announcements — and must
+ *      refuse it. A check that passed an empty page is a check that can never fail, and that
+ *      failure mode is silent: it reports a green assertion for the rest of its life. This is the
+ *      control that catches a `decide` written with an early `return pass(...)`, or one reading a
+ *      field `gather` no longer produces.
  *   2. **Targeted controls on a representative sample**, each fed evidence containing one REAL
  *      defect of the kind the assertion exists to catch — an unnamed contentinfo, a card whose
  *      accessible name says "queen of hearts", an action button announcing "Fold0 units", a verdict
@@ -666,8 +666,22 @@ describe('NEGATIVE CONTROL — 2.6, the correction announced after the rule', ()
 // or twice, is a page that rendered perfectly.
 // ---------------------------------------------------------------------------
 
-/** One write into one live region, as `SPEECH_PROBE` records it. */
-const wrote = (key, text, at, live = 'polite') => ({ text, live, role: 'status', key, at });
+/**
+ * One write into one live region, as `SPEECH_PROBE` records it.
+ *
+ * `recovered` is false here because these are texts a region was observed HOLDING. The recovered
+ * case — a value read back out of a `characterData` old value, which existed inside one React
+ * commit and never painted — has its own control under 3.3, and it is the difference between a
+ * sentence a reader could hear and one that was only ever in a component's props.
+ */
+const wrote = (key, text, at, live = 'polite') => ({
+  text,
+  live,
+  role: 'status',
+  key,
+  at,
+  recovered: false,
+});
 
 /**
  * A region key, composed rather than written whole.
@@ -681,7 +695,7 @@ const wrote = (key, text, at, live = 'polite') => ({ text, live, role: 'status',
 const regionKey = (...classNames) => classNames.join('>');
 
 const CONNECTION = regionKey('prl-panel__body', 'prl-play__connection-lines', 'prl-note');
-const NARRATION = regionKey('prl-play__table', 'prl-table', 'prl-live-region');
+const NARRATION = regionKey('prl-play__main', 'prl-play__table', 'prl-live-region');
 const TURN = regionKey('prl-play__main', 'prl-play__decision', 'prl-live-region');
 
 /** A healthy hand, as measured: connect, blinds, a bot, the turn, the Coach, a fold, the end. */
@@ -709,6 +723,9 @@ const HEALTHY_HAND = () => ({
   ],
   foldFocus: { onDocument: false, role: 'status', name: 'Your decision is with the server' },
   mutations: [],
+  // 3.3: the narration region has to be in the document BEFORE the hand is dealt, or its first
+  // sentence arrives inside the node that holds it and nothing is notified of a change.
+  regionsBeforeDeal: [CONNECTION, NARRATION, TURN],
   log: [
     wrote(CONNECTION, 'Preparing: reading your session, then finding or creating your private room.', 502),
     wrote(
@@ -716,7 +733,7 @@ const HEALTHY_HAND = () => ({
       'Live. Everything on this screen is the server’s own view of the table, redacted for you.',
       687,
     ),
-    wrote(NARRATION, 'smallBlind 5 from seat 3, bigBlind 10 from seat 4', 2368),
+    wrote(NARRATION, 'A new hand was dealt. smallBlind 5 from seat 3, bigBlind 10 from seat 4', 2368),
     wrote(NARRATION, 'folds', 3049),
     wrote(
       TURN,
@@ -786,6 +803,78 @@ describe('NEGATIVE CONTROL — 3.2, the caret dropped while setting the table up
   it('fires when the control that was pressed is still on the page', () => {
     const evidence = HEALTHY_HAND();
     evidence.steps[0].gone = false;
+    assert.ok(refuses(check, evidence));
+  });
+});
+
+describe('NEGATIVE CONTROL — 3.3, the deal nobody hears', () => {
+  const check = checkFor('J3.3');
+
+  it('passes one polite write carrying the deal and the blinds it arrived with', () => {
+    assert.equal(check.decide(HEALTHY_HAND()).ok, true);
+  });
+
+  it('fires when the narration region was not there yet — the first half of the real defect', () => {
+    // Measured before the fix: at the moment "Deal the next hand" was pressed the document held the
+    // route announcer, the connection line and the turn region, and no table narration region at
+    // all. A live region inserted already holding its sentence is announced by nothing.
+    const evidence = HEALTHY_HAND();
+    evidence.regionsBeforeDeal = [CONNECTION, TURN];
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the deal stands alone and the blinds take it back — the second half', () => {
+    // Two writes for ONE table notice. A polite region is read when the notification is serviced
+    // rather than when it is posted, so the reader hears the blinds and never hears the deal. A
+    // first version of this check passed exactly this evidence.
+    const evidence = HEALTHY_HAND();
+    const at = evidence.log.findIndex((entry) => /^A new hand was dealt\./u.test(entry.text));
+    evidence.log.splice(
+      at,
+      1,
+      wrote(NARRATION, 'A new hand was dealt.', 2368),
+      wrote(NARRATION, 'smallBlind 5 from seat 3, bigBlind 10 from seat 4', 2371),
+    );
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the sentence exists only as a recovered value that never painted', () => {
+    const evidence = HEALTHY_HAND();
+    const at = evidence.log.findIndex((entry) => /^A new hand was dealt\./u.test(entry.text));
+    evidence.log.splice(
+      at,
+      1,
+      { ...wrote(NARRATION, 'A new hand was dealt.', 2368), recovered: true },
+      wrote(NARRATION, 'smallBlind 5 from seat 3, bigBlind 10 from seat 4', 2368),
+    );
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when nothing announced a deal at all', () => {
+    const evidence = HEALTHY_HAND();
+    const at = evidence.log.findIndex((entry) => /^A new hand was dealt\./u.test(entry.text));
+    evidence.log.splice(at, 1, wrote(NARRATION, 'smallBlind 5 from seat 3, bigBlind 10 from seat 4', 2368));
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the deal interrupts', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      /^A new hand was dealt\./u.test(entry.text) ? { ...entry, live: 'assertive', role: 'alert' } : entry,
+    );
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the deal is left stapled to the front of the events after it', () => {
+    // The defect on the other side, and the one 3.17 exists for: `role="status"` is atomic, so a
+    // sentence left in front of later narration is read again on every event for the rest of the
+    // hand.
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      entry.key === NARRATION && entry.at > 2368
+        ? { ...entry, text: `A new hand was dealt. ${entry.text}` }
+        : entry,
+    );
     assert.ok(refuses(check, evidence));
   });
 });
@@ -1162,6 +1251,94 @@ describe('NEGATIVE CONTROL — 6.6, a sealed hand named in the replay', () => {
   });
 });
 
+describe('NEGATIVE CONTROL — 8.2, a fallback notice a reader cannot hear', () => {
+  const check = checkFor('J8.2');
+
+  /** `/learn` served by the second web app, the one with no API behind it. */
+  const BUNDLED_COPY = () => ({
+    notice: {
+      text:
+        '▲Watch outThis index is not liveThe content service is not reachable, so this index is ' +
+        'listing the bundled copy of the curriculum. The lessons and their prerequisites are real; ' +
+        'the read/unread marks are not yours. (fetch failed)',
+      spoken:
+        'Watch outThis index is not liveThe content service is not reachable, so this index is ' +
+        'listing the bundled copy of the curriculum. The lessons and their prerequisites are real; ' +
+        'the read/unread marks are not yours. (fetch failed)',
+      inMain: true,
+      insideDetails: false,
+      ariaHidden: false,
+      rendered: true,
+    },
+    noticeAx: { role: 'note', name: '', ignored: false },
+    spokenInTree: ['The content service is not reachable, so this index is listing the bundled copy'],
+    headings: [
+      { level: 1, name: 'The curriculum' },
+      { level: 2, name: 'Foundations' },
+    ],
+    lessonLinks: 17,
+  });
+
+  it('passes the page the offline web app actually serves', () => {
+    assert.equal(check.decide(BUNDLED_COPY()).ok, true);
+  });
+
+  it('fires when the page rendered live data after all — the harness lying to itself', () => {
+    // The control that matters most here. If the second web app reaches an API, this assertion
+    // audits the ordinary page and proves nothing, so "no notice" has to be a failure rather than
+    // a pass. Demonstrated for real by pointing the offline app at the live API.
+    const evidence = BUNDLED_COPY();
+    evidence.notice = null;
+    evidence.noticeAx = null;
+    evidence.spokenInTree = [];
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the sentence is a visual-only badge', () => {
+    // The row's own words. Strip the decorative glyphs and a tone marker plus a title is what is
+    // left; a reader who cannot see the colour is told nothing about what they are reading.
+    const evidence = BUNDLED_COPY();
+    evidence.notice.spoken = 'Watch outThis index is not live';
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the notice is hidden from the accessibility tree', () => {
+    const evidence = BUNDLED_COPY();
+    evidence.notice.ariaHidden = true;
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the notice is in the DOM and not in the tree', () => {
+    const evidence = BUNDLED_COPY();
+    evidence.spokenInTree = [];
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the notice is outside main, where the skip link jumps past it', () => {
+    const evidence = BUNDLED_COPY();
+    evidence.notice.inMain = false;
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the notice is folded behind a disclosure', () => {
+    const evidence = BUNDLED_COPY();
+    evidence.notice.insideDetails = true;
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the page fell over instead of falling back', () => {
+    const evidence = BUNDLED_COPY();
+    evidence.headings = [];
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the notice describes a page with nothing on it', () => {
+    const evidence = BUNDLED_COPY();
+    evidence.lessonLinks = 0;
+    assert.ok(refuses(check, evidence));
+  });
+});
+
 describe('figureDefect — a number a reader cannot place', () => {
   const counted = {
     label: 'Your equity',
@@ -1226,5 +1403,10 @@ describe('SPEECH_PROBE', () => {
     assert.match(SPEECH_PROBE, /characterDataOldValue: true/u);
     assert.match(SPEECH_PROBE, /role="alert"/u);
     assert.match(SPEECH_PROBE, /window\.__prlSpeechReset/u);
+    // The two additions 3.3 rests on: a recovered old value is MARKED as one, so a check cannot
+    // count a string that never painted as an announcement; and the set of regions that exist right
+    // now is readable, so "was the region there before the event" is a question with an answer.
+    assert.match(SPEECH_PROBE, /recovered: recovered === true/u);
+    assert.match(SPEECH_PROBE, /window\.__prlSpeechRegions/u);
   });
 });

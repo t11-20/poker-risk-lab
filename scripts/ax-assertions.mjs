@@ -11,9 +11,9 @@
  *
  * ## The failure this exists to end
  *
- * The certification document holds 73 manual assertions and every release report this project has
- * produced records the same verdict for all 73: UNVERIFIED, because nobody has sat down with a
- * screen reader. That is true and it is also the wrong shape of true. A large share of those 73 are
+ * The certification document holds 72 manual assertions and every release report this project has
+ * produced records the same verdict for all of them: UNVERIFIED, because nobody has sat down with a
+ * screen reader. That is true and it is also the wrong shape of true. A large share of those 72 are
  * not really about speech at all — they are about an accessible name, a role, an ARIA state, a
  * live region's politeness, where focus lands, whether a heading outline skips a level. Those are
  * facts about the rendered accessibility tree. Leaving them in a manual session that has never been
@@ -21,14 +21,25 @@
  * assertive, a control that drops focus on the floor when it disables itself — ships silently and
  * waits for a human session that never comes.
  *
- * So the 73 are split. The 63 whose whole subject is a DOM/ARIA fact are checked here, on every
- * run, and a regression fails `pnpm run verify`. The 10 whose subject is the SPEECH ITSELF — whether
+ * So the 72 are split. The 65 whose whole subject is a DOM/ARIA fact are checked here, on every
+ * run, and a regression fails `pnpm run verify`. The 7 whose subject is the SPEECH ITSELF — whether
  * a prompt is read twice, in what order the words arrive, where a virtual cursor goes past the end
  * of a modal — stay with the person, and `pnpm run certify:screen-reader` now presents only those.
  *
+ * ## Two of them were not certification limits at all, but DEFECTS filed as one
+ *
+ * 3.3 said "A new hand was dealt." never reaches the DOM and asked a reviewer to decide whether
+ * hearing the blinds instead was a PASS. That is a bug with a checklist item wrapped round it, and
+ * a check that had existed would have found it: the table's narration region was not in the
+ * document when a hand was dealt, and the deal sentence was destroyed by the forced bets of the
+ * same table notice. Both are fixed in the application, and J3.3 below is what keeps them fixed.
+ * 8.2 said the bundled-copy path needs the API down for a process this gate shares with everything
+ * else — true, and the conclusion does not follow: the gate now runs a second web app that has no
+ * API behind it. Neither row was ever about speech.
+ *
  * ## "Needs a live table" was a statement about this gate, not about speech
  *
- * Eighteen of those 63 were with the person until this module grew two fixtures, and every one of
+ * Nineteen of those 65 were with the person until this module grew three fixtures, and every one of
  * them was refused for a fixture reason rather than an un-automatable one:
  *
  *   - **A live table over a real socket** (`gatherLiveTable`). `/play?state=decision` renders the
@@ -41,8 +52,14 @@
  *     component with no face-down card and no timeline in it. The fixture reads back the hand the
  *     live table just played, as the reader's own history.
  *
+ *   - **A web app with no API behind it** (`gatherBundledCopy`). The bundled-copy path is taken by
+ *     the WEB SERVER's own fetch, so blocking `/api/*` in the browser — which is how 3.20 is
+ *     driven — leaves the server render untouched and the page still arrives with live data in it.
+ *     `ax-tree-audit.mjs` starts a second `next start` off the same build with `PRL_API_ORIGIN`
+ *     pointed at a port nothing can be listening on, and one route visits it.
+ *
  * What is still refused is refused on its merits, and section 5 of the certification document lists
- * all ten with one line each.
+ * all seven with one line each.
  *
  * ## What this does NOT claim
  *
@@ -208,11 +225,19 @@ export const ANNOUNCER_PROBE = `
  *
  * ## Three details that are each load-bearing
  *
- * **`characterDataOldValue`.** React coalesces two state changes that arrive in one task into a
- * single render, so a sentence can be replaced before it ever reaches the DOM. Where the DOM itself
- * was written twice in one batch the observer only sees the final text, and the old value is the
- * only record that the first one existed. Recovering it is what lets a check distinguish "was said
- * and replaced" from "was never said" — a distinction assertion 3.3 turns out to rest on.
+ * **`characterDataOldValue`, and the `recovered` flag on what it produces.** React coalesces two
+ * state changes that arrive in one task into a single render, so a sentence can be replaced before
+ * it ever reaches the DOM. Where the DOM itself was written twice in one batch the observer only
+ * sees the final text, and the old value is the only record that the first one existed. Recovering
+ * it is what lets a check distinguish "was said and replaced" from "was never said" — the
+ * distinction assertion 3.3 rests on.
+ *
+ * Every recovered entry is marked `recovered: true`, and that marking is the point. A recovered
+ * value is a string that was in a React element's props and never in a painted DOM: Chrome posts a
+ * live-region notification from the commit and reads the region's text when it services it, so an
+ * intermediate value inside one commit is never announced by anything. A check that accepted a
+ * recovered entry as an announcement would pass while a screen-reader user heard nothing, which is
+ * the exact failure 3.3 was filed as.
  *
  * **A mutation count per region.** A polite region re-written with the SAME text produces no change
  * of text and is still a re-announcement in several readers. Assertion 3.6 — the turn sentence is
@@ -231,6 +256,11 @@ export const SPEECH_PROBE = `
   const started = Date.now();
   window.__prlSpeech = { log, mutations };
   window.__prlSpeechReset = () => { log.length = 0; mutations.length = 0; };
+  // Which announcement surfaces EXIST right now, by the same key the log uses. A live region that
+  // is inserted already holding its sentence is not announced by Chrome — the notification is
+  // posted for a change to a region the platform already knew about — so "was the region there
+  // before the event" is a fact some assertions have to be able to read. See 3.3.
+  window.__prlSpeechRegions = () => [...document.querySelectorAll(SELECTOR)].map((el) => keyOf(el));
   const SELECTOR = '[aria-live], [role="status"], [role="alert"]';
   const seen = new WeakMap();
   const tidy = (value) => (value ?? '').replace(/\\s+/gu, ' ').trim();
@@ -249,7 +279,7 @@ export const SPEECH_PROBE = `
     const label = el.getAttribute('aria-label');
     return parts.join('>') + (label === null ? '' : '#' + label);
   };
-  const push = (el, text) => {
+  const push = (el, text, recovered) => {
     if (text === '' || seen.get(el) === text) return;
     seen.set(el, text);
     log.push({
@@ -258,10 +288,15 @@ export const SPEECH_PROBE = `
       role: el.getAttribute('role'),
       key: keyOf(el),
       at: Date.now() - started,
+      // False only for a text this region was actually observed HOLDING. See the header: a
+      // recovered old value is a sentence that existed inside one commit and never painted, and
+      // a check that counts one as an announcement is claiming a reader heard something no
+      // assistive technology was ever notified of.
+      recovered: recovered === true,
     });
   };
   const scan = () => {
-    for (const el of document.querySelectorAll(SELECTOR)) push(el, tidy(el.textContent));
+    for (const el of document.querySelectorAll(SELECTOR)) push(el, tidy(el.textContent), false);
   };
   const observer = new MutationObserver((records) => {
     for (const record of records) {
@@ -273,7 +308,9 @@ export const SPEECH_PROBE = `
       // text node that changed — otherwise the "old value" is a fragment of a longer region and
       // logging it would invent a sentence nobody wrote.
       if (record.type === 'characterData' && typeof record.oldValue === 'string') {
-        if (tidy(region.textContent) === tidy(record.target.data)) push(region, tidy(record.oldValue));
+        if (tidy(region.textContent) === tidy(record.target.data)) {
+          push(region, tidy(record.oldValue), true);
+        }
       }
     }
     scan();
@@ -1571,7 +1608,10 @@ const TABLE_NARROW_CHECKS = [
 
 /** Where each of the three regions this journey listens to lives, as a `SPEECH_PROBE` key. */
 const CONNECTION_REGION = /prl-play__connection-lines/u;
-const TABLE_REGION = /prl-table>prl-live-region/u;
+// `prl-play__table`, not `prl-table`: the narration region is mounted by `TableStage` rather than
+// by `PokerTable`, because `PokerTable` is not rendered until a view exists and a live region that
+// is inserted already holding its first sentence is announced by nothing. See 3.3.
+const TABLE_REGION = /prl-play__table>prl-live-region/u;
 const TURN_REGION = /prl-play__decision>prl-live-region/u;
 
 /** How long 3.6 sits on its own turn without acting. The assertion says ten seconds; this is it. */
@@ -1579,6 +1619,9 @@ const TURN_DWELL_MS = 10_000;
 
 /** The reader's own decision, echoed by the reducer. `spokenDecision` in `use-live-table.ts`. */
 const FOLD_ECHO = /^You chose to fold\./u;
+
+/** The sentence 3.3 is about, at the front of whatever else the deal brought with it. */
+const DEALT_ANNOUNCEMENT = /^A new hand was dealt\./u;
 
 const entriesFrom = (log, region) => (log ?? []).filter((entry) => region.test(entry.key ?? ''));
 
@@ -1676,6 +1719,12 @@ async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0 } = {})
   }
 
   await waitInPage(page, '/Deal the next hand/u.test(document.body.innerText)', 25);
+  // Read BEFORE the deal, because that is when it decides anything: see 3.3. The narration region
+  // has to already be in the document when the hand starts, or the sentence arrives with the region
+  // that holds it and no assistive technology is notified of a change.
+  evidence.regionsBeforeDeal = await page.evaluate(
+    'window.__prlSpeechRegions ? window.__prlSpeechRegions() : []',
+  );
   evidence.dealt = await pressControl(page, /^Deal the next hand$/iu);
   if (evidence.dealt === null) return { ...evidence, ...(await speechSoFar(page)) };
 
@@ -1793,6 +1842,98 @@ const LIVE_TABLE_CHECKS = [
         }
       }
       return pass(e.steps.map((step) => `${step.control} -> "${step.focus.name.slice(0, 32)}…"`).join(', '));
+    },
+  },
+  {
+    /*
+      3.3 was `person` because the sentence was measurably never announced, which is a defect rather
+      than a certification limit — see `onEventFrame` in `apps/web/src/lib/use-live-table.ts`. This
+      check is what stops it coming back, and every clause of it was written against a run that
+      passed a weaker version of the same check:
+
+        - **the narration region must already EXIST when the hand is dealt.** A live region inserted
+          already holding its sentence is not announced: the platform is notified of a CHANGE to a
+          region it knows about, and a moment earlier there was no region. Measured on this gate
+          before the fix — at the moment "Deal the next hand" was pressed the document's only live
+          regions were the route announcer, the connection line, the invite and join notes, the
+          decision band's turn region and the footer statement;
+        - **the entry must be one the region was observed HOLDING** (`recovered !== true`). A value
+          recovered from `characterData` old values existed inside one React commit and never
+          painted, so nothing was ever notified of it;
+        - **it must not stand alone.** This is the clause the first version of this check lacked,
+          and a deliberately broken build passed without it. `handStarted` and `forcedBets` are two
+          events of ONE table notice, so with the region mounted the run recorded two writes for one
+          notice: "A new hand was dealt." and then the blinds, milliseconds apart. `role="status"`
+          is atomic and a polite region is read when the notification is serviced, not when it is
+          posted, so the reader hears the last text and the deal is lost exactly as before — the
+          only difference being that the loss is now visible to a probe. One notice must be one
+          write, so the text that opens with the deal has to carry what the deal brought with it;
+        - **it must be said once.** A sentence left in front of the table's later narration is read
+          again on every event for the rest of the hand — the defect 3.17 catches, in reverse.
+    */
+    id: 'J3.3',
+    what: 'the deal is announced politely, once, in a region the page already had',
+    decide: (e) => {
+      if (e.dealt === null) return fail('the hand was never dealt, so nothing announced a deal');
+      const narration = entriesFrom(e.log, TABLE_REGION);
+      const hadRegion = (e.regionsBeforeDeal ?? []).some((key) => TABLE_REGION.test(key ?? ''));
+      if (!hadRegion) {
+        return fail(
+          'the table had no narration region at the moment the hand was dealt, so whatever it says ' +
+            `about the deal arrives WITH the region that holds it. Regions present: ${JSON.stringify(
+              e.regionsBeforeDeal ?? [],
+            )}. Chrome notifies a reader of a CHANGE to a live region it already knows about; a ` +
+            'region inserted carrying its first sentence is silent, which is what a reader gets on ' +
+            'the first hand of every session',
+        );
+      }
+      const dealt = narration.filter((entry) => DEALT_ANNOUNCEMENT.test(entry.text));
+      const painted = dealt.filter((entry) => entry.recovered !== true);
+      if (painted.length === 0) {
+        return fail(
+          dealt.length === 0
+            ? 'nothing the table said began with "A new hand was dealt." A reader who pressed the ' +
+                `control is told the blinds and never told a hand started. The region held ${JSON.stringify(
+                  narration.slice(0, 4).map((entry) => entry.text.slice(0, 44)),
+                )}`
+            : '"A new hand was dealt." exists only as a value recovered from a characterData old ' +
+                'value: it was written and replaced inside one React commit and never painted, so no ' +
+                'assistive technology was ever notified of it. That is silence, not an announcement',
+        );
+      }
+      const first = painted[0];
+      if (first.live !== 'polite' || first.role === 'alert') {
+        return fail(`the deal is announced ${first.live}; a hand starting interrupts nothing`);
+      }
+      if (painted.length > 1) {
+        return fail(
+          `the deal sentence was written into the region ${painted.length} times: ${JSON.stringify(
+            painted.map((entry) => entry.text.slice(0, 44)),
+          )}. One hand, one deal, one announcement`,
+        );
+      }
+      const rest = first.text.replace(DEALT_ANNOUNCEMENT, '').trim();
+      if (rest === '') {
+        const next = narration[narration.indexOf(first) + 1];
+        return fail(
+          'the region was written with "A new hand was dealt." and nothing else, so the forced bets ' +
+            `that arrive in the same table notice took it back${
+              next === undefined ? '' : ` — the next text it held was "${next.text.slice(0, 44)}"`
+            }. A polite region is read when the notification is serviced rather than when it is ` +
+            'posted, so two writes for one notice are one announcement and it is the second one. ' +
+            'The deal has to be carried onto the front of the sentence that replaces it',
+        );
+      }
+      const after = narration.slice(narration.indexOf(first) + 1);
+      const carried = after.filter((entry) => DEALT_ANNOUNCEMENT.test(entry.text));
+      if (carried.length > 0) {
+        return fail(
+          `"A new hand was dealt." is still in front of ${carried.length} later announcement(s) — ` +
+            `"${carried[0].text.slice(0, 60)}". The region is atomic, so the reader hears the deal ` +
+            'again on every event for the rest of the hand',
+        );
+      }
+      return pass(`"${first.text.slice(0, 70)}…", polite, once`);
     },
   },
   {
@@ -3041,6 +3182,135 @@ const MISSING_HAND_CHECKS = [
 ];
 
 // ---------------------------------------------------------------------------
+// Journey 8, continued — the page a reader gets when the API is not there
+//
+// 8.2 was `person` for a reason that reads like an impossibility and is a fixture: "the
+// bundled-copy path is taken by the WEB SERVER's own fetch, not the browser's, so reaching it needs
+// the API to be down for a process this gate shares with every other assertion". Both halves are
+// true and the conclusion does not follow — the gate can run a SECOND web server. It is the same
+// build, on its own port, with `PRL_API_ORIGIN` pointing at a port nothing can be listening on, and
+// nothing else in the run goes near it. See `OFFLINE_WEB_ORIGIN` in `ax-tree-audit.mjs`.
+//
+// What that buys is the real path rather than a simulation of it: `loadLessonList` gets a transport
+// error from its own `fetch`, `isApiUnavailable` says so, and `/learn` renders `LEARN_LESSON_LIST_
+// FIXTURE` with `fallbackReason` set — exactly what a reader would get from a deployment whose API
+// is down.
+// ---------------------------------------------------------------------------
+
+/** The phrase every fixture fallback in `apps/web/src/lib/learn-data.ts` is built on. */
+const BUNDLED_COPY_NOTICE = /bundled copy|content service is not reachable/iu;
+
+async function gatherBundledCopy(page) {
+  const nodes = await axNodes(page);
+  const notice = await page.evaluate(
+    `(() => {
+      const wanted = /bundled copy|content service is not reachable/iu;
+      const note = [...document.querySelectorAll('[role="note"]')].find((el) =>
+        wanted.test((el.textContent ?? '').replace(/\\s+/gu, ' ')),
+      );
+      if (note === undefined) return null;
+      note.setAttribute('data-prl-ax-notice', '1');
+      // What a reader is actually given: the same node with every decorative glyph removed. A
+      // notice whose meaning survives only in an aria-hidden marker is the "visual-only badge"
+      // this assertion refuses.
+      const spoken = note.cloneNode(true);
+      for (const decoration of spoken.querySelectorAll('[aria-hidden="true"]')) decoration.remove();
+      return {
+        text: (note.textContent ?? '').replace(/\\s+/gu, ' ').trim(),
+        spoken: (spoken.textContent ?? '').replace(/\\s+/gu, ' ').trim(),
+        inMain: note.closest('main') !== null,
+        insideDetails: note.closest('details') !== null,
+        ariaHidden: note.closest('[aria-hidden="true"]') !== null,
+        rendered: note.getClientRects().length > 0,
+      };
+    })()`,
+  );
+  const ax = notice === null ? [] : await axFor(page, '[data-prl-ax-notice="1"]');
+  await page.evaluate(
+    `document.querySelectorAll('[data-prl-ax-notice]').forEach((el) => el.removeAttribute('data-prl-ax-notice'))`,
+  );
+  return {
+    notice,
+    noticeAx: ax[0] ?? null,
+    // The sentence as the TREE carries it, which is the half a source scan cannot make: a `role=
+    // "note"` takes no accessible name from its contents, so the evidence that a reader gets the
+    // words is that the words are in the tree as text.
+    spokenInTree: nodes.filter((node) => BUNDLED_COPY_NOTICE.test(node.name)).map((node) => node.name),
+    headings: nodes
+      .filter((node) => node.role === 'heading')
+      .map((node) => ({ level: node.level, name: node.name })),
+    lessonLinks: (await axFor(page, 'main a[href^="/learn/"]')).filter(
+      (entry) => !entry.ignored && !isBareName(entry.name),
+    ).length,
+  };
+}
+
+const BUNDLED_COPY_CHECKS = [
+  {
+    id: 'J8.2',
+    what: 'with no API behind the web server the page renders its bundled copy and says so in words',
+    decide: (e) => {
+      const levelOnes = e.headings.filter((heading) => heading.level === 1);
+      if (levelOnes.length !== 1) {
+        return fail(
+          `this page rendered ${levelOnes.length} level-1 heading(s), so it is an error boundary ` +
+            'rather than the curriculum. The bundled copy is what the page falls back TO; a page ' +
+            'that fell over instead is a different defect and this assertion cannot see past it',
+        );
+      }
+      if (e.lessonLinks === 0) {
+        return fail(
+          'the page carries no named lesson link, so nothing was rendered from the bundled copy — ' +
+            'the notice would be describing a page that is not there',
+        );
+      }
+      if (e.notice === null) {
+        return fail(
+          'nothing on the page says the content is the bundled copy. Either the web server reached ' +
+            'an API after all — in which case this assertion checked the live page and proves ' +
+            `nothing — or the fallback is silent. The page's headings were ${JSON.stringify(
+              e.headings.slice(0, 4).map((heading) => heading.name),
+            )}`,
+        );
+      }
+      if (e.notice.ariaHidden || e.noticeAx?.ignored === true) {
+        return fail('the notice is hidden from the accessibility tree, so only a sighted reader gets it');
+      }
+      if (!e.notice.rendered) return fail('the notice is in the DOM and is not rendered');
+      if (!e.notice.inMain) {
+        return fail(
+          'the notice is outside `main`, so a reader who used the skip link to get to the content ' +
+            'has skipped past the sentence saying the content is not live',
+        );
+      }
+      if (e.notice.insideDetails) {
+        return fail(
+          'the notice is inside a disclosure. Whether what you are reading is live is not optional ' +
+            'reading',
+        );
+      }
+      // The badge test, and it is the one the row actually turns on. Strip every `aria-hidden`
+      // glyph and what is left must still be a sentence; a tone marker plus a coloured border is a
+      // visual-only badge however loud it looks.
+      if (!BUNDLED_COPY_NOTICE.test(e.notice.spoken) || e.notice.spoken.length < 40) {
+        return fail(
+          `with every decorative glyph removed the notice reads "${e.notice.spoken}", which is not a ` +
+            'sentence saying the content is a bundled copy. A reader who cannot see the tone colour ' +
+            'is told nothing',
+        );
+      }
+      if (e.spokenInTree.length === 0) {
+        return fail(
+          'the sentence is in the DOM and not in the accessibility tree, so it is on screen and ' +
+            'unreadable to the thing that reads screens',
+        );
+      }
+      return pass(`"${e.notice.spoken.slice(0, 80)}…", in main, in the tree`);
+    },
+  },
+];
+
+// ---------------------------------------------------------------------------
 // The registry
 // ---------------------------------------------------------------------------
 
@@ -3141,6 +3411,20 @@ export const ASSERTION_ROUTES = [
     path: '/review/prl-no-such-hand',
     gather: gatherMissingHand,
     checks: MISSING_HAND_CHECKS,
+  },
+  {
+    /*
+      `origin: 'offline'` is the only route that does not run against the app under test. It runs
+      against a second `next start` off the same build whose `PRL_API_ORIGIN` points at nothing, so
+      the web server's own fetch fails and the page renders its bundled copy — which is the state
+      8.2 is about and the one thing blocking `/api/*` in the browser cannot produce.
+    */
+    key: 'bundled-copy',
+    title: 'J8 Failure paths, with no API behind the web server',
+    origin: 'offline',
+    path: '/learn',
+    gather: gatherBundledCopy,
+    checks: BUNDLED_COPY_CHECKS,
   },
 ];
 

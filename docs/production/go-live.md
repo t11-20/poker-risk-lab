@@ -69,12 +69,16 @@ armed and attached to a phone is a fact about an account this repository does no
 
 | Step | Command | Pass looks like |
 | --- | --- | --- |
-| 5.1 | `pnpm run test:ax` | 109 checks, 0 failed — 63 of the 73 certification assertions |
-| 5.2 **PERSON** | `pnpm run certify:screen-reader` | the remaining **10**, with VoiceOver or NVDA, ~15 min |
+| 5.1 | `pnpm run test:ax` | 111 checks, 0 failed — 65 of the 72 certification assertions |
+| 5.2 **PERSON** | `pnpm run certify:screen-reader` | the remaining **7**, with VoiceOver or NVDA, ~10 min |
 
-The 10 are the ones whose subject is the utterance itself — whether something is read twice, what a
-virtual cursor does past the end of a modal, and one case where the announcement measurably never
-reaches the DOM and only a person can say whether what is heard instead is acceptable.
+The 7 are the ones whose subject is the utterance itself — whether something is read twice, what a
+virtual cursor does past the end of a modal — plus two states no honest fixture reaches: a failing
+deck proof, which would need a server that lies about a deal, and the root-layout boundary, which
+would need a deliberately broken build.
+
+`test:ax` starts a **second** web app of its own on `:3459` with no API behind it, for assertion
+8.2. It is torn down with the rest; if that port is taken, pass `--offline-url`.
 
 ## 6. The cohort
 

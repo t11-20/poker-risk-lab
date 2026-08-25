@@ -37,14 +37,22 @@ Screen-reader certification remains **UNVERIFIED**: `osascript` answers `-1743` 
 grant this repository can make will change that. It needs a person with VoiceOver or NVDA. That is
 the one thing standing between this and a PASS string, and it is not a code defect.
 
-What has changed is its size. **63 of the certification's 73 assertions are now machine-verified on
+What has changed is its size. **65 of the certification's 72 assertions are now machine-verified on
 every run** of `pnpm run test:ax`, one check per assertion ID, against the rendered accessibility
 tree in real Chrome — so a regression in any of them fails `pnpm run verify` on the day it lands.
-Eighteen of those were with the person until the gate grew the two fixtures they needed: a **live
-table over a real socket** and a **hand it played, replayed at `/review/<handId>`**. **10 still
-require a person listening**, and they are the ones whose subject is the speech itself. The session
-is now roughly **10–15 minutes per platform** rather than the better part of an afternoon. The
-blocker is not reduced; the work behind it is.
+Nineteen of those were with the person until the gate grew the three fixtures they needed: a **live
+table over a real socket**, a **hand it played, replayed at `/review/<handId>`**, and a **second web
+app with no API behind it**. **7 still require a person listening**, and they are the ones whose
+subject is the speech itself. The session is now roughly **ten minutes per platform** rather than
+the better part of an afternoon. The blocker is not reduced; the work behind it is.
+
+Two of the rows that moved were not certification limits at all. **3.3** recorded that "A new hand
+was dealt." never reaches the DOM and asked a reviewer to judge whether hearing the blinds instead
+was a PASS; that was an application defect filed as a checklist item, and it is fixed — the table's
+narration region is now mounted before a hand is dealt, and the deal is carried onto the front of
+the forced-bets sentence so the reader hears "A new hand was dealt. smallBlind 5 from seat 3,
+bigBlind 10 from seat 4" as one polite announcement. **1.5** asked a reviewer to check a disclosure
+`/learn` has never had, and is retired. Both are recorded in section 5 of the certification.
 
 ---
 
@@ -223,8 +231,8 @@ shell, node path and a Node version below the `engines` floor. The base is now
 | `alerts:preflight` | **REFUSES the staging configuration, exit 1**, and that is correct: staging's paging destinations are `alerts:verify`'s own throwaway `.invalid` sinks. The seven structural checks pass — 6 destinations parsed, both tiers distinct, TLS to every off-host destination, 28 rules over 2 severities all resolving to receivers that have somewhere to send. `staging promote` will not call a release promotable while this fails | — |
 | Proxy log leak, **live** | A sentinel request to `/api/v1/auth/oidc/callback?code=…&state=…` against the **running** staging proxy: **0** occurrences in the access log and **0** in the error log. What it logged instead: `"GET /api/v1/auth/oidc/callback?" 501 rt=0.031 up=172.20.0.3:3001 rid=ee14e2aa-…` — path without query, address truncated to `/24`, agent classed, the API's own request id joined | — |
 | `staging up` | **exit 0** — migrations applied, **71-check** strict smoke over TLS, all four containers healthy | `staging-2.log` |
-| `test:ax`, certification assertions | **63 of 63** — the machine-checkable share of the 73 manual assertions, one check per assertion ID, in Chrome 151, now including a hand played over a real socket at `/play` and replayed at `/review/<handId>`. Demonstrated to refuse, twice over: seven components broken in an earlier pass (footer landmark name, route-announcer politeness, `<main tabIndex>`, action-button `aria-label`, face-down card naming, sheet focus return, quiz `aria-describedby` order) failed **10** checks by ID; five broken for the live-table and replay fixtures (the stack dropped from the turn sentence, the decision echo prefixed onto every announcement, `role="alert"` removed from the table-unavailable block, the replay's end-of-hand focus rescue deleted, a face-down card renamed "card") failed exactly **3.5, 3.17, 3.20, 6.5 and 6.6** and nothing else, and all 63 passed again on restore | see residual 1 |
-| Screen reader, the residual **28** | **UNVERIFIED** `-1743`. Needs a person listening; 25–35 min per platform | — |
+| `test:ax`, certification assertions | **65 of 65** — the machine-checkable share of the 72 manual assertions, one check per assertion ID, in Chrome 151, now including a hand played over a real socket at `/play`, replayed at `/review/<handId>`, and a second web app with no API behind it. Demonstrated to refuse, three times over: seven components broken in an earlier pass (footer landmark name, route-announcer politeness, `<main tabIndex>`, action-button `aria-label`, face-down card naming, sheet focus return, quiz `aria-describedby` order) failed **10** checks by ID; five broken for the live-table and replay fixtures (the stack dropped from the turn sentence, the decision echo prefixed onto every announcement, `role="alert"` removed from the table-unavailable block, the replay's end-of-hand focus rescue deleted, a face-down card renamed "card") failed exactly **3.5, 3.17, 3.20, 6.5 and 6.6** and nothing else; and for the two rows that moved in this pass, restoring the deal-announcement defect failed **3.3** alone with the two writes it recorded quoted back, pointing the offline web app at the live API failed **8.2** as "the web server reached an API after all", and hiding the fallback notice's sentence behind `aria-hidden` failed **8.2** as a visual-only badge. All 65 passed again on restore | see residual 1 |
+| Screen reader, the residual **7** | **UNVERIFIED** `-1743`. Needs a person listening; about ten minutes per platform | — |
 
 **The three `alerts:*` rows above are a capture and are left as captured.** They read 26 checks, 28
 rules and 2 severities, which is what this candidate's run reported and what its logs hold. The dead
@@ -278,7 +286,7 @@ under a real network partition.
 
 ## Residual — what is still open, in order of how much it matters
 
-1. **Screen-reader certification is UNVERIFIED — 45 of 73 machine-verified, 28 still need a person
+1. **Screen-reader certification is UNVERIFIED — 65 of 72 machine-verified, 7 still need a person
    listening.** **This is the only item that keeps this candidate from a PASS string.**
 
    The reason previously recorded for it — `osascript` error `-1743` — is accurate about what the
@@ -286,9 +294,9 @@ under a real network partition.
    VoiceOver; it does not stop a person.** Pressing Command + F5 and listening needs no Automation
    grant. What has been missing is not a permission, it is half an hour of somebody's attention.
 
-   **What is now automated.** Each of the 73 assertions in
+   **What is now automated.** Each of the 72 assertions in
    [`accessibility-certification.md`](accessibility-certification.md) carries a `Checked by` marker.
-   **63 are marked `auto`** and have a real check in `scripts/ax-assertions.mjs`, run by
+   **65 are marked `auto`** and have a real check in `scripts/ax-assertions.mjs`, run by
    `pnpm run test:ax` inside `pnpm run verify`, against the *rendered* accessibility tree in real
    Chrome — the computed name and role of every control, the theme radio group's selected state,
    the route announcer's politeness and that it writes the title exactly once and stays silent on a
@@ -301,37 +309,45 @@ under a real network partition.
    | Section | Assertions | `auto` | `person` |
    | --- | ---: | ---: | ---: |
    | Global (G1–G10) | 10 | 10 | 0 |
-   | J1 Learn | 6 | 5 | 1 |
+   | J1 Learn | 5 | 5 | 0 |
    | J2 Guided practice | 9 | 7 | 2 |
-   | J3 Table and Coach | 21 | 19 | 2 |
+   | J3 Table and Coach | 21 | 20 | 1 |
    | J4 Scenario Lab | 6 | 5 | 1 |
    | J5 AI Legends | 5 | 5 | 0 |
    | J6 Hand review | 7 | 6 | 1 |
    | J7 Navigation sheet | 6 | 5 | 1 |
-   | J8 Failure paths | 3 | 1 | 2 |
-   | **Total** | **73** | **63** | **10** |
+   | J8 Failure paths | 3 | 2 | 1 |
+   | **Total** | **72** | **65** | **7** |
 
-   Writing them found two real defects that had sat in the document as untested claims: **G3
+   Writing them found four real defects that had sat in the document as untested claims: **G3
    asserts a `contentinfo` landmark named "About Poker Risk Lab" and the footer's computed name was
    the empty string** — a heading inside a landmark does not name the landmark, fixed in
-   `apps/web/src/components/SiteFooter.tsx`; and **3.2 asserts that a reader who opens the table or
+   `apps/web/src/components/SiteFooter.tsx`; **3.2 asserts that a reader who opens the table or
    takes a seat is placed on the status line and hears it, and that landing place had no computed
    name at all** — `role="status"` takes none from its contents — fixed with an `aria-label` in
-   `apps/web/src/app/play/LiveTable.tsx`.
+   `apps/web/src/app/play/LiveTable.tsx`; **the table's polite narration region was not in the
+   document at the moment a hand was dealt**, because it was owned by a component that is not
+   rendered until a view arrives, so on the first hand of every session it was created already
+   holding its first sentence and announced nothing — moved to `TableStage` and mounted
+   unconditionally; and **"A new hand was dealt." was never announced**, because it and the forced
+   bets are two events of one table notice and two writes into one atomic polite region for one
+   notice are one announcement — the deal is now carried onto the front of that sentence and
+   written once. The last two are 3.3, which this document had been recording as a limit of the
+   certification rather than as a bug.
 
-   **What is still a person's job, and why.** The 10 `person` rows are the ones whose subject is the
+   **What is still a person's job, and why.** The 7 `person` rows are the ones whose subject is the
    utterance itself: whether a prompt is read twice (2.4), whether a score is announced anywhere
    (2.9), where a virtual cursor goes past the end of a modal (7.4) — plus four states no fixture
-   reaches honestly: a sentence React coalesces away before it reaches the DOM (3.3), a server
-   refusal that needs a second actor racing the same seat (3.19), a count that arrives with its own
-   full page load (4.2), a failing deck proof (6.7), an API that is down for the web server rather
-   than the browser (8.2), and a build with a deliberate `throw` in it (8.3). Section 5 of the
-   certification lists all ten with one line each. The classification stays deliberately
+   reaches honestly: a server refusal that needs a second actor racing the same seat (3.19), a count
+   that arrives with its own full page load (4.2), a failing deck proof, which would need a server
+   that lies about a deal (6.7), and a build with a deliberate `throw` in the root layout, which
+   would need an application build inside `verify` or a shipped switch whose job is to break the app
+   (8.3). Section 5 of the certification lists all seven with one line each. The classification stays deliberately
    conservative: a row that mixes a checkable fact with a claim about speech stays with the person,
    because a row half-covered by a machine and dropped from the human session is a row nobody
    checks.
 
-   `pnpm run certify:screen-reader` is now the way to spend the quarter hour: it presents **the 10**,
+   `pnpm run certify:screen-reader` is now the way to spend the ten minutes: it presents **the 7**,
    states up front how many are machine-covered and where those checks live, holds the reviewer's
    place across a resumable session, requires a quoted announcement for every `FAIL` and `SILENT`,
    refuses to call an incomplete run a pass, and stamps the result with the commit it was run

@@ -141,6 +141,16 @@ export interface TableState {
   readonly revision: number;
   readonly announcement: string;
   /**
+   * A sentence that has been produced and deliberately not written into the region yet, because the
+   * event that produced it arrives in the same table notice as the one after it.
+   *
+   * Empty except between `handStarted` and the forced bets that always follow it in the same table
+   * notice, which is microseconds. See `onEventFrame` for the measurement this exists because of:
+   * two writes into one atomic polite region for one notice are one announcement, and it is the
+   * second one, so the first is never spoken at all.
+   */
+  readonly carried: string;
+  /**
    * One sentence for the region that announces the reader's OWN decision being due.
    *
    * Separate from `announcement`, which narrates the table, because the two are different kinds of
@@ -205,6 +215,7 @@ export const EMPTY_TABLE_STATE: TableState = {
   serverTimeMs: 0,
   revision: 0,
   announcement: '',
+  carried: '',
   turnAnnouncement: '',
   summary: [],
   coach: null,
@@ -353,11 +364,19 @@ export const COACH_READY_ANNOUNCEMENT =
   'The analysis of this decision is ready in the Coach panel, below the table on a narrow screen.';
 export const COACH_FAILED_ANNOUNCEMENT = 'The analysis could not be shown.';
 
+/**
+ * What a reader is told when a hand starts, and it is not announced on its own.
+ *
+ * Exported so a test asserts the sentence the reducer produces rather than carrying its own copy —
+ * the same reason `COACH_READY_ANNOUNCEMENT` is exported.
+ */
+export const DEAL_ANNOUNCEMENT = 'A new hand was dealt.';
+
 /** One sentence for the table's single polite live region. */
 function announce(event: Extract<WsServerMessage, { type: 'event' }>['event']): string {
   switch (event.kind) {
     case 'handStarted':
-      return 'A new hand was dealt.';
+      return DEAL_ANNOUNCEMENT;
     case 'forcedBets':
       return event.detail;
     case 'action':
@@ -381,15 +400,54 @@ function announce(event: Extract<WsServerMessage, { type: 'event' }>['event']): 
   }
 }
 
+/**
+ * ## Why the deal does not take the region on its own
+ *
+ * `handStarted` and `forcedBets` are two events of ONE table notice: `apps/api/src/ws/router.ts`
+ * writes every event of a notice back to back into the same socket, and `packages/poker-engine`'s
+ * `machine.ts` pushes `forcedBetsPosted` unconditionally in the same `startHand` call that pushes
+ * `handStarted`. So the deal sentence and the blinds sentence are always produced microseconds
+ * apart into one atomic polite region — and a polite region is read when the platform services its
+ * notification, not when the write happens. Two writes for one notice are one announcement, and it
+ * is the second one.
+ *
+ * "A new hand was dealt." was therefore never heard. That is assertion 3.3 of
+ * `docs/production/accessibility-certification.md`, filed there as something only a person could
+ * judge, and it is a defect. Measured in Chrome 151 by `scripts/ax-assertions.mjs`, on a hand
+ * played through the product's own screens:
+ *
+ *   - before the region moved out of `PokerTable`, the table had no narration region at all at the
+ *     moment "Deal the next hand" was pressed, so the sentence arrived inside the node that held
+ *     it and nothing was notified of anything;
+ *   - with the region mounted but the deal still writing on its own, the region took two writes for
+ *     the one notice — "A new hand was dealt.", then "smallBlind 5 from seat 3, bigBlind 10 from
+ *     seat 4" — the same loss, now visible to a probe;
+ *   - as it stands, one write: "A new hand was dealt. smallBlind 5 from seat 3, bigBlind 10 from
+ *     seat 4."
+ *
+ * So `handStarted` writes no sentence of its own. It leaves one to be CARRIED onto the front of the
+ * first thing the hand says, which is the forced bets.
+ *
+ * Carrying rather than writing-then-appending is the whole point, and it is what keeps this from
+ * becoming the opposite defect: an implementation that wrote the deal and then appended the blinds
+ * would say the deal twice whenever the two frames landed in separate commits. This one produces
+ * exactly one write however they arrive, so there is no timing under which a reader hears it twice.
+ * `role="status"` is atomic, and 3.17 is the assertion that catches a sentence left stapled to the
+ * front of everything after it.
+ */
 function onEventFrame(state: TableState, frame: Extract<WsServerMessage, { type: 'event' }>): TableState {
-  const announcement = announce(frame.event);
   if (frame.event.kind === 'handStarted') {
-    return { ...state, announcement, summary: [] };
+    // No `announcement` here on purpose: leaving the region exactly as it is means this dispatch
+    // mutates nothing, so a `handStarted` that did arrive in a commit of its own cannot re-announce
+    // the previous hand's last sentence either.
+    return { ...state, carried: announce(frame.event), summary: [] };
   }
+  const sentence = announce(frame.event);
+  const announcement = state.carried === '' ? sentence : `${state.carried} ${sentence}`;
   if (frame.event.kind === 'showdown' || frame.event.kind === 'handComplete') {
-    return { ...state, announcement, summary: frame.event.summaries };
+    return { ...state, announcement, carried: '', summary: frame.event.summaries };
   }
-  return { ...state, announcement };
+  return { ...state, announcement, carried: '' };
 }
 
 function onStateFrame(state: TableState, frame: Extract<WsServerMessage, { type: 'state' }>): TableState {

@@ -6,7 +6,7 @@
  *
  * ## Why this exists
  *
- * `docs/production/accessibility-certification.md` is 479 lines and 73 assertions, and every
+ * `docs/production/accessibility-certification.md` is a long document of 72 assertions, and every
  * release report this project has produced records the same result for it: **UNVERIFIED**. The
  * reason given each time is `osascript` error **-1743** — macOS refusing an agent permission to
  * send Apple events to System Events, so nothing automated can drive VoiceOver or read back what
@@ -14,7 +14,7 @@
  *
  * That reason is true and it is also, for this purpose, beside the point. **-1743 blocks an agent.
  * It does not block a person.** A human sitting at the machine needs no Automation grant to press
- * Command + F5 and listen; what they have needed, and not had, is a way to work through 73
+ * Command + F5 and listen; what they have needed, and not had, is a way to work through dozens of
  * assertions without losing their place, and a way to leave behind something a release report can
  * cite. A markdown table with blank cells is not that.
  *
@@ -22,17 +22,19 @@
  * the assertions out of the document, refuse an incomplete result, stamp it with the commit it was
  * run against — and leaves the one part a machine cannot do, which is listening, to the person.
  *
- * ## It asks for 10 of the 73, and says so
+ * ## It asks for 7 of the 72, and says so
  *
- * A large share of those 73 were never really about speech. "The theme control announces as a radio
+ * A large share of those 72 were never really about speech. "The theme control announces as a radio
  * group with three options, the current one selected" is a fact about the accessibility tree, and a
- * machine reads that tree better than a person listening to it can. **63 of the 73 are now checked
+ * machine reads that tree better than a person listening to it can. **65 of the 72 are now checked
  * on every run of `pnpm run test:ax`** (`scripts/ax-assertions.mjs`, one check per assertion ID),
- * and this session presents only the **10** whose subject is the speech itself: whether a prompt was
+ * and this session presents only the **7** whose subject is the speech itself: whether a prompt was
  * read twice, in what order the words arrived, where a virtual cursor goes past the end of a modal.
- * Eighteen of those 63 were in this session until the gate grew two fixtures — a live table over a
- * real socket, and a hand it played, replayed at `/review/<handId>` — because "needs a live table"
- * was a statement about the gate rather than about speech.
+ * Nineteen of those 65 were in this session until the gate grew three fixtures — a live table over
+ * a real socket, a hand it played and replayed at `/review/<handId>`, and a second web app with no
+ * API behind it — because "needs a live table" and "needs the API down" were statements about the
+ * gate rather than about speech. Two more moved because they were application DEFECTS filed as
+ * certification limits; section 5 of the document names both.
  *
  * Which set a row is in is decided by the document's own `Checked by` column, not by anything here,
  * so re-marking a row moves it with no code change — and `screen-reader-certify.test.mjs` asserts
@@ -41,16 +43,16 @@
  * automated set AND out of this session at once, leaving it covered by nobody. That is the failure
  * the mapping test exists to prevent.
  *
- * **This does not weaken the blocker.** The 10 still need a person with headphones, and until one
- * has worked through them the certification is UNVERIFIED. What changed is that it is now a quarter
- * of an hour rather than an afternoon, and that a regression in any of the other 63 fails
+ * **This does not weaken the blocker.** The 7 still need a person with headphones, and until one
+ * has worked through them the certification is UNVERIFIED. What changed is that it is now ten
+ * minutes rather than an afternoon, and that a regression in any of the other 65 fails
  * `pnpm run verify` on the day it lands instead of waiting for a session nobody has scheduled.
  *
  * ## It reads the document; it does not restate it
  *
  * Every assertion presented here is parsed out of the certification document at run time. That is
  * deliberate and it is the whole reason this file is short. A harness that carried its own copy of
- * the 73 assertions would be a second source of truth that drifts from the first the moment
+ * the assertions would be a second source of truth that drifts from the first the moment
  * somebody edits either — and the failure would be silent, because a certification that asks the
  * wrong questions still produces a filled-in form. Edit the document; this follows.
  *
@@ -497,7 +499,7 @@ async function main() {
  *
  * `total` is the size of the set this session was asked, not the size of the document, and `scope`
  * plus `machineCovered` are what stop those two being confused by whoever quotes the file later. A
- * release report that read "10 of 10" with no scope would look like a certification of a 73-row
+ * release report that read "7 of 7" with no scope would look like a certification of a 72-row
  * document that had shrunk without explanation.
  */
 function writeResult(env, total, answers, identity, coverage) {

@@ -54,6 +54,7 @@ import type { PlayerView, SeatView } from '@prl/ui';
 import {
   COACH_FAILED_ANNOUNCEMENT,
   COACH_READY_ANNOUNCEMENT,
+  DEAL_ANNOUNCEMENT,
   EMPTY_TABLE_STATE,
   isViewersTurn,
   type PendingDecision,
@@ -302,6 +303,85 @@ function eventFrame(description: string): WsServerMessage {
     serverTimeMs: 0,
   } as unknown as WsServerMessage;
 }
+
+/** The two events one `startHand` produces, in the order the API writes them. */
+function handStartedFrame(): WsServerMessage {
+  return {
+    type: 'event',
+    event: { kind: 'handStarted', handId: 'hand-1', commitmentRoot: 'root' },
+    serverTimeMs: 0,
+  } as unknown as WsServerMessage;
+}
+
+function forcedBetsFrame(detail: string): WsServerMessage {
+  return {
+    type: 'event',
+    event: { kind: 'forcedBets', detail },
+    serverTimeMs: 0,
+  } as unknown as WsServerMessage;
+}
+
+describe('the deal is announced with the blinds, in one write', () => {
+  const BLINDS = 'smallBlind 5 from seat 3, bigBlind 10 from seat 4';
+
+  it('writes nothing of its own when the hand starts', () => {
+    // The defect: `handStarted` used to put "A new hand was dealt." straight into the region, and
+    // `forcedBets` — the very next event of the SAME table notice — replaced it microseconds later.
+    // Two writes into one atomic polite region for one notice are one announcement, and it is the
+    // second one, so the deal was never heard. Measured in Chrome 151 by scripts/ax-assertions.mjs.
+    const dealt = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: handStartedFrame() });
+    assert.equal(
+      dealt.announcement,
+      '',
+      'the deal must not take the region on its own; whatever it writes there is taken back by ' +
+        'the forced bets before any reader could hear it',
+    );
+    assert.equal(dealt.carried, DEAL_ANNOUNCEMENT, 'the sentence has to be kept for the next write');
+  });
+
+  it('carries the deal onto the front of the forced bets', () => {
+    const dealt = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: handStartedFrame() });
+    const posted = tableReducer(dealt, { kind: 'frame', frame: forcedBetsFrame(BLINDS) });
+    assert.equal(posted.announcement, `${DEAL_ANNOUNCEMENT} ${BLINDS}`);
+    assert.equal(posted.carried, '', 'a carried sentence is consumed once');
+  });
+
+  it('does not say it twice — the defect on the other side', () => {
+    // `role="status"` is atomic, so a sentence left in front of the table's later narration is read
+    // again on every event for the rest of the hand. That is the failure 3.17 exists to catch, and
+    // an implementation that wrote the deal and then APPENDED the blinds would produce it whenever
+    // the two frames landed in separate commits.
+    const dealt = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: handStartedFrame() });
+    const posted = tableReducer(dealt, { kind: 'frame', frame: forcedBetsFrame(BLINDS) });
+    const next = tableReducer(posted, { kind: 'frame', frame: eventFrame('Seat 3 called 50 units') });
+    assert.equal(next.announcement, 'Seat 3 called 50 units');
+    assert.doesNotMatch(next.announcement, /A new hand was dealt/u);
+  });
+
+  it('mounts the narration region outside the component that draws the table', () => {
+    // The other half of the same defect, and the one a reducer test cannot see. `PokerTable` is not
+    // rendered until a view arrives, and the frames that start a hand bring the first sentence and
+    // the first view in one commit — so the region used to be created already holding its text, and
+    // a live region that arrives with its text is announced by nothing.
+    const stage = withoutComments(read('components', 'TableStage.tsx'));
+    const table = stage.indexOf('<PokerTable');
+    const region = stage.indexOf('className="prl-live-region"');
+    assert.ok(region >= 0 && table >= 0, 'TableStage no longer owns the narration region');
+    assert.ok(
+      region < table,
+      'the narration region must be mounted unconditionally, before the conditional that renders ' +
+        'the table — otherwise the first hand of every session announces nothing',
+    );
+    assert.doesNotMatch(
+      readFileSync(
+        join(SRC, '..', '..', '..', 'packages', 'ui', 'src', 'components', 'PokerTable.tsx'),
+        'utf8',
+      ),
+      /className="prl-live-region"/u,
+      'putting the region back inside PokerTable puts it back inside a conditional',
+    );
+  });
+});
 
 const FOLD: PendingDecision = {
   action: { type: 'fold' },

@@ -79,8 +79,11 @@
  * Every one of them is fed from a diff computed in `lib/use-live-table.ts`, never from a frame: see
  * that file's header for why a whole-state protocol makes that mandatory.
  *
- *  1. **The table's narration** — `announcement`, polite, in `PokerTable`'s single region. Dealt,
- *     bet, called, street, showdown, hand complete, and the echo of the reader's own decision.
+ *  1. **The table's narration** — `announcement`, polite, in the single region `TableRegion` mounts
+ *     unconditionally. Dealt, bet, called, street, showdown, hand complete, and the echo of the
+ *     reader's own decision. It is mounted whether or not there is a table to draw, because the
+ *     frames that start a hand bring the first sentence and the first view in one commit and a
+ *     region that arrives with its text is announced by nothing — see the comment on the region.
  *  2. **Whose decision it is** — `turnAnnouncement`, polite, in its own region beside the controls.
  *     Separate from (1) because the two race: the `state` frame that makes it the reader's turn and
  *     the `event` frame describing the action that got there arrive back to back, and one region
@@ -310,6 +313,32 @@ function TableRegion(props: TableRegionProps): ReactElement {
 
   return (
     <div className="prl-play__table">
+      {/*
+        The table's narration, and it is HERE rather than inside `PokerTable` because of when it has
+        to exist.
+
+        A live region is announced when the platform is told a region it already knows about has
+        changed. One that is inserted already holding its first sentence is silent. `PokerTable` is
+        rendered only once a `view` has arrived — and the frames that start a hand carry the events
+        and the first view in a single React commit, so the region used to be created already
+        carrying "smallBlind 5 from seat 3, bigBlind 10 from seat 4" and a reader heard nothing at
+        all on the first hand of every session. Measured by `scripts/ax-assertions.mjs` at the moment
+        "Deal the next hand" was pressed: the document's live regions were the route announcer, the
+        connection line, the invite and join notes, the decision band's turn region and the footer
+        statement — and no table narration region at all.
+
+        Mounted unconditionally and empty, it is the same rule `RouteAnnouncer`, the quiz and the
+        invite-code copy button already follow. It stays before the table in the DOM so the
+        narration is queued ahead of anything the table itself changes in the same commit.
+
+        The two rules that governed it in `PokerTable` are unchanged: polite, because a new street
+        is not an emergency; and focus is never moved, because yanking the caret on every remote
+        update makes a table unusable from the keyboard.
+      */}
+      <div aria-atomic="true" aria-live="polite" className="prl-live-region" role="status">
+        {announcement}
+      </div>
+
       {status === 'loading' ? <StageSkeleton /> : null}
 
       {/*
@@ -354,7 +383,6 @@ function TableRegion(props: TableRegionProps): ReactElement {
           {...(highlightedCards === undefined ? {} : { highlightedCards })}
           {...(highlightLabel === undefined ? {} : { highlightLabel })}
           turn={turn}
-          announcement={announcement}
         />
       )}
 

@@ -49,22 +49,25 @@
  * keyboard at all — WCAG 2.1.1 — and making it focusable would add an unnamed tab stop), and the
  * side pots keep their eligibility lists.
  *
- * ## Announcements
+ * ## Announcements are NOT made from here, and that is a fix
  *
- * Table updates are announced through the ONE polite `aria-live` region at the end of this
- * component, and two rules govern it:
+ * This component used to own the table's one polite `aria-live` region and take the sentence as an
+ * `announcement` prop. It cannot, because **it is not always on screen**: the play screen renders
+ * no table until a `view` arrives, and the frames that start a hand carry the first sentence and
+ * the first view in the same React commit. So on the first hand of every session the region was
+ * INSERTED already holding the forced-bets sentence — and a live region that arrives with its text
+ * announces nothing, because the platform is notified of a change to a region it already knew
+ * about. Measured on this repo's own gate: at the moment "Deal the next hand" was pressed, the
+ * document's live regions were the route announcer, the connection line, the invite and join notes,
+ * the decision band's turn region and the footer statement, and no table narration region at all.
  *
- *   - **Polite, not assertive.** A new street is not an emergency, and `assertive` interrupts
- *     whatever the reader was in the middle of.
- *   - **Focus is never moved.** Focus stays wherever the player put it. Yanking focus to a changed
- *     region on every remote update would make the table unusable with a keyboard, and is the
- *     classic mistake in live-updating UIs.
+ * The region now lives in `TableStage` (`apps/web/src/components/TableStage.tsx`), outside the
+ * conditional that renders this component, so it is in the document from the first paint. The two
+ * rules that governed it are unchanged and are stated there.
  *
- * The sentence itself comes from the caller, derived from the `WsEvent` stream, because this
- * component cannot know which changes the reader has already seen. The pot's own figure is the one
- * exception: `Metric`'s count-up owns a small atomic region of its own so that a settled figure is
- * announced once and a *mid-count* figure never is — the alternative is a screen reader reading
- * eleven wrong numbers on the way to the right one.
+ * The pot's own figure keeps its exception here: `Metric`'s count-up owns a small atomic region of
+ * its own so that a settled figure is announced once and a *mid-count* figure never is — the
+ * alternative is a screen reader reading eleven wrong numbers on the way to the right one.
  *
  * Server-render safe: no state, no effects, no `window`.
  */
@@ -83,12 +86,6 @@ export interface PokerTableProps {
   readonly view: PlayerView;
   /** Heading text. Defaults to the hand number. */
   readonly title?: string;
-  /**
-   * One sentence announced politely when the table changes, e.g. "Seat 3 raised to 300". The
-   * caller derives it from the event stream; passing the same string twice announces once, which
-   * is the behaviour of a live region and is usually what is wanted.
-   */
-  readonly announcement?: string;
   /** Display names by seat index. `playerId` is an opaque id and is never shown. */
   readonly seatNames?: Readonly<Record<number, string>>;
   /** Cards to ring, e.g. the five that made a hand in review. */
@@ -198,7 +195,7 @@ function PhaseSpine({ street }: PhaseSpineProps): ReactElement {
 }
 
 export function PokerTable(props: PokerTableProps): ReactElement {
-  const { view, title, announcement, seatNames, highlightedCards, highlightLabel } = props;
+  const { view, title, seatNames, highlightedCards, highlightLabel } = props;
   const { turn = null, className } = props;
 
   const seats = rotateToViewer(view.seats, view.viewerSeat);
@@ -299,11 +296,6 @@ export function PokerTable(props: PokerTableProps): ReactElement {
             />
           </div>
         )}
-      </div>
-
-      {/* Always present, never focused. See the module comment. */}
-      <div className="prl-live-region" role="status" aria-live="polite">
-        {announcement ?? ''}
       </div>
     </section>
   );
