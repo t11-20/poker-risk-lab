@@ -24,12 +24,14 @@ against the repo — if a statement here and the code disagree, the code is righ
     test:a11y  test:ax  test:csp  test:age-gate  test:exhaustive  test:simulation  db:verify
 
 It runs every gate even after one fails, then exits non-zero listing them. `security:audit` is
-itself **thirteen** supply-chain gates (`scripts/supply-chain/audit.mjs`) — a different number from
-verify's fourteen, and the two get confused.
+itself **fourteen** supply-chain gates (`scripts/supply-chain/audit.mjs`) — the same number as
+verify's fourteen since the keyless-signing identity gate was added, which is worse than a different
+number: the two lists are unrelated and now look interchangeable. Read each count off its own list.
 
 Gates outside `verify` because they need a deployment: `alerts:verify`, `alerts:preflight`,
-`staging`, `backup`, `test:load`, `test:drills`, `release:artifacts`, `release:sign`,
-`certify:screen-reader`. `pnpm run staging up` runs the strict smoke test — **72 checks** over TLS
+`alerts:ack`, `staging`, `backup`, `test:load`, `test:drills`, `release:artifacts`,
+`release:sign`, `certify:screen-reader`. `alerts:ack` needs a **person** as well as a deployment —
+it sends a real page and fails unless somebody types back a code that appears only in it. `pnpm run staging up` runs the strict smoke test — **72 checks** over TLS
 against the deployed images, which is where several guards get their only continuous exercise.
 
 ## Enrolment

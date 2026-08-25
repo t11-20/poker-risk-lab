@@ -75,6 +75,11 @@ const TEMPLATE = readFileSync(join(OBSERVABILITY, 'alertmanager.template.yml'), 
 const CONFIGURED = {
   PRL_ALERT_PAGE_WEBHOOK_URL: 'https://events.pagerduty.com/v2/enqueue',
   PRL_ALERT_TICKET_WEBHOOK_URL: 'https://hooks.jira.acme-poker.io/intake/alerts',
+  // A snitch outside the deployment, which is the only kind there is. `https`,
+  // because a ping URL is a credential — the token is the path — and the preflight
+  // refuses a cleartext one for that reason rather than for the body it carries.
+  PRL_ALERT_HEARTBEAT_WEBHOOK_URL: 'https://nosnch.in/c7f2a1b93d',
+  PRL_ALERT_HEARTBEAT_INTERVAL: '1m',
   PRL_ALERT_PAGE_EMAIL_TO: 'oncall@acme-poker.io',
   PRL_ALERT_TICKET_EMAIL_TO: 'tickets@acme-poker.io',
   PRL_ALERT_SMTP_SMARTHOST: 'smtp.acme-poker.io:587',
@@ -188,6 +193,7 @@ describe('NEGATIVE CONTROL: a placeholder receiver', () => {
     const checks = analyse({
       PRL_ALERT_PAGE_WEBHOOK_URL: '',
       PRL_ALERT_TICKET_WEBHOOK_URL: '',
+      PRL_ALERT_HEARTBEAT_WEBHOOK_URL: '',
       PRL_ALERT_PAGE_EMAIL_TO: '',
       PRL_ALERT_TICKET_EMAIL_TO: '',
       PRL_ALERT_SMTP_SMARTHOST: '',
@@ -330,6 +336,60 @@ describe('NEGATIVE CONTROL: the two tiers collapse into one', () => {
     const checks = analyse({ PRL_ALERT_TICKET_EMAIL_TO: 'oncall@acme-poker.io' });
     assert.equal(check(checks, 'different destinations').ok, false);
     assert.match(problemText(checks, 'different destinations'), /every ticket would wake somebody/);
+  });
+});
+
+describe("NEGATIVE CONTROL: a dead man's switch that watches nothing", () => {
+  it('refuses a heartbeat still pointed at the machine somebody rehearsed on', () => {
+    // The refusal with the least visible failure of any in this file. A rehearsal
+    // default in the PAGER is discovered during the first incident, by the person who
+    // was not woken. A rehearsal default in the HEARTBEAT is discovered never: the
+    // rule keeps firing, Alertmanager keeps routing it correctly, and the ping keeps
+    // arriving at a URL on a laptop. Everything looks exactly as it does when it works.
+    const checks = analyse({
+      PRL_ALERT_HEARTBEAT_WEBHOOK_URL: ALERT_DESTINATION_DEFAULTS.PRL_ALERT_HEARTBEAT_WEBHOOK_URL,
+    });
+    assert.equal(check(checks, 'no destination is a placeholder').ok, false);
+    assert.match(problemText(checks, 'no destination is a placeholder'), /PRL_ALERT_HEARTBEAT_WEBHOOK_URL/);
+  });
+
+  it('refuses a heartbeat pointed at a human tier', () => {
+    // Not one extra notification: `Watchdog` fires permanently and repeats on
+    // PRL_ALERT_HEARTBEAT_INTERVAL, so this is a notification about nothing every
+    // interval until the person receiving it mutes the channel — and the channel they
+    // mute is the pager.
+    const checks = analyse({ PRL_ALERT_HEARTBEAT_WEBHOOK_URL: CONFIGURED.PRL_ALERT_PAGE_WEBHOOK_URL });
+    assert.equal(check(checks, 'different destinations').ok, false);
+    assert.match(problemText(checks, 'different destinations'), /heartbeat fires\s+forever/);
+  });
+
+  it('refuses a snitch pinged over plaintext, because the ping URL is the credential', () => {
+    // The token is the path. Read off the wire it can be replayed, and a dead man's
+    // switch somebody else can keep alive is one with the pin taped down.
+    const checks = analyse({ PRL_ALERT_HEARTBEAT_WEBHOOK_URL: 'http://nosnch.in/c7f2a1b93d' });
+    assert.equal(check(checks, 'in the clear').ok, false);
+    assert.match(problemText(checks, 'in the clear'), /ping URL is its credential/);
+  });
+
+  it('refuses a deployment with no heartbeat destination at all', () => {
+    // An empty heartbeat renders a receiver Alertmanager accepts, routes to, and drops
+    // the notification inside. From every dashboard here that is a healthy month.
+    const checks = analyse({ PRL_ALERT_HEARTBEAT_WEBHOOK_URL: '' });
+    assert.equal(check(checks, 'every tier has a destination').ok, false);
+    assert.match(
+      problemText(checks, 'every tier has a destination'),
+      /PRL_ALERT_HEARTBEAT_WEBHOOK_URL is empty/,
+    );
+  });
+
+  it('follows severity: heartbeat to a receiver that has somewhere to send', () => {
+    // The generic routing check, exercised on the third severity: the rules file names
+    // it, so the rendered route tree has to resolve it to a receiver with a
+    // destination in it. Before the switch existed this check swept two severities.
+    const checks = analyse();
+    assert.equal(check(checks, 'resolves to a receiver with a destination').ok, true);
+    assert.match(check(checks, 'resolves to a receiver with a destination').detail, /3 severities/);
+    assert.match(check(checks, 'resolves to a receiver with a destination').detail, /heartbeat:1/);
   });
 });
 

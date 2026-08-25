@@ -18,8 +18,9 @@ this SHA unless a line says otherwise.
 **PRODUCTION HARDENING COMPLETE — EXTERNAL ACCESSIBILITY CERTIFICATION REQUIRED**
 
 `pnpm run verify` exits **0** at this candidate: all fourteen gates, **1,887 tests, zero failures**,
-including a supply-chain audit of **thirteen** gates — release image signature verification and
-container log policy were both added on 2026-08-25 and both measured passing here. The container
+including a supply-chain audit of **fourteen** gates — release image signature verification,
+container log policy and the keyless-signing identity gate were all added on 2026-08-25 and all
+measured passing here. The container
 scan reports **zero** findings at or above HIGH on either image. Staging runs these digests with a
 71-check strict smoke over TLS; both alerting tiers are verified end to end over both transports;
 sixteen reliability drills pass; backup/restore including a real scratch restore passes; and a
@@ -36,12 +37,14 @@ Screen-reader certification remains **UNVERIFIED**: `osascript` answers `-1743` 
 grant this repository can make will change that. It needs a person with VoiceOver or NVDA. That is
 the one thing standing between this and a PASS string, and it is not a code defect.
 
-What has changed is its size. **45 of the certification's 73 assertions are now machine-verified on
+What has changed is its size. **63 of the certification's 73 assertions are now machine-verified on
 every run** of `pnpm run test:ax`, one check per assertion ID, against the rendered accessibility
 tree in real Chrome — so a regression in any of them fails `pnpm run verify` on the day it lands.
-**28 still require a person listening**, and they are the ones whose subject is the speech itself.
-The session is now roughly **25–35 minutes per platform** rather than the better part of an
-afternoon. The blocker is not reduced; the work behind it is.
+Eighteen of those were with the person until the gate grew the two fixtures they needed: a **live
+table over a real socket** and a **hand it played, replayed at `/review/<handId>`**. **10 still
+require a person listening**, and they are the ones whose subject is the speech itself. The session
+is now roughly **10–15 minutes per platform** rather than the better part of an afternoon. The
+blocker is not reduced; the work behind it is.
 
 ---
 
@@ -220,8 +223,14 @@ shell, node path and a Node version below the `engines` floor. The base is now
 | `alerts:preflight` | **REFUSES the staging configuration, exit 1**, and that is correct: staging's paging destinations are `alerts:verify`'s own throwaway `.invalid` sinks. The seven structural checks pass — 6 destinations parsed, both tiers distinct, TLS to every off-host destination, 28 rules over 2 severities all resolving to receivers that have somewhere to send. `staging promote` will not call a release promotable while this fails | — |
 | Proxy log leak, **live** | A sentinel request to `/api/v1/auth/oidc/callback?code=…&state=…` against the **running** staging proxy: **0** occurrences in the access log and **0** in the error log. What it logged instead: `"GET /api/v1/auth/oidc/callback?" 501 rt=0.031 up=172.20.0.3:3001 rid=ee14e2aa-…` — path without query, address truncated to `/24`, agent classed, the API's own request id joined | — |
 | `staging up` | **exit 0** — migrations applied, **71-check** strict smoke over TLS, all four containers healthy | `staging-2.log` |
-| `test:ax`, certification assertions | **45 of 45** — the machine-checkable half of the 73 manual assertions, one check per assertion ID, in Chrome 151. Demonstrated to refuse: seven components were deliberately broken (footer landmark name, route-announcer politeness, `<main tabIndex>`, action-button `aria-label`, face-down card naming, sheet focus return, quiz `aria-describedby` order) and the gate failed **10** assertion checks by ID, then passed 45 of 45 again on restore | see residual 1 |
+| `test:ax`, certification assertions | **63 of 63** — the machine-checkable share of the 73 manual assertions, one check per assertion ID, in Chrome 151, now including a hand played over a real socket at `/play` and replayed at `/review/<handId>`. Demonstrated to refuse, twice over: seven components broken in an earlier pass (footer landmark name, route-announcer politeness, `<main tabIndex>`, action-button `aria-label`, face-down card naming, sheet focus return, quiz `aria-describedby` order) failed **10** checks by ID; five broken for the live-table and replay fixtures (the stack dropped from the turn sentence, the decision echo prefixed onto every announcement, `role="alert"` removed from the table-unavailable block, the replay's end-of-hand focus rescue deleted, a face-down card renamed "card") failed exactly **3.5, 3.17, 3.20, 6.5 and 6.6** and nothing else, and all 63 passed again on restore | see residual 1 |
 | Screen reader, the residual **28** | **UNVERIFIED** `-1743`. Needs a person listening; 25–35 min per platform | — |
+
+**The three `alerts:*` rows above are a capture and are left as captured.** They read 26 checks, 28
+rules and 2 severities, which is what this candidate's run reported and what its logs hold. The dead
+man's switch added on 2026-08-25 takes those to 29 rules over 3 severities and adds check 7 — see
+residual 2 below, which carries the measurements from that run rather than restating them here.
+Editing a stamped row to match a later tree is how a capture stops being evidence.
 
 ### Images
 
@@ -279,7 +288,7 @@ under a real network partition.
 
    **What is now automated.** Each of the 73 assertions in
    [`accessibility-certification.md`](accessibility-certification.md) carries a `Checked by` marker.
-   **45 are marked `auto`** and have a real check in `scripts/ax-assertions.mjs`, run by
+   **63 are marked `auto`** and have a real check in `scripts/ax-assertions.mjs`, run by
    `pnpm run test:ax` inside `pnpm run verify`, against the *rendered* accessibility tree in real
    Chrome — the computed name and role of every control, the theme radio group's selected state,
    the route announcer's politeness and that it writes the title exactly once and stays silent on a
@@ -292,31 +301,37 @@ under a real network partition.
    | Section | Assertions | `auto` | `person` |
    | --- | ---: | ---: | ---: |
    | Global (G1–G10) | 10 | 10 | 0 |
-   | J1 Learn | 6 | 4 | 2 |
+   | J1 Learn | 6 | 5 | 1 |
    | J2 Guided practice | 9 | 7 | 2 |
-   | J3 Table and Coach | 21 | 10 | 11 |
-   | J4 Scenario Lab | 6 | 3 | 3 |
+   | J3 Table and Coach | 21 | 19 | 2 |
+   | J4 Scenario Lab | 6 | 5 | 1 |
    | J5 AI Legends | 5 | 5 | 0 |
-   | J6 Hand review | 7 | 0 | 7 |
+   | J6 Hand review | 7 | 6 | 1 |
    | J7 Navigation sheet | 6 | 5 | 1 |
    | J8 Failure paths | 3 | 1 | 2 |
-   | **Total** | **73** | **45** | **28** |
+   | **Total** | **73** | **63** | **10** |
 
-   Writing them found one real defect that had sat in the document as an untested claim: **G3
+   Writing them found two real defects that had sat in the document as untested claims: **G3
    asserts a `contentinfo` landmark named "About Poker Risk Lab" and the footer's computed name was
-   the empty string** — a heading inside a landmark does not name the landmark. Fixed in
-   `apps/web/src/components/SiteFooter.tsx`.
+   the empty string** — a heading inside a landmark does not name the landmark, fixed in
+   `apps/web/src/components/SiteFooter.tsx`; and **3.2 asserts that a reader who opens the table or
+   takes a seat is placed on the status line and hears it, and that landing place had no computed
+   name at all** — `role="status"` takes none from its contents — fixed with an `aria-label` in
+   `apps/web/src/app/play/LiveTable.tsx`.
 
-   **What is still a person's job, and why.** The 28 `person` rows are the ones whose subject is the
-   speech: whether something arrived in the right order, whether a polite region really waited,
-   whether a refusal interrupted, whether a turn was announced once or on every state frame,
-   whether any of it is comprehensible — plus everything needing a live socket at a real table
-   (eleven of journey 3), a stopped API, a deliberately broken build, or a hand in a database
-   (journey 6 entirely). The classification is deliberately conservative: a row that mixes a
-   checkable fact with a claim about speech stays with the person, because a row half-covered by a
-   machine and dropped from the human session is a row nobody checks.
+   **What is still a person's job, and why.** The 10 `person` rows are the ones whose subject is the
+   utterance itself: whether a prompt is read twice (2.4), whether a score is announced anywhere
+   (2.9), where a virtual cursor goes past the end of a modal (7.4) — plus four states no fixture
+   reaches honestly: a sentence React coalesces away before it reaches the DOM (3.3), a server
+   refusal that needs a second actor racing the same seat (3.19), a count that arrives with its own
+   full page load (4.2), a failing deck proof (6.7), an API that is down for the web server rather
+   than the browser (8.2), and a build with a deliberate `throw` in it (8.3). Section 5 of the
+   certification lists all ten with one line each. The classification stays deliberately
+   conservative: a row that mixes a checkable fact with a claim about speech stays with the person,
+   because a row half-covered by a machine and dropped from the human session is a row nobody
+   checks.
 
-   `pnpm run certify:screen-reader` is now the way to spend the half hour: it presents **the 28**,
+   `pnpm run certify:screen-reader` is now the way to spend the quarter hour: it presents **the 10**,
    states up front how many are machine-covered and where those checks live, holds the reviewer's
    place across a resumable session, requires a quoted announcement for every `FAIL` and `SILENT`,
    refuses to call an incomplete run a pass, and stamps the result with the commit it was run
@@ -352,17 +367,67 @@ under a real network partition.
    It sends no `MAIL FROM`, no `RCPT TO` and no `DATA`, so it can never page a human. Skipped, the
    summary line reads `PREFLIGHT PASSED — CREDENTIALS UNPROVEN` rather than passing quietly.
 
-   **What is still unproven, and this blocker is therefore still OPEN:** that the configured
-   address is one a phone actually watches, and that anybody is awake. A handshake proves a relay
-   accepts credentials; it does not prove a human wakes up, and nothing in this repository can. An
-   email-to-SMS gateway decommissioned last year accepts mail exactly like a working one. The only
-   thing that closes this is a real test page to a real person who confirms they received it — a
-   checklist item in `docs/RUNBOOK.md` §go-live, not a command.
-
    Two rules were added with it — `AlertmanagerNotificationsFailing` and `AlertmanagerDown`, both
    `page`, on a new `prl-alertmanager` scrape job — so that the alerting system's own inability to
    deliver is reported rather than silent. They catch the partial cases; both paths broken at once
    cannot be reported in band and `docs/production/runbooks/alerting-blind.md` says so.
+
+   **Added 2026-08-25, and this is the part that moves the boundary rather than describing it.**
+   The sentence this entry used to end on was *"a handshake proves a relay accepts credentials; it
+   does not prove a human wakes up, and nothing in this repository can."* The first clause is still
+   true. The second was too quick, and two things now stand against it.
+
+   *A dead man's switch.* `Watchdog` (`expr: vector(1)`, `severity: heartbeat`) fires permanently
+   and is routed to a **third** receiver — neither the pager nor the ticket queue — whose
+   destination is `PRL_ALERT_HEARTBEAT_WEBHOOK_URL`, a snitch outside this deployment. Its
+   *silence* is the alarm, which makes it the only report here that does not travel the channel
+   that broke. `alerts:verify` check 7 proves the whole emitting half against the running overlay,
+   and the run below is **33 of 33 checks, exit 0**: the rule fires; **17 pings** arrive on the
+   heartbeat path with measured gaps of 20–25 s against a 60 s deadline (20 s repeat rounded up to
+   the next 5 s flush, which is why `group_interval` is deliberately not equal to
+   `repeat_interval`); **not one** of them reaches a human tier over either transport; and then —
+   with Alertmanager deliberately **stopped**, a container that script created and removes, never
+   a staging one — the absence is detected: *"silent for 60 s, past the 60 s deadline, after 17
+   ping(s). Prometheus still reports 2 alert(s) firing and delivered 0 webhook(s) and 0 email(s)
+   of any kind in that window."* The pings resumed 44 s after the restart, and the induced silence
+   is in the JSON artefact as a single number among the gaps: `104673`.
+
+   That one line is the incident `alerting-blind.md` opens with, reproduced on demand — the rules
+   perfect, the evaluation perfect, the deployment blind, and one signal leaving by a door that did
+   not depend on the thing that failed. The check has been **observed failing** too: with the
+   heartbeat routed to a path the watcher does not read, the run reports *"nothing named Watchdog
+   has arrived on /heartbeat"*, *"no heartbeat has ever arrived"* and exits 1. That negative
+   control found a real defect in its first outing — the silence check went green over a heartbeat
+   that had never arrived at all, a detection of nothing — and it now refuses that case by name.
+
+   `alerts:preflight` refuses to promote a heartbeat URL that is a placeholder, names this
+   machine, equals either human destination, or is plaintext (a snitch's ping URL is its
+   credential) — so the emitting half cannot ship without a watcher named. **The watcher itself is
+   irreducibly external**: one on this host would die with the host it is watching.
+
+   *An acknowledged test page.* `pnpm run alerts:ack` posts a real `severity: page` alert to this
+   deployment's Alertmanager, so it travels the real route tree to the real receiver, carrying a
+   one-time code in an alert **label** — which puts it in the `Subject:` a locked screen shows.
+   The command then refuses to exit 0 until a person types that code back inside `--within`.
+   There is no path to the code that does not go through the pager. **Demonstrated failing** with
+   a real terminal and nobody at it: `ACK FAILED — nobody acknowledged inside the window`, exit 1,
+   after the page had verifiably been delivered — `[FIRING:1] OperatorTestPage (7WU7HP page)`
+   captured at the SMTP sink, with the code in the subject a locked screen shows. The mechanism
+   was separately rehearsed end to end against the repository's own `.invalid` sinks, which
+   reports `ACK REHEARSED — the mechanism works. NO PERSON WAS INVOLVED.` and stamps the record
+   `attended: false`: unattended acknowledgement is refused outright the moment a real destination
+   is configured, so it can never manufacture a green record against a real pager.
+
+   **This blocker is still OPEN, and here is exactly how far it has narrowed.** It used to be the
+   whole of "no human is paged". What remains is one thing and it is a fact about the future rather
+   than about this deployment: an acknowledgement records that **somebody acknowledged one page, at
+   a known time, within a bounded window** — it is not a promise about 3am next Tuesday, the
+   holiday nobody put in the rota, or the gateway decommissioned three months from now. Closing it
+   needs a person on a real device (`alerts:ack`, exit 0, with this environment's `PRL_ALERT_*`
+   set) and a snitch somebody else runs (`PRL_ALERT_HEARTBEAT_WEBHOOK_URL`, armed, grace period at
+   least three intervals). Both are checklist items in `docs/RUNBOOK.md` §go-live. What changed is
+   that each of those checkboxes now has a command behind it that produces a dated artefact and
+   fails loudly when it cannot — where before, both were an instruction to remember something.
 3. **Images are signed by a locally-held key; they are not bound to a builder.** *Rewritten
    2026-08-25. This entry used to read "Images carry a registry digest but no signature … nothing is
    signed, there is no transparency log, and a local registry is not a third party."* Half of that
@@ -385,33 +450,78 @@ under a real network partition.
    that service. Without it, a sidecar pointing at some other correctly-signed image would pass every
    cryptographic check.
 
-   **Still open, and this is the residual.** The key is a long-lived file on the release machine, so
-   the signatures prove **possession of a key, not the identity of a builder** — anybody who can read
-   `deploy/signing/cosign.key` and its passphrase can sign anything, and nothing can tell the
-   difference. There is **no transparency log** (`--tlog-upload=false` / `--insecure-ignore-tlog`,
-   against a loopback registry), so there is no third-party record that a signature existed at a
-   time: key compromise is not detectable after the fact and a signature cannot be shown to predate a
-   revocation. The SBOM attestation says what is *inside* the image, which is a different question
-   from what built it; a SLSA provenance predicate emitted by the builder answers that and nothing
-   here emits one. And **signing is not in CI and cannot be** as things stand — it needs a private
-   key, and this repository has no CI signing identity, so `.github/workflows/*` run `security:audit`
-   at a point where no release image exists and the gate reports *not applicable* there, loudly.
+   **Still open, and this is the residual.** Every release image in this repository is signed by a
+   long-lived key on the release machine, so those signatures prove **possession of a key, not the
+   identity of a builder** — anybody who can read `deploy/signing/cosign.key` and its passphrase can
+   sign anything, and nothing can tell the difference. There is **no transparency log** behind them
+   (`--tlog-upload=false` / `--insecure-ignore-tlog`, against a loopback registry), so there is no
+   third-party record that a signature existed at a time: key compromise is not detectable after the
+   fact and a signature cannot be shown to predate a revocation.
 
-   What closes the remainder is **keyless/OIDC signing**: Fulcio issues a short-lived certificate
-   bound to a workload identity — a named workflow, in a named repository, on a named ref — and the
-   verifier demands `--certificate-identity` and `--certificate-oidc-issuer` instead of a key, with
-   Rekor as the witness. The claim then changes from *"somebody who had the key"* to *"this workflow
-   at this commit"*, and there is no long-lived secret to steal.
+   **The previous version of this paragraph said signing "is not in CI and cannot be". That was
+   wrong, and it is worth recording why**, because it is the shape of a whole class of wrong
+   statement: it treated a missing *configuration* as a missing *capability*. Keyless signing needs
+   no CI signing identity to be created — a GitHub Actions job with `id-token: write` already has
+   one, Fulcio will exchange it for a ten-minute certificate bound to the workflow, and Rekor
+   witnesses the exchange. Nothing had to be invented. What did not exist was the workflow, the
+   verification policy, and the gate that holds the two together.
 
-   One line, for quoting: **the digest a deployer pulls is now bound by signature to a key this
-   repository controls; it is not yet bound to a builder anybody else can check.**
-   [`deploy/signing/README.md`](../../deploy/signing/README.md) is the long form, custody and
-   rotation included; [`runbooks/unverified-image.md`](runbooks/unverified-image.md) is what to do
-   when verification fails.
-4. **Twenty-six of the twenty-eight alert rules are loaded, agreed, grounded and evaluable, but
-   have not been provoked.** Two are driven end to end — `ApiDown` for the paging tier and
-   `RateLimitBans` for the ticket tier — which is what makes the two-tier rule a tested property
-   rather than a configuration file.
+   **What now exists, and is checked on every push:**
+
+   * [`.github/workflows/release-sign.yml`](../../.github/workflows/release-sign.yml) — follows a
+     successful `Release` run, pushes the built images to GHCR and signs them keylessly. It grants
+     `id-token: write` **to the `sign` job alone and never at the workflow top level**, because a
+     top-level grant is inherited by every job in the file. `ci.yml` and `release.yml` still declare
+     `permissions: contents: read` and grant no `id-token` anywhere.
+   * [`deploy/signing/keyless-policy.json`](../../deploy/signing/keyless-policy.json) — the committed
+     identity policy: the exact certificate SAN and the exact OIDC issuer a keyless signature must
+     carry. Exact strings, never a regexp; Rekor required.
+   * `pnpm run security:image-provenance` verifies **whichever posture an image is actually in**, and
+     refuses a signature record that is in neither — an unsigned release is exactly what "neither"
+     looks like, so "absent" is never read as "the other posture, presumably".
+   * `pnpm run security:keyless` — gate 8 of the fourteen in `security:audit`, hermetic — fails if
+     the policy and the workflow stop agreeing: a rename, a trigger that can run on another ref,
+     `id-token: write` at the top level or in a second job or in **any** other workflow, a wildcard
+     in the ref, or an issuer that is not GitHub's. Demonstrated failing, live, for the tag-trigger
+     case, the top-level-grant case and the rename case.
+   * Four keyless refusals are demonstrated offline by
+     `node scripts/supply-chain/image-provenance.mjs --negative-control`, against a certificate
+     minted by a throwaway CA: another owner, another workflow file, another issuer, and no identity
+     asserted at all. This matters because **a keyless signature verifies against *some* Fulcio
+     certificate, and Fulcio issues one to anybody's GitHub Actions job** — the identity assertion is
+     not a refinement of keyless verification, it *is* keyless verification.
+
+   **What is still NOT true, and this is the part not to skip.** No run of that workflow has
+   happened. **There is no Fulcio certificate and no Rekor entry for this repository**, every release
+   image today is in the key posture, and the keyless half is therefore **implemented and
+   unexercised** — the machinery is tested, the mechanism is not. Two things cannot be tested here at
+   all and are not claimed: the OIDC exchange with Fulcio, and the transparency-log entry. The
+   policy also carries `"repository": null`, because this repository has **no git remote** and no
+   committed file knows its GitHub owner; the owner half of the identity is therefore unpinned until
+   somebody commits it, the gate warns about that on every run, and it refuses outright if a keyless
+   signature record is ever committed while it is null. And a SLSA provenance predicate emitted by
+   the builder — what went *into* the image, as opposed to who signed it — still does not exist.
+
+   **What the first CI run will produce**: a Fulcio certificate whose SAN is
+   `https://github.com/<owner>/poker-risk-lab/.github/workflows/release-sign.yml@refs/heads/main`,
+   issued by `https://token.actions.githubusercontent.com`; a Rekor entry for it; and signed images
+   in GHCR. **What an outsider could then check that they cannot check today**: that the image they
+   pulled was signed by that specific workflow — with `cosign verify --certificate-identity …
+   --certificate-oidc-issuer …`, needing nothing from this repository, no key and no trust in its
+   maintainers — and, from the public log, that the certificate existed when it says it did. Today an
+   outsider can check only that a digest was signed by a key whose public half this repository
+   publishes, which is a statement they must already trust the repository to find meaningful.
+
+   One line, for quoting: **the digest a deployer pulls is bound by signature to a key this
+   repository controls; the machinery to bind it to a builder anybody else can check is written,
+   gated and tested offline, and has never been run.**
+   [`deploy/signing/README.md`](../../deploy/signing/README.md) is the long form, custody, rotation
+   and the keyless policy included; [`runbooks/unverified-image.md`](runbooks/unverified-image.md) is
+   what to do when verification fails.
+4. **Twenty-six of the twenty-nine alert rules are loaded, agreed, grounded and evaluable, but
+   have not been provoked.** Three are driven end to end — `ApiDown` for the paging tier,
+   `RateLimitBans` for the ticket tier, and `Watchdog` for the heartbeat — which is what makes the
+   two-tier rule, and the third destination beside it, tested properties rather than configuration.
 5. **The legal register is not closed.** `legal-review-requirements.md` is a launch blocker in its
    own right and needs counsel, not engineering: operator identity, governing law, the age
    threshold, retention *periods*, and whether erasure must delete hand history rather than detach

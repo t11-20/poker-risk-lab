@@ -53,12 +53,16 @@ import {
   alertsInRulesFile,
   decodeQuotedPrintable,
   destinationProblems,
+  durationMs,
   emailsFor,
   expressionsInRulesFile,
+  heartbeatGaps,
+  heartbeatProblem,
   parseMessage,
   renderAlertmanagerConfig,
   seriesReferencedBy,
   startSmtpSink,
+  watchForSilence,
 } from './alert-delivery.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -362,9 +366,11 @@ describe('the real alertmanager.template.yml', () => {
     for (const key of ['smtp_smarthost:', 'webhook_configs:', 'email_configs:']) {
       assert.ok(rendered.includes(key), `the rendered config has no ${key}`);
     }
-    // Both tiers, both transports. Counting is the point: one `email_configs` would
-    // mean a receiver quietly lost its mail destination.
-    assert.equal(rendered.match(/webhook_configs:/g).length, 2);
+    // Both human tiers, both transports, plus the heartbeat's webhook. Counting is the
+    // point: one `email_configs` would mean a receiver quietly lost its mail
+    // destination, and two `webhook_configs` would mean the dead man's switch had no
+    // way to ping anything — which is the failure that reports itself to nobody.
+    assert.equal(rendered.match(/webhook_configs:/g).length, 3);
     assert.equal(rendered.match(/email_configs:/g).length, 2);
     assert.ok(rendered.includes(values.PRL_ALERT_PAGE_EMAIL_TO));
     assert.ok(rendered.includes(values.PRL_ALERT_TICKET_EMAIL_TO));
@@ -380,13 +386,18 @@ describe('the real alertmanager.template.yml', () => {
     assert.match(rendered, /^ {2}receiver: tickets$/m, 'the catch-all receiver changed');
   });
 
-  it('renders an email-only deployment with no webhook blocks at all', () => {
+  it('renders an email-only deployment with no webhook blocks for either human tier', () => {
+    // One webhook block survives, and it is the heartbeat's. That is not a leak in the
+    // conditional: a dead man's switch pings an HTTP endpoint that counts pings, and
+    // the one destination it must never have is an inbox. "Email-only" is a statement
+    // about how humans are reached, and the heartbeat does not reach a human.
     const { values } = alertmanagerValues({
       PRL_ALERT_PAGE_WEBHOOK_URL: '',
       PRL_ALERT_TICKET_WEBHOOK_URL: '',
     });
     const rendered = renderAlertmanagerConfig(TEMPLATE, values);
-    assert.ok(!rendered.includes('webhook_configs:'));
+    assert.equal(rendered.match(/webhook_configs:/g).length, 1);
+    assert.ok(rendered.includes(values.PRL_ALERT_HEARTBEAT_WEBHOOK_URL));
     assert.equal(rendered.match(/email_configs:/g).length, 2);
     assert.deepEqual(destinationProblems(values), []);
   });
@@ -395,7 +406,7 @@ describe('the real alertmanager.template.yml', () => {
     const { values } = alertmanagerValues({ PRL_ALERT_PAGE_EMAIL_TO: '', PRL_ALERT_TICKET_EMAIL_TO: '' });
     const rendered = renderAlertmanagerConfig(TEMPLATE, values);
     assert.ok(!rendered.includes('email_configs:'));
-    assert.equal(rendered.match(/webhook_configs:/g).length, 2);
+    assert.equal(rendered.match(/webhook_configs:/g).length, 3);
     assert.deepEqual(destinationProblems(values), []);
   });
 
@@ -714,13 +725,125 @@ describe('the counts docs/production/alerts.md states about itself', () => {
   });
 
   it('agrees about how many of them have never been provoked', () => {
-    // Two are driven end to end by `alerts:verify` — `ApiDown` for the paging tier and
-    // `RateLimitBans` for the ticket tier. Everything else is loaded, agreed, grounded
-    // and evaluable, which is not the same as tested, and the document says so with a
-    // number.
+    // THREE are driven end to end by `alerts:verify`, not two: `ApiDown` for the paging
+    // tier, `RateLimitBans` for the ticket tier, and `Watchdog` for the heartbeat —
+    // which is provoked by nothing at all, because it is always firing, and is then
+    // followed through its own receiver, through a deliberate silence and back.
+    // Everything else is loaded, agreed, grounded and evaluable, which is not the same
+    // as tested, and the document says so with a number.
     const total = alertsInRulesFile(RULES).size;
     const stated = /\*\*([A-Za-z-]+) rules have not been provoked\.\*\*/.exec(DOC);
     assert.ok(stated !== null, 'the document no longer states how many rules are unprovoked');
-    assert.equal(spelled(stated[1]), total - 2, `${stated[1]} stated, ${total - 2} unprovoked`);
+    assert.equal(spelled(stated[1]), total - 3, `${stated[1]} stated, ${total - 3} unprovoked`);
+  });
+});
+
+describe("the dead man's switch", () => {
+  it('is exactly one rule, is named Watchdog, and cannot stop firing for any other reason', () => {
+    // Three properties in one test because they are one property: a heartbeat that can
+    // go quiet for a reason other than the deployment dying is a heartbeat whose
+    // watcher gets a longer grace period the first time it cries wolf, and then it is
+    // decoration. `vector(1)` depends on no scrape, no metric and no subsystem; a `for:`
+    // would delay the first ping after every restart for no benefit at all.
+    const rules = alertsInRulesFile(RULES);
+    const heartbeats = [...rules].filter(([, rule]) => rule.severity === 'heartbeat');
+    assert.deepEqual(
+      heartbeats.map(([name]) => name),
+      ['Watchdog'],
+    );
+    assert.equal(expressionsInRulesFile(RULES).get('Watchdog'), 'vector(1)');
+    assert.ok(
+      !/- alert: Watchdog[\s\S]{0,400}?\n {8}for:/.test(RULES),
+      'Watchdog has a for: duration, which delays every ping after a restart',
+    );
+  });
+
+  it('is documented as a heartbeat and not as a page, which check 2 would otherwise allow', () => {
+    // The tempting mistake, and the expensive one: `severity: page` on a permanently
+    // firing rule is a notification to a human every repeat_interval, forever. The
+    // document and the rules file are compared by severity, so the two spellings have
+    // to agree — and this asserts the parser can even see the third value, which it
+    // could not before the switch existed.
+    assert.equal(alertsInDocument(DOC).get('Watchdog'), 'heartbeat');
+    assert.equal(alertsInRulesFile(RULES).get('Watchdog').severity, 'heartbeat');
+  });
+
+  it('routes to its own receiver, and that receiver is in neither human tier', () => {
+    const { values } = alertmanagerValues({});
+    const rendered = renderAlertmanagerConfig(TEMPLATE, values);
+    assert.match(rendered, /severity = "heartbeat"\n {6}receiver: heartbeat\n {6}continue: false/);
+    // `send_resolved: false` on this receiver only. A resolved heartbeat would be the
+    // last thing a watcher heard and would look like a clean shutdown.
+    assert.match(rendered, /- url: '[^']*\/heartbeat'\n(?: *#[^\n]*\n)* *send_resolved: false/);
+    // And the paging receiver must not contain the heartbeat URL under any rendering.
+    const paging = rendered.slice(rendered.indexOf('- name: paging'), rendered.indexOf('- name: tickets'));
+    assert.ok(!paging.includes(values.PRL_ALERT_HEARTBEAT_WEBHOOK_URL));
+  });
+
+  it('refuses to render without a heartbeat destination, or with a malformed interval', () => {
+    // The one destination that may not be dropped, and the reason is asymmetric: an
+    // unset pager is discovered during the first incident by the person who was not
+    // woken. An unset heartbeat is discovered never.
+    const empty = alertmanagerValues({ PRL_ALERT_HEARTBEAT_WEBHOOK_URL: '' }).values;
+    assert.match(destinationProblems(empty).join(' '), /PRL_ALERT_HEARTBEAT_WEBHOOK_URL is empty/);
+    const bad = alertmanagerValues({ PRL_ALERT_HEARTBEAT_INTERVAL: '20 seconds' }).values;
+    assert.match(destinationProblems(bad).join(' '), /must be a Prometheus duration/);
+    assert.deepEqual(destinationProblems(alertmanagerValues({}).values), []);
+  });
+
+  it('sizes its own budgets from the configured interval rather than from a constant', () => {
+    assert.equal(durationMs('20s'), 20_000);
+    assert.equal(durationMs('1m'), 60_000);
+    assert.equal(durationMs('2h'), 7_200_000);
+    assert.equal(durationMs('500ms'), 500);
+    assert.equal(durationMs('20 s'), null);
+    assert.equal(durationMs('later'), null);
+  });
+});
+
+describe("NEGATIVE CONTROL: the dead man's switch alarming", () => {
+  // A dead man's switch that has never been observed to fire is the purest possible
+  // decoration, and the live run's negative control costs a stopped Alertmanager and
+  // two minutes. These are the same alarm, constructed, so that a change to the
+  // arithmetic is caught in a pull request instead of in a rehearsal.
+  const at = (...seconds) => seconds.map((second) => 1_700_000_000_000 + second * 1_000);
+
+  it('passes a steady rhythm inside the deadline', () => {
+    assert.equal(heartbeatProblem(at(0, 20, 40, 60), { deadlineMs: 60_000 }), null);
+    assert.deepEqual(heartbeatGaps(at(0, 20, 45)), [20_000, 25_000]);
+  });
+
+  it('refuses a heartbeat that never arrived', () => {
+    assert.match(heartbeatProblem([], { deadlineMs: 60_000 }), /no heartbeat has ever arrived/);
+  });
+
+  it('refuses a single ping, which proves the route and not the rhythm', () => {
+    // The failure this is against: a `repeat_interval` Alertmanager rounded up, or a
+    // receiver that fired once at `group_wait` and never again. Both deliver a first
+    // ping that looks perfect, and both are already broken when they are installed.
+    assert.match(heartbeatProblem(at(0), { deadlineMs: 60_000 }), /only 1 heartbeat/);
+    assert.match(heartbeatProblem(at(0, 20), { deadlineMs: 60_000 }), /only 2 heartbeat/);
+  });
+
+  it('refuses a rhythm with a gap past the deadline a watcher would page on', () => {
+    const problem = heartbeatProblem(at(0, 20, 110, 130), { deadlineMs: 60_000 });
+    assert.match(problem, /longest gap between pings was 90\.0s, past the 60s deadline/);
+  });
+
+  it('detects silence from the last ping, not from the moment somebody started watching', async () => {
+    // What an external watcher can actually see. It has no idea when anybody started
+    // looking; it knows only how long since it was last told anything, which is the
+    // number its grace period is compared against.
+    const lastPing = Date.now() - 5_000;
+    const silence = await watchForSilence(() => [lastPing], 3_000, 10_000);
+    assert.ok(silence >= 5_000, `silence was ${silence}`);
+  });
+
+  it('does not report silence when a ping arrives inside the deadline', async () => {
+    // The other half, and the half that keeps this from being a timer that always
+    // rings: a watcher stuck in the alarm state is as useless as one stuck quiet.
+    const arrivals = [Date.now() - 1_000];
+    setTimeout(() => arrivals.push(Date.now()), 200);
+    assert.equal(await watchForSilence(() => arrivals, 3_000, 6_000), null);
   });
 });

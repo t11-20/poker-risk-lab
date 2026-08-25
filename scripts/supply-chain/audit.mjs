@@ -84,6 +84,13 @@ const GATES = [
   // be able to turn the release audit permanently red.
   { file: 'secret-scan.mjs', label: 'committed credentials', network: false },
   { file: 'ci-pinning.mjs', label: 'CI + container pinning', network: false },
+  // Hermetic, and deliberately NOT an artefact gate: it reads a committed policy
+  // and the committed workflows, so it runs on every push, long before any image
+  // exists. What it holds is the identity a keyless signature must carry — the
+  // workflow file name, the ref, and the rule that exactly one job in exactly one
+  // workflow may hold `id-token: write`. A rename that breaks that binding fails
+  // here rather than surfacing as an unverifiable signature months later.
+  { file: 'keyless-provenance.mjs', label: 'keyless signing identity', network: false },
   // Not a dependency gate, and it belongs here anyway: the deployment configuration
   // is supply chain in the sense that matters, and D2 in the legal register is what
   // happens when nothing reads it. Both shipped nginx configs logged the OIDC

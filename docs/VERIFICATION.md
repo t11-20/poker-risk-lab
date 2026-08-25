@@ -402,7 +402,7 @@ is enforced rather than documented.
 
 ## 10. Supply chain
 
-`pnpm run security:audit` — **11 gates**. Figures below are from the run of 2026-08-19 and
+`pnpm run security:audit` — **14 gates**. Figures below are from the run of 2026-08-19 and
 were copied out of that run's output, not carried forward, **except the rows that carry their
 own later date**, which were re-captured because the gate list had grown and the pinning
 figures had gone stale. This section said "9 gates" for both reasons at once: `secret-scan` and
@@ -505,7 +505,7 @@ described.)
 | §2.1 five-card enumeration, §3 betting, §4 side pots, §5 whole-hand invariants, §6 hidden information, §7 randomness and commitment, §8 mathematics, §9 content | `test` (via `test:unit`) |
 | §2.2 the 133,784,560-hand exhaustive check | `test:exhaustive` — **added to the gate 2026-08-18**; it was in neither `test` nor `verify` before that |
 | AI profile axes (`REPORT.md` §7) | `test:simulation` — also added to the gate 2026-08-18 |
-| §10 supply chain | `security:audit` (twelve gates, including `ci-pinning` since 2026-08-19, `secret-scan`/`container-scan` since, and `image-provenance` since 2026-08-25), `security:hygiene` |
+| §10 supply chain | `security:audit` (fourteen gates, including `ci-pinning` since 2026-08-19, `secret-scan`/`container-scan` since, and `image-provenance`, `log-policy` and `keyless-signing-identity` since 2026-08-25), `security:hygiene` |
 | The roll-forward-only migration policy (`RUNBOOK` §11.3) | `test` (via `test:scripts` → `apps/api/scripts/migrate.test.mjs`). The scanner is gated; the wiring into `up` is not — see the table above |
 | That `apps/web/src/fixtures/**` still equals what the engine computes | `test` (via `test:integration` → `apps/api/test/web-fixture-figures.test.ts`). `pnpm run fixtures:check` is the operator-facing form of the same computation and `pnpm run fixtures:regenerate` is the remedy — which the repository did **not** contain until 2026-08-18, which is how a rule-of-2-and-4 estimate of `1.6` shipped and rendered as "160.0%" |
 | The live schema's security properties | `db:verify` — present in the gate before, but as the last link of a `&&` chain, so a failure anywhere earlier skipped it. It had never run inside `verify` |
@@ -520,7 +520,7 @@ described.)
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm run security:audit        # 11 gates
+pnpm run security:audit        # 14 gates
 pnpm run test                  # builds the packages first, then unit + integration + scripts
 pnpm run test:exhaustive       # all 133,784,560 seven-card hands (~7 s)
 pnpm run test:simulation       # AI profile axes (~2 min)

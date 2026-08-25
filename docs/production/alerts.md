@@ -19,6 +19,8 @@ A third tier was considered and rejected. "Warning" alerts that go to a channel 
 
 Each tier carries **two transports**, not one, and a deployment may use either or both. See [Configuring the destinations](#configuring-the-destinations) below.
 
+There is a third `severity` value — `heartbeat` — and it is deliberately **not** a third tier. Exactly one rule carries it, it is never an incident, and it is routed to a machine rather than to a person. [`Watchdog`](#watchdog--heartbeat) below is the whole of it, and the argument for why it is a separate destination rather than a `page` or a `ticket` is made there.
+
 ---
 
 ## Why the thresholds fall on bucket boundaries
@@ -414,7 +416,7 @@ Prometheus scrapes Alertmanager for this — the `prl-alertmanager` job in `prom
 
 **Both of these are `page`, and the reason is asymmetry rather than severity.** A broken receiver is almost always *one* receiver: a ticket queue that has stopped accepting notifications can still be reported through the paging path, and a broken pager can still raise a ticket. Paging both means the report travels whichever path still works.
 
-**What they cannot report is both paths broken at once**, and no rule can — the channel carrying the report is the channel that failed. That gap is closed only from outside the deployment, by a dead man's switch or a scheduled human check; [`runbooks/alerting-blind.md`](runbooks/alerting-blind.md) says so plainly rather than implying these two cover it.
+**What they cannot report is both paths broken at once**, and no rule that reports by *arriving* can — the channel carrying the report is the channel that failed. That is what the next section is for.
 
 ### `AlertmanagerNotificationsFailing` — page
 
@@ -433,6 +435,34 @@ absent(up{job="prl-alertmanager"}) or max_over_time(up{job="prl-alertmanager"}[2
 **Why:** while this is true, no alert of any severity reaches anybody — including this one. It is still worth having: Prometheus continues to evaluate it and shows it firing in its own UI, which is where it will be seen, and a deployment running more than one Alertmanager can lose one and be told. Treat a firing `AlertmanagerDown` as a report that the deployment has been unmonitored since it started, not as a report that one process needs restarting.
 
 The `for: 2m` on top of `max_over_time(up[2m]) == 0` is the same shape as `ApiDown`, for the same reason: two minutes of missed scrapes have to accumulate before the inner condition can hold at all.
+
+---
+
+## The dead man's switch
+
+Every rule above this line reports a failure by arriving. That shared mechanism is also their shared blind spot, and the two rules above name it exactly: if nothing can be delivered, the news that nothing can be delivered cannot be delivered either. From inside this deployment, a silent Alertmanager and a genuinely quiet week are the same picture.
+
+The rule below inverts the direction. It fires permanently, so its notification must keep arriving at a watcher **outside** this deployment, and the signal is not the notification — it is the **gap**. Nothing is wrong when a ping arrives. Something is very wrong when they stop, and the report is made by a service that did not depend on anything that broke.
+
+### `Watchdog` — heartbeat
+
+```
+vector(1)
+```
+
+**No `for:`, no metric, no scrape.** `vector(1)` is always true, which is the point: a heartbeat conditional on anything at all would go quiet for reasons other than the one it is watching for, and a dead man's switch that has cried wolf once is given a longer grace period by the person it woke. Then it is decoration.
+
+**Why `heartbeat` and not `page` or `ticket`.** The two-tier rule at the top of this file is about *whether a human is woken*. This alert is neither tier, because it is never an incident — it fires on a healthy Tuesday morning and it will fire for as long as this deployment runs. Sent to the pager, it would wake somebody every `PRL_ALERT_HEARTBEAT_INTERVAL`, forever, about nothing; sent to the ticket queue it would do the same thing more slowly and with the same ending. Both are the *fastest known way to make a channel unreadable*, which is the exact harm the two-tier rule exists to prevent, arriving from the inside. So it gets a third **destination**, and the word that matters is destination rather than tier: this route ends at a machine whose only job is to notice that the pings stopped.
+
+**Where it goes.** `PRL_ALERT_HEARTBEAT_WEBHOOK_URL` — a Dead Man's Snitch, a healthchecks.io check, a PagerDuty or Grafana OnCall heartbeat integration. It is that service, not this one, that pages a person, and it does so **on absence**. There is no `email_configs` on the heartbeat receiver: every heartbeat destination worth having is an endpoint that counts pings, and the one destination it must never be is an inbox, because a message every twenty seconds is a subscription somebody mutes.
+
+**Why `send_resolved: false`, uniquely.** This alert never resolves. If it ever did, that notification would be the last thing the watcher heard, and it would read as a clean shutdown rather than as the failure it is.
+
+**The interval and the grace period.** `PRL_ALERT_HEARTBEAT_INTERVAL` is `20s` in the rehearsal so that a verification run can observe several arrivals and one detected silence in a couple of minutes. A deployment sets whatever its snitch expects, and the constraint is the same either way: the interval must be comfortably inside the watcher's grace period, because the watcher pages on the gap, and a grace period of one missed ping alarms on every deploy.
+
+**What is proven and what is external.** `pnpm run alerts:verify` check 7 proves the emitting half completely — the rule fires, it routes to its own receiver and to **neither** human tier, the notifications keep arriving with measured gaps inside the deadline, and then Alertmanager is deliberately **stopped**, the silence is detected while Prometheus goes on reporting the same alerts firing to nobody, and the pings resume when it comes back. What cannot be proven here is the watching half, and no amount of code in this repository can prove it: a watcher on this host dies with the host it is watching. That is one URL, and `pnpm run alerts:preflight` refuses to let a release be promoted while it still names this machine — which is what stops the firing half from shipping alone.
+
+**First action:** → [`runbooks/heartbeat-missing.md`](runbooks/heartbeat-missing.md). It is the only runbook here opened because an alert **stopped**.
 
 ---
 
@@ -485,13 +515,20 @@ never appears in a diff. Alertmanager does not expand environment variables in i
 configuration, so the honest alternatives were a rendered template or a documented overlay; this
 is the first, because a rendered file can be shown, diffed and archived.
 
-Each tier takes a webhook, an email recipient, or both. Set the empty string to drop one; a tier
-left with neither is refused before anything starts.
+Each of the two human tiers takes a webhook, an email recipient, or both. Set the empty string to
+drop one; a tier left with neither is refused before anything starts.
+
+`PRL_ALERT_HEARTBEAT_WEBHOOK_URL` is the exception: it may not be empty. The reason is not
+symmetry. Every other destination announces its own absence during the first incident, loudly and
+via the person who was not woken — but a heartbeat with nowhere to go announces nothing, ever, to
+nobody, and that is indistinguishable from a healthy month from every angle inside this deployment.
 
 | Variable | Rehearsal default | What a deployment puts here |
 | --- | --- | --- |
 | `PRL_ALERT_PAGE_WEBHOOK_URL` | the local sink's `/page` | PagerDuty Events API v2, Opsgenie, a Slack relay |
 | `PRL_ALERT_TICKET_WEBHOOK_URL` | the local sink's `/ticket` | the ticket queue's intake webhook |
+| `PRL_ALERT_HEARTBEAT_WEBHOOK_URL` | the local sink's `/heartbeat` | the ping URL of a dead man's switch **outside** this deployment |
+| `PRL_ALERT_HEARTBEAT_INTERVAL` | `20s` | how often the heartbeat repeats; must sit well inside the watcher's grace period |
 | `PRL_ALERT_PAGE_EMAIL_TO` | `oncall@…invalid` | email-to-SMS, an email-to-PagerDuty address, a shared inbox |
 | `PRL_ALERT_TICKET_EMAIL_TO` | `tickets@…invalid` | the ticket queue's intake address |
 | `PRL_ALERT_SMTP_SMARTHOST` | the local SMTP sink | `host:port` of the relay that accepts the mail |
@@ -529,7 +566,17 @@ by severity exactly as designed, and notifies nobody:
 - a URL that does not parse, an address with no dotted domain, a smarthost with no port;
 - a severity tier that matches no route, or that routes to a receiver with nothing in it;
 - a pager and a ticket queue that are the same address — the two-tier rule deleted, which is how a
-  pager stops being read;
+  pager stops being read — or a heartbeat pointed at either of them, which is the same harm with a
+  much sharper edge, since that destination would receive a notification about nothing every
+  interval until somebody muted it;
+- a heartbeat destination that is a placeholder or names this machine. This is the refusal with the
+  least visible failure of any in the list: a rehearsal-default *pager* is found during the first
+  incident by the person who was not woken, but a rehearsal-default *heartbeat* is found never —
+  the rule keeps firing, Alertmanager keeps routing it correctly, and the ping keeps arriving at a
+  URL on somebody's laptop;
+- a heartbeat URL over plaintext `http` to an off-host watcher. A snitch's ping URL **is** its
+  credential — the token is the path — so in the clear it can be read and replayed, and a dead
+  man's switch somebody else can keep alive is a dead man's switch with the pin taped down;
 - an alert body crossing a network in the clear: `smtp_require_tls: false` to an off-host relay, or
   a plaintext `http://` webhook. `alerts:verify` only *warns* about that combination, correctly,
   because its own relay is a local sink with no certificate. A promotion is the other case;
@@ -551,6 +598,70 @@ section is about.
 
 ---
 
+## The acknowledged test page
+
+```
+pnpm run alerts:ack
+pnpm run alerts:ack -- --within 10m --by ada@acme-poker.io --out ack.json
+pnpm run alerts:ack -- --alertmanager https://alertmanager.internal:9093
+```
+
+Everything above this section stops one hop short of the only hop that matters. `alerts:verify`
+proves the pipeline. `alerts:preflight` proves the destinations are ones a stranger would accept.
+`--handshake` proves the relay takes this deployment's credentials. **None of them proves a person
+read anything**, and none of them can: from inside a deployment, an email-to-SMS gateway
+decommissioned last year is byte-for-byte indistinguishable from one somebody is holding.
+
+`alerts:ack` asks the only question that distinguishes them. It posts a real alert to this
+deployment's Alertmanager with `severity: page`, so it travels the real route tree to the real
+paging receiver over the real transports — and then it waits for a human to type back a **code that
+exists nowhere except in the delivered notification**.
+
+- The code is generated fresh from `crypto.randomInt` and is **never printed to the terminal** in
+  an attended run. The operator sees `******`.
+- It travels as an alert **label**, so Alertmanager's default subject template puts it in the
+  `Subject:` — the part a locked screen shows without being unlocked, which is the only part
+  anybody reads at 3am — as well as in the webhook payload and the mail body.
+- It is single-use and dies with the process.
+
+There is therefore no path to the code that does not go through the pager. A wrong code is counted
+and the window keeps running, because the realistic wrong-code case is the very person this is
+meant to prove was reached, mistyping off a phone screen at night.
+
+**If nobody answers inside `--within` (default five minutes) the command exits non-zero**, prints
+the code that was sent, and names the three failures it distinguishes between — the page never
+arrived, it arrived and nobody saw it, or it arrived and nobody answered — because each has a
+different fix and only the middle one is a broken deployment.
+
+### What a pass proves, stated as narrowly as it deserves
+
+**Somebody acknowledged one page, at a known time, within a bounded window, through this
+deployment's real paging path.** That is a fact with a timestamp, and it is the first fact of its
+kind this repository has been able to produce.
+
+It is **not a promise about 3am next Tuesday.** It says nothing about the holiday nobody put in the
+rota, the phone face-down in another room, the gateway that is decommissioned three months from
+now, or the second person who was never on the test. An acknowledgement measures one moment.
+Treating it as a property of the on-call arrangement is the same error as treating a green test run
+as a proof of correctness — so run it again whenever the paging destinations change, and keep the
+rota somewhere that is not this repository.
+
+### The rehearsal, and the fence around it
+
+With nothing configured, every paging destination is this repository's own throwaway sink, so the
+command pages `oncall@…invalid` through servers it runs itself and **no message reaches a person**.
+In that configuration and *only* in that configuration, `PRL_ALERT_ACK_UNATTENDED=1` reads the code
+out of the delivered notification instead of off a keyboard, which is how the passing path is
+exercised in this repository's own captures.
+
+The fence is the point: the moment any real paging destination is configured, unattended mode is
+**refused outright**, because a green record produced without a person is a record that lies. An
+unattended run is stamped `attended: false`, prints a banner saying it is not a rehearsal, and must
+not be quoted as one. For the same reason an attended run refuses to read from anything but a
+terminal — a pipe is a script, and a script is not a person.
+
+---
+
 ## Verifying these rules
 
 A rule that has never fired is a rule that has never been tested. Each of the following can be provoked deliberately:
@@ -568,16 +679,24 @@ Provoking a rule and watching it fire is the only evidence that it is wired corr
 
 That has now been done, and what it proved is narrower than "these alerts work". `pnpm run
 alerts:verify` brings up a real Prometheus and a real Alertmanager beside the staging stack
-and establishes four things about **all twenty-eight** rules — they load with no evaluation
+and establishes four things about **all twenty-nine** rules — they load with no evaluation
 error, they agree with this document, every `prl_*` series they name appears in a live scrape
 of the API and every `alertmanager_*` series in a live scrape of Alertmanager, and every
-expression executes — and delivery for **two** of them, one per tier.
+expression executes — and delivery for **three** of them, one per destination.
 `ApiDown` is provoked by stopping the API container: it goes pending, fires, reaches
 Alertmanager, and is delivered to the paging tier and not the ticket tier, with the resolved
 notification following when the API comes back. `RateLimitBans` is provoked by flooding the
 limiter past its ban threshold, and must reach the ticket tier and not the pager. Together
 those are the two-tier rule at the top of this file being enforced by configuration rather
 than by prose, in both directions.
+
+`Watchdog` is the third, and it is provoked by nothing, because it is always firing. What is
+verified about it is the shape of a dead man's switch rather than the shape of an alert: that
+the pings **keep arriving** on their own destination with measured gaps inside the deadline,
+that not one of them reaches a human tier over either transport, and then — the check that
+makes the mechanism real rather than decorative — that with Alertmanager deliberately
+**stopped**, the absence is detected inside the grace period while Prometheus goes on
+reporting the same alerts firing to nobody, and that the pings resume when it returns.
 
 ### The email delivery is real, and here is exactly how far it goes
 
@@ -609,20 +728,32 @@ protocol, and handed over ten kilobytes of RFC822 with `alertname = ApiDown` in 
   decommissioned last year looks identical to a working one from this end.
 - **Not that a person is awake.** Nothing a repository can run proves that.
 
-### The three limits, stated plainly
+### The four limits, stated plainly
 
-1. **Twenty-six rules have not been provoked.** Loaded, agreed, grounded and evaluable is a
+1. **Twenty-six rules have not been provoked.** Three of the twenty-nine are — `ApiDown`,
+   `RateLimitBans` and `Watchdog`. For the rest, loaded, agreed, grounded and evaluable is a
    great deal more than a markdown file, and a great deal less than tested. The table above
    is how to provoke each of them by hand.
 2. **The last hop is narrower than it was, not gone.** It used to be the whole of "no human
    is paged": both receivers were a webhook sink and no real delivery protocol had ever been
-   spoken. Two of the four bullets above now have a gate against them:
+   spoken. Three of the four bullets above now have a gate against them:
    `pnpm run alerts:preflight` refuses a placeholder or an unset credential and blocks a
-   promotion on it, and `--handshake` exercises a real credential against the configured relay.
-   Two remain, and no gate in this repository can close them: **no address has been confirmed
-   to be watched, and nobody has been woken.** An email-to-SMS gateway decommissioned last year
-   accepts mail exactly like a working one. That is closed by a deployment sending itself a
-   real test page and a person confirming it arrived — not by any command here.
-3. **Staging, not production.** These rules have never been evaluated against production
+   promotion on it, `--handshake` exercises a real credential against the configured relay, and
+   `pnpm run alerts:ack` sends a **real page** and refuses to exit 0 unless a person types back
+   a code that appears nowhere except in the delivered notification. What remains is what an
+   acknowledgement cannot be: a promise about the future. `alerts:ack` records that *somebody
+   acknowledged, once, at a known time, within a bounded window*. It says nothing about 3am
+   next Tuesday, about the holiday nobody put in the calendar, or about the email-to-SMS
+   gateway that is decommissioned three months from now — and it is not a substitute for the
+   rota. Run it before go-live and after any change to the paging destinations.
+3. **The heartbeat is emitted here and watched elsewhere.** `Watchdog` closes the case
+   `AlertmanagerNotificationsFailing` and `AlertmanagerDown` cannot report — both paths broken
+   at once — and check 7 proves every part of it that lives on this side of the URL, including
+   a real detected silence. The **watcher** is external by construction: a process on this host
+   would die with the host it is watching. `alerts:preflight` refuses to promote a heartbeat URL
+   that still names this machine, so the emitter cannot ship without one; whether the snitch at
+   the other end is armed and pointed at somebody's phone is a fact about a service this
+   repository does not hold an account with.
+4. **Staging, not production.** These rules have never been evaluated against production
    data volumes, and several thresholds (`WebSocketConnectionsHigh`, `WorkerPoolQueueDeep`)
    are derived from a capacity measurement of one instance on a laptop.

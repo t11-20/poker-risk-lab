@@ -21,7 +21,7 @@
  * everything else stopped reporting. A severity label nobody routes on sends a
  * page to a ticket queue. Each of those is silent, and each is checked below.
  *
- * ## The five checks, and why each one is separate
+ * ## The seven checks, and why each one is separate
  *
  * 1. **Loaded** — every rule in `alert-rules.yml` is present in a live Prometheus
  *    with no evaluation error, carries `severity: page` or `severity: ticket`, and
@@ -51,9 +51,41 @@
  *    what makes it a test of the two-tier rule rather than of a webhook.
  * 6. **Delivered the other way too** — `RateLimitBans` is provoked, and must reach
  *    the ticket tier and not the pager. Half a routing rule is not a routing rule.
+ * 7. **The dead man's switch** — the `Watchdog` rule fires permanently, its
+ *    notification arrives repeatedly on its own third destination, it never reaches
+ *    a human tier, and then Alertmanager is STOPPED and the absence is watched for
+ *    and detected. That last part is the only check in this file whose subject is a
+ *    thing not happening.
  *
  * Every delivery in 5 and 6 is checked over BOTH transports the receivers declare:
  * an HTTP webhook, and email over SMTP.
+ *
+ * ## Check 7, and the one failure nothing in band can report
+ *
+ * Checks 1 to 6 all share an assumption, and `AlertmanagerNotificationsFailing` and
+ * `AlertmanagerDown` share it too: that a report about a broken alerting system can
+ * be delivered by the alerting system. `docs/production/runbooks/alerting-blind.md`
+ * names the case where it cannot — both delivery paths broken at once — and says
+ * plainly that no rule can close it, because the channel carrying the report is the
+ * channel that failed.
+ *
+ * A dead man's switch inverts the direction. `Watchdog` is `expr: vector(1)`: always
+ * firing, routed to a third receiver whose destination is a machine outside this
+ * deployment whose only job is to notice that the pings stopped. Nothing is wrong
+ * when a ping arrives. Everything is wrong when they stop, and the report is made by
+ * something that did not depend on the thing that failed.
+ *
+ * What check 7 can prove locally is the emitting half, and it proves all of it: the
+ * rule fires, the route sends it to its own receiver and to neither human tier, the
+ * notifications keep arriving with measured gaps inside a watcher's grace period,
+ * and — with Alertmanager stopped — the silence is detected while Prometheus goes on
+ * reporting the same alerts firing to nobody, and the pings resume when it returns.
+ *
+ * What it cannot prove is the watching half, and no amount of code here can: a
+ * watcher on this host dies with the host it is watching. That is one URL,
+ * `PRL_ALERT_HEARTBEAT_WEBHOOK_URL`, and `scripts/alert-preflight.mjs` refuses to let
+ * a release be promoted while it still names this machine — so the firing half cannot
+ * ship alone, which was the stated reason this repository had no switch at all.
  *
  * ## The SMTP half, and why it is the part that closes the blocker
  *
@@ -87,9 +119,12 @@
  *   * that the address configured is one a phone actually watches — an
  *     email-to-SMS gateway that has been decommissioned looks exactly like one
  *     that works, from this end;
- *   * that a person is awake. Nothing a repository can run proves that.
+ *   * that a person is awake. Nothing a repository can run proves that, and check 7
+ *     does not change it — a dead man's switch narrows the question from "is anybody
+ *     watching" to "is the watcher this deployment named still watching", which is
+ *     answered by `pnpm run alerts:ack` and a human typing a code.
  *
- * It also proves nothing about the twenty rules it does not provoke. Checks 1
+ * It also proves nothing about the twenty-six rules it does not provoke. Checks 1
  * to 4 say they are loaded, agreed, grounded and evaluable, which is a great deal
  * more than a markdown file said and a great deal less than "tested".
  * `docs/production/alerts.md` § Verifying these rules lists how to provoke each of
@@ -128,8 +163,9 @@
  *
  * Usage:
  *     pnpm run alerts:verify
- *     node scripts/alert-delivery.mjs --skip-provoke   # checks 1-4 only, ~30s
- *     node scripts/alert-delivery.mjs --keep-up        # leave Prometheus running
+ *     node scripts/alert-delivery.mjs --skip-provoke    # checks 1-4 only, ~30s
+ *     node scripts/alert-delivery.mjs --only-heartbeat  # checks 1-4 and 7, ~4m, API untouched
+ *     node scripts/alert-delivery.mjs --keep-up         # leave Prometheus running
  *     node scripts/alert-delivery.mjs --render-config  # render alertmanager.yml and stop
  *     node scripts/alert-delivery.mjs --json --out alerts.json
  *
@@ -181,6 +217,16 @@ const SINK_PORT = 9099;
 const SMTP_SINK_PORT = 9098;
 
 /**
+ * The path on the webhook sink that the dead man's switch pings.
+ *
+ * A third path on the same sink rather than a third server, because what makes it a
+ * separate destination is the ROUTE that chose it, and the route is what check 7
+ * asserts: a `Watchdog` notification arriving on `/page` would be the heartbeat
+ * waking somebody every twenty seconds, which is the failure this design is against.
+ */
+const HEARTBEAT_PATH = '/heartbeat';
+
+/**
  * Whether the API container is stopped right now.
  *
  * Read by the interrupt handler below. A `finally` block does not run when the process is
@@ -189,8 +235,28 @@ const SMTP_SINK_PORT = 9098;
  */
 let apiStopped = false;
 
+/**
+ * The same, for the Alertmanager container that check 7 stops on purpose.
+ *
+ * Check 7's negative control is a dead man's switch actually firing: Alertmanager is
+ * stopped, the heartbeat goes quiet, and the silence is detected. A Ctrl-C inside that
+ * window would otherwise leave the overlay half up, and `--keep-up` would hand the next
+ * run an Alertmanager that is not running for a reason nothing recorded.
+ */
+let alertmanagerStopped = false;
+
 const options = {
   skipProvoke: process.argv.includes('--skip-provoke'),
+  /**
+   * Checks 1-4 and 7, without stopping the staging API.
+   *
+   * The dead man's switch needs no provocation — it is already firing — but it does
+   * need about three minutes of wall clock to show several arrivals and one detected
+   * silence. Bundling it with `--skip-provoke` would have made that flag stop being
+   * the thirty-second one, and leaving it out of a fast path would have made the
+   * heartbeat the slowest thing in the file to iterate on. So it gets its own.
+   */
+  onlyHeartbeat: process.argv.includes('--only-heartbeat'),
   keepUp: process.argv.includes('--keep-up'),
   renderConfig: process.argv.includes('--render-config'),
   json: process.argv.includes('--json'),
@@ -281,7 +347,7 @@ function indentOf(line) {
 /**
  * Alert names and severities as the DOCUMENT states them.
  *
- * The document's own convention, used consistently by all twenty-two entries:
+ * The document's own convention, used consistently by every entry:
  *
  *     ### `ApiDown` — page
  *
@@ -289,12 +355,18 @@ function indentOf(line) {
  * alert, and check 2 then reports the difference between the two sets, which is
  * the same failure seen from the other end.
  *
+ * `heartbeat` is the third value and there is exactly one rule with it. It is
+ * matched here rather than being special-cased so that the document and the rules
+ * file are still compared by the same mechanism as everything else — a `Watchdog`
+ * documented as a `page` has to fail check 2, because that is a real and tempting
+ * mistake and it would deliver a notification to a human every twenty seconds.
+ *
  * @returns {Map<string, string>} name -> severity
  */
 export function alertsInDocument(text) {
   const found = new Map();
   for (const line of text.split('\n')) {
-    const heading = /^###\s+`([A-Za-z0-9_]+)`\s+—\s+(page|ticket)\s*$/.exec(line);
+    const heading = /^###\s+`([A-Za-z0-9_]+)`\s+—\s+(page|ticket|heartbeat)\s*$/.exec(line);
     if (heading !== null) found.set(heading[1], heading[2]);
   }
   return found;
@@ -434,6 +506,27 @@ function unquote(value) {
 export const ALERT_DESTINATION_DEFAULTS = {
   PRL_ALERT_PAGE_WEBHOOK_URL: `http://host.docker.internal:${SINK_PORT}/page`,
   PRL_ALERT_TICKET_WEBHOOK_URL: `http://host.docker.internal:${SINK_PORT}/ticket`,
+  /**
+   * The dead man's switch, and the one destination whose rehearsal default being
+   * local is a bigger lie than the others.
+   *
+   * `/page` pointing at this host merely means no human was paged by a test. A
+   * heartbeat pointing at this host means the watcher dies with the thing it is
+   * watching, which is the whole mechanism inverted. Check 7 proves everything that
+   * happens on THIS side of that URL — the rule fires, routes to its own receiver,
+   * arrives on a schedule, and its absence is detected — and `alert-preflight.mjs`
+   * refuses to let a release be promoted while this value still names this machine.
+   */
+  PRL_ALERT_HEARTBEAT_WEBHOOK_URL: `http://host.docker.internal:${SINK_PORT}${HEARTBEAT_PATH}`,
+  /**
+   * How often the heartbeat is re-sent.
+   *
+   * 20 s in the rehearsal, so that a verification run can watch several arrivals and
+   * one detected silence inside a couple of minutes. A deployment sets whatever its
+   * snitch expects and the constraint is the same either way: comfortably inside the
+   * watcher's grace period, because the watcher pages on the gap.
+   */
+  PRL_ALERT_HEARTBEAT_INTERVAL: '20s',
   PRL_ALERT_PAGE_EMAIL_TO: 'oncall@staging.poker-risk-lab.invalid',
   PRL_ALERT_TICKET_EMAIL_TO: 'tickets@staging.poker-risk-lab.invalid',
   PRL_ALERT_SMTP_SMARTHOST: `host.docker.internal:${SMTP_SINK_PORT}`,
@@ -494,7 +587,46 @@ export function destinationProblems(values) {
       `PRL_ALERT_SMTP_REQUIRE_TLS must be exactly true or false, not ${JSON.stringify(values.PRL_ALERT_SMTP_REQUIRE_TLS)}`,
     );
   }
+  /**
+   * The heartbeat, which unlike the two human tiers may not be dropped.
+   *
+   * Every other destination announces its own absence the first time something fires:
+   * an unset pager is noticed during the first incident, loudly and by the person who
+   * was not woken. A heartbeat with nowhere to go announces nothing, ever — the rule
+   * fires forever, the route matches, the receiver has no `webhook_configs` in it, and
+   * the notification is dropped inside Alertmanager. From every dashboard here that is
+   * identical to a healthy month, which is the exact failure the switch exists for.
+   */
+  if (values.PRL_ALERT_HEARTBEAT_WEBHOOK_URL === '') {
+    problems.push(
+      "PRL_ALERT_HEARTBEAT_WEBHOOK_URL is empty, so the dead man's switch would fire forever into " +
+        'a receiver with nothing in it — set it to the ping URL of a watcher outside this deployment',
+    );
+  }
+  if (!/^\d+(?:ms|[smh])$/.test(values.PRL_ALERT_HEARTBEAT_INTERVAL)) {
+    problems.push(
+      'PRL_ALERT_HEARTBEAT_INTERVAL must be a Prometheus duration such as 20s or 1m, not ' +
+        `${JSON.stringify(values.PRL_ALERT_HEARTBEAT_INTERVAL)} — Alertmanager refuses to start on ` +
+        'a malformed one, which is the good case; the bad case is a value that parses to something ' +
+        'nobody intended',
+    );
+  }
   return problems;
+}
+
+/**
+ * A Prometheus duration in milliseconds, or `null`.
+ *
+ * Only the units this file can produce, which is the point: `PRL_ALERT_HEARTBEAT_INTERVAL`
+ * is validated above and then converted here, and check 7 sizes every budget it waits on
+ * from the result. A verification that hard-coded twenty seconds would quietly stop
+ * testing the thing it claims to test the moment a deployment changed the interval.
+ */
+export function durationMs(text) {
+  const parsed = /^(\d+)(ms|[smh])$/.exec(text.trim());
+  if (parsed === null) return null;
+  const scale = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 };
+  return Number(parsed[1]) * scale[parsed[2]];
 }
 
 /**
@@ -633,8 +765,16 @@ const ALERTMANAGER = `http://127.0.0.1:${process.env.PRL_STAGING_ALERTMANAGER_PO
  * are `/page` and `/ticket` on this sink — so a `page` alert arriving on `/ticket` — or
  * on both — is the two-tier rule in `docs/production/alerts.md` not being
  * implemented, which is invisible to every other check here.
+ *
+ * `/heartbeat` is the third path, and the same reasoning is why it is a path on this
+ * sink rather than a second server: what makes the dead man's switch a separate
+ * destination is the ROUTE that chose it, and the route is the thing worth asserting.
+ *
+ * Exported, and taking a port, so that `alert-ack-page.mjs` can raise the same
+ * receiver when it rehearses an acknowledged page against the local defaults. Two
+ * copies of a webhook recorder is how one of them stops recording the path.
  */
-function startSink() {
+export function startSink(port = SINK_PORT) {
   const received = [];
   const server = createServer((request, response) => {
     let body = '';
@@ -659,18 +799,104 @@ function startSink() {
     // it reaches this process over the host gateway address rather than over
     // 127.0.0.1, and a loopback-only listener would never see it. Nothing else is
     // exposed by this — the port is open for the seconds this script runs.
-    server.listen(SINK_PORT, '0.0.0.0', () => done({ received, close: () => server.close() }));
+    server.listen(port, '0.0.0.0', () => done({ received, close: () => server.close() }));
   });
 }
 
 /** Notifications that name this alert with this status, on this path. */
-const notificationsFor = (received, path, alertname, status) =>
+export const notificationsFor = (received, path, alertname, status) =>
   received.filter(
     (entry) =>
       entry.path === path &&
       entry.payload?.status === status &&
       (entry.payload?.alerts ?? []).some((alert) => alert?.labels?.alertname === alertname),
   );
+
+// ---------------------------------------------------------------------------
+// The dead man's switch, as arithmetic
+// ---------------------------------------------------------------------------
+
+/**
+ * The instants a heartbeat ping arrived, in milliseconds since the epoch.
+ *
+ * Read off the same sink every other notification lands on, filtered to the
+ * heartbeat PATH — because the path is what the route chose, and a `Watchdog` that
+ * arrived on `/page` is not a heartbeat, it is somebody's phone ringing every twenty
+ * seconds. Status is asserted as `firing` for the same reason `send_resolved: false`
+ * is set on that receiver: this alert never resolves, and a resolved notification
+ * arriving would be the last thing a watcher heard.
+ */
+export const heartbeatArrivals = (received, path = HEARTBEAT_PATH) =>
+  notificationsFor(received, path, 'Watchdog', 'firing').map((entry) => Date.parse(entry.at));
+
+/** The gaps between consecutive arrivals, in milliseconds. */
+export const heartbeatGaps = (arrivals) => arrivals.slice(1).map((at, index) => at - arrivals[index]);
+
+/**
+ * What is wrong with a run of heartbeat arrivals, or `null` if nothing is.
+ *
+ * This is the whole of the local half of a dead man's switch, and it is a pure
+ * function so that its failure modes can be constructed in a test rather than waited
+ * for: `alert-delivery.test.mjs` drives it with no arrivals, with one arrival, and
+ * with a gap past the deadline. A watcher whose alarm has never been seen to sound
+ * is the purest possible decoration, and this one's alarm is three lines below.
+ *
+ * `minimum` is 3 rather than 1 deliberately. One arrival proves the route; it does
+ * not prove the thing the mechanism depends on, which is that the notification KEEPS
+ * coming. A `repeat_interval` that Alertmanager silently rounded up, or a receiver
+ * that fired once at `group_wait` and never again, both deliver exactly one ping and
+ * both are a dead man's switch that has already failed at the moment it is installed.
+ *
+ * @param {number[]} arrivals epoch milliseconds, ascending
+ * @param {{deadlineMs: number, minimum?: number}} bounds
+ */
+export function heartbeatProblem(arrivals, { deadlineMs, minimum = 3 }) {
+  if (arrivals.length === 0) return 'no heartbeat has ever arrived';
+  if (arrivals.length < minimum) {
+    return `only ${arrivals.length} heartbeat(s) arrived, and ${minimum} are needed to show a rhythm rather than a one-off`;
+  }
+  const gaps = heartbeatGaps(arrivals);
+  const worst = Math.max(...gaps);
+  if (worst > deadlineMs) {
+    return `the longest gap between pings was ${(worst / 1000).toFixed(1)}s, past the ${(deadlineMs / 1000).toFixed(0)}s deadline a watcher would page on`;
+  }
+  return null;
+}
+
+/**
+ * Waits until the heartbeat has been silent for longer than the deadline.
+ *
+ * The active half of the mechanism, and the reason it is a function rather than a
+ * comparison at the end: a dead man's switch does not detect absence by looking back
+ * over a log, it detects it by a timer that nothing reset. This polls, and it returns
+ * the moment the silence exceeds the deadline — which is what a snitch does, and what
+ * check 7's negative control demonstrates actually happening.
+ *
+ * Returns the observed silence in milliseconds, or `null` if a ping arrived inside the
+ * budget, in which case the absence was NOT detected and the caller must fail.
+ *
+ * @param {() => number[]} arrivals a fresh read each poll; the sink is cumulative
+ */
+export async function watchForSilence(arrivals, deadlineMs, budgetMs) {
+  const startedAt = Date.now();
+  const seen = arrivals();
+  // Measured from the LAST PING and not from the moment this was called, because that
+  // is what a watcher outside the deployment can see. It has no idea when anybody
+  // started watching; it knows only how long it has been since it was last told
+  // anything, and that is the number its grace period is compared against.
+  const lastPing = seen.length > 0 ? seen[seen.length - 1] : startedAt;
+  const before = seen.length;
+  for (;;) {
+    const now = Date.now();
+    // A ping arriving after the watch began resets the timer, exactly as it resets a
+    // snitch's, and it means the silence was not real.
+    if (arrivals().length > before) return null;
+    const silence = now - lastPing;
+    if (silence > deadlineMs) return silence;
+    if (now - startedAt > budgetMs) return null;
+    await new Promise((done) => setTimeout(done, 1_000));
+  }
+}
 
 // ---------------------------------------------------------------------------
 // The SMTP sink
@@ -1054,6 +1280,10 @@ async function main() {
     note(`webhook sink on :${SINK_PORT}, SMTP sink on :${SMTP_SINK_PORT}, both on 0.0.0.0`);
     note(`page → ${values.PRL_ALERT_PAGE_WEBHOOK_URL} and ${values.PRL_ALERT_PAGE_EMAIL_TO}`);
     note(`ticket → ${values.PRL_ALERT_TICKET_WEBHOOK_URL} and ${values.PRL_ALERT_TICKET_EMAIL_TO}`);
+    note(
+      `heartbeat → ${values.PRL_ALERT_HEARTBEAT_WEBHOOK_URL} every ` +
+        `${values.PRL_ALERT_HEARTBEAT_INTERVAL} (a machine, never a person)`,
+    );
     if (overridden.length > 0) {
       note(yellow(`overridden from the environment: ${overridden.join(', ')}`));
       note(yellow('a destination outside this host cannot be observed here, and its check will fail'));
@@ -1227,14 +1457,40 @@ async function main() {
       pass('no rule reports an evaluation error');
     }
 
-    const badSeverity = [...declared].filter(
-      ([, rule]) => rule.severity !== 'page' && rule.severity !== 'ticket',
-    );
+    const ROUTED_SEVERITIES = ['page', 'ticket', 'heartbeat'];
+    const badSeverity = [...declared].filter(([, rule]) => !ROUTED_SEVERITIES.includes(rule.severity));
+    const bySeverity = (wanted) => [...declared].filter(([, rule]) => rule.severity === wanted);
     if (badSeverity.length > 0) {
-      fail('every rule is page or ticket', badSeverity.map(([name]) => name).join(', '));
+      fail('every rule is page, ticket or heartbeat', badSeverity.map(([name]) => name).join(', '));
     } else {
-      const paging = [...declared.values()].filter((rule) => rule.severity === 'page').length;
-      pass('every rule is page or ticket', `${paging} page, ${declared.size - paging} ticket`);
+      pass(
+        'every rule is page, ticket or heartbeat',
+        ROUTED_SEVERITIES.map((severity) => `${bySeverity(severity).length} ${severity}`).join(', '),
+      );
+    }
+
+    /**
+     * Exactly one rule may be a heartbeat, and it is `Watchdog`.
+     *
+     * A separate check because the one above would pass with fifteen of them. The
+     * heartbeat destination is a machine that counts pings and pages on their absence,
+     * so it can carry precisely one signal — a second rule routed there is an incident
+     * delivered to something with no way to report it, and worse, a rule that CAN stop
+     * firing on that route makes the snitch alarm for a reason that is not the one it
+     * exists for. Once a dead man's switch has cried wolf it gets a longer grace
+     * period, and then it is decoration.
+     */
+    const heartbeats = bySeverity('heartbeat').map(([name]) => name);
+    if (heartbeats.length !== 1 || heartbeats[0] !== 'Watchdog') {
+      fail(
+        'exactly one rule is the heartbeat, and it is Watchdog',
+        heartbeats.length === 0
+          ? "no rule carries severity: heartbeat, so nothing pings the dead man's switch and its " +
+              'silence would be permanent and meaningless'
+          : `severity: heartbeat is carried by ${heartbeats.join(', ')}`,
+      );
+    } else {
+      pass('exactly one rule is the heartbeat, and it is Watchdog');
     }
 
     const badRunbook = [...declared].filter(
@@ -1420,11 +1676,12 @@ async function main() {
     else pass('every expression evaluates', `${expressions.size} expressions`);
 
     // --- Check 5: delivery, end to end -------------------------------------
-    if (options.skipProvoke) {
+    if (options.skipProvoke || options.onlyHeartbeat) {
       section('5. Delivery');
-      note('--skip-provoke: the API was not stopped, so nothing was delivered. This run does NOT');
-      note('verify delivery over either transport; it verifies that the rules are loaded, agreed,');
-      note('grounded and evaluable, and that Alertmanager loaded the rendered destinations.');
+      const flag = options.skipProvoke ? '--skip-provoke' : '--only-heartbeat';
+      note(`${flag}: the API was not stopped, so nothing was provoked. This run does NOT`);
+      note('verify delivery of an incident over either transport; it verifies that the rules are');
+      note('loaded, agreed, grounded and evaluable, and that Alertmanager loaded the destinations.');
     } else {
       section('5. ApiDown, provoked: stop the API and follow the alert to a receiver');
       note('the staging API is stopped for about four minutes: two of failed scrapes before');
@@ -1664,6 +1921,221 @@ async function main() {
         }
       }
     }
+
+    // --- Check 7: the dead man's switch ------------------------------------
+    if (options.skipProvoke) {
+      section("7. The dead man's switch");
+      note('--skip-provoke: the heartbeat was NOT observed. This run does not show that the');
+      note('Watchdog notification keeps arriving, that it stays off both human tiers, or that');
+      note('its absence is detected. `--only-heartbeat` runs exactly this section in ~3 minutes.');
+    } else {
+      section("7. The dead man's switch: the heartbeat, its rhythm, and its silence");
+      const intervalMs = durationMs(values.PRL_ALERT_HEARTBEAT_INTERVAL) ?? 20_000;
+      /**
+       * The grace period a watcher would page on, and the number this whole section is
+       * sized from.
+       *
+       * Three intervals, because a snitch that alarms on ONE missed ping alarms on a
+       * deploy, a leader election, or a slow flush — and a dead man's switch that has
+       * cried wolf once is given a longer grace period by the person it woke, which is
+       * how it becomes decoration. Three is the smallest number that survives a single
+       * missed beat and still bounds the blind window at a minute at these settings.
+       */
+      const deadlineMs = 3 * intervalMs;
+      note(
+        `interval ${values.PRL_ALERT_HEARTBEAT_INTERVAL}, deadline ${(deadlineMs / 1000).toFixed(0)}s ` +
+          `(3 intervals) → ${values.PRL_ALERT_HEARTBEAT_WEBHOOK_URL}`,
+      );
+
+      /**
+       * The rule itself, asked of Prometheus rather than inferred from a notification.
+       *
+       * `vector(1)` has no `for:` and no dependency on a scrape, so it must be firing
+       * the first time it is evaluated and every time after. Reading its state here
+       * separates "the heartbeat is not arriving because the rule is not firing" from
+       * "the heartbeat is not arriving because delivery is broken", which are the two
+       * halves of this section and have completely different runbooks.
+       */
+      const watchdogFiring = await measureUntil(
+        async () => {
+          const result = await getJson(`${PROMETHEUS}/api/v1/rules?type=alert`);
+          for (const group of result?.data?.groups ?? []) {
+            for (const rule of group.rules ?? []) {
+              if (rule.name !== 'Watchdog') continue;
+              return (rule.alerts ?? []).some((alert) => alert.state === 'firing');
+            }
+          }
+          return false;
+        },
+        60_000,
+        2_000,
+      );
+      if (watchdogFiring === null) {
+        fail(
+          'the Watchdog rule is firing',
+          'no firing Watchdog in Prometheus — an always-on rule that is not on is the switch ' +
+            'already dead, and nothing downstream of it can be trusted',
+        );
+      } else {
+        pass('the Watchdog rule is firing', 'always, by construction — vector(1), no for:');
+      }
+
+      const arrivals = () => heartbeatArrivals(sink.received);
+      const first = await measureUntil(() => arrivals().length > 0, deadlineMs + 30_000, 1_000);
+      if (first === null) {
+        fail(
+          'the heartbeat reaches its own receiver',
+          `nothing named Watchdog has arrived on ${HEARTBEAT_PATH}`,
+        );
+      } else {
+        pass(
+          'the heartbeat reaches its own receiver',
+          `${arrivals().length} ping(s) so far, on ${HEARTBEAT_PATH}`,
+        );
+      }
+
+      /**
+       * The rhythm, which is the part that makes it a heartbeat rather than a
+       * notification that happened once.
+       *
+       * A `repeat_interval` that Alertmanager rounded up to `group_interval`, or a
+       * receiver that fired at `group_wait` and never again, both deliver a first ping
+       * that looks perfect. The watcher then pages on the second missed beat of a
+       * cadence nobody configured. So this waits for three and reports the measured
+       * gaps rather than the configured ones.
+       */
+      const rhythm = await measureUntil(() => arrivals().length >= 3, 5 * intervalMs + 60_000, 1_000);
+      const measured = arrivals();
+      const problem = heartbeatProblem(measured, { deadlineMs });
+      if (rhythm === null || problem !== null) {
+        fail('it keeps arriving on a schedule', problem ?? 'fewer than three pings arrived in time');
+      } else {
+        pass(
+          'it keeps arriving on a schedule',
+          `${measured.length} pings, gaps ${heartbeatGaps(measured)
+            .map((gap) => `${(gap / 1000).toFixed(1)}s`)
+            .join(', ')} — all inside the ${(deadlineMs / 1000).toFixed(0)}s deadline`,
+        );
+      }
+
+      /**
+       * And it must not be a page or a ticket, which is the routing half of the whole
+       * argument for a third destination.
+       *
+       * A Watchdog delivered to the pager is a notification to a human every twenty
+       * seconds, forever. That is not a smaller version of the right answer, it is the
+       * fastest way to make the pager unreadable — and it would pass every other check
+       * in this file, because the notification did arrive and the alert was routed.
+       */
+      const heartbeatPaged = notificationsFor(sink.received, '/page', 'Watchdog', 'firing');
+      const heartbeatTicketed = notificationsFor(sink.received, '/ticket', 'Watchdog', 'firing');
+      const heartbeatMailed = [
+        ...emailsFor(mail.received, values.PRL_ALERT_PAGE_EMAIL_TO, 'Watchdog', 'firing'),
+        ...emailsFor(mail.received, values.PRL_ALERT_TICKET_EMAIL_TO, 'Watchdog', 'firing'),
+      ];
+      if (heartbeatPaged.length + heartbeatTicketed.length + heartbeatMailed.length > 0) {
+        fail(
+          'the heartbeat never reaches a human tier',
+          `${heartbeatPaged.length} on /page, ${heartbeatTicketed.length} on /ticket, ` +
+            `${heartbeatMailed.length} email(s) — a permanently firing alert on a human tier is a ` +
+            'notification every interval, forever',
+        );
+      } else {
+        pass(
+          'the heartbeat never reaches a human tier',
+          'nothing named Watchdog on /page, /ticket or either inbox',
+        );
+      }
+
+      /**
+       * The negative control, and the reason this section is not decoration.
+       *
+       * Alertmanager is stopped. Every rule in the file keeps evaluating in Prometheus
+       * and not one of them can reach anybody — including `AlertmanagerDown`, whose
+       * whole subject is the thing that just happened. The only signal that leaves this
+       * deployment is the one that stops, and this waits for a watcher's grace period
+       * to elapse over it.
+       *
+       * The staging API is untouched here. Alertmanager is a container this script
+       * created and will remove, which is what makes stopping it a fair test rather
+       * than an intrusion into somebody's deployment.
+       */
+      const stoppedManager = await compose(['stop', 'alertmanager']);
+      alertmanagerStopped = stoppedManager.code === 0;
+      if (stoppedManager.code !== 0) {
+        fail('Alertmanager could be stopped for the negative control', stoppedManager.stderr.trim());
+      } else {
+        // Three seconds for anything already on the wire to land, so that the counts
+        // below are of the silence rather than of the moment before it.
+        await new Promise((done) => setTimeout(done, 3_000));
+        const webhooksBefore = sink.received.length;
+        const mailsBefore = mail.received.length;
+        /**
+         * How many pings there were to lose, recorded BEFORE the silence is watched for.
+         *
+         * Without this the check goes green over nothing, and it was observed doing
+         * exactly that: a run whose heartbeat was routed to a path this sink does not
+         * watch failed the two checks above and then reported "silent for 15s, past the
+         * 15s deadline" — true, vacuous, and green. A watcher that has never heard
+         * anything cannot tell "stopped" from "never started", and this repository's own
+         * rule for every sweep applies here too: a sweep of nothing is not a pass.
+         */
+        const pingsBeforeStop = arrivals().length;
+        const silence = await watchForSilence(arrivals, deadlineMs, deadlineMs + 90_000);
+        // What Prometheus thinks, while nothing is being delivered. This is the exact
+        // shape of the incident `alerting-blind.md` opens with: the rules are perfect,
+        // the evaluation is perfect, and the deployment is blind.
+        const stillFiring = await getJson(`${PROMETHEUS}/api/v1/alerts`)
+          .then((result) => (result?.data?.alerts ?? []).filter((a) => a.state === 'firing').length)
+          .catch(() => -1);
+        if (pingsBeforeStop === 0) {
+          fail(
+            "the dead man's switch fires: a stopped Alertmanager is detected by absence",
+            'nothing had ever arrived, so this watched nothing go quiet. A silence with no ' +
+              'heartbeat before it is a sweep of nothing, not a detection',
+          );
+        } else if (silence === null) {
+          fail(
+            "the dead man's switch fires: a stopped Alertmanager is detected by absence",
+            'a ping arrived after Alertmanager was stopped, or the deadline never elapsed — the ' +
+              'watcher would not have noticed',
+          );
+        } else {
+          pass(
+            "the dead man's switch fires: a stopped Alertmanager is detected by absence",
+            `silent for ${(silence / 1000).toFixed(0)}s, past the ${(deadlineMs / 1000).toFixed(0)}s ` +
+              `deadline, after ${pingsBeforeStop} ping(s). Prometheus still reports ${stillFiring} ` +
+              'alert(s) firing and delivered ' +
+              `${sink.received.length - webhooksBefore} webhook(s) and ` +
+              `${mail.received.length - mailsBefore} email(s) of any kind in that window`,
+          );
+        }
+        // The other half of a detector worth having: it must also be able to say
+        // "recovered". A watcher stuck in the alarm state is as useless as one stuck
+        // quiet, and this is also what restores the container for `--keep-up`.
+        const restartedManager = await compose(['start', 'alertmanager']);
+        if (restartedManager.code === 0) alertmanagerStopped = false;
+        if (restartedManager.code !== 0) {
+          fail('Alertmanager was restored', restartedManager.stderr.trim());
+        } else {
+          const wasAt = arrivals().length;
+          // Up to `--rules.alert.resend-delay` (1m by default) before Prometheus
+          // re-notifies an alert it has already sent, plus the flush, plus a margin.
+          const resumed = await measureUntil(() => arrivals().length > wasAt, 180_000, 1_000);
+          if (resumed === null) {
+            fail(
+              'and the heartbeat resumes when it comes back',
+              'no further ping after Alertmanager restarted — the switch would stay alarmed',
+            );
+          } else {
+            pass(
+              'and the heartbeat resumes when it comes back',
+              `${(resumed / 1000).toFixed(0)}s after the restart`,
+            );
+          }
+        }
+      }
+    }
   } finally {
     sink.close();
     mail.close();
@@ -1686,28 +2158,85 @@ async function main() {
   if (failed.length === 0) {
     console.log(green(bold(`${checks.length} check(s) passed.`)));
     if (options.skipProvoke) {
-      console.log(yellow('  --skip-provoke was used: alert DELIVERY was not verified by this run.'));
+      console.log(yellow('  --skip-provoke was used: alert DELIVERY was not verified by this run,'));
+      console.log(yellow('  and neither was the heartbeat. This is checks 1-4 and nothing else.'));
+    }
+    if (options.onlyHeartbeat) {
+      console.log(yellow('  --only-heartbeat was used: no incident was provoked, so this run does'));
+      console.log(yellow('  NOT verify that a page or a ticket is delivered. Checks 1-4 and 7 only.'));
     }
   } else {
     console.log(red(bold(`${failed.length} of ${checks.length} check(s) failed.`)));
   }
-  console.log(
-    dim(
-      '\n  Both tiers were delivered over an HTTP webhook and over SMTP, to sinks this script\n' +
-        '  runs. The SMTP transaction and the RFC822 message are real; what is NOT rehearsed is\n' +
-        '  that a provider accepts this deployment’s credentials, that the configured address is\n' +
-        '  one a phone watches, or that anybody is awake. Set PRL_ALERT_* to point a deployment\n' +
-        '  at its own pager — see deploy/staging/observability/alertmanager.template.yml.\n',
-    ),
-  );
+  /**
+   * Whether the checks a closing paragraph is about actually passed.
+   *
+   * Both paragraphs below are conditional, and both had to become so after being
+   * caught claiming things the run had just disproved: a `--skip-provoke` log said
+   * "both tiers were delivered" three lines under a warning that delivery was not
+   * verified, and a run whose heartbeat never arrived still ended with "its absence was
+   * detected here". A summary that contradicts its own checks is worse than no summary,
+   * because the summary is the part that gets pasted into a report and the checks are
+   * the part that does not.
+   */
+  const allPassed = (pattern) =>
+    checks.filter((check) => pattern.test(check.name)).every((check) => check.ok);
+
+  if (!options.skipProvoke && !options.onlyHeartbeat && allPassed(/receiver|emailed|page|ticket/)) {
+    console.log(
+      dim(
+        '\n  Both tiers were delivered over an HTTP webhook and over SMTP, to sinks this script\n' +
+          '  runs. The SMTP transaction and the RFC822 message are real; what is NOT rehearsed is\n' +
+          '  that a provider accepts this deployment’s credentials, that the configured address is\n' +
+          '  one a phone watches, or that anybody is awake. Set PRL_ALERT_* to point a deployment\n' +
+          '  at its own pager — see deploy/staging/observability/alertmanager.template.yml.\n',
+      ),
+    );
+  }
+  if (!options.skipProvoke && allPassed(/heartbeat|dead man's switch|Watchdog/)) {
+    console.log(
+      dim(
+        '\n  The heartbeat was emitted, routed away from both human tiers, and its absence was\n' +
+          '  detected here — Alertmanager was stopped and the silence outlasted the deadline. The\n' +
+          '  WATCHING half is external by construction: a watcher on this host dies with the host\n' +
+          '  it is watching. Point PRL_ALERT_HEARTBEAT_WEBHOOK_URL at a snitch that is not this\n' +
+          '  host, and run `pnpm run alerts:ack` for the hop that ends at a person.\n',
+      ),
+    );
+  } else if (!options.skipProvoke) {
+    console.log(
+      red(
+        "\n  The dead man's switch did NOT pass. Read the check lines above rather than this\n" +
+          '  paragraph: a heartbeat that is not arriving where the watcher looks is a switch that\n' +
+          '  will never alarm, and it fails silently in exactly the way it exists to prevent.\n',
+      ),
+    );
+  }
 
   if (options.json || options.out !== null) {
     const report = {
-      schema: 'prl.alert-delivery.v2',
-      provoked: !options.skipProvoke,
+      schema: 'prl.alert-delivery.v3',
+      provoked: !options.skipProvoke && !options.onlyHeartbeat,
       destinations: values,
       overridden,
       checks,
+      /**
+       * The heartbeat, as measurements rather than as a pass.
+       *
+       * The gaps are the evidence a reader of a release artefact actually wants: a
+       * dead man's switch is a claim about a cadence, and "PASS" says nothing about
+       * whether the cadence was the configured one. These are the intervals that were
+       * observed between real notifications arriving at a real receiver.
+       */
+      heartbeat: {
+        path: HEARTBEAT_PATH,
+        intervalMs: durationMs(values.PRL_ALERT_HEARTBEAT_INTERVAL),
+        arrivals: heartbeatArrivals(sink.received).length,
+        gapsMs: heartbeatGaps(heartbeatArrivals(sink.received)),
+        reachedAHumanTier:
+          notificationsFor(sink.received, '/page', 'Watchdog', 'firing').length +
+          notificationsFor(sink.received, '/ticket', 'Watchdog', 'firing').length,
+      },
       notifications: sink.received.map((entry) => ({
         path: entry.path,
         status: entry.payload?.status ?? null,
@@ -1765,6 +2294,14 @@ if (import.meta.main) {
       if (apiStopped) {
         console.log(yellow(`\n  ${signal}: restarting the staging API before exiting.`));
         spawnSync('docker', ['compose', ...COMPOSE, 'start', 'api'], { stdio: 'inherit' });
+      }
+      // Check 7 stops Alertmanager on purpose for about a minute. A Ctrl-C inside that
+      // window is the one way this script can leave the overlay half up, and `--keep-up`
+      // would then hand the next run an Alertmanager that is down for a reason nothing
+      // wrote anywhere.
+      if (alertmanagerStopped) {
+        console.log(yellow(`  ${signal}: restarting Alertmanager before exiting.`));
+        spawnSync('docker', ['compose', ...COMPOSE, 'start', 'alertmanager'], { stdio: 'inherit' });
       }
       process.exit(130);
     });

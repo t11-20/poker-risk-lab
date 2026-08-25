@@ -512,7 +512,26 @@ function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
         Nothing is hidden or shortened by that — see section 1.1 there.
       */}
       <div className="prl-play__connection-lines">
-        <p role="status" className="prl-note" ref={statusRef} tabIndex={-1}>
+        {/*
+          `aria-label` because this line is a PLACE THE CARET ARRIVES AT, not only a region that
+          speaks. `ConnectionControls` lands focus here every time a control it was on is removed —
+          "Open the table", then "Take seat 1" — and a `role="status"` takes no name from its own
+          contents, so the computed name was the empty string: a reader was moved to a node the tree
+          describes as an unnamed status. Measured by assertion 3.2's check in
+          `scripts/ax-assertions.mjs`, which failed on exactly this the first time it was run against
+          a live table, and it is the same lesson `ActionBar`'s in-flight line and `TableStage`'s
+          acknowledgement each carry a label for.
+
+          The label and the sentence deliberately say different things, as they do there: the label
+          names where the caret now is, and the sentence is what the transport is doing.
+        */}
+        <p
+          aria-label="Where the table has got to"
+          role="status"
+          className="prl-note"
+          ref={statusRef}
+          tabIndex={-1}
+        >
           {statusSentence(live)}
         </p>
 

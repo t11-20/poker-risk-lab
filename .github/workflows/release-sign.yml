@@ -1,0 +1,314 @@
+# ---------------------------------------------------------------------------
+# Keyless release signing: the images built by `Release` are signed by an
+# identity, not by a key.
+#
+# ## What this file is for, stated as the gap it closes
+#
+# `pnpm run release:sign` signs with a long-lived cosign key held on a release
+# machine, and `deploy/signing/README.md` § "What this does not prove" is blunt
+# about the limit: it proves **possession of a key, not the identity of a
+# builder**. Anybody who can read `deploy/signing/cosign.key` and its passphrase
+# can sign anything, and no verifier can tell the difference.
+#
+# Keyless signing removes the key. This job asks GitHub for a short-lived OIDC
+# token describing itself, cosign exchanges that token with **Fulcio** for a
+# certificate valid for ten minutes whose SAN is this workflow's URI, and the
+# exchange is recorded in **Rekor**, a public append-only log. There is no
+# long-lived secret anywhere in this repository, and the claim a verifier can
+# check changes from "somebody who had the key" to "this workflow file, in this
+# repository, on this ref".
+#
+# The certificate identity this produces is exactly:
+#
+#     https://github.com/<owner>/poker-risk-lab/.github/workflows/release-sign.yml@refs/heads/main
+#
+# and that string is not written here. It is DERIVED from
+# `deploy/signing/keyless-policy.json`, which is what the verifier demands and
+# what `scripts/supply-chain/keyless-provenance.mjs` holds this file to. A rename
+# of this file, a second job with `id-token: write`, a trigger that can run on
+# another ref — each of those changes the identity, and each fails that gate
+# rather than silently widening what a verifier accepts.
+#
+# ## Why `id-token: write` is on the job and never at the top
+#
+# A workflow-level `permissions:` block is inherited by every job. Any job holding
+# `id-token: write` can mint an OIDC token that Fulcio will bind to THIS
+# workflow's identity — so granting it at the top level would hand a
+# signing-capable credential to every job in the file, including any that installs
+# dependencies or runs a third-party action. It is granted below to `sign` alone,
+# which is the one job whose whole purpose is that exchange, and the gate fails if
+# it ever appears anywhere else. `ci.yml` and `release.yml` declare
+# `permissions: contents: read` at their top level and grant no `id-token` at all;
+# that is unchanged and must stay that way.
+#
+# ## Why `workflow_run` and not a tag push
+#
+# Two reasons, and the second is the load-bearing one:
+#
+#   1. **Build once.** `release.yml` builds each image exactly once and uploads
+#      the manifest and the image tarballs. This job consumes those artefacts. A
+#      second `docker build` here would sign bytes that no staging run ever
+#      tested, which is the failure `release.yml`'s own header spends a paragraph
+#      forbidding.
+#   2. **One reachable ref.** GitHub always runs a `workflow_run` workflow from
+#      the DEFAULT BRANCH, whatever ref triggered the run it follows. So the
+#      identity minted here can only ever end `@refs/heads/main`, and the policy
+#      can demand an exact string instead of a regexp. A regexp is a licence to
+#      accept identities nobody enumerated — `.*` in the ref position accepts a
+#      signature made from any branch a contributor can push.
+#
+# It also means the code that signs is the code on `main`, reviewed, rather than
+# whatever was in the tagged tree. The tagged tree's commit is checked instead:
+# the step below refuses if the release manifest's commit is not the commit the
+# triggering run built.
+#
+# ## Pinning
+#
+# Every `uses:` is a full 40-character commit SHA with the version in a trailing
+# comment, and cosign is downloaded at a pinned version and verified against its
+# published checksum — the same treatment `release.yml` gives trivy, and for the
+# same reason: a signer installed from a moving `latest` is a moving dependency in
+# the job that produces the provenance. `scripts/supply-chain/ci-pinning.mjs`
+# enforces the `uses:` half and refuses any workflow file not declared in
+# `EXPECTED_WORKFLOWS`, so this file's existence is itself a two-file diff.
+#
+# ## Status: IMPLEMENTED AND UNEXERCISED
+#
+# No run of this workflow has happened. The first one needs a real GitHub
+# repository, network access to Fulcio and Rekor, and a `Release` run to follow.
+# Until then nothing here has produced a certificate or a log entry, and the
+# repository's provenance posture is still the key-based one. Do not read this
+# file as evidence that a keyless signature exists.
+# ---------------------------------------------------------------------------
+
+name: Release signing (keyless)
+
+on:
+  # Follows a completed `Release` run. Never `push`, `pull_request` or
+  # `pull_request_target`: a workflow that can mint a signing identity must never
+  # run on a ref a contributor controls.
+  workflow_run:
+    workflows: ['Release']
+    types: [completed]
+
+# Least privilege at the top, exactly as in ci.yml and release.yml. The signing
+# job widens its OWN block below and says why line by line. Nothing else in this
+# file gets more than read access to the repository contents.
+permissions:
+  contents: read
+
+# A release must never be signed twice concurrently: two runs would push two
+# signatures for the same digest, and the second one arriving mid-verification is
+# a confusing failure rather than a wrong one. Not cancel-in-progress — a
+# half-finished signing run should finish.
+concurrency:
+  group: release-sign-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+env:
+  # Pinned, and verified against the published checksum below. 3.1.3 is the
+  # version the key-based path is exercised with locally, so both postures speak
+  # the same cosign.
+  COSIGN_VERSION: '3.1.3'
+
+jobs:
+  sign:
+    name: Sign the release images keylessly
+    # A failed release must not be signed. `workflow_run` fires on completion
+    # whatever the conclusion, so this is the difference between signing what
+    # passed the gates and signing whatever came out of them.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    permissions:
+      # Read the checked-out source. Nothing here writes to the repository.
+      contents: read
+      # Download the manifest and the image tarballs from the run that triggered
+      # this one. `workflow_run` artefacts belong to the OTHER run, so the
+      # download needs the Actions API rather than the same-run artefact store.
+      actions: read
+      # Push the images to GHCR. A signature lives beside the image in a
+      # registry, so a signature made against a registry that dies with the
+      # runner is a signature nobody can ever fetch.
+      packages: write
+      # THE grant, and the reason this file exists as its own workflow. It lets
+      # this job — and, because permissions are per-job, only this job — request
+      # the OIDC token that Fulcio exchanges for a ten-minute certificate bound
+      # to this workflow's identity. It is never granted at the workflow level:
+      # every job would inherit the ability to mint a certificate carrying this
+      # repository's name.
+      id-token: write
+
+    steps:
+      - name: Check out
+        # The default ref, which for `workflow_run` is the default branch — the
+        # reviewed code, and the code the certificate identity will name. NOT the
+        # triggering run's head_sha: that would run a tagged tree's scripts under
+        # main's identity, which is the shape of a supply-chain attack rather
+        # than a build step.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      # Deliberately no `pnpm install`. `scripts/release-sign.mjs` and
+      # `scripts/supply-chain/image-provenance.mjs` import node: builtins and
+      # their siblings and nothing else, so the job that produces the provenance
+      # does not first execute a dependency graph. Same reasoning as the `build`
+      # and `container-scan` jobs in release.yml.
+
+      - name: Install cosign
+        # Pinned version, published checksum verified before the binary is
+        # executed. The signer is the tool whose output everything downstream
+        # trusts; installing it from a moving reference would put a mutable
+        # dependency at the root of the provenance chain.
+        run: |
+          set -euo pipefail
+          base="https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}"
+          curl --fail --silent --show-error --location -o cosign "${base}/cosign-linux-amd64"
+          curl --fail --silent --show-error --location -o cosign_checksums.txt \
+            "${base}/cosign_checksums.txt"
+          grep ' cosign-linux-amd64$' cosign_checksums.txt | sed 's|cosign-linux-amd64|cosign|' > expected.txt
+          sha256sum --check expected.txt
+          sudo install -m 0755 cosign /usr/local/bin/cosign
+          cosign version
+
+      - name: Install trivy
+        # The SBOM attestation is produced by trivy against the pushed image, exactly as the
+        # key-based signer does locally — so both postures attest the same predicate from the same
+        # tool, and a difference between them is never "the CI one skipped the SBOM". Pinned and
+        # checksum-verified, the same way release.yml installs it.
+        env:
+          TRIVY_VERSION: '0.72.0'
+        run: |
+          set -euo pipefail
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          curl --fail --silent --show-error --location -o trivy.tar.gz \
+            "${base}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl --fail --silent --show-error --location -o trivy_checksums.txt \
+            "${base}/trivy_${TRIVY_VERSION}_checksums.txt"
+          grep "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" trivy_checksums.txt > trivy_expected.txt
+          sha256sum --check trivy_expected.txt
+          tar -xzf trivy.tar.gz trivy
+          sudo install -m 0755 trivy /usr/local/bin/trivy
+          trivy --version
+
+      - name: Download the release manifest
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-manifest
+          path: deploy/staging
+          # The artefacts belong to the run that triggered this one.
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Download the images
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-images
+          path: release-images
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: The manifest must describe the commit the triggering run built
+        # Without this, a `Release` run for commit A and a manifest artefact for
+        # commit B would be signed as one thing. The identity in the certificate
+        # says which workflow ran; this says which source tree it signed.
+        run: |
+          set -euo pipefail
+          built="$(node -e "process.stdout.write(require('./deploy/staging/release-manifest.json').commit.sha)")"
+          triggered='${{ github.event.workflow_run.head_sha }}'
+          if [ "$built" != "$triggered" ]; then
+            echo "the release manifest was built from ${built}, and the run that triggered this"
+            echo "signing job was for ${triggered}. Refusing to sign: the artefact and the run"
+            echo "describe different source trees."
+            exit 1
+          fi
+          echo "manifest and triggering run agree on ${built}"
+
+      - name: Load the images
+        run: |
+          docker load -i release-images/api.tar
+          docker load -i release-images/web.tar
+
+      - name: Log in to GHCR
+        # The only credential in this workflow, and it is the run's own ephemeral
+        # GITHUB_TOKEN rather than a stored secret. It can push packages for this
+        # repository and expires with the job.
+        run: |
+          echo '${{ github.token }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+      - name: Push and sign, keylessly
+        # No key, no passphrase, no secret. `--keyless` refuses outright if
+        # ACTIONS_ID_TOKEN_REQUEST_URL is absent — the symptom of a job whose
+        # `id-token: write` was edited away — rather than falling back to an
+        # interactive browser flow that would hang the release.
+        #
+        # The signature and the SBOM attestation both go to Rekor. That is the
+        # half the key-based posture cannot have: a public, third-party record
+        # that this certificate was issued at this time, which is what makes a
+        # later compromise detectable at all.
+        run: |
+          node scripts/release-sign.mjs \
+            --keyless \
+            --registry ghcr.io \
+            --repository-prefix '${{ github.repository_owner }}' \
+            --out deploy/staging/release-signatures.json \
+            --json
+
+      - name: Verify the signature this job just made, against the COMMITTED policy
+        # The whole point, and the step that must never be removed: verification
+        # asserts `deploy/signing/keyless-policy.json`'s identity and issuer, not
+        # merely that the maths checks out. A keyless signature verifies against
+        # SOME Fulcio certificate — Fulcio issues one to anybody's Actions job —
+        # so a run that signed under an identity the policy does not name fails
+        # HERE, in the run that made it, rather than months later on somebody
+        # else's machine.
+        #
+        # The policy carries "repository": null until this repository has a
+        # committed owner; GITHUB_REPOSITORY resolves it for this run, bounded to
+        # a repository named poker-risk-lab, and the gate says out loud that it
+        # did so.
+        run: |
+          node scripts/supply-chain/image-provenance.mjs --require-attestation
+
+      - name: Upload the signature record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-signatures-keyless
+          path: deploy/staging/release-signatures.json
+          # `error`: this record IS the output of the job. A run that signed
+          # something and published no record of what it signed has produced
+          # nothing anybody can act on.
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: What an outsider can now check
+        if: always()
+        run: |
+          {
+            echo '### Keyless signature'
+            echo ''
+            echo 'Identity asserted, from `deploy/signing/keyless-policy.json`:'
+            echo ''
+            echo '```'
+            echo "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-sign.yml@refs/heads/main"
+            echo "issuer https://token.actions.githubusercontent.com"
+            echo '```'
+            echo ''
+            echo 'Anyone can re-run the verification with no key and no access to this repository:'
+            echo ''
+            echo '```'
+            echo "cosign verify \\"
+            echo "  --certificate-identity https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release-sign.yml@refs/heads/main \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+            echo "  ghcr.io/${GITHUB_REPOSITORY_OWNER}/prl-api@<digest>"
+            echo '```'
+            echo ''
+            echo 'The Rekor entry is public: <https://search.sigstore.dev>.'
+          } >> "$GITHUB_STEP_SUMMARY"

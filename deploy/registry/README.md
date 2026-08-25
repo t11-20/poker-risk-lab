@@ -229,7 +229,10 @@ The honest one-line summary, updated 2026-08-25: **content identity across a
 push/pull boundary is proven, and each digest is now signed by a key this
 repository controls and checked by `pnpm run security:image-provenance`. What is
 still absent is provenance bound to a BUILDER — a keyless/OIDC signature from a
-CI workload identity, with a transparency log behind it.**
+CI workload identity, with a transparency log behind it. That signer is now
+written and gated (`.github/workflows/release-sign.yml`,
+`deploy/signing/keyless-policy.json`, `pnpm run security:keyless`) and has never
+run, so it is absent as a fact and not as code.**
 
 ---
 

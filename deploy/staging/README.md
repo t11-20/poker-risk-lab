@@ -132,7 +132,10 @@ why it is worth running before promoting anything.
 What even a passing signature check does not buy: the key is a long-lived file on
 the release machine with no transparency log behind it, so it establishes
 possession of a key and **not the identity of a builder**. That needs keyless/OIDC
-signing in CI. [`deploy/signing/README.md`](../signing/README.md) is the long form.
+signing in CI, which is now written and gated
+(`.github/workflows/release-sign.yml`, `deploy/signing/keyless-policy.json`) and
+has never run — so every image here is still in the key posture.
+[`deploy/signing/README.md`](../signing/README.md) is the long form.
 `promote` prints that split rather than letting a green tick imply the larger
 claim. The evidence for the content claim — including a cold pull, on a throwaway
 image, after deleting it locally — is in
@@ -358,15 +361,22 @@ retention sweep after 60 days, and their enrolment rows cascade away with them.
 
 `docker-compose.observability.yml` adds a Prometheus and an Alertmanager beside this
 stack, and `pnpm run alerts:verify` uses them to answer a question staging could not
-answer before: do the twenty-seven rules in `docs/production/alerts.md` load, agree with
-that document, name series that exist, evaluate, and — for one of them, provoked for
+answer before: do the twenty-nine rules in `docs/production/alerts.md` load, agree with
+that document, name series that exist, evaluate, and — for three of them, driven for
 real — fire, route by severity and arrive at a receiver.
 
 ```bash
 pnpm run staging up          # this stack first; the overlay scrapes it
-pnpm run alerts:verify       # ~5 minutes; STOPS the API for about two of them
-pnpm run alerts:verify -- --skip-provoke   # ~30s, checks 1-4 only, API untouched
+pnpm run alerts:verify       # ~10 minutes; STOPS the API for about four of them
+pnpm run alerts:verify -- --skip-provoke     # ~30s, checks 1-4 only, API untouched
+pnpm run alerts:verify -- --only-heartbeat   # ~4 min, checks 1-4 and 7, API untouched
 ```
+
+The third of the three is the dead man's switch. `Watchdog` fires permanently and is
+routed to a heartbeat receiver that is neither human tier, and check 7 follows it
+through a rhythm, a deliberate silence — **Alertmanager is stopped**, which is a
+container this script created and removes, never a staging one — and back. That is the
+one check here whose subject is a thing NOT happening.
 
 It is an overlay and not part of `docker-compose.staging.yml` for the same reason that
 file has no `build:` section: that file is a manifest of what production runs, and
@@ -410,8 +420,12 @@ rehearsed is a provider accepting real credentials, and somebody being awake.
   long-lived file on the release machine, there is no transparency log, and the
   registry in `deploy/registry/` is a container on this host rather than a third
   party. Keyless/OIDC signing in CI — a short-lived Fulcio certificate bound to a
-  named workflow, with Rekor as the witness — is the missing piece, and this
-  repository has no CI signing identity to do it with.
+  named workflow, with Rekor as the witness — is the missing piece. It is no longer
+  missing as *code*: `.github/workflows/release-sign.yml` signs keylessly,
+  `deploy/signing/keyless-policy.json` is the committed identity a verifier demands,
+  and `pnpm run security:keyless` fails if the two stop agreeing. It is still missing
+  as *fact*: that workflow has never run, so no Fulcio certificate and no Rekor entry
+  exist, and nothing here is yet bound to a builder an outsider can check.
 
 ---
 

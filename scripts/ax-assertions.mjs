@@ -21,11 +21,28 @@
  * assertive, a control that drops focus on the floor when it disables itself — ships silently and
  * waits for a human session that never comes.
  *
- * So the 73 are split. The 45 whose whole subject is a DOM/ARIA fact are checked here, on every
- * run, and a regression fails `pnpm run verify`. The 28 whose subject is the SPEECH — what order an
- * utterance arrives in, whether a polite region really waited, whether a refusal interrupted,
- * whether a sentence is comprehensible, anything needing a live socket at a real table — stay with
- * the person, and `pnpm run certify:screen-reader` now presents only those.
+ * So the 73 are split. The 63 whose whole subject is a DOM/ARIA fact are checked here, on every
+ * run, and a regression fails `pnpm run verify`. The 10 whose subject is the SPEECH ITSELF — whether
+ * a prompt is read twice, in what order the words arrive, where a virtual cursor goes past the end
+ * of a modal — stay with the person, and `pnpm run certify:screen-reader` now presents only those.
+ *
+ * ## "Needs a live table" was a statement about this gate, not about speech
+ *
+ * Eighteen of those 63 were with the person until this module grew two fixtures, and every one of
+ * them was refused for a fixture reason rather than an un-automatable one:
+ *
+ *   - **A live table over a real socket** (`gatherLiveTable`). `/play?state=decision` renders the
+ *     table's component tree without a server, so the connection never changes state, no blind is
+ *     ever posted, the turn is never yours and no hand ever completes. The fixture opens a guest
+ *     session, creates a private room with five bots, deals, folds when the decision arrives, and
+ *     lets the hand finish — through the screens, with real key presses.
+ *   - **A hand this run played, replayed** (`gatherReplay`). The scrubbable replay is at
+ *     `/review/<handId>` and needs a hand in a database; the demo route renders a different
+ *     component with no face-down card and no timeline in it. The fixture reads back the hand the
+ *     live table just played, as the reader's own history.
+ *
+ * What is still refused is refused on its merits, and section 5 of the certification document lists
+ * all ten with one line each.
  *
  * ## What this does NOT claim
  *
@@ -171,6 +188,121 @@ export const ANNOUNCER_PROBE = `
 })();
 `;
 
+/**
+ * Every write into every live region, in order, installed before any framework code runs.
+ *
+ * ## Why the announcement surface has to be RECORDED rather than read
+ *
+ * The live table says most of what it says once and replaces it a second later. Measured on a real
+ * hand: "You chose to fold." was written at 13,248ms and the next table event overwrote it 6ms
+ * later. A check that reads the regions after the hand sees the last sentence and nothing else, so
+ * every assertion about what the table said during the hand — the connection going live, the blinds
+ * before the bots, the turn sentence, the Coach arriving, the hand completing — would be checking a
+ * page that has already stopped saying it.
+ *
+ * So this observes the whole document from `Page.addScriptToEvaluateOnNewDocument` and appends one
+ * entry per DISTINCT text a region has held, with the milliseconds since the document started.
+ * `ANNOUNCER_PROBE` does the same thing for the route announcer alone and is kept separate: G7/G8/G9
+ * are about one region whose politeness and duplication are the subject, and merging them would
+ * make those three read a haystack.
+ *
+ * ## Three details that are each load-bearing
+ *
+ * **`characterDataOldValue`.** React coalesces two state changes that arrive in one task into a
+ * single render, so a sentence can be replaced before it ever reaches the DOM. Where the DOM itself
+ * was written twice in one batch the observer only sees the final text, and the old value is the
+ * only record that the first one existed. Recovering it is what lets a check distinguish "was said
+ * and replaced" from "was never said" — a distinction assertion 3.3 turns out to rest on.
+ *
+ * **A mutation count per region.** A polite region re-written with the SAME text produces no change
+ * of text and is still a re-announcement in several readers. Assertion 3.6 — the turn sentence is
+ * announced once per turn, on an app that pushes whole-state frames several times a second — is
+ * therefore a question about mutations, not about text. Counting both is the only way to answer it.
+ *
+ * **A key that survives two regions of the same class.** The table's narration and the decision
+ * band's turn sentence are both `div.prl-live-region[role=status]`; keyed on their own class alone
+ * they would be one region, and 3.6 would count the table's narration as re-announcements of the
+ * turn. The key is the nearest three ancestor class names, which tells them apart.
+ */
+export const SPEECH_PROBE = `
+(() => {
+  const log = [];
+  const mutations = [];
+  const started = Date.now();
+  window.__prlSpeech = { log, mutations };
+  window.__prlSpeechReset = () => { log.length = 0; mutations.length = 0; };
+  const SELECTOR = '[aria-live], [role="status"], [role="alert"]';
+  const seen = new WeakMap();
+  const tidy = (value) => (value ?? '').replace(/\\s+/gu, ' ').trim();
+  const politeness = (el) => {
+    const live = el.getAttribute('aria-live');
+    if (live !== null) return live;
+    const role = el.getAttribute('role');
+    return role === 'alert' ? 'assertive' : role === 'status' ? 'polite' : 'off';
+  };
+  const keyOf = (el) => {
+    const parts = [];
+    for (let node = el; node !== null && parts.length < 3; node = node.parentElement) {
+      const className = typeof node.className === 'string' ? node.className.split(/\\s+/u)[0] : '';
+      if (className !== '') parts.unshift(className);
+    }
+    const label = el.getAttribute('aria-label');
+    return parts.join('>') + (label === null ? '' : '#' + label);
+  };
+  const push = (el, text) => {
+    if (text === '' || seen.get(el) === text) return;
+    seen.set(el, text);
+    log.push({
+      text,
+      live: politeness(el),
+      role: el.getAttribute('role'),
+      key: keyOf(el),
+      at: Date.now() - started,
+    });
+  };
+  const scan = () => {
+    for (const el of document.querySelectorAll(SELECTOR)) push(el, tidy(el.textContent));
+  };
+  const observer = new MutationObserver((records) => {
+    for (const record of records) {
+      const node = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+      const region = node === null ? null : node.closest(SELECTOR);
+      if (region === null) continue;
+      mutations.push({ key: keyOf(region), at: Date.now() - started });
+      // The text this region held before this write, recovered only when the region is the one
+      // text node that changed — otherwise the "old value" is a fragment of a longer region and
+      // logging it would invent a sentence nobody wrote.
+      if (record.type === 'characterData' && typeof record.oldValue === 'string') {
+        if (tidy(region.textContent) === tidy(record.target.data)) push(region, tidy(record.oldValue));
+      }
+    }
+    scan();
+  });
+  const attach = () => {
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      characterDataOldValue: true,
+      attributes: true,
+    });
+    scan();
+  };
+  if (document.documentElement === null) {
+    document.addEventListener('readystatechange', attach, { once: true });
+  } else {
+    attach();
+  }
+})();
+`;
+
+/** Every live-region write and mutation this document has recorded so far. */
+const speechSoFar = (page) =>
+  page.evaluate('window.__prlSpeech ?? { log: [], mutations: [] }').then((speech) => ({
+    log: speech.log ?? [],
+    mutations: speech.mutations ?? [],
+  }));
+
 /** Every non-ignored AX node, flattened to the fields these checks read. */
 async function axNodes(page) {
   const nodes = await page.axTree();
@@ -238,6 +370,68 @@ async function focusedAx(page) {
     inMain: where.inMain,
     connected: where.connected,
   };
+}
+
+/**
+ * Every `Metric` under one root, as the four things a reader is entitled to hear about a figure.
+ *
+ * `Metric` in `@prl/ui` has two shapes and only one of them puts the value in the tree as text: a
+ * counting figure hides the animated number from assistive technology and carries the real one in a
+ * visually-hidden node that reads "label: value unit interval". A check written against the visible
+ * value alone would report every counted figure on the site as unnamed, so both shapes are read
+ * here and the decisions below accept either.
+ */
+const METRICS_JS = `((root) => {
+  const tidy = (el) => (el === null ? null : (el.textContent ?? '').replace(/\\s+/gu, ' ').trim());
+  const hidden = (el) => el === null || el.closest('[aria-hidden="true"]') !== null;
+  return [...root.querySelectorAll('.prl-metric')].map((metric) => {
+    const label = metric.querySelector('.prl-metric__label');
+    const value = metric.querySelector('.prl-metric__value');
+    const unit = metric.querySelector('.prl-metric__unit');
+    const interval = metric.querySelector('.prl-metric__interval');
+    const spoken = metric.querySelector('.prl-metric__figure .prl-visually-hidden');
+    return {
+      label: tidy(label),
+      labelHidden: hidden(label),
+      value: tidy(value),
+      valueHidden: hidden(value),
+      unit: tidy(unit),
+      interval: tidy(interval),
+      intervalHidden: interval === null ? false : hidden(interval),
+      spoken: tidy(spoken),
+      labelFirst:
+        label !== null &&
+        value !== null &&
+        (label.compareDocumentPosition(value) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    };
+  });
+})`;
+
+/**
+ * What a reader hears about one figure, whichever shape it is in: the label, then the number.
+ *
+ * Returns a sentence describing the defect, or null when the figure is announced whole.
+ */
+export function figureDefect(figure) {
+  const label = (figure.label ?? '').trim();
+  if (label === '' || figure.labelHidden) return 'a figure reaches the tree with no label beside it';
+  const spoken = (figure.spoken ?? '').trim();
+  if (figure.valueHidden || figure.value === null) {
+    // The counting shape. The visible number is decoration; the hidden readout is the figure.
+    if (spoken === '') return `"${label}" hides its value from the tree and offers no readout instead`;
+    if (!spoken.startsWith(`${label}:`)) return `"${label}" is announced as "${spoken}", without its label`;
+    if (!/\d/u.test(spoken)) return `"${label}" announces "${spoken}", which carries no figure`;
+    if ((figure.interval ?? '') !== '' && !spoken.includes(figure.interval)) {
+      return `"${label}" shows an interval (${figure.interval}) that its spoken readout leaves out`;
+    }
+    return null;
+  }
+  if ((figure.value ?? '').trim() === '') return `"${label}" has no value`;
+  if (!figure.labelFirst) return `"${label}" is announced after its own number`;
+  if ((figure.interval ?? '') !== '' && figure.intervalHidden) {
+    return `"${label}" carries an interval that is hidden from the tree, so the figure is read as exact`;
+  }
+  return null;
 }
 
 const LIVE_REGIONS_JS = `
@@ -596,6 +790,12 @@ async function gatherLearn(page) {
         .filter((entry) => !entry.ignored)
         .map((entry) => ({ name: entry.name, html: entry.html.slice(0, 80) })),
     ),
+    figures: await page.evaluate(
+      `(() => {
+        const row = document.querySelector('.prl-learn-page__figures');
+        return row === null ? null : (${METRICS_JS})(row);
+      })()`,
+    ),
   };
 }
 
@@ -660,6 +860,24 @@ const LEARN_CHECKS = [
         );
       }
       return pass(`${e.mainLinks.length} links, all named`);
+    },
+  },
+  {
+    id: 'J1.6',
+    what: 'each figure at the top announces a label and a value together, never a bare number',
+    decide: (e) => {
+      if (e.figures === null) return fail('the figures block did not render on the curriculum index');
+      if (e.figures.length < 3) {
+        return fail(`only ${e.figures.length} figure(s) at the top of /learn; the header did not render`);
+      }
+      const defects = e.figures.map((figure) => figureDefect(figure)).filter((defect) => defect !== null);
+      if (defects.length > 0) {
+        return fail(
+          `${defects.length} of ${e.figures.length} figure(s) announce a number a reader cannot ` +
+            `place: ${defects.slice(0, 3).join('; ')}`,
+        );
+      }
+      return pass(e.figures.map((figure) => `${figure.label} ${figure.value ?? figure.spoken}`).join(', '));
     },
   },
 ];
@@ -1332,6 +1550,862 @@ const TABLE_NARROW_CHECKS = [
 ];
 
 // ---------------------------------------------------------------------------
+// Journey 3, continued — a LIVE table, over a real socket
+//
+// The fixture routes `/play?state=...` render this screen's component tree without a server, which
+// is what the eleven assertions below used to be blocked on: a connection that never changes state,
+// blinds that never arrive, a turn that is never yours, a decision no server answers and a hand
+// that never completes. Everything here is driven against `/play` itself — a guest session, a
+// private room with five bots, a real WebSocket, a real hand — and read out of the live-region log
+// `SPEECH_PROBE` keeps.
+//
+// Two facts about this fixture that are easy to get wrong and expensive to debug:
+//
+//   - The API must allow this audit's own origin. `PUBLIC_WEB_ORIGIN` is one allowlist for CORS and
+//     for the socket's `Origin` check, so an API started with a developer's `.env` answers every
+//     browser-side call from `127.0.0.1:3456` with `forbidden` and the table never opens.
+//     `ax-tree-audit.mjs` sets it on the API it starts; with `--no-start` it is the operator's.
+//   - The reader must be new. Chrome keeps its profile between runs, so a second run reuses the
+//     room the first left the reader seated in and "Take seat 1" is never offered.
+// ---------------------------------------------------------------------------
+
+/** Where each of the three regions this journey listens to lives, as a `SPEECH_PROBE` key. */
+const CONNECTION_REGION = /prl-play__connection-lines/u;
+const TABLE_REGION = /prl-table>prl-live-region/u;
+const TURN_REGION = /prl-play__decision>prl-live-region/u;
+
+/** How long 3.6 sits on its own turn without acting. The assertion says ten seconds; this is it. */
+const TURN_DWELL_MS = 10_000;
+
+/** The reader's own decision, echoed by the reducer. `spokenDecision` in `use-live-table.ts`. */
+const FOLD_ECHO = /^You chose to fold\./u;
+
+const entriesFrom = (log, region) => (log ?? []).filter((entry) => region.test(entry.key ?? ''));
+
+/**
+ * Focus an enabled control whose name matches, then press Enter on it.
+ *
+ * A real key through Chrome's input pipeline rather than `element.click()`, for the reason the
+ * journey audit gives at length: a synthesised click does not exercise the keyboard path, and the
+ * focus rescues this screen depends on are written against a browser that blurs a control it has
+ * just removed. Returns the name it pressed, or null when nothing matched.
+ */
+async function pressControl(page, pattern) {
+  const name = await page.evaluate(
+    `(() => {
+      const named = (b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').replace(/\\s+/gu, ' ').trim();
+      const wanted = new RegExp(${JSON.stringify(pattern.source)}, ${JSON.stringify(pattern.flags)});
+      const button = [...document.querySelectorAll('button')]
+        .filter((b) => wanted.test(named(b)))
+        .find((b) => !b.disabled);
+      if (button === undefined) return null;
+      button.focus();
+      return named(button);
+    })()`,
+  );
+  if (name === null) return null;
+  await page.press('Enter');
+  return name;
+}
+
+/** True when no enabled control on the page answers to `pattern` any more. */
+function controlGone(page, pattern) {
+  return page.evaluate(
+    `(() => {
+      const named = (b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').replace(/\\s+/gu, ' ').trim();
+      const wanted = new RegExp(${JSON.stringify(pattern.source)}, ${JSON.stringify(pattern.flags)});
+      return ![...document.querySelectorAll('button')].some((b) => wanted.test(named(b)));
+    })()`,
+  );
+}
+
+/** Poll the page until `expression` is true, or give up. Returns whether it became true. */
+async function waitInPage(page, expression, seconds) {
+  for (let attempt = 0; attempt < seconds * 4; attempt += 1) {
+    await page.settle(250);
+    if ((await page.evaluate(expression).catch(() => false)) === true) return true;
+  }
+  return false;
+}
+
+const ENABLED_ACTION = `[...document.querySelectorAll('button.prl-action-btn')].some((b) => !b.disabled)`;
+
+/**
+ * Open a table, sit down, deal, fold when the decision arrives, and let the hand finish.
+ *
+ * The product's own path, pressed one control at a time — the same journey `scripts/smoke-test.mjs`
+ * drives over a bare socket, driven here through the screen instead, because what is being asserted
+ * is what the screen said while it happened.
+ *
+ * `fresh` clears the cookie jar first, which the live-table route needs and the replay route must
+ * not do: it is reading back a hand that belongs to the session it already has.
+ */
+async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0 } = {}) {
+  const evidence = { steps: [], reachedTurn: false, dwellMs: 0, complete: false, turnOpenedAt: null };
+  if (fresh) await page.clearCookies();
+  await page.goto(`${baseUrl}/play`);
+  await page.evaluate('window.__prlSpeechReset && window.__prlSpeechReset()');
+
+  evidence.opened = await pressControl(page, /^Open the table$/iu);
+  if (evidence.opened === null) return { ...evidence, ...(await speechSoFar(page)) };
+  await page.settle(700);
+  evidence.steps.push({
+    control: evidence.opened,
+    gone: await controlGone(page, /^Open the table$/iu),
+    focus: await focusedAx(page),
+  });
+
+  evidence.socketLive = await waitInPage(
+    page,
+    '/Take seat|Deal the next hand|Stand up/u.test(document.body.innerText)',
+    45,
+  );
+  if (!evidence.socketLive) return { ...evidence, ...(await speechSoFar(page)) };
+
+  // Only when a seat is on offer. A session that is already seated at its own room — which is what
+  // the replay route finds when it has to play a hand of its own — is a legitimate state, not a
+  // failure, and the seat step is simply not part of that run.
+  evidence.sat = await pressControl(page, /^Take seat \d+$/iu);
+  if (evidence.sat !== null) {
+    await page.settle(900);
+    evidence.steps.push({
+      control: evidence.sat,
+      gone: await controlGone(page, /^Take seat \d+$/iu),
+      focus: await focusedAx(page),
+    });
+  }
+
+  await waitInPage(page, '/Deal the next hand/u.test(document.body.innerText)', 25);
+  evidence.dealt = await pressControl(page, /^Deal the next hand$/iu);
+  if (evidence.dealt === null) return { ...evidence, ...(await speechSoFar(page)) };
+
+  evidence.reachedTurn = await waitInPage(page, ENABLED_ACTION, 60);
+  if (!evidence.reachedTurn) return { ...evidence, ...(await speechSoFar(page)) };
+  const opened = await speechSoFar(page);
+  evidence.turnOpenedAt = entriesFrom(opened.log, TURN_REGION).at(-1)?.at ?? null;
+
+  // 3.6: ten seconds on your own turn, doing nothing, while the server pushes whole-state frames.
+  if (dwellMs > 0) {
+    const started = Date.now();
+    await page.settle(dwellMs);
+    evidence.dwellMs = Date.now() - started;
+  }
+
+  evidence.folded = await pressControl(page, /^fold\b/iu);
+  await page.settle(1400);
+  evidence.foldFocus = await focusedAx(page);
+  evidence.complete = await waitInPage(page, '/The hand is complete/u.test(document.body.innerText)', 90);
+  await page.settle(700);
+  return { ...evidence, ...(await speechSoFar(page)) };
+}
+
+const gatherLiveTable = (page, baseUrl) =>
+  driveLiveHand(page, baseUrl, { fresh: true, dwellMs: TURN_DWELL_MS });
+
+/** The sentence `statusSentence` prints while the session and the room are being found. */
+const PREPARING = /^Preparing: reading your session/u;
+const LIVE_STATUS = /^Live\. Everything on this screen is the server/u;
+
+const LIVE_TABLE_CHECKS = [
+  {
+    id: 'J3.1',
+    what: 'the connection status is announced politely as it changes, preparing then live',
+    decide: (e) => {
+      if (e.opened === null)
+        return fail('no "Open the table" control on /play; the live table did not render');
+      const status = entriesFrom(e.log, CONNECTION_REGION);
+      if (status.length === 0) {
+        return fail('the connection panel wrote nothing into any live region, so the transport is silent');
+      }
+      const preparing = status.findIndex((entry) => PREPARING.test(entry.text));
+      const live = status.findIndex((entry) => LIVE_STATUS.test(entry.text));
+      if (preparing < 0) {
+        return fail(
+          `the status region never said it was preparing; it held ${JSON.stringify(
+            status.map((entry) => entry.text.slice(0, 40)),
+          )}. A reader presses "Open the table" and is told nothing until it works`,
+        );
+      }
+      if (live < 0) {
+        /*
+          The one non-accessibility reason this fails, named because it costs an hour otherwise:
+          `PUBLIC_WEB_ORIGIN` is one allowlist for CORS and for the socket's `Origin` check, so an
+          API started with a developer's `.env` answers every browser-side call from this audit's
+          origin with `forbidden` and no table ever opens. `ax-tree-audit.mjs` sets it on the API it
+          starts; with `--no-start` it is whatever the running API was given.
+        */
+        const refused = (e.log ?? []).some((entry) => /forbidden|not authenticated/iu.test(entry.text));
+        return fail(
+          'the status region never announced that the table went live, so a reader who cannot see ' +
+            `the screen never learns the connection is up. It held ${JSON.stringify(
+              status.map((entry) => entry.text.slice(0, 40)),
+            )}` +
+            (refused
+              ? '. The API refused this origin — check that it was started with PUBLIC_WEB_ORIGIN ' +
+                'set to the origin this audit is driving, which is what --start does for you'
+              : ''),
+        );
+      }
+      if (live < preparing)
+        return fail('the table announced itself live before it announced it was preparing');
+      const shouty = status.filter((entry) => entry.live === 'assertive' || entry.role === 'alert');
+      if (shouty.length > 0) {
+        return fail(
+          `${shouty.length} connection status message(s) are assertive, so a socket state change cuts ` +
+            'off whatever the reader was in the middle of',
+        );
+      }
+      return pass(`${status.length} polite status changes, preparing -> live`);
+    },
+  },
+  {
+    id: 'J3.2',
+    what: 'after opening the table and taking a seat, the caret lands on the status line',
+    decide: (e) => {
+      if (e.steps.length < 2) {
+        return fail(
+          `only ${e.steps.length} of the two setup controls were reached ` +
+            `(opened ${JSON.stringify(e.opened)}, seated ${JSON.stringify(e.sat ?? null)}); ` +
+            'the seat step is where the caret is most often dropped, so a run without it proves nothing',
+        );
+      }
+      for (const step of e.steps) {
+        if (!step.gone) {
+          return fail(`"${step.control}" is still on the page after being activated`);
+        }
+        if (step.focus.onDocument) {
+          return fail(
+            `after "${step.control}" the caret is on the document itself. The control the reader ` +
+              'pressed was removed and the browser dropped focus, so a keyboard reader is returned ' +
+              'to the top of the page and hears nothing about what changed',
+          );
+        }
+        if (isBareName(step.focus.name)) {
+          return fail(
+            `after "${step.control}" the caret landed on a ${step.focus.role} with no computed name`,
+          );
+        }
+        if (step.focus.role !== 'status') {
+          return fail(
+            `after "${step.control}" the caret landed on a ${step.focus.role} named ` +
+              `"${step.focus.name.slice(0, 40)}", not on the status line that says what just changed`,
+          );
+        }
+      }
+      return pass(e.steps.map((step) => `${step.control} -> "${step.focus.name.slice(0, 32)}…"`).join(', '));
+    },
+  },
+  {
+    id: 'J3.4',
+    what: 'the table narrates the forced bets first, then each seat action, politely and in order',
+    decide: (e) => {
+      if (e.dealt === null) return fail('the hand was never dealt, so no table event was announced');
+      const narration = entriesFrom(e.log, TABLE_REGION);
+      if (narration.length === 0) {
+        return fail('the table narrated nothing at all; its polite region was never written to');
+      }
+      const blinds = narration.findIndex((entry) => /blind/iu.test(entry.text));
+      if (blinds < 0) {
+        return fail(
+          `the forced bets were never announced. The table held ${JSON.stringify(
+            narration.slice(0, 4).map((entry) => entry.text.slice(0, 40)),
+          )}, so a reader is told the price of a decision they never heard being set`,
+        );
+      }
+      const actions = narration.filter(
+        (entry, index) => index > blinds && /\b(folds|checks|calls|bets|raises)\b/iu.test(entry.text),
+      );
+      if (actions.length === 0) {
+        return fail('no seat action was announced after the blinds, so the hand was narrated as a blank');
+      }
+      const early = narration.findIndex((entry) => /\b(folds|checks|calls|bets|raises)\b/iu.test(entry.text));
+      if (early < blinds) {
+        return fail(
+          `a seat action ("${narration[early].text.slice(0, 30)}") was announced before the forced bets, ` +
+            'so the reader hears the hand out of the order it was played in',
+        );
+      }
+      const shouty = narration.filter((entry) => entry.live === 'assertive' || entry.role === 'alert');
+      if (shouty.length > 0) {
+        return fail(`${shouty.length} table event(s) were announced assertively; the table never interrupts`);
+      }
+      return pass(`blinds first, then ${actions.length} seat action(s), all polite`);
+    },
+  },
+  {
+    id: 'J3.5',
+    what: 'your turn is announced as one sentence carrying the street, the price, the pot, your stack and the actions',
+    decide: (e) => {
+      if (!e.reachedTurn) return fail('the hand never reached this seat, so no turn was announced');
+      const turns = entriesFrom(e.log, TURN_REGION).filter((entry) => /^Your turn\b/u.test(entry.text));
+      if (turns.length === 0) {
+        return fail(
+          'the decision became the reader’s and no region said so. Everything they need — that it is ' +
+            'their turn, the street, the price, the pot, their stack and the legal actions — is on ' +
+            'screen and unannounced',
+        );
+      }
+      const sentence = turns[0].text;
+      if (turns[0].live !== 'polite') return fail(`the turn sentence is ${turns[0].live}, and it must wait`);
+      const missing = [
+        ['the street', /^Your turn (preflop|on the (flop|turn|river)|at the end of the hand)\./u],
+        ['the price', /(\d[\d,]* units? to call|Nothing to call)\./u],
+        ['the pot', /Pot [\d,]+ units?/u],
+        ['your stack', /your stack [\d,]+ units?/u],
+        ['the legal actions', /You can [a-z, ]+\./u],
+      ].filter(([, pattern]) => !pattern.test(sentence));
+      if (missing.length > 0) {
+        return fail(
+          `the turn sentence is missing ${missing.map(([name]) => name).join(', ')}: "${sentence}"`,
+        );
+      }
+      return pass(`"${sentence.slice(0, 70)}…"`);
+    },
+  },
+  {
+    id: 'J3.6',
+    what: 'the turn sentence is announced once, and ten seconds of state frames do not repeat it',
+    decide: (e) => {
+      if (!e.reachedTurn) return fail('the hand never reached this seat, so nothing was dwelt on');
+      if (e.dwellMs < TURN_DWELL_MS) {
+        return fail(
+          `the run waited ${e.dwellMs}ms on its own turn, not the ${TURN_DWELL_MS}ms this assertion ` +
+            'asks for. A shorter wait can miss a re-announcement and report silence it never observed',
+        );
+      }
+      if (e.turnOpenedAt === null)
+        return fail('no turn sentence was recorded, so there is nothing to repeat');
+      const repeats = entriesFrom(e.log, TURN_REGION).filter(
+        (entry) => entry.at > e.turnOpenedAt && entry.at <= e.turnOpenedAt + e.dwellMs,
+      );
+      if (repeats.length > 0) {
+        return fail(
+          `the turn region was rewritten ${repeats.length} time(s) while the reader sat on their own ` +
+            `turn: ${JSON.stringify(repeats.map((entry) => entry.text.slice(0, 30)))}. This app pushes ` +
+            'whole-state frames several times a second, and a region that follows them announces the ' +
+            'same turn over and over until the reader turns live regions off',
+        );
+      }
+      // The stronger half. A region rewritten with the SAME text changes nothing here and is still
+      // a re-announcement in several readers, so the mutation count is what settles it.
+      const churn = (e.mutations ?? []).filter(
+        (entry) =>
+          TURN_REGION.test(entry.key ?? '') &&
+          entry.at > e.turnOpenedAt &&
+          entry.at <= e.turnOpenedAt + e.dwellMs,
+      );
+      if (churn.length > 0) {
+        return fail(
+          `the turn region took ${churn.length} DOM mutation(s) during ${e.dwellMs}ms on one turn. The ` +
+            'text did not change, so this is invisible on screen and is a repeat announcement to a reader',
+        );
+      }
+      return pass(`one write, no mutation for ${e.dwellMs}ms of state frames`);
+    },
+  },
+  {
+    id: 'J3.11',
+    what: 'the Coach analysis announces its arrival politely, carrying no figure',
+    decide: (e) => {
+      if (!e.reachedTurn) return fail('the hand never reached this seat, so no analysis was asked for');
+      const arrival = (e.log ?? []).find((entry) =>
+        /^The analysis of this decision is ready in the Coach panel/u.test(entry.text),
+      );
+      if (arrival === undefined) {
+        const failed = (e.log ?? []).find((entry) => /^The analysis could not be shown/u.test(entry.text));
+        return fail(
+          failed === undefined
+            ? 'the analysis arrived beside the buttons and nothing said so. On a narrow screen it is ' +
+                'not even on the same screen, so a reader is never told it is there'
+            : `the analysis was refused: "${failed.text.slice(0, 80)}"`,
+        );
+      }
+      if (arrival.live !== 'polite' || arrival.role === 'alert') {
+        return fail(`the Coach arrival is ${arrival.live}; an analysis is never urgent enough to interrupt`);
+      }
+      if (/\d/u.test(arrival.text)) {
+        return fail(
+          `the Coach arrival announcement carries a figure — "${arrival.text}". A number read out of ` +
+            'the panel has left the assumptions it rests on behind, which is the one thing this ' +
+            'product will not do with a figure',
+        );
+      }
+      return pass(`"${arrival.text.slice(0, 60)}…"`);
+    },
+  },
+  {
+    id: 'J3.17',
+    what: 'the decision echo is said once and is not stapled to the table events after it',
+    decide: (e) => {
+      if (e.folded === null) return fail('no enabled Fold control when the decision was the reader’s');
+      const narration = entriesFrom(e.log, TABLE_REGION);
+      const echoAt = narration.findIndex((entry) => FOLD_ECHO.test(entry.text));
+      if (echoAt < 0) {
+        return fail(
+          'after folding, the table’s region never said "You chose to fold." — a reader who cannot ' +
+            'see the screen was told nothing about their own decision',
+        );
+      }
+      const after = narration.slice(echoAt + 1);
+      if (after.length === 0) {
+        return fail(
+          'nothing was announced after the decision, so this run cannot tell whether the echo is ' +
+            'carried onto the events that follow it — which is the whole of this assertion',
+        );
+      }
+      const carried = after.filter((entry) => FOLD_ECHO.test(entry.text));
+      if (carried.length > 0) {
+        return fail(
+          `"You chose to fold." is still in front of ${carried.length} later announcement(s) — ` +
+            `"${carried[0].text.slice(0, 60)}". The region is atomic, so it is read whole every time ` +
+            'and the reader hears their own fold again on every event for the rest of the hand',
+        );
+      }
+      return pass(`echoed once, then ${after.length} clean event(s)`);
+    },
+  },
+  {
+    id: 'J3.18',
+    what: 'the end of the hand is announced politely, with the result sentences',
+    decide: (e) => {
+      if (!e.complete) return fail('the hand did not finish within the time this fixture allows');
+      const done = entriesFrom(e.log, TABLE_REGION).find((entry) =>
+        /^The hand is complete\./u.test(entry.text),
+      );
+      if (done === undefined) {
+        return fail('the hand finished and no region said so; the table simply stops talking');
+      }
+      if (done.live !== 'polite' || done.role === 'alert') {
+        return fail(`the end of the hand is announced ${done.live}; it interrupts nothing`);
+      }
+      const summaries = done.text.replace(/^The hand is complete\./u, '').trim();
+      if (summaries.length === 0) {
+        return fail(
+          'the hand is announced complete with no result after it, so a reader is told it ended and ' +
+            'never told how',
+        );
+      }
+      return pass(`"${done.text.slice(0, 64)}…"`);
+    },
+  },
+];
+
+/**
+ * Journey 3.20 — the table with no API behind it.
+ *
+ * The recipe is "stop the API, then reload `/play`". Stopping the API this gate started would also
+ * take out `/lab`, the hand the replay route reads back, and every other assertion in the run, so
+ * what is stopped instead is the browser's ability to reach it: `Network.setBlockedURLs` refuses
+ * every `/api/*` request and the socket upgrade with it. From the page's side that is the same
+ * fact — the fetch fails, the socket never opens — and it is the failure the screen has to survive.
+ */
+async function gatherTableOffline(page, baseUrl) {
+  const evidence = {};
+  try {
+    await page.blockUrls(['*/api/*']);
+    await page.goto(`${baseUrl}/play`);
+    await page.evaluate('window.__prlSpeechReset && window.__prlSpeechReset()');
+    evidence.opened = await pressControl(page, /^Open the table$/iu);
+    await page.settle(4000);
+    Object.assign(evidence, await speechSoFar(page));
+  } finally {
+    // Always, even when the page could not be driven: a run that left the API blocked would score
+    // every route after it as an outage and report those failures against pages that are correct.
+    await page.blockUrls([]).catch((error) => {
+      console.log(`  could not clear the URL block: ${error.message}`);
+    });
+  }
+  return evidence;
+}
+
+const TABLE_OFFLINE_CHECKS = [
+  {
+    id: 'J3.20',
+    what: 'with the API unreachable the error interrupts, and the status line does not claim the table is ready',
+    decide: (e) => {
+      if (e.opened === null) return fail('no "Open the table" control on /play; the page did not render');
+      const alerts = (e.log ?? []).filter((entry) => entry.live === 'assertive' || entry.role === 'alert');
+      const failure = alerts.find((entry) => /Error — table unavailable/u.test(entry.text));
+      if (failure === undefined) {
+        return fail(
+          'the table could not be reached and nothing interrupted. The error block replaced the ' +
+            `table on screen; the regions held ${JSON.stringify(
+              (e.log ?? []).map((entry) => entry.text.slice(0, 40)).slice(-3),
+            )}, so a reader is left waiting for a table that is never coming`,
+        );
+      }
+      const status = entriesFrom(e.log, CONNECTION_REGION);
+      if (status.length === 0) {
+        return fail('the connection panel said nothing at all, so this run proved nothing about the failure');
+      }
+      const contradicting = status.filter(
+        (entry) =>
+          entry.at >= failure.at &&
+          (LIVE_STATUS.test(entry.text) || /^Ready to connect\.$/u.test(entry.text)),
+      );
+      if (contradicting.length > 0) {
+        return fail(
+          `the polite status line says "${contradicting[0].text.slice(0, 50)}" at the same moment the ` +
+            'alert says the table is unavailable. An assertive alert and a polite status that ' +
+            'disagree is worse than either alone — the reader is told the opposite of the screen',
+        );
+      }
+      const last = status.at(-1);
+      return pass(`alert "${failure.text.slice(0, 40)}…", status "${last.text.slice(0, 40)}…"`);
+    },
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Journey 6 — the hand replay, on a hand this run actually played
+//
+// `/review/<handId>` needs a hand in a database and a session that holds a seat in it, which is why
+// all seven of these rows were `person`: `/legends/hand-review/demo` renders `PostHandComparison`,
+// a different component, with no face-down card and no timeline in it. The fixture is a hand played
+// through `/play` by the same browser — the reader's own history, read back the way the product
+// reads it.
+// ---------------------------------------------------------------------------
+
+/** Every hand this browser's session can see, newest first, asked for as the app asks. */
+const listHands = (page) =>
+  page
+    .evaluate(
+      `fetch('/api/v1/hands?limit=5', { headers: { accept: 'application/json' } })
+         .then((r) => (r.ok ? r.json() : { hands: [] }))
+         .then((body) => (body.hands ?? []).map((hand) => hand.id))
+         .catch(() => [])`,
+    )
+    .then((ids) => ids ?? []);
+
+/**
+ * A replayable hand, played if this session has none that will do.
+ *
+ * "That will do" is one property, and it is the one journey 6 turns on: at least one seat whose
+ * cards were never shown, so the replay renders a real face-down card for 6.6 to check. A hand
+ * where every seat showed proves nothing about hiding — and saying so is better than passing.
+ * Bounded at three attempts because a fixture that plays hands until it likes one is a gate that
+ * can run forever.
+ */
+async function handForReplay(page, baseUrl) {
+  const tried = [];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const hands = await listHands(page);
+    const candidate = hands[0] ?? null;
+    if (candidate !== null && !tried.includes(candidate)) {
+      tried.push(candidate);
+      await page.goto(`${baseUrl}/review/${candidate}`);
+      const shape = await page.evaluate(
+        `(() => ({
+          faceDown: document.querySelectorAll('.prl-card--face-down').length,
+          faceUp: document.querySelectorAll('.prl-card:not(.prl-card--face-down)').length,
+          markers: document.querySelectorAll('.prl-timeline__marker').length,
+        }))()`,
+      );
+      if (shape.faceDown > 0 && shape.faceUp > 0 && shape.markers > 1) return { id: candidate, shape, tried };
+    }
+    await driveLiveHand(page, baseUrl, {});
+  }
+  return { id: null, shape: null, tried };
+}
+
+async function gatherReplay(page, baseUrl) {
+  const evidence = { hand: null };
+  const found = await handForReplay(page, baseUrl);
+  evidence.hand = found.id;
+  evidence.attempts = found.tried;
+  if (found.id === null) return evidence;
+
+  await page.goto(`${baseUrl}/review/${found.id}`);
+  evidence.title = await page.evaluate('document.title');
+  evidence.h1 = (await axFor(page, 'h1'))[0]?.name ?? '';
+  evidence.instructions = await page.evaluate(
+    `(() => {
+      const timeline = document.querySelector('.prl-timeline');
+      if (timeline === null) return null;
+      const described = timeline.getAttribute('aria-describedby');
+      const note = described === null ? null : document.getElementById(described);
+      if (note === null) return { described: false, before: false, text: '', hidden: false };
+      return {
+        described: true,
+        text: (note.textContent ?? '').replace(/\\s+/gu, ' ').trim(),
+        before: (note.compareDocumentPosition(timeline) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        hidden: note.closest('[aria-hidden="true"]') !== null || getComputedStyle(note).display === 'none',
+      };
+    })()`,
+  );
+
+  evidence.faceDown = (await axFor(page, '.prl-card--face-down')).map((entry) => ({
+    name: entry.name,
+    html: entry.html,
+    rendered: !entry.ignored,
+  }));
+  evidence.faceUp = (await axFor(page, '.prl-card:not(.prl-card--face-down)'))
+    .filter((entry) => !entry.ignored)
+    .map((entry) => entry.name);
+  evidence.total = await page.evaluate(`document.querySelectorAll('.prl-timeline__marker').length`);
+
+  // The timeline is one tab stop with a roving tabindex, so the caret goes to the marker that is
+  // current and the arrow keys do the rest — the reader's own key press, dispatched for real.
+  await page.evaluate(
+    `(() => {
+      const marker = document.querySelector('.prl-timeline__marker[tabindex="0"]');
+      if (marker !== null) marker.focus();
+    })()`,
+  );
+  evidence.scrub = [];
+  for (let step = 0; step < 3; step += 1) {
+    await page.evaluate('window.__prlSpeechReset && window.__prlSpeechReset()');
+    await page.press('ArrowRight');
+    await page.settle(500);
+    const speech = await speechSoFar(page);
+    evidence.scrub.push({
+      log: speech.log,
+      focus: await focusedAx(page),
+      inTimeline: await page.evaluate(
+        `document.activeElement !== null && document.activeElement.closest('.prl-timeline') !== null`,
+      ),
+    });
+  }
+
+  await page.evaluate('window.__prlSpeechReset && window.__prlSpeechReset()');
+  await page.press('End');
+  await page.settle(500);
+  evidence.atEnd = (await speechSoFar(page)).log;
+  await page.evaluate('window.__prlSpeechReset && window.__prlSpeechReset()');
+  await page.press('Home');
+  await page.settle(500);
+  evidence.atHome = (await speechSoFar(page)).log;
+
+  // 6.5: walk the transport to the last step with Enter, which is where "Next decision" disables
+  // itself under the caret and the browser drops focus to <body> unless something rescues it.
+  const reached = await page.evaluate(
+    `(() => {
+      const next = [...document.querySelectorAll('.prl-replay__transport button')]
+        .find((b) => /Next decision/u.test(b.textContent ?? ''));
+      if (next === undefined) return false;
+      next.focus();
+      return true;
+    })()`,
+  );
+  evidence.transportFound = reached;
+  if (reached) {
+    for (let step = 0; step < (evidence.total ?? 0) + 1; step += 1) {
+      const onEnabledNext = await page.evaluate(
+        `document.activeElement !== null &&
+         document.activeElement.disabled === false &&
+         /Next decision/u.test(document.activeElement.textContent ?? '')`,
+      );
+      if (!onEnabledNext) break;
+      await page.press('Enter');
+      await page.settle(220);
+    }
+    evidence.afterTransport = {
+      focus: await focusedAx(page),
+      buttons: await page.evaluate(
+        `(() => [...document.querySelectorAll('.prl-replay__transport button')].map((b) => ({
+            text: (b.textContent ?? '').trim(),
+            disabled: b.disabled,
+          })))()`,
+      ),
+    };
+  }
+  return evidence;
+}
+
+const REPLAY_STEP = /^Step (\d+) of (\d+)\. /u;
+
+/** The step sentences one press wrote, from the replay's own polite region. */
+const stepWrites = (log) => (log ?? []).filter((entry) => REPLAY_STEP.test(entry.text));
+
+const REPLAY_CHECKS = [
+  {
+    id: 'J6.1',
+    what: 'the replay announces a title, and the arrow-key instruction is reachable before the timeline',
+    decide: (e) => {
+      if (e.hand === null) {
+        return fail(
+          `no replayable hand: this run played ${e.attempts.length} hand(s) and none produced a ` +
+            'timeline with both a face-down and a face-up card. Journey 6 cannot be reached without one',
+        );
+      }
+      if (!/ — Poker Risk Lab$/u.test(e.title ?? '')) {
+        return fail(`document.title is "${e.title}", which does not name the site the reader is on`);
+      }
+      if (isBareName(e.h1)) return fail(`the replay's level-1 heading computes as "${e.h1}"`);
+      const note = e.instructions;
+      if (note === null) return fail('there is no timeline on this replay at all');
+      if (!note.described) {
+        return fail(
+          'the timeline is described by nothing, so the sentence about the arrow keys is a paragraph ' +
+            'a reader meets only if they happen to read past it before they Tab',
+        );
+      }
+      if (!/arrow keys/iu.test(note.text)) {
+        return fail(
+          `the timeline's description does not mention the arrow keys: "${note.text.slice(0, 60)}"`,
+        );
+      }
+      if (note.hidden) return fail('the instruction sentence is hidden from the accessibility tree');
+      if (!note.before) {
+        return fail(
+          'the instruction sentence comes after the timeline in reading order, so a reader meets the ' +
+            'control before the sentence that says how to work it',
+        );
+      }
+      return pass(`"${e.title}", instructions before the timeline and wired to it`);
+    },
+  },
+  {
+    id: 'J6.2',
+    what: 'stepping right announces the new step as one polite message with its position and pot',
+    decide: (e) => {
+      if (e.hand === null) return fail('no replayable hand, so nothing was stepped through');
+      const first = e.scrub?.[0];
+      if (first === undefined) return fail('the arrow key was never pressed');
+      const writes = stepWrites(first.log);
+      if (writes.length === 0) {
+        return fail(
+          'pressing the right arrow scrubbed the replay and announced nothing, so a reader who ' +
+            'cannot see the table has no idea which decision they are now on',
+        );
+      }
+      const spoken = writes[0];
+      if (spoken.live !== 'polite' || spoken.role === 'alert') {
+        return fail(`the step is announced ${spoken.live}; scrubbing is not urgent and must not interrupt`);
+      }
+      const rest = spoken.text.replace(REPLAY_STEP, '').trim();
+      if (rest.length < 10) {
+        return fail(`the step announcement is a position and nothing else: "${spoken.text}"`);
+      }
+      if (!/Pot [\d,]+ units?/u.test(spoken.text)) {
+        return fail(
+          `the step announcement carries no pot — "${spoken.text}". The pot is the figure that ` +
+            'changes under the reader as they scrub, and it is on screen beside a sentence that omits it',
+        );
+      }
+      if (writes.length > 1) {
+        return fail(`${writes.length} regions announced the same step; it is announced from one`);
+      }
+      return pass(`"${spoken.text.slice(0, 64)}…"`);
+    },
+  },
+  {
+    id: 'J6.3',
+    what: 'each step announces once and the caret stays on the timeline the reader is working',
+    decide: (e) => {
+      if (e.hand === null) return fail('no replayable hand, so nothing was stepped through');
+      const presses = e.scrub ?? [];
+      if (presses.length < 3) return fail(`only ${presses.length} arrow press(es) were made`);
+      const positions = [];
+      for (const press of presses) {
+        const writes = stepWrites(press.log);
+        if (writes.length !== 1) {
+          return fail(
+            `one arrow press produced ${writes.length} step announcement(s) ` +
+              `(${JSON.stringify(writes.map((entry) => entry.text.slice(0, 24)))}); each step is said once`,
+          );
+        }
+        if (!press.inTimeline) {
+          return fail(
+            `after an arrow press the caret is on a ${press.focus.role} outside the timeline — ` +
+              'the reader asked to move a step, not to be moved off the control they were using',
+          );
+        }
+        positions.push(Number(REPLAY_STEP.exec(writes[0].text)[1]));
+      }
+      const advancing = positions.every(
+        (position, index) => index === 0 || position === positions[index - 1] + 1,
+      );
+      if (!advancing) {
+        return fail(`the steps announced were ${positions.join(', ')}, which is not one step at a time`);
+      }
+      return pass(`steps ${positions.join(' -> ')}, caret on the timeline throughout`);
+    },
+  },
+  {
+    id: 'J6.4',
+    what: 'End and Home announce the last and the first step',
+    decide: (e) => {
+      if (e.hand === null) return fail('no replayable hand, so End and Home were never pressed');
+      const last = stepWrites(e.atEnd)[0];
+      const first = stepWrites(e.atHome)[0];
+      if (last === undefined) return fail('End announced nothing, so a reader cannot jump to the end by ear');
+      if (first === undefined)
+        return fail('Home announced nothing, so a reader cannot get back to the start');
+      const [, lastIndex, lastTotal] = REPLAY_STEP.exec(last.text);
+      if (lastIndex !== lastTotal) {
+        return fail(`End announced step ${lastIndex} of ${lastTotal}, which is not the last one`);
+      }
+      const [, firstIndex] = REPLAY_STEP.exec(first.text);
+      if (firstIndex !== '1') return fail(`Home announced step ${firstIndex}, which is not the first`);
+      return pass(`End -> ${lastIndex} of ${lastTotal}, Home -> 1`);
+    },
+  },
+  {
+    id: 'J6.5',
+    what: 'reaching the last decision moves the caret to "Previous decision" rather than dropping it',
+    decide: (e) => {
+      if (e.hand === null) return fail('no replayable hand, so the transport was never walked');
+      if (!e.transportFound) return fail('the replay has no transport controls');
+      const after = e.afterTransport;
+      if (after === undefined) return fail('the transport was never walked to the end');
+      const next = after.buttons.find((button) => /Next decision/u.test(button.text));
+      if (next === undefined || !next.disabled) {
+        return fail('the walk did not reach the end of the hand, so the rescue was never needed or tested');
+      }
+      if (after.focus.onDocument) {
+        return fail(
+          'at the end of the hand the caret was dropped to the document. "Next decision" disabled ' +
+            'itself under the reader, the browser blurred it, and a reader who has just read a whole ' +
+            'hand is silently returned to the top of the page',
+        );
+      }
+      if (!/Previous decision/u.test(after.focus.name)) {
+        return fail(
+          `at the end of the hand the caret is on "${after.focus.name.slice(0, 40)}", not on the ` +
+            'transport control that survived',
+        );
+      }
+      return pass(`caret on "${after.focus.name}", "Next decision" disabled`);
+    },
+  },
+  {
+    id: 'J6.6',
+    what: 'cards that were shown are named in words and cards that were never shown name nothing',
+    decide: (e) => {
+      if (e.hand === null) return fail('no replayable hand, so no card was read');
+      if (e.faceDown.length === 0) {
+        return fail('no face-down card in this replay, so nothing was proved about hiding');
+      }
+      if (e.faceUp.length === 0) {
+        return fail('no face-up card in this replay, so nothing was proved about naming');
+      }
+      for (const card of e.faceDown) {
+        const leak = CARD_VALUE_WORDS.exec(card.name) ?? CARD_VALUE_WORDS.exec(card.html);
+        if (leak !== null) {
+          return fail(
+            `a card the server never disclosed announces "${leak[0]}" in the replay. The hand is over ` +
+              'and these cards are sealed for good — STOP and file this as a hidden-information leak, ' +
+              'not as an accessibility defect',
+          );
+        }
+        if (card.rendered && !/face[- ]?down|hidden|not shown/iu.test(card.name)) {
+          return fail(`a never-shown card is named "${card.name}", which does not say that it is hidden`);
+        }
+      }
+      const wrong = e.faceUp.filter((name) => !CARD_NAMED_IN_WORDS.test(name));
+      if (wrong.length > 0) {
+        return fail(
+          `${wrong.length} shown card(s) are named ${wrong.map((name) => `"${name}"`).join(', ')}; a ` +
+            'reader needs "king of hearts", not a letter and a symbol',
+        );
+      }
+      return pass(`${e.faceUp.length} named in words, ${e.faceDown.length} face-down and silent`);
+    },
+  },
+];
+
+// ---------------------------------------------------------------------------
 // Journey 4 — the Scenario Lab
 // ---------------------------------------------------------------------------
 
@@ -1353,6 +2427,39 @@ const LAB_INDEX_CHECKS = [
 async function gatherScenario(page) {
   const evidence = {};
   evidence.h1 = (await axFor(page, 'h1'))[0]?.name ?? '';
+
+  // 4.3 — read BEFORE the decision. The situation is what the reader is being asked about, and
+  // after the reveal the same screen carries the analysis too; gathering it here keeps the two
+  // assertions looking at the two different things they are each about.
+  evidence.situation = await page.evaluate(
+    `(() => {
+      const tidy = (el) => (el === null ? null : (el.textContent ?? '').replace(/\\s+/gu, ' ').trim());
+      const hidden = (el) => el === null || el.closest('[aria-hidden="true"]') !== null;
+      const table = document.querySelector('.prl-table');
+      if (table === null) return null;
+      const seats = [...table.querySelectorAll('.prl-seat')].map((seat) => {
+        const labels = [...seat.querySelectorAll('.prl-seat__stat-label')];
+        const values = [...seat.querySelectorAll('.prl-seat__stat-value')];
+        const position = seat.querySelector('.prl-seat__position');
+        return {
+          name: tidy(seat.querySelector('.prl-seat__name')),
+          position: tidy(position),
+          positionHidden: hidden(position),
+          stats: labels.map((label, index) => ({
+            label: tidy(label),
+            value: index < values.length ? tidy(values[index]) : null,
+          })),
+        };
+      });
+      const boards = [...table.querySelectorAll('.prl-card-row')].map((row) => {
+        const caption = row.querySelector('.prl-card-row__label');
+        return { caption: tidy(caption), captionHidden: hidden(caption), cards: row.querySelectorAll('.prl-card').length };
+      });
+      const meta = [...table.querySelectorAll('.prl-table__meta li')].map((item) => tidy(item));
+      return { seats, boards, meta, metrics: (${METRICS_JS})(table) };
+    })()`,
+  );
+
   const acted = await page.evaluate(
     `(() => {
       const button = [...document.querySelectorAll('button.prl-action-btn')].find((b) => !b.disabled);
@@ -1372,6 +2479,12 @@ async function gatherScenario(page) {
     evidence.revealRegions = (await liveRegions(page))
       .map((region) => region.text)
       .filter((text) => text.length > 0);
+    evidence.analysisFigures = await page.evaluate(
+      `(() => {
+        const reveal = document.querySelector('.prl-stage__reveal');
+        return reveal === null ? null : (${METRICS_JS})(reveal);
+      })()`,
+    );
   }
   evidence.assumptions = await page.evaluate(
     `(() => {
@@ -1392,6 +2505,95 @@ async function gatherScenario(page) {
 }
 
 const SCENARIO_CHECKS = [
+  {
+    id: 'J4.3',
+    what: 'the situation carries a position, a stack, the board and the price, each with a label',
+    decide: (e) => {
+      const situation = e.situation;
+      if (situation === null) return fail('the scenario rendered no table, so there is no situation to read');
+      if (situation.seats.length < 2) {
+        return fail(`${situation.seats.length} seat(s) on the scenario table; it did not render`);
+      }
+      const positionless = situation.seats.filter(
+        (seat) => (seat.position ?? '') === '' || seat.positionHidden,
+      );
+      if (positionless.length > 0) {
+        return fail(
+          `${positionless.length} seat(s) announce no position, so a reader is asked about a spot ` +
+            'without being told where anybody is sitting',
+        );
+      }
+      const stackless = situation.seats.filter(
+        (seat) => !seat.stats.some((stat) => (stat.label ?? '') !== '' && (stat.value ?? '') !== ''),
+      );
+      if (stackless.length > 0) {
+        return fail(
+          `${stackless.length} seat(s) carry a stack figure with no label, or a label with no figure`,
+        );
+      }
+      const board = situation.boards.find((row) => (row.caption ?? '') !== '');
+      if (board === undefined || board.captionHidden) {
+        return fail(
+          'the cards on this table are a row with no caption in the accessibility tree, so a reader ' +
+            'meets them one at a time with nothing saying what they are',
+        );
+      }
+      const price = (situation.meta ?? []).find((item) => /\d[\d,]*\s+units?\s+to\s+call/iu.test(item ?? ''));
+      if (price === undefined) {
+        return fail(
+          `nothing in the situation states the price of the decision. It holds ${JSON.stringify(
+            situation.meta,
+          )}, and the price is the one figure the question cannot be answered without`,
+        );
+      }
+      const pot = (situation.metrics ?? []).find((figure) => /pot/iu.test(figure.label ?? ''));
+      if (pot === undefined) return fail('the pot is not a labelled figure on this table');
+      const potDefect = figureDefect(pot);
+      if (potDefect !== null) return fail(potDefect);
+      return pass(
+        `${situation.seats.length} seats with positions and stacks, "${board.caption.slice(0, 34)}…", ` +
+          `"${price}"`,
+      );
+    },
+  },
+  {
+    id: 'J4.5',
+    what: 'every figure in the analysis announces its label and its unit, and its interval with it',
+    decide: (e) => {
+      if (!e.acted) return fail('no decision was committed, so no analysis was revealed');
+      const figures = e.analysisFigures;
+      if (figures === null) return fail('the analysis did not appear after a decision was committed');
+      if (figures.length < 2) {
+        return fail(`only ${figures.length} figure(s) in the revealed analysis; it did not render`);
+      }
+      const defects = figures.map((figure) => figureDefect(figure)).filter((defect) => defect !== null);
+      if (defects.length > 0) {
+        return fail(
+          `${defects.length} figure(s) are announced incompletely: ${defects.slice(0, 3).join('; ')}`,
+        );
+      }
+      /*
+        A bare number is the failure this row names, and "bare" is narrower than "has no unit".
+        Measured against the real analysis: "Price offered: 1.5 to 1" carries no unit and is not a
+        bare number — a ratio is stated in the form that says what it is. So a figure is bare only
+        when nothing places it AND the number is nothing but digits: no unit element, no percent, no
+        unit word, and no word in the value itself.
+      */
+      const bare = figures.filter((figure) => {
+        const spoken = `${figure.spoken ?? ''} ${figure.value ?? ''} ${figure.unit ?? ''}`;
+        if (/%|\b(units?|points?|outs?|times?|hands?|boards?|trials?|to \d)\b/iu.test(spoken)) return false;
+        return /^[\d,.\s+-]*$/u.test(figure.value ?? figure.spoken?.split(':').slice(1).join(':') ?? '');
+      });
+      if (bare.length > 0) {
+        return fail(
+          `${bare.length} figure(s) announce a number with nothing saying what it is in: ` +
+            bare.map((figure) => `"${figure.label}: ${figure.value ?? figure.spoken}"`).join(', '),
+        );
+      }
+      const intervals = figures.filter((figure) => (figure.interval ?? '') !== '');
+      return pass(`${figures.length} figures, all placed, ${intervals.length} carrying an interval`);
+    },
+  },
   {
     id: 'J4.4',
     what: 'making a decision announces the reveal politely, naming the scenario',
@@ -1873,6 +3075,35 @@ export const ASSERTION_ROUTES = [
     viewport: { width: 390, height: 844 },
     gather: gatherTableNarrow,
     checks: TABLE_NARROW_CHECKS,
+  },
+  /*
+    The live table, and it is placed before the replay deliberately.
+
+    Both routes can stand alone — the replay plays a hand of its own when the session has none — but
+    run in this order the replay reads back the hand this one just played, which is one hand rather
+    than two and about twenty seconds of gate. The order is an optimisation, not a dependency; a run
+    of `--assertions replay` alone is still a complete check of journey 6.
+  */
+  {
+    key: 'live-table',
+    title: 'J3 Table and Coach, over a live socket',
+    path: '/play',
+    gather: gatherLiveTable,
+    checks: LIVE_TABLE_CHECKS,
+  },
+  {
+    key: 'table-offline',
+    title: 'J3 Table with the API unreachable',
+    path: '/play',
+    gather: gatherTableOffline,
+    checks: TABLE_OFFLINE_CHECKS,
+  },
+  {
+    key: 'replay',
+    title: 'J6 Hand review, on a hand this run played',
+    path: '/review',
+    gather: gatherReplay,
+    checks: REPLAY_CHECKS,
   },
   { key: 'lab', title: 'J4 Scenario Lab', path: '/lab', gather: gatherLabIndex, checks: LAB_INDEX_CHECKS },
   {

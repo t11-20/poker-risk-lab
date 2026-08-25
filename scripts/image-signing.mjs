@@ -145,6 +145,43 @@ export const COSIGN_VERIFY_FLAGS = [
   '--allow-insecure-registry',
 ];
 
+/**
+ * The keyless flags, and every difference from the keyed set above is deliberate.
+ *
+ * No `--key`, because there is none: the private key exists for ten minutes inside a GitHub Actions
+ * job and is never written down. No `--use-signing-config=false`, because the Sigstore signing
+ * config is exactly what we want — it is what names Fulcio and Rekor. And, most importantly, **no
+ * `--tlog-upload=false` and no `--insecure-ignore-tlog`**: the keyed posture turns Rekor off
+ * because it signs a loopback lab artefact, and pays for that with the residual it states out loud
+ * (no third-party record, so a compromise is undetectable after the fact). Keyless signing without
+ * Rekor would keep the cost and throw away the benefit, so the transparency log is not optional
+ * here and `deploy/signing/keyless-policy.json` requires it.
+ */
+export const COSIGN_KEYLESS_SIGN_FLAGS = ['--yes'];
+
+/**
+ * `cosign verify` arguments for a keyless signature, built from the POLICY.
+ *
+ * A function rather than a constant because the identity is the argument that matters, and it must
+ * come from the committed policy on every call — never from the signature record being checked,
+ * which would let a record choose what it is compared against.
+ *
+ * cosign refuses to run a keyless verification with neither `--certificate-identity` nor
+ * `--certificate-identity-regexp` ("required for verification in keyless mode", measured), so the
+ * failure mode this guards is not a verification that asserts nothing. It is one that asserts
+ * something wider than what was reviewed.
+ */
+export function keylessVerifyFlags({ identity, issuer }) {
+  return [
+    '--certificate-identity',
+    identity,
+    '--certificate-oidc-issuer',
+    issuer,
+    '--allow-http-registry',
+    '--allow-insecure-registry',
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // cosign
 // ---------------------------------------------------------------------------
@@ -279,7 +316,14 @@ export function readJsonFile(path) {
 export function parseSignatureRecord(raw) {
   const problems = [];
   const images = [];
-  const meta = { schema: null, signedAt: null, publicKeyFingerprint: null, registry: null };
+  const meta = {
+    schema: null,
+    signedAt: null,
+    publicKeyFingerprint: null,
+    registry: null,
+    posture: null,
+    keyless: null,
+  };
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return { images, meta, problems: ['the signature record is not a JSON object'] };
   }
@@ -294,14 +338,86 @@ export function parseSignatureRecord(raw) {
   meta.schema = raw.schema;
   meta.signedAt = typeof raw.signedAt === 'string' ? raw.signedAt : null;
   meta.registry = typeof raw.registry === 'string' ? raw.registry : null;
-  const fingerprint = raw.publicKey?.fingerprint;
-  if (typeof fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(fingerprint)) {
+
+  // ## Which posture is this record in, and the answer is never "either"
+  //
+  // Two things can sign a release image here: a long-lived key on a release machine, or a GitHub
+  // Actions job holding a ten-minute Fulcio certificate. They are verified with completely
+  // different arguments — a public key against a fingerprint, or an identity and an issuer against
+  // a committed policy — so a reader that guesses wrong does not verify the wrong thing, it
+  // verifies NOTHING and says so.
+  //
+  // The failure this shape exists to prevent is subtler than a wrong guess: a record carrying
+  // NEITHER a public key nor a keyless block reads, to a lazily-written reader, as "the other
+  // posture, whichever that is" — and an unsigned release looks exactly like that. Absent is not
+  // the other posture. Both present is not a posture either: it would let a verification that
+  // failed under one be reported as a pass under the other.
+  const hasKey = raw.publicKey != null;
+  const hasKeyless = raw.keyless != null;
+  if (hasKey && hasKeyless) {
     problems.push(
-      'the signature record carries no usable publicKey.fingerprint, so the gate cannot tell ' +
-        'whether the committed key is the key these signatures were made with',
+      'the signature record claims BOTH a public key and a keyless identity. A signature is made ' +
+        'one way; a record in two postures lets a check that failed under one be reported as a ' +
+        'pass under the other.',
     );
+    return { images, meta, problems };
+  }
+  if (!hasKey && !hasKeyless) {
+    problems.push(
+      'the signature record names no signing posture at all — no publicKey, no keyless identity. ' +
+        'Nothing says what these signatures could be verified against, and "absent" must never be ' +
+        'read as "the other posture": an unsigned release looks precisely like this.',
+    );
+    return { images, meta, problems };
+  }
+  meta.posture = hasKeyless ? 'keyless' : 'key';
+  if (raw.posture !== undefined && raw.posture !== meta.posture) {
+    problems.push(
+      `the record says posture ${JSON.stringify(raw.posture)} and its contents are ${meta.posture}. ` +
+        'The label and the material disagree; the label is the part a human reads.',
+    );
+    return { images, meta, problems };
+  }
+
+  if (hasKeyless) {
+    const identity = raw.keyless?.identity;
+    const issuer = raw.keyless?.issuer;
+    if (typeof identity !== 'string' || identity === '') {
+      problems.push(
+        'the keyless signature record carries no certificate identity. A keyless signature ' +
+          "verifies against SOME Fulcio certificate, and Fulcio issues one to anybody's GitHub " +
+          'Actions job — the identity is the whole difference between "signed" and "signed by this ' +
+          'builder".',
+      );
+    }
+    if (typeof issuer !== 'string' || issuer === '') {
+      problems.push('the keyless signature record carries no OIDC issuer');
+    }
+    if (raw.transparencyLog?.used !== true) {
+      problems.push(
+        'the keyless signature record does not claim a transparency-log entry. Keyless signing ' +
+          'without Rekor keeps the cost of the keyed posture — no third-party record, so a ' +
+          'compromise is undetectable after the fact — and throws away the reason for the exercise.',
+      );
+    }
+    // Recorded, and checked against the committed policy by the gate. Never used AS the policy:
+    // a record that chose what it is compared against would assert nothing at all.
+    meta.keyless = {
+      identity: typeof identity === 'string' ? identity : null,
+      issuer: typeof issuer === 'string' ? issuer : null,
+      workflow: raw.keyless?.workflow ?? null,
+      rekor: raw.transparencyLog ?? null,
+    };
   } else {
-    meta.publicKeyFingerprint = fingerprint;
+    const fingerprint = raw.publicKey?.fingerprint;
+    if (typeof fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(fingerprint)) {
+      problems.push(
+        'the signature record carries no usable publicKey.fingerprint, so the gate cannot tell ' +
+          'whether the committed key is the key these signatures were made with',
+      );
+    } else {
+      meta.publicKeyFingerprint = fingerprint;
+    }
   }
 
   const entries = Object.entries(raw.images ?? {});

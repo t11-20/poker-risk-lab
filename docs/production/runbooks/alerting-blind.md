@@ -55,19 +55,33 @@ that it cannot deliver anything; if it is not running, Prometheus has nowhere to
 the channel carrying the report is the channel that failed.
 
 What closes it is a check that runs **outside** this deployment and complains when it stops hearing
-from it. Two forms, both external by construction:
+from it — and that is now shipped, in the half that can be:
 
-- **A dead man's switch.** A rule that fires permanently (`vector(1) > 0`), routed to a receiver
-  whose only job is to be pinged, watched by a service outside this deployment that alerts when
-  the pings stop. This repository does not ship one, because the watching half is by definition
-  not in this repository, and shipping the firing half alone would be a rule that pages nobody
-  about a service that is not being watched.
+- **A dead man's switch.** `Watchdog` (`expr: vector(1)`) fires permanently and is routed to a
+  third receiver, `heartbeat`, whose destination is `PRL_ALERT_HEARTBEAT_WEBHOOK_URL` — the ping
+  URL of a service outside this deployment that alarms when the pings stop. See
+  [`heartbeat-missing.md`](heartbeat-missing.md), the runbook opened when this alert **stops**.
+
+  *This runbook used to say the repository shipped no such rule, on the grounds that the watching
+  half is by definition not in the repository and shipping the firing half alone would be a rule
+  that pages nobody about a service nobody watches. That objection is answered rather than
+  ignored: `pnpm run alerts:preflight` **refuses to promote a release** whose heartbeat URL is
+  still a placeholder or still names the rehearsal machine, so the firing half cannot ship
+  alone. `pnpm run alerts:verify` check 7 proves everything on this side of that URL — the rule
+  fires, it routes to neither human tier, the pings keep arriving with measured gaps inside the
+  grace period, and with Alertmanager deliberately stopped the silence is detected while
+  Prometheus goes on reporting the same alerts firing to nobody.*
+
+  What remains external is the watcher itself, and irreducibly so: a watcher on this host dies
+  with the host it is watching.
 - **A scheduled human check.** Somebody runs `pnpm run alerts:preflight -- --handshake` on a
-  calendar, and sends themselves a real test page. Cheaper, less reliable, and better than nothing.
+  calendar, and `pnpm run alerts:ack` to send a real test page that a person has to acknowledge
+  with a code inside a bounded window. Cheaper than a snitch, less reliable, and it is the only
+  check here whose pass condition is a human being awake.
 
-Whichever is chosen, it belongs in the deployment's operations documentation and not here. This
-runbook's honest position is that the total case is **detected by a person or by something
-external**, and everything below is written for someone who has arrived by either route.
+This runbook's honest position is unchanged in one respect: the total case is **detected by
+something outside this deployment**, and everything below is written for someone who has arrived by
+that route.
 
 ## Immediate containment
 
@@ -192,10 +206,14 @@ Delivery is not fixed because the counter stopped rising. It is fixed when somet
 
 1. `pnpm run alerts:preflight -- --handshake` — proves the relay accepts this deployment's
    credentials right now. This is the credential half and only the credential half.
-2. **Send yourself a real test page** and confirm it arrived on the device that is supposed to
-   wake somebody. Nothing else establishes the last hop. A relay that accepts the mail and a
-   gateway that silently drops it are indistinguishable from this end, which is why this step is a
-   person with a phone and not a command.
+2. **`pnpm run alerts:ack`** — a real page through the real route tree, carrying a one-time code
+   that appears nowhere except in the delivered notification, and a bounded window in which a
+   person has to type it back. Nothing else establishes the last hop: a relay that accepts the
+   mail and a gateway that silently drops it are indistinguishable from this end. It is a command,
+   but its pass condition is still a person with a phone, and it fails loudly when nobody answers.
+3. **The heartbeat resumed at the watcher.** Two consecutive intervals with no alarm at whatever
+   `PRL_ALERT_HEARTBEAT_WEBHOOK_URL` points at. One ping is what a heartbeat that has already
+   failed looks like — see [`heartbeat-missing.md`](heartbeat-missing.md) § Verification.
 
 Then confirm the counter has stopped moving *while notifications are being attempted* — a flat
 counter with nothing to send proves nothing:
@@ -216,8 +234,9 @@ The second must be non-zero for the first to mean anything.
   Open its runbook; this one is now the second priority.
 - **This has happened before** — the fix is not in this runbook. It is a dead man's switch watched
   from outside the deployment, described in
-  [The case these rules cannot report](#the-case-these-rules-cannot-report), and it belongs on the
-  operations backlog with a name against it.
+  [The case these rules cannot report](#the-case-these-rules-cannot-report). The emitting half is
+  shipped and verified; check that `PRL_ALERT_HEARTBEAT_WEBHOOK_URL` on this deployment points at a
+  watcher that is armed, and that somebody's phone is attached to it.
 - **The blind window cannot be bounded** — if the start of the failure cannot be established,
   record that in the incident notes as an unbounded window rather than guessing. An assumed
   start time is how an unrelated incident gets closed as "nothing happened".

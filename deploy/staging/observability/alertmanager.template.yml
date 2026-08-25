@@ -51,6 +51,8 @@
 # | --- | --- | --- |
 # | `PRL_ALERT_PAGE_WEBHOOK_URL` | the local sink's `/page` | PagerDuty Events API v2, Opsgenie, or a Slack relay |
 # | `PRL_ALERT_TICKET_WEBHOOK_URL` | the local sink's `/ticket` | the ticket queue's intake webhook |
+# | `PRL_ALERT_HEARTBEAT_WEBHOOK_URL` | the local sink's `/heartbeat` | the ping URL of a dead man's switch OUTSIDE this deployment |
+# | `PRL_ALERT_HEARTBEAT_INTERVAL` | `20s` | how often the heartbeat is re-sent; must be well inside the snitch's grace period |
 # | `PRL_ALERT_PAGE_EMAIL_TO` | `oncall@…invalid` | email-to-SMS, an email-to-PagerDuty address, or a shared inbox |
 # | `PRL_ALERT_TICKET_EMAIL_TO` | `tickets@…invalid` | the ticket queue's intake address |
 # | `PRL_ALERT_SMTP_SMARTHOST` | the local SMTP sink | `host:port` of the relay that accepts the mail |
@@ -59,8 +61,15 @@
 # | `PRL_ALERT_SMTP_REQUIRE_TLS` | `false` | **must be `true` anywhere the relay is not on the same host** |
 # | `PRL_ALERT_SMTP_USERNAME` | unset | enables SMTP AUTH; the password comes from a file, never from here |
 #
-# Any of the four destination variables may be set to the empty string to drop
-# that destination, as long as each tier keeps at least one.
+# Any of the four HUMAN destination variables may be set to the empty string to
+# drop that destination, as long as each of the two human tiers keeps at least one.
+#
+# `PRL_ALERT_HEARTBEAT_WEBHOOK_URL` is the exception: it may not be empty, and
+# `destinationProblems` in `alert-delivery.mjs` refuses to render without it. The
+# reason is not symmetry, it is that an unset heartbeat is invisible in exactly the
+# way the heartbeat exists to prevent — every other destination announces its own
+# absence the first time something fires, and this one announces nothing ever, to
+# nobody, which is indistinguishable from a healthy month.
 #
 # ## The password is a file, not a value in here
 #
@@ -77,14 +86,57 @@
 # Route matching in Alertmanager is first-match-wins per branch, and a `page`
 # alert must not also raise a ticket: two notifications for one incident is how
 # a ticket queue becomes something nobody reads. The default receiver is the
-# catch-all for an alert whose severity label is neither value, which
+# catch-all for an alert whose severity label is none of the three values, which
 # `alert-delivery.mjs` treats as a configuration error rather than a routing
-# outcome — every rule in `alert-rules.yml` is checked to carry one of the two.
+# outcome — every rule in `alert-rules.yml` is checked to carry one of them.
 #
-# The route tree below is byte-for-byte what it was before the receivers became
-# configurable, and that is deliberate: it is the part that is verified in both
-# directions — a page that does not raise a ticket, and a ticket that does not
-# page — and a change to it would have to re-earn that.
+# ## The third route is not a third tier
+#
+# `severity: heartbeat` has exactly one rule behind it — `Watchdog`, which fires
+# permanently — and one route, ending at a receiver that is not a human. That is
+# the dead man's switch: the notification carries no information, and all of the
+# information is in its ABSENCE, watched by something outside this deployment.
+#
+# It is deliberately NOT the `page` receiver and not the `tickets` one. A
+# permanently firing alert on either would deliver a notification every
+# `repeat_interval` forever, and the predictable end of that is a pager nobody
+# reads — the same failure the two-tier rule at the top of
+# `docs/production/alerts.md` exists to prevent, arriving from the inside.
+# `alert-delivery.mjs` check 7 asserts that no `Watchdog` notification and no
+# `Watchdog` email ever reaches either human tier, which is `continue: false` on
+# this branch being tested rather than assumed. `alert-preflight.mjs` refuses a
+# promotion whose heartbeat URL equals either human destination.
+#
+# The `page` and `ticket` branches below are byte-for-byte what they were before
+# the receivers became configurable, and that is deliberate: they are the part
+# verified in both directions — a page that does not raise a ticket, and a ticket
+# that does not page — and a change to them would have to re-earn that.
+#
+# ## Why the heartbeat route sets its own intervals
+#
+# `repeat_interval` at the root is an hour, which is right for an incident and
+# useless for a heartbeat: a snitch cannot distinguish "healthy, next ping in 59
+# minutes" from "dead" without a grace period so long that the outage is over
+# before anybody is told. So this branch repeats on `PRL_ALERT_HEARTBEAT_INTERVAL`
+# — 20 s in the rehearsal, so that a verification run can observe several arrivals
+# and one detected silence in a couple of minutes. A deployment sets whatever its
+# snitch expects, and the rule is the same in both cases: the interval must be
+# comfortably inside the watcher's grace period, because the watcher pages on the
+# gap and a gap of one missed ping must not be enough to do it.
+#
+# `group_interval` on this branch is 5 s and is NOT the same value, which is worth
+# a sentence because the obvious spelling is wrong. A group is only re-notified
+# when it is flushed, and the dedup stage re-sends at the first flush strictly
+# LATER than one `repeat_interval` after the previous send. Setting the two equal
+# therefore loses the race by the microseconds the previous send took and skips
+# every other flush — a heartbeat at half the configured rate, which is exactly the
+# kind of quiet misconfiguration a snitch's grace period is not sized for. With a
+# small `group_interval` the ping arrives every `PRL_ALERT_HEARTBEAT_INTERVAL`
+# rounded up to the next 5 s, and `alerts:verify` reports the gaps it measured
+# rather than assuming them. Measured against the running overlay at these values:
+# three consecutive pings, gaps of 25.0 s and 25.0 s — 20 s rounded up to the next
+# 5 s flush, exactly as this paragraph predicts, and not the 40 s the equal-values
+# spelling produces.
 #
 # ## group_wait is short here and would not be in production
 #
@@ -130,6 +182,19 @@ route:
         - severity = "ticket"
       receiver: tickets
       continue: false
+# @if PRL_ALERT_HEARTBEAT_WEBHOOK_URL
+    - matchers:
+        - severity = "heartbeat"
+      receiver: heartbeat
+      continue: false
+      # No grouping wait worth the name: there is exactly one alert on this branch
+      # and it is already firing, so waiting for siblings that cannot exist only
+      # delays the first ping after a restart — which is the moment a watcher is
+      # most likely to be counting.
+      group_wait: 0s
+      group_interval: 5s
+      repeat_interval: ${PRL_ALERT_HEARTBEAT_INTERVAL}
+# @endif
 
 receivers:
   - name: paging
@@ -162,4 +227,27 @@ receivers:
     email_configs:
       - to: '${PRL_ALERT_TICKET_EMAIL_TO}'
         send_resolved: true
+# @endif
+# @if PRL_ALERT_HEARTBEAT_WEBHOOK_URL
+  - name: heartbeat
+    webhook_configs:
+      # The dead man's switch. In the rehearsal this is `/heartbeat` on the same
+      # sink `alert-delivery.mjs` runs; in a deployment it is the ping URL of a
+      # service that is NOT this deployment — Dead Man's Snitch, healthchecks.io, a
+      # PagerDuty or Grafana OnCall heartbeat integration — whose whole job is to
+      # page a human when these stop arriving.
+      #
+      # There is no `email_configs` here on purpose. Every heartbeat destination
+      # worth having is an HTTP endpoint that counts pings, and the one destination
+      # that must never be used is an inbox: a message every twenty seconds is a
+      # subscription somebody mutes, and a muted heartbeat is a dead man's switch
+      # with the pin taped down. `alert-preflight.mjs` refuses a heartbeat URL that
+      # equals either human tier's destination for the same reason.
+      - url: '${PRL_ALERT_HEARTBEAT_WEBHOOK_URL}'
+        # `false`, and this is the only receiver in the file where that is right.
+        # This alert never resolves — if it ever did, the notification would be the
+        # last thing the watcher heard and it would look like a clean shutdown
+        # rather than the failure it is. There is nothing to send on resolution and
+        # nothing that should be believed if it arrived.
+        send_resolved: false
 # @endif

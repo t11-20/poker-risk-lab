@@ -30,6 +30,7 @@ That order is the point. Containment comes before diagnosis because during an in
 | [dependency-compromise.md](dependency-compromise.md) | a malicious or compromised package |
 | [unverified-image.md](unverified-image.md) | a release image whose signature does not verify |
 | [alerting-blind.md](alerting-blind.md) | `AlertmanagerNotificationsFailing`, `AlertmanagerDown` — and any incident found by a person rather than by a page |
+| [heartbeat-missing.md](heartbeat-missing.md) | `Watchdog` — the dead man's switch. The only runbook here opened because an alert **stopped**: the heartbeat this deployment sends to an external watcher has gone quiet |
 
 ## Before you start, whatever the incident
 

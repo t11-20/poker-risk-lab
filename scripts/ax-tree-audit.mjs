@@ -49,6 +49,12 @@
  *   6. after a REAL interaction driven through Chrome's input pipeline, the announcement region's
  *      content actually changed and the focused node still has a computed accessible name.
  *
+ * The certification assertions that follow the sweep go further and sit down at a live table: see
+ * `scripts/ax-assertions.mjs`, which plays a hand over a real socket and replays it at
+ * `/review/<handId>`, recording every write into every live region with its politeness and its
+ * order. Those are the eighteen rows the certification document could not automate until it had a
+ * fixture for them.
+ *
  * ## What it does NOT prove
  *
  *   - That any screen reader announces any of it. See above; this is the whole reason the manual
@@ -78,7 +84,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { ANNOUNCER_PROBE, ASSERTION_ROUTES, CARD_VALUE_WORDS } from './ax-assertions.mjs';
+import { ANNOUNCER_PROBE, ASSERTION_ROUTES, CARD_VALUE_WORDS, SPEECH_PROBE } from './ax-assertions.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -104,9 +110,13 @@ const cyan = (s) => paint('36', s);
  *
  * The fixture states of `/play` are used rather than a live socket wherever a check does not need
  * one. That is not a shortcut: `/play?state=decision` renders the same component tree the live route
- * does, with the action controls hydrated, and it renders it without a database — so this gate fails
- * on an accessibility defect and never on Postgres being down. What a live table could additionally
- * prove is covered by `scripts/keyboard-audit.mjs`, which does sit down at one.
+ * does, with the action controls hydrated, and it renders it without a database — so this per-journey
+ * sweep fails on an accessibility defect and never on Postgres being down.
+ *
+ * What a live table proves in addition — the connection status changing, the blinds before the bots,
+ * a turn announced once, a hand that completes and can then be replayed — is asserted by the
+ * `live-table` and `replay` pages of `ASSERTION_ROUTES`, which do sit down at one. Those need the
+ * API and its database; this sweep deliberately does not.
  *
  * `cards` and `interact` are per ROUTE and not per journey, which is a correction rather than a
  * detail: they were per journey in the first version, so the hand-review journey demanded cards on
@@ -795,6 +805,34 @@ class Page {
     await this.send('Page.addScriptToEvaluateOnNewDocument', { source });
   }
 
+  /**
+   * Refuse every request whose URL matches one of `patterns`, for this page only.
+   *
+   * This is how assertion 3.20 — "stop the API, then reload /play and open the table" — is reached
+   * without stopping the API this gate started. Stopping it really would be the literal recipe and
+   * would also take out every other assertion in the run: the shared API serves `/lab` and the hand
+   * this run played. Blocked at the browser is the same fact from the page's point of view — the
+   * fetch and the socket fail — and it is the failure the page has to survive.
+   *
+   * Pass `[]` to clear. A page left with the API blocked would score every route after it as an
+   * outage, so callers clear in a `finally`.
+   */
+  async blockUrls(patterns) {
+    await this.send('Network.setBlockedURLs', { urls: patterns });
+  }
+
+  /**
+   * Forget every cookie in this profile.
+   *
+   * The live-table journey needs a reader who has never been here: Chrome keeps its profile in
+   * `/tmp/prl-ax-tree-audit-profile` across runs, so without this the second run reuses the guest
+   * session — and therefore the room — that the first run left the reader SEATED in. "Take seat 1"
+   * is then never offered and assertion 3.2 would be checking a control that is not on the page.
+   */
+  async clearCookies() {
+    await this.send('Network.clearBrowserCookies');
+  }
+
   /** Let the page finish whatever it started. Named rather than inlined so the waits are findable. */
   async settle(ms) {
     await delay(ms);
@@ -900,12 +938,19 @@ async function withChrome(headful, run) {
     await page.send('Page.enable');
     await page.send('Runtime.enable');
     await page.send('DOM.enable');
+    // Needed for `Network.setBlockedURLs` and `Network.clearBrowserCookies`, which the live-table
+    // and API-down fixtures use. Enabling it costs a stream of events nobody subscribes to.
+    await page.send('Network.enable');
     // The whole point of this script. Without it `getFullAXTree` answers with an empty tree.
     await page.send('Accessibility.enable');
     // Installed before any document loads: G9 asserts the app announces NOTHING on a full load, and
     // an observer attached after the page has settled cannot tell "never wrote" from "wrote and was
     // cleared". See `ANNOUNCER_PROBE`.
     await page.onNewDocument(ANNOUNCER_PROBE);
+    // The same argument, for every live region rather than only the route announcer: the live table
+    // says most of what it says once and replaces it a second later, so an observer that starts
+    // after the hand cannot tell what was said. See `SPEECH_PROBE`.
+    await page.onNewDocument(SPEECH_PROBE);
     try {
       await run(page);
     } finally {
@@ -1336,7 +1381,7 @@ async function auditRoute(page, journey, route, baseUrl) {
  * "the slider has no name" and does not say "3.13" leaves somebody grepping the document.
  *
  * A page whose `gather` throws fails every assertion on it rather than skipping them. The whole
- * point of the split is that these 45 rows are no longer in the human session; a page that quietly
+ * point of the split is that these 63 rows are no longer in the human session; a page that quietly
  * audited nothing would take them out of BOTH.
  */
 async function runAssertions(page, baseUrl, wanted) {
@@ -1410,7 +1455,19 @@ async function main() {
           // development secrets in `.env` and the audit would then score the
           // lab error page, which is how `--start` without an API went green
           // whenever something leftover answered on :3001.
-          { PORT: portFromOrigin(options.apiUrl), HOST: '127.0.0.1' },
+          //
+          // `PUBLIC_WEB_ORIGIN` is this audit's own origin, and it is what makes
+          // the live table reachable at all. It is one allowlist for CORS and
+          // for the WebSocket `Origin` check, and `.env` holds a developer's
+          // `http://localhost:3000` — so with it inherited, every browser-side
+          // call this gate makes from `http://127.0.0.1:3456` was answered
+          // `forbidden`. Measured: "Open the table" produced "You do not have
+          // access to that. (forbidden)" and the socket never opened.
+          {
+            PORT: portFromOrigin(options.apiUrl),
+            HOST: '127.0.0.1',
+            PUBLIC_WEB_ORIGIN: new URL(options.baseUrl).origin,
+          },
         );
         servers.push(api);
         console.log(dim('  starting the API...'));

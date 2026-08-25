@@ -451,3 +451,74 @@ groups:
             shows it firing in its own UI, which is where it will be seen. Treat a firing
             AlertmanagerDown as a report that the deployment has been unmonitored since it started.
           runbook: docs/production/runbooks/alerting-blind.md
+
+  # -------------------------------------------------------------------------
+  # The dead man's switch.
+  #
+  # Every rule above this one reports a thing that went wrong by ARRIVING. That
+  # shared assumption is also their shared blind spot, and the two rules above name
+  # it exactly: both delivery paths broken at once cannot be reported in band,
+  # because the channel carrying the report is the channel that failed. A silent
+  # Alertmanager and a quiet week look identical from every dashboard in this
+  # deployment.
+  #
+  # The rule below inverts that. It is always firing, so its notification must keep
+  # arriving, and the signal it carries is not the notification — it is the GAP.
+  # Something outside this deployment watches the arrivals and complains when they
+  # stop, which is the one report that cannot be swallowed by the thing it is about.
+  #
+  # ## Why `severity: heartbeat` and not `page` or `ticket`
+  #
+  # `docs/production/alerts.md` opens with a two-tier rule and it is still true: the
+  # difference between the two tiers is whether a human is woken up. This alert is
+  # neither, because it is never an incident. It fires on a healthy Tuesday morning
+  # and it will fire for as long as this deployment runs.
+  #
+  #   * `page` would wake somebody every repeat_interval, forever, about nothing.
+  #     That is the fastest way known to make a pager unreadable.
+  #   * `ticket` would do the same to the ticket queue, more slowly and with the same
+  #     ending — and a queue people scroll past is exactly what the rejected third
+  #     "warning" tier would have produced.
+  #
+  # So it gets a third destination, and the important word is DESTINATION rather than
+  # tier. The two tiers are about humans; this route ends at a machine whose only job
+  # is to notice that the pings stopped — a Dead Man's Snitch, a healthchecks.io
+  # check, a PagerDuty heartbeat integration, a Grafana OnCall heartbeat. It is that
+  # machine, not this one, that pages a person, and it does so on ABSENCE.
+  # `scripts/alert-preflight.mjs` refuses a promotion whose heartbeat destination is
+  # the same address as either human tier, because a snitch that is somebody's inbox
+  # is a subscription to a message every twenty seconds.
+  #
+  # ## What this file can and cannot prove about it
+  #
+  # `pnpm run alerts:verify` check 7 proves the half that lives here: the rule fires,
+  # routes to its own receiver and not to either human tier, and arrives repeatedly on
+  # a schedule — then it STOPS Alertmanager and shows the absence being detected while
+  # nothing else notices, and shows the pings resuming when it comes back. What it
+  # cannot prove is the watching half, because a watcher on this host dies with the
+  # host it is watching. That is one URL, it is set by PRL_ALERT_HEARTBEAT_WEBHOOK_URL,
+  # and the preflight will not let a release be promoted while it is a placeholder.
+  #
+  # See docs/production/runbooks/heartbeat-missing.md — which, unlike every other
+  # runbook here, is opened when this alert is NOT firing.
+  # -------------------------------------------------------------------------
+  - name: dead-mans-switch
+    rules:
+      - alert: Watchdog
+        # Always true, deliberately. `vector(1)` needs no metric, no scrape and no
+        # subsystem to be healthy — which is the point: a heartbeat conditional on
+        # anything would go quiet for reasons other than the one it is watching for,
+        # and a dead man's switch that cries wolf is turned off within the week.
+        expr: vector(1)
+        labels:
+          severity: heartbeat
+        annotations:
+          summary: The alerting pipeline is alive — this alert always fires
+          description: >-
+            This is a heartbeat, not an incident. It is always firing, and the notification it
+            produces is meant to arrive at a watcher OUTSIDE this deployment on a fixed interval.
+            Nothing is wrong when it arrives. Something is very wrong when it stops: Prometheus,
+            Alertmanager, the network between them, or the host has gone, and no other rule in this
+            file could have told you. If you are reading this because a snitch went quiet, treat
+            the deployment as unmonitored since the last ping and open the runbook.
+          runbook: docs/production/runbooks/heartbeat-missing.md

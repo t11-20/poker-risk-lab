@@ -24,7 +24,7 @@ pnpm --version             # must be 11.10.0
 cd poker-risk-lab
 
 pnpm install --frozen-lockfile     # never --no-frozen-lockfile
-pnpm run security:audit            # 12 gates; must pass before anything else
+pnpm run security:audit            # 14 gates; must pass before anything else
 
 cp .env.example .env
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
@@ -98,7 +98,8 @@ The container stack has no such split: there is exactly one published origin (§
 | `pnpm run test:a11y` | Static accessibility audit of the rendered pages. Starts web on **:3000** itself, or pass `--no-start --base-url <url>` | ~30 s |
 | `pnpm run test:keyboard` | **Real keyboard journeys in real Chrome** over the DevTools Protocol: focus order, focus visibility, keyboard traps, the modal sheet, the bet-size slider, and one hand folded from the keyboard at a live table. Needs a **running production build** on :3000 and a running API — it is not started for you, because a dev build ships overlays that do not ship | ~2 min |
 | `pnpm run test:smoke` | End-to-end smoke against a running stack; `-- --strict` fails on warnings | seconds |
-| `pnpm run alerts:verify` | Brings Prometheus and Alertmanager up beside the **running staging stack**, checks all 27 alert rules load/agree/ground/evaluate, then **stops the API** and follows `ApiDown` through to a receiver. `-- --skip-provoke` does the first four checks only and leaves the API alone | ~5 min |
+| `pnpm run alerts:verify` | Brings Prometheus and Alertmanager up beside the **running staging stack**, checks all 29 alert rules load/agree/ground/evaluate, then **stops the API** and follows `ApiDown` through to a receiver, floods the limiter to follow `RateLimitBans` to the ticket tier, and finally follows the `Watchdog` heartbeat — including **stopping Alertmanager** so the dead man's switch is observed actually firing. `-- --skip-provoke` does the first four checks only and leaves the API alone; `-- --only-heartbeat` does those plus the heartbeat, also without touching the API | ~10 min |
+| `pnpm run alerts:ack` | Sends a **real page** through this deployment's Alertmanager and refuses to exit 0 until a person types back a one-time code that appears nowhere except in the delivered notification. **Fails loudly when nobody answers** inside `--within` (default 5m). Needs an Alertmanager to post to — the staging overlay, or `--alertmanager <url>` | the window |
 | `pnpm run alerts:preflight` | Refuses a paging destination that is a placeholder, malformed, missing a credential, or routed to a receiver with nothing in it. Needs no stack and no containers. `-- --handshake` also speaks TCP/TLS/`EHLO`/`AUTH`/`QUIT` to the configured relay — never `MAIL FROM`, so it cannot send anybody a page. Run by `staging promote`, which refuses on it | seconds |
 | `pnpm run test:load` | WebSocket load harness against a local server | configurable |
 | `pnpm run test:all` | test + exhaustive + simulation + a11y + ax | ~5 min |
@@ -147,7 +148,7 @@ never receive another player's hole cards. A guardrail that skips is not a guard
 
 | Command | What it does |
 | --- | --- |
-| `pnpm run security:audit` | **All twelve supply-chain gates.** Itself one of the *fourteen* gates inside `pnpm run verify`, which is the release gate as a whole. The two numbers are unrelated: twelve gates live inside `security:audit`, and `verify` runs fourteen of which this is one. It was eleven until `image-provenance` was added |
+| `pnpm run security:audit` | **All fourteen supply-chain gates.** Itself one of the *fourteen* gates inside `pnpm run verify`, which is the release gate as a whole. The two numbers are coincidentally equal and unrelated: fourteen gates live inside `security:audit`, and `verify` runs fourteen of which this is one. It was eleven until `image-provenance`, `log-policy` and `keyless-signing-identity` were added |
 | `pnpm run security:audit -- --offline` | Skips the three network gates and **exits 2** — *not* a valid release audit |
 | `pnpm run security:policy` | Is the supply-chain policy actually in effect? |
 | `pnpm run security:hygiene` | Source encoding, NUL bytes, hidden/bidi characters |
@@ -529,6 +530,28 @@ to somebody whose enrolment has since expired or been withdrawn; bot seats are n
 Open in both postures, deliberately: `/learn`, the Scenario Lab, the glossary, the Legends pages,
 creating a table, joining one by invite code, and watching a table over a socket. That is the
 surface somebody deciding whether to enrol is browsing.
+
+**Before either step: a class list is not a list of email addresses.**
+
+An enrolment names an account — a `usr_` id, or the OIDC subject the identity provider issued.
+**Somebody who has never signed in has neither**, so they cannot be enrolled, and no amount of
+knowing their email address changes that. This is a consequence of the schema holding no email
+column at all (`db/migrations/0001_initial.sql`), which is deliberate and is not going to change.
+
+So the real day-one order for a cohort is:
+
+1. Students sign in once, through whichever door the deployment uses. Enforcement can already be
+   `enforced` while this happens — they will be turned away from a seat and can still read the
+   lessons, the Lab and the glossary, which is the correct thing for somebody who has not been
+   enrolled yet.
+2. Collect their identifiers — `pnpm run enrolments show --user <id>` confirms one, and the
+   identity provider's own console is the usual source for subjects in bulk.
+3. Then grant.
+
+`grant` **refuses the whole batch** if any identifier matches no account, writes nothing, and names
+every one that missed — so a class list with two typos in it does not silently enrol twenty-eight
+people and leave two wondering. `--skip-unknown` enrols the rest and tells you again who was left
+out. Rehearse it with `--dry-run` first; it resolves every identifier and writes nothing.
 
 **Turning it on is two steps, and the order matters.**
 
@@ -1114,16 +1137,32 @@ log driver, or a sidecar. Points that matter when you configure it:
 - [ ] `pnpm run alerts:preflight -- --handshake` run **from the deploy host**, and it reported the
       relay accepting the credentials rather than `CREDENTIALS UNPROVEN`. That is the last hop
       staging cannot rehearse, and it is now rehearsable
-- [ ] **A real test page was sent to a real person, and that person confirmed they got it on the
-      device that is meant to wake them.** No command in this repository can establish this and
-      none pretends to: a relay that accepts the mail and an email-to-SMS gateway that was
-      decommissioned last year are indistinguishable from the deployment's end. This is the
-      residual, and this checkbox is the only thing that closes it
-- [ ] The alerting system's own failure is watched from **outside** this deployment — a dead man's
-      switch, or a scheduled human check. `AlertmanagerNotificationsFailing` and
-      `AlertmanagerDown` catch the partial cases; both paths broken at once cannot be reported
-      in band, and [docs/production/runbooks/alerting-blind.md](production/runbooks/alerting-blind.md)
-      says so rather than implying otherwise
+- [ ] **`pnpm run alerts:ack` exited 0 with this environment's `PRL_ALERT_*` variables set**, and
+      the person who acknowledged it was the person actually on call — not whoever ran the
+      command. It sends a real page through the real route tree carrying a one-time code that
+      appears nowhere except in the delivered notification, and fails loudly if nobody types it
+      back inside the window. Attach the `--out` record to the release notes: it carries who
+      acknowledged, when, and how long they took.
+
+      **Read what it proves narrowly.** Somebody acknowledged one page, at a known time, within a
+      bounded window. It is *not* a promise about 3am next Tuesday, about the holiday nobody put in
+      the rota, or about the gateway that is decommissioned three months from now. Re-run it
+      whenever a paging destination changes. It replaces the old wording of this item — "no command
+      in this repository can establish this" — which was true until this command existed and is now
+      true only of the part after the acknowledgement
+- [ ] **`PRL_ALERT_HEARTBEAT_WEBHOOK_URL` points at a dead man's switch that is not this
+      deployment**, and that switch is armed and attached to somebody's phone. `Watchdog` fires
+      permanently and pings it every `PRL_ALERT_HEARTBEAT_INTERVAL`; its **silence** is the alarm,
+      and it is the only report that does not travel the channel that broke.
+      `pnpm run alerts:preflight` refuses to promote a placeholder here, and `alerts:verify`
+      check 7 proves the emitting half including a deliberately induced silence — but a watcher
+      inside this deployment would die with it, so the watching half is irreducibly external.
+      [docs/production/runbooks/heartbeat-missing.md](production/runbooks/heartbeat-missing.md) is
+      what to do when it goes quiet
+- [ ] The grace period configured **at that watcher** is at least three
+      `PRL_ALERT_HEARTBEAT_INTERVAL`s. One missed ping alarms on every deploy, and a dead man's
+      switch that has cried wolf once gets a longer grace period from the person it woke — which
+      is how it becomes decoration
 - [ ] `WebSocketConnectionsHigh` re-derived if the capacity measurement was repeated
       ([docs/production/load-test.md](production/load-test.md)); it is 70% of the measured
       saturation point and lives in two files that must agree

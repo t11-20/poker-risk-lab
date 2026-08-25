@@ -58,6 +58,13 @@
  *   * that the two tiers are not the same destination. If the pager and the ticket
  *     queue are one address, the two-tier rule at the top of `docs/production/alerts.md`
  *     is prose: every ticket wakes somebody, and people stop reading the pager.
+ *   * that the dead man's switch points somewhere that is not this deployment, and is
+ *     not one of the human tiers. This is the check with the least visible failure of
+ *     any in the file. A pager still holding a rehearsal default is discovered during
+ *     the first incident, by the person who was not woken; a HEARTBEAT still holding
+ *     one is discovered never, because the `Watchdog` rule keeps firing, Alertmanager
+ *     keeps routing it correctly, and the ping keeps arriving at a URL on somebody's
+ *     laptop. Everything looks exactly as it does when it works.
  *   * that the alert body does not cross a network in the clear. Alertmanager's
  *     default template names the instance, the job, the threshold that tripped and
  *     the runbook path — together, a description of how to attack this deployment
@@ -82,6 +89,16 @@
  * this script deliberately never sends one. The handshake stops at `AUTH`: no
  * `MAIL FROM`, no `RCPT TO`, no `DATA`, so running it a thousand times cannot put a
  * single message in anybody's inbox.
+ *
+ * `pnpm run alerts:ack` is the command that does send one, on purpose, and requires a
+ * person to type back a code that only appears in the delivered page. This file and
+ * that one divide the last hop between them: this refuses a destination a stranger
+ * would not accept, that one asks whether a person actually read what arrived there.
+ *
+ * **That the heartbeat is being watched.** Refusing a placeholder URL is the whole of
+ * what can be established here. Whether the snitch at the other end of it is armed,
+ * paid for, and pointed at somebody's phone is a fact about a service outside this
+ * deployment, and asking it would mean holding an account there.
  *
  * ## Why the skip is loud
  *
@@ -138,6 +155,18 @@ const RULES_FILE = join(OBSERVABILITY, 'alert-rules.yml');
 export const SWEPT_DESTINATIONS = [
   'PRL_ALERT_PAGE_WEBHOOK_URL',
   'PRL_ALERT_TICKET_WEBHOOK_URL',
+  /**
+   * The dead man's switch, and the destination where a placeholder is worst.
+   *
+   * A placeholder pager is found during the first incident, by the person who was not
+   * woken — badly, but it is found. A placeholder heartbeat is never found at all: the
+   * `Watchdog` rule fires forever, Alertmanager routes it correctly forever, the ping
+   * goes to a URL on the machine somebody rehearsed on, and nothing anywhere ever
+   * reports that no watcher exists. That is a dead man's switch with the pin taped
+   * down, and it is indistinguishable from a working one from every angle inside this
+   * deployment. It is refused here because here is the only place it can be.
+   */
+  'PRL_ALERT_HEARTBEAT_WEBHOOK_URL',
   'PRL_ALERT_PAGE_EMAIL_TO',
   'PRL_ALERT_TICKET_EMAIL_TO',
   'PRL_ALERT_SMTP_SMARTHOST',
@@ -505,7 +534,27 @@ export function staticChecks({ values, overridden, password, rulesText, template
       );
     }
   }
-  record('the paging tier and the ticket tier are different destinations', collisions, 'they differ');
+  /**
+   * And the heartbeat must not be either of them.
+   *
+   * The same rule with a much sharper edge. `Watchdog` fires permanently and repeats on
+   * `PRL_ALERT_HEARTBEAT_INTERVAL`, so pointing it at a human destination is not one
+   * extra notification, it is a notification every twenty seconds for as long as the
+   * deployment is healthy. The person receiving it mutes the channel within a day —
+   * and the channel they mute is the pager. A dead man's switch that destroys the
+   * paging tier is worse than no dead man's switch.
+   */
+  const heartbeat = values.PRL_ALERT_HEARTBEAT_WEBHOOK_URL;
+  for (const name of ['PRL_ALERT_PAGE_WEBHOOK_URL', 'PRL_ALERT_TICKET_WEBHOOK_URL']) {
+    if (heartbeat !== '' && heartbeat === values[name]) {
+      collisions.push(
+        `PRL_ALERT_HEARTBEAT_WEBHOOK_URL and ${name} are both ${heartbeat}. The heartbeat fires ` +
+          'forever and repeats every PRL_ALERT_HEARTBEAT_INTERVAL, so this destination would ' +
+          'receive a notification about nothing every interval until somebody muted it',
+      );
+    }
+  }
+  record('the paging, ticket and heartbeat tiers are different destinations', collisions, 'all three differ');
 
   // --- 6: nothing carrying an alert body crosses a network in the clear ----
   //
@@ -523,7 +572,11 @@ export function staticChecks({ values, overridden, password, rulesText, template
         `relay is ${values.PRL_ALERT_SMTP_SMARTHOST}, which is not on this host`,
     );
   }
-  for (const name of ['PRL_ALERT_PAGE_WEBHOOK_URL', 'PRL_ALERT_TICKET_WEBHOOK_URL']) {
+  for (const name of [
+    'PRL_ALERT_PAGE_WEBHOOK_URL',
+    'PRL_ALERT_TICKET_WEBHOOK_URL',
+    'PRL_ALERT_HEARTBEAT_WEBHOOK_URL',
+  ]) {
     const value = values[name];
     if (value === '') continue;
     let url;
@@ -533,7 +586,17 @@ export function staticChecks({ values, overridden, password, rulesText, template
       continue;
     }
     if (url.protocol === 'http:' && !LOCAL_HOST.test(url.hostname)) {
-      cleartext.push(`${name} posts an alert body over plaintext http to ${url.hostname}`);
+      // The heartbeat's body is innocuous — an alert that says everything is fine —
+      // and it is here for the other half of the reason. A snitch's ping URL IS its
+      // credential: the token is the path. Sent in the clear it can be read off the
+      // wire and replayed by anyone in the way, and a dead man's switch somebody else
+      // can keep alive is a dead man's switch with the pin taped down.
+      cleartext.push(
+        name === 'PRL_ALERT_HEARTBEAT_WEBHOOK_URL'
+          ? `${name} pings ${url.hostname} over plaintext http, and a snitch's ping URL is its ` +
+              'credential — anyone who can read it can keep the switch alive after this deployment dies'
+          : `${name} posts an alert body over plaintext http to ${url.hostname}`,
+      );
     }
   }
   record('no alert body crosses a network in the clear', cleartext, 'TLS to every off-host destination');

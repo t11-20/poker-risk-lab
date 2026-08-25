@@ -22,15 +22,17 @@
  * the assertions out of the document, refuse an incomplete result, stamp it with the commit it was
  * run against — and leaves the one part a machine cannot do, which is listening, to the person.
  *
- * ## It asks for 28 of the 73, and says so
+ * ## It asks for 10 of the 73, and says so
  *
  * A large share of those 73 were never really about speech. "The theme control announces as a radio
  * group with three options, the current one selected" is a fact about the accessibility tree, and a
- * machine reads that tree better than a person listening to it can. **45 of the 73 are now checked
+ * machine reads that tree better than a person listening to it can. **63 of the 73 are now checked
  * on every run of `pnpm run test:ax`** (`scripts/ax-assertions.mjs`, one check per assertion ID),
- * and this session presents only the **28** whose subject is the speech itself: what order an
- * utterance arrived in, whether a polite region really waited, whether a refusal interrupted,
- * whether a turn was announced once or forty times, anything needing a live socket at a real table.
+ * and this session presents only the **10** whose subject is the speech itself: whether a prompt was
+ * read twice, in what order the words arrived, where a virtual cursor goes past the end of a modal.
+ * Eighteen of those 63 were in this session until the gate grew two fixtures — a live table over a
+ * real socket, and a hand it played, replayed at `/review/<handId>` — because "needs a live table"
+ * was a statement about the gate rather than about speech.
  *
  * Which set a row is in is decided by the document's own `Checked by` column, not by anything here,
  * so re-marking a row moves it with no code change — and `screen-reader-certify.test.mjs` asserts
@@ -39,9 +41,9 @@
  * automated set AND out of this session at once, leaving it covered by nobody. That is the failure
  * the mapping test exists to prevent.
  *
- * **This does not weaken the blocker.** The 28 still need a person with headphones, and until one
- * has worked through them the certification is UNVERIFIED. What changed is that it is now a
- * half-hour rather than an afternoon, and that a regression in any of the other 45 fails
+ * **This does not weaken the blocker.** The 10 still need a person with headphones, and until one
+ * has worked through them the certification is UNVERIFIED. What changed is that it is now a quarter
+ * of an hour rather than an afternoon, and that a regression in any of the other 63 fails
  * `pnpm run verify` on the day it lands instead of waiting for a session nobody has scheduled.
  *
  * ## It reads the document; it does not restate it
@@ -68,7 +70,7 @@
  * least a deliberate one.
  *
  * Usage:
- *     pnpm run certify:screen-reader                 # start or resume a session (the 28)
+ *     pnpm run certify:screen-reader                 # start or resume a session (the 10)
  *     pnpm run certify:screen-reader -- --all        # every row, machine-covered ones included
  *     pnpm run certify:screen-reader -- --check      # is the recorded result current?
  *     pnpm run certify:screen-reader -- --preflight  # environment only, answer nothing
@@ -495,7 +497,7 @@ async function main() {
  *
  * `total` is the size of the set this session was asked, not the size of the document, and `scope`
  * plus `machineCovered` are what stop those two being confused by whoever quotes the file later. A
- * release report that read "28 of 28" with no scope would look like a certification of a 73-row
+ * release report that read "10 of 10" with no scope would look like a certification of a 73-row
  * document that had shrunk without explanation.
  */
 function writeResult(env, total, answers, identity, coverage) {

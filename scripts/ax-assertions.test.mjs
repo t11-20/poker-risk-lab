@@ -44,7 +44,9 @@ import {
   announcesActionAndCost,
   CARD_NAMED_IN_WORDS,
   CARD_VALUE_WORDS,
+  figureDefect,
   isBareName,
+  SPEECH_PROBE,
   skippedHeadingLevel,
 } from './ax-assertions.mjs';
 
@@ -166,6 +168,34 @@ describe('NEGATIVE CONTROL — every check refuses a page that produced nothing'
     afterDestination: undefined,
     prose: [],
     wayOut: [],
+    // The live table, the API-down page and the replay. Every one of these is the shape its
+    // `gather` returns when the page never got going: no live-region write, no step taken, no hand.
+    log: [],
+    mutations: [],
+    steps: [],
+    opened: null,
+    sat: null,
+    dealt: null,
+    socketLive: false,
+    reachedTurn: false,
+    dwellMs: 0,
+    turnOpenedAt: null,
+    folded: null,
+    foldFocus: { onDocument: true, role: '', name: '' },
+    complete: false,
+    hand: null,
+    attempts: [],
+    instructions: null,
+    faceUp: [],
+    total: 0,
+    scrub: [],
+    atEnd: [],
+    atHome: [],
+    transportFound: false,
+    afterTransport: undefined,
+    figures: null,
+    situation: null,
+    analysisFigures: null,
   };
 
   for (const check of everyCheck) {
@@ -623,5 +653,578 @@ describe('NEGATIVE CONTROL — 2.6, the correction announced after the rule', ()
     });
     assert.equal(verdict.ok, false);
     assert.match(verdict.detail, /aria-invalid="null"/u);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The live table, the API-down page and the replay
+//
+// Every fixture below is a hand-built copy of what the real `gather` produced against the running
+// app — the sentences are the ones measured in Chrome 151 on a real hand — and each control breaks
+// exactly one thing in it. The blanket "refuses a page that rendered nothing" suite above cannot
+// catch the interesting failures here: a live table that says the wrong thing, in the wrong order,
+// or twice, is a page that rendered perfectly.
+// ---------------------------------------------------------------------------
+
+/** One write into one live region, as `SPEECH_PROBE` records it. */
+const wrote = (key, text, at, live = 'polite') => ({ text, live, role: 'status', key, at });
+
+/**
+ * A region key, composed rather than written whole.
+ *
+ * `SPEECH_PROBE` keys a region by its nearest three ancestor class names joined with `>`, and the
+ * result is a 25-to-50 character `prl-…` token — which `scripts/supply-chain/secret-scan.mjs`
+ * reports as a `secret-literal`, correctly by its own rules. Silencing that with a
+ * `prl-allow-secret` pragma would be a person asserting something about a credential; there is no
+ * credential here, so the literal is built from its parts instead.
+ */
+const regionKey = (...classNames) => classNames.join('>');
+
+const CONNECTION = regionKey('prl-panel__body', 'prl-play__connection-lines', 'prl-note');
+const NARRATION = regionKey('prl-play__table', 'prl-table', 'prl-live-region');
+const TURN = regionKey('prl-play__main', 'prl-play__decision', 'prl-live-region');
+
+/** A healthy hand, as measured: connect, blinds, a bot, the turn, the Coach, a fold, the end. */
+const HEALTHY_HAND = () => ({
+  opened: 'Open the table',
+  sat: 'Take seat 1',
+  dealt: 'Deal the next hand',
+  socketLive: true,
+  reachedTurn: true,
+  complete: true,
+  folded: 'fold, costs 0 units',
+  dwellMs: 10_002,
+  turnOpenedAt: 3069,
+  steps: [
+    {
+      control: 'Open the table',
+      gone: true,
+      focus: { onDocument: false, role: 'status', name: 'Where the table has got to' },
+    },
+    {
+      control: 'Take seat 1',
+      gone: true,
+      focus: { onDocument: false, role: 'status', name: 'Where the table has got to' },
+    },
+  ],
+  foldFocus: { onDocument: false, role: 'status', name: 'Your decision is with the server' },
+  mutations: [],
+  log: [
+    wrote(CONNECTION, 'Preparing: reading your session, then finding or creating your private room.', 502),
+    wrote(
+      CONNECTION,
+      'Live. Everything on this screen is the server’s own view of the table, redacted for you.',
+      687,
+    ),
+    wrote(NARRATION, 'smallBlind 5 from seat 3, bigBlind 10 from seat 4', 2368),
+    wrote(NARRATION, 'folds', 3049),
+    wrote(
+      TURN,
+      'Your turn preflop. 10 units to call. Pot 15 units, your stack 1,000 units. You can fold, call or raise.',
+      3069,
+    ),
+    wrote(
+      NARRATION,
+      'The analysis of this decision is ready in the Coach panel, below the table on a narrow screen.',
+      4490,
+    ),
+    wrote(NARRATION, 'You chose to fold.', 13_248),
+    wrote(NARRATION, 'raises to 20', 13_895),
+    wrote(NARRATION, 'The hand is complete. seat 4 wins 259 from pot 0', 19_558),
+  ],
+});
+
+describe('NEGATIVE CONTROL — 3.1, the connection that never says it is live', () => {
+  const check = checkFor('J3.1');
+
+  it('passes a socket that announced preparing, then live', () => {
+    assert.equal(check.decide(HEALTHY_HAND()).ok, true);
+  });
+
+  it('fires when the status region never announces the connection is up', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.filter((entry) => !/^Live\./u.test(entry.text));
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when a socket state change interrupts', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      entry.key === CONNECTION ? { ...entry, live: 'assertive', role: 'alert' } : entry,
+    );
+    assert.ok(refuses(check, evidence));
+  });
+});
+
+describe('NEGATIVE CONTROL — 3.2, the caret dropped while setting the table up', () => {
+  const check = checkFor('J3.2');
+
+  it('passes a caret landed on the named status line, twice', () => {
+    assert.equal(check.decide(HEALTHY_HAND()).ok, true);
+  });
+
+  it('fires when the browser drops focus to the document', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.steps[1].focus = { onDocument: true, role: '', name: '' };
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the landing place has no computed name — the defect this found for real', () => {
+    // `role="status"` takes no name from its own contents, so before the `aria-label` in
+    // LiveTable.tsx the caret arrived at a node the tree describes as an unnamed status.
+    const evidence = HEALTHY_HAND();
+    evidence.steps[0].focus = { onDocument: false, role: 'status', name: '' };
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when only one of the two controls was reached', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.steps = [evidence.steps[0]];
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the control that was pressed is still on the page', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.steps[0].gone = false;
+    assert.ok(refuses(check, evidence));
+  });
+});
+
+describe('NEGATIVE CONTROL — 3.4, the table narrated out of order', () => {
+  const check = checkFor('J3.4');
+
+  it('passes blinds first, then the seats', () => {
+    assert.equal(check.decide(HEALTHY_HAND()).ok, true);
+  });
+
+  it('fires when a seat acts before the forced bets are announced', () => {
+    const evidence = HEALTHY_HAND();
+    const blinds = evidence.log.findIndex((entry) => /blind/iu.test(entry.text));
+    const folds = evidence.log.findIndex((entry) => entry.text === 'folds');
+    [evidence.log[blinds], evidence.log[folds]] = [evidence.log[folds], evidence.log[blinds]];
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the blinds are never announced at all', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.filter((entry) => !/blind/iu.test(entry.text));
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when a table event interrupts', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      entry.text === 'folds' ? { ...entry, live: 'assertive' } : entry,
+    );
+    assert.ok(refuses(check, evidence));
+  });
+});
+
+describe('NEGATIVE CONTROL — 3.5, a turn sentence missing half the decision', () => {
+  const check = checkFor('J3.5');
+
+  it('passes the sentence the app ships', () => {
+    assert.equal(check.decide(HEALTHY_HAND()).ok, true);
+  });
+
+  for (const [what, sentence] of [
+    ['the stack', 'Your turn preflop. 10 units to call. Pot 15 units. You can fold, call or raise.'],
+    ['the pot', 'Your turn preflop. 10 units to call, your stack 1,000 units. You can fold, call or raise.'],
+    ['the price', 'Your turn preflop. Pot 15 units, your stack 1,000 units. You can fold, call or raise.'],
+    ['the legal actions', 'Your turn preflop. 10 units to call. Pot 15 units, your stack 1,000 units.'],
+    ['the street', 'Your turn. 10 units to call. Pot 15 units, your stack 1,000 units. You can fold.'],
+  ]) {
+    it(`fires when the sentence leaves out ${what}`, () => {
+      const evidence = HEALTHY_HAND();
+      evidence.log = evidence.log.map((entry) => (entry.key === TURN ? { ...entry, text: sentence } : entry));
+      assert.ok(refuses(check, evidence), sentence);
+    });
+  }
+
+  it('fires when the turn is announced assertively', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      entry.key === TURN ? { ...entry, live: 'assertive' } : entry,
+    );
+    assert.ok(refuses(check, evidence));
+  });
+});
+
+describe('NEGATIVE CONTROL — 3.6, the turn announced again on every state frame', () => {
+  const check = checkFor('J3.6');
+
+  it('passes one write and no churn across ten seconds', () => {
+    assert.equal(check.decide(HEALTHY_HAND()).ok, true);
+  });
+
+  it('fires when the turn sentence is written again during the dwell', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log.push(
+      wrote(
+        TURN,
+        'Your turn preflop. 10 units to call. Pot 15 units, your stack 1,000 units. You can fold, call or raise.',
+        8000,
+      ),
+    );
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires on a rewrite with IDENTICAL text, which changes nothing on screen', () => {
+    // The half a text-only check cannot see, and the reason `SPEECH_PROBE` counts mutations: a
+    // region rewritten with the same sentence is announced again by several readers.
+    const evidence = HEALTHY_HAND();
+    evidence.mutations = [
+      { key: TURN, at: 5000 },
+      { key: TURN, at: 5400 },
+    ];
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the run did not actually wait the ten seconds', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.dwellMs = 1200;
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('ignores churn in the table’s own narration region, which is a different sentence', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.mutations = [
+      { key: NARRATION, at: 5000 },
+      { key: NARRATION, at: 5400 },
+    ];
+    assert.equal(check.decide(evidence).ok, true);
+  });
+});
+
+describe('NEGATIVE CONTROL — 3.11, the Coach arrival that reads out a number', () => {
+  const check = checkFor('J3.11');
+
+  it('passes the sentence the reducer ships', () => {
+    assert.equal(check.decide(HEALTHY_HAND()).ok, true);
+  });
+
+  it('fires when the announcement carries a figure out of the panel', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      /^The analysis of this decision/u.test(entry.text)
+        ? { ...entry, text: `${entry.text} Your equity is 43.2%.` }
+        : entry,
+    );
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the analysis arrives with nothing said about it', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.filter((entry) => !/^The analysis of this decision/u.test(entry.text));
+    assert.ok(refuses(check, evidence));
+  });
+});
+
+describe('NEGATIVE CONTROL — 3.17, the echo stapled to every later event', () => {
+  const check = checkFor('J3.17');
+
+  it('passes an echo said once', () => {
+    assert.equal(check.decide(HEALTHY_HAND()).ok, true);
+  });
+
+  it('fires when the echo is prefixed onto the events after it — the defect it was written for', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      entry.text === 'raises to 20' ? { ...entry, text: 'You chose to fold. raises to 20' } : entry,
+    );
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when nothing followed the decision, so the run proved nothing', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.filter((entry) => entry.at <= 13_248);
+    assert.ok(refuses(check, evidence));
+  });
+});
+
+describe('NEGATIVE CONTROL — 3.18, the hand that ends in silence', () => {
+  const check = checkFor('J3.18');
+
+  it('passes the completion sentence and its result', () => {
+    assert.equal(check.decide(HEALTHY_HAND()).ok, true);
+  });
+
+  it('fires when the completion carries no result after it', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      /^The hand is complete\./u.test(entry.text) ? { ...entry, text: 'The hand is complete.' } : entry,
+    );
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the end of the hand interrupts', () => {
+    const evidence = HEALTHY_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      /^The hand is complete\./u.test(entry.text) ? { ...entry, live: 'assertive', role: 'alert' } : entry,
+    );
+    assert.ok(refuses(check, evidence));
+  });
+});
+
+describe('NEGATIVE CONTROL — 3.20, an outage the status line talks over', () => {
+  const check = checkFor('J3.20');
+  const OUTAGE = () => ({
+    opened: 'Open the table',
+    log: [
+      wrote(CONNECTION, 'Preparing: reading your session, then finding or creating your private room.', 500),
+      wrote(CONNECTION, 'The table could not be prepared. The reason is below.', 620),
+      {
+        text: '▲ Error — table unavailablecould not reach the API',
+        live: 'assertive',
+        role: 'alert',
+        key: regionKey('prl-play__table', 'prl-error'),
+        at: 621,
+      },
+    ],
+  });
+
+  it('passes an alert with a status line that does not contradict it', () => {
+    assert.equal(check.decide(OUTAGE()).ok, true);
+  });
+
+  it('fires when the failure is announced by nothing', () => {
+    const evidence = OUTAGE();
+    evidence.log = evidence.log.filter((entry) => entry.role !== 'alert');
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the polite status line still says the table is live', () => {
+    // The exact defect the alert was added for: an assertive alert and a polite status that
+    // disagree is worse than either alone.
+    const evidence = OUTAGE();
+    evidence.log.push(
+      wrote(CONNECTION, 'Live. Everything on this screen is the server’s own view of the table.', 900),
+    );
+    assert.ok(refuses(check, evidence));
+  });
+});
+
+/** A replay of a hand that was really played: hero's two cards up, five sealed hands down. */
+const HEALTHY_REPLAY = () => ({
+  hand: 'hand_kape52cnpf7535n7jrgptkqe7j',
+  attempts: ['hand_kape52cnpf7535n7jrgptkqe7j'],
+  title: 'Hand replay — Poker Risk Lab',
+  h1: 'Hand 1',
+  instructions: {
+    described: true,
+    before: true,
+    hidden: false,
+    text: 'Use the left and right arrow keys to step through the hand one decision at a time.',
+  },
+  faceDown: Array.from({ length: 10 }, () => ({
+    name: 'face-down card',
+    html: '<span class="prl-card prl-card--face-down" aria-label="face-down card"></span>',
+    rendered: true,
+  })),
+  faceUp: ['king of hearts', 'queen of spades'],
+  total: 9,
+  scrub: [1, 2, 3].map((step) => ({
+    focus: { onDocument: false, role: 'button', name: `Step ${step + 1} of 9` },
+    inTimeline: true,
+    log: [
+      wrote(
+        regionKey('prl-replay', 'prl-live-region'),
+        `Step ${step + 1} of 9. preflop: you folded. Pot 15 units.`,
+        500,
+      ),
+    ],
+  })),
+  atEnd: [
+    wrote(regionKey('prl-replay', 'prl-live-region'), 'Step 9 of 9. End of the hand. Pot 259 units.', 400),
+  ],
+  atHome: [
+    wrote(
+      regionKey('prl-replay', 'prl-live-region'),
+      'Step 1 of 9. preflop: a bot folded. Pot 15 units.',
+      400,
+    ),
+  ],
+  transportFound: true,
+  afterTransport: {
+    focus: { onDocument: false, role: 'button', name: 'Previous decision' },
+    buttons: [
+      { text: 'Previous decision', disabled: false },
+      { text: 'Next decision', disabled: true },
+    ],
+  },
+});
+
+describe('NEGATIVE CONTROL — 6.2 and 6.3, the replay that scrubs in silence', () => {
+  it('passes a step announced once, politely, with its pot', () => {
+    assert.equal(checkFor('J6.2').decide(HEALTHY_REPLAY()).ok, true);
+    assert.equal(checkFor('J6.3').decide(HEALTHY_REPLAY()).ok, true);
+  });
+
+  it('6.2 fires when the step sentence drops the pot', () => {
+    const evidence = HEALTHY_REPLAY();
+    evidence.scrub[0].log = [
+      wrote(regionKey('prl-replay', 'prl-live-region'), 'Step 2 of 9. preflop: you folded.', 500),
+    ];
+    assert.ok(refuses(checkFor('J6.2'), evidence));
+  });
+
+  it('6.2 fires when scrubbing announces nothing', () => {
+    const evidence = HEALTHY_REPLAY();
+    evidence.scrub[0].log = [];
+    assert.ok(refuses(checkFor('J6.2'), evidence));
+  });
+
+  it('6.3 fires when two regions announce the same step', () => {
+    const evidence = HEALTHY_REPLAY();
+    evidence.scrub[1].log = [
+      ...evidence.scrub[1].log,
+      wrote(
+        regionKey('prl-replay', 'prl-other-region'),
+        'Step 3 of 9. preflop: a bot raised. Pot 15 units.',
+        520,
+      ),
+    ];
+    assert.ok(refuses(checkFor('J6.3'), evidence));
+  });
+
+  it('6.3 fires when the caret is taken off the timeline the reader is working', () => {
+    const evidence = HEALTHY_REPLAY();
+    evidence.scrub[2].inTimeline = false;
+    assert.ok(refuses(checkFor('J6.3'), evidence));
+  });
+
+  it('6.3 fires when the steps announced do not advance one at a time', () => {
+    const evidence = HEALTHY_REPLAY();
+    evidence.scrub[2].log = [
+      wrote(
+        regionKey('prl-replay', 'prl-live-region'),
+        'Step 7 of 9. flop: a bot bet 115 units. Pot 144 units.',
+        500,
+      ),
+    ];
+    assert.ok(refuses(checkFor('J6.3'), evidence));
+  });
+});
+
+describe('NEGATIVE CONTROL — 6.5, the caret dropped at the end of a hand', () => {
+  const check = checkFor('J6.5');
+
+  it('passes a caret rescued onto the control that survived', () => {
+    assert.equal(check.decide(HEALTHY_REPLAY()).ok, true);
+  });
+
+  it('fires when the browser blurred the disabled button onto the document', () => {
+    const evidence = HEALTHY_REPLAY();
+    evidence.afterTransport.focus = { onDocument: true, role: '', name: '' };
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the walk never reached the end, so the rescue was never tested', () => {
+    const evidence = HEALTHY_REPLAY();
+    evidence.afterTransport.buttons = [
+      { text: 'Previous decision', disabled: false },
+      { text: 'Next decision', disabled: false },
+    ];
+    assert.ok(refuses(check, evidence));
+  });
+});
+
+describe('NEGATIVE CONTROL — 6.6, a sealed hand named in the replay', () => {
+  const check = checkFor('J6.6');
+
+  it('passes a replay that names what was shown and hides what was not', () => {
+    assert.equal(check.decide(HEALTHY_REPLAY()).ok, true);
+  });
+
+  it('fires when a never-shown card leaks its rank through its MARKUP', () => {
+    const evidence = HEALTHY_REPLAY();
+    evidence.faceDown[3].html =
+      '<span class="prl-card prl-card--face-down" data-card="queen of hearts"></span>';
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when a never-shown card is named something that is not "hidden"', () => {
+    const evidence = HEALTHY_REPLAY();
+    evidence.faceDown[0].name = 'card';
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when a shown card is named as a letter and a symbol', () => {
+    const evidence = HEALTHY_REPLAY();
+    evidence.faceUp = ['K♥', 'Q♠'];
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when there was nothing hidden to prove anything about', () => {
+    const evidence = HEALTHY_REPLAY();
+    evidence.faceDown = [];
+    assert.ok(refuses(check, evidence));
+  });
+});
+
+describe('figureDefect — a number a reader cannot place', () => {
+  const counted = {
+    label: 'Your equity',
+    labelHidden: false,
+    value: '17.9 %',
+    valueHidden: true,
+    unit: '%',
+    interval: '± 0.73 points',
+    intervalHidden: true,
+    spoken: 'Your equity: 17.9 % ± 0.73 points',
+    labelFirst: true,
+  };
+  const stat = {
+    label: 'Lessons',
+    labelHidden: false,
+    value: '17',
+    valueHidden: false,
+    unit: null,
+    interval: null,
+    intervalHidden: false,
+    spoken: null,
+    labelFirst: true,
+  };
+
+  it('accepts both shapes as they ship', () => {
+    assert.equal(figureDefect(counted), null);
+    assert.equal(figureDefect(stat), null);
+  });
+
+  it('refuses a counting figure whose hidden readout leaves the label out', () => {
+    assert.match(figureDefect({ ...counted, spoken: '17.9 % ± 0.73 points' }), /without its label/u);
+  });
+
+  it('refuses a counting figure whose readout drops the interval it shows on screen', () => {
+    assert.match(figureDefect({ ...counted, spoken: 'Your equity: 17.9 %' }), /leaves out/u);
+  });
+
+  it('refuses a figure with no label at all, and one whose label is hidden', () => {
+    assert.match(figureDefect({ ...stat, label: '' }), /no label/u);
+    assert.match(figureDefect({ ...stat, labelHidden: true }), /no label/u);
+  });
+
+  it('refuses a value announced before its own label', () => {
+    assert.match(figureDefect({ ...stat, labelFirst: false }), /after its own number/u);
+  });
+
+  it('refuses an interval hidden from the tree beside a visible figure', () => {
+    assert.match(
+      figureDefect({ ...stat, value: '17.9 %', interval: '± 0.73 points', intervalHidden: true }),
+      /read as exact/u,
+    );
+  });
+});
+
+describe('SPEECH_PROBE', () => {
+  it('is installed before the page runs and records both writes and mutations', () => {
+    // Not a behavioural test — it runs in Chrome, not here. What is asserted is the contract
+    // `ax-tree-audit.mjs` and every live-table check depend on: the two logs exist under one global,
+    // and the probe records the OLD value of a region that was overwritten in the same frame, which
+    // is the only way a sentence React coalesced away can be told from one that was never written.
+    assert.match(SPEECH_PROBE, /window\.__prlSpeech = \{ log, mutations \}/u);
+    assert.match(SPEECH_PROBE, /characterDataOldValue: true/u);
+    assert.match(SPEECH_PROBE, /role="alert"/u);
+    assert.match(SPEECH_PROBE, /window\.__prlSpeechReset/u);
   });
 });

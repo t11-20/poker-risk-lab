@@ -97,8 +97,17 @@ export const IOC_PATHS = [
  * `release.yml` is the build-once / promote-the-same-digest pipeline. It is the
  * one workflow here that will ever hold a deployment credential, so its arrival
  * in this list is exactly the reviewed diff this mechanism exists to force.
+ *
+ * `release-sign.yml` is the keyless signer, and it is the single most
+ * privilege-bearing file in this list: it is the only workflow that may hold
+ * `id-token: write`, which is the permission that lets a job obtain a
+ * certificate carrying this repository's identity. Two gates hold it to that.
+ * `ci-pinning.mjs` refuses the file if it is not declared here;
+ * `keyless-provenance.mjs` refuses if the file's name, trigger or permission
+ * block stops matching `deploy/signing/keyless-policy.json`, and refuses an
+ * `id-token: write` grant found in ANY other workflow.
  */
-export const EXPECTED_WORKFLOWS = new Set(['ci.yml', 'release.yml', 'supply-chain.yml']);
+export const EXPECTED_WORKFLOWS = new Set(['ci.yml', 'release.yml', 'release-sign.yml', 'supply-chain.yml']);
 
 /** Byte-level markers. Any hit is treated as a confirmed compromise, not a warning. */
 export const IOC_STRINGS = [

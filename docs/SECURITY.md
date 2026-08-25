@@ -63,7 +63,7 @@ fetched at build time rather than pinned.
 pnpm run deps:quarantine      # resolve in a throwaway dir with a scrubbed environment
 git diff -- pnpm-lock.yaml    # review every added line
 pnpm install --frozen-lockfile
-pnpm run security:audit       # all twelve gates must pass
+pnpm run security:audit       # all fourteen gates must pass
 ```
 
 `deps:quarantine` resolves in a temporary directory with a throwaway `HOME`, no `.git`, no
@@ -79,6 +79,32 @@ The Mini Shai-Hulud campaign **forges Sigstore attestations**. The audit records
 attestation state for incident response, but no gate relies on it and a missing attestation
 is not a failure. Treating "has provenance" as "is safe" would be exactly the wrong lesson
 from this campaign.
+
+### Release images: two signing postures, and which claim each one supports
+
+A release image is signed one of two ways, and `pnpm run security:image-provenance` verifies
+whichever posture the signature record is actually in. It refuses a record in **neither** —
+that is what an unsigned release looks like, and "absent" must never be read as "the other
+posture, presumably" — and refuses a record claiming both.
+
+| Posture | Signed by | Verified against | What it establishes |
+| --- | --- | --- | --- |
+| **key** | a long-lived cosign key on the release machine | `deploy/signing/cosign.pub` | **possession of a key.** Anybody who can read the key and its passphrase can sign anything. No transparency log, so compromise is not detectable after the fact |
+| **keyless** | `.github/workflows/release-sign.yml`, via a ten-minute Fulcio certificate | the identity and issuer in `deploy/signing/keyless-policy.json`, plus Rekor | **the identity of a builder** — a named workflow file, in a named repository, on a named ref. No long-lived secret exists to steal |
+
+The thing to understand about the keyless posture before quoting it: a keyless signature
+verifies against *some* Fulcio certificate, and **Fulcio issues one to anybody's GitHub
+Actions job.** What makes it provenance is that the verifier demands a specific
+`--certificate-identity` and `--certificate-oidc-issuer`, taken from the committed policy and
+never from the record being checked. A verification that omits them accepts a signature made
+by a workflow in a repository nobody has heard of. `pnpm run security:keyless` holds the
+policy and the workflow to the same answer, so a rename, a retrigger onto another ref, or an
+`id-token: write` grant appearing in any other workflow fails a gate rather than silently
+widening what is accepted.
+
+**Status: the keyless posture is implemented and UNEXERCISED.** Every release image today is
+in the key posture. No run of the signing workflow has happened, so no Fulcio certificate and
+no Rekor entry exist for this repository. `deploy/signing/README.md` is the long form.
 
 ## 3. Secure coding rules
 
@@ -160,7 +186,7 @@ These are the rules a reviewer will actually check.
 ## 4. Running the gates
 
 ```bash
-pnpm run security:audit          # all twelve supply-chain gates
+pnpm run security:audit          # all fourteen supply-chain gates
 pnpm run security:audit -- --offline   # skip the three network gates — EXITS 2, see below
 
 pnpm run security:policy         # is the policy actually in effect?
@@ -174,7 +200,8 @@ pnpm run security:provenance     # lockfile ↔ registry integrity, release age
 pnpm run security:osv            # OSV.dev vulnerabilities
 pnpm run security:sbom           # CycloneDX 1.6 SBOM
 pnpm run security:containers     # trivy against the built release images
-pnpm run security:image-provenance  # are those images signed by the committed key?
+pnpm run security:image-provenance  # are those images signed — and by WHICH posture?
+pnpm run security:keyless        # does the keyless identity policy match the workflow?
 ```
 
 **`--offline` exits 2, deliberately.** It skips *integrity + release age*, *OSV* and
@@ -200,14 +227,23 @@ Summary
   ✓ pass     Shai-Hulud IOC sweep
   ✓ pass     committed credentials
   ✓ pass     CI + container pinning
+  ✓ pass     keyless signing identity
+  ✓ pass     log policy
   ○ skipped  integrity + release age
   ○ skipped  OSV vulnerabilities
   ✓ pass     SBOM generation
   ○ skipped  container image CVEs
+  ✓ pass     release image signatures
 
 3 network gate(s) skipped — NOT a valid release audit.
 2
 ```
+
+Re-captured again on 2026-08-25 when the keyless-identity gate was added. Note which
+gates the offline run still executes: *keyless signing identity* reads a committed policy
+and the committed workflows, and *release image signatures* verifies against a loopback
+registry and a committed trust anchor. Neither reaches the network, and both are exactly
+the checks an air-gapped deployer needs.
 
 Artifacts land in `docs/sbom/`: the SBOM, the OSV report and the provenance report. The
 SBOM is content-derived and byte-stable, so `git diff` shows dependency changes rather than
