@@ -1,6 +1,6 @@
 # Final readiness report
 
-**Candidate SHA:** `68394b3df5dc51f45fa7409a3541c224861dad49`
+**Candidate SHA:** `896c9d25acbe190df4471d73771a0ac698e8abf5`
 **Tree at freeze:** clean — the release manifest records `dirty: false`.
 **Branch:** `production-hardening-2`
 **Date:** 2026-08-25
@@ -10,6 +10,89 @@ This candidate supersedes `b292b2ac234c`. That one was frozen with two open bloc
 disagreement between two reviews; reconciling the disagreement found defects neither review had,
 and an adversarial audit of the whole repository found more. Everything below is measured against
 this SHA unless a line says otherwise.
+
+---
+
+## Verdict
+
+**PRODUCTION HARDENING COMPLETE — EXTERNAL ACCESSIBILITY CERTIFICATION REQUIRED**
+
+`pnpm run verify` exits **0**: all thirteen gates, including a supply-chain audit of eleven. The
+container scan reports **zero** findings of any severity. Staging runs the candidate digests with a
+62-check strict smoke over TLS, both alerting tiers are verified end to end, sixteen reliability
+drills pass, backup/restore including a real scratch restore passes, and a rollback to the previous
+digest pair and back was rehearsed.
+
+Screen-reader certification remains **UNVERIFIED**: `osascript` answers `-1743` on this host and no
+grant this repository can make will change that. It needs a person with VoiceOver or NVDA. That is
+the one thing standing between this and a PASS string, and it is not a code defect.
+
+---
+
+## What changed since `b292b2ac234c`
+
+The previous candidate was frozen with defects in it. This is not the same software.
+
+### Correctness — chips, hands and rooms
+
+| Defect | Consequence |
+| --- | --- |
+| Rate-limit bucket keyed on the **unverified** `prl_session` cookie | Any caller rotating an invented value was never counted. 60 requests, **zero** 429s, against a limit of 3 — including the limiter in front of `POST /math/equity` and its 500,000-sample ceiling |
+| Two concurrent room opens built two live tables | A table that answers `ack` and never emits another frame while the socket looks healthy; a learner refused by `require()` forever after joining by invite code; a `LiveTable` `closeAll()` cannot reach |
+| Settlement did not publish what it settled | A departing seat's stack never archived (chips destroyed; created in the mirror case), its durable seat never released, a hand complete-on-deal archived as completed but never started, `leaveRoom` never dropping membership |
+| `mayRaise` implemented half of TDA 43-C | Two short all-ins whose increments add to a full raise **do** reopen the action. 44 wrongly-denied raises in a 30,000-hand fuzz |
+| A rejected timeout left the table with no clock | The turn timer cleared `armed` and never re-armed |
+
+### Numbers a learner is shown
+
+- **Minimum defence frequency for a raise** was computed as if it were a bet, counting hero's own
+  call as money won: a 950-chip shove published 17.4% where the answer is 13.0%.
+- **The rule of 2-and-4's error figure** compared a 47-card stub against outs counted from 45, so
+  its published *sign* was wrong.
+- **The AI adapted to the reader at the difficulty that promises it does not**, through a second
+  path the trait gate never scaled, and said so in commentary. 209 of 1,050 paired decisions
+  differed at `educational`; now 0, while `expert` still differs.
+
+### Security, privacy and onboarding
+
+- **Federated sign-in could never have completed.** The OIDC callback schema rejected `iss`,
+  `scope`, `session_state`, `authuser`, `prompt`, `hd` and `client_info`, so Google, Auth0, Okta,
+  Entra and Keycloak all 400'd before the handler ran. `iss` is now validated against the
+  configured issuer — the RFC 9207 mix-up defence — before the single-use attempt row is consumed.
+- **`deploy/backup/backup.env` was matched by no ignore rule.** It holds the key that decrypts
+  every archive.
+- **The expiry sweeps had no caller.** Two tables only ever grew, and the retention promise on
+  `/privacy` was honest only because it said the sweep did not run. It runs now.
+- **The browser's deck-commitment proof was self-referential**, verified against the root inside
+  its own payload rather than the hand's published root.
+- **The first occurrence of a counted event was invisible to its own alert.** A counter series is
+  created by its first increment, and `increase()`/`rate()` read only samples inside their range —
+  Prometheus does not assume a series appearing mid-range began at zero. Every zero-tolerance rule
+  would have missed the first event. Found by provoking a real ban against staging: the counter
+  read 1 and the rule stayed silent. Those counters are primed at zero from boot.
+- Four request classes were refused before the limiter and never counted; a ban wrote an audit row
+  per request rather than per crossing; a transient database fault closed a socket with a code the
+  client treats as permanently fatal; the Coach limit was enforced per socket and documented per
+  session.
+- **The schema verifier was blind** to any table the connecting role lacks a grant on — including a
+  planted one holding a deck and its salts. `addMember` let five members into a two-seat room.
+- **Four release-blocking supply-chain gates could be evaded.** One quote character disabled the
+  floating-runner check; `FROM node AS node` bypassed digest pinning entirely.
+
+### The base image
+
+Debian bookworm-slim carried **60 unfixed findings — 52 HIGH, 8 CRITICAL, 14 distinct CVEs**, all
+from the base's 88 OS packages. Trixie was measured and rejected (it trades 30 unfixed for 15
+unfixed plus 36 *fixable*, i.e. 72 blocking findings under this policy); distroless was rejected on
+shell, node path and a Node version below the `engines` floor. The base is now
+`node:24.18.0-alpine3.24`, digest-pinned, 18 OS packages:
+
+| | before | after |
+| --- | ---: | ---: |
+| findings at the HIGH floor, both images | 60 | **0** |
+| of which CRITICAL | 8 | **0** |
+| api image | 83.3 MB | 61.7 MB |
+| web image | 170.6 MB | 148.2 MB |
 
 ---
 
@@ -28,7 +111,7 @@ this SHA unless a line says otherwise.
 | `security:secrets` | pass — working tree and all history blobs | — |
 | `release:artifacts` | `ARTIFACTS_EXIT=0`, manifest `dirty: false` | `artifacts.log` |
 | `staging up` | `STAGING_EXIT=0`, **62-check strict smoke**, digests matched, XFF overwritten 24/24, HSTS single-sourced | `staging.log` |
-| `alerts:verify` | **17 of 17, exit 0** — `ApiDown` fired at 246 s, delivered on `/page`, not `/ticket`, resolved after recovery | `alerts-final.log` / `.json` |
+| `alerts:verify` | **21 of 21, exit 0** — BOTH tiers provoked end to end: `ApiDown` (page) fired, was delivered on `/page`, resolved after recovery and did **not** raise a ticket; `RateLimitBans` (ticket) was provoked by driving the limiter past its ban threshold, was delivered on `/ticket` and did **not** page | `alerts-twotier2.log` / `.json` |
 | `test:drills` | **16 of 16**, `DRILLS_EXIT=0`, wall 142.6 s | `drills-final.log` |
 | `backup create` + `verify --deep` | PASS — real scratch restore in 45.9 s, dropped; census 13 tables / 899,530 rows | `backup-final.log` |
 | Rollback rehearsal | candidate 200 → api stopped → **504** → previous digests 200 → candidate restored 200 with workers | `rollback-final.log` |
@@ -39,8 +122,8 @@ this SHA unless a line says otherwise.
 
 | Service | Digest |
 | --- | --- |
-| api | `sha256:bbfd0269b8798bb963def8c5b775c9b88ab5c89a72b862d6fe2332417278cd78` |
-| web | `sha256:7c2c1ce9ff1c28fe4eb00922e8f3cd33ed7664caf8596fade7113cd75c0bbdf1` |
+| api | `sha256:7d3f6c23454db65db856376e838d1c3a6917a207226877d1759f7a7a142cac17` |
+| web | `sha256:aa894fcfab4157a8ce5bd864cf9d6aaafa447f4ed70c114cc6cc2ba23bd320a3` |
 
 Local BuildKit store. **Not registry-attested** — nothing is pushed, so no registry vouches for
 them. That is unchanged and remains a residual.
@@ -67,8 +150,10 @@ under a real network partition.
    enforced by configuration; the last hop — a real paging provider and a real ticket queue — is two
    URLs in `alertmanager.yml` and is not deployed.
 3. **Digests are local, not registry-attested.**
-4. **Twenty-one of the twenty-two alert rules are loaded, agreed, grounded and evaluable, but have
-   not been provoked.** Only `ApiDown` is driven end to end.
+4. **Twenty of the twenty-two alert rules are loaded, agreed, grounded and evaluable, but have not
+   been provoked.** Two are driven end to end — `ApiDown` for the paging tier and `RateLimitBans`
+   for the ticket tier — which is what makes the two-tier rule a tested property rather than a
+   configuration file.
 5. **The legal register is not closed.** `legal-review-requirements.md` is a launch blocker in its
    own right and needs counsel, not engineering: operator identity, governing law, the age
    threshold, retention *periods*, and whether erasure must delete hand history rather than detach
