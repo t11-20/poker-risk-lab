@@ -84,13 +84,26 @@
 # limiter between phases here and waits out the window instead; that is slower and
 # it is honest.
 #
-# ## The one thing staging cannot rehearse
+# ## `deploy.replicas: 1` is a correctness constraint, and it is now ENFORCED
 #
 # `apps/api/src/rooms/registry.ts` keeps authoritative hand state in process
 # memory, so `deploy.replicas: 1` below is a correctness constraint, not a sizing
 # choice (ADR 0001, RUNBOOK §11.1). Two API processes serving one room deal two
-# different hands. Staging runs one replica because production must; nothing here
-# tests a second one, because there must not be a second one.
+# different hands: two decks, two pots, and whichever settlement lands second
+# destroys the chips the other paid out.
+#
+# That used to be the whole of it — a comment here, a comment there, and nothing
+# in the code that refused a second process. It is no longer. Each API process
+# takes a lease on every room it opens (`prl.room_ownership`, migration 0005,
+# `apps/api/src/rooms/ownership.ts`), a second process is refused with a typed
+# `room_owned_elsewhere` and a counter, and a process that LOSES a lease it held
+# stops serving that room immediately. So raising the number below no longer
+# corrupts play — it produces a second process that can serve almost nothing,
+# refuses every learner routed to it, and pages `RoomOwnershipRefused`.
+#
+# It is still 1, and must be: the lease makes a second replica safe, not useful.
+# What staging still cannot rehearse is a SECOND replica serving anything, because
+# there is nothing for it to serve.
 # ---------------------------------------------------------------------------
 
 name: poker-risk-lab-staging
@@ -142,6 +155,22 @@ services:
     tmpfs:
       - /var/run/postgresql:mode=1777
       - /tmp:mode=1777
+    # 10 MiB × 3 = 30 MiB, the same numbers as the postgres service in
+    # docker-compose.yml, which is where the reasoning for every cap in this file
+    # is written out ("Why every service has a `logging:` block"). The short
+    # version: quietest service in the stack today, two orders of magnitude louder
+    # the moment somebody adds `log_min_duration_statement=0` to chase a slow
+    # query — and the disk it would fill is the one holding this database.
+    #
+    # Identical to the dev stack ON PURPOSE. The whole lesson of D2 is that these
+    # two files drift and a fix in one is not a fix, so
+    # `scripts/supply-chain/log-policy.mjs` fails if a service present in both
+    # files carries different caps in each.
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     healthcheck:
       test:
         ['CMD-SHELL', 'pg_isready --quiet --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB"']
@@ -265,6 +294,19 @@ services:
     read_only: true
     tmpfs:
       - /tmp:mode=1777,noexec,nosuid,size=64m
+    # 20 MiB × 5 = 100 MiB, the largest allowance in the stack and the same numbers
+    # as the api service in docker-compose.yml — see that file's header for the
+    # full argument. Largest because it is the highest-volume writer (a JSON line
+    # per HTTP request and per WebSocket lifecycle event) AND because it is the log
+    # an incident is reconstructed from; a cap that holds only the last few minutes
+    # deletes the evidence exactly when somebody goes looking for it. Staging is
+    # the stack that gets left running for days, so this is the one that would have
+    # got there first.
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '5'
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -344,6 +386,16 @@ services:
       # build state), so it comes back as a tmpfs: it is cache, so losing it on
       # restart is correct rather than merely tolerable. uid/gid 1000 is `node`.
       - /app/apps/web/.next/cache:mode=0700,uid=1000,gid=1000,size=256m
+    # 10 MiB × 3 = 30 MiB, the same as the web service in docker-compose.yml.
+    # `next start` logs startup and errors rather than a line per request, so this
+    # is close to silent in steady state — but quiet and bounded are different
+    # properties, and one broken render in a hot route is a stack trace per
+    # request. See docker-compose.yml's header for the full argument.
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -392,6 +444,15 @@ services:
     read_only: true
     tmpfs:
       - /tmp:mode=1777,noexec,nosuid,size=16m
+    # 10 MiB × 5 = 50 MiB, the same as the proxy service in docker-compose.yml. A
+    # line per request, but a narrow one; five files rather than three for the same
+    # reason the api gets five — it is a per-request record and an incident is
+    # reconstructed from it. See docker-compose.yml's header for the full argument.
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
     security_opt:
       - no-new-privileges:true
     cap_drop:

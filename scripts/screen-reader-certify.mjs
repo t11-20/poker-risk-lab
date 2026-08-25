@@ -22,6 +22,28 @@
  * the assertions out of the document, refuse an incomplete result, stamp it with the commit it was
  * run against — and leaves the one part a machine cannot do, which is listening, to the person.
  *
+ * ## It asks for 28 of the 73, and says so
+ *
+ * A large share of those 73 were never really about speech. "The theme control announces as a radio
+ * group with three options, the current one selected" is a fact about the accessibility tree, and a
+ * machine reads that tree better than a person listening to it can. **45 of the 73 are now checked
+ * on every run of `pnpm run test:ax`** (`scripts/ax-assertions.mjs`, one check per assertion ID),
+ * and this session presents only the **28** whose subject is the speech itself: what order an
+ * utterance arrived in, whether a polite region really waited, whether a refusal interrupted,
+ * whether a turn was announced once or forty times, anything needing a live socket at a real table.
+ *
+ * Which set a row is in is decided by the document's own `Checked by` column, not by anything here,
+ * so re-marking a row moves it with no code change — and `screen-reader-certify.test.mjs` asserts
+ * that the `auto` rows are exactly the rows `ax-assertions.mjs` has a check for, in both
+ * directions. A check deleted while the document still says `auto` would take that row out of the
+ * automated set AND out of this session at once, leaving it covered by nobody. That is the failure
+ * the mapping test exists to prevent.
+ *
+ * **This does not weaken the blocker.** The 28 still need a person with headphones, and until one
+ * has worked through them the certification is UNVERIFIED. What changed is that it is now a
+ * half-hour rather than an afternoon, and that a regression in any of the other 45 fails
+ * `pnpm run verify` on the day it lands instead of waiting for a session nobody has scheduled.
+ *
  * ## It reads the document; it does not restate it
  *
  * Every assertion presented here is parsed out of the certification document at run time. That is
@@ -46,10 +68,11 @@
  * least a deliberate one.
  *
  * Usage:
- *     pnpm run certify:screen-reader                 # start or resume a session
+ *     pnpm run certify:screen-reader                 # start or resume a session (the 28)
+ *     pnpm run certify:screen-reader -- --all        # every row, machine-covered ones included
  *     pnpm run certify:screen-reader -- --check      # is the recorded result current?
  *     pnpm run certify:screen-reader -- --preflight  # environment only, answer nothing
- *     pnpm run certify:screen-reader -- --section G  # one section
+ *     pnpm run certify:screen-reader -- --section J3 # one journey
  *
  * Exit codes:
  *     0  a complete session with no FAIL and no SILENT, or a `--check` that is current
@@ -74,10 +97,14 @@ const dim = (s) => paint('2', s);
 const red = (s) => paint('31', s);
 const green = (s) => paint('32', s);
 const yellow = (s) => paint('33', s);
+const cyan = (s) => paint('36', s);
 
 // ---------------------------------------------------------------------------
 // Reading the document
 // ---------------------------------------------------------------------------
+
+/** The two values the document's `Checked by` column may hold. Anything else is a parse failure. */
+export const COVERAGE_MARKERS = new Set(['auto', 'person']);
 
 /**
  * Every assertion in the certification document, in order.
@@ -85,12 +112,18 @@ const yellow = (s) => paint('33', s);
  * The document uses two table shapes and this reads both, because reading only one is how a
  * harness silently certifies a tenth of the document:
  *
- *   * the global table — `| G1 | <assertion> | <result> |`
- *   * the journey tables — `| 1.4 | <step, with keys> | <assertion> | <result> |`
+ *   * the global table — `| G1 | <auto|person> | <assertion> | <result> |`
+ *   * the journey tables — `| 1.4 | <auto|person> | <step, with keys> | <assertion> | <result> |`
  *
  * The journey shape carries the STEP as well as the assertion, and the step is the half that tells
  * a reviewer which keys to press. Dropping it would leave them holding an assertion about
  * something they were never told to do.
+ *
+ * The second cell is the `Checked by` marker, and it is REQUIRED rather than optional. A row
+ * without one is thrown, not defaulted, because both defaults are wrong: defaulting to `person`
+ * hides a check that was supposed to exist, and defaulting to `auto` drops a row out of the human
+ * session on the strength of a typo. The only safe answer to "somebody added a row and did not
+ * classify it" is to stop.
  *
  * The trailing result column is the blank a reviewer used to fill in by hand and is ignored: it is
  * what this harness replaces.
@@ -98,7 +131,7 @@ const yellow = (s) => paint('33', s);
  * A section is the `##`/`###` heading the row sits under, taken from the document rather than
  * hard-coded, so adding Journey 9 needs no edit here.
  *
- * @returns {Array<{id: string, section: string, step: string|null, text: string}>}
+ * @returns {Array<{id: string, section: string, coverage: string, step: string|null, text: string}>}
  */
 export function assertionsIn(markdown) {
   const found = [];
@@ -114,23 +147,35 @@ export function assertionsIn(markdown) {
       .split('|')
       .slice(1, -1)
       .map((cell) => cell.trim());
-    if (cells.length < 2) continue;
+    if (cells.length < 3) continue;
     // A separator row, and the header row whose first cell is `#` or `ID`.
     if (/^:?-+:?$/.test(cells[0])) continue;
 
     const globalId = /^([A-Z]+\d+)$/.exec(cells[0]);
-    if (globalId !== null && cells[1] !== '') {
-      found.push({ id: globalId[1], section, step: null, text: cells[1] });
+    const stepId = /^(\d+\.\d+)$/.exec(cells[0]);
+    if (globalId === null && stepId === null) continue;
+
+    const coverage = cells[1];
+    if (!COVERAGE_MARKERS.has(coverage)) {
+      throw new Error(
+        `assertion ${cells[0]} has "Checked by" = "${coverage}", which is neither "auto" nor ` +
+          '"person". Every row must say which set it is in; see §5 and §11 of the document.',
+      );
+    }
+    if (globalId !== null && cells[2] !== '') {
+      found.push({ id: globalId[1], section, coverage, step: null, text: cells[2] });
       continue;
     }
-    // `1.4`, `3.11` — a journey step. Three cells at minimum: id, step, assertion.
-    const stepId = /^(\d+\.\d+)$/.exec(cells[0]);
-    if (stepId !== null && cells.length >= 3 && cells[2] !== '') {
-      found.push({ id: `J${stepId[1]}`, section, step: cells[1], text: cells[2] });
+    // `1.4`, `3.11` — a journey step. Four cells at minimum: id, marker, step, assertion.
+    if (stepId !== null && cells.length >= 4 && cells[3] !== '') {
+      found.push({ id: `J${stepId[1]}`, section, coverage, step: cells[2], text: cells[3] });
     }
   }
   return found;
 }
+
+/** The rows a person still has to listen to. The rest are asserted by `pnpm run test:ax`. */
+export const needsAPerson = (assertions) => assertions.filter((entry) => entry.coverage === 'person');
 
 /** Markdown emphasis and links, flattened for a terminal. */
 export function plainText(markdown) {
@@ -195,6 +240,10 @@ const VERDICTS = new Map([
 const options = {
   check: process.argv.includes('--check'),
   preflight: process.argv.includes('--preflight'),
+  // `--all` puts the machine-covered rows back in front of the reviewer. It exists for somebody who
+  // does not take the automated half on trust and wants to hear it, and it is not the normal
+  // session — the artefact records which of the two was run so the two are never confused.
+  all: process.argv.includes('--all'),
   section: (() => {
     const at = process.argv.indexOf('--section');
     return at === -1 ? null : (process.argv[at + 1] ?? null);
@@ -276,7 +325,17 @@ async function main() {
   if (options.check) return reportCheck();
 
   const env = environment();
-  const all = assertionsIn(readFileSync(DOC, 'utf8'));
+  const everyRow = assertionsIn(readFileSync(DOC, 'utf8'));
+  // The session is the `person` rows. The rest are asserted on every run of `pnpm run test:ax` and
+  // a reviewer's half-hour is the scarcest thing here — spending it re-deciding what a gate already
+  // decides is how the whole procedure stays unexecuted.
+  const all = options.all ? everyRow : needsAPerson(everyRow);
+  const machineCovered = everyRow.length - needsAPerson(everyRow).length;
+  const coverage = {
+    scope: options.all ? 'every-row' : 'person',
+    documentAssertions: everyRow.length,
+    machineCovered,
+  };
   const assertions = options.section === null ? all : all.filter((a) => a.id.startsWith(options.section));
 
   console.log(bold('\nScreen-reader certification\n'));
@@ -284,7 +343,27 @@ async function main() {
   console.log(`  platform     ${env.platform}`);
   console.log(`  Apple events ${env.appleEvents}`);
   console.log(
-    `  assertions   ${assertions.length}${options.section === null ? '' : ` in ${options.section}`}`,
+    `  assertions   ${assertions.length}${options.section === null ? '' : ` in ${options.section}`}` +
+      `${options.all ? ' (--all: the machine-covered rows are included)' : ''}`,
+  );
+  console.log(
+    `  of ${everyRow.length} in the document, ${green(String(machineCovered))} are marked ` +
+      `${bold('auto')} and are asserted on every run of ${cyan('pnpm run test:ax')}`,
+  );
+  console.log(
+    dim(
+      '  Those checks are scripts/ax-assertions.mjs, one per assertion ID, against the rendered\n' +
+        '  accessibility tree in real Chrome. They certify NOTHING — they establish that the facts\n' +
+        `  those rows rest on are still true. The ${needsAPerson(everyRow).length} rows below are the ` +
+        'ones whose subject is\n  the speech itself, and no gate in this repository can decide one of them.',
+    ),
+  );
+  if (!options.all) {
+    console.log(dim('  Run with --all to be asked the machine-covered rows as well.'));
+  }
+  console.log(
+    yellow('\n  Before you start: confirm `pnpm run test:ax` is green on this build.') +
+      dim('\n  A manual pass over a build whose machine-checkable facts are broken certifies nothing.'),
   );
   if (env.appleEvents === 'refused (-1743)') {
     console.log(
@@ -312,6 +391,22 @@ async function main() {
     return 0;
   }
   if (assertions.length === 0) {
+    // "No assertions matched" is the wrong report for a section every row of which is machine
+    // covered — a reviewer who ran `--section G` and read that would reasonably conclude the
+    // harness had lost the global assertions, when what happened is that all ten of them are now
+    // checked by a gate. Say which of the two it is.
+    const inSection =
+      options.section === null ? everyRow : everyRow.filter((a) => a.id.startsWith(options.section));
+    if (!options.all && inSection.length > 0) {
+      console.log(
+        green(
+          `\n  Every one of the ${inSection.length} assertion(s) in ${options.section} is marked ` +
+            '`auto` and is checked by `pnpm run test:ax`.',
+        ),
+      );
+      console.log(dim('  Nothing here needs a person. Use --all to be asked them anyway.\n'));
+      return 0;
+    }
     console.error(
       red(`\n  No assertions matched${options.section === null ? '' : ` --section ${options.section}`}.\n`),
     );
@@ -344,7 +439,7 @@ async function main() {
           .toLowerCase();
         if (key === 'q') {
           console.log(dim('\n  Stopping. Answers so far are saved; re-run to resume.\n'));
-          writeResult(env, all.length, answers, stored);
+          writeResult(env, all.length, answers, stored, coverage);
           return 1;
         }
         verdict = VERDICTS.get(key) ?? null;
@@ -362,13 +457,13 @@ async function main() {
         ...(heard === '' ? {} : { heard }),
         ...(note === '' ? {} : { note }),
       };
-      writeResult(env, all.length, answers, stored);
+      writeResult(env, all.length, answers, stored, coverage);
     }
 
     const reviewer = stored?.reviewer ?? (await rl.question(dim('\n  reviewer name > '))).trim();
     const reader = stored?.reader ?? (await rl.question(dim('  screen reader and version > '))).trim();
     const browser = stored?.browser ?? (await rl.question(dim('  browser and version > '))).trim();
-    writeResult(env, all.length, answers, { reviewer, reader, browser });
+    writeResult(env, all.length, answers, { reviewer, reader, browser }, coverage);
 
     const counts = summarise(answers);
     const verdict = verdictOf(all.length, counts, Object.keys(answers).length);
@@ -395,9 +490,17 @@ async function main() {
   }
 }
 
-function writeResult(env, total, answers, identity) {
+/**
+ * The artefact.
+ *
+ * `total` is the size of the set this session was asked, not the size of the document, and `scope`
+ * plus `machineCovered` are what stop those two being confused by whoever quotes the file later. A
+ * release report that read "28 of 28" with no scope would look like a certification of a 73-row
+ * document that had shrunk without explanation.
+ */
+function writeResult(env, total, answers, identity, coverage) {
   const payload = {
-    schema: 'prl.screen-reader-certification.v1',
+    schema: 'prl.screen-reader-certification.v2',
     recordedAt: new Date().toISOString(),
     sha: env.sha,
     dirty: env.dirty,
@@ -405,6 +508,10 @@ function writeResult(env, total, answers, identity) {
     reviewer: identity?.reviewer ?? null,
     reader: identity?.reader ?? null,
     browser: identity?.browser ?? null,
+    scope: coverage?.scope ?? 'person',
+    documentAssertions: coverage?.documentAssertions ?? null,
+    machineCovered: coverage?.machineCovered ?? null,
+    machineCheckedBy: 'pnpm run test:ax — scripts/ax-assertions.mjs',
     total,
     answers,
   };

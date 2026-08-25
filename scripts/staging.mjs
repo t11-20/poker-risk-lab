@@ -39,6 +39,18 @@
  * step goes AFTER this check and consumes its output; the check itself does not
  * change.
  *
+ * ## And a second question, which is not about the bytes at all
+ *
+ * `promote` also runs `scripts/alert-preflight.mjs`. Everything else here asks "are
+ * these the bytes staging tested"; that one asks "if these bytes misbehave, does
+ * anybody find out". They are separate questions and only the second one can be
+ * answered wrongly in a way that looks completely healthy: a deployment whose
+ * `PRL_ALERT_*` variables still hold the rehearsal defaults passes `alerts:verify`
+ * (which renders and asserts against those same defaults), starts an Alertmanager
+ * that routes by severity exactly as designed, and posts every page to a sink that
+ * ceased to exist when the verification run ended. Nothing in band can report that,
+ * because the channel that would carry the report is the channel that is broken.
+ *
  * ## The registry, and being precise about what it bought
  *
  * `pnpm run release:artifacts --push` publishes both artefacts to a registry
@@ -51,11 +63,18 @@
  *
  * That closes "cannot be promoted across machines": the artefact now has a
  * reference another machine can resolve, and resolving it can only produce these
- * bytes or an error. It does NOT make the artefact attested. A local registry is
- * content-addressed storage, not a notary: nothing signed the image, nothing
- * records who built it or from what, and this repository has no cosign to do it
- * with. `promote` prints that split rather than letting a green tick imply the
- * larger claim.
+ * bytes or an error. It does NOT by itself make the artefact attested. A local
+ * registry is content-addressed storage, not a notary: it can prove two parties
+ * hold the same bytes and it cannot say where they came from.
+ *
+ * Since 2026-08-25 the digests ARE signed — `pnpm run release:sign` signs each one
+ * with cosign and attests a CycloneDX SBOM to it, and
+ * `pnpm run security:image-provenance` verifies both against the committed public
+ * key. That is a separate command and a separate record
+ * (`deploy/staging/release-signatures.json`); nothing in THIS file signs, verifies
+ * or consults a signature, so `promote` still prints the split rather than letting
+ * a green tick imply the larger claim. What the signature adds and what it still
+ * does not is `deploy/signing/README.md`.
  *
  * ## What this does NOT prove
  *
@@ -160,7 +179,8 @@ ${bold('pnpm run staging')} — the production-shaped rehearsal stack
     smoke      run the smoke test against the running stack
     logs       tail the stack's logs
     down       stop the stack
-    promote    verify a digest is the one staging tested (does NOT deploy)
+    promote    verify a digest is the one staging tested, and that this deployment
+               has a real paging destination (does NOT deploy)
 
   Options:
     --manifest <path>  release manifest to read   (default ${DEFAULTS.manifest})
@@ -189,6 +209,13 @@ ${bold('pnpm run staging')} — the production-shaped rehearsal stack
   artefacts as promotable across machines. With no registry references, or with a
   registry that does not answer, everything falls back to the local digests and
   \`pull_policy: never\`, which is the behaviour this stack has always had.
+
+  \`promote\` also runs \`pnpm run alerts:preflight\`, which refuses a paging
+  destination that is a placeholder, malformed, missing a credential or routed to a
+  receiver with nothing in it. Run it on its own first — it needs no stack:
+
+      pnpm run alerts:preflight
+      pnpm run alerts:preflight -- --handshake   # also prove the relay accepts the credentials
 
   Exit codes: 0 success, 1 failure or a refused promotion.
 `;
@@ -1568,6 +1595,45 @@ async function commandPromote(options) {
   });
   const promotableAcrossMachines = RELEASE_SERVICES.every((service) => registryVerified[service] === true);
 
+  /**
+   * The paging destinations, checked before this command will call anything promotable.
+   *
+   * Everything above this line asks "are these the bytes staging tested". That is a
+   * complete answer to the question it asks and no answer at all to the one that
+   * decides whether the deployment can be operated: if these bytes go out and then
+   * misbehave, does anybody find out? A release whose `PRL_ALERT_*` variables still
+   * hold the rehearsal defaults answers no — `alerts:verify` will have passed, because
+   * it renders and asserts against those same defaults, and Alertmanager will start,
+   * route by severity exactly as designed, and post every page to a sink that stopped
+   * existing when the verification run ended.
+   *
+   * Run as a subprocess rather than imported, the same way the strict smoke test is
+   * run above: the preflight owns its own exit code and its own report, and a
+   * promotion should refuse on that exit code rather than on this file's reading of
+   * somebody else's checks. `--json --out` is deliberately not passed — the operator
+   * needs to see the reasons, and a promotion is not a place to hide them in a file.
+   */
+  section('the paging destinations');
+  const preflight = run(process.execPath, ['scripts/alert-preflight.mjs'], { stream: true });
+  if (preflight.status !== 0) {
+    cross(
+      'the alerting preflight refuses this configuration',
+      'the reasons are printed above. A release cannot be promoted with a paging destination ' +
+        'that is a placeholder, malformed, missing a credential, or routed to a receiver with ' +
+        'nothing in it — every one of those is an alert that fires, routes correctly and reaches ' +
+        'nobody, and nothing in band can report it. Set the PRL_ALERT_* variables and run ' +
+        '`pnpm run alerts:preflight` until it passes.',
+    );
+    identical = false;
+  } else {
+    tick(
+      'the alerting preflight accepts this configuration',
+      'every routed receiver has a real, well-formed, non-placeholder destination and both ' +
+        'severity tiers resolve. Whether the handshake against the relay was run is in the ' +
+        'preflight output above; a skipped handshake means the credentials are still unproven.',
+    );
+  }
+
   if (manifest.commit?.dirty === true) {
     cross(
       'the manifest was built from a dirty working tree',
@@ -1625,10 +1691,13 @@ async function commandPromote(options) {
         '    * PROVENANCE. Nothing records who built these images, on what machine, from which\n' +
         '      source tree, or with which toolchain — beyond what this repository wrote into the\n' +
         '      manifest itself, which is this repository vouching for this repository.\n' +
-        '    * A SIGNATURE. Nothing signed the digest. `cosign sign` / `cosign attest` in CI is\n' +
-        '      what would make it verifiable by somebody who does not trust the machine that\n' +
-        '      produced it; cosign is not installed here and this pipeline does not pretend to\n' +
-        '      sign anything.\n' +
+        '    * A SIGNATURE — not from this command. THIS command does not verify one. The\n' +
+        '      digests are signed, by `pnpm run release:sign`, and checked by\n' +
+        '      `pnpm run security:image-provenance` against the committed public key. Run that\n' +
+        '      before promoting; a signature nobody checked is a file. And note what even a\n' +
+        '      passing check does not buy: the key is a long-lived file on this machine with no\n' +
+        '      transparency log behind it, so it proves possession of a key and not the identity\n' +
+        '      of a builder. That still needs keyless/OIDC signing in CI.\n' +
         '    * A THIRD PARTY. The registry is a container on this host. It is content-addressed\n' +
         '      storage and it is not a notary: it can prove two parties hold the same bytes, and\n' +
         '      it cannot prove where those bytes came from.\n'
@@ -1638,7 +1707,8 @@ async function commandPromote(options) {
         '      docker compose -f deploy/registry/docker-compose.registry.yml up -d\n' +
         '      pnpm run release:artifacts -- --push\n\n' +
         '  That records a registry digest beside each local one and this command then verifies\n' +
-        '  it. Signature attestation is a separate thing again and still needs cosign in CI.\n';
+        '  it. Signing is a separate step again — `pnpm run release:sign`, then\n' +
+        '  `pnpm run security:image-provenance` to check it.\n';
     console.log(
       dim(
         `\n  Verified in staging at ${attestation.verifiedAt} against ${attestation.origin}.\n` +

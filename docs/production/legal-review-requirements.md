@@ -166,6 +166,16 @@ rather than **detached** from its account?
   privilege at all** on `prl.hands`, `prl.hand_seats` or `prl.hand_actions`. If counsel concludes
   that erasure must remove hand history, that is a migration, a change to the least-privilege
   grants, and a decision about the other players in those hands — not a code change.
+* **Abandoned guest accounts are erased sixty days after they were last seen** (since 2026-08-25;
+  `apps/api/src/maintenance/retention-sweep.ts`). Two things counsel should be told plainly about
+  that number. It is **not stated in any specification** — the four places that documented this
+  sweep before it existed name the mechanism and the column and write the period as `<cutoff>` —
+  so it is **derived**: a guest has no email, no password and no federated identity, its only
+  credential is a session cookie, and a session cannot outlive sixty days from creation, so that
+  is the point at which the account can no longer be reached by anybody. And it is the *floor*
+  rather than the whole rule: no account holding a live session, a table membership, a seat in any
+  hand, or a room of its own is ever removed, at any age. If counsel decides a different period is
+  required, it is one constant.
 
 ### 8. `international-transfer` — Where the data physically sits, and who may reach it
 
@@ -265,6 +275,12 @@ Engineering work that this review unblocks or depends on. None of it closes a re
    grace, 10-minute sign-in attempt); it does not decide them. The `/privacy` §5 wording needs
    re-reading now that the sweep runs, because the sentence that made it honest was the admission
    that it did not.
+
+   **Since 2026-08-25 the same schedule also erases abandoned guest accounts**, which is the one
+   period here that the code did *not* already implement and no document stated — see the fact
+   above and `docs/production/legal-register.md` D4 for the derivation. `/privacy` §5 is now
+   inaccurate for that category and says everything except sessions is kept "until you delete your
+   account"; correcting it is E11 in that register.
 3. **Done: `.env.example` carries all eleven variables above.** This follow-up read "needs the
    eleven variables above … outside the scope of the change that produced this document and was
    not edited". They are there now — grep it for `PRL_AGE_GATE`, `PRL_LEGAL_` and

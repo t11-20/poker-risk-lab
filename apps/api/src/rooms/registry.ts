@@ -15,6 +15,28 @@
  * have to be pinned to one of them (or the whole live-table model has to move), because two
  * processes each holding "the" `HandState` for one room would deal two different hands.
  *
+ * ## That assumption is now ENFORCED, and this is where it is enforced
+ *
+ * It used to be documented and nothing more. This header said it, `docker-compose.staging.yml` said
+ * it beside `deploy.replicas: 1`, and not one line of code refused a second process — so an
+ * operator scaling for capacity, or any rolling deploy where the new container serves before the
+ * old one drains, produced two decks and two pots for one room, and whichever settlement landed
+ * second destroyed the chips the other one paid out. Silently. Nothing raised anything.
+ *
+ * So opening a room now takes a LEASE on it (`rooms/ownership.ts`, `prl.room_ownership`), and:
+ *
+ *   * a room a live process already holds is refused, as a typed `room_owned_elsewhere`, counted;
+ *   * every lease this process holds is renewed on a timer, and a renewal that updates no row
+ *     means we have been fenced — the room is closed, its sockets are disconnected and it is
+ *     dropped from this registry, at once, because continuing to serve a room we no longer own is
+ *     the exact corruption the lease exists to prevent;
+ *   * closing a room, and shutting down, release the lease, so the next process gets the room
+ *     immediately rather than waiting out a TTL.
+ *
+ * A registry built with `ownership: null` enforces none of that and behaves exactly as this file
+ * did before — which is what every test that drives rooms with a `Map`-backed store relies on, and
+ * what `RoomRegistryOptions.ownership` sets out in full.
+ *
  * ## The room record is a cache, and the cache is the live copy
  *
  * `RoomRecord` and the member list are held here so that a state frame — which goes out on every
@@ -49,6 +71,7 @@ import type { Db } from '../repositories/sql.ts';
 import * as usersRepository from '../repositories/users.ts';
 import { type DurableBotSeat, describeRefusal, durableProfile, rehydrateBotSeat } from './bot-profile.ts';
 import { BotRunner, type BotSeatSpec } from './bots.ts';
+import { LEASE_HEARTBEAT_INTERVAL_MS, LEASE_SELF_EVICT_AFTER_MS, type RoomOwnership } from './ownership.ts';
 import {
   type ArchivedDeal,
   type ArchivedResult,
@@ -56,7 +79,7 @@ import {
   type TableListener,
   type TableNotice,
 } from './table.ts';
-import { type Clock, systemClock } from './timers.ts';
+import { type Clock, type ScheduledTask, systemClock } from './timers.ts';
 
 // ---------------------------------------------------------------------------
 // Records
@@ -624,6 +647,40 @@ export interface RoomRegistryOptions {
   readonly onProblem?: ProblemHook;
   /** Defaults to the process-wide metrics. A test that wants isolation passes its own. */
   readonly metrics?: AppMetrics;
+  /**
+   * The room lease, or `null` for a registry that does not enforce one.
+   *
+   * ## Why the default is null, and why that is not a hole
+   *
+   * `store` defaults to the real Postgres store because every caller of it already needs a
+   * database. This does not, and cannot: `test/rooms.test.ts` and `test/ws-router.test.ts` drive
+   * the whole of rooms, seating, the socket protocol and the bots against a `Map`-backed store with
+   * no Postgres anywhere, and a default that reached for `getSql()` would turn every one of those
+   * into a database test. A development run with no database is the same case.
+   *
+   * So the default is the historical behaviour — no lease, no refusal, no heartbeat — and the
+   * production wiring in `routes/index.ts` passes `postgresRoomOwnership(getSql)` explicitly, the
+   * same way it passes `postgresArchive(getSql)` and for the same reason. That file's header
+   * already records what happened the last time a registry was left on a permissive default: the
+   * archive wrote nothing and `GET /hands` was empty forever. The equivalent mistake here is worse
+   * and quieter, so `test/wiring.test.ts` asserts that the assembled app's registry enforces a
+   * lease, rather than trusting the call site to keep saying so.
+   *
+   * A registry with `ownership: null` is not "unsafe by default" in any deployment: it is one
+   * process with no database, which cannot have a second process contending for a room it is not
+   * persisting anyway.
+   */
+  readonly ownership?: RoomOwnership | null;
+}
+
+/** Why a room was taken away from this process. Both are `prl_room_fencings_total{reason=...}`. */
+export type EvictionReason = 'fenced' | 'lease_expired';
+
+/** A lease this registry believes it holds, and the last moment it had proof. */
+interface HeldLease {
+  readonly fence: number;
+  /** `clock.now()` at the last acquisition or successful renewal. See `LEASE_SELF_EVICT_AFTER_MS`. */
+  confirmedAt: number;
 }
 
 /** Who is asking. The subset of `ResolvedSession['user']` every room operation needs. */
@@ -664,6 +721,24 @@ export class RoomRegistry {
   private readonly metrics: AppMetrics;
   readonly store: RoomStore;
 
+  /** The lease, or null for a registry that does not enforce one. See `RoomRegistryOptions`. */
+  private readonly ownership: RoomOwnership | null;
+  /** One entry per room this process believes it owns. Keyed the same way `rooms` is. */
+  private readonly leases = new Map<string, HeldLease>();
+  /** The renewal timer, armed only while at least one lease is held. */
+  private heartbeatTask: ScheduledTask | null = null;
+  /**
+   * Every release this registry has started, chained so `shutdown()` can wait for all of them.
+   *
+   * A chain rather than a set of loose promises for the reason `LiveRoom.releaseQueue` is one: the
+   * caller that matters — the shutdown path — has to be able to await "every release has been
+   * written", and a fire-and-forget release that nobody can wait for turns a graceful shutdown into
+   * a lease-TTL-long refusal for every room this process was serving.
+   */
+  private releaseQueue: Promise<void> = Promise.resolve();
+  /** Who wants to know that a room was taken away. `ws/hub.ts` registers one, to close sockets. */
+  private readonly evictionListeners = new Set<(roomId: string, reason: EvictionReason) => void>();
+
   constructor(options: RoomRegistryOptions = {}) {
     this.clock = options.clock ?? systemClock;
     this.learnerTurnSeconds = options.learnerTurnSeconds;
@@ -674,6 +749,7 @@ export class RoomRegistry {
     this.nextHandId = options.nextHandId ?? newHandId;
     this.onProblem = options.onProblem ?? ((): void => undefined);
     this.metrics = options.metrics ?? appMetrics();
+    this.ownership = options.ownership ?? null;
     // Read at scrape time from the map itself, never mirrored on open and close: a mirror drifts
     // the first time somebody adds a path that removes a room and forgets the decrement, and a
     // gauge that is quietly wrong during an incident is worse than no gauge (see `Gauge.setFrom`).
@@ -747,6 +823,37 @@ export class RoomRegistry {
   }
 
   private async buildRoom(request: OpenRoomRequest): Promise<LiveRoom> {
+    // ########################################################################
+    // ## THE LEASE IS TAKEN FIRST. NOTHING ABOVE THIS LINE, EVER.           ##
+    // ########################################################################
+    //
+    // Not merely "before the table is built" — before `reconcileInterruptedHands`, which is the
+    // reason this is a hard rule rather than a tidy one. That call runs
+    // `hands.abandonInterruptedHands`, which settles every open hand row for the room on the stated
+    // grounds that "a hand interrupted by a restart is unrecoverable by design, so the row has to be
+    // settled by somebody". That reasoning is true for a room NOBODY is serving and false for a room
+    // another process is serving right now: its hand is not interrupted, it is in progress, in that
+    // process's memory, and closing the row underneath it destroys the record of a hand people are
+    // still playing. Reconciling before acquiring would make a refused open destructive.
+    //
+    // A failure here is deliberately FAIL-CLOSED: if the lease cannot be read, the room does not
+    // open. Every other path into this method has already reached Postgres — `ensureOpen` reads the
+    // room row and the roster first — so a database this cannot ask is a database that has already
+    // failed the open; and the one thing that must not happen is serving a room whose ownership is
+    // unknown.
+    await this.acquireLease(request.record.id);
+    try {
+      return await this.buildOwnedRoom(request);
+    } catch (error) {
+      // The lease was taken and there is no room to hold it. Released rather than left to expire,
+      // because a build that failed on a transient read would otherwise make the room unopenable —
+      // by anybody, including this process on the very next request — for a whole lease TTL.
+      this.releaseLeaseSoon(request.record.id);
+      throw error;
+    }
+  }
+
+  private async buildOwnedRoom(request: OpenRoomRequest): Promise<LiveRoom> {
     // Nothing in this process holds a table for this room yet, so any hand still open in the
     // database belongs to a process that is gone and can never finish it. Closed here, before the
     // table exists, so the reconciliation can never race a hand this process is about to deal.
@@ -1179,12 +1286,19 @@ export class RoomRegistry {
     return toRoomSummary(room);
   }
 
-  /** Closes one room: its bots, its table, its timers. */
+  /** Closes one room: its bots, its table, its timers, and the lease it was holding. */
   close(roomId: string): void {
     const room = this.rooms.get(roomId);
     if (room === undefined) return;
     room.close();
     this.rooms.delete(roomId);
+    // Started here and awaited by `shutdown()`, never by this method: `close` is called from a
+    // Fastify `onClose` hook, from `closeAll`, and from a route — all of which are synchronous
+    // about it — and making it async would change three signatures to await a write whose failure
+    // costs one room one lease TTL. What the release buys is that the NEXT process gets the room at
+    // once instead of waiting the TTL out, which is the whole difference between a seamless deploy
+    // and a thirty-second refusal.
+    this.releaseLeaseSoon(roomId);
   }
 
   /**
@@ -1195,10 +1309,259 @@ export class RoomRegistry {
    */
   closeAll(): void {
     for (const roomId of [...this.rooms.keys()]) this.close(roomId);
+    this.heartbeatTask?.cancel();
+    this.heartbeatTask = null;
+  }
+
+  /**
+   * `closeAll()`, plus waiting for every lease to have actually been given back.
+   *
+   * This is what a graceful shutdown wants and what `closeAll` cannot be. Every room this process
+   * was serving is unopenable by the replacement process until its lease is released or expires, so
+   * a deploy that exits without waiting for these deletes makes every live table refuse to open for
+   * up to `LEASE_TTL_MS` — which is precisely the overlap window this whole mechanism exists to
+   * make safe, turned into an outage instead.
+   *
+   * Never rejects. A release that fails is reported through `onProblem` inside the chain and the
+   * lease expires on its own; a shutdown path that could throw here would be a deploy that hangs.
+   */
+  async shutdown(): Promise<void> {
+    this.closeAll();
+    await this.releaseQueue;
   }
 
   get size(): number {
     return this.rooms.size;
+  }
+
+  // -----------------------------------------------------------------------
+  // The lease
+  // -----------------------------------------------------------------------
+
+  /**
+   * True when this registry refuses a room another live process holds.
+   *
+   * Exists so `test/wiring.test.ts` can assert that the ASSEMBLED app enforces it. The wiring is
+   * one line in `routes/index.ts` and losing it would be invisible — every test still passes, every
+   * room still opens, and the guard is simply gone.
+   */
+  get enforcesOwnership(): boolean {
+    return this.ownership !== null;
+  }
+
+  /**
+   * The lease this process holds for a room, or null. For tests and for the runbook's own checks.
+   *
+   * The fence is the interesting field: it increments on every acquisition, so a room whose fence
+   * has moved since this process took it has changed hands.
+   */
+  leaseFor(roomId: string): { readonly fence: number } | null {
+    const lease = this.leases.get(roomId);
+    return lease === undefined ? null : { fence: lease.fence };
+  }
+
+  /**
+   * Registers a listener for "this room was taken away from us", and returns its unsubscribe.
+   *
+   * The registry knows nothing about sockets, and must not: a `LiveRoom` is constructed directly by
+   * tests that have no hub at all. But a fenced room whose sockets stay open is a client still
+   * being sent state frames from a table this process is no longer allowed to own, so somebody has
+   * to close them — `ws/hub.ts` registers the listener that does, with
+   * `WS_CLOSE.serverShuttingDown`, which is the code the web client reconnects from with backoff.
+   *
+   * A listener that throws must not stop the eviction: the eviction is the safety property and the
+   * notification is a consequence of it.
+   */
+  onEviction(listener: (roomId: string, reason: EvictionReason) => void): () => void {
+    this.evictionListeners.add(listener);
+    return () => {
+      this.evictionListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Takes the lease for a room, or refuses to serve it.
+   *
+   * A refusal is a typed `room_owned_elsewhere` and a counter, deliberately not `seat_taken` (an
+   * ordinary race between two learners, which must never page anybody) and deliberately not a 500
+   * (nothing broke; the guard worked). The holder is read back for the LOG LINE only — an operator
+   * needs "which process, and how stale is it" first, and none of it reaches the client, which is
+   * told a code and a request id like every other failure.
+   *
+   * The holder read is `catch`-guarded because it is diagnostics: failing to describe the holder
+   * must not change the answer, which is already decided.
+   */
+  private async acquireLease(roomId: string): Promise<void> {
+    const ownership = this.ownership;
+    if (ownership === null) return;
+    const lease = await ownership.acquire(roomId);
+    if (lease === null) {
+      this.metrics.roomOwnershipRefusals.inc();
+      const holder = await ownership.holderOf(roomId).catch(() => null);
+      this.onProblem('another API process holds this room, so this one will not serve it', {
+        event: 'room-lease-refused',
+        roomId,
+        ownerId: ownership.ownerId,
+        holderId: holder?.ownerId ?? 'unknown',
+        holderFence: holder?.fence ?? null,
+        holderHeartbeatAgeMs: holder?.heartbeatAgeMs ?? null,
+      });
+      throw new AppError('room_owned_elsewhere', {
+        logDetail: `room ${roomId} is leased to another API process`,
+      });
+    }
+    this.leases.set(roomId, { fence: lease.fence, confirmedAt: this.clock.now() });
+    this.armHeartbeat();
+  }
+
+  /**
+   * Renews every lease this process holds, and evicts every room it turns out not to.
+   *
+   * Public so that a test can run exactly one beat rather than waiting out an interval, and so that
+   * the eviction path can be exercised without a real timer. Production arms it on the clock;
+   * nothing else calls it.
+   *
+   * ## The distinction the whole method turns on
+   *
+   * A renewal that comes back WITHOUT a room is a fencing: the statement ran, the row exists, and
+   * its `owner_id` is not ours. A renewal that THROWS says nothing at all about ownership — the
+   * database was unreachable, or the query was abandoned by its deadline — and treating that as a
+   * fencing would close every live table in the process on a network blip. So the two are handled
+   * differently, and the second one is bounded by time rather than by a single failure: once our
+   * last CONFIRMED renewal is older than `LEASE_SELF_EVICT_AFTER_MS` we stop serving the room
+   * whatever the reason, because past that point another process is about to become entitled to it
+   * and we cannot prove we still hold it. `ownership.ts` has the argument for the three numbers and
+   * for why this threshold is strictly below the TTL.
+   */
+  async heartbeatLeases(): Promise<void> {
+    const ownership = this.ownership;
+    if (ownership === null || this.leases.size === 0) return;
+    const roomIds = [...this.leases.keys()];
+    let renewed: readonly string[] | null = null;
+    let failure: unknown = null;
+    try {
+      renewed = await ownership.heartbeat(roomIds);
+    } catch (error) {
+      // Not reported on its own: a beat that fails once is an ordinary transient, this runs every
+      // few seconds, and a line per failure would fill the log during exactly the incident an
+      // operator is trying to read it in. The failure that MATTERS — one that lasted long enough to
+      // cost a lease — is reported by the eviction below, and carries this error with it.
+      failure = error;
+    }
+    const now = this.clock.now();
+    const held = renewed === null ? null : new Set(renewed);
+    for (const [roomId, lease] of [...this.leases]) {
+      if (held !== null) {
+        if (held.has(roomId)) {
+          lease.confirmedAt = now;
+          continue;
+        }
+        this.evict(roomId, 'fenced', null);
+        continue;
+      }
+      if (now - lease.confirmedAt >= LEASE_SELF_EVICT_AFTER_MS) {
+        this.evict(roomId, 'lease_expired', failure);
+      }
+    }
+  }
+
+  /**
+   * Stops serving a room this process no longer owns. The whole point of the mechanism.
+   *
+   * Order matters and is the reverse of what reads naturally. The room is dropped from `rooms` and
+   * the table is closed FIRST, synchronously, before anything is logged or any listener is called:
+   * a listener that throws, or a `onProblem` consumer that does, must not be able to leave this
+   * process still serving the room. `LiveRoom.close()` stops the bots and the turn timer and closes
+   * the table, so no further hand can be dealt at it, and the eviction listeners then close the
+   * sockets that were watching.
+   *
+   * The lease is NOT released for a `fenced` eviction, and cannot be: `release` is owner-scoped, the
+   * row belongs to somebody else now, and the delete would match nothing. For `lease_expired` the
+   * row may still be ours — we simply could not reach it — so the release is attempted, best effort:
+   * if it lands, the room becomes openable at once instead of after the TTL.
+   */
+  private evict(roomId: string, reason: EvictionReason, cause: unknown): void {
+    const lease = this.leases.get(roomId);
+    this.leases.delete(roomId);
+    const room = this.rooms.get(roomId);
+    if (room !== undefined) {
+      room.close();
+      this.rooms.delete(roomId);
+    }
+    this.metrics.roomFencings.inc({ reason });
+    for (const listener of [...this.evictionListeners]) {
+      try {
+        listener(roomId, reason);
+      } catch {
+        // Swallowed on purpose, and not counted: the eviction has already happened, which is the
+        // property that matters. A hub that threw while closing sockets is a hub bug, and the
+        // sockets it failed to close are closed by their own heartbeat within two intervals.
+      }
+    }
+    this.onProblem(
+      reason === 'fenced'
+        ? 'another API process took this room; it has been closed here'
+        : 'this process could not renew the lease on a room and has stopped serving it',
+      {
+        event: 'room-fenced',
+        roomId,
+        reason,
+        fence: lease?.fence ?? null,
+        ownerId: this.ownership?.ownerId ?? null,
+        wasLive: room !== undefined,
+        ...(cause === null ? {} : { error: String(cause) }),
+      },
+    );
+    if (reason === 'lease_expired') this.releaseLeaseSoon(roomId);
+  }
+
+  /**
+   * Queues the release of one lease, so `shutdown()` can wait for every one of them.
+   *
+   * Owner-scoped in the repository, which is what makes it safe to call for a room we may already
+   * have lost: the delete matches nothing and answers false. Calling it for a room we never held is
+   * also safe and is why there is no membership check here — `close()` runs for every room whether
+   * or not this registry enforces a lease at all.
+   */
+  private releaseLeaseSoon(roomId: string): void {
+    const ownership = this.ownership;
+    if (ownership === null) return;
+    this.leases.delete(roomId);
+    this.releaseQueue = this.releaseQueue
+      .then(async () => {
+        await ownership.release(roomId);
+      })
+      .catch((error: unknown) => {
+        // Logged and swallowed, like an archive write and for the same reason: a failed release
+        // must not wedge the chain for every later room, and it must not fail a shutdown. The cost
+        // is bounded and worth naming — that one room is unopenable until its lease expires.
+        this.onProblem('a room lease could not be released; it will expire on its own', {
+          event: 'room-lease-release',
+          roomId,
+          ownerId: ownership.ownerId,
+          error: String(error),
+        });
+      });
+  }
+
+  /**
+   * Arms the renewal timer, once, for as long as there is at least one lease to renew.
+   *
+   * Re-armed from inside the tick rather than run as an interval, for the reason `timers.ts` gives
+   * for the turn clock: an interval fires again while the previous beat is still in flight, and a
+   * beat is a database round trip that can take as long as its deadline. Two overlapping beats
+   * would race each other to write `confirmedAt`, and a slow database would accumulate them.
+   *
+   * It stops when the last room goes, so an idle process schedules nothing at all.
+   */
+  private armHeartbeat(): void {
+    if (this.ownership === null || this.heartbeatTask !== null) return;
+    this.heartbeatTask = this.clock.schedule(LEASE_HEARTBEAT_INTERVAL_MS, () => {
+      this.heartbeatTask = null;
+      void this.heartbeatLeases().finally(() => {
+        if (this.leases.size > 0) this.armHeartbeat();
+      });
+    });
   }
 
   /** Records that a member's socket opened or closed, for `RoomMember.connected`. */

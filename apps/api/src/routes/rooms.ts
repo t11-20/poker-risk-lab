@@ -231,8 +231,13 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
     app.addHook('onClose', async () => {
       // Only the registry this module created. A registry passed in belongs to its owner, and
       // closing somebody else's tables on our way out would be a surprise.
-      if (ownsRegistry) registry.closeAll();
-      await Promise.resolve();
+      //
+      // `shutdown()` rather than `closeAll()`, and the difference is a whole deploy. Both close
+      // every table; only this one waits for the room LEASES to be given back. A process that exits
+      // without releasing leaves every room it was serving unopenable — by its own replacement —
+      // until each lease expires, which is `LEASE_TTL_MS` of "that table will not open" on every
+      // single deploy. It never rejects, so it cannot turn a shutdown into a hang.
+      if (ownsRegistry) await registry.shutdown();
     });
 
     /** The caller, as every room operation wants them. */

@@ -68,6 +68,17 @@ Concretely, when it is done:
    process that does not own its room. With the lease, that is a refusal an operator can
    see and a client can retry. Without it, it is two decks.
 
+   The net has a hole worth sizing before anyone leans on it. The fence is a takeover
+   counter, and **no hand row carries it**, so the database will not refuse a write already
+   in flight from a process that has just lost its lease. What stops those writes is
+   eviction, which is bounded by one heartbeat interval — about five seconds — rather than
+   absolutely. That is the right trade while `replicas: 1` holds, because fencing then only
+   happens during a misconfiguration or a deploy overlap and five seconds of contention is
+   enormously better than unbounded. It is **not** the right trade for a deployment that
+   fences routinely, which is what item 2 above would make normal. Closing it means a fence
+   column on every table a live room writes to and a `WHERE fence = $n` on each statement,
+   and that work belongs to item 1, not after it.
+
 ### The cost, stated plainly
 
 Adding or removing a replica migrates rooms, and a migrated room's **in-flight hand is

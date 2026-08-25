@@ -117,11 +117,22 @@ first. `staging up` then deploys the registry references with `pull_policy:
 always` — re-verifying each digest first — and `promote` reports the artefacts as
 promotable across machines.
 
-Neither digest is **signed**. A registry is content-addressed storage, not a
-notary: what a push buys is content identity across a push/pull boundary — another
-machine asking for `repo@sha256:X` gets those bytes or an error, never different
-ones. Who built them, from what source, and whether anybody stands behind them is
-provenance; it needs `cosign` in CI and there is none in this environment.
+A push alone does not **sign** anything. A registry is content-addressed storage,
+not a notary: what a push buys is content identity across a push/pull boundary —
+another machine asking for `repo@sha256:X` gets those bytes or an error, never
+different ones.
+
+Since 2026-08-25 the digests **are** signed, by a separate command:
+`pnpm run release:sign` signs each one with cosign and attests a CycloneDX SBOM to
+it, and `pnpm run security:image-provenance` verifies both against the committed
+public key with no private key needed. `promote` does not consult that — it checks
+content identity and says so — which is why the check is a command of its own and
+why it is worth running before promoting anything.
+
+What even a passing signature check does not buy: the key is a long-lived file on
+the release machine with no transparency log behind it, so it establishes
+possession of a key and **not the identity of a builder**. That needs keyless/OIDC
+signing in CI. [`deploy/signing/README.md`](../signing/README.md) is the long form.
 `promote` prints that split rather than letting a green tick imply the larger
 claim. The evidence for the content claim — including a cold pull, on a throwaway
 image, after deleting it locally — is in
@@ -318,7 +329,7 @@ Not "it started". In order:
 
 `docker-compose.observability.yml` adds a Prometheus and an Alertmanager beside this
 stack, and `pnpm run alerts:verify` uses them to answer a question staging could not
-answer before: do the twenty-two rules in `docs/production/alerts.md` load, agree with
+answer before: do the twenty-seven rules in `docs/production/alerts.md` load, agree with
 that document, name series that exist, evaluate, and — for one of them, provoked for
 real — fire, route by severity and arrive at a receiver.
 
@@ -363,13 +374,15 @@ rehearsed is a provider accepting real credentials, and somebody being awake.
 - **A deploy identity, or a rollback.** See `.github/workflows/release.yml`, which
   is explicit about which of its steps cannot execute today and fails rather than
   pretending.
-- **Provenance or a signature, registry or no registry.** A pushed artefact is
-  fetchable by digest and that is all a content address can mean. Nothing signs
-  it, nothing attests to who built it, and the registry in `deploy/registry/` is a
-  container on this host rather than a third party. `cosign` in CI is the missing
-  piece and it is missing deliberately rather than forgotten — it is not installed
-  in this environment, and a pipeline that claimed attestation without it would be
-  the worst outcome of the three.
+- **Provenance bound to a BUILDER.** The artefacts are now signed — see
+  `pnpm run release:sign` and `deploy/signing/README.md` — so a digest is bound to
+  a key this repository controls, and `pnpm run security:image-provenance` refuses
+  anything else. What is still absent is the part a key cannot supply: the key is a
+  long-lived file on the release machine, there is no transparency log, and the
+  registry in `deploy/registry/` is a container on this host rather than a third
+  party. Keyless/OIDC signing in CI — a short-lived Fulcio certificate bound to a
+  named workflow, with Rekor as the witness — is the missing piece, and this
+  repository has no CI signing identity to do it with.
 
 ---
 

@@ -245,6 +245,29 @@ const MUST_BE_IGNORED = [
     path: 'deploy/staging/tls/staging-key.pem',
     why: "the staging leaf certificate's private key (pnpm run staging init)",
   },
+  {
+    /**
+     * The release signing key.
+     *
+     * This one is the same shape of hole as `deploy/backup/backup.env` and it is worth saying why
+     * it is not merely another private key. Committing it would not leak data — it decrypts
+     * nothing. It would hand every reader of the repository the ability to MINT signatures that
+     * `pnpm run security:image-provenance` accepts, over any bytes at all, and the gate would go on
+     * reporting a pass while meaning nothing. A leaked verification key is a non-event; a leaked
+     * signing key silently converts the control into decoration, which is the worse failure because
+     * nothing turns red.
+     *
+     * `NEVER_TRACKED` also matches it by extension (`\.key$`), and that is not redundancy to be
+     * tidied away: that rule fires only once the file is already tracked, i.e. after the mistake.
+     * This rule is the one that stops `git add -A` on the release machine, where the file exists.
+     */
+    path: 'deploy/signing/cosign.key',
+    why: 'the release image signing key — anybody holding it can mint signatures the provenance gate accepts (deploy/signing/README.md)',
+  },
+  {
+    path: 'deploy/signing/signing.env',
+    why: 'COSIGN_PASSWORD, the passphrase that unlocks the signing key above (deploy/signing/README.md)',
+  },
 ];
 
 /**

@@ -184,15 +184,25 @@ the content itself.
 
 This is the part to read before quoting any of the above in a release note.
 
-- **Nothing is signed.** No signature, no attestation, no transparency log entry.
-  `cosign` is not installed in this environment and nothing here pretends to sign
-  anything. A consumer who does not already trust this machine has nothing to
-  verify.
-- **No provenance.** The manifest records a commit sha, a Docker version and a
-  timestamp because this repository wrote them there. That is the repository
+- **A push signs nothing.** Everything on this page is about content identity. The
+  signatures are a separate command with a separate record —
+  `pnpm run release:sign` writes `deploy/staging/release-signatures.json`, and
+  `pnpm run security:image-provenance` verifies it against the committed public key
+  — so a digest that has been pushed and not signed is exactly as unverifiable as
+  it was before. *(This bullet used to read "cosign is not installed in this
+  environment". That stopped being true on 2026-08-25.)*
+- **Still no transparency log entry.** Signing uses `--tlog-upload=false` and
+  verification `--insecure-ignore-tlog`, because Rekor is a public log and this is
+  a loopback registry holding a lab artefact. So there is no third-party record
+  that a signature existed at a time.
+- **Still no provenance in the SLSA sense.** The manifest records a commit sha, a
+  Docker version and a timestamp because this repository wrote them there; the
+  signature adds a key this repository also controls. Both are this repository
   vouching for itself. Nothing binds the artefact to a source tree, a builder, or
-  a build environment in a way an outsider could check. That is what a signed
-  SLSA-style provenance attestation (`cosign attest --predicate`) exists to do.
+  a build environment in a way an outsider could check — that is what a signed
+  SLSA provenance predicate emitted by the BUILDER exists to do, and keyless/OIDC
+  signing is what makes the identity in it mean anything. See
+  [`../signing/README.md`](../signing/README.md).
 - **The registry is not a third party.** It is a container on this host with no
   authentication and no TLS, published on loopback. It can prove two parties hold
   the same bytes; it cannot say where those bytes came from, and anything that can
@@ -207,8 +217,19 @@ This is the part to read before quoting any of the above in a release note.
 - **It is not a deployment target.** `staging promote` still only verifies. There
   is no production environment in this repository to promote *to*.
 
-The honest one-line summary: **content identity across a push/pull boundary is
-now proven; provenance and attestation are not, and need a signing tool in CI.**
+- **It carries the signatures, and does not vouch for them.** `cosign` stores a
+  signature as another object in the same repository, under a `sha256-<digest>`
+  tag. Because the registry is unauthenticated, anything that can reach it can
+  write those tags too — which is why negative control 3 in
+  [`../signing/README.md`](../signing/README.md) transplants a valid signature
+  onto a different image and gets a 201. It is refused at verification, by the
+  digest inside the signed payload, and not by the registry.
+
+The honest one-line summary, updated 2026-08-25: **content identity across a
+push/pull boundary is proven, and each digest is now signed by a key this
+repository controls and checked by `pnpm run security:image-provenance`. What is
+still absent is provenance bound to a BUILDER — a keyless/OIDC signature from a
+CI workload identity, with a transparency log behind it.**
 
 ---
 

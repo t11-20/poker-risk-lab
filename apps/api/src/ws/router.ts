@@ -78,6 +78,7 @@ import type {
   ErrorCode,
   RoomSummary,
   WsClientMessage,
+  WsCloseCode,
   WsServerMessage,
 } from '@prl/contracts';
 import { ERROR_MESSAGES, WS_CLOSE, WS_LIMITS, WS_PROTOCOL_VERSION, wsCloseForError } from '@prl/contracts';
@@ -437,6 +438,20 @@ export class WsRouter {
   /** Every socket currently attached to a room. */
   socketsIn(roomId: string): readonly WsConnection[] {
     return [...(this.byRoom.get(roomId) ?? [])];
+  }
+
+  /**
+   * Closes every socket watching one room.
+   *
+   * Exists for one caller: a room this process has been FENCED from (`RoomRegistry.onEviction`).
+   * The registry has already closed the table and dropped the room, so these sockets are attached
+   * to something that will never send another frame — and a client sitting on a healthy socket that
+   * has silently stopped receiving state is the worst possible version of this, because its ping
+   * watchdog is answered and it never reconnects. Closing them with a real code is what sends it to
+   * the process that does own the room.
+   */
+  closeRoom(roomId: string, code: WsCloseCode, reason: string): void {
+    for (const connection of this.socketsIn(roomId)) this.closeConnection(connection, code, reason);
   }
 
   /** Closes every socket. The server's shutdown path calls this before the registry's. */

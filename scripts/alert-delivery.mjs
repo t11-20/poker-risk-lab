@@ -31,11 +31,15 @@
  *    the file is the behaviour. Two sets that drift is how a threshold gets
  *    changed in one place.
  * 3. **Grounded** — every `prl_*` series an expression mentions appears in a live
- *    scrape of the API. This is the invariant that document states in its own
- *    second paragraph: *"If a name below does not appear in a live scrape of GET
- *    /metrics, the rule is wrong."* Read with a retry budget, because check 6 floods
- *    the limiter from the same loopback address this reads from, and the ban outlives
- *    the run that caused it.
+ *    scrape of the API, and every `alertmanager_*` series appears in a live scrape of
+ *    Alertmanager. This is the invariant that document states in its own second
+ *    paragraph: *"If a name below does not appear in a live scrape of GET /metrics,
+ *    the rule is wrong."* Read with a retry budget, because check 6 floods the limiter
+ *    from the same loopback address this reads from, and the ban outlives the run that
+ *    caused it. The Alertmanager half also asserts `up{job="prl-alertmanager"} == 1`:
+ *    a series that exists and is not being scraped grounds a rule that can never fire,
+ *    and `AlertmanagerNotificationsFailing` is the one rule whose silence nothing else
+ *    here could report.
  * 4. **Evaluable** — every expression is executed by Prometheus. A rule that
  *    cannot be parsed or that references a label set that does not exist is a rule
  *    that will never fire, and it looks identical to a quiet one.
@@ -310,6 +314,29 @@ export function alertsInDocument(text) {
 export function seriesReferencedBy(expression) {
   const names = new Set();
   for (const match of expression.matchAll(/\bprl_[a-z0-9_]+/g)) {
+    names.add(match[0].replace(/_(?:bucket|sum|count)$/, ''));
+  }
+  return names;
+}
+
+/**
+ * The same question for the series Alertmanager exports about ITSELF.
+ *
+ * `seriesReferencedBy` matches `prl_*` and only `prl_*`, which was complete until the
+ * rules file gained `AlertmanagerNotificationsFailing` — a rule on
+ * `alertmanager_notifications_failed_total`, a name this repository does not own and
+ * therefore cannot check by reading `metrics.ts`. Leaving it ungrounded would have made
+ * check 3 pass over a rule whose series name it never looked at, which is the exact hole
+ * that check exists to close: an expression on a series that does not exist is
+ * syntactically perfect, evaluates without error, and is permanently false.
+ *
+ * A separate function rather than a widened regex, because the two are grounded against
+ * two different scrapes — the API's exposition and Alertmanager's — and merging them
+ * would mean looking for one system's names in the other's output.
+ */
+export function alertmanagerSeriesReferencedBy(expression) {
+  const names = new Set();
+  for (const match of expression.matchAll(/\balertmanager_[a-z0-9_]+/g)) {
     names.add(match[0].replace(/_(?:bucket|sum|count)$/, ''));
   }
   return names;
@@ -1306,6 +1333,76 @@ async function main() {
       } else {
         pass('every series exists', `${exported.size} metric families exported`);
       }
+    }
+
+    /**
+     * The other exposition: Alertmanager's own.
+     *
+     * Two conditions, one check, and both are required — because either alone passes
+     * for the wrong reason. Reading Alertmanager's `/metrics` proves the series the
+     * `alerting-itself` rules name really are exported by this version; asserting
+     * `up{job="prl-alertmanager"} == 1` proves Prometheus is actually scraping them.
+     * Without the second, a scrape job that was deleted or misnamed leaves the rules
+     * evaluating against a series that will never have a sample, which is silent, and
+     * `AlertmanagerNotificationsFailing` is the one rule whose silence cannot be
+     * reported by anything else in this file.
+     */
+    const alertmanagerSeries = new Map();
+    for (const [name, expression] of expressions) {
+      for (const series of alertmanagerSeriesReferencedBy(expression)) alertmanagerSeries.set(series, name);
+    }
+    const exposition = await fetch(`${ALERTMANAGER}/metrics`, { signal: AbortSignal.timeout(10_000) })
+      .then((response) => (response.ok ? response.text() : ''))
+      .catch(() => '');
+    const alertmanagerExported = new Set(
+      exposition
+        .split('\n')
+        .filter((line) => line.startsWith('# TYPE '))
+        .map((line) => line.split(' ')[2]),
+    );
+    const scrapingAlertmanager = await measureUntil(
+      async () => {
+        const result = await getJson(
+          `${PROMETHEUS}/api/v1/query?query=${encodeURIComponent('up{job="prl-alertmanager"}')}`,
+        );
+        return result?.data?.result?.[0]?.value?.[1] === '1';
+      },
+      60_000,
+      1_000,
+    );
+    const alertmanagerUnknown = [...alertmanagerSeries].filter(
+      ([series]) => !alertmanagerExported.has(series),
+    );
+    if (alertmanagerSeries.size === 0) {
+      // Reached only if the alerting-itself rules were deleted, and then this check has
+      // examined nothing. A grounding of zero series is not a pass, for the same reason
+      // the parse guard above is not.
+      fail(
+        'every alertmanager_* series exists and Prometheus is scraping Alertmanager',
+        'no rule names an alertmanager_* series, so nothing watches the alerting system itself',
+      );
+    } else if (alertmanagerExported.size === 0) {
+      fail(
+        'every alertmanager_* series exists and Prometheus is scraping Alertmanager',
+        `no # TYPE lines came back from ${ALERTMANAGER}/metrics`,
+      );
+    } else if (alertmanagerUnknown.length > 0) {
+      fail(
+        'every alertmanager_* series exists and Prometheus is scraping Alertmanager',
+        alertmanagerUnknown.map(([series, alert]) => `${series} (${alert})`).join(', '),
+      );
+    } else if (scrapingAlertmanager === null) {
+      fail(
+        'every alertmanager_* series exists and Prometheus is scraping Alertmanager',
+        'up{job="prl-alertmanager"} never became 1 — the scrape job in prometheus.yml is missing ' +
+          'or misnamed, and AlertmanagerDown is keyed on that exact job label',
+      );
+    } else {
+      pass(
+        'every alertmanager_* series exists and Prometheus is scraping Alertmanager',
+        `${alertmanagerSeries.size} series in ${alertmanagerExported.size} families, ` +
+          `up{job="prl-alertmanager"} = 1 after ${(scrapingAlertmanager / 1000).toFixed(1)}s`,
+      );
     }
 
     // --- Check 4: every expression evaluates -------------------------------

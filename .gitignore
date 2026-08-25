@@ -37,3 +37,16 @@ backups/
 # this one was not, so on a backup host `git add -A` would have committed it.
 # `scripts/supply-chain/secret-scan.mjs` asserts this rule exists.
 deploy/backup/backup.env
+
+# The release signing key and the passphrase that unlocks it.
+# `deploy/signing/README.md` tells an operator to create both with
+# `pnpm run release:sign --generate-key`, and neither may ever be tracked.
+# The PUBLIC half — deploy/signing/cosign.pub — IS committed and is the trust
+# anchor `pnpm run security:image-provenance` verifies against; a repository
+# that also carried the private half would be handing every reader the ability
+# to mint signatures the gate accepts, which is the whole control gone.
+# `deploy/backup/backup.env` was matched by no ignore rule until somebody
+# checked, and this is the same shape of file on the same kind of host.
+# `scripts/supply-chain/secret-scan.mjs` asserts both of these rules exist.
+deploy/signing/cosign.key
+deploy/signing/signing.env

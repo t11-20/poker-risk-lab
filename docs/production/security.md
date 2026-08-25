@@ -35,16 +35,20 @@ What is *not* at stake removes whole categories of threat, and the absence is de
 | Dependency shape checks (unexpected binaries, install hooks) | `security:shapes` |
 | Published-vulnerability scan | `security:osv` (allowlist entries require an expiry and a justification) |
 | SBOM, CycloneDX 1.6, per build | `security:sbom` |
-| Provenance | `security:provenance` |
+| npm package integrity + release-age cooldown | `security:provenance` (gate name `integrity-and-release-age`; it is about **packages**, not images) |
 | Container base images pinned by digest | `security:pinning` |
 | CI actions pinned by SHA, least-privilege `permissions:` | `security:pinning` |
 | Container image CVE scan | `security:containers` (trivy) |
+| **Release images signed by digest, and the signature verified** | `security:image-provenance` (cosign, against the committed `deploy/signing/cosign.pub`; needs no private key). Signing is `release:sign` |
+| **A signed CycloneDX SBOM attestation bound to each image digest** | `security:image-provenance` — the attestation's in-toto subject must be the image's own digest, and an empty predicate fails |
 | Repository hygiene — no NUL, no C0 controls, no bidi overrides, no zero-width characters, no CRLF | `security:hygiene` |
 | No credential material in a tracked file | `security:secrets` |
 | An ignore rule exists for every path an operator is told to write a secret to | `security:secrets` |
 | No credential in git history | `security:secrets --history` (opt-in; see below) |
 
 `pnpm run security:audit` chains the gates and is release-blocking. `supply-chain.yml` re-runs them daily, so a package that becomes bad after it was vetted is caught without a commit.
+
+**The signature gate is not in CI, and cannot be as things stand.** Signing needs a private key and there is no CI signing identity, so `security:audit` in CI runs at a point where no release image exists and reports the gate *not applicable*, saying so loudly rather than passing over it. It is a release-machine step: `pnpm run release:sign` then `pnpm run security:image-provenance`. What a locally-held key does and does not establish — possession of a key, not the identity of a builder, and no transparency log — is [`deploy/signing/README.md`](../../deploy/signing/README.md).
 
 **A note on why lifecycle scripts being disabled matters more than it sounds.** A malicious package overwhelmingly acts at install time. With scripts off, a compromised package present in the graph has to be *imported* to do anything — which turns "it is in the lockfile" from a compromise into a question with an answer.
 
@@ -104,6 +108,48 @@ Two keying strategies, and the difference between them is a defect that was foun
 Keys are hashed, never raw: the rate limiter keeps keys in memory and hands them to `onBanReach` for logging, and neither should hold something replayable or an IP address.
 
 Addresses are normalised so one caller is one bucket. `::ffff:203.0.113.4` and `203.0.113.4` are the same host, and Node reports the mapped spelling on a dual-stack socket and the plain one otherwise — two spellings means two buckets and a limit that quietly counts to half of what it says. `::1` and `127.0.0.1` are deliberately **not** folded together: those are genuinely different addresses.
+
+### Sign-in: two budgets, because a classroom is one caller
+
+Address keying is correct and it has a cost that was, for a while, understated in this document and in the code: behind one campus NAT, office egress or VPN concentrator, a whole class is one caller. Measured against the then-shipped 15-per-minute OIDC limit — thirty learners, one address, one window — **15 completed sign-ins and 15 `429`s, the first at learner 16.**
+
+Raising the number alone would have handed a script the same headroom, so the limit was split into two budgets that count different things:
+
+- **The ceiling**, `RATE_LIMIT_OIDC_MAX`, applied to `/auth/oidc/start` and `/auth/oidc/callback` through the same address key as before. Sized for the classroom: `simultaneous starts x 2` (a start plus one retry), default 60.
+- **The failed-outcome budget**, `RATE_LIMIT_OIDC_FAILURE_MAX`, charged only by OIDC requests that end in an error. Default 15 — *unchanged in effect from what shipped*, so the outbound load a script can force on the identity provider has not moved.
+
+The distinction that makes this safe is that a request cannot be judged on arrival but can be judged on how it **ends**. Completing a sign-in requires an authorization code only the provider can mint, presented with a single-use attempt row and a PKCE verifier from a cookie handed out one request earlier. A script cannot produce that; it can produce unlimited requests that fail to. Thirty completions from one address in a minute is a classroom; fifteen failures is not.
+
+A refusal is never itself charged. Charging it would push a caller's own window forward on every retry — `continueExceeding` by accident — and turn one cancelled consent screen into an unbounded lockout for everyone behind a shared address.
+
+**Guest creation is deliberately excluded from this and keeps a budget of 10.** On `POST /auth/guest` every attempt succeeds: no password, no provider, nothing to fail. There is no failed outcome to charge, and the successful creations *are* the abuse — it is the one unauthenticated endpoint that writes a user row.
+
+### The third budget: starts nobody comes back for
+
+The two budgets above cannot see the cheapest attack there is. A caller that only ever hits `/auth/oidc/start` writes an attempt row every time and produces **no failed outcome**, because a start that succeeds is not a failure. Raising the ceiling from 15 to 60 therefore quadrupled what that caller could write, and two things a first draft of this section assumed would bound it turned out not to:
+
+- **The global limiter contributes nothing.** `@fastify/rate-limit` lets a route's own `config.rateLimit` *replace* the global bucket rather than stack with it. Measured: after 500 starts from one address, `GET /ready` from that address still answered 200 and `POST /auth/guest` still answered 201.
+- **The 10-minute TTL does not remove rows.** It bounds when a row is *usable*. `maintenance/retention-sweep.ts` is what removes them — every **six hours**, at most 1,000 x 100 = 100,000 rows per table per sweep. Residency is `rate x 360 minutes`, not `rate x 10`.
+
+The honest arithmetic for the one table nothing else bounds:
+
+| | rows/min | per address per 6 h sweep | addresses to outrun the sweep |
+| --- | --- | --- | --- |
+| before this change | 15 | 5,400 | 19 |
+| ceiling raised alone | 60 | 21,600 | **5** |
+| with the third budget | 60 per 10 min | 2,160 | 46 |
+
+Five addresses to make `prl.oidc_login_attempts` grow without limit was not an acceptable price for the cohort fix. So a third budget charges a start when it writes an attempt row and **credits** it when a callback redeems one, over the attempt row's own 10-minute TTL — so "still charged when the window closes" means exactly "the row expired unredeemed", with no timer per attempt and no second sweep. Its max is `RATE_LIMIT_OIDC_MAX`, so it sizes itself from the cohort declaration rather than being a fourth number an operator must reason about. A class of thirty holds about thirty for a few seconds and gives them all back.
+
+**The security delta, stated so it can be argued with.** From one address: an attacker can now complete up to `RATE_LIMIT_OIDC_MAX` sign-ins per window instead of 15 (each needing real credentials at the provider, so our limiter was never the bound on that), and can burst 60 attempt rows in a minute rather than 15. Against that, sustained attempt-row creation is now **60 per 10 minutes rather than 15 per minute** — 2,160 rows per address per sweep against 5,400 before, so that channel ends up *tighter* than it shipped. Unchanged: forced token-endpoint exchanges (15 per window, measured before and after), guest account creation (10 per window), and the refusal of unbounded account creation and unbounded IdP round trips.
+
+### The sizing is a boot refusal, not a comment
+
+The correct size depends on a fact the process cannot discover: how many learners share one egress address. So the operator declares it. `COHORT_SIZE` and `COHORT_ENTRY` change no limit; they make `loadConfig` check the configured limits against the declaration and **refuse to start** when they cannot serve it, naming the variable and the arithmetic — the same mechanism as the `RATE_LIMIT_RESET_TOKEN` refusal below, pointing the other way. Nothing is raised automatically: declaring a cohort of thirty tells you guest creation is set to ten, it does not open it to thirty on your behalf.
+
+`COHORT_ENTRY` defaults to `both`, which checks every door. It also refuses a configuration where `RATE_LIMIT_OIDC_FAILURE_MAX` has been raised to meet the ceiling, because at that point the split is gone and the classroom's headroom is the script's.
+
+Proven by: `apps/api/test/cohort-sign-in-limits.test.ts` — the cohort completing, the script still refused and still bounded to the same number of forced token exchanges, guest creation still bounded, the refusals, and the positive control that a correctly sized cohort boots.
 
 ### The test-isolation control, and why it cannot exist in production
 

@@ -37,6 +37,7 @@ import { buildApp, EXPECTED_ROUTE_MODULES, registerRoutes } from '../src/app.ts'
 import { type AppConfig, loadConfig } from '../src/config.ts';
 import { closeDatabase, configureDatabase, type DatabaseHandle } from '../src/db.ts';
 import { AppMetrics } from '../src/observability/metrics.ts';
+import { roomRegistry } from '../src/rooms/registry.ts';
 import { API_ROUTE_MODULES, registerApiRoutes } from '../src/routes/index.ts';
 import { closeSharedPool } from '../src/workers/pool.ts';
 import { createWsHub } from '../src/ws/hub.ts';
@@ -276,5 +277,33 @@ describe('assembled observability wiring', () => {
     await probe.ready();
     assert.equal(routerMetrics, probeMetrics);
     await probe.close();
+  });
+
+  /**
+   * The room lease is actually wired into the assembled app.
+   *
+   * This is a one-line assertion about a one-line call site, and it is here because losing that
+   * line is invisible in every other way. `RoomRegistry` defaults to `ownership: null` — it has to,
+   * because `test/rooms.test.ts` and `test/ws-router.test.ts` drive the whole of rooms and the
+   * socket protocol against a `Map` with no database — so a `registerApiRoutes` that stopped
+   * passing `postgresRoomOwnership(getSql)` would leave every test in this package green, every
+   * room opening normally, and the guard simply gone.
+   *
+   * What it is a guard against is not hypothetical: `routes/index.ts` exists at all because the
+   * registry was once left on its permissive `archive` default in production, so hands were played
+   * that were never persisted and `GET /hands` was empty forever. The equivalent mistake here does
+   * not lose history, it lets two API processes deal two different hands at one table.
+   *
+   * `roomRegistry()` with no options returns the process-wide instance `registerApiRoutes` built in
+   * `before`, because the singleton's dependencies are decided by its FIRST caller.
+   */
+  it('gives the assembled registry a room lease, so a second process cannot serve a live room', () => {
+    assert.equal(
+      roomRegistry().enforcesOwnership,
+      true,
+      'the assembled app built a registry that enforces no room ownership: two API processes could ' +
+        'each hold their own deck and pot for one room, and the second settlement to land would ' +
+        'destroy the chips the first paid out',
+    );
   });
 });

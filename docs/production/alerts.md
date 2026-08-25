@@ -213,6 +213,70 @@ stuck chair would be invisible to the rule that exists for it. Same reason as `R
 
 **First action:** → [`runbooks/stuck-seat.md`](runbooks/stuck-seat.md).
 
+### `RoomOwnershipFenced` — page
+
+```
+sum(increase(prl_room_fencings_total[10m])) > 0
+```
+
+**Why zero tolerance, and why this is a page:** a room being played is held in ONE process's memory
+— the deck, the commitment salts and the pot have no column and never will — so
+`prl.room_ownership` leases each room to exactly one API process. A *fencing* means this process
+was serving a room and lost the lease, which is only possible if another process took it. For some
+window bounded by the heartbeat interval, two processes were both authoritative for one room's
+in-flight hand state.
+
+That is not a near miss, it is the corruption itself. The hand held in the evicted process can
+never settle; if the other process settled its own version of it, the stacks written to
+`room_members` are not the ones anybody played for, and no error is raised anywhere. This meets the
+page tier on both of its clauses at once: chips are in an uncertain state, and it does not heal —
+the configuration that produced it (a second replica, a supervisor starting a replacement early)
+is still there.
+
+**How to tell the two causes apart:** the `reason` label. `fenced` means another process actively
+took the room and the fix is the deployment. `lease_expired` means this process could not renew for
+longer than the lease allows and stepped down of its own accord — a database or scheduling problem
+here rather than a second process anywhere. Expect `ApiNotReady` or `DbPoolSaturated` alongside the
+second one.
+
+**Why it is not `HandsFailing`:** that fires too, because an evicted room's hand is abandoned. It
+says a hand did not settle; this says *why*, and the why is the difference between a restart and a
+deployment that is actively corrupting play.
+
+**Why the counter is primed at zero:** `increase()` cannot see a rise from a series that was never
+scraped, and the first fencing is the entire reason this rule exists. Both `reason` values are
+primed, because the two are different incidents and neither may be the one that is missing.
+
+**First action:** → [`runbooks/room-ownership-contended.md`](runbooks/room-ownership-contended.md).
+
+### `RoomOwnershipRefused` — page
+
+```
+sum(increase(prl_room_ownership_refusals_total[5m])) > 0
+```
+
+**For:** 10m.
+**What it means:** the guard working. A second process asked for a room this one is serving and was
+refused with `503 room_owned_elsewhere`, so nothing was corrupted. But a refusal is never
+transient by itself: a room is refused only while a live process holds and renews its lease, so a
+sustained refusal rate means a deployment in which some fraction of learners are routed to a
+process that cannot open the table they want. Behind a load balancer with two replicas that is
+roughly half of them, indefinitely — learners cannot use the product, which is the page tier's
+first clause.
+
+**Why the window is shorter than the `for`:** a rolling deploy legitimately produces a few seconds
+of refusals while the old container drains and the new one is already serving. `increase(...[5m])`
+goes back to zero five minutes after the last refusal, so a burst cannot stay true for the ten
+minutes the `for` requires. Only refusals that keep arriving fire this. A longer window than the
+`for` would page on every deploy, which is how an alert gets muted.
+
+**Why it is not counted as `prl_api_errors_total{code="room_owned_elsewhere"}`:** that counts the
+requests refused rather than the refusals. One misconfigured process retrying a busy room produces
+hundreds of the first from one of the second, and the two answer different questions — "how many
+learners were affected" and "how many times did a process try to take a room it must not have".
+
+**First action:** → [`runbooks/room-ownership-contended.md`](runbooks/room-ownership-contended.md).
+
 ### `ArchiveFailing` — ticket
 
 ```
@@ -298,6 +362,30 @@ It was a placeholder of 400 until the measurement existed, listed here so the su
 
 ---
 
+## Data retention — the promise nothing else can see being broken
+
+### `RetentionSweepStalled` — ticket
+
+```
+max(prl_retention_sweep_age_seconds) > 27000
+```
+
+**For:** 15m.
+
+**Why this rule exists at all, and why it is not on the counter next to it.** The sweep also exports `prl_retention_rows_deleted_total{kind}`, and that counter is the wrong thing to alert on: on a deployment of any ordinary size most six-hour windows have no expired session, no abandoned sign-in and no sixty-day-old guest, so a flat counter is the **healthy** state. "Removed nothing" and "did not run" are the same flat line. Everything else about a dead sweep is equally invisible — no request fails, no latency moves, no error is logged after the one that killed it — which is precisely how this subsystem spent its early life with two sweeps that existed, were tested, and were called by nothing (`legal-review-requirements.md` §7). `docs/production/legal-register.md` §5 L5 gives the general shape: *"this is where a wrong answer is invisible: nothing fails, data simply persists."* So the sweep reports its own age and this rule reads that.
+
+**Why 27,000 seconds (7½ hours):** the sweep runs every six hours, so this is one full interval plus a quarter of another — long enough that a slow sweep, a long first backlog or a scrape that lands awkwardly cannot trip it, short enough that a **single** missed tick is caught rather than a day of them. With `for: 15m` the page arrives a little under eight hours after the last successful sweep.
+
+**Why an age and not a timestamp:** `time() - prl_..._timestamp_seconds` subtracts this process's clock from Prometheus's, and two hosts disagreeing about the time is not a retention failure. The API computes the difference against its own clock and exports the duration, so the rule compares a duration with a duration. It also survives this deployment's two-hour Prometheus retention, which no `increase()` over a six-hour window could.
+
+**Why a restart clears it:** the gauge starts from process start, not from zero, because the first sweep is deliberately at T+6h rather than at boot — a process that has never swept is as stale as it is old and no more. A process restarting often enough to hide a dead timer this way is already `ProcessRestartLoop`.
+
+**Why a ticket and not a page:** nothing is broken for anybody at 3 a.m., and there is nothing useful to do at 3 a.m. either. What is accumulating is rows that should have gone, and the fix — find out why the timer stopped, usually by restarting the process — is a working-hours job. It stops being one if it is still firing tomorrow, which the runbook says.
+
+**First action:** → [`runbooks/retention-sweep-stalled.md`](runbooks/retention-sweep-stalled.md).
+
+---
+
 ## Meta — alerts about the telemetry itself
 
 ### `MetricsCardinalityOverflow` — ticket
@@ -315,6 +403,36 @@ changes(prl_readiness_state[30m]) > 6
 ```
 
 **Why:** readiness flapping in and out takes an instance in and out of the load balancer repeatedly, which is worse for learners than being cleanly out. It is usually a database that is marginal rather than down.
+
+---
+
+## The alerting system itself
+
+Every rule above this section is delivered by Alertmanager. So the one failure none of them can report is Alertmanager failing to deliver — and that failure is not exotic: an expired provider key, a rotated SMTP password, a relay that starts answering `550` for this sender, or an intake URL that quietly began returning 404 all produce it. Each rule keeps evaluating and firing exactly as designed, Alertmanager keeps routing by severity exactly as designed, and nothing arrives.
+
+Prometheus scrapes Alertmanager for this — the `prl-alertmanager` job in `prometheus.yml`. Until it existed, `alertmanager_notifications_failed_total` was exported by a container on the same network and read by nothing at all.
+
+**Both of these are `page`, and the reason is asymmetry rather than severity.** A broken receiver is almost always *one* receiver: a ticket queue that has stopped accepting notifications can still be reported through the paging path, and a broken pager can still raise a ticket. Paging both means the report travels whichever path still works.
+
+**What they cannot report is both paths broken at once**, and no rule can — the channel carrying the report is the channel that failed. That gap is closed only from outside the deployment, by a dead man's switch or a scheduled human check; [`runbooks/alerting-blind.md`](runbooks/alerting-blind.md) says so plainly rather than implying these two cover it.
+
+### `AlertmanagerNotificationsFailing` — page
+
+```
+sum(increase(alertmanager_notifications_failed_total[15m])) > 0
+```
+
+**Why zero and not a rate:** one failed notification is one page that did not arrive. There is no number of undelivered pages that is acceptable, which is the same reasoning `ArchiveFailing` and `SeatReleaseFailing` use for their own thresholds. Alertmanager retries, so the notification may have been delivered in the end — the runbook's first step is to establish which integration failed and whether anything ultimately arrived, and the `integration` label answers the first half in one query.
+
+### `AlertmanagerDown` — page
+
+```
+absent(up{job="prl-alertmanager"}) or max_over_time(up{job="prl-alertmanager"}[2m]) == 0
+```
+
+**Why:** while this is true, no alert of any severity reaches anybody — including this one. It is still worth having: Prometheus continues to evaluate it and shows it firing in its own UI, which is where it will be seen, and a deployment running more than one Alertmanager can lose one and be told. Treat a firing `AlertmanagerDown` as a report that the deployment has been unmonitored since it started, not as a report that one process needs restarting.
+
+The `for: 2m` on top of `max_over_time(up[2m]) == 0` is the same shape as `ApiDown`, for the same reason: two minutes of missed scrapes have to accumulate before the inner condition can hold at all.
 
 ---
 
@@ -387,6 +505,44 @@ The password is a file rather than a value in the configuration because the rend
 configuration is the artefact somebody pastes into a bug report, and a submission password in it
 is a credential in a chat log.
 
+### The values are checked before a release can be promoted
+
+```
+pnpm run alerts:preflight                 # placeholders, shapes, both tiers, credentials
+pnpm run alerts:preflight -- --handshake   # and whether the relay accepts the credential today
+```
+
+`pnpm run staging promote` runs the first of those and refuses a promotion it fails. The reason it
+exists is that `alerts:verify` **cannot** catch a placeholder, and the reason is structural rather
+than an oversight: that script renders the destinations it is about to assert against, so it is
+checking its own defaults — and its defaults are deliberately unroutable sinks on this host. It
+passes hardest exactly when nothing has been configured. The preflight asks the opposite question:
+are these values ones a stranger's mail relay and a stranger's pager would accept?
+
+What it refuses, each of which produces an Alertmanager that starts, reports itself healthy, routes
+by severity exactly as designed, and notifies nobody:
+
+- a destination still holding a rehearsal default, a reserved documentation domain (`.invalid`,
+  `.example`, `example.com`, `.test`), a name that resolves only on this machine
+  (`host.docker.internal`, `localhost`, `127.0.0.1`), an unfilled `<…>` marker, or a
+  come-back-to-this word;
+- a URL that does not parse, an address with no dotted domain, a smarthost with no port;
+- a severity tier that matches no route, or that routes to a receiver with nothing in it;
+- a pager and a ticket queue that are the same address — the two-tier rule deleted, which is how a
+  pager stops being read;
+- an alert body crossing a network in the clear: `smtp_require_tls: false` to an off-host relay, or
+  a plaintext `http://` webhook. `alerts:verify` only *warns* about that combination, correctly,
+  because its own relay is a local sink with no certificate. A promotion is the other case;
+- a username with no password, a password with no username, or a submission port (587, 465) with no
+  credentials at all.
+
+`--handshake` is opt-in, and a skipped handshake changes the summary line to
+`PREFLIGHT PASSED — CREDENTIALS UNPROVEN` rather than passing quietly. When it runs it speaks TCP,
+TLS, `EHLO`, `AUTH` and `QUIT` to the configured relay and nothing else — **no `MAIL FROM`, no
+`RCPT TO`, no `DATA`** — so it can be run in a loop and can never put a message in anybody's inbox.
+A `235` proves the relay accepts this deployment's credentials. It proves nothing about whether the
+recipient address is watched, which is the next section's subject.
+
 **Why email is a first-class transport here and not a fallback.** A great many teams page through
 it — an email-to-SMS gateway, a provider's inbound address, a shared inbox with a phone rule on
 it. It is also the only paging transport this repository can rehearse end to end without holding
@@ -412,9 +568,10 @@ Provoking a rule and watching it fire is the only evidence that it is wired corr
 
 That has now been done, and what it proved is narrower than "these alerts work". `pnpm run
 alerts:verify` brings up a real Prometheus and a real Alertmanager beside the staging stack
-and establishes four things about **all twenty-two** rules — they load with no evaluation
-error, they agree with this document, every `prl_*` series they name appears in a live
-scrape, and every expression executes — and delivery for **two** of them, one per tier.
+and establishes four things about **all twenty-eight** rules — they load with no evaluation
+error, they agree with this document, every `prl_*` series they name appears in a live scrape
+of the API and every `alertmanager_*` series in a live scrape of Alertmanager, and every
+expression executes — and delivery for **two** of them, one per tier.
 `ApiDown` is provoked by stopping the API container: it goes pending, fires, reaches
 Alertmanager, and is delivered to the paging tier and not the ticket tier, with the resolved
 notification following when the API comes back. `RateLimitBans` is provoked by flooding the
@@ -454,15 +611,18 @@ protocol, and handed over ten kilobytes of RFC822 with `alertname = ApiDown` in 
 
 ### The three limits, stated plainly
 
-1. **Twenty rules have not been provoked.** Loaded, agreed, grounded and evaluable is a
+1. **Twenty-six rules have not been provoked.** Loaded, agreed, grounded and evaluable is a
    great deal more than a markdown file, and a great deal less than tested. The table above
    is how to provoke each of them by hand.
 2. **The last hop is narrower than it was, not gone.** It used to be the whole of "no human
    is paged": both receivers were a webhook sink and no real delivery protocol had ever been
-   spoken. What remains is the four bullets above: nothing left this machine, no credential
-   was exercised, no address was confirmed to be watched, and nobody was woken. Closing
-   those is a deployment's job, done by setting `PRL_ALERT_*` and sending itself a test page
-   — not by editing a file in a checkout.
+   spoken. Two of the four bullets above now have a gate against them:
+   `pnpm run alerts:preflight` refuses a placeholder or an unset credential and blocks a
+   promotion on it, and `--handshake` exercises a real credential against the configured relay.
+   Two remain, and no gate in this repository can close them: **no address has been confirmed
+   to be watched, and nobody has been woken.** An email-to-SMS gateway decommissioned last year
+   accepts mail exactly like a working one. That is closed by a deployment sending itself a
+   real test page and a person confirming it arrived — not by any command here.
 3. **Staging, not production.** These rules have never been evaluated against production
    data volumes, and several thresholds (`WebSocketConnectionsHigh`, `WorkerPoolQueueDeep`)
    are derived from a capacity measurement of one instance on a laptop.

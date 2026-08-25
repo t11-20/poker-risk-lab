@@ -42,8 +42,10 @@
  *
  * ## What this cannot do
  *
- * Signatures. `cosign` is not installed and this module does not sign, verify or
- * attest anything. What a push here buys is CONTENT IDENTITY across a push/pull
+ * Signatures. This module does not sign, verify or attest anything — that is
+ * `scripts/image-signing.mjs` and `scripts/supply-chain/image-provenance.mjs`, added
+ * 2026-08-25, and this paragraph used to say cosign was not installed at all.
+ * What a push here buys, on its own, is CONTENT IDENTITY across a push/pull
  * boundary — the property that another machine asking for `repo@sha256:X` gets
  * those bytes or an error, never different bytes. Who built them, on what, from
  * which source, and whether anybody vouches for them are provenance questions,

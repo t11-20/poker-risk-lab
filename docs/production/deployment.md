@@ -309,3 +309,13 @@ The two defects that `staging up` found — Monte Carlo equity throwing under `N
 - [ ] the previous release's `release-manifest` artifact is retrievable — **that artifact is the rollback target**, which is why its retention is 90 days
 - [ ] the orchestrator's termination grace is **above** `SHUTDOWN_GRACE_MS`, never equal to it
 - [ ] one replica, or room affinity tested with two players in one room
+- [ ] **if this deployment serves a class**: `COHORT_SIZE` declares how many learners sign in
+      together from one address, `COHORT_ENTRY` names which doors they use, and the API booted —
+      it refuses to start when the sign-in limits cannot serve the declaration. RUNBOOK §7.1 has
+      the arithmetic. Every sign-in limit is keyed on the client address (it has to be: those
+      routes issue the session a session-keyed limit would let the caller rotate), so a campus
+      NAT is one caller. Getting this wrong is not found in a log; it is found by thirty students
+      at once, and it was measured at 15 of 30 refused before the check existed
+- [ ] `RATE_LIMIT_OIDC_FAILURE_MAX` was **not** raised alongside `RATE_LIMIT_OIDC_MAX`. The
+      ceiling is sized for the cohort and that budget is sized for the abuse; raising them
+      together hands a script the classroom's headroom and the boot check will refuse it

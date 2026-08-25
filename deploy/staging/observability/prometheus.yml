@@ -62,3 +62,36 @@ scrape_configs:
       credentials_file: /etc/prometheus/metrics-token
     static_configs:
       - targets: ['api:3001']
+
+  # Alertmanager, scraped so that the alerting system can report its OWN failure.
+  #
+  # ## The one failure no in-band alert can report
+  #
+  # Every rule above this line is about the application, and every one of them is
+  # delivered by Alertmanager. So the single failure that silences all of them —
+  # Alertmanager unable to deliver, or not running — is the one failure they cannot
+  # tell anybody about. Until this job existed, `alertmanager_notifications_failed_total`
+  # was exported by a container on this network and read by nothing: an expired
+  # PagerDuty key, a rejected SMTP password or a relay that started answering 550
+  # would have incremented a counter nobody was looking at, forever, while every
+  # dashboard stayed green.
+  #
+  # `AlertmanagerNotificationsFailing` and `AlertmanagerDown` in `alert-rules.yml`
+  # read this job. Both are honest about their own limitation in
+  # `docs/production/runbooks/alerting-blind.md`: a notification that cannot be
+  # delivered cannot deliver the news that notifications cannot be delivered. They
+  # catch the partial cases — one receiver of two, one transport of two — which is
+  # most of what actually happens, and the total case is what the runbook's
+  # out-of-band check is for.
+  #
+  # No `authorization:` block, and that is not an oversight. Alertmanager serves
+  # /metrics without authentication and has no way to require any; it is reachable
+  # only on the compose network, published to loopback alone, and what it exposes is
+  # notification counters rather than anything about a learner. The API's exposition
+  # is the one that carries a bearer token because the API's is the one with
+  # per-endpoint behaviour in it.
+  - job_name: prl-alertmanager
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets: ['alertmanager:9093']

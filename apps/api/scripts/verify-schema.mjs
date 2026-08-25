@@ -34,6 +34,13 @@
  *      have: two of these keys were ON DELETE RESTRICT, which made every learner who had ever
  *      created or joined a table permanently undeletable, and nothing anywhere compared the
  *      schema's answer to the policy's requirement.
+ *  10. Every table in the schema holds EXACTLY the verbs the grant matrix in
+ *      db/migrations/0001_initial.sql says it holds, for prl_app, and no table exists that the
+ *      matrix has not decided about. Check 6 asks whether prl_app can do the one thing that is
+ *      never acceptable (TRUNCATE); this asks whether it can do precisely the things it should,
+ *      which is a different and stricter question in both directions — an UPDATE on an
+ *      append-only ledger and a MISSING grant on a new table are both failures, and neither was
+ *      visible before.
  *
  * Every one of them reads `pg_catalog` directly, and no check reads `information_schema` at all.
  * That is a correctness requirement, not a preference: `information_schema` is filtered by the
@@ -109,6 +116,74 @@ const USER_REFERENCE_ACTIONS = [
     'n',
     'a room cascades to its hands, so CASCADE here would destroy the hand history of everybody ' +
       'who ever played at that table; RESTRICT made every learner who had created one undeletable',
+  ],
+];
+
+/**
+ * The verbs checked for every table, in the order a failure message prints them.
+ *
+ * All seven, not just the four DML ones. `REFERENCES` lets a role attach a foreign key to a table
+ * it does not own — which is how a row becomes undeletable by somebody else's constraint — and
+ * `TRIGGER` lets it attach code that runs inside another role's transaction. Both are in 0001's
+ * "never granted, and must never be granted" list, and neither was checked anywhere until this
+ * matrix existed.
+ */
+const TABLE_PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
+
+/**
+ * What `prl_app` may do to each table, and why — the grant matrix from
+ * `db/migrations/0001_initial.sql`, restated where the database can be asked about it.
+ *
+ * ## Why this is written out rather than derived
+ *
+ * For the same reason `USER_REFERENCE_ACTIONS` is: a list read from the thing it is checking cannot
+ * detect a change to it. Deriving the expectation from the live ACL would make this check assert
+ * that the database agrees with itself.
+ *
+ * ## The failure it exists for, which is the default rather than the exception
+ *
+ * 0001 says in as many words that PostgreSQL's built-in default for a new table is owner-only, "so
+ * a table added by a later migration grants prl_app nothing at all until that migration says so".
+ * That is the right default and it makes a forgotten GRANT invisible: the migration applies, the
+ * schema is correct, `db:verify` passes, and the first anybody hears of it is a runtime
+ * `permission denied` on whatever path the new table serves. `prl.room_ownership` (migration 0005)
+ * is a table whose whole job is to REFUSE to serve a room it cannot read a lease for, so a missing
+ * grant there would have turned a correctness guard into a total refusal of every room, at runtime,
+ * with nothing in this gate to say why.
+ *
+ * The other direction matters just as much and is quieter. An over-grant — DELETE on `prl.hands`,
+ * UPDATE on `prl.audit_log` — is a capability nobody decided to hand the request path, it looks
+ * like nothing in a diff of a migration, and it is exactly what an injection reaching the runtime
+ * role is bounded by.
+ *
+ * A table that is not in this list fails as loudly as one with the wrong verbs, and deliberately:
+ * it is a table whose privileges nobody has reasoned about.
+ */
+const APP_TABLE_GRANTS = [
+  ['users', 'SELECT INSERT UPDATE DELETE', 'sign-up, rename, guest sweep, and a learner leaving'],
+  ['sessions', 'SELECT INSERT UPDATE DELETE', 'login, refresh, revoke, expiry sweep'],
+  ['oidc_login_attempts', 'SELECT INSERT UPDATE DELETE', 'start, single-use consume, sweep'],
+  ['lesson_progress', 'SELECT INSERT UPDATE DELETE', 'a learner may clear their own progress'],
+  ['rooms', 'SELECT INSERT UPDATE', 'create, play, close. No DELETE: closing is a status change'],
+  ['room_members', 'SELECT INSERT UPDATE', 'join, re-seat, leave. Removal happens by CASCADE (0004)'],
+  ['hands', 'SELECT INSERT UPDATE', 'deal, advance, settle. A hand is history and is never deleted'],
+  ['hand_seats', 'SELECT INSERT UPDATE', 'deal, show down, settle. As hands'],
+  ['hand_actions', 'SELECT INSERT', 'append-only: the ledger of what was done in a hand'],
+  ['quiz_attempts', 'SELECT INSERT', 'append-only'],
+  ['scenario_attempts', 'SELECT INSERT', 'append-only'],
+  ['audit_log', 'SELECT INSERT', 'append-only; a role that can edit the audit log has no audit log'],
+  [
+    'room_ownership',
+    'SELECT INSERT UPDATE DELETE',
+    'the room lease (migration 0005). DELETE is the odd one and is argued in that file: a lease row ' +
+      'is a statement about the present rather than history, and releasing it by deleting it is what ' +
+      'lets a deploy hand a room over at once instead of stranding it for a whole lease TTL',
+  ],
+  [
+    'schema_migrations',
+    '',
+    'nothing at all, on purpose: the runtime has no business reading, let alone editing, the ' +
+      'migration ledger',
   ],
 ];
 
@@ -531,6 +606,65 @@ try {
       );
     }
     note(`checked schema and ${misowned.length === 0 ? 'every' : 'each'} relation owner`);
+  }
+
+  // ---- 10. The grant matrix, exactly ---------------------------------------------------
+  //
+  // `has_table_privilege` rather than reading `relacl`, because the ACL array does not account for
+  // privileges reaching the role through membership in another one — and `prl_app` is a privilege
+  // CONTAINER whose members are the login identities, so the question that matters is what the
+  // container effectively holds. `pg_class` supplies the table list for the reason every other list
+  // in this file comes from `pg_catalog`: `information_schema` is filtered by the connecting role's
+  // privileges, and a table this script cannot see is exactly the table whose grants nobody wrote.
+  {
+    const before = failures.length;
+    const declared = new Map(APP_TABLE_GRANTS.map(([table, verbs, why]) => [table, { verbs, why }]));
+    const present = await sql`
+      select cls.relname as table_name
+      from pg_catalog.pg_class cls
+      join pg_catalog.pg_namespace nsp on nsp.oid = cls.relnamespace
+      where nsp.nspname = ${SCHEMA} and cls.relkind in ('r', 'p')
+      order by cls.relname
+    `;
+    for (const { table_name: table } of present) {
+      const [held] = await sql`
+        select coalesce(
+          string_agg(privilege, ' ' order by ordinality),
+          ''
+        ) as verbs
+        from unnest(${TABLE_PRIVILEGES}::text[]) with ordinality as candidate(privilege, ordinality)
+        where has_table_privilege('prl_app', ${`${SCHEMA}.${table}`}, candidate.privilege)
+      `;
+      const actual = held?.verbs ?? '';
+      const expectation = declared.get(table);
+      declared.delete(table);
+      if (expectation === undefined) {
+        fail(
+          'grant matrix',
+          `${table} is not in APP_TABLE_GRANTS, so nobody has decided what prl_app may do to it ` +
+            `(it currently holds: ${actual === '' ? 'nothing' : actual}). Decide, write it into the ` +
+            'migration that created the table, and add it to that list in this script.',
+        );
+        continue;
+      }
+      if (actual !== expectation.verbs) {
+        fail(
+          'grant matrix',
+          `prl_app holds ${actual === '' ? 'nothing' : actual} on ${table}, expected ` +
+            `${expectation.verbs === '' ? 'nothing' : expectation.verbs} — ${expectation.why}`,
+        );
+      }
+    }
+    for (const [table, expectation] of declared) {
+      fail(
+        'grant matrix',
+        `${table} is in APP_TABLE_GRANTS and does not exist in the schema (${expectation.why}). ` +
+          'Either the database is not migrated or a table was removed and the matrix was not.',
+      );
+    }
+    if (failures.length === before) {
+      note(`prl_app holds exactly the declared verbs on all ${present.length} tables`);
+    }
   }
 
   // ---- 7. No aggregate quiz score -----------------------------------------------------

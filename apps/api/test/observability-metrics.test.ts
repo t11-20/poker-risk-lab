@@ -649,6 +649,27 @@ describe('counters whose alerts are zero-tolerance are primed at zero', () => {
     assert.match(new AppMetrics().render(), /prl_seat_release_failures_total 0/);
   });
 
+  /**
+   * The room lease, where the first event is the ONLY event worth alerting on.
+   *
+   * Both rules are `increase(...) > 0`, and both describe something that must never happen at all:
+   * a second API process asking for a room this one is serving, and — worse — this process being
+   * fenced from a room it was already serving, which means two processes were both authoritative
+   * for one room's hand state for some window. There is no background rate to distinguish a spike
+   * from, so the alert's whole job is the first occurrence, and an unprimed series is invisible to
+   * it exactly as `RateLimitBans` was against staging.
+   *
+   * `prl_room_fencings_total` is labelled by reason and the set is closed at two, so both are
+   * primed: `fenced` (somebody took the room) and `lease_expired` (this process could not renew and
+   * stepped down) send an operator to different places and neither may be the one that is missing.
+   */
+  it('renders the room-lease series before any process contends for a room', () => {
+    const text = new AppMetrics().render();
+    assert.match(text, /prl_room_ownership_refusals_total 0/);
+    assert.match(text, /prl_room_fencings_total\{reason="fenced"\} 0/);
+    assert.match(text, /prl_room_fencings_total\{reason="lease_expired"\} 0/);
+  });
+
   it('a primed series still counts normally, so priming costs nothing (POSITIVE CONTROL)', () => {
     // Without this, the two assertions above would also hold for a counter that had been broken
     // into always reporting zero.
@@ -659,10 +680,19 @@ describe('counters whose alerts are zero-tolerance are primed at zero', () => {
     // free several at once, and a primed series must add to what is already there rather than
     // replace it.
     metrics.seatReleaseFailures.inc({}, 2);
+    metrics.roomOwnershipRefusals.inc();
+    metrics.roomFencings.inc({ reason: 'fenced' });
     const text = metrics.render();
     assert.match(text, /prl_rate_limit_events_total\{kind="banned"\} 1/);
     assert.match(text, /prl_archive_failures_total 1/);
     assert.match(text, /prl_seat_release_failures_total 2/);
+    assert.match(text, /prl_room_ownership_refusals_total 1/);
+    assert.match(text, /prl_room_fencings_total\{reason="fenced"\} 1/);
+    assert.match(
+      text,
+      /prl_room_fencings_total\{reason="lease_expired"\} 0/,
+      'one reason moving must not move the other; they are different incidents',
+    );
     assert.match(text, /prl_rate_limit_events_total\{kind="limited"\} 0/, 'priming must not move a sibling');
   });
 });

@@ -36,6 +36,23 @@
  * is decide the PERIODS, which are entry 7 of the counsel register and are a policy question, not
  * an observation about the code.
  *
+ * ## The retention paragraph was also WRONG, in the direction that understates
+ *
+ * It said "a session lasts fourteen days from when it was issued". Fourteen days is the IDLE
+ * window: `extendExpiry` in `apps/api/src/repositories/sessions.ts` slides it forward on every
+ * visit past the halfway mark (`SESSION_REFRESH_AFTER`), bounded by `SESSION_ABSOLUTE_TTL_SECONDS`
+ * in `apps/api/src/auth/session.ts` — SIXTY days from `created_at`. A learner who visits weekly
+ * held one session row for four times as long as this page claimed. The ceiling is now stated, and
+ * `apps/web/test/legal-pages.test.ts` reads both constants out of the API source and fails if the
+ * page and the code disagree again. A retention period a document understates is worse than one it
+ * leaves vague: the vague one sends a reader to ask, and the wrong one does not.
+ *
+ * Two smaller corrections went with it. "Only for the ten minutes an in-progress sign-in lasts"
+ * described when a row stops WORKING, not when it stops EXISTING — the sweep is what removes it, so
+ * the row can outlive its ten minutes by up to a sweep interval. And section 6 said what deletion
+ * does without saying what it cannot reach: backups are sealed snapshots, and the shipped policy in
+ * `scripts/backup.mjs` keeps one for up to six months.
+ *
  * `robots` is not overridden here, for the reason written out on `/terms`.
  */
 
@@ -105,7 +122,9 @@ const INVENTORY: readonly InventoryEntry[] = [
       'One row per signed-in browser. A SHA-256 digest of the session token — never the token, so ' +
       'reading this table cannot sign anyone in — when it expires, when it was revoked, and ' +
       'optionally a keyed HMAC-SHA-256 of your IP address and of your browser’s User-Agent string. ' +
-      'The raw address and the raw user agent are never written anywhere. Be clear about what the ' +
+      'Neither the raw address nor the raw user agent is ever written to the database — but read ' +
+      'section 4 before concluding they are written nowhere, because the web server in front of ' +
+      'this application is a different matter. Be clear about what the ' +
       'keyed digest achieves: it is pseudonymisation, not anonymisation. Somebody holding the ' +
       'server’s secret can confirm a guessed address; what it prevents is a leaked backup handing ' +
       'out a list of addresses.',
@@ -113,8 +132,9 @@ const INVENTORY: readonly InventoryEntry[] = [
   {
     table: 'prl.oidc_login_attempts',
     what:
-      'Only if this deployment has an identity provider configured, and only for the ten minutes an ' +
-      'in-progress sign-in lasts. Digests of the three single-use secrets (state, nonce and the PKCE ' +
+      'Only if this deployment has an identity provider configured. A sign-in stops being completable ' +
+      'ten minutes after it starts; the row itself is removed by the sweep described in section 5, so ' +
+      'it can sit there for up to six hours longer. Digests of the three single-use secrets (state, nonce and the PKCE ' +
       'verifier) and, if you were going somewhere in particular, the local path to return you to. ' +
       'The secrets themselves are never stored, so a database read cannot complete somebody else’s ' +
       'sign-in. Each row can be consumed exactly once.',
@@ -126,6 +146,16 @@ const INVENTORY: readonly InventoryEntry[] = [
       'action timer, which seat you took, your chip stack, when you joined and when you left. The ' +
       'invite code is stored only as a SHA-256 digest and is shown to you exactly once, so it cannot ' +
       'be recovered afterwards by anyone including the operator.',
+  },
+  {
+    table: 'prl.room_ownership',
+    what:
+      'Nothing about you, and it is listed here so that “nothing” is a stated fact rather than an ' +
+      'omission. One row per table that currently has a hand in flight, recording which of the ' +
+      'application’s own server processes is in charge of it and when that process last proved it ' +
+      'was alive. The identifier in it names a process, not a person; there is no account ' +
+      'identifier in the table and no column that could hold one. The row is deleted when the ' +
+      'process lets the table go.',
   },
   {
     table: 'prl.hands, prl.hand_seats and prl.hand_actions',
@@ -245,7 +275,8 @@ export default function PrivacyPage(): ReactElement {
               <strong>Your session cookie</strong>, and the paired token that protects against cross-site
               request forgery. The session cookie is the one thing in this list that is sent to the server: it
               is what identifies your account. It is marked so that scripts cannot read it, and it lasts
-              fourteen days.
+              fourteen days from your last visit — each visit past the halfway point moves that fourteen days
+              forward, and no amount of visiting carries it past sixty days from when it was issued.
             </li>
             <li>
               <strong>Your theme choice</strong> (<code>prl-theme</code> in local storage) and whether the
@@ -289,23 +320,57 @@ export default function PrivacyPage(): ReactElement {
             and error codes, and the number of distinct label values is capped so that a caller cannot make
             one carry data.
           </p>
+          <p>
+            <strong>
+              The web server in front of the application is a separate log, and it is not redacted.
+            </strong>{' '}
+            Everything above describes the application’s own log. Requests reach the application through a
+            reverse proxy, and the proxy configuration this project ships writes a conventional access log:
+            one line per request carrying your <em>raw</em> IP address, your <em>full</em> User-Agent string,
+            the complete request line including anything in the query string, and the page you came from. None
+            of the redaction described above applies to it, because none of it is written by the application.
+            If you sign in through an identity provider, the provider sends you back to a URL with single-use
+            sign-in parameters in the query string, and that URL is in this log too.
+          </p>
+          <p>
+            This is said here rather than left to be discovered because the paragraphs above would otherwise
+            read as a promise the whole system does not keep. Where those lines are sent, who can read them,
+            and how long they are kept are decisions of whoever operates this deployment; nothing in this
+            software rotates or deletes them, and no retention period for them is configured anywhere in it.
+          </p>
         </section>
 
         <section className="prl-legal__section">
           <h2>5. How long things are kept</h2>
           <p>
-            A session lasts fourteen days from when it was issued; a revoked one is meant to be removed a day
-            after revocation, and an unfinished sign-in expires after ten minutes. Everything else — your
-            account row, your progress, your answers and your hand history — is kept until you delete your
-            account.
+            A session lasts fourteen days <em>from when it was last used</em>, not from when it was issued.
+            Each visit past the halfway point of that window slides the expiry forward, so a session you keep
+            using does not stop working after a fortnight. What stops it sliding is a hard ceiling of{' '}
+            <strong>sixty days from creation</strong>: a learner who visits at least once a week keeps one
+            session row for up to sixty days, and then has to sign in again. A revoked session becomes
+            removable a day after revocation, and an unfinished sign-in stops being usable after ten minutes.
+            Everything else — your account row, your progress, your answers and your hand history — is kept
+            until you delete your account, with one exception described next.
+          </p>
+          <p>
+            <strong>Guest accounts you stop using are removed for you.</strong> A guest account has no email
+            address and no password — no such columns exist — so the only thing that can ever reach it again
+            is the cookie in the browser that created it, and that cookie cannot outlive the sixty-day ceiling
+            above. Sixty days after a guest account was last seen it is therefore unreachable by anybody, and
+            it is erased on the same schedule as the sweeps below. An account is only ever taken when it is
+            genuinely finished with: never while a session is still live, never while it still holds a seat at
+            a table, a place in a room, or a room of its own — at any age. The erasure is the same operation
+            as section 6, with the same guarantees; nothing about it is a shortcut.
           </p>
           <p>
             <strong>An honest note about the sweeps.</strong> The code that removes expired sessions and
             expired sign-in attempts runs on a schedule — every six hours, inside the server, in bounded
-            batches. So an expired session is both unusable and, within a few hours, gone. This paragraph used
-            to say the opposite, because until that schedule existed nothing called that code at all. The
-            periods above are still a policy: they say how long a thing may be kept, and the sweep only
-            enforces what the code already implements.
+            batches. This paragraph used to say the opposite, because until that schedule existed nothing
+            called that code at all. Being <em>unusable</em> and being <em>gone</em> are still two different
+            moments, and the gap between them is up to six hours: a sign-in attempt stops working after ten
+            minutes and its row is removed at the next sweep, which is why the row can outlive the ten minutes
+            by several hours. The first sweep of a freshly started server runs six hours after it starts, not
+            at boot. The periods above are a policy; the sweep only enforces what the code already implements.
           </p>
           <CounselFlag clause={COUNSEL_CLAUSES['retention-and-deletion']} />
         </section>
@@ -314,7 +379,9 @@ export default function PrivacyPage(): ReactElement {
           <h2>6. Deleting your account</h2>
           <p>
             Deletion is a single operation, and this is exactly what it does — taken from the database
-            migration that implements it rather than from a promise:
+            migration that implements it rather than from a promise. It runs when you ask for it, and it is
+            also what removes an abandoned guest account sixty days after it was last seen (section 5); the
+            two paths are the same code, so the list below is true of both:
           </p>
           <ul>
             <li>
@@ -338,6 +405,18 @@ export default function PrivacyPage(): ReactElement {
             transaction, and refuses to commit if anything that should have gone is still present. If your
             deployment shows no control for this, the feature has not been wired up in that build, and nothing
             on this page can delete anything on your behalf — ask whoever runs it.
+          </p>
+          <p>
+            <strong>What deletion does not reach: backups.</strong> Deletion runs against the live database
+            and against nothing else. If this deployment takes backups — the shipped tooling takes one a
+            night, keeps the last seven, then one a week for four weeks and one a month for six months, and
+            never deletes the newest working one — then your rows are still inside the encrypted archives
+            taken before you left, and they stay there until those archives age out of that policy. There is
+            no way to edit a backup: an archive is a sealed snapshot, and rewriting one would destroy the
+            property that makes it trustworthy as a record. What this means in practice is that erasure is
+            immediate in the system you use and takes as long as the backup policy in the archives nobody
+            reads unless the database has to be rebuilt. Whether that is acceptable, and whether the backup
+            periods are the right ones, is part of the retention question marked in section 5.
           </p>
         </section>
 

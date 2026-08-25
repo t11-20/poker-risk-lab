@@ -47,6 +47,7 @@ import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   ALERT_DESTINATION_DEFAULTS,
+  alertmanagerSeriesReferencedBy,
   alertmanagerValues,
   alertsInDocument,
   alertsInRulesFile,
@@ -638,5 +639,88 @@ describe('emailsFor with no address configured', () => {
     ];
     assert.equal(emailsFor(received, '', 'RateLimitBans', 'firing').length, 0);
     assert.equal(emailsFor(received, '  ,  ', 'RateLimitBans', 'firing').length, 0);
+  });
+});
+
+describe('alertmanagerSeriesReferencedBy', () => {
+  it('finds the series the alerting-itself rules are built on', () => {
+    // `seriesReferencedBy` matches `prl_*` and only `prl_*`, so before this existed the
+    // rules watching the alerting system were the one part of the file check 3 never
+    // grounded — an expression on a misspelled `alertmanager_*` series would have
+    // loaded, evaluated without error, and been permanently false.
+    assert.deepEqual(
+      [...alertmanagerSeriesReferencedBy('sum(increase(alertmanager_notifications_failed_total[15m])) > 0')],
+      ['alertmanager_notifications_failed_total'],
+    );
+    assert.deepEqual([...alertmanagerSeriesReferencedBy('prl_hands_failed_total > 0')], []);
+  });
+
+  it('is used by at least one shipped rule, so check 3 is not grounding nothing', () => {
+    const named = new Set();
+    for (const expression of expressionsInRulesFile(RULES).values()) {
+      for (const series of alertmanagerSeriesReferencedBy(expression)) named.add(series);
+    }
+    assert.ok(
+      named.size > 0,
+      'no rule watches the alerting system itself, so nothing would report a deployment whose ' +
+        'alerts fire, route correctly and reach nobody',
+    );
+  });
+});
+
+describe('the counts docs/production/alerts.md states about itself', () => {
+  /** The number words that document uses, which is all it will ever need. */
+  const WORDS = new Map(
+    [
+      'zero',
+      'one',
+      'two',
+      'three',
+      'four',
+      'five',
+      'six',
+      'seven',
+      'eight',
+      'nine',
+      'ten',
+      'eleven',
+      'twelve',
+      'thirteen',
+      'fourteen',
+      'fifteen',
+      'sixteen',
+      'seventeen',
+      'eighteen',
+      'nineteen',
+      'twenty',
+    ].map((word, index) => [word, index]),
+  );
+  const spelled = (text) => {
+    const [tens, units] = text.toLowerCase().split('-');
+    const base = WORDS.get(tens);
+    if (base === undefined) return null;
+    return units === undefined ? base : base + (WORDS.get(units) ?? Number.NaN);
+  };
+
+  it('agrees with the number of rules that actually exist', () => {
+    // This control was already rotten when it was written: the document said
+    // "all twenty-two rules" while the rules file held twenty-three, because a rule was
+    // added and the prose was not. A stated count nobody checks is a claim that decays
+    // silently, and this document's counts are quoted straight into release reports.
+    const total = alertsInRulesFile(RULES).size;
+    const stated = /establishes four things about \*\*all ([a-z-]+)\*\* rules/.exec(DOC);
+    assert.ok(stated !== null, 'the document no longer states how many rules it covers');
+    assert.equal(spelled(stated[1]), total, `the document says ${stated[1]}, the rules file has ${total}`);
+  });
+
+  it('agrees about how many of them have never been provoked', () => {
+    // Two are driven end to end by `alerts:verify` — `ApiDown` for the paging tier and
+    // `RateLimitBans` for the ticket tier. Everything else is loaded, agreed, grounded
+    // and evaluable, which is not the same as tested, and the document says so with a
+    // number.
+    const total = alertsInRulesFile(RULES).size;
+    const stated = /\*\*([A-Za-z-]+) rules have not been provoked\.\*\*/.exec(DOC);
+    assert.ok(stated !== null, 'the document no longer states how many rules are unprovoked');
+    assert.equal(spelled(stated[1]), total - 2, `${stated[1]} stated, ${total - 2} unprovoked`);
   });
 });

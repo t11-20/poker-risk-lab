@@ -436,8 +436,58 @@ const HOSTILE_CHANGES: readonly HostileChange[] = [
     apply: async (sql) => {
       await sql`alter table prl.audit_log owner to prl_app`;
     },
+    /**
+     * The GRANT has to be re-issued, and finding that out is what the grant matrix check bought.
+     *
+     * `ALTER TABLE ... OWNER TO prl_app` makes `prl_app` the owner, and PostgreSQL drops the now
+     * redundant explicit grant to it from the ACL. Handing ownership back to `prl_migrator` does
+     * NOT put that entry back, so the revert left `audit_log` with no grant to the runtime role at
+     * all — the security-audit trail unwritable by the only role that writes to it.
+     *
+     * This test reverted that way from the day it was written and passed every time, because
+     * nothing in the verifier looked at grants: `assertPasses` after the revert only ever proved
+     * that ownership was restored. Check 10 caught it on its first run against the full suite.
+     */
     revert: async (sql) => {
       await sql`alter table prl.audit_log owner to prl_migrator`;
+      await sql`grant select, insert on prl.audit_log to prl_app`;
+    },
+  },
+  {
+    /**
+     * The over-grant direction of the matrix.
+     *
+     * `prl.hands` is SELECT/INSERT/UPDATE and 0001 says why in as many words: "deal, advance,
+     * settle. No DELETE". A DELETE here would let the request path — and therefore an injection
+     * that reaches it — remove a hand that other people played, and it looks like nothing at all in
+     * a migration diff. Check 6 could never see it: it asks only about TRUNCATE.
+     */
+    what: 'DELETE on prl.hands granted to the runtime role, which no migration ever decided',
+    expect: /grant matrix: prl_app holds SELECT INSERT UPDATE DELETE on hands, expected SELECT INSERT UPDATE/,
+    apply: async (sql) => {
+      await sql`grant delete on prl.hands to prl_app`;
+    },
+    revert: async (sql) => {
+      await sql`revoke delete on prl.hands from prl_app`;
+    },
+  },
+  {
+    /**
+     * The missing-grant direction, on the table where it costs the most.
+     *
+     * A new table is granted nothing by default — 0001 says so — so this is what a migration that
+     * forgot its GRANT looks like. `prl.room_ownership` is the room lease: the API refuses to serve
+     * a room whose lease it cannot take, so a missing grant here does not degrade a feature, it
+     * refuses every room in the deployment. That failure would otherwise arrive as a runtime
+     * `permission denied` on a table nothing else mentions, with `db:verify` having passed.
+     */
+    what: 'the room-lease table left with no grants, the default state of a new table',
+    expect: /grant matrix: prl_app holds nothing on room_ownership, expected SELECT INSERT UPDATE DELETE/,
+    apply: async (sql) => {
+      await sql`revoke all on prl.room_ownership from prl_app`;
+    },
+    revert: async (sql) => {
+      await sql`grant select, insert, update, delete on prl.room_ownership to prl_app`;
     },
   },
   {
@@ -463,6 +513,9 @@ describe('verify-schema.mjs — it passes a correct schema and rejects a hostile
       assert.match(result.output, /\d+ columns across the prl schema/);
       assert.match(result.output, /\d+ indexes/);
       assert.match(result.output, /checked \d+ tables for prl_app privileges/);
+      // And that the grant matrix looked at every table rather than at the ones it happened to
+      // find. A matrix that silently checked nothing would report no failures either.
+      assert.match(result.output, /prl_app holds exactly the declared verbs on all \d+ tables/);
     });
   });
 

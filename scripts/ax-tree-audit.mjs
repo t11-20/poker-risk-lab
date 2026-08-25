@@ -78,6 +78,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { ANNOUNCER_PROBE, ASSERTION_ROUTES, CARD_VALUE_WORDS } from './ax-assertions.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -189,8 +190,13 @@ const DEFAULTS = {
   headful: false,
   readyTimeoutSeconds: 120,
   journeys: [],
+  assertions: [],
+  skipJourneys: false,
+  skipAssertions: false,
   json: null,
 };
+
+const ASSERTION_KEYS_FOR_HELP = ASSERTION_ROUTES.map((route) => route.key).join(', ');
 
 const HELP = `
 ${bold('pnpm run test:ax')} — accessibility-TREE audit, in real Chrome
@@ -209,6 +215,10 @@ ${bold('pnpm run test:ax')} — accessibility-TREE audit, in real Chrome
   Scope
     --journeys <a,b,c>    audit only these journey keys    (default: all)
                           ${JOURNEY_KEYS_FOR_HELP}
+    --assertions <a,b,c>  run only these certification pages (default: all)
+                          ${ASSERTION_KEYS_FOR_HELP}
+    --no-journeys         skip the per-journey tree audit
+    --no-assertions       skip the certification assertions
 
   Reporting
     --headful             run Chrome with a window, to watch it
@@ -263,6 +273,18 @@ function parseArgs(argv) {
           .map((key) => key.trim())
           .filter((key) => key.length > 0);
         break;
+      case '--assertions':
+        options.assertions = need()
+          .split(',')
+          .map((key) => key.trim())
+          .filter((key) => key.length > 0);
+        break;
+      case '--no-journeys':
+        options.skipJourneys = true;
+        break;
+      case '--no-assertions':
+        options.skipAssertions = true;
+        break;
       default:
         throw new Error(`unknown option ${arg} (try --help)`);
     }
@@ -278,6 +300,15 @@ function parseArgs(argv) {
     if (!known.has(key)) {
       throw new Error(`no journey named "${key}" (known: ${[...known].join(', ')})`);
     }
+  }
+  const knownAssertions = new Set(ASSERTION_ROUTES.map((route) => route.key));
+  for (const key of options.assertions) {
+    if (!knownAssertions.has(key)) {
+      throw new Error(`no assertion page named "${key}" (known: ${[...knownAssertions].join(', ')})`);
+    }
+  }
+  if (options.skipJourneys && options.skipAssertions) {
+    throw new Error('--no-journeys and --no-assertions together leave nothing to audit');
   }
   return options;
 }
@@ -338,12 +369,11 @@ export const REQUIRED_LANDMARKS = [
 /**
  * Words that must never appear in the accessible name of a card the server chose to hide.
  *
- * Ranks and suits, as `packages/ui/src/cards.ts` spells them. Matched on word boundaries so
- * "face-down card" does not trip on anything, and so a name like "Ada hole cards" is not read as a
- * leak — "cards" is not a rank.
+ * Defined in `scripts/ax-assertions.mjs` and re-exported here because assertion 3.8 and the
+ * per-journey card audit below are the same rule applied twice, and two copies of a leak pattern is
+ * how one of them ends up not knowing about "deuce".
  */
-export const CARD_VALUE_WORDS =
-  /\b(ace|king|queen|jack|ten|nine|eight|seven|six|five|four|three|two|deuce|hearts?|diamonds?|clubs?|spades?)\b/iu;
+export { CARD_VALUE_WORDS };
 
 const roleOf = (node) => (node.role?.value ?? '').toString().toLowerCase();
 const nameOf = (node) => (node.name?.value ?? '').toString().trim();
@@ -667,21 +697,26 @@ class Page {
    * all. That distinction is documented at length in `scripts/keyboard-audit.mjs` and cost a
    * debugging session there; it is repeated here so it cannot be lost by editing one file.
    */
-  async press(key) {
+  async press(key, options = {}) {
     const KEYS = {
       Tab: { windowsVirtualKeyCode: 9, text: '\t' },
       Enter: { windowsVirtualKeyCode: 13, text: '\r' },
       Escape: { windowsVirtualKeyCode: 27 },
       ArrowRight: { windowsVirtualKeyCode: 39 },
+      Home: { windowsVirtualKeyCode: 36 },
+      End: { windowsVirtualKeyCode: 35 },
     };
     const spec = KEYS[key];
     if (spec === undefined) throw new Error(`no key spec for ${key}`);
+    // Shift is bit 8 in CDP's modifier mask. Without it Shift + Tab is just Tab, and a check for a
+    // backwards focus trap would walk forwards through it and report a pass.
+    const modifiers = options.shift === true ? 8 : 0;
     const base = {
       key,
       code: key,
       windowsVirtualKeyCode: spec.windowsVirtualKeyCode,
       nativeVirtualKeyCode: spec.windowsVirtualKeyCode,
-      modifiers: 0,
+      modifiers,
     };
     await this.send('Input.dispatchKeyEvent', {
       type: spec.text === undefined ? 'rawKeyDown' : 'keyDown',
@@ -690,6 +725,79 @@ class Page {
     });
     await this.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
     await delay(50);
+  }
+
+  /**
+   * Real typing, one character at a time, into whatever holds the caret.
+   *
+   * Not `element.value = ...`, and not `Input.insertText` either, and both alternatives were tried
+   * before this one. The check that needs this is assertion 2.6 — type letters into the quiz's
+   * numeric field and expect it to report itself invalid — and `<input type="number">` refuses a
+   * non-numeric value from BOTH of the shortcuts: the element reports an empty value and
+   * `validity.badInput` never becomes true, so the field is never made invalid, no correction is
+   * rendered, and the check reports a confident pass over an interaction that did not happen.
+   * Measured: `Input.insertText('abc')` left `aria-invalid` absent. Per-character key events, which
+   * is what a person does, set `badInput` and the field announces itself as refused.
+   */
+  async insertText(text) {
+    for (const character of text) {
+      const code = character.toUpperCase().charCodeAt(0);
+      const base = {
+        key: character,
+        text: character,
+        unmodifiedText: character,
+        windowsVirtualKeyCode: code,
+        nativeVirtualKeyCode: code,
+        modifiers: 0,
+      };
+      await this.send('Input.dispatchKeyEvent', { type: 'keyDown', ...base });
+      await this.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+      await delay(30);
+    }
+    await delay(120);
+  }
+
+  /** Replace the whole value of one field with `text`, through the same real input path. */
+  async selectAllAndType(selector, text) {
+    await this.evaluate(
+      `(() => {
+        const field = document.querySelector(${JSON.stringify(selector)});
+        if (field === null) return;
+        field.focus();
+        field.select();
+      })()`,
+    );
+    await this.insertText(text);
+  }
+
+  /**
+   * A device-metrics override, not a window resize.
+   *
+   * The two narrow-width journeys are decided by `matchMedia('(min-width: 860px)')` and by a
+   * container query. A headless window that was merely made smaller does not reliably move either,
+   * so a "narrow width" check run that way would audit the desktop layout and pass.
+   */
+  async setViewport(viewport) {
+    if (viewport === null || viewport === undefined) {
+      await this.send('Emulation.clearDeviceMetricsOverride');
+      return;
+    }
+    await this.send('Emulation.setDeviceMetricsOverride', {
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+  }
+
+  /** Run `source` in every document this page loads, before any of its own script does. */
+  async onNewDocument(source) {
+    await this.send('Page.addScriptToEvaluateOnNewDocument', { source });
+  }
+
+  /** Let the page finish whatever it started. Named rather than inlined so the waits are findable. */
+  async settle(ms) {
+    await delay(ms);
   }
 
   async goto(url) {
@@ -794,6 +902,10 @@ async function withChrome(headful, run) {
     await page.send('DOM.enable');
     // The whole point of this script. Without it `getFullAXTree` answers with an empty tree.
     await page.send('Accessibility.enable');
+    // Installed before any document loads: G9 asserts the app announces NOTHING on a full load, and
+    // an observer attached after the page has settled cannot tell "never wrote" from "wrote and was
+    // cleared". See `ANNOUNCER_PROBE`.
+    await page.onNewDocument(ANNOUNCER_PROBE);
     try {
       await run(page);
     } finally {
@@ -1215,6 +1327,55 @@ async function auditRoute(page, journey, route, baseUrl) {
   if (route.interact === true) await actAtTheTable(page, label);
 }
 
+/**
+ * The certification assertions a machine can decide, run one page at a time.
+ *
+ * Every finding is stamped with the assertion ID from
+ * `docs/production/accessibility-certification.md`, because a failure here has to be traceable back
+ * to the sentence a reviewer would otherwise have been asked to listen for. A message that says
+ * "the slider has no name" and does not say "3.13" leaves somebody grepping the document.
+ *
+ * A page whose `gather` throws fails every assertion on it rather than skipping them. The whole
+ * point of the split is that these 45 rows are no longer in the human session; a page that quietly
+ * audited nothing would take them out of BOTH.
+ */
+async function runAssertions(page, baseUrl, wanted) {
+  for (const route of wanted) {
+    section(`${route.title}  ${dim(`${route.path}${route.viewport === undefined ? '' : ' · narrow'}`)}`);
+    let evidence = null;
+    let gatherError = null;
+    try {
+      await page.setViewport(route.viewport ?? null);
+      await page.goto(`${baseUrl}${route.path}`);
+      evidence = await route.gather(page, baseUrl);
+    } catch (error) {
+      gatherError = error instanceof Error ? error.message : String(error);
+    } finally {
+      // Always put the window back, even when the page could not be driven. A narrow-width page
+      // that failed halfway would otherwise leave every route after it being audited at 390px, and
+      // those failures would be reported against routes that are perfectly correct at the width
+      // they are meant to be read at.
+      await page.setViewport(null).catch((error) => {
+        console.log(dim(`  could not clear the viewport override: ${error.message}`));
+      });
+    }
+    for (const check of route.checks) {
+      if (gatherError !== null) {
+        bad(`${check.id} — ${check.what}`, `the page could not be driven: ${gatherError}`);
+        continue;
+      }
+      let verdict;
+      try {
+        verdict = check.decide(evidence);
+      } catch (error) {
+        verdict = { ok: false, detail: `the check threw: ${error instanceof Error ? error.message : error}` };
+      }
+      if (verdict.ok) ok(`${check.id} — ${check.what}`, verdict.detail);
+      else bad(`${check.id} — ${check.what}`, verdict.detail);
+    }
+  }
+}
+
 async function main() {
   let options;
   try {
@@ -1279,25 +1440,47 @@ async function main() {
         ? JOURNEYS
         : JOURNEYS.filter((journey) => options.journeys.includes(journey.key));
 
+    const wantedAssertions =
+      options.assertions.length === 0
+        ? ASSERTION_ROUTES
+        : ASSERTION_ROUTES.filter((route) => options.assertions.includes(route.key));
+
     await withChrome(options.headful, async (page) => {
-      for (const journey of wanted) {
-        section(`${journey.title}  ${dim(journey.key)}`);
-        for (const route of journey.routes) {
-          try {
-            await auditRoute(page, journey, route, options.baseUrl);
-          } catch (error) {
-            bad(
-              `${journey.title} ${route.path}: audit`,
-              error instanceof Error ? error.message : String(error),
-            );
+      if (!options.skipJourneys) {
+        for (const journey of wanted) {
+          section(`${journey.title}  ${dim(journey.key)}`);
+          for (const route of journey.routes) {
+            try {
+              await auditRoute(page, journey, route, options.baseUrl);
+            } catch (error) {
+              bad(
+                `${journey.title} ${route.path}: audit`,
+                error instanceof Error ? error.message : String(error),
+              );
+            }
           }
         }
+      }
+      if (!options.skipAssertions) {
+        console.log(
+          bold(`\n${'═'.repeat(70)}\nCertification assertions — the machine-checkable half of the 73`),
+        );
+        console.log(
+          dim(
+            '  docs/production/accessibility-certification.md marks each of these `auto`. A failure\n' +
+              '  here is a regression in a fact one of its manual assertions rests on.',
+          ),
+        );
+        await runAssertions(page, options.baseUrl, wantedAssertions);
       }
     });
 
     // A journey that was asked for and produced no result at all is a failure, never a warning.
-    if (wanted.length === 0) {
+    if (!options.skipJourneys && wanted.length === 0) {
       bad('scope', 'no journey matched, so nothing was audited');
+    }
+    if (!options.skipAssertions && wantedAssertions.length === 0) {
+      bad('scope', 'no assertion page matched, so no certification assertion was checked');
     }
   } catch (error) {
     bad('audit', error instanceof Error ? error.message : String(error));

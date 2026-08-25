@@ -47,6 +47,7 @@ import { type RouteModule, registerRoutes } from '../app.ts';
 import { sessionPlugin } from '../auth/session.ts';
 import { getSql } from '../db.ts';
 import { recordProblem } from '../observability/telemetry.ts';
+import { postgresRoomOwnership } from '../rooms/ownership.ts';
 import { postgresArchive, roomRegistry } from '../rooms/registry.ts';
 import wsHub from '../ws/hub.ts';
 import authRoutes, { createAuthStore } from './auth.ts';
@@ -94,6 +95,22 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   roomRegistry({
     metrics,
     archive: postgresArchive(getSql),
+    // ######################################################################
+    // ## THIS LINE IS WHAT MAKES "ONE API PROCESS PER ROOM" REAL.         ##
+    // ######################################################################
+    //
+    // Without it the registry defaults to `ownership: null`, which is the behaviour every
+    // database-free test needs and is exactly what this file's header describes going wrong for the
+    // archive: a permissive default, silently taken by production, and nobody notices for months.
+    // The failure here is worse than an empty `GET /hands`. Two API processes — a second replica, or
+    // the few seconds of a rolling deploy where the new container is healthy and the old one has not
+    // drained — would each hold their own deck and pot for the same room, and whichever settlement
+    // landed second would destroy the chips the other one paid out, with no error anywhere.
+    //
+    // Bound lazily through `getSql`, like the archive, so registering routes still touches no pool.
+    // `test/wiring.test.ts` asserts that the assembled app's registry enforces a lease, because
+    // losing this one line would leave every test green.
+    ownership: postgresRoomOwnership(getSql),
     // A lone learner at a table of bots gets this long to act, so the Coach panel can actually be
     // read before the clock folds them. Threaded from config rather than read inside `LiveTable`,
     // so a test constructing a table directly can still vary it.

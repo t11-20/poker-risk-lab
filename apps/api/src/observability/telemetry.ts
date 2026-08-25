@@ -66,6 +66,9 @@ export type ProblemEvent =
   | 'seat-retake'
   | 'seat-release'
   | 'bot-rehydrate'
+  | 'room-lease-refused'
+  | 'room-fenced'
+  | 'room-lease-release'
   // rooms/table.ts
   | 'turn-timeout'
   | 'engine-rejection'
@@ -98,6 +101,9 @@ export const PROBLEM_EVENTS: readonly ProblemEvent[] = [
   'seat-retake',
   'seat-release',
   'bot-rehydrate',
+  'room-lease-refused',
+  'room-fenced',
+  'room-lease-release',
   'turn-timeout',
   'engine-rejection',
   'departed-seat-fold',
@@ -169,9 +175,18 @@ export function classifyProblem(event: ProblemEvent): ProblemClass {
     // continues, and a seat-release failure leaves a chair durably occupied by somebody who has
     // left — the summary shows it free, the next client to tap it is refused `seat_taken`, and
     // nothing retries. Paging the archive runbook for that sends somebody to the wrong system.
+    //
+    // `room-lease-refused` and `room-fenced` are counted at their source too, and NOT as actor
+    // failures. An actor failure is "it is somebody's turn and nothing is going to act", which the
+    // turn clock resolves; these two are "two processes are pointed at one room", which nothing in
+    // the process can resolve and which has its own page-tier alert. `rooms/registry.ts` increments
+    // `prl_room_ownership_refusals_total` and `prl_room_fencings_total` at the moment it decides,
+    // because only that code knows which of the two reasons a fencing had.
     case 'archive-write':
     case 'hands-interrupted':
     case 'seat-release':
+    case 'room-lease-refused':
+    case 'room-fenced':
       return 'counted-at-source';
     // `engine-rejection` is deliberately NOT an actor failure: it is the engine refusing an
     // action a client submitted, the caller is told `illegal_action`, and it is already counted
@@ -182,6 +197,11 @@ export function classifyProblem(event: ProblemEvent): ProblemClass {
     case 'subscriber-throw':
     case 'room-open-read':
     case 'reconcile-read':
+    // A lease this process could not give back on the way out. Worth a line, not a series: the
+    // lease expires on its own within `LEASE_TTL_MS`, so the whole cost is that one room is
+    // unopenable for up to that long — and the two events that matter, being refused and being
+    // fenced, are counted above.
+    case 'room-lease-release':
     case 'socket-intent':
     case 'socket-send':
     case 'socket-close':

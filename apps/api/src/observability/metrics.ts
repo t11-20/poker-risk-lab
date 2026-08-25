@@ -377,6 +377,126 @@ export class AppMetrics {
     primeLabels: [{}],
   });
 
+  /**
+   * "Did a SECOND process try to open a room this one is serving?"
+   *
+   * The guard working, and the only thing that reports it. `prl.room_ownership` refuses the open,
+   * so no hand is corrupted and no learner loses a chip — but a refusal means two API processes are
+   * pointed at one database, which the whole live-table design forbids (`rooms/ownership.ts`, and
+   * `deploy.replicas: 1` in `docker-compose.staging.yml`). Every refusal is a configuration that
+   * will keep producing them.
+   *
+   * NOT substitutable by `prl_api_errors_total{code="room_owned_elsewhere"}`, which counts the
+   * REQUESTS refused rather than the refusals: one misconfigured process retrying a busy room
+   * produces hundreds of the former from one of the latter, and the two answer different questions
+   * — "how many learners were affected" and "how many times did a process try to take a room it
+   * must not have".
+   *
+   * No labels, so priming is unambiguous; primed for the reason `archiveFailures` is, because the
+   * alert on it is zero-tolerance and the FIRST refusal is exactly the one worth seeing.
+   */
+  readonly roomOwnershipRefusals = this.registry.counter({
+    name: `${PREFIX}_room_ownership_refusals_total`,
+    help: 'Room opens refused because another live API process holds the room lease.',
+    primeLabels: [{}],
+  });
+
+  /**
+   * "Did this process lose a room it was already serving?"
+   *
+   * The far worse half. A refusal means the guard caught a second process BEFORE it dealt anything.
+   * A fencing means this process was serving a room, lost the lease, and has had to evict it — so
+   * for some window bounded by the heartbeat interval, two processes were both authoritative for one
+   * room's hand state. That is the corruption itself, not a near miss: the hand in this process's
+   * memory can never settle, and if the other process settled its own version of it the stacks that
+   * hit `room_members` are not the ones anybody played for.
+   *
+   * The `reason` label separates the two ways it happens, because they send an operator to
+   * different places. `fenced` means somebody actively took the room — a second replica, an
+   * overlapping deploy — and the fix is the deployment. `lease_expired` means this process could not
+   * renew for longer than the lease allows and stepped down of its own accord, which is a database
+   * or scheduling problem here rather than a second process anywhere. A closed set of two, so both
+   * are primed: an alert keyed on `increase()` cannot see a rise from a series that never existed.
+   */
+  readonly roomFencings = this.registry.counter({
+    name: `${PREFIX}_room_fencings_total`,
+    help: 'Live rooms evicted because this process no longer holds their lease, by reason.',
+    labelNames: ['reason'],
+    primeLabels: [{ reason: 'fenced' }, { reason: 'lease_expired' }],
+  });
+
+  // --- Retention -----------------------------------------------------------
+  /**
+   * "Is the retention promise being kept, and by how much?"
+   *
+   * One series per thing the sweep removes, and the label set is closed by the sweep itself —
+   * there are three and adding a fourth is a code change, not a caller's choice. All three are
+   * primed at zero because the honest reading of this counter is a rate of change, and
+   * `increase()` cannot see a rise from a series that was never scraped: without priming, the
+   * first deployment quiet enough to have nothing to sweep would render nothing at all, and a
+   * dashboard would say "no data" for the metric whose entire purpose is to be evidence that the
+   * sweep runs.
+   *
+   * `abandoned_guests` counts ACCOUNTS, not rows, and that is the honest unit: erasing one guest
+   * removes its sessions, lesson progress, quiz attempts and scenario attempts too, and a number
+   * that summed those would be a different figure every release as the schema grew.
+   *
+   * The values name what was removed rather than which table it came out of, and that is not a
+   * stylistic choice: `oidc_login_attempts` was the first spelling and
+   * `observability-metrics.test.ts` refused it, because `oidc_` is one of this schema's id
+   * prefixes and the value is therefore indistinguishable from an identifier to the scanner that
+   * exists to catch one reaching a label. A leak detector nobody can trust is worse than none, so
+   * the label moved rather than the detector. Keep new values clear of `ID_PREFIXES`.
+   *
+   * No user id, no session id, nothing derived from a person — rule 2 at the top of this file.
+   * The removed account's id goes to the log line, where retention and access are governed.
+   */
+  readonly retentionRowsDeleted = this.registry.counter({
+    name: `${PREFIX}_retention_rows_deleted_total`,
+    help: 'Rows removed by the scheduled retention sweep, by kind. Guests are counted as accounts.',
+    labelNames: ['kind'],
+    primeLabels: [
+      { kind: 'expired_sessions' },
+      { kind: 'expired_login_attempts' },
+      { kind: 'abandoned_guests' },
+    ],
+  });
+
+  /**
+   * "Has the sweep run recently?" — the metric that exists because the counter above cannot say.
+   *
+   * ############################################################################
+   * ## A SWEEP THAT STOPS RUNNING IS INVISIBLE IN EVERY OTHER SIGNAL          ##
+   * ############################################################################
+   *
+   * `prl_retention_rows_deleted_total` not moving means one of two things and cannot tell them
+   * apart: there was nothing to remove, or nothing ran. On a small deployment the first is the
+   * normal state — most six-hour windows have no expired session and no sixty-day-old guest — so
+   * the flat line that means "healthy" and the flat line that means "the timer died at the last
+   * deploy and the retention promise has been false ever since" are the same line. That is
+   * precisely the failure `docs/production/legal-register.md` §5 L5 calls the one where "nothing
+   * fails, data simply persists", and it is how this subsystem got into the state it was in.
+   *
+   * So this reports the age of the last SUCCESSFUL sweep, in seconds, and `RetentionSweepStalled`
+   * alerts on it. Three deliberate choices:
+   *
+   *   * **An age, not a timestamp.** `time() - prl_..._timestamp_seconds` would put the scraper's
+   *     clock and this process's clock in the same subtraction, and the difference between two
+   *     hosts' clocks is not a retention failure. Computed here, both readings come from one
+   *     clock and the rule compares a duration against a duration.
+   *   * **Read at scrape time**, per rule 3 at the top of this file — a gauge mirroring state
+   *     owned elsewhere is never written on change.
+   *   * **It starts from process start, not from zero.** A process that has never swept is not
+   *     infinitely stale; it is as stale as it is old, and the first sweep is deliberately at
+   *     T+6h rather than at boot. Zero-initialising would page every deployment at every restart,
+   *     which trains people to ignore the rule — and a process restarting often enough to hide a
+   *     dead timer this way is already `ProcessRestartLoop`.
+   */
+  readonly retentionSweepAge = this.registry.gauge({
+    name: `${PREFIX}_retention_sweep_age_seconds`,
+    help: 'Seconds since the last successful retention sweep, or since process start if none.',
+  });
+
   // --- Analysis ------------------------------------------------------------
   /** "Is the Coach slow, and is it slow because of queueing or because of the work?" */
   readonly analysisDuration = this.registry.histogram(
@@ -541,10 +661,48 @@ export class AppMetrics {
   /** Previous CPU reading, so `cpuSeconds` can be the monotonic counter it is declared as. */
   private lastCpu = process.cpuUsage();
 
+  /**
+   * When the last retention sweep finished, in epoch milliseconds, or null before the first one.
+   *
+   * Null rather than 0, so "has not swept yet" is a state the gauge can substitute process start
+   * for rather than a timestamp in 1970 that reads as fifty-six years of staleness.
+   */
+  private lastRetentionSweepMs: number | null = null;
+
   constructor() {
     this.eventLoop.enable();
     this.processStart.setFrom(() => Math.floor(Date.now() / 1000 - process.uptime()));
+    this.retentionSweepAge.setFrom(() => {
+      const since = this.lastRetentionSweepMs ?? Date.now() - process.uptime() * 1_000;
+      // Clamped at zero: a clock stepped backwards between the sweep and the scrape must render a
+      // dull "just swept" rather than a negative number that no threshold can be written against.
+      return Math.max(0, Math.floor((Date.now() - since) / 1_000));
+    });
     this.registry.onCollect(() => this.sampleProcess());
+  }
+
+  /**
+   * Records one completed retention sweep.
+   *
+   * Called from the sweep's `onSwept` beside the log line, rather than from inside the sweep
+   * itself, for the reason every other counter in this file is fed from its caller: the sweep is
+   * unit-tested against a fake `sql` with no process-wide singleton anywhere near it, and a
+   * `runRetentionSweep` that reached for `appMetrics()` would build an event-loop monitor inside
+   * every one of those tests.
+   *
+   * A FAILED sweep must never reach this. That is what makes the age gauge mean what it says: it
+   * is the age of the last sweep that finished, not of the last one that was attempted, so a
+   * database that has been refusing the sweep for a day reports a day of staleness.
+   */
+  markRetentionSweep(removed: {
+    readonly sessions: number;
+    readonly loginAttempts: number;
+    readonly guestAccounts: number;
+  }): void {
+    this.retentionRowsDeleted.inc({ kind: 'expired_sessions' }, removed.sessions);
+    this.retentionRowsDeleted.inc({ kind: 'expired_login_attempts' }, removed.loginAttempts);
+    this.retentionRowsDeleted.inc({ kind: 'abandoned_guests' }, removed.guestAccounts);
+    this.lastRetentionSweepMs = Date.now();
   }
 
   /**

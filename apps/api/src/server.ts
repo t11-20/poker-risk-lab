@@ -33,6 +33,7 @@ import { buildApp } from './app.ts';
 import { type AppConfig, ConfigError, getConfig } from './config.ts';
 import { closeDatabase, configureDatabase, getSql } from './db.ts';
 import { startRetentionSweep } from './maintenance/retention-sweep.ts';
+import { appMetrics } from './observability/metrics.ts';
 import { API_ROUTE_MODULES, registerApiRoutes } from './routes/index.ts';
 import { beginSharedPoolWarmup, closeSharedPool } from './workers/pool.ts';
 
@@ -389,11 +390,25 @@ async function main(): Promise<void> {
           {
             sweptSessions: result.sessions,
             sweptLoginAttempts: result.loginAttempts,
+            sweptGuestAccounts: result.guestAccounts,
+            sweepGuestsBlocked: result.guestAccountsBlocked,
             sweepIncomplete: result.incomplete,
             sweepMs: Math.round(result.durationMs),
           },
           'retention sweep',
         );
+        // A log line is evidence only for somebody reading logs. The counter is what a dashboard
+        // reads and the age gauge is what the alert reads — and the age gauge is the whole answer
+        // to "a sweep that silently stops running looks exactly like one with nothing to do".
+        // Only a sweep that FINISHED gets here; `onProblem` deliberately does not touch it.
+        appMetrics().markRetentionSweep(result);
+      },
+      onGuestBlocked: (userId, error) => {
+        // One account the schema would not let go of, while the rest of the batch went. `warn`
+        // rather than `error` because nothing is broken for anybody right now, and with the id,
+        // because "one guest could not be erased" is unactionable without knowing which — the id
+        // is a log field precisely so it never becomes a metric label.
+        app.log.warn({ err: error, userId }, 'retention sweep could not erase a guest account');
       },
       onProblem: (error) => {
         // Never fatal. A sweep is on no request path and nobody is waiting for it; the next tick

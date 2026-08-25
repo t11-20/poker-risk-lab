@@ -63,7 +63,7 @@ fetched at build time rather than pinned.
 pnpm run deps:quarantine      # resolve in a throwaway dir with a scrubbed environment
 git diff -- pnpm-lock.yaml    # review every added line
 pnpm install --frozen-lockfile
-pnpm run security:audit       # all eleven gates must pass
+pnpm run security:audit       # all twelve gates must pass
 ```
 
 `deps:quarantine` resolves in a temporary directory with a throwaway `HOME`, no `.git`, no
@@ -160,7 +160,7 @@ These are the rules a reviewer will actually check.
 ## 4. Running the gates
 
 ```bash
-pnpm run security:audit          # all eleven supply-chain gates
+pnpm run security:audit          # all twelve supply-chain gates
 pnpm run security:audit -- --offline   # skip the three network gates — EXITS 2, see below
 
 pnpm run security:policy         # is the policy actually in effect?
@@ -174,6 +174,7 @@ pnpm run security:provenance     # lockfile ↔ registry integrity, release age
 pnpm run security:osv            # OSV.dev vulnerabilities
 pnpm run security:sbom           # CycloneDX 1.6 SBOM
 pnpm run security:containers     # trivy against the built release images
+pnpm run security:image-provenance  # are those images signed by the committed key?
 ```
 
 **`--offline` exits 2, deliberately.** It skips *integrity + release age*, *OSV* and

@@ -476,6 +476,21 @@ function clientRateLimitKey(request: FastifyRequest, config: AppConfig): string 
 }
 
 /**
+ * The address key, for anything that has to bucket a caller the same way `clientKeyedRateLimit`
+ * does without being a `@fastify/rate-limit` route config.
+ *
+ * `routes/auth.ts` holds a second, tighter budget alongside the OIDC route limits — one spent by
+ * FAILED sign-in outcomes rather than by requests (`plugins/failed-outcome-budget.ts`). It has to
+ * bucket callers identically to the limiter it sits beside, and the way to guarantee that is to
+ * call the same function rather than to write a second one that happens to agree today. The
+ * prefix differs (`f:` there, `a:` here) because the two counters are separate; the identity they
+ * are counting is the same one.
+ */
+export function addressRateLimitKey(request: FastifyRequest, config: AppConfig): string {
+  return clientRateLimitKey(request, config);
+}
+
+/**
  * A rate limit keyed on the CLIENT ADDRESS, ignoring the session cookie entirely.
  *
  * `rateLimitKeyFor` prefers the session because address-only keying punishes everyone behind one
@@ -492,10 +507,19 @@ function clientRateLimitKey(request: FastifyRequest, config: AppConfig): string 
  * The attacker does not even have to be clever here. Rotating the key is the *natural* behaviour
  * of a client that creates accounts, because the endpoint hands it a fresh identity every time.
  *
- * So session-minting routes key on the address. The NAT trade-off is accepted deliberately for
- * these few routes: several people behind one address sharing an account-creation budget is a mild
- * inconvenience, while unbounded account creation is an abuse channel and a way to fill the users
- * table.
+ * So session-minting routes key on the address. That much has not changed and must not: it is the
+ * only key on these routes that accumulates at all.
+ *
+ * What HAS changed is what used to be written here — that the NAT cost was "a mild inconvenience".
+ * It was not. Measured against the shipped defaults: thirty learners behind one address, signing
+ * in through the identity provider at the start of a class, got FIFTEEN sign-ins through and
+ * fifteen 429s, the first at learner sixteen. Half a paying cohort refused on its first
+ * interaction with the product is not an inconvenience, it is the product failing.
+ *
+ * The fix is not a bigger number here — that would hand a script the same headroom. It is that the
+ * routes above this one now carry two budgets: a cohort-sized ceiling counted by this function,
+ * and a much tighter budget counted by `FailedOutcomeBudget` that only a FAILED outcome spends.
+ * `routes/auth.ts` argues the split, states what it costs and states what it does not cost.
  */
 export function clientKeyedRateLimit(
   config: AppConfig,

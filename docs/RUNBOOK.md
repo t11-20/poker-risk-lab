@@ -24,7 +24,7 @@ pnpm --version             # must be 11.10.0
 cd poker-risk-lab
 
 pnpm install --frozen-lockfile     # never --no-frozen-lockfile
-pnpm run security:audit            # 11 gates; must pass before anything else
+pnpm run security:audit            # 12 gates; must pass before anything else
 
 cp .env.example .env
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
@@ -98,7 +98,8 @@ The container stack has no such split: there is exactly one published origin (§
 | `pnpm run test:a11y` | Static accessibility audit of the rendered pages. Starts web on **:3000** itself, or pass `--no-start --base-url <url>` | ~30 s |
 | `pnpm run test:keyboard` | **Real keyboard journeys in real Chrome** over the DevTools Protocol: focus order, focus visibility, keyboard traps, the modal sheet, the bet-size slider, and one hand folded from the keyboard at a live table. Needs a **running production build** on :3000 and a running API — it is not started for you, because a dev build ships overlays that do not ship | ~2 min |
 | `pnpm run test:smoke` | End-to-end smoke against a running stack; `-- --strict` fails on warnings | seconds |
-| `pnpm run alerts:verify` | Brings Prometheus and Alertmanager up beside the **running staging stack**, checks all 22 alert rules load/agree/ground/evaluate, then **stops the API** and follows `ApiDown` through to a receiver. `-- --skip-provoke` does the first four checks only and leaves the API alone | ~5 min |
+| `pnpm run alerts:verify` | Brings Prometheus and Alertmanager up beside the **running staging stack**, checks all 27 alert rules load/agree/ground/evaluate, then **stops the API** and follows `ApiDown` through to a receiver. `-- --skip-provoke` does the first four checks only and leaves the API alone | ~5 min |
+| `pnpm run alerts:preflight` | Refuses a paging destination that is a placeholder, malformed, missing a credential, or routed to a receiver with nothing in it. Needs no stack and no containers. `-- --handshake` also speaks TCP/TLS/`EHLO`/`AUTH`/`QUIT` to the configured relay — never `MAIL FROM`, so it cannot send anybody a page. Run by `staging promote`, which refuses on it | seconds |
 | `pnpm run test:load` | WebSocket load harness against a local server | configurable |
 | `pnpm run test:all` | test + exhaustive + simulation + a11y + ax | ~5 min |
 | `pnpm run fixtures:check` | Report drift between `apps/web/src/fixtures/**` and what the engine computes today. Changes nothing | seconds |
@@ -146,7 +147,7 @@ never receive another player's hole cards. A guardrail that skips is not a guard
 
 | Command | What it does |
 | --- | --- |
-| `pnpm run security:audit` | **All eleven supply-chain gates.** Itself one of the *fourteen* gates inside `pnpm run verify`, which is the release gate as a whole. The two elevens are unrelated: eleven gates live inside `security:audit`, and `verify` runs fourteen of which this is one |
+| `pnpm run security:audit` | **All twelve supply-chain gates.** Itself one of the *fourteen* gates inside `pnpm run verify`, which is the release gate as a whole. The two numbers are unrelated: twelve gates live inside `security:audit`, and `verify` runs fourteen of which this is one. It was eleven until `image-provenance` was added |
 | `pnpm run security:audit -- --offline` | Skips the three network gates and **exits 2** — *not* a valid release audit |
 | `pnpm run security:policy` | Is the supply-chain policy actually in effect? |
 | `pnpm run security:hygiene` | Source encoding, NUL bytes, hidden/bidi characters |
@@ -156,10 +157,29 @@ never receive another player's hole cards. A guardrail that skips is not a guard
 | `pnpm run security:secrets` | Credentials in tracked files, and the ignore rules that keep the uncommitted ones uncommitted |
 | `pnpm run security:secrets -- --history` | The same sweep over every blob in git history. Not part of the audit — see `docs/production/security.md` |
 | `pnpm run security:pinning` | CI actions pinned by commit SHA, base images by digest, no undeclared workflow |
-| `pnpm run security:provenance` | Lockfile ↔ registry integrity, release-age cooldown |
+| `pnpm run security:provenance` | Lockfile ↔ registry integrity, release-age cooldown. **npm packages** — not images |
 | `pnpm run security:osv` | OSV.dev vulnerability scan |
 | `pnpm run security:sbom` | Generate the CycloneDX 1.6 SBOM |
+| `pnpm run security:containers` | Trivy CVE scan of the built release images |
+| `pnpm run security:image-provenance` | **Are the release images signed?** Verifies each digest against the committed `deploy/signing/cosign.pub`, and verifies the SBOM attestation bound to it. Needs no private key |
+| `pnpm run release:sign` | Push the release images to the registry and sign + attest them. **Needs the private key** |
 | `pnpm run deps:quarantine` | Resolve dependencies in a scrubbed, secret-free quarantine |
+
+**Two things called "provenance", and they are different questions.**
+`security:provenance` is about **npm packages**: does the lockfile's integrity hash match what
+the registry serves, and is every version past the release-age cooldown. Its own gate name is
+`integrity-and-release-age`, which is what the audit prints. `security:image-provenance` is about
+the **container images**: is the digest a deployer pulls signed by the key this repository
+committed. The names are kept apart deliberately rather than one being renamed onto the other,
+because dated audit evidence under `docs/audit/` quotes `security:provenance` runs and
+retro-fitting that name onto a different check would falsify the record.
+
+**Signing is not wired into CI, and that is not an oversight.** Signing needs a private key and
+this repository has no CI signing identity; `.github/workflows/*` therefore run
+`security:audit` at a point where no release image exists, so the signature gate reports
+*not applicable* there and says so loudly. It is a release-machine step. See
+[`deploy/signing/README.md`](../deploy/signing/README.md) for custody, rotation, and what a
+verification failure means.
 
 **`--offline` exits 2 and that is the point.** It prints `3 network gate(s) skipped — NOT a
 valid release audit` and exits non-zero, so a pipeline reading only the exit code cannot
@@ -419,6 +439,7 @@ Full list with descriptions in `.env.example`. The ones that matter:
 | `OIDC_*` | api | All-or-nothing. Any one present means all must be present. Omit entirely to run guest-only. `OIDC_REDIRECT_URI` must name the API's own origin and port. |
 | `MONTE_CARLO_MAX_SAMPLES` | api | Server-side ceiling. The schema also caps the request. |
 | `TRUST_PROXY` | api | Only enable when the API is reachable **exclusively** through a proxy you control — it makes `X-Forwarded-For` trusted, and therefore spoofable by anyone who can reach the API directly. The local stack leaves it off because it publishes the API port for tooling. |
+| `COHORT_SIZE` / `COHORT_ENTRY` | api | How many learners sign in together from **one** address, and through which door. Changes no limit; makes the server **refuse to boot** when the sign-in limits cannot serve that number. Set it for any deployment serving a class. See §7.1. |
 
 Build-time only, and they will not work at runtime:
 
@@ -429,6 +450,67 @@ Build-time only, and they will not work at runtime:
 
 Configuration is validated **once at startup**, reporting every problem at once. The server
 refuses to boot rather than run half-configured.
+
+### 7.1 Sizing the sign-in limits for a class
+
+Read this before any deployment that serves a cohort. It is the one configuration mistake whose
+consequences are discovered by paying users rather than by an operator.
+
+**Why a class is one caller.** `POST /auth/guest` and `GET /auth/oidc/callback` both *issue* a
+session, so neither can be rate limited by that session — the caller presents a fresh cookie on
+its next request and the counter never accumulates (measured; `plugins/security.ts` carries the
+numbers). They are keyed on a hash of the client address instead. A campus NAT, an office egress
+or a VPN concentrator therefore makes thirty students **one** caller for every sign-in limit, and
+they all arrive inside the same ten seconds.
+
+**What that used to cost.** Against the previously shipped defaults, measured: thirty learners,
+one address, one 60-second window produced **15 completed sign-ins and 15 `429`s, the first at
+learner 16**. Half a cohort refused on its first interaction with the product.
+
+**The arithmetic to actually compute.**
+
+```
+RATE_LIMIT_OIDC_MAX  >=  simultaneous starts  x  2
+```
+
+*Simultaneous starts* is the largest number of learners who open the app and sign in inside one
+`RATE_LIMIT_OIDC_WINDOW_MS` from one egress address — the size of the biggest class, not of the
+licence. The `x2` is one start plus one retry, for the stale tab, the back button and the
+re-consent screen. `30 -> 60` (the shipped default), `45 -> 90`, `120 -> 240`.
+
+**Do not raise `RATE_LIMIT_OIDC_FAILURE_MAX` with it.** That is a second, tighter budget spent
+only by OIDC requests that end in an error, and it is the only thing separating a classroom from a
+script: completing a sign-in needs an authorization code your identity provider minted, and a
+script can only produce requests that fail to. Its default of 15 is exactly what the pre-split
+configuration permitted, so the outbound load a script can force on your identity provider has not
+moved. The server refuses to boot if it is not below `RATE_LIMIT_OIDC_MAX`.
+
+**There is a third budget you do not configure.** A caller that floods `/auth/oidc/start` and never
+returns produces no failed outcome, so the budget above cannot see it — and attempt rows are removed
+by the six-hourly retention sweep, not by their 10-minute TTL, so residency is `rate x 360 minutes`.
+A budget on *unredeemed* starts (charged on a start, credited when a callback redeems it, over the
+attempt TTL) bounds that at `RATE_LIMIT_OIDC_MAX` per 10 minutes. It sizes itself from the ceiling,
+so raising the ceiling for a bigger class raises it too, and there is nothing to set.
+
+**Guest creation is a different case and keeps its tight default.** On `POST /auth/guest` every
+attempt succeeds — no password, no provider, nothing to fail — so there is no failed outcome to
+charge and the successful creations *are* the abuse. `RATE_LIMIT_GUEST_MAX` stays at 10 for every
+deployment. A class that uses guest accounts needs it raised, and raising it to 30 means that
+address can create 30 accounts a minute. Do that only for an ingress you control, and prefer
+signing the class in through the identity provider.
+
+**Declare the class and the check becomes a refusal.** Set `COHORT_SIZE` to the number of learners
+who arrive together from one address, and `COHORT_ENTRY` to `oidc`, `guest` or `both` (default
+`both`, which checks every door). Nothing is raised automatically — the process checks the limits
+against the declaration at boot and **refuses to start**, naming the variable and the arithmetic,
+if they cannot serve it. `COHORT_SIZE` unset means "public instance": the tight defaults apply and
+nothing is checked.
+
+```
+COHORT_SIZE=30
+COHORT_ENTRY=oidc
+RATE_LIMIT_OIDC_MAX=60
+```
 
 ## 8. Verifying a hand yourself
 
@@ -595,8 +677,27 @@ design assumes one API process per room."* ADR 0001 chose that deliberately — 
 distributed lock on every action, for a play-money teaching app.
 
 The consequence is concrete and unforgiving: **two API processes each holding "the" `HandState`
-for one room deal two different hands and resolve the pot differently.** Nothing detects it. The
-learner sees a hand that never happened.
+for one room deal two different hands and resolve the pot differently.** The learner sees a hand
+that never happened.
+
+**"Nothing detects it" is no longer true, and this paragraph used to say so.** Each process now
+takes a lease on every room it opens — `prl.room_ownership` (migration 0005), the mechanism is in
+`apps/api/src/rooms/ownership.ts` — and:
+
+* a second process asking for a room a live process holds is refused with `503
+  room_owned_elsewhere` and counted (`prl_room_ownership_refusals_total`, alert
+  `RoomOwnershipRefused`);
+* a process that LOSES a lease it held stops serving that room within one heartbeat: the table is
+  closed, its sockets are disconnected with `4503` and the room is dropped
+  (`prl_room_fencings_total`, alert `RoomOwnershipFenced`, runbook
+  [`runbooks/room-ownership-contended.md`](production/runbooks/room-ownership-contended.md));
+* closing a room and shutting down release the lease, so a rolling deploy hands rooms over at once
+  rather than leaving them unopenable for the 30-second lease TTL. A process that is SIGKILLed
+  cannot release, so its rooms are unopenable for that TTL and then taken.
+
+That changes what a second replica costs — silent chip loss becomes a loud, contained refusal —
+and it does not change the requirement below. A second replica can serve almost nothing, so it is
+not a scaling knob now either.
 
 So exactly one of these must be true:
 
@@ -607,7 +708,8 @@ So exactly one of these must be true:
    WebSocket for a given room id to the same process, and keeps doing so across reconnects. That
    is a real routing tier, not a load-balancer checkbox: cookie-based stickiness is not enough,
    because the key is the *room*, not the *session* — two players in one room are two sessions
-   that must land on one process.
+   that must land on one process. The lease does not substitute for this: it makes a
+   wrongly-routed request fail cleanly, which is not the same as making it work.
 
 Web is stateless; scale it freely. PostgreSQL is the only durable state.
 
@@ -916,6 +1018,11 @@ log driver, or a sidecar. Points that matter when you configure it:
 - [ ] `PRL_API_ORIGIN` set on web; **no** `NEXT_PUBLIC_API_ORIGIN` or `PRL_API_REWRITE_ORIGIN` anywhere in a runtime environment
 - [ ] Proxy terminates TLS, routes `/api/*` and `/ws*`, overwrites `X-Forwarded-*`, supports upgrades
 - [ ] `TRUST_PROXY` matches reality (on only if the API is unreachable except via the proxy)
+- [ ] **Serving a class?** `COHORT_SIZE` declares how many learners sign in together from one
+      address and `COHORT_ENTRY` names which doors they use. The API refuses to boot if the
+      sign-in limits cannot serve that number, so a successful boot is the evidence. §7.1 has the
+      arithmetic and the measurement (15 of 30 learners refused, before the check existed).
+      `RATE_LIMIT_OIDC_FAILURE_MAX` was **not** raised alongside `RATE_LIMIT_OIDC_MAX`
 - [ ] API pinned to one replica, or room affinity implemented and tested with two players in one room
 - [ ] Migrations run from outside the serving container, at the release commit
 - [ ] **No rollback in the deploy plan.** The schema is roll-forward only (§11.3); the rollback
@@ -942,10 +1049,26 @@ log driver, or a sidecar. Points that matter when you configure it:
 - [ ] Orchestrator termination grace **above** `SHUTDOWN_GRACE_MS`, never equal to it (§10)
 - [ ] Alerting rules deployed **and delivery rehearsed** to whatever this environment pages with.
       `pnpm run alerts:verify` does that against staging and its own webhook sink; production
-      differs only in the two receiver URLs in
-      the `PRL_ALERT_*` variables that render `alertmanager.template.yml`, and that last hop — a
-      provider accepting real credentials — is the half staging
-      cannot rehearse. An alert nobody receives is a rule with an encouraging name
+      differs only in the `PRL_ALERT_*` variables that render `alertmanager.template.yml`.
+      An alert nobody receives is a rule with an encouraging name
+- [ ] `pnpm run alerts:preflight` exits 0 **with this environment's `PRL_ALERT_*` variables set**,
+      not with the rehearsal defaults. It refuses a placeholder receiver, a malformed destination,
+      a missing SMTP credential, and a severity tier routed to a receiver with nothing in it —
+      every one of which produces an Alertmanager that starts, reports itself healthy, routes
+      correctly and notifies nobody. `staging promote` refuses on it
+- [ ] `pnpm run alerts:preflight -- --handshake` run **from the deploy host**, and it reported the
+      relay accepting the credentials rather than `CREDENTIALS UNPROVEN`. That is the last hop
+      staging cannot rehearse, and it is now rehearsable
+- [ ] **A real test page was sent to a real person, and that person confirmed they got it on the
+      device that is meant to wake them.** No command in this repository can establish this and
+      none pretends to: a relay that accepts the mail and an email-to-SMS gateway that was
+      decommissioned last year are indistinguishable from the deployment's end. This is the
+      residual, and this checkbox is the only thing that closes it
+- [ ] The alerting system's own failure is watched from **outside** this deployment — a dead man's
+      switch, or a scheduled human check. `AlertmanagerNotificationsFailing` and
+      `AlertmanagerDown` catch the partial cases; both paths broken at once cannot be reported
+      in band, and [docs/production/runbooks/alerting-blind.md](production/runbooks/alerting-blind.md)
+      says so rather than implying otherwise
 - [ ] `WebSocketConnectionsHigh` re-derived if the capacity measurement was repeated
       ([docs/production/load-test.md](production/load-test.md)); it is 70% of the measured
       saturation point and lives in two files that must agree

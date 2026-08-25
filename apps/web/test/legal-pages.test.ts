@@ -852,3 +852,86 @@ describe('the free-of-charge clause and the absence of a payment path', () => {
     );
   });
 });
+
+/**
+ * `/privacy` promises that abandoned guest accounts are erased, and the period must be the code's.
+ *
+ * ## The defect this exists for
+ *
+ * The abandoned-guest sweep was documented in four places, had an index built for it and a DELETE
+ * grant widened for it, and **nothing consumed any of it**. Guest accounts were retained forever
+ * while five separate comments described the reaper that would remove them. A compliance audit found
+ * it; no test could have, because every one of those five sites was prose.
+ *
+ * The sweep exists now, and the page says so. That creates the opposite risk, and it is the worse
+ * one: a page that promises erasure on a period the code does not implement is a false statement to
+ * a reader, where the old comments were only a false statement to a maintainer.
+ *
+ * ## Why the assertion is about the DERIVATION and not the number
+ *
+ * Sixty days was not picked. A guest has no email, no password and no federated identity — no column
+ * could hold one — so the only thing that can ever reach the account again is a session cookie, and
+ * a session cannot outlive `SESSION_ABSOLUTE_TTL_SECONDS`. Sixty days unseen is therefore the
+ * SMALLEST period after which every credential that could reach the account is already dead. Shorter
+ * deletes reachable accounts; longer keeps provably unreachable ones.
+ *
+ * That is why this asserts `GUEST_RETENTION_SECONDS` is still *defined as* the session ceiling
+ * rather than asserting it equals 5,184,000. Someone who edits the ceiling for an unrelated reason
+ * must carry the guest period with it, and a test pinned to the literal would let the two drift
+ * apart while both still "passed".
+ */
+describe('the guest retention promise on /privacy', () => {
+  const SWEEP_SOURCE = readFileSync(
+    resolve(REPO, 'apps', 'api', 'src', 'maintenance', 'retention-sweep.ts'),
+    'utf8',
+  );
+
+  it('is still derived from the session ceiling, not a number somebody chose (REGRESSION)', () => {
+    assert.match(
+      SWEEP_SOURCE,
+      /export const GUEST_RETENTION_SECONDS = SESSION_ABSOLUTE_TTL_SECONDS;/u,
+      'GUEST_RETENTION_SECONDS is no longer the session ceiling. If that is deliberate, the derivation ' +
+        'argument in retention-sweep.ts and the paragraph on /privacy both have to be rewritten — the ' +
+        'period is only defensible as "every credential that could reach this account is already dead".',
+    );
+  });
+
+  it('names that period on the page, in words, as the code computes it', () => {
+    const days = constantProduct(API_SESSION_AUTH, 'SESSION_ABSOLUTE_TTL_SECONDS') / 86_400;
+    // Lowercased, because this phrase opens a sentence on the page and `word()` is lowercase.
+    // Matching case here would make the test fail on a paragraph that says the right thing.
+    const privacy = flat(read(...PAGES.privacy)).toLowerCase();
+    assert.ok(
+      privacy.includes(`${word(days)} days after a guest account was last seen`),
+      `/privacy must say guests are erased ${word(days)} days after they were last seen`,
+    );
+  });
+
+  it('states the liveness guarantee, which is the part a reader is owed', () => {
+    // The period is the boring half. The half that matters to somebody mid-course is that the sweep
+    // cannot take an account still in use — and the page must say it, because "sixty days unseen"
+    // alone reads as a countdown that could reach a live account.
+    const privacy = flat(read(...PAGES.privacy));
+    assert.match(
+      privacy,
+      /never while a session is still live/u,
+      '/privacy must say the sweep never takes an account with a live session',
+    );
+    assert.match(
+      privacy,
+      /seat at a table, a place in a room, or a room of its own/u,
+      '/privacy must say what else protects an account from the sweep',
+    );
+  });
+
+  it('catches a page that promises erasure on the wrong period (NEGATIVE CONTROL)', () => {
+    // Without this, the two assertions above pass against any `includes` that always returned true.
+    const days = constantProduct(API_SESSION_AUTH, 'SESSION_ABSOLUTE_TTL_SECONDS') / 86_400;
+    const wrong = 'Guests are erased thirty days after a guest account was last seen.';
+    assert.equal(
+      wrong.includes(`${word(days)} days after a guest account was last seen`),
+      false,
+      'a page naming the wrong period must not satisfy the check',
+    );
+  });
+});

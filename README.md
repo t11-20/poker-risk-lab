@@ -165,7 +165,7 @@ have to be designed together.
 This repo was built during the **Mini Shai-Hulud** campaign — a self-propagating npm/PyPI
 worm that compromised on the order of 1,300 package versions, steals CI and developer
 credentials, and forges Sigstore provenance attestations. So the dependency policy is
-release-blocking and enforced by **eleven gates**, which between them assert: the policy is
+release-blocking and enforced by **twelve gates**, which between them assert: the policy is
 in effect, lifecycle scripts disabled, registry-only resolutions, a 7-day release-age
 cooldown, exact versions, source-encoding hygiene, lockfile hashes cross-checked against the
 registry, a family deny-list, an OSV scan, an on-disk IOC sweep, **no committed

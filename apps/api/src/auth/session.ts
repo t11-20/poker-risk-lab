@@ -149,7 +149,20 @@ export interface SessionStore {
   /** Slides `expires_at` out, bounded by the absolute ceiling. `null` when nothing moved. */
   readonly extendExpiry: (sessionId: string) => Promise<Date | null>;
   readonly revoke: (sessionId: string) => Promise<boolean>;
-  /** Keeps an active learner out of the guest-account sweep. */
+  /**
+   * Keeps an active learner out of the guest-account sweep.
+   *
+   * That sweep now exists: `maintenance/retention-sweep.ts` erases guest accounts unseen for
+   * `SESSION_ABSOLUTE_TTL_SECONDS`, which is the point at which no cookie that ever pointed at
+   * one can still work. This line was written before it did, which is why
+   * `docs/production/legal-register.md` D4 recorded a guest sweep "documented in four places and
+   * implemented in none" — this was one of the four.
+   *
+   * Note what it is not. A live session row is what actually keeps a learner's account safe, and
+   * the sweep reads that directly; this write only decides how long a *dead* account is kept
+   * afterwards. So the fact that it lands only when a session slides — at most once per half
+   * window, never on every request — cannot cost anybody their account.
+   */
   readonly touchLastSeen: (userId: string) => Promise<boolean>;
 }
 

@@ -57,7 +57,9 @@
     "security:secrets": "node scripts/supply-chain/secret-scan.mjs",
     "security:audit": "node scripts/supply-chain/audit.mjs",
     "security:pinning": "node scripts/supply-chain/ci-pinning.mjs",
+    "security:logs": "node scripts/supply-chain/log-policy.mjs",
     "security:containers": "node scripts/supply-chain/container-scan.mjs",
+    "security:image-provenance": "node scripts/supply-chain/image-provenance.mjs",
     "deps:quarantine": "node scripts/supply-chain/quarantine.mjs",
     "verify": "failed=''; for gate in security:audit security:hygiene lint build typecheck design:contrast test test:a11y test:ax test:csp test:age-gate test:exhaustive test:simulation db:verify; do printf '\\n=== verify gate: %s ===\\n' \"$gate\"; if pnpm run \"$gate\"; then printf '=== PASS %s ===\\n' \"$gate\"; else printf '=== FAIL %s ===\\n' \"$gate\"; failed=\"$failed $gate\"; fi; done; if [ -n \"$failed\" ]; then printf '\\n=== verify FAILED. These gates did not pass:%s ===\\n' \"$failed\" >&2; exit 1; fi; printf '\\n=== verify: every gate passed ===\\n'",
     "security:hygiene": "node scripts/supply-chain/repo-hygiene.mjs",
@@ -66,8 +68,10 @@
     "test:smoke": "node scripts/smoke-test.mjs",
     "backup": "node scripts/backup.mjs",
     "release:artifacts": "node scripts/release-artifacts.mjs",
+    "release:sign": "node --env-file-if-exists=deploy/signing/signing.env scripts/release-sign.mjs",
     "staging": "node scripts/staging.mjs",
     "alerts:verify": "node scripts/alert-delivery.mjs",
+    "alerts:preflight": "node scripts/alert-preflight.mjs",
     "certify:screen-reader": "node scripts/screen-reader-certify.mjs"
   },
   "devDependencies": {

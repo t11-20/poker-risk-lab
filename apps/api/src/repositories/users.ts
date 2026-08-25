@@ -253,6 +253,13 @@ export async function byId(sql: Db, userId: string): Promise<UserRow | null> {
  * guest accounts have not been seen since <cutoff>" is an index scan, and this is what keeps
  * an active learner out of that answer. Returns false when the id does not exist, which lets a
  * caller notice a session pointing at a deleted account instead of assuming the write landed.
+ *
+ * The reaper is `findAbandonedGuests` below, run four times a day by
+ * `apps/api/src/maintenance/retention-sweep.ts`. Note what this write is NOT: it is a policy
+ * signal, not the safety check. A learner is kept out of the sweep by having a live session row,
+ * which the sweep reads directly — see `abandonedGuestPredicate`. This timestamp only decides
+ * how long after the last session dies the row is kept, which is why a lag of up to half the
+ * idle window in when it is written cannot cost anybody their account.
  */
 export async function touchLastSeen(sql: Db, userId: string): Promise<boolean> {
   const rows = await sql<{ id: string }[]>`
@@ -510,6 +517,166 @@ export async function deleteAccount(sql: Db, userId: string): Promise<AccountDel
       roomsCreated: before.rooms_owned,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Abandoned guests — the same erasure, reached without anybody asking for it
+// ---------------------------------------------------------------------------
+
+/**
+ * The definition of "abandoned", as one SQL fragment used by both statements below.
+ *
+ * ## Why this is a fragment and not two copies of a WHERE clause
+ *
+ * The sweep asks this question twice: once to CHOOSE a batch of accounts, and once again inside
+ * the transaction that deletes each one. Two copies would be two things to keep in step, and the
+ * copy that drifts is the one in the delete path — which is the copy whose failure mode is
+ * "deleted a learner who was still playing". So there is one text, interpolated into both.
+ *
+ * ## What each clause is for, and why none of them is redundant
+ *
+ * `kind = 'guest'` — a federated account is NEVER touched by this. Somebody who signed in through
+ * an identity provider can sign in again tomorrow, whatever `last_seen_at` says, so an idle
+ * federated account is dormant rather than abandoned and nothing in this repository may remove
+ * it. The partial index `users_guest_last_seen_idx` (`0002_indexes_and_constraints.sql:51-55`) is
+ * built with exactly this predicate, so it is also what makes the choosing query an index scan.
+ *
+ * `last_seen_at <= now() - cutoff` — the retention period, supplied by the caller rather than
+ * chosen here. `apps/api/src/maintenance/retention-sweep.ts` derives it and says where from.
+ * `touchLastSeen` above is what keeps an active learner on the right side of it.
+ *
+ * `not exists (a live session)` — **the clause that makes this safe, and it is not a duplicate of
+ * the timestamp.** `last_seen_at` moves when a session slides past its halfway mark, so it can lag
+ * genuine activity by up to half the idle window; a policy expressed only in timestamps would be
+ * reasoning about a clock when the question is "can anybody still reach this account?". A live
+ * session row IS that answer, read directly. If this ever disagrees with the timestamp, this wins.
+ *
+ * `not exists (a membership, a hand seat, an owned room)` — a guest who ever sat at a table is not
+ * an abandoned sign-up, and deleting one is a different decision from the one being implemented
+ * here. Their seat is in somebody else's hand history (`hand_seats.user_id` is SET NULL, so the
+ * deletion would silently blank a name in a record four other people share), their room is
+ * somebody else's table, and their membership row may be a chair at a table that is live right
+ * now. `docs/production/legal-register.md` §5 L5 puts "must a learner's hand history be deleted"
+ * in front of counsel; until that is answered, an unattended timer must not answer it four times
+ * a day by accident. The population this sweep is for — the account minted automatically for
+ * every visitor who opens a lesson and never comes back — has none of these rows.
+ *
+ * ## The incident this shape prevents
+ *
+ * A sweep that selected ids and then deleted them in a later statement can delete an account that
+ * became live in between. Here the second evaluation runs inside the deleting transaction under
+ * `FOR UPDATE` on the account row, and PostgreSQL's `FOR UPDATE` conflicts with the `FOR KEY
+ * SHARE` that any INSERT referencing that row must take — so a session, membership or hand seat
+ * cannot be created for an account while this holds the lock, and one created before it is seen
+ * by the re-check. The check and the delete are therefore not two moments a race can live
+ * between. Same reasoning as `consumeLoginAttempt` in `sessions.ts`, for the same reason.
+ */
+function abandonedGuestPredicate(sql: Db, cutoffSeconds: number) {
+  return sql`
+        u.kind = 'guest'
+    and u.last_seen_at <= now() - (${cutoffSeconds}::int * interval '1 second')
+    and not exists (
+      select 1
+        from prl.sessions s
+       where s.user_id = u.id
+         and s.revoked_at is null
+         and s.expires_at > now()
+    )
+    and not exists (select 1 from prl.room_members m where m.user_id = u.id)
+    and not exists (select 1 from prl.hand_seats  h where h.user_id = u.id)
+    and not exists (select 1 from prl.rooms       r where r.owner_user_id = u.id)
+  `;
+}
+
+export interface AbandonedGuestQuery {
+  /** How long an account may go unseen before it is abandoned. Seconds. */
+  readonly cutoffSeconds: number;
+  /** Most ids to return. The sweep's batch size. */
+  readonly limit: number;
+}
+
+/**
+ * Ids of guest accounts nobody can reach any more, oldest first, bounded by `limit`.
+ *
+ * Reading and deleting are separate calls because the deletion of each account is its own
+ * transaction: one account that cannot be removed — a foreign key added later without a
+ * referential action, say — must not roll back the other 999 in the batch and must not become a
+ * permanent head-of-line block on a sweep that then reports "removed nothing" forever.
+ *
+ * `order by last_seen_at` is the oldest-first order the index already stores, so this is a
+ * bounded index scan rather than a sort of the whole guest population.
+ */
+export async function findAbandonedGuests(sql: Db, query: AbandonedGuestQuery): Promise<string[]> {
+  const rows = await sql<{ id: string }[]>`
+    select u.id
+      from prl.users u
+     where ${abandonedGuestPredicate(sql, query.cutoffSeconds)}
+     order by u.last_seen_at
+     limit ${query.limit}
+  `;
+  return rows.map((row) => row.id);
+}
+
+/**
+ * Erases one abandoned guest, or returns null because it is not abandoned after all.
+ *
+ * ## Why this calls `deleteAccount` instead of issuing its own DELETE
+ *
+ * One statement — `delete from prl.users where id in (select … limit n)` — would have been
+ * cheaper, and it is what the other two sweeps do. It is the wrong choice here, for three
+ * reasons that all reduce to the same one: this is an erasure, and there is already exactly one
+ * definition of what an erasure means.
+ *
+ *   1. `deleteAccount` VERIFIES ITSELF. It counts the eight tables that name the learner before
+ *      the delete and again afterwards inside the same transaction, and throws if anything
+ *      survived (`accountFootprint`). A schema change that half-erased an account would roll back
+ *      rather than commit. An unattended timer that runs four times a day with nobody reading its
+ *      output is precisely where that check earns its cost — a request-path deletion at least has
+ *      a learner watching the response.
+ *   2. The policy in `db/migrations/0004_account_deletion.sql` — what cascades, what is detached
+ *      to NULL, what is kept in full because it is four other people's record too — would
+ *      otherwise exist twice, in a migration and in a sweep, and the two would drift.
+ *   3. Rooms are closed before their ownership is detached (`deleteAccount` again), because a room
+ *      whose owner is gone can never be closed by anybody. A candidate here owns no rooms, so
+ *      that step does nothing today; it will still be right if the candidate rule ever widens.
+ *
+ * The cost, stated because it is real: a batch of N accounts is N transactions rather than one
+ * statement. At the sweep's default batch that is a few thousand statements four times a day, off
+ * every request path, and it buys the verification above. Throughput was not the property worth
+ * optimising in a DELETE against the table that holds every account.
+ *
+ * ## Why the predicate is evaluated again here
+ *
+ * See `abandonedGuestPredicate`. The caller chose this id from a query that ran earlier, in
+ * another transaction, against a snapshot that is now old. This is the evaluation that matters:
+ * it runs under `FOR UPDATE`, in the transaction that does the deleting, so "still abandoned" and
+ * "deleted" are the same moment. Returning null rather than throwing is deliberate — an account
+ * that came back to life between the two is a correct outcome of a correct guard, not an error,
+ * and the sweep counts it as not removed.
+ *
+ * Requires a transaction handle for the reason `deleteAccount` does, and says so the same way.
+ */
+export async function deleteAbandonedGuest(
+  sql: Db,
+  userId: string,
+  cutoffSeconds: number,
+): Promise<AccountDeletionSummary | null> {
+  if (!('savepoint' in sql)) {
+    throw new AppError('internal_error', {
+      logDetail: 'deleteAbandonedGuest was given a pool handle; it must run inside a transaction',
+    });
+  }
+
+  const locked = await sql<{ id: string }[]>`
+    select u.id
+      from prl.users u
+     where u.id = ${userId}
+       and ${abandonedGuestPredicate(sql, cutoffSeconds)}
+       for update
+  `;
+  if (locked[0] === undefined) return null;
+
+  return deleteAccount(sql, userId);
 }
 
 // ---------------------------------------------------------------------------

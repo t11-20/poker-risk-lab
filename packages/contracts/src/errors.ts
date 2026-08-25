@@ -57,6 +57,26 @@ export const ERROR_CODES = [
   'invite_code_invalid',
   'already_seated',
   'insufficient_units',
+  /**
+   * Another API process is authoritative for this room, and this one refused to serve it.
+   *
+   * A room being played lives in ONE process's memory — the deck, the salts and the pot have no
+   * column and never will — so two processes serving one room deal two different hands and the
+   * second settlement to land destroys the chips the first paid out. `prl.room_ownership` makes
+   * that an enforced lease rather than a comment beside `deploy.replicas: 1`, and this is what a
+   * process answers when it is refused the lease.
+   *
+   * Its own code rather than `seat_taken` (which is an ordinary race between two learners and must
+   * never page anybody) and rather than `internal_error` (nothing broke — the guard worked, and a
+   * 500 would send the reader a bug report form for a configuration mistake).
+   *
+   * 503 rather than 409, and the reason is what the client then does: `wsCloseForError` maps 5xx to
+   * `serverShuttingDown`, which is the retry-with-backoff path, while 4xx maps to a permanent
+   * refusal that tells the reader the table is not theirs. It is not theirs to give up on — it is
+   * being served, somewhere — so the honest instruction to the client is "wait and try again",
+   * which is also what resolves it when a deploy's containers stop overlapping.
+   */
+  'room_owned_elsewhere',
 
   // --- gameplay ---
   'illegal_action',
@@ -149,6 +169,9 @@ export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
   invite_code_invalid: 404,
   already_seated: 409,
   insufficient_units: 409,
+  // 503, not 409. See the code's own note: 5xx is the retryable branch of `wsCloseForError`, and
+  // a room held by another process is a "try again", not a "this is not yours".
+  room_owned_elsewhere: 503,
 
   illegal_action: 422,
   stale_action_sequence: 409,
@@ -195,6 +218,8 @@ export const ERROR_MESSAGES: Readonly<Record<ErrorCode, string>> = {
   invite_code_invalid: 'That invite code is not valid.',
   already_seated: 'You are already seated at that table.',
   insufficient_units: 'You do not have enough units for that table. Reset your units and try again.',
+  room_owned_elsewhere:
+    'That table is being looked after by another server right now. Give it a moment and try again.',
 
   illegal_action: 'That is not a legal action in this spot.',
   stale_action_sequence: 'The hand moved on while you were deciding. Have another look.',

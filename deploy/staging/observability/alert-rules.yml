@@ -219,6 +219,35 @@ groups:
             else surfaces it. Contained, and it will not heal on its own.
           runbook: docs/production/runbooks/stuck-seat.md
 
+      - alert: RoomOwnershipFenced
+        expr: sum(increase(prl_room_fencings_total[10m])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: An API process lost a room it was serving and had to stop
+          description: >-
+            Two processes were authoritative for one room's in-flight hand state. The hand held in
+            the evicted process can never settle, and if the other process settled its own version
+            the stacks written to room_members are not the ones anybody played for. The reason
+            label separates "somebody took it" (fenced — a second replica or an overlapping deploy)
+            from "we could not renew" (lease_expired — a database or scheduling problem here).
+          runbook: docs/production/runbooks/room-ownership-contended.md
+
+      - alert: RoomOwnershipRefused
+        expr: sum(increase(prl_room_ownership_refusals_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: An API process has been refusing rooms another process holds for ten minutes
+          description: >-
+            The guard working, and a deployment that keeps making it work. A refused open answers
+            503 room_owned_elsewhere, so every learner routed to this process cannot open any table
+            it does not hold. The window is deliberately SHORTER than the for duration: a rolling
+            deploy produces a few seconds of refusals while the old container drains, and a burst
+            that stops cannot stay true long enough to fire.
+          runbook: docs/production/runbooks/room-ownership-contended.md
+
       - alert: ArchiveFailing
         expr: sum(rate(prl_archive_failures_total[15m])) > 0
         for: 15m
@@ -316,6 +345,39 @@ groups:
             not from a generic figure. Re-derive it whenever that measurement is repeated.
           runbook: docs/production/runbooks/worker-saturation.md
 
+  # -------------------------------------------------------------------------
+  # Data retention.
+  #
+  # The one rule in this file whose subject is a promise made to a reader rather
+  # than a thing a learner would notice breaking. Nothing degrades when the
+  # retention sweep stops: every request still succeeds, every table still reads,
+  # and rows that should have gone simply stay. `docs/production/legal-register.md`
+  # §5 L5 names that shape exactly - "this is where a wrong answer is invisible:
+  # nothing fails, data simply persists."
+  #
+  # Note what is NOT alerted on here, and why. `prl_retention_rows_deleted_total`
+  # staying flat is the NORMAL state of a small deployment - most six-hour windows
+  # have nothing expired and no sixty-day-old guest - so a rule on it would fire
+  # constantly or never. "Removed nothing" and "did not run" are the same flat line,
+  # which is why the sweep exports its own age and this rule reads that instead.
+  # -------------------------------------------------------------------------
+  - name: data-retention
+    rules:
+      - alert: RetentionSweepStalled
+        expr: max(prl_retention_sweep_age_seconds) > 27000
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: The retention sweep has not completed for over seven hours
+          description: >-
+            The sweep runs every six hours and removes expired sessions, expired sign-in attempts
+            and abandoned guest accounts. While this is firing, the retention periods on /privacy
+            are not being enforced and nothing else in this file can see it: no request fails and
+            no counter moves, because a sweep that removes nothing and a sweep that never ran
+            produce the same numbers.
+          runbook: docs/production/runbooks/retention-sweep-stalled.md
+
   - name: telemetry
     rules:
       - alert: MetricsCardinalityOverflow
@@ -340,3 +402,52 @@ groups:
             Taking an instance in and out repeatedly is worse for learners than being cleanly out.
             Usually a database that is marginal rather than down.
           runbook: docs/production/runbooks/db-unavailable.md
+
+  # -------------------------------------------------------------------------
+  # The alerting system itself.
+  #
+  # Every other rule in this file is delivered by Alertmanager, so the one failure
+  # they cannot report is Alertmanager failing to deliver. That is not a hypothetical
+  # shape of bug: an expired provider key, a rotated SMTP password, a relay that
+  # starts answering 550 for this sender, or a receiver URL that quietly began
+  # returning 404 all produce exactly it — every application alert keeps evaluating
+  # and firing correctly, Alertmanager keeps routing them correctly, and nothing
+  # arrives. Before these two rules, `alertmanager_notifications_failed_total` was
+  # exported by a container on this network and read by nothing at all.
+  #
+  # Both are `page`, and the reason is the asymmetry: a broken receiver is usually
+  # ONE receiver. A ticket queue that has stopped accepting notifications can still
+  # be reported through the paging path, and the other way round. The case these
+  # cannot report is both paths broken at once, which is what the out-of-band check
+  # in the runbook exists for — and the runbook says so rather than implying these
+  # rules cover it.
+  # -------------------------------------------------------------------------
+  - name: alerting-itself
+    rules:
+      - alert: AlertmanagerNotificationsFailing
+        expr: sum(increase(alertmanager_notifications_failed_total[15m])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: Alertmanager could not deliver a notification
+          description: >-
+            Zero tolerance, because one failed notification is one page that did not arrive.
+            Alertmanager retries, so it may already have recovered; the first job is to find out
+            which integration failed and whether anything was ultimately delivered. This alert is
+            delivered through the same Alertmanager, so it can report a broken receiver and not a
+            broken Alertmanager — see the runbook for the out-of-band check.
+          runbook: docs/production/runbooks/alerting-blind.md
+
+      - alert: AlertmanagerDown
+        expr: absent(up{job="prl-alertmanager"}) or max_over_time(up{job="prl-alertmanager"}[2m]) == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: Alertmanager is not answering scrapes, so nothing can be delivered
+          description: >-
+            Every rule in this file routes through it. While this is true, no alert of any
+            severity reaches anybody, including this one — Prometheus still evaluates and still
+            shows it firing in its own UI, which is where it will be seen. Treat a firing
+            AlertmanagerDown as a report that the deployment has been unmonitored since it started.
+          runbook: docs/production/runbooks/alerting-blind.md

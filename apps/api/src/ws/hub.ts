@@ -375,6 +375,26 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
     });
     options.onRouterReady?.(router);
 
+    /**
+     * Sockets watching a room this process has been FENCED from.
+     *
+     * The registry has already closed the table and dropped the room by the time this runs — that
+     * ordering is deliberate and is documented on `RoomRegistry.evict` — so what is left is a set of
+     * sockets attached to a table that will never send another frame. Left open they are the worst
+     * failure shape this hub has: the connection is healthy, pings are answered, the client's
+     * watchdog never fires, and the learner simply watches a table that has stopped moving. The
+     * registry's own header records the same symptom from an in-process version of this bug.
+     *
+     * `serverShuttingDown` (4503) rather than a code of this hub's own, because it is exactly what
+     * the client must do: `describeClose` in `apps/web/src/lib/table-socket.ts` treats it as
+     * retryable and reconnects with backoff, which lands the learner on the process that does own
+     * the room. 4403 would be permanent and would tell them the table is not theirs, which is false.
+     */
+    const stopWatchingEvictions = registry.onEviction((roomId) => {
+      app.log.warn({ roomId }, 'room lease lost; closing its sockets');
+      router.closeRoom(roomId, WS_CLOSE.serverShuttingDown, 'this table moved to another server');
+    });
+
     /** Sockets per session, for `maxSocketsPerSession`. */
     const bySession = new Map<string, number>();
     /**
@@ -461,6 +481,11 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
       // Idempotent, and both calls are meant: `preClose` stops the pings as early as it can, and
       // this runs even for a close that never reached `preClose` (a hook before it having thrown).
       clearInterval(heartbeat);
+      // The registry outlives this hub in a process that builds several apps — every test that
+      // does, and `resetRoomRegistryForTests` exists precisely because it is shared. A listener
+      // left behind would hold a closed router alive and, on the next eviction, close sockets
+      // through it: the same shape as the room subscription `handleClose` is careful to drop.
+      stopWatchingEvictions();
       // A backstop, not the mechanism — `preClose` has already closed every socket by now, and
       // `closeConnection` is a no-op on a connection that is already closed. It stays because it
       // costs nothing and because a router left holding room subscriptions for a closed app is a

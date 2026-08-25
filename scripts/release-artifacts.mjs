@@ -56,8 +56,11 @@
  * so what a push buys is content identity across a push/pull boundary — another
  * machine asking for `repo@sha256:X` gets those bytes or an error, never
  * different bytes. Who built them, from what source, on what machine, and whether
- * anybody stands behind them is provenance, it needs a signing tool
- * (`cosign attest`/`cosign sign` in CI), and there is none in this environment.
+ * anybody stands behind them is provenance, and it needs a signing tool. That is
+ * `pnpm run release:sign`, a SEPARATE command on purpose: it holds the private key
+ * and this script must never learn to. Nothing in this file signs anything, so a
+ * manifest written here describes UNSIGNED artefacts until that command has run and
+ * `pnpm run security:image-provenance` has verified the result.
  * `pnpm run staging promote` states exactly that split rather than implying more.
  *
  * ## What this does NOT prove
@@ -807,9 +810,10 @@ function digestKindFor(images) {
     'two content addresses for one artefact: the local BuildKit image-store manifest digest ' +
     '(--iidfile), and the manifest digest the registry returned on push — which was re-fetched from ' +
     'the registry, re-hashed here, and pulled back by digest. images.<service>.registry.reference ' +
-    'resolves to exactly these bytes on any machine that can reach the registry. NEITHER digest is ' +
-    'signed: no signature, no attestation and no notary (cosign is not available here), so this is ' +
-    'content identity across a push/pull boundary and not provenance.'
+    'resolves to exactly these bytes on any machine that can reach the registry. Neither digest is ' +
+    'signed BY THIS SCRIPT: signing is `pnpm run release:sign`, which records what it signed in ' +
+    'deploy/staging/release-signatures.json. Until that has run this is content identity across a ' +
+    'push/pull boundary and not provenance.'
   );
 }
 
@@ -1060,10 +1064,11 @@ async function main() {
         '  Both artefacts are also in the registry, and each registry digest was re-fetched,\n' +
           '  re-hashed here and pulled back by digest. Another machine that can reach the registry\n' +
           '  can obtain exactly these bytes; a digest pull cannot return different ones.\n' +
-          '  What that is NOT: a signature. Nothing here signs, attests or notarises anything, so\n' +
-          '  the registry copy proves content identity and says nothing about provenance — who\n' +
-          '  built it, from what source, or whether anybody stands behind it. That needs cosign\n' +
-          '  (or an equivalent) in CI, and there is none in this environment.\n',
+          '  What that is NOT: a signature. Nothing HERE signs, attests or notarises anything, so\n' +
+          '  what this script alone proves is content identity. Sign them next:\n\n' +
+          '      pnpm run release:sign && pnpm run security:image-provenance\n\n' +
+          '  and read deploy/signing/README.md for what a locally-held key does and does not\n' +
+          '  establish: it is possession of a key, not the identity of a builder.\n',
       ),
     );
   } else {

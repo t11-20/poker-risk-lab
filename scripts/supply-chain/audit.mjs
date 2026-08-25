@@ -18,12 +18,14 @@
  * six of eight gates. An audit that did not run its gates is not a passed audit;
  * the exit code now says the same thing the prose does.
  *
- * ## The container-image gate has a scope the others do not
+ * ## Two gates have a scope the others do not
  *
  * Every other gate reads the repository: the lockfile, the installed store, the
  * workflow files. They can run on any checkout at any time. `container-scan.mjs`
- * reads the two Docker IMAGES, which exist only after `pnpm run release:artifacts`
- * has built them, and this audit is invoked long before that — by
+ * and `image-provenance.mjs` read the two Docker IMAGES — one for known CVEs, the
+ * other to check they are signed by the committed key — and those exist only
+ * after `pnpm run release:artifacts` has built them, while this audit is invoked
+ * long before that — by
  * `.github/workflows/ci.yml` on every push, by `pnpm run verify`, and by
  * `quarantine.mjs` against a proposed lockfile. There is no honest way for a
  * commit-time audit to scan an artefact that does not exist yet.
@@ -37,14 +39,18 @@
  *     Summary says in as many words that this audit did NOT cover container
  *     images. Exit code unchanged — the audit's own scope, the dependency graph
  *     at this commit, was covered completely, and it says exactly what it did.
- *   * **`--skip-containers` with artefacts present**: an explicit refusal to run a
- *     gate that could have run, which exits **2**, the same "incomplete" code
- *     `--offline` uses. A flag is the only way to skip a runnable gate, and using
- *     it is never a pass.
+ *   * **`--skip-containers` or `--skip-signatures` with artefacts present**: an
+ *     explicit refusal to run a gate that could have run, which exits **2**, the
+ *     same "incomplete" code `--offline` uses. A flag is the only way to skip a
+ *     runnable gate, and using it is never a pass.
  *
  * The release path does not rely on that inference: `.github/workflows/release.yml`
  * builds the artefacts and then runs `pnpm run security:containers` as a step of
  * its own, so the scan on the path that ships is mandatory and visible by name.
+ *
+ * The signature gate is deliberately NOT a network gate. Its registry is loopback
+ * and its trust anchor is a committed file, so it is exactly the check that still
+ * works for a deployer with no internet — `--offline` leaves it running.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -59,6 +65,13 @@ const REPO_ROOT = resolve(HERE, '..', '..');
 /**
  * `network: true` gates reach the internet and are skipped by `--offline`.
  * `artefact: true` gates need a built release image; see the header.
+ *
+ * `skipFlag` names the ONE command-line flag that may skip that gate, and it is per-gate rather
+ * than shared. It used to be shared: the condition read `gate.artefact === true && skipContainers`,
+ * so the moment a second artefact gate existed — the signature check — `--skip-containers` would
+ * have silently skipped it too. A flag named after the CVE scan turning off the signature
+ * verification is the sort of thing nobody notices until a release ships unsigned behind a flag
+ * somebody passed for an unrelated reason.
  */
 const GATES = [
   { file: 'policy-check.mjs', label: 'policy in effect', network: false },
@@ -71,10 +84,34 @@ const GATES = [
   // be able to turn the release audit permanently red.
   { file: 'secret-scan.mjs', label: 'committed credentials', network: false },
   { file: 'ci-pinning.mjs', label: 'CI + container pinning', network: false },
+  // Not a dependency gate, and it belongs here anyway: the deployment configuration
+  // is supply chain in the sense that matters, and D2 in the legal register is what
+  // happens when nothing reads it. Both shipped nginx configs logged the OIDC
+  // authorization code — `access_log ... combined;` writes "$request" verbatim —
+  // and no gate, test or lint rule read either file, so it shipped silently past
+  // every check in this list. Offline, hermetic, and it reads only committed text.
+  { file: 'log-policy.mjs', label: 'log policy', network: false },
   { file: 'provenance.mjs', label: 'integrity + release age', network: true },
   { file: 'osv-scan.mjs', label: 'OSV vulnerabilities', network: true },
   { file: 'sbom.mjs', label: 'SBOM generation', network: false },
-  { file: 'container-scan.mjs', label: 'container image CVEs', network: true, artefact: true },
+  {
+    file: 'container-scan.mjs',
+    label: 'container image CVEs',
+    network: true,
+    artefact: true,
+    skipFlag: '--skip-containers',
+  },
+  // Same scope as the CVE scan and for the same reason: it reads the release IMAGES, which exist
+  // only after `pnpm run release:artifacts`. Not a network gate — the registry it verifies against
+  // is loopback — so `--offline` leaves it running, which is correct: signature verification is
+  // exactly the check an air-gapped deployer needs and it needs nothing but the committed key.
+  {
+    file: 'image-provenance.mjs',
+    label: 'release image signatures',
+    network: false,
+    artefact: true,
+    skipFlag: '--skip-signatures',
+  },
 ];
 
 /** Where `release-artifacts.mjs` writes, and therefore where this looks. */
@@ -113,7 +150,6 @@ function releaseArtefactsPresent() {
 }
 
 const offline = process.argv.includes('--offline');
-const skipContainers = process.argv.includes('--skip-containers');
 const results = [];
 
 const artefacts = releaseArtefactsPresent();
@@ -132,8 +168,8 @@ for (const gate of GATES) {
     results.push({ ...gate, skipped: false, notApplicable: true, code: 0 });
     continue;
   }
-  if (gate.artefact === true && skipContainers) {
-    console.log(`${dim('  ○')} ${gate.label} ${dim('— skipped (--skip-containers)')}`);
+  if (gate.skipFlag !== undefined && process.argv.includes(gate.skipFlag)) {
+    console.log(`${dim('  ○')} ${gate.label} ${dim(`— skipped (${gate.skipFlag})`)}`);
     results.push({ ...gate, skipped: true, notApplicable: false, code: 0 });
     continue;
   }
@@ -171,14 +207,21 @@ if (failed.length > 0) {
 }
 
 if (skipped.length > 0) {
-  // "network gate(s)" is deliberately unchanged from when `--offline` was the only
-  // way to skip one. Every gate that CAN be skipped by a flag reaches the network —
-  // the container scan fetches trivy's vulnerability database — so the sentence is
-  // still literally true, and `audit.test.mjs` asserts it verbatim.
-  console.log(red(bold(`\n${skipped.length} network gate(s) skipped — NOT a valid release audit.`)));
+  // The noun is computed rather than written, and that is a correction rather than
+  // a flourish. It used to be the literal string "network gate(s)", justified by a
+  // comment saying every skippable gate reached the network — true when the only
+  // skippable gates were the OSV query, the registry integrity check and the CVE
+  // scan. `image-provenance.mjs` breaks it: it verifies signatures against a
+  // loopback registry and a committed key, reaches no network at all, and
+  // `--skip-signatures` skips it. Printing "1 network gate(s) skipped" for it would
+  // be a false sentence in the one message a reader consults to find out what did
+  // not run. `--offline` still produces the original wording verbatim, which is
+  // what `audit.test.mjs` asserts.
+  const noun = skipped.every((r) => r.network) ? 'network gate(s)' : 'gate(s)';
+  console.log(red(bold(`\n${skipped.length} ${noun} skipped — NOT a valid release audit.`)));
   console.log(dim('  Exiting non-zero on purpose: an audit that did not run its gates has not passed.'));
   console.log(dim('  Run `pnpm run security:audit` with network access, and without'));
-  console.log(dim('  --skip-containers, before releasing.\n'));
+  console.log(dim('  --skip-containers or --skip-signatures, before releasing.\n'));
   // A distinct code so a caller can tell "incomplete" from "something failed".
   process.exit(2);
 }
@@ -194,9 +237,13 @@ if (notApplicable.length > 0) {
   console.log(
     dim(
       '\n  This audit therefore covered the dependency graph at this commit and NOT the container\n' +
-        '  images that ship. Those are scanned after they are built:\n\n' +
-        '      pnpm run release:artifacts && pnpm run security:containers\n\n' +
-        '  which is exactly what .github/workflows/release.yml does, as a mandatory step.\n',
+        '  images that ship — neither their known CVEs nor whether they are signed. Both are\n' +
+        '  checked after the images are built:\n\n' +
+        '      pnpm run release:artifacts && pnpm run security:containers\n' +
+        '      pnpm run release:sign      && pnpm run security:image-provenance\n\n' +
+        '  The first line is exactly what .github/workflows/release.yml does, as a mandatory step.\n' +
+        '  The second is not wired into CI and cannot be: signing needs a private key, and this\n' +
+        '  repository has no CI signing identity. See deploy/signing/README.md.\n',
     ),
   );
 }

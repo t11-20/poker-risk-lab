@@ -13,6 +13,9 @@ That order is the point. Containment comes before diagnosis because during an in
 | [api-unhealthy.md](api-unhealthy.md) | `ApiDown`, `ProcessRestartLoop`, `HandsFailing`, `TableActorFailing` |
 | [db-unavailable.md](db-unavailable.md) | `ApiNotReady` |
 | [db-saturation.md](db-saturation.md) | `DbPoolSaturated`, `ArchiveFailing` |
+| [room-ownership-contended.md](room-ownership-contended.md) | `RoomOwnershipFenced`, `RoomOwnershipRefused` — two API processes and one room |
+| [stuck-seat.md](stuck-seat.md) | `SeatReleaseFailing` |
+| [retention-sweep-stalled.md](retention-sweep-stalled.md) | `RetentionSweepStalled` — the scheduled deletion of expired rows and abandoned guest accounts has stopped |
 | [websocket-spike.md](websocket-spike.md) | `WebSocketReconnectStorm`, `WebSocketConnectionsHigh`, `WebSocketRefusalSpike` |
 | [worker-saturation.md](worker-saturation.md) | `EventLoopBlocked`, `WorkerPoolQueueDeep`, `AnalysisTimeouts` |
 | [elevated-error-rate.md](elevated-error-rate.md) | `HttpErrorRateHigh`, `HttpLatencyP99High` |
@@ -25,6 +28,8 @@ That order is the point. Containment comes before diagnosis because during an in
 | [incorrect-coach-result.md](incorrect-coach-result.md) | a reported wrong probability, EV or ranking |
 | [leaked-secret.md](leaked-secret.md) | a credential is believed to be exposed |
 | [dependency-compromise.md](dependency-compromise.md) | a malicious or compromised package |
+| [unverified-image.md](unverified-image.md) | a release image whose signature does not verify |
+| [alerting-blind.md](alerting-blind.md) | `AlertmanagerNotificationsFailing`, `AlertmanagerDown` — and any incident found by a person rather than by a page |
 
 ## Before you start, whatever the incident
 

@@ -100,6 +100,24 @@ services:
     tmpfs:
       - /prometheus:mode=0700,uid=65534,gid=65534,size=256m
       - /tmp:mode=1777,noexec,nosuid,size=16m
+    # 10 MiB × 3 = 30 MiB. The full argument for capping every service is in
+    # docker-compose.yml's header ("Why every service has a `logging:` block"); the
+    # short version is that Docker's `json-file` driver is unbounded without
+    # `max-size`, and a full Docker host takes Postgres down with it.
+    #
+    # The specific shape of this service's bad day is worth naming, because it is
+    # the opposite of the TSDB cap two lines up. `--storage.tsdb.retention.time=2h`
+    # bounds the METRICS; it says nothing about the LOG. A Prometheus whose target
+    # is refusing connections logs a scrape failure per target per scrape interval,
+    # indefinitely — a steady, unbounded stream produced precisely during the
+    # outage somebody is trying to debug, on the stack whose job is to notice
+    # outages. Three files is enough: these lines are repetitive by construction
+    # and the fiftieth identical scrape failure adds nothing the first did not.
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -136,6 +154,21 @@ services:
       # container is correct here for the same reason as the TSDB above.
       - /alertmanager:mode=0700,uid=65534,gid=65534,size=32m
       - /tmp:mode=1777,noexec,nosuid,size=16m
+    # 10 MiB × 3 = 30 MiB, same reasoning as prometheus above and the same shape of
+    # bad day: an SMTP smarthost that refuses the submission produces a delivery
+    # error per notification per retry, forever, and the thing being retried is an
+    # alert about something already broken. See docker-compose.yml's header.
+    #
+    # One caution that belongs on THIS service and no other: its log lines quote
+    # the notification it failed to send, so they carry on-call addresses and alert
+    # text. The register lists the SMTP smarthost as a recipient of exactly that
+    # (§7 recipients table); this cap bounds how much of it accumulates on the
+    # Docker host, and does not make the log non-sensitive.
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     security_opt:
       - no-new-privileges:true
     cap_drop:

@@ -109,6 +109,80 @@
 # reason. If a service starts failing with EROFS after a dependency upgrade, the
 # fix is to find out what it wants to write and add it here on purpose — not to
 # drop read_only.
+#
+# ## Why every service has a `logging:` block, and why the numbers differ
+#
+# THE CANONICAL EXPLANATION. `docker-compose.staging.yml` and
+# `docker-compose.observability.yml` point here rather than repeating it.
+#
+# There was no `logging:` block anywhere in this repository until D2 in
+# docs/production/legal-register.md. D2 is remembered as a privacy defect — the
+# proxy was writing OAuth authorization codes to its log — but it had a second
+# half that has nothing to do with privacy and is the more likely way to lose a
+# weekend:
+#
+#   Docker's default log driver is `json-file`, and `json-file` with no
+#   `max-size` is UNBOUNDED. Nothing rotates it. There is no logrotate anywhere
+#   in deploy/, and there could not usefully be — see below. A container that
+#   writes a line per request therefore grows a file on the Docker host, without
+#   limit, for as long as it runs.
+#
+# The failure that follows is not "a log got big". It is: the Docker host's disk
+# fills; Postgres cannot extend a relation or write WAL; Postgres shuts down or
+# refuses writes; and the learner-visible symptom is data loss or an outage. That
+# is a DATA-AVAILABILITY incident reached entirely through a logging setting, and
+# it takes down every container on the host, not just the one that was noisy.
+# `read_only: true` on all of these services does not help at all — the log is
+# written by the daemon, outside the container's filesystem.
+#
+# So every service is capped. They are NOT capped uniformly, because they do not
+# write at remotely comparable rates, and a number chosen for the noisiest would
+# be silly on the quietest:
+#
+#   api           20m x 5 = 100 MiB  the highest-volume writer in the stack: a
+#                                    structured JSON line per HTTP request AND per
+#                                    WebSocket lifecycle event, each several times
+#                                    the width of an nginx line. It also gets the
+#                                    most headroom because it is the log an
+#                                    incident is actually reconstructed from.
+#   proxy         10m x 5 =  50 MiB  a line per request, but a narrow one.
+#   postgres      10m x 3 =  30 MiB  near-silent by default — this stack sets
+#                                    neither log_statement nor
+#                                    log_min_duration_statement, so it logs
+#                                    startup, checkpoints and errors. The cap is
+#                                    not for today; it is for the day somebody
+#                                    debugging a slow query sets
+#                                    log_min_duration_statement=0 and forgets,
+#                                    which turns the quietest service into the
+#                                    loudest by two orders of magnitude and does
+#                                    it silently.
+#   web           10m x 3 =  30 MiB  startup and errors, not a line per request —
+#                                    but one bad render in a hot route is a stack
+#                                    trace per request, which is why it is capped
+#                                    rather than trusted.
+#
+# 210 MiB for the whole stack, worst case, and the same per-service numbers appear
+# in docker-compose.staging.yml. Keeping them identical is deliberate: the entire
+# lesson of D2 is that these two files drift and a fix in one is not a fix, so
+# `scripts/supply-chain/log-policy.mjs` asserts a service present in both has the
+# same cap in both. A production deployment on real hardware should raise these
+# deliberately, in one place, having decided how much disk it is willing to spend.
+#
+# ## Why there is no logrotate, and why that is not an omission
+#
+# logrotate would be the wrong tool and it would break `docker logs`. These files
+# are owned and held open by the Docker daemon; renaming one out from under it
+# leaves the daemon writing to an unlinked inode (the log silently stops
+# appearing and the disk is still consumed), and `copytruncate` races the daemon's
+# own writes. `max-size`/`max-file` IS Docker's rotation, applied by the component
+# that owns the file. Adding logrotate on top would be redundant at best.
+#
+# But be exact about what a size cap is and is not: it bounds HOW MUCH, never HOW
+# LONG. At ten requests a minute a 100 MiB api log holds months; under load it
+# holds an afternoon. So the disk-exhaustion risk is closed here and the
+# data-retention question is NOT — a size cap cannot implement "kept for N days"
+# and must not be recorded as though it had. That is stated in §2.10 of the legal
+# register rather than quietly left to look solved.
 # ---------------------------------------------------------------------------
 
 name: poker-risk-lab
@@ -147,6 +221,19 @@ services:
       - /var/run/postgresql:mode=1777
       # ...and temporary sort/hash spill files here.
       - /tmp:mode=1777
+    # 10 MiB × 3 = 30 MiB. The quietest service here by a wide margin — this stack
+    # sets neither `log_statement` nor `log_min_duration_statement`, so Postgres
+    # logs startup, checkpoints and errors and very little else. The cap is not
+    # for that; it is for the afternoon somebody adds
+    # `-c log_min_duration_statement=0` to debug a slow query, which turns the
+    # quietest service into the loudest by two orders of magnitude, silently, and
+    # the disk it fills is the one holding this database's own data directory.
+    # See this file's header, "Why every service has a `logging:` block".
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     healthcheck:
       # `pg_isready` against the real user and database, not just the port. During
       # initdb the server briefly listens while rejecting connections, and a
@@ -287,6 +374,19 @@ services:
       # Node writes here for diagnostic reports, heap snapshots and any use of
       # os.tmpdir(). noexec/nosuid because nothing in here should ever be run.
       - /tmp:mode=1777,noexec,nosuid,size=64m
+    # 20 MiB × 5 = 100 MiB, the largest allowance in the stack, and deliberately so
+    # on both axes. Per-file, because this is the highest-volume writer here — a
+    # structured JSON line per HTTP request AND per WebSocket lifecycle event, each
+    # several times the width of an nginx line. Per-count, because this is the log
+    # an incident is actually reconstructed from, and a cap that holds only the
+    # last few minutes of a busy morning is a cap that deletes the evidence just as
+    # somebody goes looking for it. See this file's header, "Why every service has
+    # a `logging:` block".
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '5'
     # Defence in depth on top of the non-root USER in the image: no process in
     # this container can acquire a capability it did not start with.
     security_opt:
@@ -335,6 +435,17 @@ services:
       # build state), so it comes back as a tmpfs: cache, therefore losing it on
       # restart is correct rather than merely tolerable.
       - /app/apps/web/.next/cache:mode=0700,uid=1000,gid=1000,size=256m
+    # 10 MiB × 3 = 30 MiB. `next start` logs startup and errors, not a line per
+    # request, so in steady state this is close to silent. It is capped anyway
+    # because the shape of its bad day is a single broken render in a hot route
+    # producing a full stack trace per request — quiet and unbounded are different
+    # properties, and only one of them is being relied on here. See this file's
+    # header, "Why every service has a `logging:` block".
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -386,6 +497,63 @@ services:
   # receives SIGTERM rather than a shell that ignores it. The image's own entrypoint is
   # bypassed for the same read-only reason — it templates files into /etc/nginx.
   #
+  # ## What it writes to a log, and the incident that decided it
+  #
+  # This config used to say `access_log /dev/stdout combined;`, and `combined` logs
+  # `"$request"` — the request line VERBATIM, query string included. `/api/v1/auth/oidc/
+  # callback` is routed by `location /api/`, and an OIDC provider returns to it as
+  # `?code=<authorization code>&state=<state>`. So every sign-in wrote an OAuth
+  # authorization code — a bearer credential exchangeable for a session — to the
+  # container log in the clear. Measured against a throwaway container running this
+  # exact config, before the fix:
+  #
+  #   172.22.0.1 - - [25/Aug/2026:07:50:49 +0000] "GET /api/v1/auth/oidc/callback?
+  #   code=SENTINELCODE123&state=SENTINELSTATE456 HTTP/1.1" 502 157 "-" "curl/8.7.1"
+  #
+  # That is D2 in docs/production/legal-register.md. It matters more than an ordinary
+  # logging slip because the service one hop downstream works hard to make that exact
+  # line impossible: `queryKeysOf` (apps/api/src/logging.ts) logs query parameter names
+  # and never values *specifically* so an authorization code cannot enter a log, and
+  # `clientKeyFor` (apps/api/src/plugins/request-context.ts) stores `HMAC(secret,
+  # "client:"+ip)` rather than an address. This file undid both of them upstream.
+  #
+  # `prl_privacy` below replaces it. `$uri` rather than `$request`, because `$uri` is
+  # the path with the query string already gone — that is the line that removes the
+  # credential. `$is_args` still records *whether* there was a query string, which is
+  # as close as nginx core gets to `queryKeysOf` (it has no way to keep names and drop
+  # values). The client address is truncated to a /24 (or /48 for IPv6) rather than
+  # dropped: when the API is the thing that is down, this log is the only place that can
+  # answer "one caller or a thousand", and an access log with nothing in it is not a
+  # win. That is reduction, not anonymisation, and it is written down as such next to
+  # the map. The user agent is classed rather than logged, because a UA string is a
+  # fingerprint and "browser / tool / bot" is what it is actually read for.
+  # `$http_referer` is gone outright — a Referer is somebody else's URL and can carry
+  # somebody else's token. `$upstream_http_x_request_id` is the API's OWN request id,
+  # read back off its response, which joins a proxy line to an API line without this
+  # proxy inventing or trusting a correlation id (the API sets `requestIdHeader: false`
+  # and refuses an inbound one).
+  #
+  # ## The error log leaked the same request line, and `log_format` cannot stop it
+  #
+  # `ngx_http_log_error` stamps the request context onto error-log messages itself, at
+  # any level, in a shape no directive controls. From the same throwaway container:
+  #
+  #   2026/08/25 07:50:49 [error] 7#7: *1 api could not be resolved (3: Host not found),
+  #   client: 172.22.0.1, server: _, request: "GET /api/v1/auth/oidc/callback?code=
+  #   SENTINELCODE123&state=SENTINELSTATE456 HTTP/1.1", host: "127.0.0.1:18080"
+  #
+  # Fixing the access log alone would have been a fix that tested clean and changed
+  # nothing. nginx has no error-log format, so the level is the only lever: it is now
+  # `crit`. Everything nginx emits with a request line in normal operation — upstream
+  # unreachable, upstream timeout, oversized body, client abort, malformed request — is
+  # `[error]` or quieter and is dropped; `[emerg]`/`[alert]` still print, so a bind or
+  # config failure at start is still loud. `crit` is a reduction and not a proof, so the
+  # one path where the query string is a credential by construction gets its own
+  # `location =` block with `error_log /dev/null`. See the config.
+  #
+  # `scripts/supply-chain/log-policy.mjs` is the gate that keeps this true, and it
+  # fails against the config as it was before this comment existed.
+  #
   # ## The `$$`
   #
   # Compose interpolates `$VAR` in this file, and nginx configuration is made of `$vars`.
@@ -417,10 +585,45 @@ services:
         # Everything nginx writes goes to the tmpfs. With a read-only root there is no
         # other choice, and there is nothing here worth surviving a restart.
         pid /tmp/nginx.pid;
-        error_log /dev/stderr warn;
+        # `crit`, not `warn`. nginx stamps the full request line — query string and all
+        # — onto its own error-log messages and no directive changes that shape, so the
+        # level is the only control. See this service's header comment.
+        error_log /dev/stderr crit;
         events { worker_connections 1024; }
         http {
-          access_log /dev/stdout combined;
+          # The client address, reduced to a network: IPv4 keeps three octets, IPv6
+          # three hextets, and the host part is discarded before it is written down.
+          # $$remote_addr is still used raw for X-Forwarded-For below — the API needs it
+          # to compute its own keyed hash — and is simply not persisted HERE. Anything
+          # this cannot truncate correctly (a compressed IPv6 literal) degrades to
+          # `ip6`: the failure mode of a redaction rule must be "log less", never "raw".
+          map $$remote_addr $$prl_client_net {
+            default                                       "ip6";
+            ""                                            "-";
+            "~^(?<v4net>[0-9]+\.[0-9]+\.[0-9]+)\.[0-9]+$$" "$$v4net.0/24";
+            "~^(?<v6net>[0-9a-fA-F]+:[0-9a-fA-F]+:[0-9a-fA-F]+):" "$$v6net::/48";
+          }
+          # The user agent, reduced to a class. A full UA is a fingerprint and the API
+          # stores only a digest of it; "browser / tool / bot" is what it is read for.
+          # Regexes are tried in written order, so `bot` wins over `browser` for the
+          # many crawlers that also claim to be Mozilla.
+          map $$http_user_agent $$prl_ua_class {
+            default                                     "other";
+            ""                                          "none";
+            "~*(bot|crawl|spider|slurp)"                "bot";
+            "~*^(curl|wget|python-|go-http|node-fetch)" "tool";
+            "~*(Firefox|Chrome|Safari|Edg)/"            "browser";
+          }
+          # `$$uri`, never `$$request`/`$$request_uri`: the query string is gone before
+          # anything is written, which is what keeps an OAuth authorization code off
+          # disk (D2). `escape=default` is nginx's default and is stated because it
+          # matters — `$$uri` is percent-DECODED, so without escaping a crafted path
+          # could inject a newline and forge a log line.
+          log_format prl_privacy escape=default
+            '$$time_iso8601 $$prl_client_net $$prl_ua_class "$$request_method $$uri$$is_args" '
+            '$$status $$body_bytes_sent rt=$$request_time up=$$upstream_addr '
+            'us=$$upstream_status urt=$$upstream_response_time rid=$$upstream_http_x_request_id';
+          access_log /dev/stdout prl_privacy;
           client_body_temp_path /tmp/nginx-body;
           proxy_temp_path /tmp/nginx-proxy;
           fastcgi_temp_path /tmp/nginx-fastcgi;
@@ -456,6 +659,33 @@ services:
             # table between hands.
             proxy_read_timeout 3600s;
             proxy_send_timeout 3600s;
+
+            # Off, and stated rather than assumed. On, nginx would answer an upstream
+            # 4xx/5xx from its own error_page, which is an INTERNAL REDIRECT: a second
+            # pass with a rewritten $$uri, another chance to log a request that already
+            # has a line, and the loss of the API's own error body and request id.
+            proxy_intercept_errors off;
+
+            # The OIDC callback, and the only reason it is a location of its own.
+            # `location /api/` already routes this path; this exact-match block exists
+            # purely to give this ONE path an error log that cannot leak, because it is
+            # the path where a query-string value is a credential BY CONSTRUCTION —
+            # the provider redirects here with ?code=<exchangeable for a session>.
+            # `error_log crit` at the top removes every message class that carries a
+            # request line in normal operation, but not a genuine [crit] (a full 16 MiB
+            # tmpfs producing `open() failed` while buffering the upstream response
+            # would still print `request: "GET /api/v1/auth/oidc/callback?code=…"`).
+            # On this path that residual is not acceptable, so the error log goes to
+            # /dev/null and the sanitised access-log line is the record.
+            #
+            # The upstream MUST stay identical to `location /api/`; two blocks routing
+            # the same traffic can drift, so scripts/supply-chain/log-policy.mjs
+            # asserts they name the same upstream.
+            location = /api/v1/auth/oidc/callback {
+              error_log /dev/null crit;
+              set $$upstream "${PRL_PROXY_API_UPSTREAM:-api:3001}";
+              proxy_pass http://$$upstream$$request_uri;
+            }
 
             # Origin is passed through untouched — nginx does not strip it — and that
             # matters: the API checks Origin against PUBLIC_WEB_ORIGIN on CSRF and on
@@ -498,6 +728,15 @@ services:
     read_only: true
     tmpfs:
       - /tmp:mode=1777,noexec,nosuid,size=16m
+    # A line per request, but a narrow one: 10 MiB × 5 = 50 MiB. Five files rather
+    # than three because this log is per-request and an incident is reconstructed
+    # from it — the same reason the api gets five. See this file's header,
+    # "Why every service has a `logging:` block".
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
     security_opt:
       - no-new-privileges:true
     cap_drop:
