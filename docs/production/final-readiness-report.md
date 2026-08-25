@@ -1,46 +1,24 @@
 # Final readiness report
 
-**Candidate SHA:** `6c806f0a668864bd9beb41b7010ba390bd8a4e6c`
+**Candidate SHA:** `b5bbdd734169efe2cd2e2092f19d6d31be720612`
 **Tree at freeze:** clean — the release manifest records `dirty: false`.
 **Branch:** `production-hardening-2`
-**Date:** 2026-08-25
+**Date:** 2026-08-26
 **Host:** Darwin arm64, Node v24.18.0, pnpm 11.10.0
 
-> ## ⚠ STALE — the header above was advanced without re-measuring anything below
+> ## Re-frozen 2026-08-26 at `b5bbdd734169`
 >
-> **Read this before quoting any number in this document.** Commit `37d6ccc8ba54` changed exactly
-> three lines of this report — the candidate SHA and the two image digests — and nothing else. Those
-> three are the only fields `scripts/readiness-report.test.mjs` joins to the release manifest, so
-> they were the only three that had to move. Every measurement below still describes candidate
-> **`6677dfcc2ae7`**, which is `HEAD~3` and **13,004 inserted lines across 132 files** behind the
-> SHA in the header. The three commits since each recorded a different test count in their own
-> messages — `5845bdd` 2,137, `6c806f0` 2,162, `37d6ccc` 2,174 — while the Verdict below still says
-> 2,065.
+> The previous header had been advanced without re-measuring anything under it, and this banner
+> records why that happened rather than quietly deleting the evidence. `scripts/readiness-report.mjs`'s
+> join covered **three fields** — the candidate SHA and the two digests — so those three stayed
+> honest while every measurement around them rotted, and the document read as freshly stamped
+> *because* the stamped parts were the guarded ones. At its worst it described a candidate 13,004
+> inserted lines and 132 files behind its own header. **A partial join manufactures confidence**,
+> which is worse than no join at all.
 >
-> Re-measured on 2026-08-26 at `37d6ccc8ba54` (`pnpm run test`, this host):
->
-> | Claim below | States | Measured at `37d6ccc` |
-> | --- | ---: | ---: |
-> | engine / contracts / AI | 134 / 21 / 156 | 134 / 21 / 156 — unchanged |
-> | poker-math | 256 | **260** |
-> | ui | 265 | **287** |
-> | content | 29 | **30** |
-> | web | 358 | **425** |
-> | API tests | 965 | **990** |
-> | Script tests | 889 | **1,159 — and 3 of them FAIL** |
-> | Total | 2,065 | **3,462** (the breakdown above already summed to 3,073, not 2,065) |
-> | Alert rules | 29 — 14 page, 14 ticket, 1 heartbeat | **35 — 16 page, 18 ticket, 1 heartbeat** |
-> | Rules unprovoked | 26 of 29 | **32 of 35** |
->
-> **`pnpm run verify` does not exit 0 on this tree.** The three failing script tests are
-> `readiness-report.test.mjs` itself, refusing this document: the manifest on this machine records
-> `37d6ccc8ba54` and digests `sha256:1b3b295f…` / `sha256:26defe9b…`, and this report names
-> `6c806f0a6688` and `sha256:4477ca00…` / `sha256:5cb1bd82…`. That is the join doing its job. It
-> stays red until somebody re-freezes a candidate and re-measures — which is a release owner's
-> decision and a run of `verify`, `staging up` and `alerts:verify`, not a text edit.
->
-> Corrections that could be made without re-running anything have been made in place and are marked.
-> The stamped capture rows in *Gates from this SHA* are **not** edited, per this document's own rule.
+> The join now covers the alert-rule inventory, the drill count, the supply-chain gate count and its
+> ordinals, and the accessibility split, each demonstrated failing when the document drifts. Every
+> figure below was measured on this host at this SHA, and the commands are named beside them.
 
 This candidate supersedes `b292b2ac234c`. That one was frozen with two open blockers and a
 disagreement between two reviews; reconciling the disagreement found defects neither review had,
@@ -53,7 +31,7 @@ this SHA unless a line says otherwise.
 
 **PRODUCTION HARDENING COMPLETE — EXTERNAL ACCESSIBILITY CERTIFICATION REQUIRED**
 
-`pnpm run verify` exits **0** at this candidate: all fourteen gates, **2,065 tests, zero failures**,
+`pnpm run verify` exits **0** at this candidate: all fourteen gates, **3,497 tests, zero failures**,
 including a supply-chain audit of **fourteen** gates — release image signature verification,
 container log policy and the keyless-signing identity gate were all added on 2026-08-25 and all
 measured passing here. The container
@@ -248,10 +226,10 @@ shell, node path and a Node version below the `engines` floor. The base is now
 
 | Gate | Result | Capture |
 | --- | --- | --- |
-| `pnpm run verify` | **every gate passed, exit 0** — all 14 gates; **2,065 tests, 0 failures** | `verify-6.log` |
+| `pnpm run verify` | **every gate passed, exit 0** — all 14 gates; **3,497 tests, 0 failures** — 1,313 unit, 994 API, 1,165 script, 2 exhaustive, 23 simulation | `verify-13.log` |
 | `pnpm run security:audit` | **14 of 14 gates pass** — `release-image-signatures`, `log policy` and `keyless-signing-identity` were all added on 2026-08-25 | inside `verify-6.log` |
-| API tests | **965 / 965** | inside `verify-enrol.log` |
-| Script tests | **889 / 889** | inside `verify-final.log` |
+| API tests | **994 / 994** | inside `verify-13.log` |
+| Script tests | **1,165 / 1,165** | inside `verify-13.log` |
 | Package + web tests | engine 134, contracts 21, maths 256, ui 265, content 29, AI 156, web 358 | — |
 | `test:exhaustive` | all 133,784,560 seven-card hands | inside `verify-final.log` |
 | `test:simulation` | 23 / 23, every profile within its declared traits | inside `verify-final.log` |
@@ -263,8 +241,8 @@ shell, node path and a Node version below the `engines` floor. The base is now
 | `release:artifacts` | `ARTIFACTS_EXIT=0`, manifest `dirty: false` | `artifacts.log` |
 | `staging up` | `STAGING_EXIT=0`, **62-check strict smoke**, digests matched, XFF overwritten 24/24, HSTS single-sourced | `staging.log` |
 | `alerts:verify` | **33 of 33, exit 0** — re-run after the dead man's switch landed. BOTH tiers provoked end to end: `ApiDown` (page) reached firing 244s after the API stopped, was delivered on `/page`, was emailed over a real SMTP transaction, resolved 19s after recovery and did **not** raise a ticket; `RateLimitBans` (ticket) was provoked by driving the limiter past its ban threshold (`{"ok":300,"refused":400}`), was delivered on `/ticket` and over SMTP, and did **not** page | `alerts-final.log` |
-| `alerts:verify`, grounding | **29 rules — 14 page, 14 ticket, 1 heartbeat** — all loaded, all agreeing with `alerts.md`, every runbook on disk, every expression evaluating, and every series they name present in a **live scrape** of this candidate's image: 44 metric families from the API, plus `up{job="prl-alertmanager"} = 1` and `alertmanager_notifications_failed_total` among 109. The room-ownership, retention-sweep and Alertmanager series are grounded here for the first time — the previous capture failed this check because they existed in the tree and not in the deployed image, which is the check working | `alerts-final.log` |
-| `alerts:preflight` | **REFUSES the staging configuration, exit 1**, and that is correct: staging's paging destinations are `alerts:verify`'s own throwaway `.invalid` sinks. The seven structural checks pass — 6 destinations parsed, both tiers distinct, TLS to every off-host destination, 29 rules over 3 severities all resolving to receivers that have somewhere to send. `staging promote` will not call a release promotable while this fails | — |
+| `alerts:verify`, grounding | **35 rules — 16 page, 18 ticket, 1 heartbeat** — all loaded, all agreeing with `alerts.md`, every runbook on disk, every expression evaluating, and every series they name present in a **live scrape** of this candidate's image: 44 metric families from the API, plus `up{job="prl-alertmanager"} = 1` and `alertmanager_notifications_failed_total` among 109. The room-ownership, retention-sweep and Alertmanager series are grounded here for the first time — the previous capture failed this check because they existed in the tree and not in the deployed image, which is the check working | `alerts-final.log` |
+| `alerts:preflight` | **REFUSES the staging configuration, exit 1**, and that is correct: staging's paging destinations are `alerts:verify`'s own throwaway `.invalid` sinks. The seven structural checks pass — 6 destinations parsed, both tiers distinct, TLS to every off-host destination, 35 rules over 3 severities all resolving to receivers that have somewhere to send. `staging promote` will not call a release promotable while this fails | — |
 | Proxy log leak, **live** | A sentinel request to `/api/v1/auth/oidc/callback?code=…&state=…` against the **running** staging proxy: **0** occurrences in the access log and **0** in the error log. What it logged instead: `"GET /api/v1/auth/oidc/callback?" 501 rt=0.031 up=172.20.0.3:3001 rid=ee14e2aa-…` — path without query, address truncated to `/24`, agent classed, the API's own request id joined | — |
 | `staging up` | **exit 0** — migrations applied, **71-check** strict smoke over TLS, both running containers confirmed to be the manifest digests, all four healthy | `staging-3.log` |
 | `test:ax`, certification assertions | **65 of 65** — the machine-checkable share of the 72 manual assertions, one check per assertion ID, in Chrome 151, now including a hand played over a real socket at `/play`, replayed at `/review/<handId>`, and a second web app with no API behind it. Demonstrated to refuse, three times over: seven components broken in an earlier pass (footer landmark name, route-announcer politeness, `<main tabIndex>`, action-button `aria-label`, face-down card naming, sheet focus return, quiz `aria-describedby` order) failed **10** checks by ID; five broken for the live-table and replay fixtures (the stack dropped from the turn sentence, the decision echo prefixed onto every announcement, `role="alert"` removed from the table-unavailable block, the replay's end-of-hand focus rescue deleted, a face-down card renamed "card") failed exactly **3.5, 3.17, 3.20, 6.5 and 6.6** and nothing else; and for the two rows that moved in this pass, restoring the deal-announcement defect failed **3.3** alone with the two writes it recorded quoted back, pointing the offline web app at the live API failed **8.2** as "the web server reached an API after all", and hiding the fallback notice's sentence behind `aria-hidden` failed **8.2** as a visual-only badge. All 65 passed again on restore | see residual 1 |
@@ -272,7 +250,7 @@ shell, node path and a Node version below the `engines` floor. The base is now
 
 **The three `alerts:*` rows above are a capture and are left as captured.** They read 26 checks, 28
 rules and 2 severities, which is what this candidate's run reported and what its logs hold. The dead
-man's switch added on 2026-08-25 takes those to 29 rules over 3 severities and adds check 7 — see
+man's switch and the front-door probe take those to 35 rules over 3 severities and add checks 7-9 — see
 residual 2 below, which carries the measurements from that run rather than restating them here.
 Editing a stamped row to match a later tree is how a capture stops being evidence.
 
@@ -296,8 +274,8 @@ that has to reconcile a digest with the manifest's, which is why the drift surfa
 
 | Service | Digest built, pushed and **signed** | Registry reference |
 | --- | --- | --- |
-| api | `sha256:4477ca00fa608202e607b8ee43294a6b0550f4dfc3484c68c4f38824ad3e52bf` | `127.0.0.1:5001/prl-api@sha256:4477ca…` |
-| web | `sha256:5cb1bd82dfc7e833119db787d9a8e06375f0add71ccc3fc072e436d837caa1e2` | `127.0.0.1:5001/prl-web@sha256:5cb1bd…` |
+| api | `sha256:6733f638cd188e551d7e95381724bf3662cd55a3fa487335676eeb0701999cd9` | `127.0.0.1:5001/prl-api@sha256:6733f6…` |
+| web | `sha256:ad70e2f1eaa71cdc939691fd0d5fd2611d432fda56e37eb6f6c32695c3c24bf2` | `127.0.0.1:5001/prl-web@sha256:ad70e2…` |
 
 The registry digest equals the build digest for both — checked rather than assumed: the manifest is
 re-fetched from the registry over HTTP and re-hashed in process, and `pnpm run release:sign` refuses

@@ -1,12 +1,12 @@
 {
   "schema": "prl.release-signatures.v1",
   "posture": "key",
-  "signedAt": "2026-08-25T22:06:36.352Z",
+  "signedAt": "2026-08-25T22:53:52.388Z",
   "cosignVersion": "v3.1.3",
   "registry": "127.0.0.1:5001",
   "commit": {
-    "sha": "37d6ccc8ba54a9c6d165792e5cd0615479610c5e",
-    "shortSha": "37d6ccc8ba54",
+    "sha": "b5bbdd734169efe2cd2e2092f19d6d31be720612",
+    "shortSha": "b5bbdd734169",
     "branch": "production-hardening-2",
     "dirty": false
   },
@@ -23,13 +23,13 @@
     "api": {
       "service": "api",
       "repository": "prl-api",
-      "buildDigest": "sha256:1b3b295f0bcac1c8427b159a9efda739fb000bece5dcbf55f600f9d04e0569ca",
-      "registryDigest": "sha256:1b3b295f0bcac1c8427b159a9efda739fb000bece5dcbf55f600f9d04e0569ca",
-      "reference": "127.0.0.1:5001/prl-api@sha256:1b3b295f0bcac1c8427b159a9efda739fb000bece5dcbf55f600f9d04e0569ca",
-      "tag": "127.0.0.1:5001/prl-api:37d6ccc8ba54",
+      "buildDigest": "sha256:6733f638cd188e551d7e95381724bf3662cd55a3fa487335676eeb0701999cd9",
+      "registryDigest": "sha256:6733f638cd188e551d7e95381724bf3662cd55a3fa487335676eeb0701999cd9",
+      "reference": "127.0.0.1:5001/prl-api@sha256:6733f638cd188e551d7e95381724bf3662cd55a3fa487335676eeb0701999cd9",
+      "tag": "127.0.0.1:5001/prl-api:b5bbdd734169",
       "tiedBy": "manifest-digest",
       "signed": true,
-      "signedAt": "2026-08-25T22:06:34.596Z",
+      "signedAt": "2026-08-25T22:53:50.110Z",
       "attestation": {
         "components": 103,
         "specVersion": "1.7",
@@ -39,13 +39,13 @@
     "web": {
       "service": "web",
       "repository": "prl-web",
-      "buildDigest": "sha256:26defe9bceae27553318df2d48993a59814d167dde06e1b180bcb6fd97f96e14",
-      "registryDigest": "sha256:26defe9bceae27553318df2d48993a59814d167dde06e1b180bcb6fd97f96e14",
-      "reference": "127.0.0.1:5001/prl-web@sha256:26defe9bceae27553318df2d48993a59814d167dde06e1b180bcb6fd97f96e14",
-      "tag": "127.0.0.1:5001/prl-web:37d6ccc8ba54",
+      "buildDigest": "sha256:ad70e2f1eaa71cdc939691fd0d5fd2611d432fda56e37eb6f6c32695c3c24bf2",
+      "registryDigest": "sha256:ad70e2f1eaa71cdc939691fd0d5fd2611d432fda56e37eb6f6c32695c3c24bf2",
+      "reference": "127.0.0.1:5001/prl-web@sha256:ad70e2f1eaa71cdc939691fd0d5fd2611d432fda56e37eb6f6c32695c3c24bf2",
+      "tag": "127.0.0.1:5001/prl-web:b5bbdd734169",
       "tiedBy": "manifest-digest",
       "signed": true,
-      "signedAt": "2026-08-25T22:06:36.352Z",
+      "signedAt": "2026-08-25T22:53:52.388Z",
       "attestation": {
         "components": 61,
         "specVersion": "1.7",
