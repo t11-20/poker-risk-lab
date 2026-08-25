@@ -1,6 +1,6 @@
 # Final readiness report
 
-**Candidate SHA:** `896c9d25acbe190df4471d73771a0ac698e8abf5`
+**Candidate SHA:** `4320f1c4ad212e81d1a8a4ae2c310cbc7ccab748`
 **Tree at freeze:** clean — the release manifest records `dirty: false`.
 **Branch:** `production-hardening-2`
 **Date:** 2026-08-25
@@ -65,6 +65,14 @@ The previous candidate was frozen with defects in it. This is not the same softw
   `/privacy` was honest only because it said the sweep did not run. It runs now.
 - **The browser's deck-commitment proof was self-referential**, verified against the root inside
   its own payload rather than the hand's published root.
+- **A stuck chair was reported as lost hand history.** `seat-release` was not in the
+  `ProblemEvent` union, so a failed seat release took the nearest available kind — `archive-write`
+  — and incremented `archiveFailures`. `ArchiveFailing` is zero-tolerance, so an operator was paged
+  by a data-integrity alert, with that runbook, because a chair failed to free. It now has its own
+  event, its own primed counter, its own rule and its own runbook, and it counts chairs rather than
+  passes. Fixing it exposed that the release loop awaited the whole list at once, so the first
+  refusal stranded every chair behind it silently — the same shape as the defect the mechanism
+  exists to close, one level down.
 - **The first occurrence of a counted event was invisible to its own alert.** A counter series is
   created by its first increment, and `increase()`/`rate()` read only samples inside their range —
   Prometheus does not assume a series appearing mid-range began at zero. Every zero-tolerance rule
@@ -100,10 +108,10 @@ shell, node path and a Node version below the `engines` floor. The base is now
 
 | Gate | Result | Capture |
 | --- | --- | --- |
-| `pnpm run verify` | **every gate passed, `VERIFY_EXIT=0`** — 14 gates, `test:age-gate` among them | `verify-final3.log` |
+| `pnpm run verify` | **every gate passed, `VERIFY_EXIT=0`** — all 14 gates, `test:age-gate` among them | `verify-14.log` |
 | `pnpm run security:audit` | 11 of 11 gates pass | inside `verify7.log` |
-| API tests | **852 / 852** | inside `verify7.log` |
-| Script tests | **560 / 560** | inside `verify7.log` |
+| API tests | **861 / 861** | inside `verify-14.log` |
+| Script tests | **650 / 650** | inside `verify-14.log` |
 | Package + web tests | engine 134, contracts 21, maths 256, ui 265, content 29, AI 156, web 358 | — |
 | `test:exhaustive` | all 133,784,560 seven-card hands | inside `verify7.log` |
 | `test:simulation` | 23 / 23, every profile within its declared traits | inside `verify7.log` |
@@ -111,7 +119,7 @@ shell, node path and a Node version below the `engines` floor. The base is now
 | `security:secrets` | pass — working tree and all history blobs | — |
 | `release:artifacts` | `ARTIFACTS_EXIT=0`, manifest `dirty: false` | `artifacts.log` |
 | `staging up` | `STAGING_EXIT=0`, **62-check strict smoke**, digests matched, XFF overwritten 24/24, HSTS single-sourced | `staging.log` |
-| `alerts:verify` | **21 of 21, exit 0** — BOTH tiers provoked end to end: `ApiDown` (page) fired, was delivered on `/page`, resolved after recovery and did **not** raise a ticket; `RateLimitBans` (ticket) was provoked by driving the limiter past its ban threshold, was delivered on `/ticket` and did **not** page | `alerts-twotier2.log` / `.json` |
+| `alerts:verify` | **25 of 25, exit 0** — BOTH tiers provoked end to end: `ApiDown` (page) fired, was delivered on `/page`, resolved after recovery and did **not** raise a ticket; `RateLimitBans` (ticket) was provoked by driving the limiter past its ban threshold, was delivered on `/ticket` and did **not** page | `alerts-23.log` / `.json` |
 | `test:drills` | **16 of 16**, `DRILLS_EXIT=0`, wall 142.6 s | `drills-final.log` |
 | `backup create` + `verify --deep` | PASS — real scratch restore in 45.9 s, dropped; census 13 tables / 899,530 rows | `backup-final.log` |
 | Rollback rehearsal | candidate 200 → api stopped → **504** → previous digests 200 → candidate restored 200 with workers | `rollback-final.log` |
@@ -176,10 +184,10 @@ under a real network partition.
    content identity across a push/pull boundary holds, and cross-machine promotion works. What does
    not exist is **provenance**: nothing is signed, there is no transparency log, and a local
    registry is not a third party. That needs `cosign sign` / `cosign attest` in CI.
-4. **Twenty of the twenty-two alert rules are loaded, agreed, grounded and evaluable, but have not
-   been provoked.** Two are driven end to end — `ApiDown` for the paging tier and `RateLimitBans`
-   for the ticket tier — which is what makes the two-tier rule a tested property rather than a
-   configuration file.
+4. **Twenty-one of the twenty-three alert rules are loaded, agreed, grounded and evaluable, but
+   have not been provoked.** Two are driven end to end — `ApiDown` for the paging tier and
+   `RateLimitBans` for the ticket tier — which is what makes the two-tier rule a tested property
+   rather than a configuration file.
 5. **The legal register is not closed.** `legal-review-requirements.md` is a launch blocker in its
    own right and needs counsel, not engineering: operator identity, governing law, the age
    threshold, retention *periods*, and whether erasure must delete hand history rather than detach
