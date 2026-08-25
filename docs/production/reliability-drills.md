@@ -1,6 +1,8 @@
 # Reliability drills
 
-**Candidate SHA:** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`
+**Candidate SHA:** `68394b3df5dc51f45fa7409a3541c224861dad49` — **16 of 16, `DRILLS_EXIT=0`, wall 142.6 s**, isolated, re-run 2026-08-25 after the room-settlement and turn-timer fixes.
+
+**Previous candidate SHA:** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`
 **Command:** `node --env-file-if-exists=.env scripts/reliability-drills.mjs`
 **Capture:** `{SCRATCH}/drills.log` (`DRILLS_EXIT=0`, 16 of 16 passed, wall 141.4 s), isolated after a contended FAIL.
 

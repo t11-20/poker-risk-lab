@@ -1,6 +1,14 @@
 # Rollback verification
 
-**Images SHA:** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`
+**Images SHA:** `68394b3df5dc51f45fa7409a3541c224861dad49`
+
+> **Re-rehearsed 2026-08-25 on the current candidate.** Candidate `/ready` 200 → `compose stop api`
+> → nginx **504** on the TLS origin → previous digest pair (`b292b2a`, the Debian build) serving 200
+> → candidate restored, 200 with workers. The sequence below is the original capture and its shape
+> is unchanged; the digests are now
+> api `sha256:bbfd0269b879…` / web `sha256:7c2c1ce9ff1c…`.
+
+**Previous images SHA:** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`
 **Capture:** `{SCRATCH}/rollback.log` (host SHA at run time `53faed7`, docs-only vs the image SHA).
 
 `{SCRATCH}`:

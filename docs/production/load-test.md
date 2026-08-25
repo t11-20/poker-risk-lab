@@ -1,5 +1,17 @@
 # Load and capacity
 
+> **Current candidate `68394b3`, on Alpine.** The saturation hunt below was measured on the Debian
+> build and remains the recorded measurement for the shape of the bottleneck. The Alpine image was
+> re-measured on 2026-08-25 to answer the one question the base change opened — whether the Monte
+> Carlo worker pool behaves under sustained load on musl. Driving the **container** (not a host
+> process) with all limits raised, `--ramp 8,16,24,32 --seats 3`: highest passing **24 seated
+> players** at p95 9.9 ms, saturating at 48 on **CPU and the worker queue** with the event loop
+> still quiet — the same bottleneck ordering the Debian build showed. **Zero** rate-limit refusals
+> and **zero** reconnect-consistency failures. The absolute numbers are lower than the hunt below
+> because that container shared the machine with a full staging stack and reached its database over
+> the host gateway; what reproduces is which resource runs out, not how many players fit.
+
+
 **Candidate SHA (API/web tree):** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`.
 `git diff 4a17e3c b292b2a -- apps/api packages apps/web` is empty. The saturation hunt was measured against that API tree (`{SCRATCH}/load-test.log`, `load-test-saturation.log` / `.json`). Harness: `scripts/load-test.mjs`.
 

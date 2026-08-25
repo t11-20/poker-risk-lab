@@ -1,6 +1,14 @@
 # Staging verification
 
-**Candidate SHA (images):** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`
+**Candidate SHA (images):** `68394b3df5dc51f45fa7409a3541c224861dad49`
+
+> **Superseded.** Everything below describes the `b292b2a` candidate on Debian bookworm-slim.
+> The current candidate is `68394b3`, on `node:24.18.0-alpine3.24`, whose scan reports **zero**
+> findings of any severity — the CVE section below is history, not a live figure. Its staging run
+> passed 62 strict-smoke checks with the proxy as the single source of HSTS. See
+> [`final-readiness-report.md`](final-readiness-report.md).
+
+**Previous candidate SHA (images):** `b292b2ac234cb586f253ad42ec0ef4d949fa332b`
 **Host log SHA:** `{SCRATCH}/staging.log` was stamped `c969163` because HEAD had moved to a docs-only commit when `staging up` started. The manifest it deployed is this SHA (`dirty=false`).
 
 `{SCRATCH}`:
