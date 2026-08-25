@@ -1,6 +1,6 @@
 # Final readiness report
 
-**Candidate SHA:** `4601b0b17ca9c8335221d7aadc7b31d486571066`
+**Candidate SHA:** `5e2753a1c934df864c99e5d462feb1f8ad1ae13d`
 **Tree at freeze:** clean — the release manifest records `dirty: false`.
 **Branch:** `production-hardening-2`
 **Date:** 2026-08-25
@@ -17,11 +17,11 @@ this SHA unless a line says otherwise.
 
 **PRODUCTION HARDENING COMPLETE — EXTERNAL ACCESSIBILITY CERTIFICATION REQUIRED**
 
-`pnpm run verify` exits **0** at this candidate: all fourteen gates, **1,840 tests, zero failures**,
+`pnpm run verify` exits **0** at this candidate: all fourteen gates, **1,887 tests, zero failures**,
 including a supply-chain audit of **thirteen** gates — release image signature verification and
 container log policy were both added on 2026-08-25 and both measured passing here. The container
 scan reports **zero** findings at or above HIGH on either image. Staging runs these digests with a
-62-check strict smoke over TLS; both alerting tiers are verified end to end over both transports;
+71-check strict smoke over TLS; both alerting tiers are verified end to end over both transports;
 sixteen reliability drills pass; backup/restore including a real scratch restore passes; and a
 rollback to the previous digest pair and back was rehearsed.
 
@@ -48,6 +48,34 @@ afternoon. The blocker is not reduced; the work behind it is.
 ## What changed since `b292b2ac234c`
 
 ### 2026-08-25, after this candidate was first frozen
+
+**The system could not tell a paying student from a free one.** No enrolment record, no entitlement,
+no receipt — established by exhaustive search, and the last product-level gap between this and taking
+money. `db/migrations/0006` adds `prl.cohorts` and `prl.enrolments`; `pnpm run enrolments` grants
+them; `PRL_ENROLMENT_REQUIRED=enforced` gates **taking a seat** and nothing else.
+
+Three decisions in that worth stating, because each was a fork:
+
+- **The record, not the till.** There are no amounts, no currency and no processor anywhere in the
+  schema, and there is no payment path in this repository at all. A scholarship cohort and a paid one
+  produce identical rows, because the grant happens out of band and the `reference` column is an
+  opaque string that may literally read `scholarship`. This is why `/terms` §7 can no longer say the
+  service is free **and** must not say it is paid: the software cannot tell.
+- **Grants are an operator CLI, not an HTTP admin API.** There is no admin role in this system and no
+  privilege surface above a learner. Adding one for a class of thirty, at the end of a hardening run,
+  is a large new attack surface bought for very little. `prl_app` — the request-path role — holds
+  **SELECT only** on both tables: the API can ask who is entitled and cannot enrol, extend or
+  un-revoke anybody.
+- **One choke point, not one guard per route.** There are three ways to reach a seat and the restart
+  retake path is a fourth that calls `table.sit` directly. The guard is on the seat, so a fifth route
+  arrives gated. A learner no longer entitled does not get their chair back after a restart, and a
+  failed entitlement read leaves the seat unrestored.
+
+The switch ships **off** — an open instance is a legitimate deployment — but staging runs it
+`enforced` and the strict smoke drives all four cells over TLS against the deployed image, refusing
+and then accepting *the same `sit` frame* with only an enrolment row between them. A default-off flag
+nobody has watched refuse anything is decoration.
+
 
 Seven defects found and closed after the freeze, each with a negative control demonstrated against
 the old code rather than asserted. They are listed first because a reader who stops after one
@@ -173,9 +201,9 @@ shell, node path and a Node version below the `engines` floor. The base is now
 
 | Gate | Result | Capture |
 | --- | --- | --- |
-| `pnpm run verify` | **every gate passed, exit 0** — all 14 gates; **1,840 tests, 0 failures** | `verify-final.log` |
+| `pnpm run verify` | **every gate passed, exit 0** — all 14 gates; **1,887 tests, 0 failures** | `verify-enrol.log` |
 | `pnpm run security:audit` | **13 of 13 gates pass** — the signature gate and the log-policy gate were added on 2026-08-25 | inside `verify-final.log` |
-| API tests | **926 / 926** | inside `verify-final.log` |
+| API tests | **965 / 965** | inside `verify-enrol.log` |
 | Script tests | **889 / 889** | inside `verify-final.log` |
 | Package + web tests | engine 134, contracts 21, maths 256, ui 265, content 29, AI 156, web 358 | — |
 | `test:exhaustive` | all 133,784,560 seven-card hands | inside `verify-final.log` |
@@ -187,11 +215,11 @@ shell, node path and a Node version below the `engines` floor. The base is now
 | `security:secrets` | pass — working tree and all history blobs | — |
 | `release:artifacts` | `ARTIFACTS_EXIT=0`, manifest `dirty: false` | `artifacts.log` |
 | `staging up` | `STAGING_EXIT=0`, **62-check strict smoke**, digests matched, XFF overwritten 24/24, HSTS single-sourced | `staging.log` |
-| `alerts:verify` | **26 of 26, exit 0** — BOTH tiers provoked end to end at this candidate: `ApiDown` (page) reached firing 244s after the API stopped, was delivered on `/page`, was emailed over a real SMTP transaction, resolved 19s after recovery and did **not** raise a ticket; `RateLimitBans` (ticket) was provoked by driving the limiter past its ban threshold (`{"ok":300,"refused":400}`), was delivered on `/ticket` and over SMTP, and did **not** page | `alerts-final.log` |
-| `alerts:verify`, grounding | **28 rules — 14 page, 14 ticket** — all loaded, all agreeing with `alerts.md`, every runbook on disk, every expression evaluating, and every series they name present in a **live scrape** of this candidate's image: 43 metric families from the API, plus `up{job="prl-alertmanager"} = 1` and `alertmanager_notifications_failed_total` among 109. The room-ownership, retention-sweep and Alertmanager series are grounded here for the first time — the previous capture failed this check because they existed in the tree and not in the deployed image, which is the check working | `alerts-final.log` |
+| `alerts:verify` | **26 of 26, exit 0** — re-run against this candidate's image. BOTH tiers provoked end to end: `ApiDown` (page) reached firing 244s after the API stopped, was delivered on `/page`, was emailed over a real SMTP transaction, resolved 19s after recovery and did **not** raise a ticket; `RateLimitBans` (ticket) was provoked by driving the limiter past its ban threshold (`{"ok":300,"refused":400}`), was delivered on `/ticket` and over SMTP, and did **not** page | `alerts-final.log` |
+| `alerts:verify`, grounding | **28 rules — 14 page, 14 ticket** — all loaded, all agreeing with `alerts.md`, every runbook on disk, every expression evaluating, and every series they name present in a **live scrape** of this candidate's image: 44 metric families from the API, plus `up{job="prl-alertmanager"} = 1` and `alertmanager_notifications_failed_total` among 109. The room-ownership, retention-sweep and Alertmanager series are grounded here for the first time — the previous capture failed this check because they existed in the tree and not in the deployed image, which is the check working | `alerts-final.log` |
 | `alerts:preflight` | **REFUSES the staging configuration, exit 1**, and that is correct: staging's paging destinations are `alerts:verify`'s own throwaway `.invalid` sinks. The seven structural checks pass — 6 destinations parsed, both tiers distinct, TLS to every off-host destination, 28 rules over 2 severities all resolving to receivers that have somewhere to send. `staging promote` will not call a release promotable while this fails | — |
 | Proxy log leak, **live** | A sentinel request to `/api/v1/auth/oidc/callback?code=…&state=…` against the **running** staging proxy: **0** occurrences in the access log and **0** in the error log. What it logged instead: `"GET /api/v1/auth/oidc/callback?" 501 rt=0.031 up=172.20.0.3:3001 rid=ee14e2aa-…` — path without query, address truncated to `/24`, agent classed, the API's own request id joined | — |
-| `staging up` | **exit 0** — migrations applied, **62-check** strict smoke over TLS, all four containers healthy | `staging-final.log` |
+| `staging up` | **exit 0** — migrations applied, **71-check** strict smoke over TLS, all four containers healthy | `staging-2.log` |
 | `test:ax`, certification assertions | **45 of 45** — the machine-checkable half of the 73 manual assertions, one check per assertion ID, in Chrome 151. Demonstrated to refuse: seven components were deliberately broken (footer landmark name, route-announcer politeness, `<main tabIndex>`, action-button `aria-label`, face-down card naming, sheet focus return, quiz `aria-describedby` order) and the gate failed **10** assertion checks by ID, then passed 45 of 45 again on restore | see residual 1 |
 | Screen reader, the residual **28** | **UNVERIFIED** `-1743`. Needs a person listening; 25–35 min per platform | — |
 
@@ -215,8 +243,8 @@ that has to reconcile a digest with the manifest's, which is why the drift surfa
 
 | Service | Digest built, pushed and **signed** | Registry reference |
 | --- | --- | --- |
-| api | `sha256:ef5d752909e6bb69be144d67dc22568911a7bdc7066d6f18da1bd6a4c9b29194` | `127.0.0.1:5001/prl-api@sha256:ef5d75…` |
-| web | `sha256:825dec5bb1f352848379d37f35ac0e14d6caefb694106c74bede7f7c72ed11e4` | `127.0.0.1:5001/prl-web@sha256:825dec…` |
+| api | `sha256:97c9a3f8b5b52cf83fc5ba55d6692891a28074d1b445bd6976871a8c8b9615af` | `127.0.0.1:5001/prl-api@sha256:97c9a3…` |
+| web | `sha256:3099cf67919c882853898f2456590b00a4816bcabffa120f73ac43bd9ac37ea0` | `127.0.0.1:5001/prl-web@sha256:3099cf…` |
 
 The registry digest equals the build digest for both — checked rather than assumed: the manifest is
 re-fetched from the registry over HTTP and re-hashed in process, and `pnpm run release:sign` refuses
