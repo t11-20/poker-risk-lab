@@ -46,11 +46,11 @@
 # not depend on that file continuing to say so" — and every install in this
 # workflow depended on exactly that. One edit to pnpm-workspace.yaml, in a diff
 # about something else entirely, would have re-enabled arbitrary install-time code
-# execution in all nine CI jobs while the release images stayed safe. Install-time
-# lifecycle hooks are the campaign's Pattern A delivery mechanism
-# (docs/security/shai-hulud-snapshot-2026-08-17.md), and the gate that watches for
-# them (`dep-shapes.mjs`) runs AFTER the install that would already have executed
-# them. Recorded as residual SUP-020; the flag is the fix.
+# execution in every installing job in this workflow while the release images
+# stayed safe. Install-time lifecycle hooks are the campaign's Pattern A delivery
+# mechanism (docs/security/shai-hulud-snapshot-2026-08-17.md), and the gate that
+# watches for them (`dep-shapes.mjs`) runs AFTER the install that would already
+# have executed them. Recorded as residual SUP-020; the flag is the fix.
 #
 # ## Why there is no dependency cache
 #
@@ -193,6 +193,21 @@ jobs:
 
   # -------------------------------------------------------------------------
   # 2. Lint. No build needed: Biome reads source, not types.
+  #
+  # `design:contrast` used to run here, under a comment claiming it "needs no
+  # build and no browser". That stopped being true at b9687b1, which gave the
+  # gate a THIRD pass — every element carrying text, composited in real Chrome,
+  # on every route in both themes — and did not update this job. So the step
+  # could not pass: `next start` in a job that never built the web app prints
+  # "Could not find a production build in the '.next' directory", and the gate
+  # correctly refuses rather than skipping. Reproduced exactly, by moving
+  # `apps/web/.next` aside and running the gate with a runner-shaped
+  # environment: "FAIL painted layer (real Chrome, every ancestor composited)
+  # 2 finding(s) — the painted layer could not be measured: web exited (1)
+  # before it was ready", exit 1.
+  #
+  # It now runs in `browser-gates` below, which builds the app and resolves a
+  # browser, alongside the other two gates that need exactly those two things.
   # -------------------------------------------------------------------------
   lint:
     name: Lint
@@ -218,12 +233,6 @@ jobs:
 
       - name: Lint
         run: pnpm run lint
-
-      - name: Contrast budget
-        # Static: it parses the CSS token layer and recomputes every claimed ratio, so it needs no
-        # build and no browser. It was runnable and run by nothing — a documented accessibility
-        # guarantee with no gate behind it is a guarantee nobody is holding.
-        run: pnpm run design:contrast
 
   # -------------------------------------------------------------------------
   # 3. Typecheck.
@@ -860,5 +869,317 @@ jobs:
         with:
           name: a11y-report
           path: a11y-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  # -------------------------------------------------------------------------
+  # 8. The COMPUTED accessibility tree, walked in real Chrome.
+  #
+  # `test:ax` is one of the fourteen gates `pnpm run verify` blocks a release on,
+  # and it ran in no workflow at all: before this job,
+  # `grep -n 'test:ax' .github/workflows/*.yml` matched nothing. A change that
+  # broke the tree therefore passed CI — including the one failure mode this
+  # audit exists for that is not an accessibility defect at all: a face-down
+  # card whose rank or suit reaches a computed accessible name has leaked
+  # hidden information to anybody running a screen reader while looking
+  # perfectly correct on screen.
+  #
+  # Its own job rather than a step in `a11y`, because the two measure different
+  # layers and only one of them is fast. `a11y-audit.mjs` parses server-rendered
+  # HTML; this drives Chrome through six journeys and sits down at a live table,
+  # playing a hand over a real socket and replaying it at `/review/<handId>`.
+  #
+  # ## What the job has to supply, and how that was established
+  #
+  # `test:ax` runs `--start --with-api`, so the script starts BOTH servers and
+  # the job supplies only the environment they boot from. That is exactly the
+  # shape that made the `a11y` job exit 78 on every run, so it was measured
+  # rather than assumed: the step below was run with EXACTLY the two variables
+  # this job sets and nothing else, and with `.env` MOVED ASIDE, which is the
+  # state of a fresh checkout —
+  #
+  #     env -i PATH=… HOME=… CI=true COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  #       NPM_CONFIG_UPDATE_NOTIFIER=false \
+  #       DATABASE_URL=postgres://prl_ci_app:…@127.0.0.1:5432/… \
+  #       DATABASE_URL_ADMIN=… \
+  #       pnpm run test:ax -- --json ax-tree-report.json
+  #
+  # against a migrated and seeded scratch database, connecting as a `prl_app`
+  # member. It printed ".env not found. Continuing without it.", started both
+  # servers, and finished "checks passed 111, checks failed 0" — exit 0, in
+  # Chrome 151.0.7922.174 headless.
+  #
+  # `DATABASE_URL` is the only variable the API itself requires, and it requires
+  # it outside production too: with it removed, `node apps/api/dist/server.js`
+  # prints "Refusing to start: 1 configuration problem. - DATABASE_URL is
+  # required but missing or empty" and exits 78. `SESSION_COOKIE_SECRET` and
+  # `PUBLIC_WEB_ORIGIN` are NOT needed, and that is not luck: the audit starts
+  # the API without forcing `NODE_ENV=production` (its own comment at that spawn
+  # says why) and hands it `PUBLIC_WEB_ORIGIN` itself, set to the audit's own
+  # origin so that CORS and the WebSocket `Origin` check admit the browser this
+  # job drives.
+  #
+  # Ports are the script's, not this job's: the web app on 3456
+  # (`PRL_WEB_ORIGIN`, set by the `test:ax` script), the API on 3001, and a
+  # second web app on 3459 with a dead API behind it for certification assertion
+  # 8.2. Nothing else in this job binds any of them.
+  #
+  # ## The one thing that cannot be measured from here
+  #
+  # The runner image. This job needs a Chrome the audit's candidate list can
+  # find — `CHROME_PATH`, then `/usr/bin/google-chrome`, `/usr/bin/chromium`,
+  # `/usr/bin/chromium-browser`. "Resolve the browser" below walks that same
+  # list and pins the answer into `CHROME_PATH`, so an image without one fails
+  # at a step that says exactly that instead of two minutes into an audit.
+  # -------------------------------------------------------------------------
+  ax-tree:
+    name: Accessibility tree (real Chrome)
+    needs: supply-chain
+    runs-on: ubuntu-24.04
+    # The audit plays a hand at a live table and waits on bots, on top of a full
+    # workspace build. It takes about three minutes on a warm laptop.
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        # postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:60f4761b9035e0b8d5218f701a8c3382f641bf12b1604822574cf5be3baeb537
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: poker_risk_lab_ax
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username postgres --dbname poker_risk_lab_ax"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # As in `a11y` and `end-to-end`: the job default is the least-privileged
+      # identity, because the API the audit starts inherits it and a missing
+      # GRANT should fail this build rather than a deployment. The steps that
+      # legitimately need more override it with DATABASE_URL_ADMIN.
+      DATABASE_URL: postgres://prl_ci_app:prl-ci-not-a-secret@127.0.0.1:5432/poker_risk_lab_ax
+      DATABASE_URL_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_ax
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build
+        # The whole workspace, not `build:packages`: the audit runs
+        # `next start`, which serves a production build, and `node
+        # dist/server.js`, which is the compiled API.
+        run: pnpm run build
+
+      - name: Wait for PostgreSQL
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
+        run: pnpm run db:wait
+
+      - name: Migrate and seed
+        # The live-table and replay assertions need content in the database, and
+        # owning a schema is what the runtime role must not be able to do.
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
+        run: |
+          pnpm run db:migrate
+          pnpm run db:seed
+
+      - name: Grant a login identity membership of prl_app
+        # See the identical step in `end-to-end`, and the header section that
+        # explains why the runtime role is NOLOGIN.
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql --host 127.0.0.1 --username postgres --dbname poker_risk_lab_ax \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'prl_ci_app') THEN
+              CREATE ROLE prl_ci_app LOGIN PASSWORD 'prl-ci-not-a-secret';
+            END IF;
+          END
+          $$;
+          GRANT prl_app TO prl_ci_app;
+          GRANT CONNECT ON DATABASE poker_risk_lab_ax TO prl_ci_app;
+          SQL
+
+      - name: Resolve the browser
+        # The audit finds Chrome itself, from this same list. Resolving it here
+        # first turns "no browser on this image" into a named failure, and
+        # pinning the answer into CHROME_PATH means the audit drives the binary
+        # whose version this step printed rather than a second candidate.
+        run: |
+          for candidate in /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser; do
+            if [ -x "$candidate" ]; then
+              "$candidate" --version
+              echo "CHROME_PATH=$candidate" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "no Chrome on this runner image, so the accessibility TREE cannot be walked."
+          echo "The audit needs one of: /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser"
+          exit 1
+
+      - name: Accessibility-tree audit
+        # `--json` is opt-in so a local run leaves no untracked file behind; CI
+        # wants it so the next step can publish the findings.
+        run: pnpm run test:ax -- --json ax-tree-report.json
+
+      - name: Upload the accessibility-tree report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ax-tree-report
+          path: ax-tree-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  # -------------------------------------------------------------------------
+  # 9. The gates that need a production build and a real browser, and nothing
+  #    else.
+  #
+  # Three gates, one shape: `next build && next start`, driven by Chrome, with
+  # no API and no database anywhere near them. They are in one job for the same
+  # reason `end-to-end` puts the smoke test and the load harness together — they
+  # need the same thing, and building the workspace three times to run them
+  # apart would be the whole cost of the job, three times.
+  #
+  #   * `design:contrast` — see section 2. It was a step in `lint`, in a job
+  #     with no build, so its third pass could not run at all.
+  #   * `test:csp` — the browser-level negative control. Everything else in this
+  #     repository that touches the Content-Security-Policy asserts the policy's
+  #     VALUE or that the header ARRIVED; `fetch` does not enforce a policy. This
+  #     is the only thing that proves a browser refuses the injection, and it ran
+  #     in no workflow.
+  #   * `test:age-gate` — the age gate is a LEGAL control that is OFF by default,
+  #     which is exactly why it needs a gate of its own: a gate that silently
+  #     fails looks identical to the shipped configuration. It ran in no workflow
+  #     either.
+  #
+  # ## What the job has to supply, and how that was established
+  #
+  # Nothing but the build and the browser, and that was measured rather than
+  # assumed. Each of the three steps below was run verbatim, with EXACTLY the
+  # environment this job gives it and no more — `env -i PATH=… HOME=… CI=true
+  # COREPACK_ENABLE_DOWNLOAD_PROMPT=0 NPM_CONFIG_UPDATE_NOTIFIER=false`, no
+  # `.env`, no `DATABASE_URL` of any kind, against a `pnpm run build`:
+  #
+  #   * `pnpm run design:contrast` — all three passes PASS over 38 pages and
+  #     10,884 composited text elements, 145 probes against real screenshot
+  #     pixels, exit 0.
+  #   * `pnpm run test:csp -- --out csp-negative-control.json` — 11 checks
+  #     passed, 0 failed, 7 injections refused, 4 positive controls, exit 0.
+  #   * `pnpm run test:age-gate -- --out age-gate-report.json` — 36 checks
+  #     passed, 0 failed, 17 refusals proved, 19 open routes proved, 8 of them
+  #     in a browser, exit 0.
+  #
+  # Neither wants an API: `test:csp` does not pass `--with-api`, and every
+  # server the age-gate audit starts is a web app it configures itself
+  # (`PRL_AGE_GATE=on`, and the two scopes on two ports, because a gate that is
+  # off cannot be measured).
+  #
+  # Ports are the scripts' own and do not collide: 3457 for the CSP control,
+  # 3458 and 3459 for the age gate's two scopes, 3462 for the contrast sweep.
+  #
+  # ## Teardown
+  #
+  # There is none, deliberately. Each script owns the servers it starts and
+  # stops them in a `finally`, including on a failing check — unlike
+  # `end-to-end`, where the job itself backgrounds them. The only case that
+  # leaks a `next start` is the job timeout killing the script outright, and
+  # that case destroys the runner a moment later.
+  # -------------------------------------------------------------------------
+  browser-gates:
+    name: Contrast, CSP and age gate (real Chrome)
+    needs: supply-chain
+    runs-on: ubuntu-24.04
+    # Three browser sweeps on top of a full build. The contrast pass alone walks
+    # every route in both themes and screenshots each one.
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build
+        # All three gates measure a PRODUCTION build and say so: the development
+        # Content-Security-Policy adds `'unsafe-eval'` and an HMR websocket on
+        # purpose, so a pass against `next dev` would be worth nothing.
+        run: pnpm run build
+
+      - name: Resolve the browser
+        id: browser
+        # Same list, same reason, as the `ax-tree` job above.
+        run: |
+          for candidate in /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser; do
+            if [ -x "$candidate" ]; then
+              "$candidate" --version
+              echo "CHROME_PATH=$candidate" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "no Chrome on this runner image, so none of the three gates below can run."
+          echo "They need one of: /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser"
+          exit 1
+
+      - name: Contrast budget
+        # Three passes: the token set, the pairings a component may use, and the
+        # composited background of every element carrying text, walked in real
+        # Chrome on every route in both themes.
+        run: pnpm run design:contrast
+
+      - name: CSP negative control
+        # These three gates are independent measurements that happen to want the
+        # same two things, so a failure in one must not hide the verdicts of the
+        # others — `pnpm run verify` runs every gate after a failure for exactly
+        # that reason. The condition is on the BROWSER step rather than
+        # `always()`: if the build or the browser is missing, there is nothing to
+        # measure and a second confusing failure helps nobody.
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:csp -- --out csp-negative-control.json
+
+      - name: Age gate
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:age-gate -- --out age-gate-report.json
+
+      - name: Upload the browser-gate reports
+        # `always()`, because the report of a FAILING run is the one worth
+        # reading: both files record every check, its verdict and its evidence.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: browser-gate-reports
+          path: |
+            csp-negative-control.json
+            age-gate-report.json
           if-no-files-found: warn
           retention-days: 14
