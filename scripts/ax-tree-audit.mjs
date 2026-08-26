@@ -901,6 +901,34 @@ class Page {
     return out;
   }
 
+  /**
+   * The same question as `axFor`, asked of a whole sweep: is each match IGNORED by the
+   * accessibility tree, and what are its computed role and name — without its markup.
+   *
+   * `axFor` fetches `DOM.getOuterHTML` for every match, which several checks need (a card's leak
+   * can hide in an attribute) and which makes it the wrong tool for a sweep. Assertion 7.4 asks
+   * this of every content-bearing element on a page with a modal open — `<main>`, its heading, the
+   * footer, and every ancestor of each of them — so pulling each one's outer HTML transfers the
+   * document many times over to decide a boolean per node.
+   */
+  async axFlagsFor(selector) {
+    const doc = await this.send('DOM.getDocument', { depth: 1 });
+    const found = await this.send('DOM.querySelectorAll', { nodeId: doc.root.nodeId, selector });
+    const out = [];
+    for (const nodeId of found.nodeIds ?? []) {
+      const partial = await this.send('Accessibility.getPartialAXTree', { nodeId, fetchRelatives: false });
+      const node = (partial.nodes ?? [])[0];
+      out.push({
+        ignored: node === undefined || node.ignored === true,
+        role: String(node?.role?.value ?? ''),
+        name: String(node?.name?.value ?? '')
+          .replace(/\s+/gu, ' ')
+          .trim(),
+      });
+    }
+    return out;
+  }
+
   close() {
     this.#socket.close();
   }

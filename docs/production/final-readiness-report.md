@@ -93,7 +93,7 @@ Screen-reader certification remains **UNVERIFIED**: `osascript` answers `-1743` 
 grant this repository can make will change that. It needs a person with VoiceOver or NVDA. That is
 the one thing standing between this and a PASS string, and it is not a code defect.
 
-What has changed is its size. **68 of the certification's 72 assertions are now machine-verified on
+What has changed is its size. **70 of the certification's 72 assertions are now machine-verified on
 every run** of `pnpm run test:ax`, one check per assertion ID, against the rendered accessibility
 tree in real Chrome — so a regression in any of them fails `pnpm run verify` on the day it lands.
 Nineteen of those were with the person until the gate grew the three fixtures they needed: a **live
@@ -290,8 +290,8 @@ shell, node path and a Node version below the `engines` floor. The base is now
 | `alerts:preflight` | **REFUSES the staging configuration, exit 1**, and that is correct: staging's paging destinations are `alerts:verify`'s own throwaway `.invalid` sinks. The seven structural checks pass — 6 destinations parsed, both tiers distinct, TLS to every off-host destination, 35 rules over 3 severities all resolving to receivers that have somewhere to send. `staging promote` will not call a release promotable while this fails | — |
 | Proxy log leak, **live** | A sentinel request to `/api/v1/auth/oidc/callback?code=…&state=…` against the **running** staging proxy: **0** occurrences in the access log and **0** in the error log. What it logged instead: `"GET /api/v1/auth/oidc/callback?" 501 rt=0.031 up=172.20.0.3:3001 rid=ee14e2aa-…` — path without query, address truncated to `/24`, agent classed, the API's own request id joined | — |
 | `staging up` | **exit 0** — migrations applied, **71-check** strict smoke over TLS, both running containers confirmed to be the manifest digests, all four healthy | `staging-3.log` |
-| `test:ax`, certification assertions | **65 of 65** at this candidate SHA, **68 of 68** since 2.4, 2.9 and 3.19 moved on 2026-08-26 (see residual 1 for the three negative controls that bought them) — the machine-checkable share of the 72 manual assertions, one check per assertion ID, in Chrome 151, now including a hand played over a real socket at `/play`, replayed at `/review/<handId>`, and a second web app with no API behind it. Demonstrated to refuse, three times over: seven components broken in an earlier pass (footer landmark name, route-announcer politeness, `<main tabIndex>`, action-button `aria-label`, face-down card naming, sheet focus return, quiz `aria-describedby` order) failed **10** checks by ID; five broken for the live-table and replay fixtures (the stack dropped from the turn sentence, the decision echo prefixed onto every announcement, `role="alert"` removed from the table-unavailable block, the replay's end-of-hand focus rescue deleted, a face-down card renamed "card") failed exactly **3.5, 3.17, 3.20, 6.5 and 6.6** and nothing else; and for the two rows that moved in this pass, restoring the deal-announcement defect failed **3.3** alone with the two writes it recorded quoted back, pointing the offline web app at the live API failed **8.2** as "the web server reached an API after all", and hiding the fallback notice's sentence behind `aria-hidden` failed **8.2** as a visual-only badge. All 65 passed again on restore | see residual 1 |
-| Screen reader, the residual **7** at this SHA, **4** since | **UNVERIFIED** `-1743`. Needs a person listening; about five minutes per platform | — |
+| `test:ax`, certification assertions | **65 of 65** at this candidate SHA, **68 of 68** since 2.4, 2.9 and 3.19 moved on 2026-08-26, and **70 of 70** since 4.2 and 7.4 were fixed in the product on the same day (see residual 1) — the machine-checkable share of the 72 manual assertions, one check per assertion ID, in Chrome 151, now including a hand played over a real socket at `/play`, replayed at `/review/<handId>`, and a second web app with no API behind it. Demonstrated to refuse, three times over: seven components broken in an earlier pass (footer landmark name, route-announcer politeness, `<main tabIndex>`, action-button `aria-label`, face-down card naming, sheet focus return, quiz `aria-describedby` order) failed **10** checks by ID; five broken for the live-table and replay fixtures (the stack dropped from the turn sentence, the decision echo prefixed onto every announcement, `role="alert"` removed from the table-unavailable block, the replay's end-of-hand focus rescue deleted, a face-down card renamed "card") failed exactly **3.5, 3.17, 3.20, 6.5 and 6.6** and nothing else; and for the two rows that moved in this pass, restoring the deal-announcement defect failed **3.3** alone with the two writes it recorded quoted back, pointing the offline web app at the live API failed **8.2** as "the web server reached an API after all", and hiding the fallback notice's sentence behind `aria-hidden` failed **8.2** as a visual-only badge. For 4.2 and 7.4, a build with the count taken back out of the Lab's title and the `inert` sweep removed from `MobileNav` failed exactly **J4.2** ("a count that is not in the title is a count no reader is told") and **J7.4** ("90 of 188 elements behind the sheet are still non-ignored") and nothing else; a second build that re-dressed the summary as a live region and exempted the footer from the sweep failed the same two rows on their other clauses. All passed again on restore | see residual 1 |
+| Screen reader, the residual **7** at this SHA, **2** since | **UNVERIFIED** `-1743`. Needs a person listening; about five minutes per platform | — |
 
 **The three `alerts:*` rows above are a capture and are left as captured.** They read 26 checks, 28
 rules and 2 severities, which is what this candidate's run reported and what its logs hold. The dead
@@ -351,7 +351,7 @@ under a real network partition.
 
 ## Residual — what is still open, in order of how much it matters
 
-1. **Screen-reader certification is UNVERIFIED — 68 of 72 machine-verified, 4 still need a person
+1. **Screen-reader certification is UNVERIFIED — 70 of 72 machine-verified, 2 still need a person
    listening.** **This is the only item that keeps this candidate from a PASS string.**
 
    The reason previously recorded for it — `osascript` error `-1743` — is accurate about what the
@@ -361,7 +361,7 @@ under a real network partition.
 
    **What is now automated.** Each of the 72 assertions in
    [`accessibility-certification.md`](accessibility-certification.md) carries a `Checked by` marker.
-   **68 are marked `auto`** and have a real check in `scripts/ax-assertions.mjs`, run by
+   **70 are marked `auto`** and have a real check in `scripts/ax-assertions.mjs`, run by
    `pnpm run test:ax` inside `pnpm run verify`, against the *rendered* accessibility tree in real
    Chrome — the computed name and role of every control, the theme radio group's selected state,
    the route announcer's politeness and that it writes the title exactly once and stays silent on a
@@ -377,12 +377,12 @@ under a real network partition.
    | J1 Learn | 5 | 5 | 0 |
    | J2 Guided practice | 9 | 9 | 0 |
    | J3 Table and Coach | 21 | 21 | 0 |
-   | J4 Scenario Lab | 6 | 5 | 1 |
+   | J4 Scenario Lab | 6 | 6 | 0 |
    | J5 AI Legends | 5 | 5 | 0 |
    | J6 Hand review | 7 | 6 | 1 |
-   | J7 Navigation sheet | 6 | 5 | 1 |
+   | J7 Navigation sheet | 6 | 6 | 0 |
    | J8 Failure paths | 3 | 2 | 1 |
-   | **Total** | **72** | **68** | **4** |
+   | **Total** | **72** | **70** | **2** |
 
    Writing them found four real defects that had sat in the document as untested claims: **G3
    asserts a `contentinfo` landmark named "About Poker Risk Lab" and the footer's computed name was
@@ -413,29 +413,30 @@ under a real network partition.
    `It is not your turn to act. (not_your_turn). Nothing was applied.`, assertively, and it was the
    only interruption in the whole hand.
 
-   **What is still a person's job, and why.** The 4 `person` rows are: where a virtual cursor goes
-   past the end of a modal (7.4) — measured, 29 content-bearing nodes behind the open sheet are
-   still in the computed tree, because `MobileNav` holds the background in scope with
-   `aria-modal="true"` rather than `inert`, so whether they are reachable is the reader's own
-   behaviour — plus three states no fixture reaches honestly: a filter count that arrives with its
-   own full page load (4.2), a failing deck proof, which would need a server that lies about a deal
-   (6.7), and a build with a deliberate `throw` in the root layout, which would need an application
-   build inside `verify` or a shipped switch whose job is to break the app (8.3). Section 5 of the
-   certification lists all four with one line each. The classification stays deliberately
-   conservative: a row that mixes a checkable fact with a claim about speech stays with the person,
-   because a row half-covered by a machine and dropped from the human session is a row nobody
-   checks.
+   **What is still a person's job, and why.** The 2 `person` rows are two states no fixture reaches
+   honestly: a failing deck proof, which would need a server that lies about a deal (6.7), and a
+   build with a deliberate `throw` in the root layout, which would need an application build inside
+   `verify` or a shipped switch whose job is to break the app (8.3). Section 5 of the certification
+   lists both with one line each. The classification stays deliberately conservative: a row that
+   mixes a checkable fact with a claim about speech stays with the person, because a row
+   half-covered by a machine and dropped from the human session is a row nobody checks.
 
-   **4.2 is not a limit of the certification; it is a defect the certification is holding.** The
-   Scenario Lab's filter is a plain `GET` form, so submitting it replaces the document. Measured in
-   Chrome 151 on this build: the JavaScript context was destroyed, `document.title` was identical
-   before and after, and the summary region took **zero mutations** on the new document — it arrived
-   already holding "Showing 14 of 36 scenarios." A live region that arrives with its text announces
-   nothing, which is the same fact 3.3 was fixed for. A reviewer will record SILENT. Closing it is a
-   product change (the count in the title of a filtered view is the zero-JavaScript fix) and is
-   listed as such rather than being quietly automated.
+   **Two rows that used to be here were defects, not limits, and were fixed in the product on
+   2026-08-26.** Both measurements were re-taken before anything was changed and both held.
+   **4.2** — the Scenario Lab's filter is a plain `GET` form, so submitting it replaces the
+   document: measured in Chrome 151, the JavaScript context was destroyed, `document.title` was
+   byte-identical before and after, and the summary region took **zero mutations** on the new
+   document because it arrived already holding "Showing 14 of 36 scenarios." A live region that
+   arrives with its text announces nothing, which is the same fact 3.3 was fixed for — and unlike
+   3.3 there is no surviving context to write into later. A filtered view now carries the count in
+   its title, which is the one channel a full document load announces with no JavaScript, and the
+   summary's dead `aria-live` is gone. **7.4** — measured, 29 of 34 content-bearing nodes behind the
+   open sheet were still non-ignored in the computed tree, because `MobileNav` held the background
+   in scope with `aria-modal="true"` and a focus trap and nothing else. Every subtree that is not
+   the sheet is now `inert` while it is open; re-measured after, 0 of 188 are reachable. Both
+   checks were shown to fail against a build with the defect restored before either row moved.
 
-   `pnpm run certify:screen-reader` is now the way to spend the five minutes: it presents **the 4**,
+   `pnpm run certify:screen-reader` is now the way to spend the five minutes: it presents **the 2**,
    states up front how many are machine-covered and where those checks live, holds the reviewer's
    place across a resumable session, requires a quoted announcement for every `FAIL` and `SILENT`,
    refuses to call an incomplete run a pass, and stamps the result with the commit it was run

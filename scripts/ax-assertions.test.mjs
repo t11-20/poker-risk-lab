@@ -202,6 +202,13 @@ describe('NEGATIVE CONTROL — every check refuses a page that produced nothing'
     figures: null,
     situation: null,
     analysisFigures: null,
+    // 4.2's two submits and 7.4's sweep. Empty is "the form was never submitted" and "the page had
+    // nothing behind the sheet" — the two states in which each of them proves nothing at all.
+    summary: null,
+    fields: [],
+    narrowed: {},
+    emptied: {},
+    background: null,
   };
 
   for (const check of everyCheck) {
@@ -581,6 +588,217 @@ describe('NEGATIVE CONTROL — 7.2, a modal that leaks', () => {
 
   it('fires when nothing was pressed at all, rather than reporting a clean trap', () => {
     assert.equal(check.decide({ forwardStops: [] }).ok, false);
+  });
+});
+
+describe('NEGATIVE CONTROL — 7.4, a background the sheet only ASKED to be left alone', () => {
+  const check = checkFor('J7.4');
+  /** One content-bearing element behind the sheet, ignored by the tree because it is inert. */
+  const gone = (tag, text) => ({
+    tag,
+    ancestor: false,
+    announcer: false,
+    text,
+    own: true,
+    ignored: true,
+    role: '',
+    name: '',
+  });
+  const healthy = {
+    background: [
+      // The sheet's own ancestors, which cannot be inerted without inerting the sheet: in the tree,
+      // and carrying no text of their own.
+      {
+        tag: 'header',
+        ancestor: true,
+        announcer: false,
+        text: 'Menu',
+        own: false,
+        ignored: false,
+        role: 'banner',
+        name: 'Site',
+      },
+      {
+        tag: 'div',
+        ancestor: true,
+        announcer: false,
+        text: 'Menu',
+        own: false,
+        ignored: true,
+        role: '',
+        name: '',
+      },
+      // The one exemption, empty.
+      {
+        tag: 'div',
+        ancestor: false,
+        announcer: true,
+        text: '',
+        own: false,
+        ignored: false,
+        role: 'status',
+        name: '',
+      },
+      ...Array.from({ length: 30 }, (_unused, index) => gone('a', `Destination ${index}`)),
+    ],
+  };
+
+  it('passes a background that is not in the tree at all', () => {
+    assert.equal(check.decide(healthy).ok, true);
+  });
+
+  it('fires when the skip link and the hero are still walkable — the state the row was filed in', () => {
+    const leaking = healthy.background.map((element, index) =>
+      index > 3 && index < 8
+        ? { ...element, ignored: false, role: 'link', name: `Destination ${index}` }
+        : element,
+    );
+    const verdict = check.decide({ background: leaking });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /still\s+non-ignored nodes/u);
+    assert.match(verdict.detail, /Destination 4/u);
+  });
+
+  it('fires when an ancestor left in the tree carries text of its own', () => {
+    const chatty = healthy.background.map((element) =>
+      element.tag === 'header' ? { ...element, own: true, text: 'Poker Risk Lab' } : element,
+    );
+    const verdict = check.decide({ background: chatty });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /ancestors are in the tree AND carry text/u);
+  });
+
+  it('fires when a second thing has been exempted from the sweep', () => {
+    const twoExemptions = [
+      ...healthy.background,
+      {
+        tag: 'footer',
+        ancestor: false,
+        announcer: true,
+        text: '',
+        own: false,
+        ignored: false,
+        role: 'contentinfo',
+        name: 'About',
+      },
+    ];
+    const verdict = check.decide({ background: twoExemptions });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /2 element\(s\) behind the sheet are exempt/u);
+  });
+
+  it('fires when the exempted route announcer is holding a sentence', () => {
+    const speaking = healthy.background.map((element) =>
+      element.announcer ? { ...element, text: 'Learn — Poker Risk Lab' } : element,
+    );
+    const verdict = check.decide({ background: speaking });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /spared from the sweep and is holding/u);
+  });
+
+  it('refuses a sweep that found almost nothing, rather than reporting a clean background', () => {
+    const verdict = check.decide({ background: healthy.background.slice(0, 4) });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /negative over an empty set is not a pass/u);
+  });
+
+  it('refuses a run whose two lists did not line up', () => {
+    const verdict = check.decide({ background: { misaligned: { dom: 188, ax: 12 } } });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /do not line up/u);
+  });
+});
+
+describe('NEGATIVE CONTROL — 4.2, a filtered count nobody is told', () => {
+  const check = checkFor('J4.2');
+  const healthy = {
+    title: 'Scenario Lab — Poker Risk Lab',
+    summary: 'Showing all 36 scenarios.',
+    narrowed: {
+      chosen: { select: 'prl-filter-difficulty', value: 'advanced', declared: 14 },
+      submitted: true,
+      title: 'Scenario Lab — 14 of 36 scenarios — Poker Risk Lab',
+      summary: 'Showing 14 of 36 scenarios.',
+      contextSurvived: false,
+      summaryIsLive: false,
+      regionMutations: 0,
+    },
+    emptied: {
+      chosen: { select: 'prl-filter-street', value: 'turn', declared: 0 },
+      submitted: true,
+      title: 'Scenario Lab — 0 of 36 scenarios — Poker Risk Lab',
+      summary: 'Showing 0 of 36 scenarios.',
+      contextSurvived: false,
+      summaryIsLive: false,
+      regionMutations: 0,
+    },
+  };
+
+  it('passes a filtered view whose title carries the count the page shows', () => {
+    assert.equal(check.decide(healthy).ok, true);
+  });
+
+  it('fires when the title is the unfiltered one — the state the row was filed in', () => {
+    const verdict = check.decide({
+      ...healthy,
+      narrowed: { ...healthy.narrowed, title: 'Scenario Lab — Poker Risk Lab' },
+    });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /a count that is not in the title is a count no reader is told/u);
+  });
+
+  it('fires when the title carries a DIFFERENT count from the page', () => {
+    const verdict = check.decide({
+      ...healthy,
+      narrowed: { ...healthy.narrowed, title: 'Scenario Lab — 12 of 36 scenarios — Poker Risk Lab' },
+    });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /the page shows/u);
+  });
+
+  it('fires when the submit stopped replacing the document, because then nothing announces at all', () => {
+    const verdict = check.decide({
+      ...healthy,
+      narrowed: { ...healthy.narrowed, contextSurvived: true },
+    });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /did NOT replace the document/u);
+  });
+
+  it('fires when the summary is dressed as a live region it can never fire', () => {
+    const verdict = check.decide({
+      ...healthy,
+      narrowed: { ...healthy.narrowed, summaryIsLive: true },
+    });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /dressed as a live region/u);
+  });
+
+  it('fires when the unfiltered title has grown a count of its own', () => {
+    const verdict = check.decide({ ...healthy, title: 'Scenario Lab — all 36 scenarios — Poker Risk Lab' });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /UNFILTERED title already carries a count/u);
+  });
+
+  it('fires when a filter that matches nothing leaves the title alone', () => {
+    const verdict = check.decide({
+      ...healthy,
+      emptied: { ...healthy.emptied, title: 'Scenario Lab — Poker Risk Lab' },
+    });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /cannot discover by scrolling/u);
+  });
+
+  it('refuses a run that never reached an empty result, rather than passing on one half', () => {
+    const verdict = check.decide({ ...healthy, emptied: { chosen: null } });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /never exercised/u);
+  });
+
+  it('refuses a run that never found a narrowing option at all', () => {
+    const verdict = check.decide({ ...healthy, narrowed: { chosen: null } });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /no option that narrows the list/u);
   });
 });
 

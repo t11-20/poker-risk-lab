@@ -21,10 +21,10 @@
  * assertive, a control that drops focus on the floor when it disables itself — ships silently and
  * waits for a human session that never comes.
  *
- * So the 72 are split. The 68 whose whole subject is a DOM/ARIA fact are checked here, on every
- * run, and a regression fails `pnpm run verify`. The 4 that are left stay with the person, and
- * `pnpm run certify:screen-reader` now presents only those: where a virtual cursor goes past the
- * end of a modal (7.4), and three states no honest fixture reaches (4.2, 6.7, 8.3).
+ * So the 72 are split. The 70 whose whole subject is a DOM/ARIA fact are checked here, on every
+ * run, and a regression fails `pnpm run verify`. The 2 that are left stay with the person, and
+ * `pnpm run certify:screen-reader` now presents only those: two states no honest fixture reaches
+ * (6.7 and 8.3).
  *
  * ## Three of them were answerable, and the reason each had been left was wrong
  *
@@ -49,7 +49,7 @@
  *     turn to act. (not_your_turn). Nothing was applied." — assertively, and the only interruption
  *     in the whole hand.
  *
- * ## Two more were not certification limits at all, but DEFECTS filed as one
+ * ## Four more were not certification limits at all, but DEFECTS filed as one
  *
  * 3.3 said "A new hand was dealt." never reaches the DOM and asked a reviewer to decide whether
  * hearing the blinds instead was a PASS. That is a bug with a checklist item wrapped round it, and
@@ -60,9 +60,28 @@
  * else — true, and the conclusion does not follow: the gate now runs a second web app that has no
  * API behind it. Neither row was ever about speech.
  *
+ * **4.2 and 7.4 joined them on 2026-08-26, and the certification had already written down why.** It
+ * said of 4.2 that a machine could answer it, that the answer was that nothing announced the filter
+ * count, and that closing it was a product change rather than a certification one. It said of 7.4
+ * that making the background `inert` "would then make the row `auto` by construction". Both product
+ * changes were made, both measurements were re-taken first and both held:
+ *
+ *   - **4.2.** A GET submit on `/lab` replaces the document, so there is no surviving context to
+ *     write into a live region — measured, the `window` marker was gone, `document.title` was
+ *     byte-identical, and the summary region took zero mutations because it arrived already holding
+ *     its sentence. A filtered view now carries the count in its title, which is the one thing a new
+ *     document announces without JavaScript. J4.2 below checks that the submit is still a document
+ *     load (a client-side query change would announce nothing at all), and reads the count off the
+ *     page's own summary rather than recomputing it.
+ *   - **7.4.** Measured: 29 of 34 content-bearing elements behind the open sheet were still
+ *     non-ignored nodes. `MobileNav` now marks every subtree that is not the sheet `inert` while it
+ *     is open. J7.4 below is a negative over the whole background, with a floor under the sweep, and
+ *     it holds the sheet's un-inertable ancestors and its one deliberate exemption to their own
+ *     stricter terms.
+ *
  * ## "Needs a live table" was a statement about this gate, not about speech
  *
- * Nineteen of those 68 were with the person until this module grew three fixtures, and every one of
+ * Nineteen of those 70 were with the person until this module grew three fixtures, and every one of
  * them was refused for a fixture reason rather than an un-automatable one:
  *
  *   - **A live table over a real socket** (`gatherLiveTable`). `/play?state=decision` renders the
@@ -82,10 +101,8 @@
  *     pointed at a port nothing can be listening on, and one route visits it.
  *
  * What is still refused is refused on its merits, and section 5 of the certification document lists
- * all four with one line each. One of the four, **4.2**, is refused for a different reason from the
- * others and the document says so: a machine can answer it, the answer was measured, and it is that
- * nothing announces the filter count. It stays in the human session because closing it is a product
- * change rather than a certification one — not because it is undecidable.
+ * both with one line each: 6.7 needs a server that lies about a deal, and 8.3 needs a build with a
+ * deliberate `throw` in the root layout.
  *
  * ## What this does NOT claim
  *
@@ -102,7 +119,8 @@
  * under that carve-out, and 6.7 is the counter-example that stays: both of its halves are
  * structural, one of them is unreachable, and half a row is not a covered row. Overclaiming here is
  * worse than a smaller automated set: a row that has been dropped from the human session and is
- * only half covered by a machine is a row nobody checks.
+ * only half covered by a machine is a row nobody checks. Nothing here moved on the strength of a
+ * check that had not been run against a build with the defect deliberately restored.
  *
  * ## Shape
  *
@@ -3020,8 +3038,149 @@ const REPLAY_CHECKS = [
 // Journey 4 — the Scenario Lab
 // ---------------------------------------------------------------------------
 
-async function gatherLabIndex(page) {
-  return { title: await page.evaluate('document.title') };
+/** The summary line under the filters, as a reader would hear it. */
+const LAB_SUMMARY_JS = `(() => {
+  const line = document.querySelector('.prl-lab-filters__summary');
+  return line === null ? null : (line.textContent ?? '').replace(/\\s+/gu, ' ').trim();
+})()`;
+
+/**
+ * Every filter option, with the count the option itself declares.
+ *
+ * The label is built as \`\${label} (\${count})\` by \`ScenarioFilters\`, and the count is computed
+ * against the OTHER two facets — so an option reading "(0)" on an already-filtered page is a
+ * combination that matches nothing, which is how the empty case below is reached without this gate
+ * knowing anything about the scenario catalogue.
+ */
+const LAB_OPTIONS_JS = `(() => [...document.querySelectorAll('form.prl-lab-filters select')].map((select) => ({
+  id: select.id,
+  chosen: select.value,
+  options: [...select.options].map((option) => {
+    const text = (option.textContent ?? '').trim();
+    const counted = /\\((\\d+)\\)\\s*$/u.exec(text);
+    return { value: option.value, text, count: counted === null ? null : Number(counted[1]) };
+  }),
+})))()`;
+
+/** The marker whose disappearance proves the submit replaced the document rather than the query. */
+const LAB_CONTEXT_MARKER = 'window.__prlLabContext';
+
+/**
+ * Choose a filter option, submit the form, and record what the new document says.
+ *
+ * `wanting` is `'fewer'` for any option that narrows the list, and `'none'` for one whose declared
+ * count is zero. Both are found by reading the counts the page prints on its own options, so this
+ * function knows nothing about which topics or streets exist.
+ */
+async function submitLabFilter(page, wanting) {
+  await page.evaluate(`${LAB_CONTEXT_MARKER} = 'alive'; true`);
+  const chosen = await page.evaluate(
+    `(() => {
+      const wantEmpty = ${JSON.stringify(wanting === 'none')};
+      const declared = (option) => {
+        const counted = /\\((\\d+)\\)\\s*$/u.exec((option.textContent ?? '').trim());
+        return counted === null ? null : Number(counted[1]);
+      };
+      for (const select of document.querySelectorAll('form.prl-lab-filters select')) {
+        // The "any" option's own count is the size of the unfiltered list, which is what makes
+        // "this option NARROWS the list" decidable here rather than assumed. An option that matches
+        // everything would still change the title and would prove nothing about a narrowing.
+        const anyOption = [...select.options].find((option) => option.value === 'any');
+        const total = anyOption === undefined ? null : declared(anyOption);
+        for (const option of select.options) {
+          if (option.value === 'any') continue;
+          const count = declared(option);
+          if (count === null) continue;
+          if (wantEmpty ? count !== 0 : count === 0 || count === total) continue;
+          if (select.value === option.value) continue;
+          select.value = option.value;
+          return { select: select.id, value: option.value, declared: count, total };
+        }
+      }
+      return null;
+    })()`,
+  );
+  if (chosen === null) return { chosen: null };
+  const submitted = await page.evaluate(
+    `(() => {
+      const button = document.querySelector('form.prl-lab-filters button[type="submit"]');
+      if (button === null) return false;
+      button.click();
+      return true;
+    })()`,
+  );
+  if (!submitted) return { chosen, submitted: false };
+  await page.settle(2500);
+  const speech = await speechSoFar(page);
+  return {
+    chosen,
+    submitted: true,
+    url: await page.evaluate('location.href'),
+    title: await page.evaluate('document.title'),
+    summary: await page.evaluate(LAB_SUMMARY_JS),
+    // Absent means the JavaScript context was destroyed, which is what a full document load does
+    // and what the whole approach below rests on.
+    contextSurvived: (await page.evaluate(`${LAB_CONTEXT_MARKER} ?? null`)) !== null,
+    summaryIsLive: await page.evaluate(
+      `(() => {
+        const line = document.querySelector('.prl-lab-filters__summary');
+        if (line === null) return null;
+        return line.closest('[aria-live], [role="status"], [role="alert"]') !== null;
+      })()`,
+    ),
+    // How many times ANY live region on the new document was written to. Recorded rather than
+    // gated: it is the measurement the row was filed on, and it belongs in the run's output where
+    // the next person can read it instead of re-deriving it.
+    regionMutations: speech.mutations.length,
+  };
+}
+
+/**
+ * Journey 4's index, and the two submits assertion 4.2 is about.
+ *
+ * Three page loads rather than one, because the assertion is about what a SUBMIT produces and the
+ * empty case has to be reached from an already-filtered page: an option can only read "(0)" once
+ * another facet is set.
+ */
+async function gatherLabIndex(page, baseUrl) {
+  const evidence = {};
+  evidence.title = await page.evaluate('document.title');
+  evidence.summary = await page.evaluate(LAB_SUMMARY_JS);
+  evidence.fields = await page.evaluate(LAB_OPTIONS_JS);
+
+  await page.goto(`${baseUrl}/lab`);
+  evidence.narrowed = await submitLabFilter(page, 'fewer');
+
+  // Straight on from the narrowed view: the zero-count option only exists because a facet is
+  // already set, and starting again from `/lab` would throw that away.
+  evidence.emptied = await submitLabFilter(page, 'none');
+  return evidence;
+}
+
+/** What the three selects offered, for a failure message that says why nothing could be chosen. */
+function labOptionInventory(fields) {
+  if (!Array.isArray(fields) || fields.length === 0) return 'nothing — the form rendered no selects';
+  return fields
+    .map(
+      (field) =>
+        `${field.id}: ${field.options.map((option) => `${option.value}(${option.count})`).join(' ')}`,
+    )
+    .join('; ');
+}
+
+/** The count as `ScenarioFilters.scenarioCountPhrase` writes it: "14 of 36", or "all 36". */
+const LAB_COUNT_PHRASE = /(?:all\s+\d+|\d+\s+of\s+\d+)/u;
+
+/**
+ * The count the page is SHOWING, read out of its own summary line.
+ *
+ * Read rather than computed: the point of the assertion is that the reader is told the number the
+ * page is displaying, and a gate that recomputed it from the catalogue would be checking its own
+ * arithmetic against the page's.
+ */
+function labCountShown(summary) {
+  const found = summary === null ? null : LAB_COUNT_PHRASE.exec(summary);
+  return found === null ? null : found[0].replace(/\s+/gu, ' ');
 }
 
 const LAB_INDEX_CHECKS = [
@@ -3032,6 +3191,115 @@ const LAB_INDEX_CHECKS = [
       e.title === 'Scenario Lab — Poker Risk Lab'
         ? pass(`"${e.title}"`)
         : fail(`document.title is "${e.title}", the certification quotes "Scenario Lab — Poker Risk Lab"`),
+  },
+  {
+    id: 'J4.2',
+    /*
+      This row was `person`, and the certification said why: a machine could answer it, the answer
+      was that NOTHING announced the count, and closing it was a product change rather than a
+      certification one. The product change has been made, so the row is here.
+
+      The defect. `ScenarioFilters` is a plain GET form and ships no JavaScript on purpose, so a
+      submit replaces the document. Measured in Chrome 151 against a production build of this app:
+      a `window` marker set before the submit was gone afterwards, `document.title` was
+      byte-identical before and after ("Scenario Lab — Poker Risk Lab", carrying nothing about the
+      filter), and the summary region on the new document took ZERO mutations because it arrived
+      already holding "Showing 14 of 36 scenarios." A live region that arrives with its text
+      announces nothing — the same fact 3.3 was fixed for. There the region could be mounted empty
+      and written into a moment later; here the context that would do the writing has been thrown
+      away by the navigation, so there is no "later" to write in.
+
+      The fix, and therefore what this checks. A new document IS announced, by its title, with no
+      JavaScript involved — that is assertion G1 — so a filtered view now puts the count there.
+      `RouteAnnouncer` cannot stand in for it: it is deliberately silent on a full load, and a
+      query-only change does not move `usePathname` at all.
+
+      The clauses, in the order they would catch a regression:
+
+        - the submit still destroys the JavaScript context. If a future edit made this a client-side
+          navigation, the title would still change and NOTHING would announce it, because the
+          announcer only speaks on a pathname change. That would be a silent regression to exactly
+          the state this row was filed in, so it fails here rather than passing on the title alone.
+        - the unfiltered title carries no count, so `/lab` still reads as 4.1 quotes it.
+        - a narrowing submit puts the page's own count in the title, and an emptying one does too.
+          The count is read off the summary line rather than recomputed, so the two cannot agree by
+          both being wrong in the same way.
+        - the empty case is reached and is not simply "0 scenarios" arriving as silence: the row
+          says a filter that narrows the list to nothing must announce that.
+
+      A sweep of nothing is refused twice over: a run where the filters offered no narrowing option,
+      or no zero-count option, fails rather than passing with two clauses unexercised.
+    */
+    what: 'a filtered view announces its count, in the one channel a full document load has',
+    decide: (e) => {
+      const narrowed = e.narrowed ?? {};
+      const emptied = e.emptied ?? {};
+      if (narrowed.chosen === null || narrowed.chosen === undefined) {
+        return fail(
+          'the filters offered no option that narrows the list, so no submit was made and nothing ' +
+            `about the count was checked. What they offered: ${labOptionInventory(e.fields)}`,
+        );
+      }
+      if (narrowed.submitted !== true) return fail('the filter form has no submit control');
+      if (narrowed.contextSurvived) {
+        return fail(
+          'the submit did NOT replace the document — the JavaScript context survived it. A ' +
+            'client-side query change moves neither the pathname nor a document load, so nothing ' +
+            'announces the new count however good the title is. See RouteAnnouncer',
+        );
+      }
+      if (LAB_COUNT_PHRASE.test(e.title)) {
+        return fail(
+          `the UNFILTERED title already carries a count ("${e.title}"), which 4.1 quotes without one`,
+        );
+      }
+      const shown = labCountShown(narrowed.summary);
+      if (shown === null) {
+        return fail(`the filtered page shows no count at all; its summary line reads "${narrowed.summary}"`);
+      }
+      if (!narrowed.title.includes(shown)) {
+        return fail(
+          `the page shows "${narrowed.summary}" and the document title is "${narrowed.title}". A new ` +
+            'document is announced by its title and by nothing else this page can reach, so a count ' +
+            'that is not in the title is a count no reader is told',
+        );
+      }
+      if (narrowed.title === e.title) {
+        return fail(`the filtered title is byte-identical to the unfiltered one ("${e.title}")`);
+      }
+      if (narrowed.summaryIsLive === true) {
+        return fail(
+          'the summary line is dressed as a live region on a page whose every filter change is a ' +
+            'full document load. It cannot fire — it arrives already holding its text — and an ' +
+            'announcement channel that has been measured never to work is how this row stayed open ' +
+            'for as long as it did. The title is the channel; see the comment above',
+        );
+      }
+      if (emptied.chosen === null || emptied.chosen === undefined) {
+        return fail(
+          'no filter combination on this catalogue narrows the list to nothing, so the half of this ' +
+            'row about an empty result was never exercised. That is not a pass. What the unfiltered ' +
+            `page offered: ${labOptionInventory(e.fields)}`,
+        );
+      }
+      const emptyShown = labCountShown(emptied.summary);
+      if (emptyShown === null || !/^0\s+of\s+\d+$/u.test(emptyShown)) {
+        return fail(
+          `an option declaring "(0)" was applied and the page then shows "${emptied.summary}", which ` +
+            'is not an empty result. The fixture chose the wrong option, so nothing was proved',
+        );
+      }
+      if (!emptied.title.includes(emptyShown)) {
+        return fail(
+          `a filter that matches nothing leaves the title as "${emptied.title}" while the page says ` +
+            `"${emptied.summary}". An empty result is the one a reader cannot discover by scrolling`,
+        );
+      }
+      return pass(
+        `"${narrowed.title}" and "${emptied.title}", both on a fresh document, with ` +
+          `${narrowed.regionMutations} live-region mutation(s) behind them`,
+      );
+    },
   },
 ];
 
@@ -3421,6 +3689,18 @@ const PROFILE_CHECKS = [
 
 const SHEET_TAB_STOPS = 14;
 
+/**
+ * The fewest content-bearing elements a page must have behind the sheet for 7.4 to mean anything.
+ *
+ * Not a target: a floor. The check is a negative over the whole background, and a negative over an
+ * empty set is the shape of green check this repository has been bitten by. Measured on `/` at
+ * 390x844: 188 elements match `BACKGROUND_CONTENT_JS` — the header, the hero, every card, the
+ * footer — so twenty leaves room for the page to be redesigned and none for the sweep to stop
+ * matching. Demonstrated by raising this to 500 against the real page, which failed the check with
+ * "only 188 content-bearing element(s) found outside the sheet".
+ */
+const BACKGROUND_CONTENT_FLOOR = 20;
+
 async function gatherSheet(page) {
   const evidence = {};
   const opened = await page.evaluate(
@@ -3442,6 +3722,12 @@ async function gatherSheet(page) {
   evidence.forwardStops = await tabAround(page, 'Tab');
   evidence.backwardStops = await tabAround(page, 'Tab', { shift: true });
 
+  evidence.background = await gatherSheetBackground(page);
+
+  // Put the caret back where the sheet put it. `gatherSheetBackground` stamps and unstamps
+  // attributes only, so it does not move focus — but Escape is read on the sheet's own key handler
+  // and a caret left anywhere else would make 7.5 a test of this fixture rather than of the sheet.
+  await page.evaluate(`document.querySelector('.prl-sheet__close')?.focus(); true`);
   await page.press('Escape');
   await page.settle(500);
   evidence.afterEscape = {
@@ -3454,6 +3740,61 @@ async function gatherSheet(page) {
 
   await gatherSheetDestination(page, evidence);
   return evidence;
+}
+
+/**
+ * What "content behind the sheet" IS, for a page that has no idea what its own content is.
+ *
+ * An element counts if it could be stopped on and read: it has a text node of its OWN (so a wrapper
+ * `<div>` around a paragraph is not counted twice), or it is a control, an image, a landmark, or
+ * something carrying an explicit `role`. Deliberately structural rather than a list of the things
+ * this app happens to render at `/` — the assertion is about anything a future edit puts behind the
+ * sheet, not about the hero links that were there when it was written.
+ */
+const BACKGROUND_CONTENT_JS = `(() => {
+  const sheet = document.querySelector('.prl-sheet');
+  if (sheet === null) return null;
+  const CONTROLS = 'a[href],button,input,select,textarea,img,svg,[role],main,nav,header,footer,aside,form,h1,h2,h3';
+  const ownText = (el) =>
+    [...el.childNodes].some((node) => node.nodeType === 3 && (node.textContent ?? '').trim() !== '');
+  const elements = [...document.querySelectorAll('body *')].filter((el) => {
+    if (el === sheet || sheet.contains(el)) return false;
+    if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE' || el.tagName === 'LINK') return false;
+    return ownText(el) || el.matches(CONTROLS);
+  });
+  elements.forEach((el, index) => el.setAttribute('data-prl-bg', String(index)));
+  return elements.map((el) => ({
+    tag: el.tagName.toLowerCase(),
+    // An ancestor of the sheet cannot be made inert: \`inert\` is inherited and a descendant cannot
+    // opt out, so inerting the sheet's own \`<header>\` would inert the sheet inside it. These are
+    // the nodes the check holds to a different, and stricter, standard.
+    ancestor: el.contains(sheet),
+    announcer: el.hasAttribute('data-prl-route-announcer'),
+    text: (el.textContent ?? '').replace(/\\s+/gu, ' ').trim().slice(0, 60),
+    own: ownText(el),
+  }));
+})()`;
+
+/**
+ * Every content-bearing element outside the open sheet, and whether the accessibility tree ignores
+ * it.
+ *
+ * `axFlagsFor` rather than `axFor`: this asks the question of the whole page, and `axFor` would
+ * fetch the outer HTML of `<main>` and of every ancestor of everything inside it to decide a
+ * boolean per node.
+ */
+async function gatherSheetBackground(page) {
+  const elements = await page.evaluate(BACKGROUND_CONTENT_JS);
+  if (elements === null) return null;
+  const flags = await page.axFlagsFor('[data-prl-bg]');
+  await page.evaluate(
+    `document.querySelectorAll('[data-prl-bg]').forEach((el) => el.removeAttribute('data-prl-bg')); true`,
+  );
+  // Both sides are the same selector engine over the same document, so both are in document order
+  // and the two lists line up. Checked rather than assumed: if they ever did not, every verdict
+  // below would be about the wrong element and would still read as a clean pass.
+  if (flags.length !== elements.length) return { misaligned: { dom: elements.length, ax: flags.length } };
+  return elements.map((element, index) => ({ ...element, ...flags[index] }));
 }
 
 /** Tab (or Shift+Tab) around the sheet, recording whether the caret ever leaves it. */
@@ -3540,6 +3881,104 @@ const SHEET_CHECKS = [
     id: 'J7.3',
     what: 'Shift + Tab never leaves the sheet',
     decide: (e) => decideTrap(e.backwardStops, 'Shift + Tab'),
+  },
+  {
+    id: 'J7.4',
+    /*
+      This row was `person`, and the certification's reason for it was right about the
+      implementation and wrong about the ceiling: "whether the virtual cursor reaches those 29 nodes
+      is a fact about whether the reader honours `aria-modal`". It was, because the background was
+      only DECLARED out of scope. Measured before the fix, sheet open at 390x844 on `/`: of 34
+      content-bearing elements outside `.prl-sheet`, 29 were still non-ignored nodes in the computed
+      accessibility tree — "Skip to main content", the wordmark link, `main`, its `h1`, every hero
+      link. `MobileNav` now marks every subtree that is not the sheet `inert` while it is open, and
+      an inert subtree is not in the tree at all, so there is nothing left for a cursor to walk to
+      whatever the reader thinks of `aria-modal`. That is what makes this row decidable here.
+
+      Two things this deliberately does NOT require, because both would be false claims:
+
+        - it does not require the sheet's own ANCESTORS to be ignored. `inert` is inherited and a
+          descendant cannot opt out of it, so inerting `<header>` — where both the trigger and the
+          sheet live — would inert the sheet inside it. What is required of them instead is that
+          they are containers: an ancestor that is still in the tree must carry no text of its own,
+          so reading it reaches a landmark boundary and nothing else. Measured: the one survivor is
+          `<header aria-label="Site">`, a banner with no text of its own.
+        - it does not require the route announcer to be ignored, and it requires it to be EMPTY.
+          `MobileNav` spares it on purpose (see `INERT_EXEMPT` there): it is the one region outside
+          the sheet that still has something to say, because a back-button navigation announces the
+          new route while the sheet is still open. Sparing it is only free while it is empty, which
+          is what this asserts — and it asserts that it is the ONLY thing spared, so a second
+          exemption cannot be added quietly.
+
+      A sweep of nothing is refused: a run that found fewer than twenty content-bearing elements
+      behind the sheet has not looked at the page, and a page with no background is not a page this
+      assertion has been proved against.
+    */
+    what: 'nothing behind the open sheet is left in the accessibility tree for a cursor to walk to',
+    decide: (e) => {
+      const background = e.background;
+      if (background === null || background === undefined) {
+        return fail('the sheet was never found, so nothing was measured behind it');
+      }
+      if (background.misaligned !== undefined) {
+        return fail(
+          `the DOM sweep found ${background.misaligned.dom} elements and the accessibility query ` +
+            `answered for ${background.misaligned.ax}. The two lists do not line up, so every ` +
+            'verdict below would be about the wrong element',
+        );
+      }
+      if (background.length < BACKGROUND_CONTENT_FLOOR) {
+        return fail(
+          `only ${background.length} content-bearing element(s) found outside the sheet. This ` +
+            'assertion is a negative over the whole background, and a negative over an empty set ' +
+            'is not a pass',
+        );
+      }
+      const spared = background.filter((element) => element.announcer);
+      const reachable = background.filter(
+        (element) => !element.ignored && !element.ancestor && !element.announcer,
+      );
+      if (reachable.length > 0) {
+        return fail(
+          `${reachable.length} of ${background.length} elements behind the sheet are still ` +
+            `non-ignored nodes in the computed tree, among them ${reachable
+              .slice(0, 4)
+              .map((element) => `<${element.tag}> "${element.name === '' ? element.text : element.name}"`)
+              .join(', ')}. A reader whose virtual cursor does not stop at \`aria-modal\` walks out ` +
+            'of the menu into a page that is not on the screen',
+        );
+      }
+      const speaking = background.filter((element) => element.ancestor && !element.ignored && element.own);
+      if (speaking.length > 0) {
+        return fail(
+          `${speaking.length} of the sheet's own ancestors are in the tree AND carry text of their ` +
+            `own (${speaking.map((element) => `<${element.tag}> "${element.text}"`).join(', ')}). An ` +
+            'ancestor cannot be made inert without inerting the sheet inside it, so it has to be a ' +
+            'container and nothing more',
+        );
+      }
+      if (spared.length !== 1) {
+        return fail(
+          `${spared.length} element(s) behind the sheet are exempt from the sweep. Exactly one is ` +
+            'expected — the route announcer, which must keep speaking because a back-button ' +
+            'navigation announces the new route while the sheet is still open. A second exemption ' +
+            'is a hole in this assertion',
+        );
+      }
+      if (spared[0].text !== '') {
+        return fail(
+          `the route announcer is spared from the sweep and is holding "${spared[0].text}" while ` +
+            'the sheet is open, so there IS content behind the sheet that a cursor can reach',
+        );
+      }
+      const ancestors = background.filter((element) => element.ancestor && !element.ignored);
+      return pass(
+        `${background.length} behind the sheet, ${reachable.length} reachable; ` +
+          `${ancestors.length} container(s) left in the tree (${ancestors
+            .map((element) => `${element.role || element.tag}`)
+            .join(', ')})`,
+      );
+    },
   },
   {
     id: 'J7.5',

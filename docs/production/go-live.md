@@ -76,7 +76,7 @@ armed and attached to a phone is a fact about an account this repository does no
 
 | Step | Command | Pass looks like |
 | --- | --- | --- |
-| 5.1 | `pnpm run test:ax` | 114 checks, 0 failed — 68 of the 72 certification assertions |
+| 5.1 | `pnpm run test:ax` | 116 checks, 0 failed — 70 of the 72 certification assertions |
 | 5.2 **PERSON** | `pnpm run certify:screen-reader` | the remaining **4**, with VoiceOver or NVDA, ~5 min |
 
 The 4 are: what a virtual cursor does past the end of a modal (7.4 — measured, 29 content-bearing
