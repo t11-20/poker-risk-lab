@@ -182,7 +182,9 @@ curl -sS -o /dev/null -w 'status %{http_code} tls %{ssl_verify_result}\n' https:
 pnpm run test:smoke --strict
 ```
 
-Step 4 is the one that counts, and it is the same tool that made this gap visible: it checks the public origin over TLS with the CA, in 72 checks — **once, at deploy time**. The probe is what turns that single measurement into a continuous one; the smoke run is what proves the product behind the origin still works.
+Step 4 is the one that counts, and it is the same tool that made this gap visible: it checks the public origin over TLS with the CA, in seventy-odd checks — **once, at deploy time**.
+(Not a fixed number: nothing declares the total and some checks are conditional on what the run
+finds. This said "72 checks"; a run on 2026-08-26 reported 71. Read it off the run.) The probe is what turns that single measurement into a continuous one; the smoke run is what proves the product behind the origin still works.
 
 ## Escalation
 

@@ -81,8 +81,16 @@ at five (uncapped, a pty drove ~106,000 guesses/s — a third of a 30-bit space 
 and `rehearsal` is decided by reading the targeted Alertmanager's own config over `/api/v2/status`
 **and** watching the page arrive at this process's own sinks — never from `PRL_ALERT_*`, which say
 what this checkout would render and nothing about where the page went. Unattended mode is fenced on
-that measurement. `pnpm run staging up` runs the strict smoke test — **72 checks** over TLS
-against the deployed images, which is where several guards get their only continuous exercise.
+that measurement. `pnpm run staging up` runs the strict smoke test over TLS against the deployed
+images, which is where several guards get their only continuous exercise. `pnpm run staging smoke`
+runs it against a stack that is already up, and recreates nothing.
+
+**Do not quote a check count here.** This file said "72 checks"; a run against the live stack on
+2026-08-26 reported **71**, and so does `docs/production/final-readiness-report.md`. The total is
+emergent — nothing in `scripts/smoke-test.mjs` or its test declares it, and some checks are
+conditional on what the run found — so any number written into prose is a number that drifts
+without anything noticing. `docs/production/runbooks/public-origin-unreachable.md` still said 72 for
+the same reason. Read the count off the run.
 
 ## Enrolment
 
