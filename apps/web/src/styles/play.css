@@ -1607,15 +1607,17 @@
 }
 
 .prl-play .prl-coach__section .prl-stat__pair {
-  /* `minmax(0, auto)` on the value, not bare `auto`.
-     A bare `auto` track is floored at max-content, so a value that is a SENTENCE rather than a
-     figure asks for its whole one-line width and the `1fr` label collapses under it — rendered, on
-     the deployed build, "POT AND PRICE" was squeezed to a ~40px column and the sentence painted
-     across it. Every other row here carries something like `2.9 to 1`, which is why the track was
-     specified this way and why it held for so long. `minmax(0, auto)` lets the value shrink and
-     wrap instead, and changes nothing for a short value, which still sits hard against the right
-     edge via `.prl-stat__value`'s `justify-content: flex-end`. */
-  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  /* A label and a SENTENCE do not share a line in a 325px rail. They stack.
+     This was `minmax(0, 1fr) auto`: two tracks on one line, which is right for the figures this
+     section is full of (`2.9 to 1`, `25.9 %`) and wrong for the one row whose value is a clause.
+     A bare `auto` track is floored at max-content, so the sentence asked for its full width and
+     the `1fr` label collapsed under it — on the deployed build "POT AND PRICE" was squeezed to a
+     ~40px column with the sentence painted across it.
+     `minmax(0, auto)` was tried first and did NOT fix it: the value still took most of the rail
+     once wrapped, and `1fr` is a share of what is left over. Stacking removes the competition
+     rather than tuning it, and cannot collide at any rail width. The value keeps its right
+     alignment, so it reads as a figure captioned by the label above it. */
+  grid-template-columns: minmax(0, 1fr);
   align-items: baseline;
   column-gap: var(--prl-space-5);
 }
