@@ -805,13 +805,24 @@ export function findTextDefects(measurement, context = {}, exemptions = EXEMPTIO
   // ---- collision: glyphs of two independent, in-flow elements ------------
   // Sorted by top edge so the scan can stop early; the app puts a few hundred text boxes on a
   // page and the naive pairing is 100k comparisons, which is slower than the page load.
-  const sorted = [...boxes].sort((a, b) => a.rects[0].y - b.rects[0].y);
+  //
+  // Ordered by the TOPMOST rectangle, not by `rects[0]`. The walker pushes rectangles in text-node
+  // document order and, within a node, in line order — so `rects[0]` is the first rect of the first
+  // text node, which is *usually* the highest and is not guaranteed to be. The early exit below is
+  // only sound if the sort key is the true minimum: it stops the inner scan on the first box that
+  // begins below `first`'s lowest edge, and concludes that every box after it is lower still. Give
+  // it a key that can exceed the box's real top and that conclusion is false — the scan stops early
+  // and the pairs it never compared are reported as no collision. A detector that goes quiet reads
+  // exactly like one that found nothing, which is the failure mode this whole file is written
+  // against, so the invariant is made true here rather than assumed.
+  const topOf = (box) => Math.min(...box.rects.map((r) => r.y));
+  const sorted = [...boxes].sort((a, b) => topOf(a) - topOf(b));
   const lowestOf = sorted.map((box) => Math.max(...box.rects.map(bottom)));
   for (let a = 0; a < sorted.length; a += 1) {
     const first = sorted[a];
     for (let b = a + 1; b < sorted.length; b += 1) {
       const second = sorted[b];
-      if (second.rects[0].y > lowestOf[a]) break;
+      if (topOf(second) > lowestOf[a]) break;
       if (first.flow !== second.flow) continue;
       if (isAncestor(first, second) || isAncestor(second, first)) continue;
       counts.pairs += 1;

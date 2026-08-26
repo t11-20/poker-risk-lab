@@ -296,6 +296,77 @@ describe('a correctly laid out row', () => {
   });
 });
 
+/**
+ * A box whose FIRST rectangle is not its highest one.
+ *
+ * The walker pushes rectangles in text-node document order, and within a node in line order, so
+ * `rects[0]` is the first rect of the first text node. Usually that is the highest. It is not
+ * guaranteed to be, and the collision scan's early exit is only sound if the sort key is the true
+ * minimum: it stops on the first box beginning below the current one's lowest edge and concludes
+ * every box after it is lower still.
+ *
+ * Here the ELEMENT `header > .prl-mark` owns two text nodes whose glyphs paint at y=300 and y=180 —
+ * the second higher than the first. Sorted by `rects[0].y` it lands after the paragraph at y=200,
+ * the scan breaks, and its real overlap with that paragraph is never compared. Sorted by the
+ * topmost rect it lands first and the pair is examined.
+ */
+function rectsOutOfOrder() {
+  return measurement([
+    box({
+      i: 10,
+      end: 11,
+      sel: 'header > span.prl-mark',
+      text: 'Pot and price',
+      rects: [
+        { x: 40, y: 300, w: 60, h: 16 },
+        { x: 40, y: 180, w: 120, h: 30 },
+      ],
+      pad: { x: 40, y: 180, w: 400, h: 136 },
+      content: { x: 40, y: 180, w: 400, h: 136 },
+    }),
+    box({
+      i: 12,
+      end: 13,
+      sel: 'header > p',
+      text: '100 units in the middle, 35 units to call',
+      rects: [{ x: 40, y: 200, w: 300, h: 21 }],
+      pad: { x: 40, y: 200, w: 400, h: 21 },
+      content: { x: 40, y: 200, w: 400, h: 21 },
+    }),
+  ]);
+}
+
+describe('the collision scan cannot stop early and call it clean (REGRESSION)', () => {
+  it('compares a pair whose first rectangle is not its topmost one', () => {
+    const { findings, counts } = findTextDefects(rectsOutOfOrder(), {});
+    assert.equal(counts.pairs, 1, 'the pair was never compared; the scan stopped early');
+    assert.deepEqual(
+      findings.map((finding) => finding.check),
+      ['collision'],
+    );
+  });
+
+  it('the OLD sort key would have skipped it, which is why this fixture exists', () => {
+    // Reproduces the discarded ordering over the same fixture so the control demonstrates the bug
+    // rather than merely asserting the fix. Sorted by `rects[0].y` the mark (300) follows the
+    // paragraph (200); scanning from the paragraph, the mark begins below the paragraph's lowest
+    // edge (221) and the scan breaks with the two never compared.
+    const { boxes } = rectsOutOfOrder();
+    const byFirstRect = [...boxes].sort((a, b) => a.rects[0].y - b.rects[0].y);
+    const lowest = Math.max(...byFirstRect[0].rects.map((r) => r.y + r.h));
+    assert.equal(byFirstRect[0].sel, 'header > p', 'the paragraph must sort first under the old key');
+    assert.ok(
+      byFirstRect[1].rects[0].y > lowest,
+      'the old key must trigger the early exit here, or this fixture proves nothing',
+    );
+    // And under the key actually used, the order is the other way round and nothing breaks early.
+    const topOf = (b) => Math.min(...b.rects.map((r) => r.y));
+    const byTop = [...boxes].sort((a, b) => topOf(a) - topOf(b));
+    assert.equal(byTop[0].sel, 'header > span.prl-mark');
+    assert.ok(topOf(byTop[1]) <= Math.max(...byTop[0].rects.map((r) => r.y + r.h)));
+  });
+});
+
 describe('what is NOT a defect', () => {
   it('ignores two elements in different positioned layers (deliberately stacked)', () => {
     const stacked = collapsedCoachRow();
