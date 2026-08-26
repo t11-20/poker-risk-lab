@@ -289,6 +289,17 @@ that has not expired?
   argued at `:168-193`), so `POST /me/delete` removes every place the reader held, live or revoked,
   with no notion of an outstanding entitlement to preserve, void or refund. That is a deliberate
   decision, not an oversight, and it is a decision counsel may need to overturn.
+* **It is now recorded when it happens, which it was not before 2026-08-26.** A CASCADE is a
+  referential action and writes no audit row, so a live place ended with nothing saying so and the
+  operator's trail showed an entitlement that was never closed — over-counting for ever, precisely
+  for the readers who exercised erasure. `deleteAccount` now writes an `enrolment.ended_by_erasure`
+  row per enrolment, in the same transaction and before the rows go, detached from the start,
+  carrying the cohort, the authority, the external `reference` and whether the place was still live.
+  **This changes what counsel is deciding.** The question is no longer "can a destroyed entitlement
+  be evidenced at all" — it can, on both sides — but the narrower one: what the operator owes the
+  holder of a live place who erases themselves, given that the record of it now exists and names
+  nobody. The technical half of this entry is closed; the policy half is not, and only the policy
+  half ever needed counsel.
 * **`/terms` §8 no longer disclaims availability on the basis of being free**, because that basis is
   no longer assertable. It now states the technical facts and says outright that whether the operator
   may exercise them without owing the reader something is not settled by the page. Replacing that

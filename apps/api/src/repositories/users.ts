@@ -42,6 +42,7 @@
 import { randomBytes } from 'node:crypto';
 import type { UserKind } from '@prl/contracts';
 import { AppError } from '../errors.ts';
+import * as audit from './audit.ts';
 import { newUserId } from './ids.ts';
 import { revokeAllForUser } from './sessions.ts';
 import { type Db, isForeignKeyViolation, sqlViolation, violationError } from './sql.ts';
@@ -332,9 +333,14 @@ export interface AccountDeletionSummary {
      *
      * They go with the account (`enrolments_user_id_fkey` is ON DELETE CASCADE, argued in
      * `db/migrations/0006_cohort_enrolments.sql`): an enrolment describes one person and nobody
-     * else, and one naming an account that no longer exists entitles nobody. The RECORD that the
-     * grant and the revocation happened survives in `prl.audit_log` with `user_id` NULL, which is
-     * where the authority and the external reference remain readable afterwards.
+     * else, and one naming an account that no longer exists entitles nobody. The RECORD survives in
+     * `prl.audit_log` with `user_id` NULL, which is where the authority and the external reference
+     * remain readable afterwards.
+     *
+     * This used to say "the grant and the revocation", which was measurably false: a cascade is a
+     * referential action and writes nothing, so a live entitlement ended with no entry saying so.
+     * `deleteAccount` now writes an `enrolment.ended_by_erasure` entry per enrolment, in the same
+     * transaction and before the rows go.
      */
     readonly enrolments: number;
   };
@@ -476,6 +482,71 @@ export async function deleteAccount(sql: Db, userId: string): Promise<AccountDel
   // request that resolved a token a moment ago cannot slide its expiry against a row that is
   // about to stop existing.
   const sessionsRevoked = await revokeAllForUser(sql, userId);
+
+  // The end of every entitlement this account held, written BEFORE the rows stop existing.
+  //
+  // `enrolments_user_id_fkey` is ON DELETE CASCADE, and both this file and
+  // `db/migrations/0006_cohort_enrolments.sql` claimed the record survived it: "the RECORD that
+  // the grant and the revocation happened survives in `prl.audit_log`". Measured against the
+  // development database inside a rolled-back transaction — a user, a cohort, one live enrolment
+  // and its `enrolment.granted` entry, then `delete from prl.users` — the enrolment row went, the
+  // grant entry survived and was correctly detached, and `enrolment.revoked` entries matching that
+  // cohort: **zero**. A referential action is not a statement; it writes nothing.
+  //
+  // So the operator's trail said a place in a class had been granted on this authority against
+  // this external reference, and nothing ever ended it. Reconciling "who holds a place" against
+  // the audit log over-counted for ever, and it over-counted precisely for the learners who
+  // exercised erasure. For a course somebody paid for that is the shape of a dispute nobody can
+  // settle: the record shows a live entitlement and there is no row behind it.
+  //
+  // A distinct event rather than `enrolment.revoked`, because it is a different act. A revocation
+  // is an operator withdrawing a place and it names who did it; this is the entitlement ending as
+  // a consequence of the holder erasing themselves, on nobody's authority, and the two must not be
+  // read as the same thing when somebody asks why a place ended.
+  //
+  // Detached at the point of writing, for the reason `/me/delete` gives for the deletion event
+  // itself: `audit_log.user_id` is ON DELETE SET NULL, so the row is about to be detached anyway,
+  // and writing it detached means the log never briefly holds a pointer to an account that asked
+  // to stop existing. What survives is the cohort, the authority and the external reference — the
+  // three things an operator needs to reconcile a place — and nothing that names who held it.
+  //
+  // `prl_app` can do this: it holds SELECT on both tables and INSERT on `prl.audit_log`, and needs
+  // no DELETE on `prl.enrolments` — the cascade still does the removal with the constraint owner's
+  // privileges. This adds no privilege to the request path.
+  const ending = await sql<
+    {
+      id: string;
+      cohort_id: string;
+      cohort_key: string;
+      reference: string;
+      granted_by: string;
+      was_live: boolean;
+    }[]
+  >`
+    select e.id, e.cohort_id, c.key as cohort_key, e.reference, e.granted_by,
+           (e.revoked_at is null) as was_live
+      from prl.enrolments e
+      join prl.cohorts c on c.id = e.cohort_id
+     where e.user_id = ${userId}
+     order by e.granted_at
+  `;
+  for (const enrolment of ending) {
+    await audit.record(sql, {
+      event: 'enrolment.ended_by_erasure',
+      userId: null,
+      detail: {
+        enrolmentId: enrolment.id,
+        cohortId: enrolment.cohort_id,
+        cohortKey: enrolment.cohort_key,
+        reference: enrolment.reference,
+        grantedBy: enrolment.granted_by,
+        // Whether this place was still live when it ended. An already-revoked enrolment ending
+        // with the account is bookkeeping; a LIVE one ending is the case an operator has to
+        // answer for, and a reader cannot tell them apart from the cohort alone.
+        wasLive: enrolment.was_live,
+      },
+    });
+  }
 
   try {
     await sql`delete from prl.users where id = ${userId}`;

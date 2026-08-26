@@ -288,7 +288,27 @@ append-only `prl.audit_log` row in the **same transaction** as the change
 `reference` (`:516-523`). `user_id` on the enrolment is CASCADE, so `POST /me/delete` removes the
 enrolment row; `audit_log.user_id` is SET NULL (`0001_initial.sql:855-856`), so what remains is a
 detached row saying that on a date, on somebody's authority, against that reference, a place was
-granted and later ended. **Counsel should be told both halves plainly:** the erasure is real, and the
+granted and later ended.
+
+**The second half of that sentence was not true until 2026-08-26, and the correction matters to
+counsel.** A CASCADE is a referential action, not a statement: it writes no audit row. Measured
+against the development database inside a rolled-back transaction — a user, a cohort, one live
+enrolment with its `enrolment.granted` entry, then `delete from prl.users` — the enrolment row went,
+the grant entry survived detached, and entries recording an end: **zero**. So the trail said a place
+had been granted and that nothing ever ended it, and reconciling "who holds a place" against the
+audit log over-counted for ever — precisely for the learners who exercised erasure. For a course
+somebody paid for that is a dispute with no record behind either side. `deleteAccount` now writes an
+`enrolment.ended_by_erasure` row per enrolment, in the same transaction and **before** the rows go,
+detached from the start, carrying the cohort, the authority, the external `reference` and whether
+the place was still live (`apps/api/src/repositories/users.ts`). A distinct event rather than
+`enrolment.revoked`, because it is a different act: a revocation is an operator withdrawing a place
+and names who did it; this is an entitlement ending because its holder erased themselves, on
+nobody's authority. `apps/api/test/account-deletion.test.ts` holds both halves — one entry per
+enrolment, and none at all for a learner who never held a place.
+
+`db/migrations/0006_cohort_enrolments.sql` still carries the old claim in its header comment, and
+**cannot be corrected**: `apps/api/scripts/migrate.mjs` records a sha256 of every applied file and
+aborts on mismatch, including for a comment. This register is the correction. **Counsel should be told both halves plainly:** the erasure is real, and the
 external reference an operator typed outlives it in a table nothing ever sweeps. `/privacy` §2 and
 §6 now say so.
 
@@ -455,7 +475,9 @@ so the log never briefly points at an account that asked to stop existing
    removed, and a grant's `detail` carries the external `reference` an operator typed
    (`apps/api/src/repositories/enrolments.ts:516-523`). So after an erasure the operator can still
    see that on a date, on an authority, against that reference, a place was granted and later ended
-   — with nobody named. Deliberate and defensible; also a thing a reader must be told, and
+   — with nobody named. The "later ended" half is an `enrolment.ended_by_erasure` row written by
+   `deleteAccount` before the cascade takes the enrolment; until 2026-08-26 nothing wrote it and the
+   trail showed a place that was never closed. See §2.9. Deliberate and defensible; also a thing a reader must be told, and
    `/privacy` §2 and §6 now tell them.
 
 ### 3.3 There is no data-export path, and for a paying user that is a gap
