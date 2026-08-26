@@ -20,6 +20,27 @@
 > ordinals, and the accessibility split, each demonstrated failing when the document drifts. Every
 > figure below was measured on this host at this SHA, and the commands are named beside them.
 
+> ## Re-measured 2026-08-26 at `95db89f4b9d0` — **the candidate below is now behind the tree**
+>
+> Read this before any number in this document. `pnpm run verify` was run again on this host at
+> commit `95db89f4b9d0`, which is **six commits and 11 files ahead** of the candidate SHA in the
+> header, and the gate results in "Gates from this SHA" are from THAT run. The images the header
+> names were built from `375303fa9714` and predate every one of those commits. **A release from
+> this document requires `pnpm run release:artifacts` at the new commit and a full re-freeze**; the
+> candidate SHA and the digests have deliberately NOT been advanced, because advancing a header over
+> measurements taken elsewhere is the exact mistake the banner below records.
+>
+> What changed, and why the counts here moved: `verify` gained a fifteenth gate, `test:layout`, and
+> the release pipeline gained the nine `verify` gates it had never run. The measured result at
+> `95db89f4b9d0`: **`pnpm run verify` passes 15 of 15 gates, 3,584 tests, 0 failures**.
+>
+> The count in this document was itself unguarded until now. `readiness-report.test.mjs` checked
+> every "N gates" claim against the supply-chain count, which was safe only by accident — `verify`
+> ran fourteen and `security:audit` runs fourteen — so the sweep agreed with both and could not tell
+> them apart. `test:layout` made them fifteen and fourteen and the sweep failed on a correct
+> document. Each claim is now attributed to the list it is about by its nearest preceding marker,
+> and a claim naming neither list is refused rather than guessed at.
+
 This candidate supersedes `b292b2ac234c`. That one was frozen with two open blockers and a
 disagreement between two reviews; reconciling the disagreement found defects neither review had,
 and an adversarial audit of the whole repository found more. Everything below is measured against
@@ -31,7 +52,9 @@ this SHA unless a line says otherwise.
 
 **PRODUCTION HARDENING COMPLETE — EXTERNAL ACCESSIBILITY CERTIFICATION REQUIRED**
 
-`pnpm run verify` exits **0** at this candidate: all fourteen gates, **3,555 tests, zero failures**,
+`pnpm run verify` exits **0**: at this candidate it was all fourteen of the gates that existed
+then and **3,555 tests, zero failures**, and at `95db89f4b9d0` — the re-measurement in the banner above — all fifteen gates and
+**3,584 tests, zero failures**,
 including a supply-chain audit of **fourteen** gates — release image signature verification,
 container log policy and the keyless-signing identity gate were all added on 2026-08-25 and all
 measured passing here. The container
@@ -226,7 +249,7 @@ shell, node path and a Node version below the `engines` floor. The base is now
 
 | Gate | Result | Capture |
 | --- | --- | --- |
-| `pnpm run verify` | **every gate passed, exit 0** — all 14 gates; **3,555 tests, 0 failures** | `verify-rules.log` |
+| `pnpm run verify` | **every gate passed, exit 0** — all 15 gates; **3,584 tests, 0 failures**. Measured at `95db89f4b9d0`, not at the candidate SHA — see the banner at the top | `verify-rules.log` |
 | `pnpm run security:audit` | **14 of 14 gates pass** — `release-image-signatures`, `log policy` and `keyless-signing-identity` were all added on 2026-08-25 | inside `verify-6.log` |
 | API tests | **994 / 994** | inside `verify-13.log` |
 | Script tests | **1,165 / 1,165** | inside `verify-13.log` |

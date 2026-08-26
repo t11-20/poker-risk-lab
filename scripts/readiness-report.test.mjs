@@ -56,6 +56,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+// The gate list is read from the `verify` script by the same parser the release-gate coverage
+// guard uses, so the report, the workflow graph and the script cannot drift into three answers.
+import { gatesInVerify } from './release-gate-coverage.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REPORT_PATH = join(REPO_ROOT, 'docs', 'production', 'final-readiness-report.md');
@@ -326,6 +329,56 @@ function readNumber(raw) {
 /** Whitespace collapsed, so a claim that the formatter wrapped is still one sentence. */
 const flat = (markdown) => markdown.replaceAll(/\s+/gu, ' ');
 
+/**
+ * Which list is this "<N> gates" claim about?
+ *
+ * Every such claim used to be checked against the supply-chain count, and that was safe only by
+ * accident: `verify` ran fourteen gates and `security:audit` runs fourteen, so a sweep that could
+ * not tell them apart agreed with both. CLAUDE.md says out loud that the equality is a coincidence
+ * over unrelated lists and that they will collide again — and they did, the moment `test:layout`
+ * made `verify` fifteen. A guard that cannot attribute a number turns the fix for one list into a
+ * failure of the other.
+ *
+ * Attribution is by NEAREST PRECEDING marker rather than by paragraph, because the verdict sentence
+ * states both counts at once: "`pnpm run verify` exits 0 … all fifteen gates … including a
+ * supply-chain audit of fourteen gates". A paragraph-scoped rule sees both markers and cannot
+ * choose. A claim with no marker in reach is REPORTED, never attributed by guess — the safe
+ * direction here is refusing to answer.
+ */
+const GATE_MARKER =
+  /`?pnpm run verify`?|`?pnpm run security:audit`?|`?security:audit`?|supply-chain audit|supply-chain gates/giu;
+const MARKER_REACH = 400;
+
+function attributeGateCounts(flatReport, counts) {
+  const problems = [];
+  const attributed = { verify: 0, supplyChain: 0 };
+  for (const match of flatReport.matchAll(new RegExp(`(${NUMBER_PATTERN})\\s+gates`, 'giu'))) {
+    const stated = readNumber(match[1]);
+    if (stated === null) continue;
+    const before = flatReport.slice(Math.max(0, match.index - MARKER_REACH), match.index);
+    const nearest = [...before.matchAll(GATE_MARKER)].at(-1);
+    if (nearest === undefined) {
+      problems.push(
+        `"${stated} gates" names neither \`verify\` nor \`security:audit\` within ${MARKER_REACH} ` +
+          'characters, so no check can tell which list it is about. Two unrelated lists are counted ' +
+          'in this document and their counts are not interchangeable — say which.',
+      );
+      continue;
+    }
+    const isVerify = /verify/iu.test(nearest[0]);
+    const expected = isVerify ? counts.verify : counts.supplyChain;
+    if (stated !== expected) {
+      problems.push(
+        `the report says "${stated} gates" of ${isVerify ? '`pnpm run verify`' : '`security:audit`'}, ` +
+          `which runs ${expected}`,
+      );
+    }
+    if (isVerify) attributed.verify += 1;
+    else attributed.supplyChain += 1;
+  }
+  return { problems, attributed };
+}
+
 const FLAT_REPORT = flat(REPORT);
 
 /**
@@ -481,14 +534,30 @@ describe('the readiness report cannot drift from the counts it reports', () => {
     const files = [...block[1].matchAll(/file:\s*'([^']+)'/gu)].map((match) => match[1]);
     assert.ok(files.length >= 10, `only ${files.length} gates parsed out of audit.mjs`);
 
-    const totals = [...FLAT_REPORT.matchAll(new RegExp(`(${NUMBER_PATTERN})\\s+gates`, 'giu'))]
-      .map((match) => readNumber(match[1]))
-      .filter((value) => value !== null);
-    assert.ok(totals.length > 0, 'the report no longer states how many supply-chain gates there are');
-    for (const total of totals) {
-      assert.equal(total, files.length, `the report says ${total} gates and audit.mjs runs ${files.length}`);
-    }
-
+    // Every "<N> gates" in the document used to be checked against THIS count, and that was only
+    // ever safe by accident: `verify` ran fourteen gates and `security:audit` runs fourteen, so a
+    // sweep that could not tell the two apart agreed with both. CLAUDE.md says out loud that the
+    // equality is a coincidence over unrelated lists and that they will collide again — and they
+    // did, the moment `test:layout` made `verify` fifteen. Attributing each claim to the list it is
+    // about is what stops the fix for one being a failure of the other.
+    //
+    // Attribution is by NEAREST PRECEDING marker rather than by paragraph, because the verdict
+    // paragraph states both counts in one sentence: "`pnpm run verify` exits 0 … all fifteen gates
+    // … including a supply-chain audit of fourteen gates". A paragraph-scoped rule sees both markers
+    // and cannot choose; the nearer one is always the right one here, and a claim with no marker
+    // within reach FAILS rather than being attributed by guess.
+    const { problems, attributed } = attributeGateCounts(FLAT_REPORT, {
+      verify: gatesInVerify(JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8'))).length,
+      supplyChain: files.length,
+    });
+    assert.deepEqual(problems, [], problems.join('\n'));
+    // A sweep of nothing is not a pass, and here it cuts both ways: a report that stopped stating
+    // either count would satisfy a loop that simply found no matches.
+    assert.ok(attributed.verify > 0, 'the report no longer states how many gates `pnpm run verify` runs');
+    assert.ok(
+      attributed.supplyChain > 0,
+      'the report no longer states how many supply-chain gates there are',
+    );
     // Each gate the report numbers, by the npm script that runs it.
     //
     // Scoped to a paragraph rather than to a character window, and the first attempt at this got it
@@ -529,6 +598,39 @@ describe('the readiness report cannot drift from the counts it reports', () => {
         'left the document is a claim that stopped being checked without anybody deciding to stop ' +
         'checking it.',
     );
+  });
+
+  it('NEGATIVE CONTROL — a gate count attributed to the wrong list is caught', () => {
+    const counts = { verify: 15, supplyChain: 14 };
+
+    // The exact shape of the verdict sentence: both counts, one sentence, correct.
+    const correct =
+      '`pnpm run verify` exits 0 at this candidate: all fifteen gates, 3,555 tests, zero failures, ' +
+      'including a supply-chain audit of fourteen gates.';
+    assert.deepEqual(attributeGateCounts(correct, counts).problems, []);
+    assert.deepEqual(attributeGateCounts(correct, counts).attributed, { verify: 1, supplyChain: 1 });
+
+    // Swap them, which is what a document written when the two counts were equal looks like after
+    // one of them moves. The old sweep — every claim measured against the supply-chain count —
+    // passed the first half of this and failed the second.
+    const swapped = correct.replace('fifteen gates', 'fourteen gates');
+    const problems = attributeGateCounts(swapped, counts).problems;
+    assert.equal(problems.length, 1, `expected exactly one problem, got: ${problems.join(' | ')}`);
+    assert.match(problems[0], /"14 gates" of `pnpm run verify`, which runs 15/u);
+
+    // And the other direction, so the check is not merely "verify must be the larger number".
+    const supplyWrong = correct.replace('audit of fourteen gates', 'audit of fifteen gates');
+    assert.match(attributeGateCounts(supplyWrong, counts).problems[0], /of `security:audit`, which runs 14/u);
+  });
+
+  it('NEGATIVE CONTROL — an unattributable gate count is refused, not guessed', () => {
+    // The safe direction. Attributing by guess would let a claim about either list be validated
+    // against the other's count, which is the failure this whole helper exists to prevent.
+    const orphan = `A run of the pipeline reported ${'x'.repeat(500)} fourteen gates.`;
+    const { problems, attributed } = attributeGateCounts(orphan, { verify: 15, supplyChain: 14 });
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /names neither `verify` nor `security:audit`/u);
+    assert.deepEqual(attributed, { verify: 0, supplyChain: 0 });
   });
 
   it('splits the accessibility assertions the way the certification and the registry do', async () => {
