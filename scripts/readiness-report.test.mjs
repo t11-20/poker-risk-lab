@@ -379,6 +379,24 @@ function attributeGateCounts(flatReport, counts) {
   return { problems, attributed };
 }
 
+/**
+ * Every passing test total the document states as a RESULT.
+ *
+ * Scoped to a total sitting beside a zero-failure verdict, because the document also quotes historic
+ * counts on purpose — "at this candidate it was … 3,555 tests passing" is a record of an earlier run
+ * and must not be dragged forward. Those read as prose; these read as results, and the distinction
+ * is carried by the phrasing rather than by a line number.
+ */
+function statedTestTotals(flatReport) {
+  return [
+    ...flatReport.matchAll(
+      new RegExp(`(${NUMBER_PATTERN})\\s+tests,\\s*(?:\\*\\*)?\\s*(?:0|zero)\\s+failures`, 'giu'),
+    ),
+  ]
+    .map((match) => readNumber(match[1]))
+    .filter((value) => value !== null);
+}
+
 const FLAT_REPORT = flat(REPORT);
 
 /**
@@ -598,6 +616,47 @@ describe('the readiness report cannot drift from the counts it reports', () => {
         'left the document is a claim that stopped being checked without anybody deciding to stop ' +
         'checking it.',
     );
+  });
+
+  it('states one test total, not two that disagree (REGRESSION)', () => {
+    // The test total is stated in the verdict and again in the gate table, and there is no source
+    // of truth for it short of running the suite — so this cannot check it is RIGHT. It can check
+    // the document agrees with itself, which is the realistic failure: one of the two gets updated
+    // after a re-measurement and the other is missed, leaving a document that reports two different
+    // runs as one. The re-measurement that added this check moved the number twice, and the second
+    // move touched five places.
+    //
+    // Scoped to totals stated beside a pass/fail verdict, because the document also quotes historic
+    // counts on purpose — "at this candidate it was … 3,555 tests" is a record of a previous run and
+    // must not be dragged forward. Those read as prose; these read as results.
+    const stated = statedTestTotals(FLAT_REPORT);
+    assert.ok(
+      stated.length >= 2,
+      `the report states a passing test total ${stated.length} time(s); with fewer than two there ` +
+        'is nothing to cross-check and this guard has stopped guarding anything',
+    );
+    assert.equal(
+      new Set(stated).size,
+      1,
+      `the report states more than one passing test total: ${[...new Set(stated)].join(', ')}. One ` +
+        'of them is from a different run.',
+    );
+  });
+
+  it('NEGATIVE CONTROL — a half-updated test total is caught, and history is not', () => {
+    const both =
+      'verify passes 15 of 15 gates, 3,586 tests, 0 failures. … all 15 gates; **3,586 tests, 0 failures**.';
+    assert.deepEqual(statedTestTotals(both), [3586, 3586]);
+
+    // The realistic failure: a re-measurement updates one of the two and misses the other, and the
+    // document then reports two different runs as one.
+    const half = both.replace('3,586 tests, 0 failures.', '3,590 tests, 0 failures.');
+    assert.deepEqual(statedTestTotals(half), [3590, 3586]);
+
+    // A historic count phrased as history is NOT a result and must not be swept in, or every
+    // re-freeze would have to rewrite the record of the run before it.
+    const history = `${both} At the candidate it was 3,555 tests passing.`;
+    assert.deepEqual(statedTestTotals(history), [3586, 3586]);
   });
 
   it('NEGATIVE CONTROL — a gate count attributed to the wrong list is caught', () => {
