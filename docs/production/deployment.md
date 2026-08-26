@@ -11,9 +11,10 @@ How a commit becomes a running production deployment: what runs, in what order, 
 ```
 commit
   │
-  ├─ 1  supply-chain gates, lint, typecheck        .github/workflows/release.yml: gates
-  ├─ 2  full test suite against a real database                                 : tests
-  ├─ 3  BUILD ONCE — both images, digests recorded                              : build
+  ├─ 1  supply-chain gates, hygiene, lint, typecheck  .github/workflows/release.yml: gates
+  ├─ 2  full suite + exhaustive + simulation, real database                     : tests
+  ├─ 2b contrast, a11y, ax tree, CSP, age gate, real Chrome                     : browser-gates
+  ├─ 3  BUILD ONCE — both images, digests recorded (needs 2 AND 2b)             : build
   ├─ 4  container CVE scan of those exact images                                : container-scan
   ├─ 5  staging deploy on those digests + smoke/E2E                             : staging
   ├─ 6  promotion check: same digest, byte for byte                             : promote
@@ -22,7 +23,11 @@ commit
   └─ 9  rollback plan, printed with this release's digests                      : rollback-plan
 ```
 
-Triggered by a `v*` tag, so a release is a deliberate act with a name and never a side effect of a push to a branch. `workflow_dispatch` runs it on demand with `dry_run` defaulting to **true**, so somebody who clicks Run without reading gets a full build, scan and staging verification and no promotion. Concurrency is `cancel-in-progress: false`: unlike CI, an in-flight release must not be cancelled, because a half-finished deploy is worse than a queued one.
+Triggered by a `v*` tag, so a release is a deliberate act with a name and never a side effect of a push to a branch. `workflow_dispatch` runs it on demand with `dry_run` defaulting to **true**, so somebody who clicks Run without reading gets a full build, scan and staging verification and no promotion.
+
+**A rehearsal is not signed, and that took two guards.** A dry run concludes *success* — every job passes, `promote` is skipped — and `release-sign.yml` asked only about the conclusion. So a `workflow_dispatch` against any branch, on the safe default, had its images pushed to GHCR and signed with a Fulcio certificate naming this repository. The signing job now additionally requires `workflow_run.event == 'push'`, which for this workflow means a `v*` tag; and `promote` writes `release-promotable.json` naming the commit, which the signing job downloads from the triggering run and refuses to proceed without. The condition prevents the job existing; the artefact is checked *inside* it, because a condition loosened later skips silently and nobody reads a run that was never created. `scripts/keyless-identity.test.mjs` holds both, and all four of its checks fail against the workflows as they stood.
+
+**The release gate now runs in the release.** `pnpm run verify` is fourteen gates and this workflow ran five of them: `security:hygiene`, `build`, `design:contrast`, `test:a11y`, `test:ax`, `test:csp`, `test:age-gate`, `test:exhaustive` and `test:simulation` ran in `ci.yml` and nowhere here. A commit that failed the contrast budget, shipped an inaccessible control, lost the CSP negative control, broke the age gate — a legal control — or evaluated seven-card hands wrongly was built into an immutable artefact, scanned, staged and offered for signing, with this pipeline green throughout. `scripts/release-gate-coverage.mjs` reads the `for gate in` clause of the `verify` script and this workflow's `needs` graph and fails when they disagree, so a fifteenth gate is a two-file change by construction. It runs inside `test:scripts`, which is to say inside this pipeline. Concurrency is `cancel-in-progress: false`: unlike CI, an in-flight release must not be cancelled, because a half-finished deploy is worse than a queued one.
 
 Top-level permissions are `contents: read` and nothing more. No job needs a token today. When a registry appears, the push job — and only the push job — gets `packages: write`, or better `id-token: write` for OIDC-federated credentials, which stores no long-lived secret in the repository at all.
 
@@ -30,7 +35,7 @@ Top-level permissions are `contents: read` and nothing more. No job needs a toke
 
 | Stage | Executes on a runner today? |
 | --- | --- |
-| 1 gates, 2 tests, 3 build, 4 scan, 5 staging, 6 promotion check, 9 rollback plan | **yes** |
+| 1 gates, 2 tests, 2b browser gates, 3 build, 4 scan, 5 staging, 6 promotion check, 9 rollback plan | **yes** |
 | 7 production deploy | **no** — `NOT WIRED` |
 | 8 post-deploy verification | **no** — `NOT WIRED` |
 

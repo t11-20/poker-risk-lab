@@ -36,6 +36,13 @@ equal by coincidence and are unrelated.
 
 If the release was built by CI rather than a workstation, 2.4 must report **KEYLESS** and the
 identity in `deploy/signing/keyless-policy.json` must be the workflow that actually built it.
+
+CI signs **tag pushes only**. `release-sign.yml` requires the triggering run to have been a `push`
+— `release.yml`'s only push trigger is `tags: v*` — and to have produced `release-promotable.json`,
+which its `promote` job writes and a dry run does not. A `workflow_dispatch` rehearsal therefore
+produces no signature at all, which is the intended outcome and not a fault to chase: until this
+changed, such a rehearsal against any branch had its images pushed to GHCR and signed under this
+repository's identity, because a dry run concludes *success*. If a release needs signing, tag it.
 `"repository": null` in that file means nobody has set the GitHub owner yet — it warns on every run
 and fails outright if a keyless record is committed while it is null.
 
