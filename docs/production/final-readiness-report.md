@@ -1,6 +1,6 @@
 # Final readiness report
 
-**Candidate SHA:** `375303fa971b327ea3a174396b8f5e868062afab`
+**Candidate SHA:** `0b01f90ce510759ccc253692a11b179787e9e0db`
 **Tree at freeze:** clean — the release manifest records `dirty: false`.
 **Branch:** `production-hardening-2`
 **Date:** 2026-08-26
@@ -20,10 +20,29 @@
 > ordinals, and the accessibility split, each demonstrated failing when the document drifts. Every
 > figure below was measured on this host at this SHA, and the commands are named beside them.
 
-> ## Re-measured 2026-08-26 at `7e861ae0a9f1` — **the candidate below is now behind the tree**
+> ## Rebuilt 2026-08-26 at `0b01f90ce510` for a HIGH CVE — **staging is still on the old pair**
+>
+> `security:audit` blocked the release: **CVE-2026-14456**, HIGH, in libcrypto3/libssl3 3.5.7-r0 —
+> the OpenSSL shipped by the pinned `node:24.18.0-alpine3.24` digest. Four findings across both
+> images, 0 unfixable, in the exact digests staging was and still is running. A fresh upstream
+> advisory against artefacts built hours earlier, not a regression in this tree.
+>
+> `Dockerfile.api` and `Dockerfile.web` now install the fixed 3.5.8-r0 from alpine/v3.24/main,
+> pinned exactly. Rebuilt from a clean tree and rescanned: **api 0 findings at or above HIGH, web 0,
+> 0 unfixable, 0 allowed**. No CVE was allowlisted; the allowlist is still empty.
+>
+> **What has NOT happened, and it is the reason this document is not a release.** The new pair is
+> built and scanned only. It has not been pushed, not signed, and **not deployed** — `pnpm run
+> staging up` was refused by this environment's permission policy, so staging is still serving the
+> superseded, CVE-affected digests and `pnpm run staging status` reports the mismatch loudly, which
+> is correct. Every staging-derived measurement below — the strict smoke, the alert verification,
+> the drills — was taken against the OLD pair and has not been re-taken. Before a release:
+> `pnpm run staging up`, then `release:sign`, then re-freeze this document.
+>
+> ## Re-measured 2026-08-26 at `7e861ae0a9f1`
 >
 > Read this before any number in this document. `pnpm run verify` was run again on this host at
-> commit `7e861ae0a9f1`, which is **eight commits ahead** of the candidate SHA in the
+> commit `7e861ae0a9f1`, which is **behind the candidate SHA** now recorded in the
 > header, and the gate results in "Gates from this SHA" are from THAT run. The images the header
 > names were built from `375303fa9714` and predate every one of those commits. **A release from
 > this document requires `pnpm run release:artifacts` at the new commit and a full re-freeze**; the
@@ -298,10 +317,16 @@ that has to reconcile a digest with the manifest's, which is why the drift surfa
 **The digests this candidate built, signed and runs are the ones below**, and they are what
 `deploy/staging/release-manifest.json` and `deploy/staging/release-signatures.json` both record:
 
-| Service | Digest built, pushed and **signed** | Registry reference |
+| Service | Digest built | Superseded digest (built, pushed and **signed**) |
 | --- | --- | --- |
-| api | `sha256:5411626265ada1324ede2544034bfe2699e5106469319e106429c17c34bfb75d` | `127.0.0.1:5001/prl-api@sha256:541162…` |
-| web | `sha256:6b1043cc9edbdce67870d365f74809199be5cc0b5f905b77747138dce9fa1f5f` | `127.0.0.1:5001/prl-web@sha256:6b1043…` |
+| api | `sha256:94872a9abc937547b0d98441e4496718a9a5f879b2ea4f6c17a33be48a9d4083` | `sha256:5411626265ada1324ede2544034bfe2699e5106469319e106429c17c34bfb75d` |
+| web | `sha256:e1c04b0e4f5f1d940280c09cda74e23981120d9f9fdacb72b3995199b9864af3` | `sha256:6b1043cc9edbdce67870d365f74809199be5cc0b5f905b77747138dce9fa1f5f` |
+
+**The superseded pair is the one that was pushed, signed and run**, at
+`127.0.0.1:5001/prl-api@sha256:541162…` and `…/prl-web@sha256:6b1043…`. It is kept visible rather
+than deleted because it is what staging is serving as this is written, and because it is the pair
+CVE-2026-14456 was found in. The new pair has been built and scanned and is **neither pushed, nor
+signed, nor deployed** — see the banner at the top.
 
 The registry digest equals the build digest for both — checked rather than assumed: the manifest is
 re-fetched from the registry over HTTP and re-hashed in process, and `pnpm run release:sign` refuses

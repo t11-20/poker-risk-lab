@@ -125,6 +125,19 @@ const SUPERSEDED = new Map([
     'sha256:aa894fcfab4157a8ce5bd864cf9d6aaafa447f4ed70c114cc6cc2ba23bd320a3',
     'the web digest from the same stale push',
   ],
+  // The pair CVE-2026-14456 was found in, and the pair staging is STILL serving: the rebuilt
+  // images were refused a deploy by this environment's permission policy. Kept visible rather than
+  // deleted because every staging-derived measurement in the report — the strict smoke, the alert
+  // verification, the drills — was taken against these two and has not been re-taken, and because
+  // deleting the digest a HIGH advisory landed on would erase the only record of what was affected.
+  [
+    'sha256:5411626265ada1324ede2544034bfe2699e5106469319e106429c17c34bfb75d',
+    'the api digest built at 375303fa9714, pushed and signed, affected by CVE-2026-14456 and still deployed',
+  ],
+  [
+    'sha256:6b1043cc9edbdce67870d365f74809199be5cc0b5f905b77747138dce9fa1f5f',
+    'the web digest from the same build, affected by the same advisory and still deployed',
+  ],
 ]);
 
 /** Every full-length digest the report states, in order, deduplicated. */
