@@ -427,6 +427,22 @@ jobs:
   # started API. `--strict` on the smoke test promotes its warnings to failures —
   # two of them are security properties (rate limiting present, an unknown hand
   # answering 404 rather than 500) and neither could fail a run before.
+  #
+  # ## Why the WEB app is started here and not only the API
+  #
+  # It was not, and sections 10 and 11 of the smoke test — the CSP and security
+  # headers on a rendered page, and the PROD-048 guest bootstrap — both begin by
+  # fetching `PRL_WEB_ORIGIN` and, when nothing answers, `warn` and return. Under
+  # `--strict` that warning is a failure, so this job could never go green;
+  # without `--strict` it would be sixteen checks that silently did not run.
+  # Reproduced locally on the same shape (API up, nothing serving the web origin):
+  # `node scripts/smoke-test.mjs --origin … --strict` printed "web origin … is not
+  # reachable (fetch failed)  (a warning, promoted to a failure by --strict)"
+  # TWICE and exited 1 with 49 checks passed. With the web app started, the same
+  # command exits 0 with 65 — the difference is exactly those two sections.
+  #
+  # `pnpm run build` rather than `build:packages`, because `next start` serves a
+  # production build and there is otherwise nothing to serve.
   # -------------------------------------------------------------------------
   end-to-end:
     name: Smoke + load (running server)
@@ -462,6 +478,12 @@ jobs:
       PORT: '3001'
       HOST: 127.0.0.1
       PUBLIC_WEB_ORIGIN: http://localhost:3000
+      # Where the smoke test looks for the rendered page. It is also the smoke
+      # test's own default, and it is written here anyway: the value has to agree
+      # with PUBLIC_WEB_ORIGIN above (the API's CORS and WebSocket Origin
+      # allowlist) and with the port the web app is started on below, and three
+      # things that must agree should be visible in one place.
+      PRL_WEB_ORIGIN: http://localhost:3000
       SESSION_COOKIE_SECRET: ci-only-not-a-secret-32-chars-xx
       # A multi-table load run opens one guest session per seat, so the shipped limits
       # refuse it — correctly. Raised here for the harness rather than lowered in the
@@ -486,8 +508,17 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Build packages
-        run: pnpm run build:packages
+      - name: Build
+        # The whole workspace, not just `build:packages`: the web app is started
+        # below and `next start` serves a production build.
+        #
+        # NODE_ENV is overridden for this step because the job-level value is the
+        # API's `development` — `next build` under a non-standard NODE_ENV is not
+        # the artefact `next start` expects to serve, and the smoke test's CSP
+        # section reads the headers of exactly that artefact.
+        env:
+          NODE_ENV: production
+        run: pnpm run build
 
       - name: Wait for PostgreSQL
         env:
@@ -556,6 +587,35 @@ jobs:
           cat /tmp/api.log
           exit 1
 
+      - name: Start the web app
+        # The subject of smoke-test sections 10 and 11. Same shape as the API
+        # above: backgrounded, then polled, with the log kept so a failure below
+        # can be attributed.
+        #
+        # PORT and NODE_ENV are overridden for this step alone. The job-level
+        # values are the API's (3001, development, because `loadConfig` refuses a
+        # production process without a real SESSION_COOKIE_SECRET), and inheriting
+        # them here would put Next on the API's port in a mode `next start` does
+        # not serve. PRL_API_ORIGIN is a literal address: the API binds
+        # 127.0.0.1, and `localhost` on a runner may resolve to ::1 first.
+        env:
+          PORT: '3000'
+          NODE_ENV: production
+          PRL_API_ORIGIN: http://127.0.0.1:3001
+        run: |
+          pnpm --filter @prl/web start > /tmp/web.log 2>&1 &
+          echo $! > /tmp/web.pid
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://localhost:3000/learn > /dev/null; then
+              echo "web is up after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the web app never became healthy"
+          cat /tmp/web.log
+          exit 1
+
       - name: Smoke test (strict)
         run: pnpm run test:smoke -- --strict
 
@@ -570,9 +630,23 @@ jobs:
         if: always()
         run: cat /tmp/api.log || true
 
+      - name: Web log
+        if: always()
+        run: cat /tmp/web.log || true
+
       - name: Stop the API
         if: always()
         run: kill "$(cat /tmp/api.pid)" || true
+
+      - name: Stop the web app
+        if: always()
+        # `pnpm --filter … start` is a wrapper, so killing the recorded pid can
+        # leave Next holding the port (see ManagedServer in scripts/a11y-audit.mjs).
+        # The runner is destroyed either way; both are named so the intent is not
+        # left to that.
+        run: |
+          kill "$(cat /tmp/web.pid)" || true
+          pkill -f 'next start' || true
 
   # -------------------------------------------------------------------------
   # 5c. The statistical evidence that the opponent profiles actually differ.

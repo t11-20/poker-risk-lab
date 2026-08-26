@@ -101,8 +101,18 @@ permissions:
 # signatures for the same digest, and the second one arriving mid-verification is
 # a confusing failure rather than a wrong one. Not cancel-in-progress — a
 # half-finished signing run should finish.
+#
+# Keyed on the COMMIT, not on `github.event.workflow_run.id`. That was the group
+# until an adversarial review read it: a run id is unique per run by
+# construction, so every `sign` job sat in a group of one and the guard serialised
+# nothing at all — the exact case it was written for (two `Release` runs of the
+# same commit completing together, because a tag was moved and re-pushed) is the
+# case where two run ids differ. `release-sign.mjs` tags the pushed image
+# `<shortSha>` (its `tagLabel`), and `docker build` is not reproducible, so those
+# two runs push two different digests under one tag and the tag ends up on
+# whichever finished last. Grouping by head_sha is what makes them queue.
 concurrency:
-  group: release-sign-${{ github.event.workflow_run.id }}
+  group: release-sign-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 env:

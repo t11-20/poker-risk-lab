@@ -44,6 +44,7 @@ import {
   checkWorkflowPinning,
   collectPinnedImages,
   discoverContainerFiles,
+  discoverLocalActionFiles,
   listWorkflowFiles,
   matrixValues,
   parsePinnedReference,
@@ -261,6 +262,114 @@ describe('action pinning', () => {
     const gate = new Gate('t');
     checkWorkflowPinning(gate, 'ci.yml', 'jobs:\n  containers:\n    runs-on: ubuntu-24.04\n');
     assert.deepEqual(gate.failures, [], failureText(gate));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// YAML FLOW styles, which every reader in this file was blind to
+//
+// The defect: `uses:`, `runs-on:`, `image:` and `container:` are all read by
+// regexes anchored at `^\s*`, and YAML's flow mappings put a key anywhere on the
+// line. GitHub's parser accepts both. Measured against the exported checks, one
+// form per call, everything else in the workflow correctly pinned:
+//
+//     - uses: actions/checkout@v7                     FAIL, 1 judged
+//     - {uses: actions/checkout@v7}                   pass, 0 judged
+//     steps: [{uses: actions/checkout@v7}]            pass, 0 judged
+//     - uses: / newline / actions/checkout@v7         pass, 0 judged
+//     a: {runs-on: ubuntu-latest}                     pass, 0 declarations
+//     pg: {image: postgres:16}                        pass, 0 judged
+//
+// And nothing said so: the counts this file returns were a note, so the run
+// printed "1 workflow(s), 0 action reference(s)" and a green tick. Same class as
+// `FROM node AS node` below and as the `runs-on` spellings above.
+//
+// `checkNothingWasUnread` refuses a line carrying one of those four keys in a
+// shape the readers cannot see, rather than teaching four regexes to parse flow
+// YAML. Each row below was re-run against the fixed gate: all five now fail.
+// ---------------------------------------------------------------------------
+
+describe('keys the readers cannot see', () => {
+  const unread = [
+    ['a step written as a flow mapping', 'jobs:\n  a:\n    steps:\n      - {uses: actions/checkout@v7}\n'],
+    ['a steps list written as a flow sequence', 'jobs:\n  a:\n    steps: [{uses: actions/checkout@v7}]\n'],
+    [
+      'a uses whose value is on the next line',
+      'jobs:\n  a:\n    steps:\n      - uses:\n          actions/checkout@v7\n',
+    ],
+    ['a whole job written as a flow mapping', 'jobs:\n  a: {runs-on: ubuntu-latest, steps: []}\n'],
+    [
+      'a service container written as a flow mapping',
+      'jobs:\n  a:\n    services:\n      pg: {image: postgres:16}\n',
+    ],
+  ];
+
+  for (const [what, text] of unread) {
+    it(`FAILS on ${what}`, () => {
+      const gate = new Gate('t');
+      checkWorkflowPinning(gate, 'w.yml', text);
+      assert.match(failureText(gate), /is in a shape this gate cannot read/, `${what} was accepted`);
+    });
+  }
+
+  it('does not fire on the block forms every real workflow uses', () => {
+    // The whole risk of this check is a false positive on the shapes the
+    // repository already writes. `runCiPinningGate` over the real files is the
+    // other half of this assertion and lives in the first describe block.
+    const gate = new Gate('t');
+    checkWorkflowPinning(
+      gate,
+      'w.yml',
+      'jobs:\n  a:\n    runs-on: ubuntu-24.04\n    container:\n' +
+        `      image: node:22@sha256:${'a'.repeat(64)}\n` +
+        '    services:\n      pg:\n' +
+        `        image: postgres:16@sha256:${'b'.repeat(64)}\n` +
+        '    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n',
+    );
+    assert.deepEqual(gate.failures, [], failureText(gate));
+  });
+
+  it('does not read `Base-image digest freshness` as an image key', () => {
+    // release.yml has a step by that name. A hyphen before `image` is not a YAML
+    // key boundary, and a gate that fails on its own step names gets deleted.
+    const gate = new Gate('t');
+    checkWorkflowPinning(
+      gate,
+      'release.yml',
+      'jobs:\n  a:\n    steps:\n      - name: Base-image digest freshness\n',
+    );
+    assert.deepEqual(gate.failures, [], failureText(gate));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Local actions — the two-hop bypass
+//
+// `checkWorkflowPinning` clears `uses: ./…` because "a local action lives in this
+// repository and is reviewed with it". The gate then read `.github/workflows`
+// and nothing else, so `.github/actions/setup/action.yml` containing
+// `uses: actions/checkout@v7` passed the release audit having never been opened.
+// ---------------------------------------------------------------------------
+
+describe('local action files', () => {
+  it('discovers an action.yml anywhere but the skipped directories', () => {
+    const root = mkdtempSync(join(tmpdir(), 'prl-actions-'));
+    after(() => rmSync(root, { recursive: true, force: true }));
+    mkdirSync(join(root, '.github', 'actions', 'setup'), { recursive: true });
+    writeFileSync(join(root, '.github', 'actions', 'setup', 'action.yml'), 'runs:\n  using: composite\n');
+    mkdirSync(join(root, 'node_modules', 'someone', 'thing'), { recursive: true });
+    writeFileSync(join(root, 'node_modules', 'someone', 'thing', 'action.yml'), 'runs:\n');
+    assert.deepEqual(discoverLocalActionFiles(root), ['.github/actions/setup/action.yml']);
+  });
+
+  it('FAILS on an unpinned uses inside a composite action', () => {
+    const gate = new Gate('t');
+    checkWorkflowPinning(
+      gate,
+      '.github/actions/setup/action.yml',
+      'runs:\n  using: composite\n  steps:\n    - uses: actions/checkout@v7\n',
+    );
+    assert.match(failureText(gate), /action is not pinned to a full commit SHA/);
   });
 });
 

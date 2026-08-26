@@ -84,6 +84,40 @@
  * `ci-pinning.test.mjs` feeds every spelling in the table above, including the
  * quoted one that started this.
  *
+ * ## Every reader here is a line regex, and YAML has flow styles
+ *
+ * The same defect one level up. `uses:`, `runs-on:`, `image:` and `container:` are
+ * all read by patterns anchored at `^\s*`, and a YAML flow mapping puts a key
+ * anywhere on the line. GitHub's parser accepts both spellings. Measured against
+ * the exported checks, one form per call, everything else correctly pinned:
+ *
+ *   | `- uses: actions/checkout@v7`                    | FAIL, 1 judged |
+ *   | `- {uses: actions/checkout@v7}`                  | **pass, 0 judged** |
+ *   | `steps: [{uses: actions/checkout@v7}]`           | **pass, 0 judged** |
+ *   | `- uses:` + `    actions/checkout@v7`            | **pass, 0 judged** |
+ *   | `a: {runs-on: ubuntu-latest, steps: []}`         | **pass, 0 declarations** |
+ *   | `pg: {image: postgres:16}`                       | **pass, 0 judged** |
+ *
+ * And the note said so without saying anything: "1 workflow(s), 0 action
+ * reference(s)" over a green tick. `scripts/keyless-identity.mjs` learned the flow
+ * form for `permissions:` after an adversarial review found it blind to it; this
+ * file reads the same four files and did not.
+ *
+ * `checkNothingWasUnread` refuses a line carrying one of those keys in a shape the
+ * readers cannot see, rather than teaching four regexes to parse flow YAML. The
+ * remedy is block style, which is what every workflow here already writes.
+ *
+ * ## And the local action nobody opened
+ *
+ * `uses: ./…` is cleared here because "a local action lives in this repository and
+ * is reviewed with it" — a statement about review, not about this gate, which read
+ * `.github/workflows/*.yml` and nothing else. A composite action containing
+ * `uses: actions/checkout@v7` was therefore a two-hop bypass: the workflow line
+ * passed because it was local, and the local file was never read.
+ * `discoverLocalActionFiles` finds every `action.yml`/`action.yaml` in the tree and
+ * holds it to the same rule. There are none today, so it carries no minimum — the
+ * subject is the file somebody adds next week.
+ *
  * ## The one thing an `image:` may be other than a digest
  *
  * `docker-compose.staging.yml` deploys the two application images **by digest**,
@@ -197,6 +231,47 @@ export function listWorkflowFiles(workflowDir) {
     .filter((e) => e.isFile() && /\.ya?ml$/.test(e.name))
     .map((e) => e.name)
     .sort();
+}
+
+/**
+ * Every `action.yml` / `action.yaml` in the repository — a LOCAL action, composite
+ * or docker, reachable from a workflow as `uses: ./path/to/it`.
+ *
+ * `checkWorkflowPinning` clears `./…` on the grounds that "a local action lives in
+ * this repository and is reviewed with it". That is a statement about review, not
+ * about this gate: the gate read `.github/workflows/*.yml` and nothing else, so a
+ * composite action containing `uses: actions/checkout@v7` was a two-hop bypass of
+ * the rule this file exists to enforce — the workflow line passed because it was
+ * local, and the local file was never opened. There are none in this repository
+ * today, which is why this is discovery with no minimum rather than a
+ * scan-of-nothing assertion: the file somebody adds next week is the subject.
+ *
+ * @param {string} root
+ * @returns {string[]} repo-relative paths
+ */
+export function discoverLocalActionFiles(root) {
+  const found = [];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        walk(full);
+        continue;
+      }
+      if (entry.isFile() && /^action\.ya?ml$/.test(entry.name)) {
+        found.push(relative(root, full).split('\\').join('/'));
+      }
+    }
+  };
+  walk(root);
+  return found.sort();
 }
 
 /**
@@ -487,10 +562,93 @@ export function checkRunnerPinning(gate, label, text) {
 }
 
 /**
+ * The four keys this file's line-oriented readers judge, wherever they appear on
+ * a line rather than only at the start of one.
+ *
+ * `[\s{,[]` and not `[-]`: `- uses:` puts a space between the dash and the key,
+ * while `Base-image digest freshness` would otherwise read as an `image` key.
+ */
+const READ_KEY_MENTION = /(?:^|[\s{,[])(uses|runs-on|image|container)\s*:/g;
+
+/**
+ * Whether the reader for `key` would have read this line at all.
+ *
+ * Every one of them is anchored with `^\s*`, which is the whole point: YAML's
+ * FLOW styles put a key anywhere on the line, and a key the gate never read is a
+ * key it never cleared. `uses` additionally needs a value on the same line —
+ * `- uses:` with the reference on the next line is a plain multi-line scalar
+ * that GitHub accepts and `/^\s*-?\s*uses:\s*(\S+)/` does not match.
+ */
+function readsKeyOnLine(key, line) {
+  if (key === 'uses') return /^\s*-?\s*uses:\s*\S/.test(line);
+  if (key === 'runs-on') return /^\s*runs-on:/.test(line);
+  if (key === 'image') return /^\s*image:/.test(line);
+  return /^\s*container:/.test(line);
+}
+
+/**
+ * Check: nothing on this line carries one of the four keys in a shape the readers
+ * above cannot see.
+ *
+ * ## Why a mismatch is a failure rather than a smaller number
+ *
+ * Every reader in this file is a line regex anchored at the start of the line, so
+ * all four are blind to YAML's flow styles, which GitHub's parser accepts exactly
+ * as it accepts the block ones. Measured against the exported checks, one form per
+ * call, everything else in the workflow correctly pinned:
+ *
+ *   | `- uses: actions/checkout@v7`            | FAIL, 1 judged   |
+ *   | `- {uses: actions/checkout@v7}`          | **pass, 0 judged** |
+ *   | `steps: [{uses: actions/checkout@v7}]`   | **pass, 0 judged** |
+ *   | `- uses:` + newline + `    actions/checkout@v7` | **pass, 0 judged** |
+ *   | `a: {runs-on: ubuntu-latest}`            | **pass, 0 declarations** |
+ *   | `pg: {image: postgres:16}`               | **pass, 0 judged** |
+ *
+ * The `judged`/`runs-on` counts this file returns are a NOTE, not an assertion, so
+ * the run said "1 workflow(s), 0 action reference(s)" and printed a green tick.
+ * That is the same defect as `FROM node AS node` two functions down and the same
+ * defect as the `runs-on` spellings in the header, and it is the reason the
+ * Dockerfile check's counter was made load-bearing. This is that counter for the
+ * workflow reader, and it is per-line so the message can name the line.
+ *
+ * `scripts/keyless-identity.mjs` already learned the flow-mapping form for
+ * `permissions:` after an adversarial review found it blind to it. This file did
+ * not, and the two gates read the same files.
+ *
+ * The failure mode of this check is a false positive on a legitimate flow-style
+ * line, resolved by writing it in block style — which is what every workflow in
+ * this repository already does. The failure mode it replaces is silence.
+ *
+ * @param {Gate} gate
+ * @param {string} line  already passed through `uncomment`
+ * @param {string} at   `<file>:<line>`, which already carries the file name
+ */
+function checkNothingWasUnread(gate, line, at) {
+  READ_KEY_MENTION.lastIndex = 0;
+  const seen = new Map();
+  for (const match of line.matchAll(READ_KEY_MENTION)) {
+    const key = match[1] ?? '';
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+  }
+  for (const [key, mentions] of seen) {
+    const read = readsKeyOnLine(key, line) ? 1 : 0;
+    if (mentions <= read) continue;
+    gate.fail(
+      `a \`${key}:\` at ${at} is in a shape this gate cannot read: ${line.trim()}`,
+      'the readers in ci-pinning.mjs are anchored at the start of a line, so a key written in a YAML ' +
+        'FLOW mapping (`- {uses: …}`, `[{image: …}]`) or with its value on the following line is never ' +
+        'judged at all — and an unjudged reference used to print a green tick. Write it in block style, ' +
+        'one key per line, which is what every workflow in this repository already does.',
+    );
+  }
+}
+
+/**
  * Check: every `uses:` is a full commit SHA, a local action, or a digest-pinned
  * container action; every container the job runs in or beside is digest-pinned;
- * and no job runs on a floating `*-latest` runner label (`checkRunnerPinning`,
- * which reads all five spellings of `runs-on` — see the header).
+ * no job runs on a floating `*-latest` runner label (`checkRunnerPinning`, which
+ * reads all five spellings of `runs-on` — see the header); and nothing carrying
+ * one of those keys went unread (`checkNothingWasUnread`).
  *
  * @param {Gate} gate
  * @param {string} label  how to name this file in a message
@@ -503,6 +661,7 @@ export function checkWorkflowPinning(gate, label, text) {
   for (const [index, rawLine] of text.split('\n').entries()) {
     const line = uncomment(rawLine);
     const at = `${label}:${index + 1}`;
+    checkNothingWasUnread(gate, line, at);
 
     const uses = /^\s*-?\s*uses:\s*(\S+)/.exec(line);
     if (uses) {
@@ -749,6 +908,13 @@ export function runCiPinningGate() {
       runners += parseRunsOn(text).length;
     }
 
+    // Local actions, held to the same rule as the workflows that call them. See
+    // `discoverLocalActionFiles` for the two-hop bypass this closes.
+    const localActions = discoverLocalActionFiles(REPO_ROOT);
+    for (const name of localActions) {
+      actionRefs += checkWorkflowPinning(gate, name, readFileSync(join(REPO_ROOT, name), 'utf8'));
+    }
+
     const { dockerfiles, composeFiles } = discoverContainerFiles(REPO_ROOT);
     if (dockerfiles.length === 0) {
       gate.fail('no Dockerfile found', 'the base-image pinning check examined nothing');
@@ -766,7 +932,8 @@ export function runCiPinningGate() {
     }
 
     gate.note(
-      `${workflows.length} workflow(s), ${actionRefs} action reference(s), ${runners} runs-on ` +
+      `${workflows.length} workflow(s) and ${localActions.length} local action file(s), ` +
+        `${actionRefs} action reference(s), ${runners} runs-on ` +
         `declaration(s), ${dockerfiles.length} Dockerfile(s) with ${baseImages} external base image(s), ` +
         `${composeFiles.length} compose file(s) with ${composeImages} image reference(s)`,
     );

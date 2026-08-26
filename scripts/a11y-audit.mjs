@@ -1251,6 +1251,18 @@ function checkAttrValue(name, value, spec, byId) {
 // ===========================================================================
 
 /**
+ * The port an origin names, or `fallback` when it names none.
+ *
+ * Both servers are started with an explicit `PORT` rather than letting them pick
+ * their own default: `--base-url`/`--api-url` say where the audit will look, and a
+ * server listening somewhere else is a run that scores whatever else answered.
+ */
+function portFromOrigin(origin, fallback) {
+  const port = new URL(origin).port;
+  return port === '' ? fallback : port;
+}
+
+/**
  * A child server this script owns and must clean up.
  *
  * Detached, and signalled by process group, for the same reason as
@@ -1421,16 +1433,37 @@ try {
         'api',
         ['--filter', '@prl/api', 'start'],
         new URL('/api/v1/health', options.apiUrl).toString(),
-        { NODE_ENV: 'production' },
+        // Do NOT force NODE_ENV=production on the API. `loadConfig` refuses a
+        // production process that has no `SESSION_COOKIE_SECRET` and no
+        // `PUBLIC_WEB_ORIGIN`, and `--with-api` is used by exactly one caller —
+        // the `a11y` job in ci.yml — which supplies neither. Measured with that
+        // job's environment: `NODE_ENV=production DATABASE_URL=… node
+        // apps/api/dist/server.js` prints "Refusing to start: 2 configuration
+        // problems" and exits 78, so `waitUntilReady` threw "api exited (78)
+        // before it was ready" and the job could never go green. `verify` runs
+        // this gate WITHOUT `--with-api`, which is why nothing local ever saw it.
+        // `ax-tree-audit.mjs` reached the same conclusion for the same reason.
+        //
+        // `PUBLIC_WEB_ORIGIN` is this audit's own web origin: it is one allowlist
+        // for CORS and the WebSocket Origin check, so without it the pages the
+        // audit scores render their error state rather than their content.
+        {
+          PORT: portFromOrigin(options.apiUrl, '3001'),
+          HOST: '127.0.0.1',
+          PUBLIC_WEB_ORIGIN: new URL(options.baseUrl).origin,
+        },
       );
       servers.push(api);
       console.log(dim('  starting the API...'));
       api.start();
       await api.waitUntilReady(options.readyTimeoutSeconds);
     }
+    // The WEB server keeps NODE_ENV=production: its production build is the
+    // markup this audit exists to score. Only the API drops it, above.
     const web = new ManagedServer('web', ['--filter', '@prl/web', 'start'], options.baseUrl, {
       NODE_ENV: 'production',
       PRL_API_ORIGIN: options.apiUrl,
+      PORT: portFromOrigin(options.baseUrl, '3000'),
     });
     servers.push(web);
     console.log(dim('  starting the web app...'));
