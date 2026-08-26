@@ -1300,7 +1300,7 @@ not.**
    legible and usable — and now check the two transparency preferences as well (§7.2), which
    `prefers-reduced-transparency` and `prefers-contrast` make trivially testable in DevTools.
 8. Run **`pnpm run verify`** before claiming done. It is the release gate and it is the whole
-   list: fourteen gates including `lint`, `typecheck`, `build`, `test`, `design:contrast` and
+   list: sixteen gates including `lint`, `typecheck`, `build`, `test`, `design:contrast` and
    `test:a11y`, each reported `PASS`/`FAIL`, all of them run even after one fails. (This said
    *eleven*, which was the count when the line was written; the loop in `package.json` has since
    gained `test:ax`, `test:csp` and `test:age-gate`, and that loop is the authority.) The `&&`

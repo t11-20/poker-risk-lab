@@ -163,7 +163,7 @@ jobs:
         run: node scripts/supply-chain/ci-pinning.mjs --freshness
 
       - name: Repository hygiene
-        # The second of the fourteen gates, and one this workflow did not run. It
+        # The second of the sixteen gates, and one this workflow did not run. It
         # is the check that first-party source carries no C0 control characters, no
         # secrets and none of the shapes the campaign snapshot lists — cheap, and
         # exactly the sort of gate whose absence from a RELEASE is worst.
@@ -266,7 +266,7 @@ jobs:
         run: pnpm run test
 
       - name: Enumerate every seven-card hand
-        # `test:exhaustive` and `test:simulation` are two of the fourteen gates and
+        # `test:exhaustive` and `test:simulation` are two of the sixteen gates and
         # ran nowhere in this workflow. They are the two that decide whether the
         # thing being released EVALUATES POKER CORRECTLY, which makes their absence
         # from the release pipeline the least defensible of the nine.

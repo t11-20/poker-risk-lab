@@ -105,7 +105,7 @@ procedure, including the one-API-process rule, is in `RUNBOOK.md`.
 ## 4. Verification
 
 ```bash
-pnpm run verify          # the release gate: 14 gates, every one of them run and reported
+pnpm run verify          # the release gate: 16 gates, every one of them run and reported
 pnpm run test            # build:packages, then unit + integration + scripts
 pnpm run test:all        # the above, plus exhaustive, simulation, a11y and ax
 pnpm run security:audit  # 11 supply-chain gates
@@ -338,7 +338,7 @@ paragraph; the numbers are that run's output, not a carry-forward.
 
 | Audit finding | State | How that was established |
 |---|---|---|
-| **P0-4** `verify` was a `&&` chain, so `db:verify` had never executed inside it | Fixed | `verify` is now a loop over its whole gate list — fourteen gates today, and the number is not the finding — that prints `PASS`/`FAIL` for each, runs all of them regardless, and exits 1 listing every failure. Read from `package.json`; the control flow was executed with stand-in gates and two deliberate failures — both were reported and the exit was 1 |
+| **P0-4** `verify` was a `&&` chain, so `db:verify` had never executed inside it | Fixed | `verify` is now a loop over its whole gate list — sixteen gates today, and the number is not the finding — that prints `PASS`/`FAIL` for each, runs all of them regardless, and exits 1 listing every failure. Read from `package.json`; the control flow was executed with stand-in gates and two deliberate failures — both were reported and the exit was 1 |
 | **OPS-015** `RUNBOOK` §11.4 backup/restore produced an unservable database | Fixed | Rehearsed end to end 2026-08-19. The old `--no-owner --no-privileges` restore exits **0** and then `db:verify` exits **1** with `prl_app: lacks USAGE on schema prl`. The corrected procedure — `migrate.mjs roles`, then `pg_restore --exit-on-error` with ownership kept — gives `db:verify` exit 0 and `db:migrate:status` exit 0 |
 | **OPS-008** the least-privilege database model was never exercised | Fixed | `docker-compose.yml` and `.env.example` connect as `prl_api`; `db/seeds/0002_dev_login_roles.sql` creates it as a member of `prl_app` and asserts it holds `USAGE` and not `CREATE` on schema `prl` |
 | **OPS-003** no rollback path and no roll-forward-only policy in its place | Fixed | `migrate.mjs down` refuses and lists four alternatives (run, exit 1); `up` refuses an undeclared destructive statement; `apps/api/scripts/migrate.test.mjs` covers it, 10/10 pass |

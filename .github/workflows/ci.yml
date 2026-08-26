@@ -890,7 +890,7 @@ jobs:
   # `test:ax` costs one extra step; putting it in `browser-gates` would cost
   # that job a second Postgres service and the property its header claims.
   #
-  # `test:ax` is one of the fourteen gates `pnpm run verify` blocks a release on,
+  # `test:ax` is one of the sixteen gates `pnpm run verify` blocks a release on,
   # and it ran in no workflow at all: before this job,
   # `grep -n 'test:ax' .github/workflows/*.yml` matched nothing. A change that
   # broke the tree therefore passed CI — including the one failure mode this
