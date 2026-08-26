@@ -36,8 +36,15 @@
 > staging up` was refused by this environment's permission policy, so staging is still serving the
 > superseded, CVE-affected digests and `pnpm run staging status` reports the mismatch loudly, which
 > is correct. Every staging-derived measurement below — the strict smoke, the alert verification,
-> the drills — was taken against the OLD pair and has not been re-taken. Before a release:
-> `pnpm run staging up`, then `release:sign`, then re-freeze this document.
+> the drills — was taken against the OLD pair and has not been re-taken.
+>
+> **The order to recover, and it is `go-live.md`'s, not the one this banner first gave.** Signing is
+> step 2.3, *before* the §3 deployment — `release:artifacts` (done), `security:containers` (done, 0
+> blocking), then **`release:sign`**, then `security:image-provenance`, then **`staging up`**, then
+> re-freeze this document. Signing after deploying would put staging on digests nothing had signed
+> and leave `security:audit` red across the whole rehearsal, which is the window in which somebody
+> decides the gate is noise. This banner said "staging up, then release:sign" and that was
+> backwards.
 >
 > ## Re-measured 2026-08-26 at `7e861ae0a9f1`
 >
