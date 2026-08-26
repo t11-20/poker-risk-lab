@@ -20,31 +20,38 @@
 > ordinals, and the accessibility split, each demonstrated failing when the document drifts. Every
 > figure below was measured on this host at this SHA, and the commands are named beside them.
 
-> ## Rebuilt 2026-08-26 at `0b01f90ce510` for a HIGH CVE — **staging is still on the old pair**
+> ## Rebuilt for a HIGH CVE, then signed and deployed — **closed 2026-08-27**
 >
 > `security:audit` blocked the release: **CVE-2026-14456**, HIGH, in libcrypto3/libssl3 3.5.7-r0 —
 > the OpenSSL shipped by the pinned `node:24.18.0-alpine3.24` digest. Four findings across both
-> images, 0 unfixable, in the exact digests staging was and still is running. A fresh upstream
-> advisory against artefacts built hours earlier, not a regression in this tree.
+> images, 0 unfixable, in the exact digests staging was running. A fresh upstream advisory against
+> artefacts built hours earlier, not a regression in this tree. It was caught by the container CVE
+> gate on a routine `verify`, with nobody reading an advisory feed.
 >
-> `Dockerfile.api` and `Dockerfile.web` now install the fixed 3.5.8-r0 from alpine/v3.24/main,
-> pinned exactly. Rebuilt from a clean tree and rescanned: **api 0 findings at or above HIGH, web 0,
-> 0 unfixable, 0 allowed**. No CVE was allowlisted; the allowlist is still empty.
+> `Dockerfile.api` and `Dockerfile.web` install the fixed 3.5.8-r0 from alpine/v3.24/main, pinned
+> exactly, in `base` so every derived stage carries it. **No CVE was allowlisted; the allowlist is
+> empty.**
 >
-> **What has NOT happened, and it is the reason this document is not a release.** The new pair is
-> built and scanned only. It has not been pushed, not signed, and **not deployed** — `pnpm run
-> staging up` was refused by this environment's permission policy, so staging is still serving the
-> superseded, CVE-affected digests and `pnpm run staging status` reports the mismatch loudly, which
-> is correct. Every staging-derived measurement below — the strict smoke, the alert verification,
-> the drills — was taken against the OLD pair and has not been re-taken.
+> **Done, in `go-live.md`'s order — sign at §2.3, deploy at §3:**
 >
-> **The order to recover, and it is `go-live.md`'s, not the one this banner first gave.** Signing is
-> step 2.3, *before* the §3 deployment — `release:artifacts` (done), `security:containers` (done, 0
-> blocking), then **`release:sign`**, then `security:image-provenance`, then **`staging up`**, then
-> re-freeze this document. Signing after deploying would put staging on digests nothing had signed
-> and leave `security:audit` red across the whole rehearsal, which is the window in which somebody
-> decides the gate is noise. This banner said "staging up, then release:sign" and that was
-> backwards.
+> | Step | Result |
+> | --- | --- |
+> | `release:artifacts` at `0b01f90ce510` | both images rebuilt from a clean tree, `dirty: false` |
+> | `security:containers` | **api 0, web 0** at or above HIGH; 0 unfixable, 0 allowed |
+> | `release:sign` | both published to the promotion registry, **signed by digest**, each with a CycloneDX 1.7 SBOM attestation (api 103 components, web 61); registry digest equals the build digest for both |
+> | `security:image-provenance` | exit 0, posture **KEY** |
+> | `security:audit` | **15 of 15 pass**, `release-image-signatures` among them |
+> | `staging up` | migrations applied, **71-check strict smoke over TLS**, X-Forwarded-For overwrite confirmed against 24 forged client addresses, `staging-verified.json` written |
+> | `staging status` | all four services running/healthy, **api and web both match the manifest** |
+> | `security:containers` against the **deployed** digests | **0 blocking** |
+>
+> Signing before deploying is the order that matters: the reverse would put staging on digests
+> nothing had signed and leave `security:audit` red across the whole rehearsal — the window in which
+> somebody decides the gate is noise. An earlier version of this banner had it backwards.
+>
+> Every staging-derived measurement below the fold was taken against the SUPERSEDED pair and is
+> marked as such where it appears. The strict smoke has been re-run against the new pair and passed;
+> the alert verification and the reliability drills have **not** been re-taken.
 >
 > ## Re-measured 2026-08-26 at `7e861ae0a9f1`
 >
@@ -337,16 +344,19 @@ that has to reconcile a digest with the manifest's, which is why the drift surfa
 **The digests this candidate built, signed and runs are the ones below**, and they are what
 `deploy/staging/release-manifest.json` and `deploy/staging/release-signatures.json` both record:
 
-| Service | Digest built | Superseded digest (built, pushed and **signed**) |
+| Service | Digest built, pushed, **signed** and **deployed** | Superseded digest |
 | --- | --- | --- |
 | api | `sha256:94872a9abc937547b0d98441e4496718a9a5f879b2ea4f6c17a33be48a9d4083` | `sha256:5411626265ada1324ede2544034bfe2699e5106469319e106429c17c34bfb75d` |
 | web | `sha256:e1c04b0e4f5f1d940280c09cda74e23981120d9f9fdacb72b3995199b9864af3` | `sha256:6b1043cc9edbdce67870d365f74809199be5cc0b5f905b77747138dce9fa1f5f` |
 
-**The superseded pair is the one that was pushed, signed and run**, at
-`127.0.0.1:5001/prl-api@sha256:541162…` and `…/prl-web@sha256:6b1043…`. It is kept visible rather
-than deleted because it is what staging is serving as this is written, and because it is the pair
-CVE-2026-14456 was found in. The new pair has been built and scanned and is **neither pushed, nor
-signed, nor deployed** — see the banner at the top.
+**The left-hand pair is the live one**: built at `0b01f90ce510`, published to the promotion
+registry, signed by digest with a CycloneDX SBOM attestation each, and deployed to staging on
+2026-08-27, where `staging status` confirms both services match the manifest and the container scan
+reports 0 findings at or above HIGH against those exact digests.
+
+The superseded pair is kept visible rather than deleted because it is the pair **CVE-2026-14456 was
+found in**, and deleting the digests a HIGH advisory landed on would erase the only record of what
+was affected. It was itself pushed and signed while it was current.
 
 The registry digest equals the build digest for both — checked rather than assumed: the manifest is
 re-fetched from the registry over HTTP and re-hashed in process, and `pnpm run release:sign` refuses
