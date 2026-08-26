@@ -40,7 +40,11 @@ import { ACCOUNT_DELETE_CONFIRMATION } from '@prl/contracts';
 import { buildApp, registerRoutes } from '../src/app.ts';
 import { closeDatabase, configureDatabase, getSql, isDatabaseConfigured } from '../src/db.ts';
 import { resetAppMetricsForTests } from '../src/observability/metrics.ts';
-import { awaitPendingAuditWrites } from '../src/observability/telemetry.ts';
+import {
+  awaitPendingAuditWrites,
+  failedAuditWrites,
+  recordSecurityAudit,
+} from '../src/observability/telemetry.ts';
 import authRoutes from '../src/routes/auth.ts';
 import { DB_SKIP_REASON, testConfig } from './helpers/hands-app.ts';
 
@@ -94,14 +98,37 @@ interface AuditRow {
 }
 
 /**
+ * A mark taken BEFORE the action, carrying both things `waitForAuditRow` has to bound against.
+ *
+ * The timestamp and the failure count have to be sampled at the same moment, and that moment is
+ * before the request — not when the wait begins. Sampling the count inside `waitForAuditRow` looks
+ * equivalent and is not: `recordSecurityAudit` is fire-and-forget, so by the time the response has
+ * been asserted and the wait starts, a refused write has ALREADY been counted. The wait would then
+ * see no change, conclude the write was merely slow, and print the misdiagnosis this exists to
+ * prevent. The negative control below caught exactly that, in this file, in the first version.
+ *
+ * Binding them together in one value is deliberate: two loose `const`s are two things to remember
+ * at each call site, and the one that gets forgotten is the one with no visible consequence.
+ */
+interface AuditWatch {
+  readonly since: Date;
+  readonly failedBefore: number;
+}
+
+function watchAudit(): AuditWatch {
+  return { since: new Date(), failedBefore: failedAuditWrites() };
+}
+
+/**
  * Waits for one audit row matching `event`, created at or after `since`.
  *
  * The `since` bound matters: this suite runs against a shared development database that may hold
  * rows from a previous run, and a test that would pass on somebody else's leftovers is not a
  * test. Returns null on the deadline so the caller can produce a message naming what it wanted.
  */
-async function waitForAuditRow(event: string, since: Date): Promise<AuditRow | null> {
+async function waitForAuditRow(event: string, watch: AuditWatch): Promise<AuditRow> {
   const sql = getSql();
+  const { since, failedBefore } = watch;
   // Wait on the WRITE, not on a clock. `recordSecurityAudit` is fire-and-forget by design — a
   // security event must never delay the request it describes — which made it unobservable here,
   // so this used to poll. That got worse rather than better: the deadline went from five seconds
@@ -123,9 +150,37 @@ async function waitForAuditRow(event: string, since: Date): Promise<AuditRow | n
        limit 1`;
     const row = rows[0];
     if (row !== undefined) return row;
+    // Stop the moment a write is known to have been refused. Polling on is not just slow, it is
+    // wrong: the row is never going to arrive, and fifteen seconds of waiting is what made this
+    // read as a timing problem in the first place.
+    if (failedAuditWrites() > failedBefore) break;
     await new Promise((resolve) => setTimeout(resolve, AUDIT_POLL_MS));
   }
-  return null;
+
+  // Say WHICH of the two happened, rather than reporting a clock.
+  //
+  // This used to end `return null` and the caller asserted "no audit row appeared within the
+  // deadline", which is the one thing the reader already knew. The two causes want opposite
+  // responses: a write that was refused is a real failure of the thing under test, and a write
+  // still in flight on a saturated pool is a deadline to raise. This test failed once at 15,024 ms
+  // against a 15,000 ms deadline while builds saturated the machine, and the message could not tell
+  // anyone which it had been — so the next person raises the deadline and hopes, which is how a
+  // guard turns into a formality.
+  //
+  // `awaitPendingAuditWrites` has already settled every write started before this point, so a
+  // failure counted since then IS the write for this event: it was attempted, `report` swallowed it
+  // to keep the request safe, and no amount of extra waiting will produce the row.
+  const failed = failedAuditWrites() - failedBefore;
+  throw new Error(
+    failed > 0
+      ? `no audit row for "${event}": ${failed} audit write(s) were REFUSED by the database and ` +
+          'swallowed by recordSecurityAudit. This is not a slow test — waiting longer cannot help. ' +
+          'Look for the "a security event could not be written to the audit log" report.'
+      : `no audit row for "${event}" within ${AUDIT_DEADLINE_MS} ms, and no audit write failed. ` +
+          'The write settled and the row is not visible to this pooled connection, so the row was ' +
+          'either never started (the route did not record the event — a real defect) or is still ' +
+          'landing under load (raise AUDIT_DEADLINE_MS).',
+  );
 }
 
 describe('the security audit trail is actually written', {
@@ -150,7 +205,7 @@ describe('the security audit trail is actually written', {
   });
 
   it('records a guest account creation, and does NOT record the name the learner typed', async () => {
-    const since = new Date();
+    const watch = watchAudit();
     const csrf = await csrfPair(app);
     const created = await app.inject({
       method: 'POST',
@@ -163,8 +218,7 @@ describe('the security audit trail is actually written', {
     assert.equal(created.statusCode, 201, created.body);
     const userId = (JSON.parse(created.body) as { user: { id: string } }).user.id;
 
-    const row = await waitForAuditRow('auth.guest.created', since);
-    assert.ok(row !== null, 'no audit row appeared for auth.guest.created within the deadline');
+    const row = await waitForAuditRow('auth.guest.created', watch);
     assert.equal(row.user_id, userId, 'the row must name the account that was created');
 
     const serialised = JSON.stringify(row.detail ?? {});
@@ -175,7 +229,7 @@ describe('the security audit trail is actually written', {
   });
 
   it('records a deliberate sign-out, and does not record one that had nothing to end', async () => {
-    const since = new Date();
+    const watch = watchAudit();
     const csrf = await csrfPair(app);
     const created = await app.inject({
       method: 'POST',
@@ -193,8 +247,16 @@ describe('the security audit trail is actually written', {
     });
     assert.equal(out.statusCode, 204, out.body);
 
-    const row = await waitForAuditRow('auth.session.revoked', since);
-    assert.ok(row !== null, 'no audit row appeared for auth.session.revoked within the deadline');
+    // Not existence alone. A revocation recorded against nobody is an audit trail that cannot
+    // answer the question it exists for — whose session ended — and `waitForAuditRow` throwing is
+    // now the only thing standing behind the row's presence, so the row's CONTENT wants asserting
+    // here rather than being read and dropped.
+    const row = await waitForAuditRow('auth.session.revoked', watch);
+    assert.equal(
+      row.user_id,
+      (JSON.parse(created.body) as { user: { id: string } }).user.id,
+      'the revocation must name the account whose session ended',
+    );
 
     // The other half: a sign-out by a caller with no session is idempotent by design, and
     // recording it would fill the log with the retries and lost cookies it exists to make
@@ -220,7 +282,7 @@ describe('the security audit trail is actually written', {
   });
 
   it('records an erasure WITHOUT naming who asked for it', async () => {
-    const since = new Date();
+    const watch = watchAudit();
     const csrf = await csrfPair(app);
     const created = await app.inject({
       method: 'POST',
@@ -244,8 +306,7 @@ describe('the security audit trail is actually written', {
     // so rather than silently exercising the refusal path and calling it a pass.
     assert.equal(erased.statusCode, 200, `erasure did not succeed: ${erased.body}`);
 
-    const row = await waitForAuditRow('auth.account.deleted', since);
-    assert.ok(row !== null, 'no audit row appeared for auth.account.deleted within the deadline');
+    const row = await waitForAuditRow('auth.account.deleted', watch);
     assert.equal(
       row.user_id,
       null,
@@ -257,5 +318,49 @@ describe('the security audit trail is actually written', {
     const sql = getSql();
     const remaining = await sql<{ id: string }[]>`select id from prl.users where id = ${body.user.id}`;
     assert.equal(remaining.length, 0, 'the erased account must not still exist');
+  });
+  /**
+   * NEGATIVE CONTROL for the diagnosis above, run against a write the database really refuses.
+   *
+   * The two ways this suite can fail look identical from outside — the row is not there — and want
+   * opposite responses. A refused write is a defect in the thing under test and no deadline can
+   * help; a slow write is a deadline to raise. Before this, both printed "no audit row appeared
+   * within the deadline", so the cheap reading of a failure was always "raise it and move on".
+   *
+   * `audit_log_event_shape` gives a real refusal without a mock: the column only accepts
+   * `^[a-z0-9]+([.][a-z0-9_]+)*$`, so an event with spaces and capitals is rejected by PostgreSQL,
+   * `recordSecurityAudit` swallows it exactly as it would swallow a pool timeout, and the row never
+   * arrives. That is the shape of the case the old message could not name.
+   */
+  it('NEGATIVE CONTROL — a refused write is diagnosed as refused, not as a slow one', async () => {
+    const failures: string[] = [];
+    const watch = watchAudit();
+
+    recordSecurityAudit(
+      // Cast deliberately: the type exists to stop this being written by accident, and this test
+      // is the one place that wants a write the database will throw out.
+      { event: 'NOT A REAL EVENT' as Parameters<typeof recordSecurityAudit>[0]['event'] },
+      (message) => failures.push(message),
+    );
+    await awaitPendingAuditWrites();
+
+    assert.deepEqual(
+      failures,
+      ['a security event could not be written to the audit log'],
+      'the refusal must reach onFailure; if it does not, the write was never attempted',
+    );
+    assert.equal(
+      failedAuditWrites() - watch.failedBefore,
+      1,
+      'the counter the diagnosis reads did not move, so the message cannot tell the two cases apart',
+    );
+
+    // And the message the reader actually sees says so. Asserted on the text because the text IS
+    // the fix — a counter nobody surfaces would leave the next failure just as mute.
+    await assert.rejects(
+      () => waitForAuditRow('NOT A REAL EVENT', watch),
+      /REFUSED by the database/u,
+      'the timeout still reports a clock rather than the cause',
+    );
   });
 });

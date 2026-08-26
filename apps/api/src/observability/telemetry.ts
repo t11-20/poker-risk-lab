@@ -437,6 +437,23 @@ export type SecurityAuditEvent =
  */
 const pendingAuditWrites = new Set<Promise<unknown>>();
 
+/**
+ * Audit writes that were started and did not land, since this process began.
+ *
+ * `recordSecurityAudit` reports a failed write through `onFailure` and swallows it, which is right
+ * — a security event must never fail the request it describes. The cost is that a test polling for
+ * the row cannot tell "the write is slow" from "the write was refused and you will wait forever".
+ * `security-audit-trail.test.ts` timed out at 15,024 ms against a 15,000 ms deadline while the
+ * machine was saturated, and its message — "no audit row appeared within the deadline" — could not
+ * say which of the two had happened. This counter lets it say.
+ */
+let auditWriteFailures = 0;
+
+/** For tests: how many audit writes have been reported as failed. */
+export function failedAuditWrites(): number {
+  return auditWriteFailures;
+}
+
 function trackAuditWrite(write: Promise<unknown>): void {
   pendingAuditWrites.add(write);
   void write.finally(() => {
@@ -492,6 +509,7 @@ export function recordSecurityAudit(
 ): void {
   if (!isDatabaseConfigured()) return;
   const report = (error: unknown): void => {
+    auditWriteFailures += 1;
     onFailure('a security event could not be written to the audit log', {
       event: 'audit-write',
       auditEvent: entry.event,
