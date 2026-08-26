@@ -125,9 +125,26 @@ jobs:
   sign:
     name: Sign the release images keylessly
     # A failed release must not be signed. `workflow_run` fires on completion
-    # whatever the conclusion, so this is the difference between signing what
-    # passed the gates and signing whatever came out of them.
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # whatever the conclusion, so the first clause is the difference between
+    # signing what passed the gates and signing whatever came out of them.
+    #
+    # The second clause closes a hole the first one made comfortable. A REHEARSAL
+    # concludes success: `release.yml` offers `workflow_dispatch` with
+    # `dry_run: true` as its default — deliberately, so that clicking Run without
+    # reading is the safe choice — and that run builds images from whatever branch
+    # was chosen, passes staging, skips promotion and goes green. On conclusion
+    # alone this job then pushed those branch images to GHCR and signed them with
+    # a Fulcio certificate naming this repository. The safe default made the
+    # rehearsal the LIKELY path into signing.
+    #
+    # `release.yml`'s only `push` trigger is `tags: v*`, so requiring `push` here
+    # means a signature can only ever come from a tag. `release-promotable.json`
+    # below is the independent half: this clause reasons about how the run was
+    # started, that artefact records what the run actually decided to do.
+    # One line, and it stays one line: in a folded scalar a MORE-indented
+    # continuation keeps its newline instead of folding to a space, which would
+    # hand GitHub's expression parser a literal line break.
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -224,6 +241,45 @@ jobs:
           path: release-images
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
+
+      - name: Download the promotion attestation
+        # Written by `release.yml`'s `promote` job, which runs on a tag push or an
+        # explicit `dry_run: false` and nowhere else. If it is absent the download
+        # FAILS the job, which is the intended outcome: this is the one artefact in
+        # a release that means "promoted", and its absence means there was nothing
+        # to sign.
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: release-promotable
+          path: deploy/staging
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: The release must have been promoted, not rehearsed
+        # Belt and braces with the `if:` above, on purpose. A condition is one
+        # edit away from being loosened for a good reason, and a loosened one
+        # SKIPS silently — the job simply does not appear, and nobody reads a
+        # workflow run that was never created. This is inside the job, so it fails
+        # in the log of the run that tried.
+        run: |
+          set -euo pipefail
+          node -e "
+            const attestation = require('./deploy/staging/release-promotable.json');
+            const triggered = process.env.TRIGGERING_SHA;
+            const problems = [];
+            if (attestation.promotable !== true) problems.push('the attestation does not say promotable');
+            if (attestation.sha !== triggered) {
+              problems.push(\`the promotion was for \${attestation.sha}, this run is for \${triggered}\`);
+            }
+            if (problems.length > 0) {
+              console.error('refusing to sign:');
+              for (const problem of problems) console.error('  - ' + problem);
+              process.exit(1);
+            }
+            console.log(\`promoted: \${attestation.sha} via \${attestation.event} \${attestation.ref}\`);
+          "
+        env:
+          TRIGGERING_SHA: ${{ github.event.workflow_run.head_sha }}
 
       - name: The manifest must describe the commit the triggering run built
         # Without this, a `Release` run for commit A and a manifest artefact for

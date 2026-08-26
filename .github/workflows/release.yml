@@ -727,6 +727,48 @@ jobs:
         # that could.
         run: node scripts/staging.mjs promote
 
+      - name: Record that this release was PROMOTED, not rehearsed
+        # The artefact `release-sign.yml` refuses to sign without.
+        #
+        # Signing keyed off the triggering run's conclusion alone, and a rehearsal
+        # concludes success: `workflow_dispatch` with the default `dry_run: true`
+        # against any branch runs the gates, builds the images, passes staging,
+        # skips this job — and the release run goes green. `release-sign.yml` then
+        # pushed those branch images to GHCR and signed them with a Fulcio
+        # certificate naming this repository. The safe-by-default input made the
+        # rehearsal path the LIKELY one.
+        #
+        # This job only runs on a tag push or an explicit `dry_run: false`, so its
+        # output is the only artefact in the release that means "promoted". A
+        # branch name cannot forge it and a conclusion cannot imply it.
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('node:fs');
+            const manifest = require('./deploy/staging/release-manifest.json');
+            fs.writeFileSync(
+              'deploy/staging/release-promotable.json',
+              \`\${JSON.stringify({
+                promotable: true,
+                sha: manifest.commit.sha,
+                event: process.env.GITHUB_EVENT_NAME,
+                ref: process.env.GITHUB_REF,
+                runId: process.env.GITHUB_RUN_ID,
+              }, null, 2)}\n\`,
+            );
+          "
+          cat deploy/staging/release-promotable.json
+
+      - name: Upload the promotion attestation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-promotable
+          path: deploy/staging/release-promotable.json
+          # `error`, not `warn`: an absent attestation would make every later
+          # signing run fail for a reason nobody could see from here.
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Record the digests being promoted
         run: |
           {

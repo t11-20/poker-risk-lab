@@ -537,3 +537,93 @@ describe('the policy schema is checked before the shape is trusted', () => {
     assert.equal(parseKeylessPolicy([]).policy, null);
   });
 });
+
+/**
+ * WHAT may be signed, as distinct from WHO signed it.
+ *
+ * Everything above this point is about identity: the certificate names this
+ * repository's `release-sign.yml` on `refs/heads/main`, and a signature from
+ * anywhere else is refused. All of it was true of a release built from an
+ * arbitrary branch, because the only question the signing job asked about the run
+ * that triggered it was whether it concluded successfully.
+ *
+ * A REHEARSAL concludes successfully. `release.yml` offers `workflow_dispatch`
+ * with `dry_run: true` as the default — deliberately, so that clicking Run without
+ * reading is the safe choice — and such a run builds images from the chosen
+ * branch, scans them, brings the whole staging stack up against them, skips
+ * promotion, and goes green. The signing workflow then pushed those images to
+ * GHCR and bound a Fulcio certificate naming this repository to them. The safe
+ * default made the rehearsal the likely way in.
+ *
+ * Two independent guards now, because they fail differently. The `if:` reasons
+ * about how the run STARTED and prevents the job existing at all — a `push`, which
+ * for `release.yml` means a `v*` tag. `release-promotable.json` records what the
+ * run DECIDED, is written only by the `promote` job, and is checked inside the
+ * job so that a loosened condition fails in a log somebody is reading rather than
+ * skipping a job nobody looks for.
+ */
+describe('a rehearsal must not be signed', () => {
+  const RELEASE_TEXT = readFileSync(join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
+
+  /** The `if:` on the `sign` job — read from the file, not assumed. */
+  const signCondition = (text) => /\n {4}if:\s*(.+)\n/u.exec(text)?.[1] ?? '';
+
+  it('signing requires BOTH a successful conclusion and a tag push (REGRESSION)', () => {
+    const condition = signCondition(WORKFLOW_TEXT);
+    assert.match(condition, /workflow_run\.conclusion == 'success'/u, 'a failed release could be signed');
+    assert.match(
+      condition,
+      /workflow_run\.event == 'push'/u,
+      'the signing job no longer requires a push, so a `workflow_dispatch` rehearsal — whose ' +
+        'default is `dry_run: true` — concludes success and gets its branch images pushed to GHCR ' +
+        "and signed under this repository's identity",
+    );
+    // One line. In a folded scalar a more-indented continuation keeps its newline
+    // rather than folding to a space, which hands GitHub's expression parser a
+    // literal line break; this caught exactly that while the change was written.
+    assert.ok(!condition.includes('\n'), 'the condition spans lines; fold it or GitHub sees a break');
+  });
+
+  it('signing consumes a promotion attestation from the triggering run', () => {
+    assert.match(WORKFLOW_TEXT, /name: release-promotable/u, 'the attestation is no longer downloaded');
+    assert.match(
+      WORKFLOW_TEXT,
+      /promotable !== true/u,
+      'the attestation is downloaded and not CHECKED, which is a file nobody reads',
+    );
+    assert.match(
+      WORKFLOW_TEXT,
+      /attestation\.sha !== triggered/u,
+      "a promotion of a DIFFERENT commit would satisfy the check; the artefact must name this run's sha",
+    );
+  });
+
+  it('the promote job is the only thing that writes the attestation (REGRESSION)', () => {
+    assert.match(RELEASE_TEXT, /name: release-promotable/u, 'release.yml no longer uploads it');
+    assert.match(
+      RELEASE_TEXT,
+      /if-no-files-found: error/u,
+      'an absent attestation must fail where it is produced, not silently at the signer',
+    );
+    // The whole value of the artefact is that the job writing it cannot run for a
+    // rehearsal. If that condition goes, the artefact means nothing.
+    assert.match(
+      RELEASE_TEXT,
+      /if: \$\{\{ github\.event_name == 'push' \|\| inputs\.dry_run == false \}\}/u,
+      'the `promote` job is no longer gated on a real release, so its attestation proves nothing',
+    );
+  });
+
+  it('NEGATIVE CONTROL — dropping either guard is caught', () => {
+    const withoutPush = WORKFLOW_TEXT.replace(" && github.event.workflow_run.event == 'push'", '');
+    assert.notEqual(withoutPush, WORKFLOW_TEXT, 'the clause moved; this control is stale');
+    assert.doesNotMatch(signCondition(withoutPush), /workflow_run\.event == 'push'/u);
+
+    const withoutCheck = WORKFLOW_TEXT.replace('promotable !== true', 'promotable !== undefined');
+    assert.notEqual(withoutCheck, WORKFLOW_TEXT, 'the attestation check moved; this control is stale');
+    assert.doesNotMatch(withoutCheck, /promotable !== true/u);
+
+    const withoutUpload = RELEASE_TEXT.replace('name: release-promotable', 'name: something-else');
+    assert.doesNotMatch(withoutUpload, /name: release-promotable/u);
+  });
+});
