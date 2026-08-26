@@ -69,7 +69,12 @@ function sitCallSites(source: string): { method: string; line: number; text: str
 
     const declaration =
       /^ {2}(?:private |public |protected )?(?:static )?(?:async )?([A-Za-z_]\w*)\s*[(<]/u.exec(line);
-    if (declaration !== null) method = declaration[1];
+    // `noUncheckedIndexedAccess`: a capture group is `string | undefined` to the compiler even
+    // when the pattern cannot match without it. Guarded rather than asserted, so a future edit to
+    // the pattern that really does drop the group leaves the last method name in place instead of
+    // writing `undefined` into it.
+    const declaredName = declaration?.[1];
+    if (declaredName !== undefined) method = declaredName;
     if (/\.sit\(/u.test(line)) found.push({ method, line: index + 1, text: trimmed });
   });
   return found;

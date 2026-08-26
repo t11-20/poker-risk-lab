@@ -44,8 +44,8 @@ It exists because `.prl-play .prl-coach__section .prl-stat__pair` shipped as
 `grid-template-columns: minmax(0, 1fr) auto`. A bare `auto` track is floored at max-content, so a
 value that was a sentence took the whole row and the `1fr` label collapsed to nothing with the
 sentence painted across it. **Every gate was green** — `design:contrast` composites in real Chrome,
-`test:ax` makes 111 computed-tree assertions, 3,555 unit tests passed — and it was found by looking
-at a screenshot. The first probe written for it missed it too, because it compared the two
+`test:ax` made 111 computed-tree assertions (114 since 2026-08-26), 3,555 unit tests passed — and it
+was found by looking at a screenshot. The first probe written for it missed it too, because it compared the two
 elements' **bounding boxes**: when a track collapses the boxes do not overlap, the *text* overflows
 the box. If you write a layout check, measure the glyphs.
 

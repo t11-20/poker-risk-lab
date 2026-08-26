@@ -22,19 +22,23 @@
  * the assertions out of the document, refuse an incomplete result, stamp it with the commit it was
  * run against — and leaves the one part a machine cannot do, which is listening, to the person.
  *
- * ## It asks for 7 of the 72, and says so
+ * ## It asks for 4 of the 72, and says so
  *
  * A large share of those 72 were never really about speech. "The theme control announces as a radio
  * group with three options, the current one selected" is a fact about the accessibility tree, and a
- * machine reads that tree better than a person listening to it can. **65 of the 72 are now checked
+ * machine reads that tree better than a person listening to it can. **68 of the 72 are now checked
  * on every run of `pnpm run test:ax`** (`scripts/ax-assertions.mjs`, one check per assertion ID),
- * and this session presents only the **7** whose subject is the speech itself: whether a prompt was
- * read twice, in what order the words arrived, where a virtual cursor goes past the end of a modal.
- * Nineteen of those 65 were in this session until the gate grew three fixtures — a live table over
+ * and this session presents only the **4** that are left: where a virtual cursor goes past the end
+ * of a modal, and three states no fixture reaches honestly.
+ * Nineteen of those 68 were in this session until the gate grew three fixtures — a live table over
  * a real socket, a hand it played and replayed at `/review/<handId>`, and a second web app with no
  * API behind it — because "needs a live table" and "needs the API down" were statements about the
- * gate rather than about speech. Two more moved because they were application DEFECTS filed as
- * certification limits; section 5 of the document names both.
+ * gate rather than about speech. Three more moved because they were application DEFECTS filed as
+ * certification limits, and three more on 2026-08-26 because the reason each had been left was
+ * answerable: a prompt read twice has exactly one cause inside the tree (2.4), "no score anywhere"
+ * is decidable by running the quiz twice and requiring the two ends to read the same (2.9), and a
+ * server refusal needs one task rather than a second actor (3.19). Section 5 of the document names
+ * every one of them.
  *
  * Which set a row is in is decided by the document's own `Checked by` column, not by anything here,
  * so re-marking a row moves it with no code change — and `screen-reader-certify.test.mjs` asserts
@@ -43,10 +47,12 @@
  * automated set AND out of this session at once, leaving it covered by nobody. That is the failure
  * the mapping test exists to prevent.
  *
- * **This does not weaken the blocker.** The 7 still need a person with headphones, and until one
- * has worked through them the certification is UNVERIFIED. What changed is that it is now ten
- * minutes rather than an afternoon, and that a regression in any of the other 65 fails
- * `pnpm run verify` on the day it lands instead of waiting for a session nobody has scheduled.
+ * **This does not weaken the blocker.** The 4 still need a person, and until one has worked through
+ * them the certification is UNVERIFIED. What changed is that it is now five minutes rather than an
+ * afternoon, and that a regression in any of the other 68 fails `pnpm run verify` on the day it
+ * lands instead of waiting for a session nobody has scheduled. One of the 4 — 4.2 — is a defect
+ * this session is holding rather than a limit of it: the answer was measured and it is SILENT. See
+ * section 5 of the document.
  *
  * ## It reads the document; it does not restate it
  *
@@ -359,7 +365,9 @@ async function main() {
       '  Those checks are scripts/ax-assertions.mjs, one per assertion ID, against the rendered\n' +
         '  accessibility tree in real Chrome. They certify NOTHING — they establish that the facts\n' +
         `  those rows rest on are still true. The ${needsAPerson(everyRow).length} rows below are the ` +
-        'ones whose subject is\n  the speech itself, and no gate in this repository can decide one of them.',
+        'ones no gate in this\n  repository can decide: a virtual cursor past the end of a modal, a count that ' +
+        'arrives\n  with its own full page load, and two states no honest fixture reaches. Section 5 of ' +
+        'the\n  document gives the reason for each, one line each — read them before you start.',
     ),
   );
   if (!options.all) {

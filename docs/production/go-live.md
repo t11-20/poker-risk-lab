@@ -22,8 +22,8 @@ gates are.
 | 1.2 | `pnpm run verify` | `=== verify: every gate passed ===`, exit 0 |
 | 1.3 | `pnpm run db:verify` | `every documented schema security property holds` |
 
-`verify` is fourteen gates and `security:audit` inside it is another fourteen. The two numbers are
-equal by coincidence and are unrelated.
+`verify` is fifteen gates and `security:audit` inside it is fourteen. The two counts are over
+unrelated lists; read each off its own.
 
 ## 2. The artefacts (machine, ~10 min)
 
@@ -76,13 +76,23 @@ armed and attached to a phone is a fact about an account this repository does no
 
 | Step | Command | Pass looks like |
 | --- | --- | --- |
-| 5.1 | `pnpm run test:ax` | 111 checks, 0 failed — 65 of the 72 certification assertions |
-| 5.2 **PERSON** | `pnpm run certify:screen-reader` | the remaining **7**, with VoiceOver or NVDA, ~10 min |
+| 5.1 | `pnpm run test:ax` | 114 checks, 0 failed — 68 of the 72 certification assertions |
+| 5.2 **PERSON** | `pnpm run certify:screen-reader` | the remaining **4**, with VoiceOver or NVDA, ~5 min |
 
-The 7 are the ones whose subject is the utterance itself — whether something is read twice, what a
-virtual cursor does past the end of a modal — plus two states no honest fixture reaches: a failing
-deck proof, which would need a server that lies about a deal, and the root-layout boundary, which
-would need a deliberately broken build.
+The 4 are: what a virtual cursor does past the end of a modal (7.4 — measured, 29 content-bearing
+nodes behind the open sheet are still in the computed tree, because the sheet holds the background
+in scope with `aria-modal` rather than `inert`, so reachability is the reader's own behaviour); plus
+three states no honest fixture reaches — a failing deck proof, which would need a server that lies
+about a deal (6.7); the root-layout boundary, which would need a deliberately broken build (8.3);
+and the Scenario Lab's filter count (4.2).
+
+**4.2 is a defect, not a limit, and a reviewer will record SILENT against it.** The filter is a plain
+`GET` form, so submitting it replaces the document; measured in Chrome 151, the summary region takes
+zero mutations on the new page — it arrives already holding "Showing 14 of 36 scenarios.", and a
+live region that arrives with its text announces nothing. Nothing else says the count either: the
+title is identical before and after. Closing it is a product change — the count in the document
+title of a filtered view is the zero-JavaScript fix, and `ScenarioFilters` ships no JavaScript on
+purpose — so it is listed here rather than automated away.
 
 `test:ax` starts a **second** web app of its own on `:3459` with no API behind it, for assertion
 8.2. It is torn down with the rest; if that port is taken, pass `--offline-url`.

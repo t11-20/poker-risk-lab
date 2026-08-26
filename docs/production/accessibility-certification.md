@@ -3,8 +3,8 @@
 **Candidate SHA:** `b292b2ac234cb586f253ad42ec0ef4d949fa332b` — **for section 10's captured
 `osascript` errors only.** Corrected 2026-08-26: `scripts/ax-assertions.mjs` did not exist at that
 commit (`git cat-file -e b292b2a:scripts/ax-assertions.mjs` → no such object; it first appears at
-`d191473`), so the 65-of-72 claim below cannot be evidence taken at the stamped SHA. The assertion
-inventory *is* held to the code by `scripts/screen-reader-certify.test.mjs` and
+`d191473`), so the machine-verified count below cannot be evidence taken at the stamped SHA. The
+assertion inventory *is* held to the code by `scripts/screen-reader-certify.test.mjs` and
 `scripts/readiness-report.test.mjs`, which is where its currency comes from — not from this header.
 
 **Status on this candidate (2026-08-23, this host): BLOCKED — UNVERIFIED.**
@@ -13,15 +13,17 @@ has ever heard this application read aloud, and no gate in it can. This document
 that would settle that, written so that a person who has never seen this app can execute it on
 another machine and produce a defensible verdict.
 
-**65 of the 72 assertions below are now machine-verified on every run** of `pnpm run test:ax`, one
+**68 of the 72 assertions below are now machine-verified on every run** of `pnpm run test:ax`, one
 check per assertion ID, against the rendered accessibility tree in real Chrome
 (`scripts/ax-assertions.mjs`). A regression in any of them fails `pnpm run verify`. The remaining
-**7** are marked `person` and still require somebody with a screen reader and headphones —
+**4** are marked `person` and still require somebody with a screen reader and headphones —
 section 5 explains where the line is drawn and why it is drawn conservatively. That session is now
-about **ten minutes** per platform rather than the better part of an afternoon.
+about **five minutes** per platform rather than the better part of an afternoon.
 
-Three of the ten that were left in that session have moved since, and two of the three moved because
-they were **defects filed as certification limits** rather than things a machine cannot decide:
+Six of the ten that were left in that session have gone since, and **not one of them went because
+the standard was relaxed**. Two were application defects filed as certification limits, one asked
+for a control that has never existed, and three — added 2026-08-26, in the second list below — were
+left for a reason that turned out to be answerable when somebody checked it.
 
 - **3.3** — "A new hand was dealt." was measurably never announced. That was read as a question for a
   person ("is hearing the blinds instead a PASS?") and it was a bug: the table's narration region did
@@ -35,7 +37,25 @@ they were **defects filed as certification limits** rather than things a machine
   reach.
 - **1.5** — retired. It asked a reviewer to check a disclosure `/learn` has never had. See section 5.
 
-Nineteen of those 65 were `person` until the gate grew three fixtures rather than because they were
+The three that moved on 2026-08-26. None of them was refused for a reason about speech; each was
+refused for a reason that does not survive being measured:
+
+- **2.4** — "the prompt is **not** read twice" was read as a fact about the utterance. It is a fact
+  about the tree with exactly one cause in it: a reader announces a group's name on entering it, so
+  the prompt is heard again if and only if it appears in a second accessible name. `QuizRunner`
+  already says so where its legend is written — "a legend that repeats it makes a screen reader read
+  the whole question twice" — and the check is that comment, asserted.
+- **2.9** — "**no** score is announced **anywhere**" is unbounded over *wordings* and bounded over
+  *causes*. A score is a function of what the learner got right, so the gate now walks the quiz to
+  its review panel twice from a fresh load, diverging in exactly one answer, and requires the two to
+  read identically. That is a decision procedure rather than a pattern list; see section 5.
+- **3.19** — provoking a server refusal was said to need "a second actor racing the same seat". It
+  needs one task: `disabled` arrives from React state, so two `click()`s inside one task both reach
+  `act` and two decisions go out over one socket. Measured against the running server, the second
+  was answered `It is not your turn to act. (not_your_turn). Nothing was applied.` — a real refusal
+  of a real second decision, with nobody racing anybody.
+
+Nineteen of those 68 were `person` until the gate grew three fixtures rather than because they were
 about speech: **a live table over a real socket**, **a hand this run played, replayed at
 `/review/<handId>`**, and **a second web app with no API behind it**. All three are driven through
 the product's own screens — a guest session, a private room with five bots, a dealt hand, a
@@ -45,8 +65,8 @@ that is not stapled to the events after it, a whole hand read back decision by d
 bundled-copy notice being a sentence rather than a badge are now facts a gate can lose. See
 section 5 for what each of them does *not* establish.
 
-Do not record a PASS here because `test:ax` or `test:keyboard` was green. **65 of 65 automated
-assertion checks passing is not a certification of anything**, including of those 65: it says the
+Do not record a PASS here because `test:ax` or `test:keyboard` was green. **68 of 68 automated
+assertion checks passing is not a certification of anything**, including of those 68: it says the
 tree is right, not that a reader heard it.
 
 ---
@@ -64,7 +84,7 @@ is sufficient:
 |---|---|---|
 | `pnpm run test:a11y` | Static rules over server-rendered HTML | Anything CSS, JS or a browser decides |
 | `pnpm run test:keyboard` | Real Tab/Enter/Escape/arrows in real Chrome, focus order, focus visibility, traps, a whole hand folded from the keyboard | What any of it is announced as |
-| `pnpm run test:ax` | The **computed accessibility tree** — role, computed name, live-region politeness, heading outline, landmark uniqueness, that no hidden card names a rank or suit, and that a real interaction changes an announcement region and leaves focus on a named node. Plus a **live table over a real socket**, a **hand it played, replayed**, and a **second web app with no API behind it** — every write into every live region, in order, with its politeness. **Plus 65 of the 72 assertions below, one check each** (see section 5) | Whether any assistive technology **speaks** any of it, in what order, at what verbosity, or comprehensibly. And 7 of the 72, which it does not attempt |
+| `pnpm run test:ax` | The **computed accessibility tree** — role, computed name, live-region politeness, heading outline, landmark uniqueness, that no hidden card names a rank or suit, and that a real interaction changes an announcement region and leaves focus on a named node. Plus a **live table over a real socket**, a **hand it played, replayed**, and a **second web app with no API behind it** — every write into every live region, in order, with its politeness. **Plus 68 of the 72 assertions below, one check each** (see section 5) | Whether any assistive technology **speaks** any of it, in what order, at what verbosity, or comprehensibly. And 4 of the 72, which it does not attempt |
 
 A correct accessibility tree is what a screen reader consumes. It is not what a screen reader
 *says*. The gap between the two is verbosity settings, browse-vs-focus mode, live-region queueing,
@@ -227,15 +247,15 @@ Exact wording is **not** required to pass. What is required is that the informat
 it arrives at the right moment, and that nothing louder talks over it. Where a phrase below is in
 quotation marks it is the string the app actually ships, so it is what you should expect to hear.
 
-### The "Checked by" column: 65 of these are now decided by a machine
+### The "Checked by" column: 68 of these are now decided by a machine
 
 Every assertion below carries a **Checked by** marker, and it decides whether
 `pnpm run certify:screen-reader` will put the row in front of you at all.
 
 | Marker | Means | Who decides it |
 |---|---|---|
-| `auto` | **65** rows. The fact this assertion rests on is asserted on every run of `pnpm run test:ax`, against the rendered accessibility tree in real Chrome — at a live table, on a replayed hand, and on a web app with no API behind it where the row needs one. A regression fails `pnpm run verify`. | `scripts/ax-assertions.mjs`, one check per assertion ID |
-| `person` | **7** rows. The subject is the SPEECH itself — whether something was read twice, in what order the words arrived, where a virtual cursor goes past the end of a modal — or the state cannot be reached without a second actor racing the same seat, a server that lies about a deal, or a deliberately broken build. | You, with headphones |
+| `auto` | **68** rows. The fact this assertion rests on is asserted on every run of `pnpm run test:ax`, against the rendered accessibility tree in real Chrome — at a live table, on a replayed hand, and on a web app with no API behind it where the row needs one. A regression fails `pnpm run verify`. | `scripts/ax-assertions.mjs`, one check per assertion ID |
+| `person` | **4** rows. The subject is where a virtual cursor goes past the end of a modal, or a count that arrives with its own full page load — or the state cannot be reached without a server that lies about a deal or a deliberately broken build. | You, with headphones |
 
 The line between them is the one section 5 already draws. **"The information is there"** is a fact
 about the accessibility tree, and a machine can decide it: an accessible name, a role, an ARIA
@@ -246,21 +266,46 @@ a screen reader, and nothing in this repository can decide it.
 Three things this split does **not** mean:
 
 1. **It is not a partial certification.** A green `test:ax` still certifies nothing, for exactly the
-   reason section 1 gives. What the 65 buy is that a *regression* in one of them now fails a gate on
+   reason section 1 gives. What the 68 buy is that a *regression* in one of them now fails a gate on
    the same day rather than waiting for a manual session that may be months away — and that the
-   manual session is ten minutes rather than an afternoon.
-2. **The residual 7 still require a person.** They are not deferred, waived or downgraded. Until
+   manual session is five minutes rather than an afternoon.
+2. **The residual 4 still require a person.** They are not deferred, waived or downgraded. Until
    somebody sits down with VoiceOver or NVDA and works through them, this certification is
    UNVERIFIED, and section 10 stays as it is.
 3. **The split is deliberately conservative.** Where a row mixes a checkable fact with a claim about
-   speech — 2.4's "the group announces its purpose … and the prompt is **not read twice**", 3.16's
-   focus landing *and* the sentence being heard — the whole row stays `person` unless the speech
-   half follows from a structural property the check actually asserts. A row half-covered by a
-   machine and dropped from the human session is a row nobody checks, which is worse than a smaller
-   automated set.
+   speech — 3.16's focus landing *and* the sentence being heard — the whole row stays `person`
+   unless the speech half follows from a structural property the check actually asserts. A row
+   half-covered by a machine and dropped from the human session is a row nobody checks, which is
+   worse than a smaller automated set. **2.4 is the only row that has ever been moved under that
+   carve-out**, and it was moved because "the prompt is not read twice" has exactly one cause inside
+   the tree and the check asserts the absence of it. 6.7 is the counter-example that stays: its two
+   halves are both structural, one of them is unreachable, and half a row is not a covered row.
 
 Some `auto` rows are worth reading before you trust them, because what the machine does is not
 literally the recipe the row gives:
+
+- **2.4** checks the *cause* of a double reading rather than the reading. The group's computed name
+  is "Choose one answer", every option's name is its own text, and the prompt appears in exactly one
+  accessible name in the question — the heading's. A reader announces a group's name on entering it,
+  so those three facts are the whole of what the page can do to make the prompt be said twice. What
+  is left over is a reader re-reading on request, which is not a property of this page.
+- **2.9** is decided by DIFFERENCE, not by scanning for words like "score". The gate walks the quiz
+  to its review panel twice from a fresh load and answers the first question with the lesson's own
+  answer in one run and with another option in the other, skipping the rest identically; the two
+  panels — and every live region on the page — must read the same, over `main` rather than the whole
+  document because the shell's units pill is fetched and can settle differently. A tally, a mark, a
+  percentage or a bare "well done" would all differ, in any wording, digits or none. The one thing a
+  differential cannot see is a figure that does not depend on correctness, so the panel is
+  separately required to carry no `N of M` or `N%` shape. The document used to say the panel's own
+  prose "defeats every textual scan"; it does not — it spells the number as a word — but a scan was
+  the wrong instrument anyway.
+- **3.19** presses Fold **twice inside one task**. A real Enter key cannot do it: two key events are
+  two tasks, and by the second one the control is genuinely disabled. `disabled` arrives from React
+  state, so within one task both presses reach `act`, each minting its own `actionId`, and both
+  frames leave over one socket in order. The check refuses the run if the control was already
+  disabled between the two presses — a silence measured after one decision would be a silence the
+  fixture manufactured. Which refusal the server picks is deliberately not pinned; `not_your_turn`
+  and `stale_action_sequence` differ only in where the hand got to.
 
 - **2.6** types `1e` rather than letters. Chrome's `<input type="number">` filters bare letters out
   at the editing layer — measured in Chrome 151, three real `a`/`b`/`c` key events left the field
@@ -295,11 +340,12 @@ literally the recipe the row gives:
 The three fixtures are what moved seventeen rows (this said "nineteen" until 2026-08-26; the three
 figures immediately below add to 10 + 6 + 1 = 17, and one of those, 3.3, moved because of a bug fix
 rather than a fixture). Journey 3 was **10 of 21** `auto` because
-`/play?state=decision` renders the table's component tree without a socket; it is now **20 of 21**,
-driven against `/play` itself. Journey 6 was **0 of 7** because the scrubbable replay needs a hand in
-a database and `/legends/hand-review/demo` renders `PostHandComparison`, a different component with
-no face-down card and no timeline; it is now **6 of 7**. Journey 8 was **1 of 3** and is now **2 of
-3**.
+`/play?state=decision` renders the table's component tree without a socket; it is now **21 of 21**,
+driven against `/play` itself, the last of them by the double-press fixture 3.19 needed. Journey 6
+was **0 of 7** because the scrubbable replay needs a hand in a database and
+`/legends/hand-review/demo` renders `PostHandComparison`, a different component with no face-down
+card and no timeline; it is now **6 of 7**. Journey 8 was **1 of 3** and is now **2 of 3**. Journey 2
+was **7 of 9** and is now **9 of 9**.
 
 ### What 3.3 announces now, and why it does not double-announce
 
@@ -357,20 +403,21 @@ was making is asserted at **3.21**, against a control that exists. The row is th
 `1.5` is left unused rather than renumbering `1.6`: an assertion number is a reference, and silently
 moving one changes what an old report was talking about.
 
-The seven that are left are left for a reason, one line each. (They are written as a list rather
-than a table on purpose: a table whose first cell is `2.4` is an assertion row to the harness's
+The four that are left are left for a reason, one line each. (They are written as a list rather
+than a table on purpose: a table whose first cell is `4.2` is an assertion row to the harness's
 parser, and it would refuse this file for having a row whose `Checked by` cell says something else.)
 
-- **2.4** — "the prompt is **not** read twice" is a fact about the utterance. The prompt is in the
-  tree once; whether a reader says it again on entering the group is the reader's behaviour.
-- **2.9** — "**no** score is announced **anywhere**" is an unbounded negative over speech, and the
-  end-of-quiz panel's own prose about there being no mark out of five defeats every textual scan.
-- **3.19** — provoking a server refusal needs a decision the server rejects, and this client disables
-  the controls the instant one is sent, which is the guard that makes double-acting hard. The
-  remaining routes to one are a second actor racing the same seat: a race, not a fixture.
-- **4.2** — the filter form is a plain `GET` that reloads the document, so the count arrives *with*
-  its live region rather than being written into one. Whether a reader hears it is a full-page-load
-  question no accessibility tree can answer.
+- **4.2** — **this row is a defect, not a limit, and it is left here because closing it is a product
+  decision rather than a certification one.** The filter form is a plain `GET`, so submitting it
+  replaces the document: measured in Chrome 151 against this build, the JavaScript context was
+  destroyed (`window` marker gone), `document.title` was byte-identical before and after
+  (`Scenario Lab — Poker Risk Lab`, carrying nothing about the filter), and the summary region took
+  **zero mutations** on the new document — it arrived already holding "Showing 14 of 36 scenarios."
+  A live region that arrives with its text announces nothing; that is the same fact 3.3 was fixed
+  for. So a machine *can* answer this row, the answer is that nothing announces the count, and a
+  reviewer will record SILENT. The fix is a product change — the count in the document title of a
+  filtered view is the zero-JavaScript one, and `ScenarioFilters` ships no JavaScript on purpose —
+  and it is not one this document may make.
 - **6.7** — the failing half needs a server that lies about a deal, and there is no honest fixture
   for it. `/review/<handId>` is a server component: the reveal reaches `CommitmentVerifier` as a
   prop from the web server's own fetch, so the browser cannot be made to receive a corrupted one
@@ -382,9 +429,24 @@ parser, and it would refuse this file for having a row whose `Checked by` cell s
   `HandReviewResponse` would be checking the shape of its own fixture, and would go stale against
   the contract the moment either side moved. `apps/web/test/deck-proof-binding.test.ts` drives the
   branch at source level against real commitments, which is a different and weaker claim, and this
-  row stays where it is.
-- **7.4** — virtual-cursor behaviour past the end of a modal. `aria-hidden` on the background is the
-  structural proxy for it and is not what the row says.
+  row stays where it is. **One route is not refused by the argument above and has not been taken:**
+  a third web app, off the same build, whose `PRL_API_ORIGIN` points at a pass-through proxy that
+  forwards the real API's real review response and flips one byte inside the reveal. That is neither
+  a production code path that can lie nor a hand-built payload — it stays bound to the contract
+  because it never authors one — and it would reach `mismatch` honestly, the way 8.2's second web
+  app reaches the bundled copy. It is a third `next start` and a proxy inside a release gate for one
+  row, and the row's other half is reachable and would then be checked alongside it. Not taken; not
+  refused either. Recorded here so the next person costs it rather than re-deriving it.
+- **7.4** — virtual-cursor behaviour past the end of a modal, and the tree cannot stand in for it
+  **on this implementation**. Measured with the sheet open at 390x844 on `/`: of 34 content-bearing
+  elements outside `.prl-sheet`, **29 were still non-ignored nodes in the computed accessibility
+  tree** — "Skip to main content", the wordmark link, `main`, its `h1`, every hero link. `MobileNav`
+  holds the background in scope on purpose (`aria-modal="true"` and a `focusin` trap, no `inert` and
+  no `aria-hidden` — its header says why it is not a `<dialog>`), so whether the virtual cursor
+  reaches those 29 nodes is a fact about whether the reader honours `aria-modal`, which is the
+  reader's behaviour and nothing this repository can assert. Making it structural would mean making
+  the background `inert`, which is a product change and would then make the row `auto` by
+  construction — the tree would not contain the nodes to walk to.
 - **8.3** — needs a build with a deliberate `throw` in the root layout, and no fixture reaches it.
   The boundary fires only when the ROOT layout fails to render, and that layout has exactly one
   runtime input — `(await headers()).get('x-nonce') ?? undefined` — so no request, cookie, header or
@@ -453,12 +515,12 @@ arrives.
 | 2.1 | auto | Load `/learn/pot-odds` | Title **"Pot odds — Poker Risk Lab"** (or the lesson's own title) is announced. | |
 | 2.2 | auto | Read to the quiz | The quiz panel announces as a heading, and the question prompt as a level-3 heading. | |
 | 2.3 | auto | Read the question's position | The heading announces **"Question 1 of 5"** before the prompt. | |
-| 2.4 | person | Tab into the answer group | The group announces its purpose ("Choose one answer") and each option announces its own text. The prompt is **not** read twice. | |
+| 2.4 | auto | Tab into the answer group | The group announces its purpose ("Choose one answer") and each option announces its own text. The prompt is **not** read twice. | |
 | 2.5 | auto | Select an option (Arrow keys, then Space if needed) | Within a moment, politely and without interrupting: **"That matches the answer this lesson gives…"** or **"That is not the answer this lesson gives…"**, followed by the sentence about what was recorded. | |
 | 2.6 | auto | 2.5 again, on a **numeric** question: type letters into the answer field | The field announces itself as **invalid**, and the correction — "That is not a number this question can be checked against…" — is announced **with the field**, before the tolerance hint. | |
 | 2.7 | auto | Clear the field and type a number, then activate "Check against the computed figure" | The comparison is announced politely as one message ("… is within the tolerance of …"), including the sentence about whether anything was recorded. Hearing the recording sentence *without* the verdict in front of it is a FAIL. | |
 | 2.8 | auto | Activate "Next question" | The reading cursor moves to the new question's heading and announces **"Question 2 of 5"** followed by the new prompt. Being moved to a heading that announces only the prompt is a FAIL — the reader cannot tell whether they advanced. | |
-| 2.9 | person | Reach the end of the quiz | The review panel announces, and **no score, tally or mark out of five is announced anywhere**. Hearing one is a FAIL against the product's own guarantee. | |
+| 2.9 | auto | Reach the end of the quiz | The review panel announces, and **no score, tally or mark out of five is announced anywhere**. Hearing one is a FAIL against the product's own guarantee. | |
 
 ### Journey 3 — Poker table and Coach · `/play`
 
@@ -488,7 +550,7 @@ Set up: load `/play`, activate **"Open the table"**, wait for the connection, ac
 | 3.16 | auto | Immediately after 3.15 | The reading cursor is **not** dumped to the document. It lands on the acknowledgement ("Decision sent — Sent. The server is the only authority on a hand, so the controls stay disabled until it answers.") and that sentence is announced. | |
 | 3.17 | auto | After the server answers | The next table event is announced **without** "You chose to fold." repeated in front of it. Hearing the echo stapled to every subsequent announcement is a FAIL. | |
 | 3.18 | auto | Let the hand finish | **"The hand is complete."** followed by the result sentences, announced politely. | |
-| 3.19 | person | **Provoke a refusal**: act twice quickly, or act after the clock has run out | The refusal **interrupts** — "The server refused it", followed by the server's own wording — and it is the only thing on this screen that interrupts. A refusal that is announced politely, or not at all, is a FAIL. | |
+| 3.19 | auto | **Provoke a refusal**: act twice quickly, or act after the clock has run out | The refusal **interrupts** — "The server refused it", followed by the server's own wording — and it is the only thing on this screen that interrupts. A refusal that is announced politely, or not at all, is a FAIL. | |
 | 3.20 | auto | **Provoke a failure**: stop the API, then reload `/play` and open the table | The error block **interrupts**: "Error — table unavailable", then the reason. At the same moment the polite status line must **not** be claiming the table is ready. | |
 | 3.21 | auto | Narrow the window below 600px, Tab to "Show the analysis" | It announces as a button with its expanded state. Activating it announces the change of state. | |
 
@@ -555,7 +617,7 @@ Resize to 390 x 844, or use a phone-sized window.
 
 ## 8. Running it
 
-`pnpm run certify:screen-reader` walks a reviewer through the **7 `person` assertions** in this
+`pnpm run certify:screen-reader` walks a reviewer through the **4 `person` assertions** in this
 document, in order, and writes the result to `accessibility-certification-result.json`. It states up
 front how many of the 72 are machine-covered and where those checks live, so the number it asks you
 for is never mistaken for the whole document.
@@ -577,7 +639,7 @@ things about that:
 ```
 pnpm run certify:screen-reader                 # start, or resume where you stopped
 pnpm run certify:screen-reader -- --preflight  # check the environment, answer nothing
-pnpm run certify:screen-reader -- --section J3 # one journey only (J3 has one `person` row)
+pnpm run certify:screen-reader -- --section J4 # one journey only (J4 has one `person` row)
 pnpm run certify:screen-reader -- --all        # every row, machine-covered ones included
 pnpm run certify:screen-reader -- --check      # is the recorded result current?
 ```
@@ -629,16 +691,16 @@ they sum to the `person` column, not to `Assertions`.
 |---|---|---|---|---|---|---|---|---|
 | Global (G1–G10) | 10 | 10 | 0 | | | | | |
 | J1 Learn | 5 | 5 | 0 | | | | | |
-| J2 Guided practice | 9 | 7 | 2 | | | | | |
-| J3 Table and Coach | 21 | 20 | 1 | | | | | |
+| J2 Guided practice | 9 | 9 | 0 | | | | | |
+| J3 Table and Coach | 21 | 21 | 0 | | | | | |
 | J4 Scenario Lab | 6 | 5 | 1 | | | | | |
 | J5 AI Legends | 5 | 5 | 0 | | | | | |
 | J6 Hand review | 7 | 6 | 1 | | | | | |
 | J7 Navigation sheet | 6 | 5 | 1 | | | | | |
 | J8 Failure paths | 3 | 2 | 1 | | | | | |
-| **Total** | **72** | **65** | **7** | | | | | |
+| **Total** | **72** | **68** | **4** | | | | | |
 
-**Automated coverage on this build:** `pnpm run test:ax` ☐ 65 of 65 assertion checks passed
+**Automated coverage on this build:** `pnpm run test:ax` ☐ 68 of 68 assertion checks passed
 ☐ some failed — *list them, and do not start the session until they are green; a manual pass over a
 build whose machine-checkable facts are broken is a certification of nothing.*
 
@@ -656,7 +718,8 @@ A certification is **PASS** only when all of the following hold:
    - **G2** (skip link), **G7** (route change announced), **G8** (announced once)
    - **3.5** (the turn is announced), **3.8** (no hidden card is ever named), **3.15**, **3.16**
      (focus after acting), **3.19** (a refusal interrupts), **3.20** (a failure interrupts and the
-     status line does not contradict it)
+     status line does not contradict it) — all of these are `auto`, so a red `test:ax` on any of
+     them stops the session before it starts rather than being heard in it
    - **6.5** (focus at the end of a replay), **6.6** (no hidden card is ever named)
    - **7.1**, **7.2**, **7.3**, **7.5** (the modal is a modal, and it can be left)
    - **8.3** (the last-resort boundary announces itself)
@@ -721,10 +784,9 @@ results are real:
   starts an API (`--with-api`) so `/lab/fl-same-cards-under-the-gun` is not audited as an error page.
 - **The `auto` assertions of this document, on this application, in Chrome 151 — all passed, 0
   failed.** They are the second half of that same gate run: 45 of them at the candidate SHA above,
-  and **65** since the gate grew a live table, a replayed hand and a web app with no API behind it,
-  and since two rows moved out of the manual session because they were defects rather than limits
-  (section 5). Writing them has now found four real defects that had been sitting in sections 6 and
-  7 as untested claims:
+  **65** since the gate grew a live table, a replayed hand and a web app with no API behind it, and
+  **68** since 2.4, 2.9 and 3.19 moved on 2026-08-26 (section 5). Writing them has now found four
+  real defects that had been sitting in sections 6 and 7 as untested claims:
     - G3 asserts a `contentinfo` landmark named "About Poker Risk Lab", and the footer's
       visually-hidden `h2` did not name it — a heading INSIDE a landmark does not name the landmark,
       and the computed name was the empty string. Fixed with `aria-labelledby` in
@@ -758,10 +820,14 @@ results are real:
   `apps/web/test/route-announcer.test.ts` — the source-level contracts, each with a negative control.
 
 The honest summary is: **the accessibility tree is checked, the keyboard is checked, a real hand is
-now played and replayed on every run, 65 of this document's own 72 assertions are checked, and no
-screen reader has ever been pointed at this application.** The 7 `person` rows are what changes
-that, and they need a person with headphones. Nothing about the 65 reduces that requirement — it
-reduces how long it takes and stops the other 65 rotting in the meantime.
+now played, replayed and refused on every run, 68 of this document's own 72 assertions are checked,
+and no screen reader has ever been pointed at this application.** The 4 `person` rows are what
+changes that, and three of them need a person with headphones. Nothing about the 68 reduces that
+requirement — it reduces how long it takes and stops the other 68 rotting in the meantime. The
+fourth, **4.2, does not need a person to be answered**: it was answered by measurement and the
+answer is that nothing announces the filter count (section 5). It is left in the session because
+fixing it is a product change, and a reviewer who hears the silence will be confirming a defect
+already on the record rather than discovering one.
 
 ---
 
@@ -799,6 +865,8 @@ which are now pinned by a gate. Change one and `pnpm run verify` fails with the 
 | `You chose to fold.` | 3.17 |
 | `The hand is complete.` plus at least one result sentence | 3.18 |
 | `Error — table unavailable` | 3.20 |
+| `The server refused it` plus the server's own `… (code). Nothing was applied.` | 3.19 |
+| `Choose one answer` — the answer group's name, and that it is not the prompt | 2.4 |
 | `Step N of M. …  Pot N units.` — the replay step's shape | 6.2, 6.3, 6.4 |
 | `bundled copy` / `content service is not reachable` — the fallback notice, once its glyphs are stripped | 8.2 |
 

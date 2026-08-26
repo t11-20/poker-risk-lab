@@ -117,6 +117,11 @@ describe('NEGATIVE CONTROL — every check refuses a page that produced nothing'
     mainLinks: [],
     panelHeading: null,
     promptHeading: null,
+    answerGroup: null,
+    answerOptions: [],
+    // 2.9's two walks of the quiz. Empty is "the quiz was never reached twice", which is exactly
+    // the state in which a differential proves nothing.
+    runs: [],
     choiceAnswered: false,
     choiceVerdict: null,
     choiceVerdictCount: 0,
@@ -181,6 +186,7 @@ describe('NEGATIVE CONTROL — every check refuses a page that produced nothing'
     dwellMs: 0,
     turnOpenedAt: null,
     folded: null,
+    doubleAct: null,
     foldFocus: { onDocument: true, role: '', name: '' },
     complete: false,
     hand: null,
@@ -656,6 +662,136 @@ describe('NEGATIVE CONTROL — 2.6, the correction announced after the rule', ()
   });
 });
 
+describe('NEGATIVE CONTROL — 2.4, the answer group that reads the question again', () => {
+  const check = checkFor('J2.4');
+  const PROMPT = 'Which of these describes break-even equity correctly?';
+  const healthy = {
+    promptHeading: { role: 'heading', level: 3, name: `Question 1 of 5. ${PROMPT}` },
+    answerGroup: { role: 'group', name: 'Choose one answer', ignored: false },
+    answerOptions: [
+      { role: 'radio', name: 'The chance that you currently hold the best hand', ignored: false },
+      { role: 'radio', name: 'The share of the time you must end up with the pot', ignored: false },
+      { role: 'radio', name: 'The share of the pot that already belongs to you', ignored: false },
+    ],
+  };
+
+  it('passes a group that names its purpose over options that name themselves', () => {
+    assert.equal(check.decide(healthy).ok, true);
+  });
+
+  it('fires when the legend repeats the prompt — the defect `QuizRunner` names in place', () => {
+    // The one shape inside the tree that makes a reader say the question twice: the group is
+    // announced on entry, so a group named by the prompt is the prompt again.
+    const verdict = check.decide({ ...healthy, answerGroup: { ...healthy.answerGroup, name: PROMPT } });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /in the accessibility tree 2 times/u);
+  });
+
+  it('fires when an option carries the prompt as well as its own text', () => {
+    const answerOptions = [
+      { role: 'radio', name: `${PROMPT} The share of the pot that already belongs to you`, ignored: false },
+      ...healthy.answerOptions.slice(1),
+    ];
+    const verdict = check.decide({ ...healthy, answerOptions });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /as an option/u);
+  });
+
+  it('fires when the group is a labelled generic, which no reader announces on entry', () => {
+    const verdict = check.decide({
+      ...healthy,
+      answerGroup: { role: 'generic', name: 'Choose one answer', ignored: false },
+    });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /not a role a reader announces on entry/u);
+  });
+
+  it('fires when the group reaches the tree with no name at all', () => {
+    const verdict = check.decide({ ...healthy, answerGroup: { role: 'group', name: '', ignored: false } });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /told a group started and not what it is for/u);
+  });
+
+  it('fires when an option announces nothing of its own', () => {
+    const answerOptions = [{ role: 'radio', name: '', ignored: false }, ...healthy.answerOptions.slice(1)];
+    const verdict = check.decide({ ...healthy, answerOptions });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /announce no text of their own/u);
+  });
+});
+
+describe('NEGATIVE CONTROL — 2.9, a score at the end of a quiz', () => {
+  const check = checkFor('J2.9');
+  const ADVICE =
+    'Watch which half of the comparison you are least comfortable with. The price is exact ' +
+    'arithmetic and should become automatic; the equity is an estimate that depends on a range ' +
+    'you chose. Nothing here was scored, and there is nowhere in this product for a mark out of ' +
+    'five to live.';
+  const run = (takeTheLessonAnswer, wanted, verdict, extra = '') => ({
+    takeTheLessonAnswer,
+    opened: 4,
+    chose: { lesson: 1, wanted },
+    verdict,
+    reachedReview: true,
+    panel: `Quiz Reading the price Review What to do with all that ${ADVICE}${extra}`,
+    main: `Pot odds ${ADVICE}${extra}`,
+    regions: ['polite:'],
+  });
+  const MATCHED = 'That matches the answer this lesson gives. The reasoning is below.';
+  const MISSED = 'That is not the answer this lesson gives. Nothing is deducted for it.';
+  const healthy = { runs: [run(true, 1, MATCHED), run(false, 0, MISSED)] };
+
+  it('passes two runs whose review panel is the same however the question went', () => {
+    assert.equal(check.decide(healthy).ok, true);
+  });
+
+  it('fires on a verdict that carries no number at all — which no wording scan would catch', () => {
+    // The whole reason this row is decided by difference. "Every answer matched." has no digit, no
+    // percentage, no "out of", and is a mark on the learner all the same.
+    const runs = [
+      run(true, 1, MATCHED, ' Every answer matched.'),
+      run(false, 0, MISSED, ' Some answers did not match.'),
+    ];
+    const verdict = check.decide({ runs });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /reads differently depending on whether the answer matched/u);
+  });
+
+  it('fires on a tally that does not depend on correctness, which the differential cannot see', () => {
+    const tally = ' You answered 1 of 5 questions.';
+    const runs = [run(true, 1, MATCHED, tally), run(false, 0, MISSED, tally)];
+    const verdict = check.decide({ runs });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /which is a tally/u);
+  });
+
+  it('fires when a live region differs between the two runs', () => {
+    const runs = [
+      { ...run(true, 1, MATCHED), regions: ['polite:You matched every question.'] },
+      { ...run(false, 0, MISSED), regions: ['polite:'] },
+    ];
+    const verdict = check.decide({ runs });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /a live region at the end of the quiz/u);
+  });
+
+  it('refuses two runs that never diverged, rather than reading their agreement as a pass', () => {
+    // The control against the control. Two identical runs agree about a scoreboard too, so a
+    // differential that did not prove its own divergence would pass the very app it exists to fail.
+    const runs = [run(true, 1, MATCHED), run(false, 1, MATCHED)];
+    const verdict = check.decide({ runs });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /picked the same option/u);
+  });
+
+  it('refuses a run that never reached the review panel', () => {
+    const runs = [{ ...run(true, 1, MATCHED), reachedReview: false }, run(false, 0, MISSED)];
+    const verdict = check.decide({ runs });
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /never reached the review panel/u);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The live table, the API-down page and the replay
 //
@@ -1052,6 +1188,89 @@ describe('NEGATIVE CONTROL — 3.18, the hand that ends in silence', () => {
       /^The hand is complete\./u.test(entry.text) ? { ...entry, live: 'assertive', role: 'alert' } : entry,
     );
     assert.ok(refuses(check, evidence));
+  });
+});
+
+describe('NEGATIVE CONTROL — 3.19, a refusal nobody is interrupted for', () => {
+  const check = checkFor('J3.19');
+  const DECISION = regionKey('prl-play__stage', 'prl-play__main', 'prl-play__decision');
+  const REFUSAL =
+    '▲Watch outThe server refused itIt is not your turn to act. (not_your_turn). Nothing was applied.';
+
+  /**
+   * The hand 3.19's fixture plays: everything `HEALTHY_HAND` records, plus a second decision out of
+   * the same seat and the refusal it earned. The strings are the ones measured in Chrome 151
+   * against the running server.
+   */
+  const REFUSED_HAND = () => {
+    const evidence = HEALTHY_HAND();
+    evidence.doubleAct = { name: 'fold, costs 0 units, gives up the hand', stillEnabled: true };
+    evidence.log = [
+      ...evidence.log,
+      // The `role="status"` wrapper takes the same text politely; the alert inside it is the one
+      // that interrupts. Both are in the log, which is why the check looks for an assertive ONE
+      // rather than for the absence of a polite one.
+      wrote(`${DECISION}#What happened to your decision`, REFUSAL, 14_010),
+      { text: REFUSAL, live: 'assertive', role: 'alert', key: DECISION, at: 14_011, recovered: false },
+    ];
+    return evidence;
+  };
+
+  it('passes a refusal that interrupts, in the server’s own words', () => {
+    const verdict = check.decide(REFUSED_HAND());
+    assert.equal(verdict.ok, true, verdict.detail);
+  });
+
+  it('fires when the refusal is announced politely — the row’s own named FAIL', () => {
+    const evidence = REFUSED_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      entry.live === 'assertive' ? { ...entry, live: 'polite', role: 'status' } : entry,
+    );
+    const verdict = check.decide(evidence);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /announced polite, not assertively/u);
+  });
+
+  it('fires when the refusal carries the heading and none of the server’s wording', () => {
+    const evidence = REFUSED_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      entry.live === 'assertive' ? { ...entry, text: '▲Watch outThe server refused it' } : entry,
+    );
+    const verdict = check.decide(evidence);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /carries the heading and none of/u);
+  });
+
+  it('fires when something else on the screen interrupts as well', () => {
+    // "…and it is the only thing on this screen that interrupts." A second assertive region is how
+    // a reader learns to switch the surface off, which costs them this one.
+    const evidence = REFUSED_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      /^The hand is complete\./u.test(entry.text) ? { ...entry, live: 'assertive', role: 'alert' } : entry,
+    );
+    const verdict = check.decide(evidence);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /other announcement\(s\) on this screen interrupted/u);
+  });
+
+  it('refuses a run whose second press met a disabled control, rather than reading it as silence', () => {
+    // The control against the fixture rotting. If the client ever disabled the button synchronously
+    // the second decision would never be sent, there would be nothing for the server to refuse, and
+    // a check that only looked for a refusal would report the app broken — or, worse, a later edit
+    // could make it report a pass over a hand where nothing was ever refused.
+    const evidence = REFUSED_HAND();
+    evidence.doubleAct = { name: 'fold, costs 0 units, gives up the hand', stillEnabled: false };
+    const verdict = check.decide(evidence);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /only ONE decision was sent/u);
+  });
+
+  it('fires when two decisions went out and nothing said one was refused', () => {
+    const evidence = REFUSED_HAND();
+    evidence.log = evidence.log.filter((entry) => !/The server refused it/u.test(entry.text));
+    const verdict = check.decide(evidence);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /no region ever said the server refused one/u);
   });
 });
 

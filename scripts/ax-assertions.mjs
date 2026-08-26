@@ -21,12 +21,35 @@
  * assertive, a control that drops focus on the floor when it disables itself — ships silently and
  * waits for a human session that never comes.
  *
- * So the 72 are split. The 65 whose whole subject is a DOM/ARIA fact are checked here, on every
- * run, and a regression fails `pnpm run verify`. The 7 whose subject is the SPEECH ITSELF — whether
- * a prompt is read twice, in what order the words arrive, where a virtual cursor goes past the end
- * of a modal — stay with the person, and `pnpm run certify:screen-reader` now presents only those.
+ * So the 72 are split. The 68 whose whole subject is a DOM/ARIA fact are checked here, on every
+ * run, and a regression fails `pnpm run verify`. The 4 that are left stay with the person, and
+ * `pnpm run certify:screen-reader` now presents only those: where a virtual cursor goes past the
+ * end of a modal (7.4), and three states no honest fixture reaches (4.2, 6.7, 8.3).
  *
- * ## Two of them were not certification limits at all, but DEFECTS filed as one
+ * ## Three of them were answerable, and the reason each had been left was wrong
+ *
+ * Added 2026-08-26, each with the measurement that moved it:
+ *
+ *   - **2.4** was `person` for "the prompt is **not** read twice", which reads as a fact about the
+ *     utterance and is a fact about the tree. A reader announces a group's name on entering it, so
+ *     the prompt is heard a second time if and only if it appears in a second accessible name —
+ *     the group's, or an option's. `QuizRunner` already says this where its legend is written; the
+ *     check asserts it. Measured: group name "Choose one answer", four options each named by its
+ *     own text, the prompt in exactly one accessible name.
+ *   - **2.9** was `person` because "no score is announced anywhere" is unbounded over WORDINGS. It
+ *     is bounded over CAUSES: a score is a function of what the learner got right. `gatherQuizReview`
+ *     walks the quiz to its review panel twice from a fresh load, answering the first question with
+ *     the lesson's own answer once and with another option once, and requires the two ends to read
+ *     identically. Nothing that depends on correctness can survive that, in any wording.
+ *   - **3.19** was `person` because provoking a server refusal was said to need "a second actor
+ *     racing the same seat". It needs one task. `disabled` comes from React state and is applied on
+ *     the next render, so two `click()`s inside one task both reach `act`, each minting its own
+ *     `actionId`, and both frames leave over one socket in order. Measured against the running
+ *     server: the second click saw `disabled === false` and the server answered "It is not your
+ *     turn to act. (not_your_turn). Nothing was applied." — assertively, and the only interruption
+ *     in the whole hand.
+ *
+ * ## Two more were not certification limits at all, but DEFECTS filed as one
  *
  * 3.3 said "A new hand was dealt." never reaches the DOM and asked a reviewer to decide whether
  * hearing the blinds instead was a PASS. That is a bug with a checklist item wrapped round it, and
@@ -39,7 +62,7 @@
  *
  * ## "Needs a live table" was a statement about this gate, not about speech
  *
- * Nineteen of those 65 were with the person until this module grew three fixtures, and every one of
+ * Nineteen of those 68 were with the person until this module grew three fixtures, and every one of
  * them was refused for a fixture reason rather than an un-automatable one:
  *
  *   - **A live table over a real socket** (`gatherLiveTable`). `/play?state=decision` renders the
@@ -59,7 +82,10 @@
  *     pointed at a port nothing can be listening on, and one route visits it.
  *
  * What is still refused is refused on its merits, and section 5 of the certification document lists
- * all seven with one line each.
+ * all four with one line each. One of the four, **4.2**, is refused for a different reason from the
+ * others and the document says so: a machine can answer it, the answer was measured, and it is that
+ * nothing announces the filter count. It stays in the human session because closing it is a product
+ * change rather than a certification one — not because it is undecidable.
  *
  * ## What this does NOT claim
  *
@@ -71,10 +97,12 @@
  * than an afternoon.
  *
  * The split is conservative on purpose. Where an assertion mixes a checkable fact with a claim
- * about speech — "the group announces its purpose ... and the prompt is not read twice" — the whole
- * row stays with the person. Overclaiming here is worse than a smaller automated set: a row that
- * has been dropped from the human session and is only half covered by a machine is a row nobody
- * checks.
+ * about speech, the whole row stays with the person unless the speech half follows from a
+ * structural property the check actually asserts — 2.4 is the only row that has ever been moved
+ * under that carve-out, and 6.7 is the counter-example that stays: both of its halves are
+ * structural, one of them is unreachable, and half a row is not a covered row. Overclaiming here is
+ * worse than a smaller automated set: a row that has been dropped from the human session and is
+ * only half covered by a machine is a row nobody checks.
  *
  * ## Shape
  *
@@ -932,6 +960,12 @@ async function gatherQuiz(page) {
   evidence.panelHeading = (await axFor(page, '.prl-learn-quiz .prl-panel__title'))[0] ?? null;
   evidence.promptHeading = (await axFor(page, '.prl-learn-quiz__heading'))[0] ?? null;
 
+  // 2.4 — read BEFORE anything is answered. Answering inserts the chips and the note under each
+  // option, and a check that read the group afterwards would be reading a different group from the
+  // one the assertion's step ("Tab into the answer group") arrives at.
+  evidence.answerGroup = (await axFor(page, '.prl-learn-quiz__options'))[0] ?? null;
+  evidence.answerOptions = await axFor(page, '.prl-learn-quiz__options input[type="radio"]');
+
   // 2.5 — answer the multiple-choice question and read the region it writes into.
   const answered = await page.evaluate(
     `(() => {
@@ -1082,6 +1116,70 @@ const QUIZ_CHECKS = [
     },
   },
   {
+    id: 'J2.4',
+    what: 'the answer group names its purpose, each option names itself, and the prompt is in the tree once',
+    decide: (e) => {
+      if (e.answerGroup === null || e.answerGroup.ignored) {
+        return fail(
+          'the answer options are not a group in the computed tree, so entering them announces nothing',
+        );
+      }
+      // The role, not only the name. A `generic` container carrying an `aria-label` computes a name
+      // that no reader announces on entry, so it would satisfy every other clause here and tell the
+      // reader nothing — which is the same silence as having no group at all.
+      if (!['group', 'radiogroup'].includes(e.answerGroup.role)) {
+        return fail(
+          `the answer options sit inside a "${e.answerGroup.role}", which is not a role a reader ` +
+            'announces on entry. Its name is never said, whatever the name is',
+        );
+      }
+      if (isBareName(e.answerGroup.name)) {
+        return fail(
+          `the answer group computes the name "${e.answerGroup.name}". A reader who tabs into it is ` +
+            'told a group started and not what it is for',
+        );
+      }
+      const options = (e.answerOptions ?? []).filter((option) => !option.ignored);
+      if (options.length < 2) {
+        return fail(
+          `${options.length} answer option(s) reached the tree; there is nothing to choose between`,
+        );
+      }
+      const bare = options.filter((option) => isBareName(option.name));
+      if (bare.length > 0) {
+        return fail(`${bare.length} of ${options.length} options announce no text of their own`);
+      }
+      // The half of this row that is about the UTTERANCE, decided structurally.
+      //
+      // "The prompt is not read twice" has exactly one cause inside the tree: the prompt appearing
+      // in a second accessible name. A group labelled by the prompt is re-announced on entry by
+      // every reader; an option whose name carries the prompt repeats it once per option.
+      // `QuizRunner` says so where the legend is written — "a legend that repeats it makes a screen
+      // reader read the whole question twice" — and this is that comment as a check. What is left
+      // over is a reader re-reading anything at all on request, which is not a property of this page.
+      const prompt = (e.promptHeading?.name ?? '').replace(/^Question \d+ of \d+\.\s*/u, '').trim();
+      if (prompt.length < 12) {
+        return fail(
+          `the question prompt could not be read off the heading ("${e.promptHeading?.name ?? ''}"), so ` +
+            'this run could not check whether anything else repeats it',
+        );
+      }
+      const repeats = [
+        ...(e.answerGroup.name.includes(prompt) ? [`the group ("${e.answerGroup.name}")`] : []),
+        ...options
+          .filter((option) => option.name.includes(prompt))
+          .map((option) => `an option ("${option.name.slice(0, 40)}…")`),
+      ];
+      if (repeats.length > 0) {
+        return fail(
+          `the prompt is in the accessibility tree ${repeats.length + 1} times — as the heading, and ` +
+            `as ${repeats.join(' and ')}. A reader hears the whole question again on entering the group`,
+        );
+      }
+      return pass(`group "${e.answerGroup.name}", ${options.length} named options, prompt named once`);
+    },
+  },
+  {
     id: 'J2.5',
     what: 'answering writes the verdict and its source sentence into one polite region',
     decide: (e) => {
@@ -1182,6 +1280,210 @@ const QUIZ_CHECKS = [
     },
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Journey 2.9 — the end of a quiz, run twice
+// ---------------------------------------------------------------------------
+
+/**
+ * 2.9 — "no score, tally or mark out of five is announced anywhere" — decided by DIFFERENCE.
+ *
+ * ## Why the obvious check is the wrong one, and why this row sat with the person
+ *
+ * The certification recorded this as an unbounded negative over speech, and added that "the
+ * end-of-quiz panel's own prose about there being no mark out of five defeats every textual scan".
+ * The second half of that is measurably false — the panel spells the number as a word ("nowhere in
+ * this product for a mark out of five to live"), so no digit-shaped scan trips on it — but the
+ * first half is the real problem and a scan does not solve it. A scan is a list of the wordings
+ * somebody thought of. "You matched three of the five" defeats a digit pattern; "well done" is a
+ * verdict with no number in it at all. A negative decided by a wording list is a negative that
+ * passes anything the list did not anticipate, which is exactly the proxy-for-a-judgement shape
+ * this repository has been bitten by before.
+ *
+ * ## What is decided instead
+ *
+ * A score is a function of what the learner got right. So the quiz is run to its review panel
+ * TWICE, from a fresh load each time, diverging in exactly one place: the first question is
+ * answered with the lesson's own answer in one run and with a different option in the other. Every
+ * other question is skipped, identically, in both. If any figure anywhere on the page were derived
+ * from correctness — a tally, a percentage, a mark, a grade, a sentence of praise, in digits or in
+ * words or in a live region — the two runs would differ, because the number of matched answers
+ * differs by exactly one. They must be identical.
+ *
+ * That is a decision procedure rather than a pattern list: it cannot be defeated by a wording
+ * nobody thought of, because it never looks at the wording. What it does not cover is a figure that
+ * does NOT depend on correctness — "5 questions answered" is a tally the row also forbids and it
+ * would be identical in both runs — so the panel is separately required to carry no `N of M` or
+ * `N%` shape. The differential is the load-bearing half; the shape scan is a second, weaker guard
+ * over the one thing the differential cannot see.
+ *
+ * The run is compared over `main` rather than the whole document, deliberately: the shell's units
+ * pill is fetched asynchronously and can settle as `assumed` in one run and `known` in the next,
+ * which is a difference about the API's latency and not about the quiz. Nothing outside `main`
+ * knows what was answered.
+ */
+const SPOKEN_TEXT_JS = `((root) => {
+  if (root === null) return null;
+  const copy = root.cloneNode(true);
+  for (const decoration of copy.querySelectorAll('[aria-hidden="true"]')) decoration.remove();
+  return (copy.textContent ?? '').replace(/\\s+/gu, ' ').trim();
+})`;
+
+/** The shapes a tally takes when it is written in digits. See the header: the weaker of the two halves. */
+const TALLY_SHAPE = /\b\d[\d,]*\s*(?:\/|of|out of)\s*\d[\d,]*\b|\b\d[\d,]*\s*%/u;
+
+/** How many "Next question"/"Finish" presses it can take to walk out of a quiz. */
+const QUIZ_STEP_LIMIT = 12;
+
+async function gatherQuizReview(page, baseUrl) {
+  const evidence = { runs: [] };
+  for (const takeTheLessonAnswer of [true, false]) {
+    const run = { takeTheLessonAnswer };
+    await page.goto(`${baseUrl}/learn/pot-odds`);
+    await page.settle(700);
+    // Answer once with whatever is first, only so that the chips appear and the lesson's own answer
+    // can be read off the page. Which option carries it is a fact about the question, and this
+    // gate has no business knowing the answer key.
+    run.opened = await page.evaluate(
+      `(() => {
+        const radios = [...document.querySelectorAll('.prl-learn-quiz__options input[type="radio"]')];
+        if (radios.length === 0) return 0;
+        radios[0].click();
+        return radios.length;
+      })()`,
+    );
+    if (run.opened === 0) {
+      evidence.runs.push(run);
+      continue;
+    }
+    await page.settle(900);
+    run.chose = await page.evaluate(
+      `(() => {
+        const options = [...document.querySelectorAll('.prl-learn-quiz__option')];
+        const lesson = options.findIndex((option) => /the answer this lesson gives/u.test(option.textContent ?? ''));
+        if (lesson < 0) return null;
+        const wanted = ${JSON.stringify(takeTheLessonAnswer)} ? lesson : (lesson === 0 ? 1 : 0);
+        const radio = options[wanted].querySelector('input[type="radio"]');
+        if (radio === null) return null;
+        radio.click();
+        return { lesson, wanted };
+      })()`,
+    );
+    await page.settle(900);
+    run.verdict = await page.evaluate(
+      `(${SPOKEN_TEXT_JS})(document.querySelector('.prl-learn-quiz__verdict'))`,
+    );
+
+    // Out through the quiz's own control, skipping the rest — identically in both runs.
+    for (let step = 0; step < QUIZ_STEP_LIMIT; step += 1) {
+      const advanced = await page.evaluate(
+        `(() => {
+          const button = [...document.querySelectorAll('.prl-learn-quiz__nav button')]
+            .find((b) => /Next question|Finish/u.test(b.textContent ?? '') && !b.disabled);
+          if (button === undefined) return false;
+          button.click();
+          return true;
+        })()`,
+      );
+      if (!advanced) break;
+      await page.settle(450);
+      run.reachedReview = await page.evaluate(
+        `document.querySelector('.prl-learn-quiz__options') === null &&
+         document.querySelector('.prl-learn-quiz__advice') !== null`,
+      );
+      if (run.reachedReview === true) break;
+    }
+    run.panel = await page.evaluate(`(${SPOKEN_TEXT_JS})(document.querySelector('.prl-learn-quiz'))`);
+    run.main = await page.evaluate(`(${SPOKEN_TEXT_JS})(document.querySelector('main'))`);
+    run.regions = (await liveRegions(page)).map((region) => `${region.live ?? region.role}:${region.text}`);
+    evidence.runs.push(run);
+  }
+  return evidence;
+}
+
+const QUIZ_REVIEW_CHECKS = [
+  {
+    id: 'J2.9',
+    what: 'the end of the quiz says nothing that depends on what was answered, and carries no tally',
+    decide: (e) => {
+      const [matched, missed] = e.runs ?? [];
+      if (matched === undefined || missed === undefined) {
+        return fail('the quiz was not run to its review panel twice, so there was nothing to compare');
+      }
+      for (const run of [matched, missed]) {
+        const label = run.takeTheLessonAnswer ? 'the matching run' : 'the non-matching run';
+        if (run.chose === null || run.chose === undefined) {
+          return fail(
+            `${label} could not find the lesson's own answer on the page, so it diverged from nothing`,
+          );
+        }
+        if (run.reachedReview !== true) {
+          return fail(
+            `${label} never reached the review panel, so this assertion checked no end of any quiz`,
+          );
+        }
+        if ((run.panel ?? '').length < 100) {
+          return fail(
+            `${label} read ${(run.panel ?? '').length} characters of review panel; a sweep of nothing is not a pass`,
+          );
+        }
+      }
+      // The divergence, proved rather than assumed. Two runs that answered the same way would agree
+      // about everything including a score, and this check would pass a scoreboard.
+      if (matched.chose.wanted === missed.chose.wanted) {
+        return fail('both runs picked the same option, so nothing about correctness differed between them');
+      }
+      if (!/^That matches the answer this lesson gives/u.test(matched.verdict ?? '')) {
+        return fail(
+          `the run that picked the lesson's own answer was told "${(matched.verdict ?? '').slice(0, 60)}", ` +
+            'so it did not match after all and the two runs may have scored the same',
+        );
+      }
+      if (!/^That is not the answer this lesson gives/u.test(missed.verdict ?? '')) {
+        return fail(
+          `the run that picked another option was told "${(missed.verdict ?? '').slice(0, 60)}", so it ` +
+            'matched too and the two runs scored the same',
+        );
+      }
+      if (matched.main !== missed.main) {
+        return fail(
+          'the end of the quiz reads differently depending on whether the answer matched, so something ' +
+            `on the page is derived from correctness. Matching run: "${firstDifference(
+              matched.main,
+              missed.main,
+            )}"`,
+        );
+      }
+      if (JSON.stringify(matched.regions) !== JSON.stringify(missed.regions)) {
+        return fail(
+          'a live region at the end of the quiz holds different text depending on whether the answer ' +
+            `matched: ${JSON.stringify(matched.regions)} against ${JSON.stringify(missed.regions)}`,
+        );
+      }
+      const tally = TALLY_SHAPE.exec(matched.panel ?? '');
+      if (tally !== null) {
+        return fail(
+          `the review panel announces "${tally[0]}", which is a tally. The panel is where the quiz ends ` +
+            'and there is nothing there for a figure to be about except the answers',
+        );
+      }
+      return pass(
+        `identical over ${matched.main.length} characters of main across a matched and an unmatched run, ` +
+          'no tally shape in the panel',
+      );
+    },
+  },
+];
+
+/** Where two strings first differ, with a little either side. For a failure message that can be read. */
+export function firstDifference(left, right) {
+  const a = left ?? '';
+  const b = right ?? '';
+  let at = 0;
+  while (at < a.length && at < b.length && a[at] === b[at]) at += 1;
+  const from = Math.max(0, at - 30);
+  return `…${a.slice(from, at + 50)}…` + ` / …${b.slice(from, at + 50)}…`;
+}
 
 // ---------------------------------------------------------------------------
 // Journey 3 — the poker table and the Coach, at a desktop width
@@ -1710,8 +2012,12 @@ const ENABLED_ACTION = `[...document.querySelectorAll('button.prl-action-btn')].
  *
  * `fresh` clears the cookie jar first, which the live-table route needs and the replay route must
  * not do: it is reading back a hand that belongs to the session it already has.
+ *
+ * `decide` is how the decision is made when the turn arrives. It defaults to one Fold pressed with
+ * a real Enter key; 3.19 substitutes a double press, which is the only fixture that reaches a
+ * server refusal. See `foldTwiceInOneTask`.
  */
-async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0 } = {}) {
+async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0, decide = foldOnce } = {}) {
   const evidence = { steps: [], reachedTurn: false, dwellMs: 0, complete: false, turnOpenedAt: null };
   if (fresh) await page.clearCookies();
   await page.goto(`${baseUrl}/play`);
@@ -1768,7 +2074,7 @@ async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0 } = {})
     evidence.dwellMs = Date.now() - started;
   }
 
-  evidence.folded = await pressControl(page, /^fold\b/iu);
+  evidence.folded = await decide(page, evidence);
   await page.settle(1400);
   evidence.foldFocus = await focusedAx(page);
   evidence.complete = await waitInPage(page, '/The hand is complete/u.test(document.body.innerText)', 90);
@@ -1776,8 +2082,60 @@ async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0 } = {})
   return { ...evidence, ...(await speechSoFar(page)) };
 }
 
+/** One Fold, through Chrome's own key pipeline. What a reader does, and what 3.15 and 3.16 read. */
+const foldOnce = (page) => pressControl(page, /^fold\b/iu);
+
+/**
+ * Two decisions out of one seat before the controls can disable themselves — the fixture for 3.19.
+ *
+ * ## Why this is not the race the document said it was
+ *
+ * 3.19 was `person` because "provoking a server refusal needs a decision the server rejects, and
+ * this client disables the controls the instant one is sent" — with the conclusion that the only
+ * remaining route was a second actor racing the same seat. The premise is right about a human and
+ * wrong about a task: `disabled` arrives from React state, so it is applied on the NEXT render, and
+ * two `click()`s inside one task both reach `act`, which mints a fresh `actionId` for each. Both
+ * frames go out over one socket, in order. Measured against the running server: the second click
+ * saw `button.disabled === false`, and the server answered
+ * `"It is not your turn to act. (not_your_turn). Nothing was applied."` — a real refusal of a real
+ * second decision, with no second actor anywhere.
+ *
+ * A real Enter key cannot do this and that is not a shortcoming of the fixture: two key events are
+ * two tasks by construction, and by the second one the control is genuinely disabled. The keyboard
+ * path to a decision is what 3.15 and 3.16 press; what 3.19 is about is the fate of the second one.
+ *
+ * The refusal code is deliberately not pinned. Which one the server picks depends on where the hand
+ * got to between the two frames — `not_your_turn` once the fold has moved the action on,
+ * `stale_action_sequence` if it has not — and 3.19 is about the refusal being heard, not about
+ * which refusal it was.
+ */
+async function foldTwiceInOneTask(page, evidence) {
+  const result = await page.evaluate(
+    `(() => {
+      const named = (b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').replace(/\\s+/gu, ' ').trim();
+      const button = [...document.querySelectorAll('button.prl-action-btn')]
+        .filter((b) => /^fold\\b/iu.test(named(b)))
+        .find((b) => !b.disabled);
+      if (button === undefined) return null;
+      button.click();
+      // Read between the two presses. If this is ever false the fixture has stopped working: the
+      // second click would be refused by the browser and no second decision would be sent, and the
+      // check below would then be reporting a silence it manufactured.
+      const stillEnabled = !button.disabled;
+      button.click();
+      return { name: named(button), stillEnabled };
+    })()`,
+  );
+  evidence.doubleAct = result;
+  return result === null ? null : result.name;
+}
+
 const gatherLiveTable = (page, baseUrl) =>
   driveLiveHand(page, baseUrl, { fresh: true, dwellMs: TURN_DWELL_MS });
+
+/** 3.19's own hand, played to the same turn and then acted on twice. */
+const gatherRefusedDecision = (page, baseUrl) =>
+  driveLiveHand(page, baseUrl, { fresh: true, decide: foldTwiceInOneTask });
 
 /** The sentence `statusSentence` prints while the session and the room are being found. */
 const PREPARING = /^Preparing: reading your session/u;
@@ -2159,6 +2517,86 @@ const LIVE_TABLE_CHECKS = [
         );
       }
       return pass(`"${done.text.slice(0, 64)}…"`);
+    },
+  },
+];
+
+/** The heading `SUBMISSION_TITLE.rejected` prints when the refusal came from the server. */
+const SERVER_REFUSED = /The server refused it/u;
+
+/**
+ * The wording the server itself supplied, as `onErrorFrame` renders it: a sentence, then `(code)`.
+ *
+ * Matched as a shape rather than as a string. Which refusal arrives depends on where the hand got
+ * to between the two frames, and pinning `not_your_turn` would fail the gate on a timing difference
+ * that changes nothing about what a reader is told.
+ */
+const SERVER_REFUSAL_REASON = /\(([a-z_]+)\)\.\s*Nothing was applied\./u;
+
+const REFUSED_DECISION_CHECKS = [
+  {
+    id: 'J3.19',
+    what: 'a refused decision interrupts, in the server’s own words, and nothing else on the screen does',
+    decide: (e) => {
+      if (!e.reachedTurn) {
+        return fail('the decision never reached this seat, so no decision could be refused');
+      }
+      if (e.doubleAct === null || e.doubleAct === undefined) {
+        return fail('no enabled Fold control was on the screen when the turn arrived');
+      }
+      if (e.doubleAct.stillEnabled !== true) {
+        return fail(
+          'the control was already disabled between the two presses, so only ONE decision was sent ' +
+            'and this run never asked the server to refuse anything. The fixture has stopped ' +
+            'working; a silence measured here would be a silence it manufactured',
+        );
+      }
+      const writes = e.log ?? [];
+      if (writes.length === 0) {
+        return fail('no live region was written to during the whole hand; nothing was measured');
+      }
+      const refusals = writes.filter((entry) => SERVER_REFUSED.test(entry.text) && !entry.recovered);
+      if (refusals.length === 0) {
+        return fail(
+          'two decisions went out and no region ever said the server refused one. Either the second ' +
+            'was accepted — in which case this seat acted twice — or the refusal reached the screen ' +
+            `as pixels only. The regions held ${JSON.stringify(
+              writes.map((entry) => entry.text.slice(0, 40)).slice(-4),
+            )}`,
+        );
+      }
+      const interrupting = refusals.find((entry) => entry.live === 'assertive' || entry.role === 'alert');
+      if (interrupting === undefined) {
+        return fail(
+          `the refusal was announced ${refusals[0].live}, not assertively. A reader who is mid-` +
+            'sentence hears their decision refused whenever the queue gets to it, by which time they ' +
+            'have acted again — "a refusal that is announced politely is a FAIL"',
+        );
+      }
+      const reason = SERVER_REFUSAL_REASON.exec(interrupting.text);
+      if (reason === null) {
+        return fail(
+          `the alert says "${interrupting.text.slice(0, 80)}", which carries the heading and none of ` +
+            "the server's own wording. A reader is told something was refused and not what",
+        );
+      }
+      // "…and it is the only thing on this screen that interrupts." An assertive region that fires
+      // for anything else is what teaches a reader to turn the whole surface off, which costs them
+      // this announcement — the one that matters.
+      const otherInterruptions = writes.filter(
+        (entry) =>
+          (entry.live === 'assertive' || entry.role === 'alert') &&
+          !entry.recovered &&
+          !SERVER_REFUSED.test(entry.text),
+      );
+      if (otherInterruptions.length > 0) {
+        return fail(
+          `${otherInterruptions.length} other announcement(s) on this screen interrupted as well — ` +
+            `${JSON.stringify(otherInterruptions.map((entry) => entry.text.slice(0, 50)).slice(0, 3))}. ` +
+            'The refusal is the only thing here that is allowed to',
+        );
+      }
+      return pass(`assertive, "${interrupting.text.slice(0, 56)}…", code ${reason[1]}, sole interruption`);
     },
   },
 ];
@@ -3364,6 +3802,18 @@ export const ASSERTION_ROUTES = [
     checks: QUIZ_CHECKS,
   },
   {
+    /*
+      2.9 gets its own page visit because it needs two of them: the quiz is walked to its review
+      panel twice from a fresh load, and the runs differ in exactly one answer. See
+      `gatherQuizReview` for why the row is decided by difference rather than by a scan.
+    */
+    key: 'quiz-review',
+    title: 'J2 Guided practice, at the end of the quiz',
+    path: '/learn/pot-odds',
+    gather: gatherQuizReview,
+    checks: QUIZ_REVIEW_CHECKS,
+  },
+  {
     key: 'table',
     title: 'J3 Table and Coach',
     path: '/play?state=decision',
@@ -3406,6 +3856,21 @@ export const ASSERTION_ROUTES = [
     path: '/review',
     gather: gatherReplay,
     checks: REPLAY_CHECKS,
+  },
+  /*
+    3.19's hand, and it must come AFTER the replay.
+
+    It clears the cookie jar and plays a hand of its own, so a session sitting between it and the
+    replay would be a different reader's — the replay would find no hand of its own to read back
+    and would have to play one, which is twenty seconds of gate for nothing. Ordering only; the
+    route stands alone.
+  */
+  {
+    key: 'live-refusal',
+    title: 'J3 Table and Coach, a decision the server refuses',
+    path: '/play',
+    gather: gatherRefusedDecision,
+    checks: REFUSED_DECISION_CHECKS,
   },
   { key: 'lab', title: 'J4 Scenario Lab', path: '/lab', gather: gatherLabIndex, checks: LAB_INDEX_CHECKS },
   {
