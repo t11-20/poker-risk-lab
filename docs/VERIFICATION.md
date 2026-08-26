@@ -491,14 +491,14 @@ The honest section.
 
 ### What the release gate actually enforces
 
-`pnpm run verify` runs **fourteen** gates, reports each, and exits non-zero if any failed. Every
+`pnpm run verify` runs **fifteen** gates, reports each, and exits non-zero if any failed. Every
 section of this document is mapped onto it here, because "we check that" and "the release checks
 that" are different sentences and this project has confused them before. (This said *eleven*, then
-*thirteen*: eleven was the count before `test:ax` and `test:csp` joined the loop in `package.json`,
-and thirteen was right until `test:age-gate` joined it. Read the count off that loop, not off this
-sentence. Nothing in the table below maps onto `test:age-gate` — it enforces a control this document
-makes no claim about, and `docs/production/legal-review-requirements.md` follow-up 5 is where it is
-described.)
+*thirteen*, then *fourteen*: eleven was the count before `test:ax` and `test:csp` joined the loop in
+`package.json`, thirteen was right until `test:age-gate` joined it, and fourteen until `test:layout`
+did. Read the count off that loop, not off this sentence. Nothing in the table below maps onto
+`test:age-gate` — it enforces a control this document makes no claim about, and
+`docs/production/legal-review-requirements.md` follow-up 5 is where it is described.)
 
 | This document's claim | Enforced by |
 | --- | --- |
@@ -512,6 +512,7 @@ described.)
 | Contrast ratios, both themes | `design:contrast` — three passes: the token set, the pairings a component may use, and the **composited background of every element carrying text**, walked in real Chrome on every route in both themes (and under `prefers-reduced-transparency` and `prefers-contrast: more`). The third needs the web app **built** and a Chrome on `CHROME_PATH`; without either it fails rather than skipping |
 | §8's AA-vs-KK / AKs-vs-22 / AKo-vs-QQ figures, and Monte Carlo agreeing with exact enumeration | **Nothing.** See the row in the table above |
 | Accessibility, to the extent §12 says it is checked at all | `test:a11y` — **added to the gate 2026-08-18**; it lived only in `test:all`, which is not the gate |
+| That the app's text does not paint over itself, escape its column or get cut off | `test:layout` — `Range.getClientRects()` over every text node, every route, both themes, at 360/768/1024/1440/1920, in real Chrome. It measures the GLYPHS: the defect it was written for was a grid track that collapsed to 0px, where the element boxes do not overlap and the text does. Six injected negative controls run before the sweep — one per check it can report, the first of them the offending CSS rule put back verbatim — and each must be caught. This document made no claim about layout before it, which is the point — the defect shipped past every row above |
 | Everything in the "NOT verified" table above | **Nothing.** That is what the table means |
 
 ---

@@ -1072,6 +1072,12 @@ jobs:
   #     which is exactly why it needs a gate of its own: a gate that silently
   #     fails looks identical to the shipped configuration. It ran in no workflow
   #     either.
+  #   * `test:layout` — the painted text. It measures `Range.getClientRects()`
+  #     over every text node on every route, in both themes, at 360/768/1024/
+  #     1440/1920, and it exists because a collapsed grid track in the Coach rail
+  #     shipped with every gate above it green: the boxes did not overlap, the
+  #     text did. It also runs six injected negative controls before the sweep,
+  #     so a broken detector fails the job rather than going quiet.
   #
   # ## What the job has to supply, and how that was established
   #
@@ -1096,7 +1102,8 @@ jobs:
   # off cannot be measured).
   #
   # Ports are the scripts' own and do not collide: 3457 for the CSP control,
-  # 3458 and 3459 for the age gate's two scopes, 3462 for the contrast sweep.
+  # 3458 and 3459 for the age gate's two scopes, 3462 for the contrast sweep,
+  # 3463 for the painted-text sweep.
   #
   # ## Teardown
   #
@@ -1107,11 +1114,12 @@ jobs:
   # that case destroys the runner a moment later.
   # -------------------------------------------------------------------------
   browser-gates:
-    name: Contrast, CSP and age gate (real Chrome)
+    name: Contrast, painted text, CSP and age gate (real Chrome)
     needs: supply-chain
     runs-on: ubuntu-24.04
-    # Three browser sweeps on top of a full build. The contrast pass alone walks
-    # every route in both themes and screenshots each one.
+    # Four browser sweeps on top of a full build. The contrast pass alone walks
+    # every route in both themes and screenshots each one, and the painted-text
+    # pass walks them again at five widths.
     timeout-minutes: 45
     steps:
       - name: Check out
@@ -1171,6 +1179,15 @@ jobs:
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: pnpm run test:age-gate -- --out age-gate-report.json
 
+      - name: Painted text
+        # Six negative controls first — a defect of each shape put back into a
+        # real page — then 15 routes x 2 themes x 5 widths. The controls are the
+        # half that matters in CI: a sweep reporting nothing and a detector that
+        # examined nothing print the same thing, and only one of them is good
+        # news.
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:layout -- --out text-layout-report.json
+
       - name: Upload the browser-gate reports
         # `always()`, because the report of a FAILING run is the one worth
         # reading: both files record every check, its verdict and its evidence.
@@ -1181,5 +1198,6 @@ jobs:
           path: |
             csp-negative-control.json
             age-gate-report.json
+            text-layout-report.json
           if-no-files-found: warn
           retention-days: 14

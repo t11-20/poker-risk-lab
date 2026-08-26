@@ -148,7 +148,7 @@ never receive another player's hole cards. A guardrail that skips is not a guard
 
 | Command | What it does |
 | --- | --- |
-| `pnpm run security:audit` | **All fourteen supply-chain gates.** Itself one of the *fourteen* gates inside `pnpm run verify`, which is the release gate as a whole. The two numbers are coincidentally equal and unrelated: fourteen gates live inside `security:audit`, and `verify` runs fourteen of which this is one. It was eleven until `image-provenance`, `log-policy` and `keyless-signing-identity` were added |
+| `pnpm run security:audit` | **All fourteen supply-chain gates.** Itself one of the *fifteen* gates inside `pnpm run verify`, which is the release gate as a whole. The two numbers were coincidentally equal — fourteen and fourteen — until `test:layout` was added to `verify`; they are unrelated lists and were never comparable. It was eleven until `image-provenance`, `log-policy` and `keyless-signing-identity` were added |
 | `pnpm run security:audit -- --offline` | Skips the three network gates and **exits 2** — *not* a valid release audit |
 | `pnpm run security:policy` | Is the supply-chain policy actually in effect? |
 | `pnpm run security:hygiene` | Source encoding, NUL bytes, hidden/bidi characters |
@@ -220,11 +220,12 @@ privilege boundary working, not a broken command.
 ```bash
 pnpm run verify
 # security:audit · security:hygiene · lint · build · typecheck · design:contrast
-# test · test:a11y · test:ax · test:csp · test:age-gate · test:exhaustive · test:simulation
-# db:verify
-# — fourteen gates. This comment said thirteen, and before that eleven. The eleven was a
-#   comment that had fallen behind the loop (test:ax and test:csp were missing from it, not
-#   from package.json); the thirteen was correct until test:age-gate was added to the loop.
+# test · test:a11y · test:ax · test:layout · test:csp · test:age-gate · test:exhaustive
+# test:simulation · db:verify
+# — fifteen gates. This comment said fourteen, and thirteen, and before that eleven. The
+#   eleven was a comment that had fallen behind the loop (test:ax and test:csp were missing
+#   from it, not from package.json); thirteen was correct until test:age-gate joined, and
+#   fourteen until test:layout did.
 #   Read the list in package.json, never this comment, if the two ever disagree.
 ```
 

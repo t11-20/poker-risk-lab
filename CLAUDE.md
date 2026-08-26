@@ -18,15 +18,40 @@ against the repo — if a statement here and the code disagree, the code is righ
 
 ## The gate
 
-`pnpm run verify` is the release gate: **fourteen** gates, in order —
+`pnpm run verify` is the release gate: **fifteen** gates, in order —
 
     security:audit  security:hygiene  lint  build  typecheck  design:contrast  test
-    test:a11y  test:ax  test:csp  test:age-gate  test:exhaustive  test:simulation  db:verify
+    test:a11y  test:ax  test:layout  test:csp  test:age-gate  test:exhaustive
+    test:simulation  db:verify
 
 It runs every gate even after one fails, then exits non-zero listing them. `security:audit` is
-itself **fourteen** supply-chain gates (`scripts/supply-chain/audit.mjs`) — the same number as
-verify's fourteen since the keyless-signing identity gate was added, which is worse than a different
-number: the two lists are unrelated and now look interchangeable. Read each count off its own list.
+itself **fourteen** supply-chain gates (`scripts/supply-chain/audit.mjs`). Those two counts were
+equal for a while — worse than being different, because the lists are unrelated and equal numbers
+look interchangeable — and `test:layout` has since made them fifteen and fourteen. Read each count
+off its own list anyway; they will collide again.
+
+`scripts/release-gate-coverage.mjs` reads the `for gate in ...` clause of `verify` against the job
+graphs of both workflows and fails when they disagree, so **adding a gate is a three-file change by
+construction**: `package.json`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`.
+
+`pnpm run test:layout` is the newest and the one whose absence cost the most. It measures
+**`Range.getClientRects()` over each element's own text nodes** — where the glyphs landed — on
+every route, in both themes, at 360/768/1024/1440/1920, and reports four shapes of one failure:
+glyphs of two independent in-flow elements overlapping, glyphs painted outside their own box,
+glyphs cut off by a non-scrolling ancestor, and a block narrower than its own longest word.
+
+It exists because `.prl-play .prl-coach__section .prl-stat__pair` shipped as
+`grid-template-columns: minmax(0, 1fr) auto`. A bare `auto` track is floored at max-content, so a
+value that was a sentence took the whole row and the `1fr` label collapsed to nothing with the
+sentence painted across it. **Every gate was green** — `design:contrast` composites in real Chrome,
+`test:ax` makes 111 computed-tree assertions, 3,555 unit tests passed — and it was found by looking
+at a screenshot. The first probe written for it missed it too, because it compared the two
+elements' **bounding boxes**: when a track collapses the boxes do not overlap, the *text* overflows
+the box. If you write a layout check, measure the glyphs.
+
+Its negative controls run on every invocation: six stylesheets injected into real pages, one of
+them the `minmax(0, 1fr) auto` rule put back verbatim, each of which must be caught. A detector
+that stops working fails the gate instead of going quiet.
 
 Gates outside `verify` because they need a deployment: `alerts:verify`, `alerts:preflight`,
 `alerts:ack`, `staging`, `backup`, `test:load`, `test:drills`, `release:artifacts`,

@@ -294,13 +294,15 @@ jobs:
   #
   # `scripts/release-gate-coverage.mjs` is the guard that keeps this job in step
   # with `verify`, and it runs inside `pnpm run test` in the job above — so a
-  # fifteenth gate added to `verify` and not wired in here fails THIS pipeline.
+  # gate added to `verify` and not wired in here fails THIS pipeline. It has
+  # already earned its keep once: `test:layout` was added to `verify` as the
+  # fifteenth gate, and this job is where that guard said it had to be wired.
   # -------------------------------------------------------------------------
   browser-gates:
-    name: Contrast, a11y, ax tree, CSP and age gate (real Chrome)
+    name: Contrast, a11y, ax tree, painted text, CSP and age gate (real Chrome)
     needs: gates
     runs-on: ubuntu-24.04
-    # Five browser sweeps on top of a full build. `test:ax` alone plays a hand at
+    # Six browser sweeps on top of a full build. `test:ax` alone plays a hand at
     # a live table and waits on bots.
     timeout-minutes: 60
 
@@ -421,6 +423,15 @@ jobs:
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: pnpm run test:age-gate -- --out age-gate-report.json
 
+      - name: Painted text
+        # `Range.getClientRects()` over every text node on every route, in both
+        # themes, at five widths, with six injected negative controls run first.
+        # It is here because a collapsed grid track in the Coach rail shipped
+        # with every other gate in this job green — the element boxes did not
+        # overlap, the glyphs did — and nothing in this pipeline could see it.
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:layout -- --out text-layout-report.json
+
       - name: Upload the browser-gate reports
         # `always()`, because the report of a FAILING run is the one worth reading.
         if: always()
@@ -432,6 +443,7 @@ jobs:
             ax-tree-report.json
             csp-negative-control.json
             age-gate-report.json
+            text-layout-report.json
           if-no-files-found: warn
           retention-days: 14
 
