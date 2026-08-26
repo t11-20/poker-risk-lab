@@ -62,10 +62,22 @@
  * size the element ends up at, which is the only way a fluid `clamp()` heading can be capped at all.
  * The cap lives on the two children rather than on the head, because the head's `ch` would resolve
  * against the head's own 17px and hand the 20px lede a 51-character line.
+ *
+ * THE TYPOGRAPHIC STEP THAT WAS MISSING. The hero opens at `--prl-type-display-1` (4rem at 1440px)
+ * and every section heading under it fell straight through to `base.css`'s bare `h2`, measured at
+ * 1.75rem. A page whose second-largest text is 44% of its largest has one voice and then a long
+ * murmur: with no middle register the four sections read as one undifferentiated scroll rather
+ * than as four chapters. `--prl-type-display-2` is the token that exists for this step, and it
+ * brings its own optical tracking — which matters more here than the size, because a grotesk set
+ * at 2.5rem with body tracking looks slack, and slack is what reads as unconsidered.
  */
 .prl-home__section-title {
   margin: 0;
   max-width: 20ch;
+  font-size: var(--prl-type-display-2);
+  font-weight: var(--prl-weight-bold);
+  letter-spacing: var(--prl-tracking-display-2);
+  line-height: var(--prl-leading-heading);
   text-wrap: balance;
 }
 
@@ -88,10 +100,41 @@
   padding-block: var(--prl-space-12) var(--prl-section-y);
 }
 
+/**
+ * THE EYEBROW, AS A FLOATING PILL RATHER THAN AS A LINE OF SMALL TYPE.
+ *
+ * This is the first element on the first screen, and it was a run of 13px letter-spaced text
+ * sitting on the page ground with nothing around it — which is how a caption looks, not how a
+ * product's standing claim looks. It is now the same object as the pills in the header directly
+ * above it: L3 `floating`, `--prl-glass-filter`, `--prl-elevation-2`, `--prl-radius-pill`. The
+ * page wash behind it is what makes the material read as material rather than as a flat tint (see
+ * the MATERIALS block in `tokens.css`), and this is the one place on the page it has a bounded
+ * pane over it to prove it.
+ *
+ * The fill and the blur go together in this block, which is the ghosting rule
+ * `packages/ui/test/layout-guarantees.test.ts` reads off this stylesheet, and
+ * `-webkit-backdrop-filter` is still required by Safari. `--prl-text-faint` is asserted on this
+ * exact tint over both bounding backdrops by `scripts/check-contrast.mjs` (4.55:1 worst), so the
+ * ink is measured where it is used.
+ *
+ * `justify-self: start` is what keeps it a pill: a grid item stretches by default, and a
+ * full-width capsule is a bar.
+ */
 .prl-home__eyebrow {
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  justify-self: start;
   gap: var(--prl-space-4);
+  min-height: var(--prl-target-min);
+  padding-inline: var(--prl-space-7);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-glass-floating);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  box-shadow: var(--prl-elevation-2);
   color: var(--prl-text-faint);
 }
 
@@ -142,6 +185,9 @@
   flex-wrap: wrap;
   gap: var(--prl-space-5);
   align-items: center;
+  /* The two actions are the end of the hero's argument, not the next item in its list, so they get
+     a step of air the stack's own gap does not give them. */
+  padding-block-start: var(--prl-space-4);
 }
 
 /**
@@ -152,22 +198,47 @@
  * fine print. `--prl-caution` on the label plus the words themselves, so the marking is never
  * carried by colour alone.
  */
+/**
+ * IT LOOKED BOLTED ON, AND THE REASON WAS THAT IT WAS DRAWN AS A WARNING RATHER THAN AS A CARD.
+ *
+ * A 2px-radius box with a 1px `--prl-line-strong` outline and a caution-coloured left edge is the
+ * shape of a validation error, and it sat beside a hero whose own objects were a floating pill and
+ * two capsules. So the most important sentence on the page — the one thing about this product that
+ * must not be scrolled past — was the only element in the hero that did not look designed.
+ *
+ * It is now the material ladder's L2 `raised`: the card level, the level body text lives on,
+ * opaque on purpose because long prose over a varying backdrop is a legibility problem no amount
+ * of tint solves. It keeps the caution edge, because the marking is information and because
+ * `--prl-caution` on the label plus the words themselves are what stop it being carried by colour
+ * alone — what changes is that the edge is now one detail on an object instead of the object's
+ * whole identity.
+ *
+ * `--prl-space-1` is 2px and means "a small length"; `--prl-focus-width` is also 2px and means
+ * "the focus ring". Borrowing the focus token here is how a later change to the ring's weight
+ * silently thickens this marker, so the space token is the right one.
+ */
 .prl-home__guardrail {
   display: grid;
-  gap: var(--prl-space-3);
+  gap: var(--prl-space-5);
   max-width: var(--prl-measure);
   margin: 0;
-  padding: var(--prl-space-6);
-  border: 1px solid var(--prl-line-strong);
-  /* `--prl-space-1` is 2px and means "a small length"; `--prl-focus-width` is also 2px and means
-     "the focus ring". Borrowing the focus token here is how a later change to the ring's weight
-     silently thickens this marker. */
+  padding: var(--prl-space-8);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
   border-inline-start: var(--prl-space-1) solid var(--prl-caution);
-  border-radius: var(--prl-radius-1);
-  background-color: var(--prl-surface-raised);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
+/**
+ * The label reads as a marking rather than as a first line: it is set apart from the sentence it
+ * introduces by a rule, which is what a caution notice does on a physical instrument.
+ */
 .prl-home__guardrail-label {
+  padding-block-end: var(--prl-space-5);
+  border-block-end: var(--prl-hairline);
   color: var(--prl-caution);
 }
 
@@ -182,6 +253,89 @@
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body);
   line-height: var(--prl-leading-body);
+}
+
+/* ==========================================================================================
+   2b. THE LOOP, AS A SEQUENCE RATHER THAN AS FOUR COLUMNS
+   ==========================================================================================
+   `ProcessSpine` is styled in `globals.css`, which is the shell's file and not this one. What is
+   below is scoped to `.prl-home__section .prl-spine*` so it applies on this route and nowhere
+   else — the same component is a BREADCRUMB inside a hand, where one step is current and a
+   decorated rail would be noise. Nothing here changes the markup or the shell's rules; it
+   overrides them at (0,2,0) on one route.
+
+   WHAT WAS WRONG. Four `<li>`s in four grid tracks, each with a 20px accent tick above it, is
+   four columns of text with a mark on top. It reads as a comparison — four alternatives — and the
+   component's entire claim is the opposite: these are four steps of one loop, in order, and the
+   fourth leads back to the first. A sequence needs a line running THROUGH it and a node ON that
+   line, which is the difference between a diagram and a layout.
+   ========================================================================================== */
+
+/** The shell draws the rail as a border on the `<ol>` itself, which puts one continuous line
+    above four columns. The line moves onto the steps below so each one carries its own segment
+    and can therefore carry a node. */
+.prl-home__section .prl-spine {
+  gap: var(--prl-space-8);
+  border-block-start: 0;
+}
+
+.prl-home__section .prl-spine__step {
+  gap: var(--prl-space-4);
+  padding-block-start: var(--prl-space-9);
+}
+
+/**
+ * The rail segment. `globals.css` gives this pseudo-element a 20px accent tick; here it runs the
+ * full width of the step so the four segments meet across the row and read as one line. It is
+ * `--prl-line-strong` and not the decorative hairline because at 1px on the page ground the
+ * decorative line is 1.44:1 and simply is not there.
+ */
+.prl-home__section .prl-spine__step::before {
+  width: 100%;
+  border-block-start: 1px solid var(--prl-line-strong);
+}
+
+/**
+ * The node. A ring on the rail, at the start of each step — the mark that turns a line into a
+ * sequence of stations. It is `::after` on the step, which the shell leaves unused, and it is
+ * drawn as a border rather than as a fill so that `forced-colors` repaints it instead of throwing
+ * it away. The page-coloured centre is what makes the rail appear to pass behind it.
+ *
+ * `.prl-spine__step` is already `position: relative` in `globals.css`, and the `-50%` translate
+ * centres the ring on a rail sitting at the step's block-start edge.
+ */
+.prl-home__section .prl-spine__step::after {
+  content: "";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  width: var(--prl-space-5);
+  height: var(--prl-space-5);
+  border: var(--prl-space-1) solid var(--prl-accent-edge);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-surface-page);
+  transform: translateY(-50%);
+}
+
+/**
+ * The step number, promoted from a caption to the thing that carries the ordering.
+ *
+ * The `01…04` numerals are `aria-hidden` — the `<ol>` already announces "item 2 of 4" — so their
+ * whole job is visual, and at `--prl-type-label` they were losing that job to the label beside
+ * them. At the metric size, tabular and in the accent, the eye reads the order before it reads a
+ * single word, which is what a process graphic is for.
+ */
+.prl-home__section .prl-spine__index {
+  color: var(--prl-accent-text);
+  font-size: var(--prl-type-metric-sm);
+  font-variant-numeric: var(--prl-numeric);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
+}
+
+.prl-home__section .prl-spine__label {
+  font-size: var(--prl-type-label);
 }
 
 /* ==========================================================================================
@@ -266,9 +420,46 @@
   border-block-start: 1px solid var(--prl-accent-edge);
 }
 
+/**
+ * The module's way in, drawn as a control rather than as an underlined sentence.
+ *
+ * Three panels each ending in a plain text link put the page's three real destinations at the
+ * quietest weight on the card, under a paragraph and a list that are both louder than they are.
+ * The anchor takes the shared control metrics — `--prl-target-min`, `--prl-radius-pill`, the same
+ * `--prl-line-strong` boundary a `.prl-btn--secondary` carries — so it is recognisably the same
+ * object as the hero's actions and the header's pills without any markup changing: it is still an
+ * `<a>` with an accessible name and a href, and it is still announced as a link.
+ *
+ * The `a` descendant selector is scoped to this class, which owns exactly one anchor.
+ */
 .prl-home__module-link {
   margin-block-start: auto;
-  padding-block-start: var(--prl-space-6);
+  padding-block-start: var(--prl-space-8);
+}
+
+.prl-home__module-link a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--prl-target-min);
+  padding-inline: var(--prl-space-7);
+  border: 1px solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-pill);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-medium);
+  text-decoration: none;
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    color var(--prl-dur-fast) var(--prl-ease-material);
+}
+
+.prl-home__module-link a:hover {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-hover);
+  color: var(--prl-accent-text);
+  text-decoration: none;
 }
 
 /* ==========================================================================================
@@ -301,22 +492,49 @@
   display: contents;
 }
 
+/**
+ * The claim, at reading weight instead of at caption weight.
+ *
+ * It was `--prl-type-label` — 13px, uppercase, letter-spaced — which is the treatment this file
+ * gives to a field label. "Every seven-card hand, enumerated" is not a field label; it is the
+ * heading of the paragraph beside it, and set as small caps it was the smallest text in a block
+ * whose own detail ran at 17px. The claim now reads at the body size with heading tracking, and
+ * the index keeps the caption treatment because a numeral IS a caption here.
+ */
 .prl-home__proof-term {
   display: grid;
-  gap: var(--prl-space-4);
+  gap: var(--prl-space-5);
   grid-template-columns: auto 1fr;
   align-items: baseline;
   padding-block-start: var(--prl-space-8);
   border-block-start: var(--prl-hairline);
   color: var(--prl-text);
-  font-size: var(--prl-type-label);
+  font-size: var(--prl-type-body);
   font-weight: var(--prl-weight-semibold);
-  letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
+  letter-spacing: var(--prl-tracking-heading);
+  text-transform: none;
 }
 
 .prl-home__proof-index {
   color: var(--prl-accent-text);
+  font-size: var(--prl-type-label);
+}
+
+/**
+ * The verifying command, drawn as an inset chip rather than as coloured text.
+ *
+ * `<code>` on the page ground is a font change and nothing else, and the whole point of this line
+ * is that the claim above it is CHECKABLE — it is the only runnable thing on the page. A recessed
+ * pane with a hairline is how the rest of the app draws a literal, and it is what makes the
+ * command findable when the reader is scanning for one.
+ */
+.prl-home__proof-check {
+  width: max-content;
+  max-width: 100%;
+  padding: var(--prl-space-3) var(--prl-space-5);
+  border: var(--prl-hairline);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-inset);
 }
 
 .prl-home__proof-detail {
@@ -364,6 +582,30 @@
 @media (min-width: 900px) {
   .prl-metrics {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+    /* The rules below stand in for the gap, so the columns close up and the band reads as one
+       object with four cells rather than as four blocks that happen to be level. */
+    gap: var(--prl-space-7);
+  }
+
+  /**
+   * A rule between the figures.
+   *
+   * Four numbers set at `--prl-type-metric-lg` across a 1440px row, separated by nothing but
+   * whitespace, do not read as a table of evidence — they read as four unrelated statements, and
+   * the note under each one is what actually ties it to its figure. A hairline is the cheapest
+   * thing that says "these four belong to one row and each has its own cell", and it is the
+   * decorative use `--prl-line-subtle` exists for: it separates, it does not mean.
+   *
+   * `.prl-metrics` is a `<div>` of `Metric` components, so `> *` is exactly the four cells.
+   */
+  .prl-metrics > * {
+    padding-inline-start: var(--prl-space-7);
+    border-inline-start: var(--prl-hairline);
+  }
+
+  .prl-metrics > :first-child {
+    padding-inline-start: 0;
+    border-inline-start: 0;
   }
 
   .prl-home__hero {
@@ -389,9 +631,19 @@
    * rule and the text end together, and hands the slack to the claim column where there is nothing
    * to misalign.
    */
+  /**
+   * The claim column is sized to the claim, not to the leftovers.
+   *
+   * `minmax(0, 1fr)` handed it every pixel the detail column did not want — measured at 1440px
+   * that is a 619px track holding a phrase that sets in about 320px, so each claim floated in the
+   * middle of a half-empty column and the two columns did not read as a pair. `34ch` is the
+   * longest of the four claims plus its numeral, and `ch` scales with whatever size the term ends
+   * up at, so the cap cannot go stale if the type does.
+   */
   .prl-home__proof {
-    grid-template-columns: minmax(0, 1fr) minmax(0, var(--prl-measure));
-    column-gap: var(--prl-space-9);
+    grid-template-columns: minmax(0, 34ch) minmax(0, var(--prl-measure));
+    column-gap: var(--prl-space-11);
+    justify-content: start;
   }
 
   .prl-home__proof-term {

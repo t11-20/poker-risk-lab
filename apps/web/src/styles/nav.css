@@ -14,20 +14,53 @@
  * ==========================================================================================
  *
  * "When I scroll down, it overlaps with the menu bar."  The old header rested at 92% opacity with
- * no `backdrop-filter`, so headings ghosted through it — perfectly legible, in the wrong place, as
- * a second layer of text. THE FIX IS A SOLID FILL, and it is applied at two levels here:
+ * NO `backdrop-filter`, so headings ghosted through it — perfectly legible, in the wrong place, as
+ * a second layer of text. It was never a z-index bug; hit-testing put the header on top at every
+ * point. It was the fill.
  *
- *   1. the header STRIP is opaque `--prl-shell-header-fill`, which is `--prl-surface-page` — the
- *      page's own colour. It is invisible against the page (so the pills read as floating objects
- *      lying on the page, which is the whole look) and it is completely impassable (so nothing can
- *      ever ghost through it). Those two facts are not in tension: identical colour, zero alpha.
- *   2. every pill is opaque `--prl-shell-nav-fill` (`--prl-surface-raised`) with a real border.
- *      A pill has content passing under it on every scroll frame; it is the element in the app
- *      that can least afford to be see-through.
+ * THIS COMMENT USED TO SAY "THE FIX IS A SOLID FILL" AND "NO `backdrop-filter` ANYWHERE". Both
+ * sentences are now wrong, and it matters *which* half of them was wrong, because the incident
+ * they came from has not changed and the reasoning must not be lost on the way past it:
  *
- * No `backdrop-filter` anywhere. A blur on a full-width strip repaints on every scroll frame and
- * is one of the most expensive things a compositor can be asked for — and it would not fix the
- * bug, it would only make the ghost blurry.
+ *   - "a solid fill fixes it" was TRUE, and it is still one of two fixes.
+ *   - "a blur would not fix the bug, it would only make the ghost blurry" was FALSE, and it is the
+ *     sentence this rewrite exists to correct. A blurry ghost is not a ghost. Ghosting is a
+ *     LEGIBILITY failure — the complaint was words being readable in the wrong place — and
+ *     legibility is precisely what a blur destroys while leaving colour behind. That asymmetry is
+ *     the entire reason `blur(20px) saturate(180%)` is a material and 92% opacity is a mistake:
+ *
+ *         92% opacity  destroys neither the legibility nor the colour of the backdrop.
+ *         blur+saturate destroys the legibility and keeps the colour.
+ *
+ * So the strip is GLASS now, and the old defect cannot return through it:
+ *
+ *   1. THE BLUR IS REAL AND UNCONDITIONAL. `--prl-glass-floating` never appears without
+ *      `--prl-glass-filter` in the same block — the rule `packages/ui/test/layout-guarantees.test.ts`
+ *      reads straight off this stylesheet — and the strip is blurred from the first paint at every
+ *      scroll position, so there is no 40px window at the top of a page where it is translucent
+ *      and unblurred. That window is exactly where the reader met the bug.
+ *   2. THE BLUR RADIUS IS LARGER THAN THE TYPE. 20px against a ramp whose largest reading size is
+ *      17px and whose display sizes cap at 4rem of tightly-tracked grotesk: nothing that passes
+ *      under this bar resolves into letterforms. Checked in Chrome by scrolling `/terms` — a
+ *      fourteen-section document of solid prose — under the bar at 1440x1200.
+ *   3. IT GOES SOLID FOR ANYONE WHO ASKED IT TO. Under `prefers-reduced-transparency`,
+ *      `prefers-contrast: more` and `forced-colors`, `tokens.css` resolves the fill to
+ *      `--prl-surface-raised` and the filter to `none`. That is the old opaque bar, reached with
+ *      no override in this file, and it is reached as a PAIR — a reader can never end up with the
+ *      translucent fill and no blur, which is the only combination that produces the defect.
+ *
+ * The pills stay OPAQUE — `--prl-shell-nav-fill`, which is `--prl-surface-inset` — and the reason
+ * has changed with them. It is no longer "a pill has content passing under it"; the strip handles
+ * that for every pill in the bar. It is that the strip is the glass, so a pill in the same
+ * material would stack one tint on another and land within a rounding error of the sheet it sits
+ * on. An opaque fill two steps up the ramp, a lit hairline and `--prl-elevation-2` are what make
+ * four controls read as objects lying on a sheet rather than as holes cut in it.
+ *
+ * The cost is one bounded, promoted strip. `tokens.css` objects to blur on surfaces that repaint
+ * under moving content — the table field, six seats and a live Coach panel — and a `position:
+ * sticky` bar with `backdrop-filter` is promoted to its own compositor layer and re-composited
+ * rather than re-laid-out as the page scrolls. Nothing here animates or transitions a
+ * `backdrop-filter`, and nothing may.
  *
  * "The bar must not cover content."  `.prl-shell__header` is `position: sticky` (from
  * `globals.css`), so it takes part in layout and the page begins below it. `scroll-padding` is
@@ -100,24 +133,36 @@
    lying on the page; what the compositor sees is one opaque rectangle that content cannot cross.
    ========================================================================================== */
 
+/**
+ * The strip's glass, restated here rather than inherited, so this file is readable on its own —
+ * and restated as the FILL AND THE FILTER TOGETHER, which is not a style choice. A rule that set
+ * only the fill would leave the last word on `background-color` in a block with no
+ * `backdrop-filter` in it, which is the ghosting bug written down, and it is the shape
+ * `layout-guarantees.test.ts` fails. Wherever a glass fill goes, the filter goes with it.
+ */
 .prl-shell__header {
   padding-block: var(--prl-pillbar-pad-block);
-  /* The strip is the page colour and fully opaque — see the header comment. Restated here rather
-     than inherited so this file is readable on its own; it is the same token `globals.css` sets. */
-  background-color: var(--prl-shell-header-fill);
-  border-block-end: 0;
+  background-color: var(--prl-glass-floating);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  border-block-end: 1px solid var(--prl-edge-shade);
 }
 
 /**
- * No full-width rule under the bar, floating or not.
+ * The rule under the bar, which this file used to remove.
  *
- * `globals.css` strengthens the strip's bottom hairline past the sentinel, which was right for a
- * strip and is wrong for this: a line drawn across the whole viewport re-draws the bar as a band
- * cut out of the page, which is the shape this design exists to replace. What says "floating over
- * content" instead is each pill's own edge — see section 8b.
+ * It removed it for a good reason that has expired: "a line drawn across the whole viewport
+ * re-draws the bar as a band cut out of the page". That was true of a bar painted in the page's
+ * own colour, where the line was the only evidence a bar existed at all. It is not true of a sheet
+ * of glass — the edge is now the underside of an object the reader can already see, and an object
+ * with no bottom edge is the thing that looks unfinished.
+ *
+ * `globals.css` promotes it from `--prl-edge-shade` to `--prl-line-strong` past the sentinel, and
+ * that promotion is kept: once content is passing beneath the bar the line stops describing an
+ * edge and starts carrying the boundary between two layers, which is WCAG 1.4.11.
  */
 .prl-shell__header[data-stuck="true"] {
-  border-block-end: 0;
+  border-block-end: 1px solid var(--prl-line-strong);
 }
 
 /* ==========================================================================================
@@ -151,13 +196,31 @@
  * bar can plausibly have — a radius token rather than a computed half-height, so the shape is
  * stated once and cannot go stale when the height changes.
  */
+/**
+ * THE LIT HAIRLINE, and why it is one border with three colours.
+ *
+ * A pane reads as a physical sheet when its top edge catches light and its bottom edge falls into
+ * shadow. That is `tokens.css`'s `--prl-edge` / `--prl-edge-lit` / `--prl-edge-shade`, and it
+ * replaces the flat `--prl-line-subtle` these pills used to carry: a uniform 1px outline in one
+ * colour describes a rectangle, not an object, and on a glass strip a rectangle is what the pills
+ * looked like.
+ *
+ * `--prl-elevation-2` is the level the design system gives to bounded chrome that travels over
+ * content, spent through the token because `layout-guarantees.test.ts` fails a `box-shadow`
+ * literal. It is the second half of the same sentence as the hairline: an edge says the pane is a
+ * sheet, a shadow says how far above the page it is, and only one of them without the other reads
+ * as a flat shape with an outline.
+ */
 .prl-pill-group {
   display: flex;
   align-items: center;
   min-height: var(--prl-pill-h);
-  border: 1px solid var(--prl-line-subtle);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-shell-nav-fill);
+  box-shadow: var(--prl-elevation-2);
   transition: border-color var(--prl-dur-quick) var(--prl-ease-standard);
 }
 
@@ -182,9 +245,12 @@
   place-items: center;
   width: var(--prl-pill-h);
   height: var(--prl-pill-h);
-  border: 1px solid var(--prl-line);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
   border-radius: 50%;
   background-color: var(--prl-shell-nav-fill);
+  box-shadow: var(--prl-elevation-2);
   color: var(--prl-accent-text);
   transition:
     background-color var(--prl-dur-instant) var(--prl-ease-hover),
@@ -353,8 +419,11 @@
 .prl-pillbar .prl-units__value {
   min-height: var(--prl-pill-h);
   padding-inline: var(--prl-space-6);
-  border-color: var(--prl-line-subtle);
+  border-color: var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
   background-color: var(--prl-shell-nav-fill);
+  box-shadow: var(--prl-elevation-2);
   font-size: var(--prl-type-body-sm);
 }
 
@@ -376,7 +445,29 @@
   width: var(--prl-pill-h);
   height: var(--prl-pill-h);
   background-color: var(--prl-shell-nav-fill);
+  box-shadow: var(--prl-elevation-2);
   font-size: var(--prl-type-body);
+}
+
+/**
+ * THE COMPOSITION RULE, spent here for the first time in this file.
+ *
+ * `box-shadow` is one property and `base.css` draws the focus HALO with it — `:focus-visible {
+ * box-shadow: var(--prl-focus-ring) }`, at specificity (0,1,0). Every rule in this stylesheet is
+ * at least (0,2,0) and loads after it, so an elevated control that says nothing here would keep
+ * its elevation and silently lose the halo the moment a keyboard reached it; an elevated control
+ * that restated only the ring would drop a level of height for as long as the keyboard was on it,
+ * which reads as the pane falling over. Both halves are therefore written together, and the ring
+ * goes FIRST because shadows paint in list order, first on top.
+ *
+ * The outline is untouched by any of this. It is the indicator; the halo is the supplement that
+ * keeps it visible against a backdrop this bar does not own (see `--prl-focus-halo` in
+ * `tokens.css`), and the outline still survives `forced-colors` where the halo does not.
+ */
+.prl-pillbar .prl-units__toggle:focus-visible,
+.prl-pillbar__cta:focus-visible,
+.prl-nav-trigger:focus-visible {
+  box-shadow: var(--prl-focus-ring), var(--prl-elevation-2);
 }
 
 /**
@@ -586,6 +677,7 @@
   padding-inline: var(--prl-space-6);
   border-radius: var(--prl-radius-pill);
   background-color: var(--prl-shell-nav-fill);
+  box-shadow: var(--prl-elevation-2);
 }
 
 .prl-nav-trigger .prl-nav-trigger__word {
@@ -654,11 +746,17 @@
 
 /* `--prl-line-strong` is inherited from `globals.css` and stays: the boundary is what identifies
    a three-option switch as one control (WCAG 1.4.11). Only the corner radius and the fill change. */
+/* The fill is `--prl-shell-nav-fill`, the same one the bar's controls wear, for the reason the
+   heading above gives: this control has two homes and has to be recognisably one object in both.
+   It used to be `--prl-surface-page`, which read as a well cut into an opaque footer — and the
+   footer is not opaque any more, so on the backdrop field the same fill would read as a flat dark
+   blob sitting on a lit ground rather than as a switch. */
 .prl-footer__theme,
 .prl-sheet__foot .prl-theme {
   padding: var(--prl-space-1);
   border-radius: var(--prl-radius-pill);
-  background-color: var(--prl-surface-page);
+  background-color: var(--prl-shell-nav-fill);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-footer__theme .prl-theme__word,
@@ -683,15 +781,20 @@
    ==========================================================================================
    Past the sentinel, every edge in the bar goes from decorative to meaningful.
 
-   `--prl-line-subtle` is 1.44:1 and is fine while the bar is part of the page. Once content is
-   passing beneath it, a pill's edge is the only thing separating two layers, so it moves to
-   `--prl-line-strong` (4.34:1) — WCAG 1.4.11 applied to a border whose job changed. The whole set
-   lives here, after every rule it overrides, because a stronger selector written earlier than a
-   weaker one is a rule whose effect depends on reading order.
+   The lit hairline (`--prl-edge`, ~1.5:1) describes an object and is fine while the bar is part of
+   the page. Once content is passing beneath it, a pill's edge is the only thing separating two
+   layers, so the whole border — all three sides of it — moves to `--prl-line-strong` (4.34:1).
+   WCAG 1.4.11 applied to a border whose job changed, and the lit/shaded pair is given up wholesale
+   rather than partly, because a pane with a meaningful top edge and a decorative bottom one states
+   the boundary in one direction only.
+
+   The whole set lives here, after every rule it overrides, because a stronger selector written
+   earlier than a weaker one is a rule whose effect depends on reading order.
    ========================================================================================== */
 
 .prl-shell__header[data-stuck="true"] .prl-pill-group,
 .prl-shell__header[data-stuck="true"] .prl-units__value,
+.prl-shell__header[data-stuck="true"] .prl-nav-trigger,
 .prl-shell__header[data-stuck="true"] .prl-shell__brand-index {
   border-color: var(--prl-line-strong);
 }

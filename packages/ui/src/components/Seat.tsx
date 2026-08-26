@@ -186,6 +186,24 @@ export function Seat(props: SeatProps): ReactElement {
   if (holeCards !== null) cards = holeCards;
   else if (isHoldingCards) cards = FACE_DOWN_PAIR;
 
+  /**
+   * This seat is holding cards the caller asked to ring — at a settled table, the winner.
+   *
+   * An ADDED class, never a renamed one, and it states nothing the plate did not already state:
+   * `PlayingCard` puts the caller's phrase ("part of the winning hand") into each ringed card's
+   * accessible name, and the ring is already drawn on the cards themselves. What was missing was
+   * anything at the PLATE level, so a settled six-max table showed five plates and a sixth that
+   * looked identical except for two small rings 130px inside it. `styles/play.css` section 12.3
+   * draws the plate for it; a stylesheet that does not know about the class loses nothing.
+   *
+   * Deliberately NOT called `--won`. Why the cards are marked is the caller's knowledge (that is
+   * what `highlightLabel` is for), and hand review marks cards for reasons other than winning.
+   */
+  const marked =
+    highlightedCards !== undefined &&
+    highlightedCards.length > 0 &&
+    holeCards?.some((card) => highlightedCards.includes(card)) === true;
+
   return (
     <Tag
       className={cx(
@@ -193,6 +211,7 @@ export function Seat(props: SeatProps): ReactElement {
         STATUS_CLASS[seat.status],
         seat.isSelf && 'prl-seat--self',
         seat.isToAct && 'prl-seat--to-act',
+        marked && 'prl-seat--marked',
         className,
       )}
       style={seatRingPosition(ringIndex, ringCount)}

@@ -77,10 +77,36 @@ body {
    * perfectly valid-looking stylesheet.
    */
   background-color: var(--prl-surface-page);
+  /**
+   * THE WASH. Two very low-alpha radial fields over the page ground - see the MATERIALS block
+   * in tokens.css. It is what makes a translucent pane read as a pane: over a flat colour,
+   * glass is just a slightly different flat colour, and the whole material system above this
+   * line would be invisible without something behind it that varies.
+   *
+   * Three properties are set together and all three matter. `no-repeat` stops the browser
+   * tiling a gradient whose stops end before the box does. `scroll` (the initial value, stated
+   * because the alternative is the trap) is NOT `fixed`: a fixed background is re-resolved
+   * against the viewport on every scroll frame, which is precisely the per-frame repaint the
+   * rest of this system goes out of its way to avoid. Scrolled, it is painted once into the
+   * page's own layer and travels with it.
+   *
+   * `--prl-page-wash` resolves to `none` under `prefers-reduced-transparency`,
+   * `prefers-contrast: more` and `forced-colors`, so this declaration needs no override.
+   */
+  background-image: var(--prl-page-wash);
+  background-repeat: no-repeat;
+  background-attachment: scroll;
   color: var(--prl-text);
   font-family: var(--prl-font-sans);
   font-size: var(--prl-type-body);
   font-weight: var(--prl-weight-regular);
+  /**
+   * A whisper of negative tracking at the reading size. Every face in `--prl-font-sans` is
+   * spaced for 15-16px and this app reads at 17, where the default spacing is visibly loose.
+   * It is a token rather than a number because it is one point on a ramp that continues up
+   * through the display sizes - see the OPTICAL TRACKING block in tokens.css.
+   */
+  letter-spacing: var(--prl-tracking-body);
   line-height: var(--prl-leading-body);
   /**
    * Tabular figures for the whole document, not just for metrics.
@@ -90,9 +116,17 @@ body {
    * the number moves sideways under the reader's eye, and a number that moves while you read
    * it is a number you misread. Components that show a figure restate this locally so the
    * guarantee survives being used outside this stylesheet.
+   *
+   * `--prl-numeric` carries `lining-nums` as well, which is the half that is usually
+   * forgotten: several faces in the stack default to OLD-STYLE figures next to lowercase, so a
+   * stack size renders with a descending 4 and a short 1 in the middle of it. `font-feature-
+   * settings` restates `tnum` for the one browser generation that shipped the low-level
+   * property before the high-level one.
    */
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
+  font-variant-numeric: var(--prl-numeric);
+  font-feature-settings:
+    "tnum" 1,
+    "lnum" 1;
   text-rendering: optimizelegibility;
   -webkit-font-smoothing: antialiased;
 }
@@ -131,11 +165,19 @@ h2 {
   letter-spacing: var(--prl-tracking-display-3);
 }
 
+/**
+ * `--prl-tracking-heading`, not `--prl-tracking-display-3`.
+ *
+ * Tracking is a function of SIZE, not of role, and display-3 is the value for 28px. Borrowing
+ * it for a 22px heading over-tightens by about a third of the step, which is small enough to
+ * look like a rendering artefact and large enough to see once a heading sits directly above its
+ * lede. The ramp now continues down through the reading sizes instead of stopping at display.
+ */
 h3 {
   font-size: var(--prl-type-heading);
   font-weight: var(--prl-weight-semibold);
-  letter-spacing: var(--prl-tracking-display-3);
-  line-height: var(--prl-leading-snug);
+  letter-spacing: var(--prl-tracking-heading);
+  line-height: var(--prl-leading-heading);
 }
 
 h4,
@@ -143,6 +185,7 @@ h5,
 h6 {
   font-size: var(--prl-type-body);
   font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-body);
   line-height: var(--prl-leading-snug);
 }
 
@@ -185,6 +228,29 @@ dd {
 
 small {
   font-size: var(--prl-type-body-sm);
+}
+
+/**
+ * THE NUMERIC GUARANTEE, RESTATED WHERE A COLUMN DEPENDS ON IT.
+ *
+ * `body` already sets `--prl-numeric`, and inheritance carries it into every cell - which is
+ * exactly why this is easy to lose: any wrapper that sets `font-variant-numeric: normal` for a
+ * legitimate reason (a heading in a small-caps voice, a component that wanted proportional
+ * figures for one label) silently un-aligns every table below it, and the failure looks like a
+ * column that is slightly ragged rather than like a bug.
+ *
+ * A table column is the one place where the alignment is load-bearing rather than merely tidy:
+ * a stack of equity percentages that do not share a decimal position cannot be compared by eye,
+ * which is the entire reason a reader put them in a column. Restating it on the cells means the
+ * guarantee survives whatever is above them.
+ *
+ * Alignment itself is not set here, because it cannot be decided from markup: `.prl-number`
+ * (components.css) carries `text-align: end` and is applied per cell by whoever knows which
+ * columns hold figures.
+ */
+th,
+td {
+  font-variant-numeric: var(--prl-numeric);
 }
 
 strong,
@@ -301,9 +367,37 @@ a:hover {
    received focus.
    ========================================================================================== */
 
+/**
+ * THE SECOND TONE, AND WHY GLASS FORCED IT.
+ *
+ * The rule above was, for a long time, correct and complete: one accent outline, 12.77:1 on the
+ * page ground, offset so it clears the control. It stops being complete the moment a control can
+ * float. `--prl-focus-offset` puts most of the ring's width on WHAT IS BEHIND the control rather
+ * than on the control, and a floating pane's backdrop is not something this stylesheet owns:
+ * `accent-300` measures 1.52:1 against white. On a pill lying over a playing card, a
+ * single-colour ring is not dim, it is absent.
+ *
+ * So the indicator is two-tone - the accent outline, plus `--prl-focus-halo` of the opposite
+ * polarity as a hairline immediately outside it and filling the offset gap immediately inside
+ * it. The claim is not "this looks clearer"; it is that NO backdrop defeats both tones, and
+ * `scripts/check-contrast.mjs` proves it in closed form over every backdrop luminance in [0, 1]
+ * rather than by sampling a few. In dark the ring covers L <= 0.180 and the halo covers
+ * L >= 0.112; in light the ring covers L >= 0.246 and the halo covers L <= 0.300. Both pairs
+ * overlap, so there is no gap.
+ *
+ * The halo is a `box-shadow`, and that has two consequences, both accepted rather than hidden:
+ * it is clipped by an ancestor's `overflow: hidden`, and it is not painted under `forced-colors`.
+ * In both cases the indicator degrades to exactly the outline it was before, which is why the
+ * outline is still the primary tone and not the supplement.
+ *
+ * `box-shadow` is one property, so an element that carries an elevation must restate the ring
+ * alongside it while focused: see the composition rule beside `--prl-focus-ring` in tokens.css,
+ * and `.prl-material` in components.css for the worked example.
+ */
 :focus-visible {
   outline: var(--prl-focus-width) solid var(--prl-focus-color);
   outline-offset: var(--prl-focus-offset);
+  box-shadow: var(--prl-focus-ring);
 }
 
 :focus:not(:focus-visible) {

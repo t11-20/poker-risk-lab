@@ -52,6 +52,12 @@
  * nothing. `grant` closes the expired predecessor out first, in the same transaction, with a
  * reason that says what happened. Both rows survive.
  *
+ * ## Why both writes take the learner's row first
+ *
+ * The index adjudicates who holds the slot. It does NOT make `grant` and `revoke` serialisable
+ * against each other, and two interleavings that proved it — one of which reported a successful
+ * withdrawal of nobody while the learner stayed entitled — are written out on `lockLearner`.
+ *
  * ## Why nothing here can be reached from an HTTP handler
  *
  * `prl_app` — the role the request path connects as — holds SELECT and nothing else on both
@@ -427,8 +433,11 @@ export type GrantOutcome =
 /**
  * Grants an entitlement, or reports that an unrevoked one already exists.
  *
- * ## The three statements, and why they are in this order
+ * ## The four statements, and why they are in this order
  *
+ * 0. **Take the learner's row.** `lockLearner` — the index adjudicates who holds the slot, and it
+ *    does not make this function serialisable against `revoke`. The two interleavings that proved
+ *    that are written out there.
  * 1. **Close out an expired predecessor.** Scoped by `expires_at is not null and expires_at <=
  *    now()`, so it can only ever touch a row that entitles nobody. A LIVE enrolment is left
  *    strictly alone, which is what makes step 2 able to refuse a duplicate rather than silently
@@ -451,10 +460,11 @@ export type GrantOutcome =
  */
 export async function grant(sql: Db, input: GrantInput): Promise<GrantOutcome> {
   requireTransaction(sql, 'grant');
+  await lockLearner(sql, input.userId);
 
   const superseded = await sql<{ id: string }[]>`
     update prl.enrolments
-       set revoked_at = now(),
+       set revoked_at = clock_timestamp(),
            revoked_by = ${input.grantedBy},
            revoked_reason = ${SUPERSEDED_REASON}
      where cohort_id = ${input.cohortId}
@@ -496,9 +506,11 @@ export async function grant(sql: Db, input: GrantInput): Promise<GrantOutcome> {
     `;
     const held = existing[0];
     if (held === undefined) {
-      // Nothing inserted and nothing in the way. Only reachable if the conflicting row was
-      // revoked between the two statements by another transaction, which cannot happen inside
-      // one — so this is a defect in this function rather than a state of the world.
+      // Nothing inserted and nothing in the way. This WAS reachable, and the claim that it was
+      // not is why it read as an assertion: `on conflict do nothing` takes no lock on the row it
+      // conflicted with, so a concurrent `revoke` could commit in the gap and empty the slot the
+      // insert had just been refused for. `lockLearner` above is what makes it unreachable now —
+      // no other transaction can be revoking this learner while we hold their row.
       throw new AppError('internal_error', {
         logDetail: 'granting an enrolment: the insert was refused and no conflicting row exists',
       });
@@ -560,10 +572,11 @@ export interface RevokeInput {
  */
 export async function revoke(sql: Db, input: RevokeInput): Promise<EnrolmentRecord | null> {
   requireTransaction(sql, 'revoke');
+  await lockLearner(sql, input.userId);
 
   const rows = await sql<{ id: string }[]>`
     update prl.enrolments
-       set revoked_at = now(),
+       set revoked_at = clock_timestamp(),
            revoked_by = ${input.revokedBy},
            revoked_reason = ${input.reason}
      where cohort_id = ${input.cohortId}
@@ -585,6 +598,59 @@ export async function revoke(sql: Db, input: RevokeInput): Promise<EnrolmentReco
     },
   });
   return byId(sql, row.id);
+}
+
+/**
+ * Serialises every write about one learner's entitlements on the learner's own row.
+ *
+ * ############################################################################
+ * ## THE PARTIAL UNIQUE INDEX DECIDES WHO HOLDS THE SLOT. IT DOES NOT MAKE  ##
+ * ## `grant` AND `revoke` SERIALISABLE AGAINST EACH OTHER.                  ##
+ * ############################################################################
+ *
+ * Both writes are check-then-act spread over more than one statement, and under READ COMMITTED
+ * each statement takes its own snapshot. Two interleavings were reproduced against a real
+ * PostgreSQL 16 with two operator sessions, and neither is equivalent to running the two commands
+ * in either order:
+ *
+ *   * **A revocation that withdrew nothing and said so.** The learner held an EXPIRED, unrevoked
+ *     enrolment. Operator A ran `grant`, whose supersede closed that row out and whose insert
+ *     wrote a fresh unbounded one. Operator B ran `revoke` and blocked on the supersede's row
+ *     lock. When A committed, B's `UPDATE ... where revoked_at is null` re-checked the tuple it
+ *     had waited for — now revoked — and matched nothing; A's new row was inserted after B's
+ *     statement snapshot, so it was a phantom B could not see. `revoke` returned null, the CLI
+ *     told the operator there was nothing to withdraw, and `entitlementFor` still answered
+ *     ENTITLED, with no expiry at all. Withdrawal is the one operation here whose failure has to
+ *     be loud, and this one was silent in the direction that keeps somebody in.
+ *   * **`grant` reaching its own "this cannot happen" branch.** `on conflict do nothing` takes no
+ *     lock on the row it conflicted with, so a concurrent `revoke` can commit between the insert
+ *     and the read-back that explains the refusal. The read-back then finds no unrevoked row and
+ *     throws `internal_error` — aborting the operator's whole transaction, which on the bulk path
+ *     is the other twenty-nine grants in the same class list.
+ *
+ * `prl.users` is the anchor rather than an advisory lock because the row already exists, because
+ * it is the same row `deleteAccount` and `deleteAbandonedGuest` take `FOR UPDATE` on — so an
+ * erasure and a grant serialise too, in the same lock order, with no new deadlock cycle — and
+ * because a lock on a row survives in exactly the scope a transaction does. Cost: two operator
+ * commands touching one learner run one after the other. This is a CLI with a class of thirty.
+ *
+ * A learner that does not exist returns no row and is deliberately not an error here: `grant`'s
+ * foreign key already refuses it with a message about the reference that is wrong, and `revoke`
+ * for an unknown account must reach "there is nothing to withdraw" rather than a fault.
+ *
+ * ## Why `clock_timestamp()` writes `revoked_at`, and why the lock made that necessary
+ *
+ * `now()` is `transaction_timestamp()`. Once these writes queue behind each other, the waiting
+ * transaction's `now()` is older than the grant it is waiting for — so `revoked_at` lands BEFORE
+ * `granted_at` and `enrolments_revoked_after_grant` refuses the update with a raw 23514 that
+ * nothing here maps. Reproduced without the lock as well, with a transaction opened 400 ms before
+ * the grant it then withdrew; adding the lock turns that from a race into the ordinary case, which
+ * is why the two changes ship together. `clock_timestamp()` is the instant the statement actually
+ * ran, which is after every commit this transaction can see, and it is a truer record of when the
+ * withdrawal happened than the moment the operator's transaction opened.
+ */
+async function lockLearner(sql: Db, userId: string): Promise<void> {
+  await sql`select id from prl.users where id = ${userId} for update`;
 }
 
 /**

@@ -552,4 +552,102 @@ describe('the room lease, against a real database', { skip: skipReason }, () => 
       await dropRoom(roomId);
     }
   });
+
+  // -------------------------------------------------------------------------
+  // (e) A beat that had to wait
+  // -------------------------------------------------------------------------
+
+  /**
+   * NEGATIVE CONTROL (e). Against `set heartbeat_at = now()` this case FAILED with
+   * `23514 room_ownership_heartbeat_after_acquire` — reproduced against PostgreSQL 16, on pool
+   * handles, exactly as `rooms/ownership.ts` issues them.
+   *
+   * `now()` is the TRANSACTION's start, and one beat is one statement over every room this process
+   * holds, so it takes one row lock after another and any one of them can wait. A beat that
+   * blocked on the first room wrote the second room's heartbeat with a timestamp from BEFORE the
+   * wait — earlier than an `acquire` that had committed in the meantime — and 0005's
+   * `heartbeat_at >= acquired_at` refused the write. The migration says of that constraint that
+   * "both are written with the database's `now()`, so on a healthy path this cannot fire".
+   *
+   * What made it expensive is that the beat is ONE statement: the renewals for every OTHER room
+   * were rolled back with it. `heartbeatLeases` catches the failure, so the process then has one
+   * beat's worth of nothing, on precisely the path `releaseLeaseSoon` documents as the one that
+   * produces the most of these — a database slow enough that beats block while rooms are evicted
+   * and re-opened underneath.
+   *
+   * The contention is produced with a real row lock on the FIRST room rather than a sleep, and the
+   * case refuses to proceed until a backend is genuinely blocked: a run in which nothing waited
+   * would prove nothing and must not be able to look like a pass.
+   */
+  it('renews every room even when the beat has to wait for one of them', async () => {
+    const first = await makeRoom();
+    const second = await makeRoom();
+    const ownerId = `api_beat_${randomBytes(8).toString('hex')}`;
+    const ttlSeconds = LEASE_TTL_MS / 1_000;
+    try {
+      await ownershipRepository.acquire(sql(), { roomId: first, ownerId, ttlSeconds });
+      await ownershipRepository.acquire(sql(), { roomId: second, ownerId, ttlSeconds });
+
+      let lockTaken!: () => void;
+      const held = new Promise<void>((wake) => {
+        lockTaken = wake;
+      });
+      let releaseTheLock!: () => void;
+      const untilReleased = new Promise<void>((wake) => {
+        releaseTheLock = wake;
+      });
+
+      const blocker = withAdminSql((admin) =>
+        admin.begin(async (tx) => {
+          await tx`select room_id from prl.room_ownership where room_id = ${first} for update`;
+          lockTaken();
+          await untilReleased;
+        }),
+      );
+      await held;
+
+      // Dispatched now, so its transaction timestamp is taken now, and then it waits on `first`.
+      const beat = ownershipRepository.heartbeat(sql(), { ownerId, roomIds: [first, second] });
+      await withAdminSql(async (watcher) => {
+        for (let attempt = 0; attempt < 250; attempt += 1) {
+          const rows = await watcher<{ waiting: number }[]>`
+            select count(*)::int as waiting
+              from pg_locks
+             where not granted and pid <> pg_backend_pid()
+          `;
+          if ((rows[0]?.waiting ?? 0) > 0) return;
+          await new Promise((wake) => setTimeout(wake, 20));
+        }
+        assert.fail('the beat never blocked, so this case did not produce the state it is about');
+      });
+
+      // The same process re-takes the SECOND room while the beat is still queued behind the first:
+      // an eviction and a re-open, which is what `releaseLeaseSoon` says happens most on this path.
+      const retaken = await ownershipRepository.acquire(sql(), { roomId: second, ownerId, ttlSeconds });
+      assert.equal(retaken?.fence, 2, 'the re-acquire did not happen, so nothing moved acquired_at');
+
+      releaseTheLock();
+      const renewed = await beat;
+      await blocker;
+
+      assert.deepEqual(
+        [...renewed].sort(),
+        [first, second].sort(),
+        'a beat that had to wait lost the renewals of the rooms it was not waiting for',
+      );
+      const rows = await withAdminSql(
+        (admin) => admin<{ room_id: string; ok: boolean }[]>`
+          select room_id, heartbeat_at >= acquired_at as ok
+            from prl.room_ownership where room_id in (${first}, ${second})
+        `,
+      );
+      assert.equal(rows.length, 2);
+      for (const row of rows) {
+        assert.equal(row.ok, true, `${row.room_id} kept a heartbeat older than its acquisition`);
+      }
+    } finally {
+      await dropRoom(first);
+      await dropRoom(second);
+    }
+  });
 });

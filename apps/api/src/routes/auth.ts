@@ -745,7 +745,51 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
       reply: FastifyReply,
       done: (error?: Error) => void,
     ) => {
-      if (chargeableOidcFailures.has(request) && reply.statusCode >= 400 && reply.statusCode !== 429) {
+      // `delete` rather than `has`: the mark is spent here, so `chargeAbandonedOutcome` below
+      // cannot charge the same request a second time if both hooks ever ran for one request.
+      // It also drops the reference eagerly rather than waiting for the collector.
+      const chargeable = chargeableOidcFailures.delete(request);
+      if (chargeable && reply.statusCode >= 400 && reply.statusCode !== 429) {
+        oidcFailures.charge(addressRateLimitKey(request, config));
+      }
+      done();
+    };
+
+    /**
+     * The outcome that is never a status code: the caller hung up.
+     *
+     * ############################################################################
+     * ## `onResponse` DOES NOT RUN ON A REQUEST THE CLIENT ABORTED.             ##
+     * ############################################################################
+     *
+     * Fastify attaches its `onResponse` runner to the raw response's `finish` and `error`
+     * events (`lib/reply.js`, `setupResponseListeners`). A client that writes the request and
+     * then destroys the socket produces neither, so a charge that lives only in `onResponse` is
+     * a charge an attacker opts out of by not waiting for the answer. The handler keeps running
+     * — Node does not cancel it — so the token exchange still leaves this process.
+     *
+     * Measured against the code this hook was added to, one address, a stub provider whose token
+     * endpoint always refuses, `RATE_LIMIT_OIDC_MAX=400` so only this budget could refuse:
+     *
+     *     start, then callback, read the answer      15 forced token exchanges, then 429
+     *     start, then callback, destroy the socket  120 forced token exchanges, no refusal,
+     *                                               and a fresh /auth/oidc/start still 303
+     *
+     * 120 was where the loop stopped, not where the caller was refused. The one number the whole
+     * cohort change promised not to move — "a script driving incomplete sign-ins from one address
+     * forced 15 token exchanges per minute and was then refused" — was `curl --max-time 0.05`
+     * away from being unbounded.
+     *
+     * Charging here is deliberately pessimistic: a request that reached the mark and then vanished
+     * is charged as a failure even though its outcome is unknown. That is the safe direction. The
+     * mark is only set once a request has spent something (a discovery fetch and an attempt row on
+     * the start, an outbound token exchange on the callback), so "unknown" and "failed" cost this
+     * server the same thing, and the case it charges a learner for — abandoning a sign-in in the
+     * few milliseconds between the handler being entered and the redirect being written — is one
+     * a person cannot produce on purpose.
+     */
+    const chargeAbandonedOutcome = (request: FastifyRequest, done: (error?: Error) => void) => {
+      if (chargeableOidcFailures.delete(request)) {
         oidcFailures.charge(addressRateLimitKey(request, config));
       }
       done();
@@ -833,6 +877,43 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
      *
      * This is a deliberate constraint on the sign-in path, added before a real provider is wired
      * rather than after, because the cohort work this protects assumes OIDC is how a class arrives.
+     *
+     * ## Why this is an `onRequest` hook and not a `preHandler`, which it was
+     *
+     * ############################################################################
+     * ## A GUARD BELOW THE COUNTER DOES NOT PROTECT THE COUNTER.                ##
+     * ############################################################################
+     *
+     * As a `preHandler` this guard stopped the attempt rows and stopped the failed-outcome
+     * budget being charged, and the comment above said the incident was closed. It was not.
+     * `@fastify/rate-limit` attaches its route hook at `onRequest`, so the COHORT CEILING —
+     * `oidcMax`, 60 per 60 s, keyed on the same hashed address for the whole campus — had
+     * already been spent by the time any `preHandler` ran. Measured on the test harness against
+     * the version that had this at `preHandler`:
+     *
+     *     60 cross-site <img> loads of /auth/oidc/start   400 x60 (this guard refused every one)
+     *       -> attempt rows written                        0
+     *       -> the victim's own /auth/oidc/start           429, retryAfter 60
+     *
+     *     60 cross-site <img> loads of /auth/oidc/callback 400 x60 (refused by the SCHEMA — no
+     *                                                      query at all, so no guard even ran)
+     *       -> the victim's own /auth/oidc/callback        429, retryAfter 60
+     *
+     * Sixty image tags, no session, no CSRF token, no valid query, and a whole NAT is refused
+     * sign-in for the rest of the window — renewable every window for as long as the page is
+     * open. The budgets were fixed twice and the counter above them was never moved.
+     *
+     * `@fastify/rate-limit` APPENDS its hook to a route's declared `onRequest` array
+     * (`addRouteRateHook` in its `index.js`), so listing this guard there puts it above the
+     * ceiling, which is the only place it can be and still protect it. It also puts it above the
+     * schema, which is what closes the callback case: a `<img src=".../callback">` carries no
+     * query, and validation used to answer it before any hook of ours ran at all.
+     *
+     * What that costs, stated because `plugins/security.ts` states the opposite invariant: a
+     * request refused here is answered WITHOUT being counted by anything. That is one header
+     * comparison and no I/O, on two routes, for a request carrying a header no navigation ever
+     * sends — and the alternative is counting it against the victim's address, which is the
+     * defect. `GET /health` is already deliberately uncounted, so this is not a new class.
      */
     const refuseNonNavigationOidc = (
       request: FastifyRequest,
@@ -865,8 +946,14 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
         // Both budgets guard the start: the failed-outcome one because a start can fail against
         // the provider, and the unredeemed one because a start that SUCCEEDS is the whole of what
         // a start flood produces.
-        preHandler: [refuseNonNavigationOidc, refuseWhenFailing, refuseWhenTooManyUnredeemed],
+        // `onRequest`, ABOVE the route limiter, and that placement is the whole of the second
+        // fix — see `refuseNonNavigationOidc`. `@fastify/rate-limit` appends its own hook to
+        // whatever `onRequest` array a route declares, so a guard listed here runs first and a
+        // guard listed in `preHandler` runs one stage too late.
+        onRequest: [refuseNonNavigationOidc],
+        preHandler: [refuseWhenFailing, refuseWhenTooManyUnredeemed],
         onResponse: chargeFailedOutcome,
+        onRequestAbort: chargeAbandonedOutcome,
         schema: { querystring: { $ref: 'prl:oidcStartQuery#' } },
       },
       async (request, reply) => {
@@ -930,11 +1017,14 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
         // Only the failed-outcome budget. A callback REDEEMS an attempt row rather than writing
         // one, so refusing it for having too many outstanding would be refusing the one request
         // that reduces them.
-        preHandler: [refuseNonNavigationOidc, refuseWhenFailing],
+        // Above the route limiter, for the reason given on the start route.
+        onRequest: [refuseNonNavigationOidc],
+        preHandler: [refuseWhenFailing],
         // …and only once the callback has proved it belongs to a sign-in this server started.
         // See `chargeableOidcFailures`: without that condition the budget is spendable, against a
         // victim's address, by any page the victim happens to visit.
         onResponse: chargeFailedOutcome,
+        onRequestAbort: chargeAbandonedOutcome,
         schema: { querystring: { $ref: 'prl:oidcCallbackQuery#' } },
       },
       async (request, reply) => {

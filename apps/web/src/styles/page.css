@@ -25,30 +25,84 @@
  */
 
 /* ==========================================================================================
-   THE PAGE OPENER
+   0. THE ONE TOKEN THIS FILE DEFINES
+   ==========================================================================================
+   A definition is the one place a literal is supposed to live, which is the same licence
+   `globals.css` §0 and `nav.css` §0 take. It is here rather than in `tokens.css` because it is a
+   route-chrome value: nothing in `packages/ui` has an opinion about how wide a page's headline is.
+
+   `--prl-measure` (60ch) is the READING measure — the ~76 characters past which the eye loses the
+   line beginning on the return sweep. That argument is about a paragraph and does not transfer to
+   display type: a headline is read in one or two glances rather than swept, it is set 2.5x larger,
+   and at 60ch a 44px headline runs most of a 1360px container and reads as a banner. 22ch is the
+   width at which the app's longest `h1` — "What this is, and what you may do with it" — breaks
+   into two balanced lines rather than one very long one.
+   ========================================================================================== */
+
+:root {
+  --prl-measure-display: 22ch;
+}
+
+/* ==========================================================================================
+   1. THE PAGE OPENER
    ==========================================================================================
    Eyebrow, `h1`, standfirst — in that order, with one hairline under the block. Every route needs
    the same opening rhythm, and a page that invents its own heading spacing is how two routes end
    up looking like two products.
+
+   THE SPACING IS NOT UNIFORM, AND THAT IS THE POINT
+
+   This block used to be `gap: var(--prl-space-5)` — one value between all three lines. Even
+   spacing between an eyebrow, a 44px headline and a paragraph does not read as calm; it reads as
+   three unrelated lines that happen to be stacked, because nothing in the spacing says which of
+   them belong together. Typographic hierarchy is carried by PROXIMITY at least as much as by size:
+   the eyebrow is a label ON the headline and sits close enough to be read as attached to it, and
+   the standfirst is a separate voice and gets a step of air to say so.
+
+   So the grid gap is the TIGHT value and the one relationship that needs to be loose adds its own
+   margin on top of it. Written that way round because the tight pair is the default and the loose
+   one is the exception; the alternative — a loose gap with a negative margin pulling the eyebrow
+   back up — states the same layout as a correction to itself.
+
+   The block above it grew too: `--prl-space-13` (80px) of air over the eyebrow rather than
+   `--prl-space-11` (48px). 48px under a 92px sticky bar left the eyebrow reading as part of the
+   chrome. Generous at the page level, tight within the group — that is the whole rhythm rule, and
+   it is the reason `--prl-page-nav` at the foot of this file spends `--prl-space-13` as well.
    ========================================================================================== */
 
 .prl-page-head {
   display: grid;
   align-content: start;
   justify-items: start;
-  gap: var(--prl-space-5);
-  padding-block: var(--prl-space-11) var(--prl-space-9);
+  gap: var(--prl-space-4);
+  padding-block: var(--prl-space-13) var(--prl-space-10);
   border-block-end: var(--prl-hairline);
 }
 
 .prl-page-head__title {
   margin: 0;
+  /* See section 0: display type takes the display measure, not the reading one. `text-wrap:
+     balance` in `.prl-display-2` then has something to balance. */
+  max-width: var(--prl-measure-display);
 }
 
+/**
+ * The lede voice. 20px rather than the 17px reading size, because this paragraph is doing a
+ * different job from the ones below it: it is the page's own summary, read once, by somebody
+ * deciding whether to read the rest. `--prl-type-body-lg` is the token the design system already
+ * has for exactly that ("lead paragraphs, Coach conclusions") and it was not being spent here.
+ *
+ * `--prl-tracking-heading` comes with the size. Tracking is a function of size in this system, and
+ * 20px sits in the band that token covers; leaving it at the body value is the discontinuity the
+ * OPTICAL TRACKING block in `tokens.css` was written about.
+ */
 .prl-page-head__standfirst {
   margin: 0;
+  margin-block-start: var(--prl-space-5);
   max-width: var(--prl-measure);
   color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-lg);
+  letter-spacing: var(--prl-tracking-heading);
   line-height: var(--prl-leading-body);
 }
 
@@ -71,15 +125,28 @@
    absent: a reviewer looking at a number is entitled to know whether a server produced it.
    ========================================================================================== */
 
+/**
+ * Level 1 of the material ladder — a grouped background, not a card: `--prl-surface-raised`, the
+ * lit hairline, and NO elevation. That is exactly the distinction `tokens.css` draws between L1
+ * and L2, and it is the right one here: an unshadowed pane reads as part of the page and a
+ * shadowed one reads as an object lying on it, and this note is an aside inside the page's own
+ * flow rather than something floating over it.
+ *
+ * The lit hairline replaces a flat `--prl-hairline` on three of the four sides. The fourth is the
+ * inline-start rule, which is unchanged and is not decoration: it is the mark that says "aside".
+ */
 .prl-source-note {
   display: block;
-  margin-block: var(--prl-space-6) 0;
-  padding: var(--prl-space-5) var(--prl-space-6);
-  border: var(--prl-hairline);
+  margin-block: var(--prl-space-7) 0;
+  padding: var(--prl-space-6) var(--prl-space-7);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
   /* A left rule at the focus width, so the note reads as an aside rather than as a panel. */
   border-inline-start: var(--prl-focus-width) solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-1);
+  border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-raised);
+  box-shadow: var(--prl-elevation-0);
 }
 
 .prl-source-note .prl-label {
@@ -94,12 +161,16 @@
    no layout at all.
    ========================================================================================== */
 
+/* `--prl-space-13` above and `--prl-space-11` below: the space that separates this row from the
+   page it closes is a SECTION seam and gets the section's air, while the space under it is only
+   the gap before the footer's own rule. Symmetric margins here were part of what made the page
+   rhythm read as one repeated value. */
 .prl-page-nav {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--prl-space-4) var(--prl-space-7);
-  margin-block: var(--prl-space-11);
-  padding-block-start: var(--prl-space-6);
+  gap: var(--prl-space-4) var(--prl-space-9);
+  margin-block: var(--prl-space-13) var(--prl-space-11);
+  padding-block-start: var(--prl-space-7);
   border-block-start: var(--prl-hairline);
 }
 

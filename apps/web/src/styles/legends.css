@@ -17,13 +17,27 @@
  *    unitless SVG stroke widths (following `.prl-radar__ring`), and media-query lengths, since
  *    `var()` is invalid in a media feature. The one addition is `--prl-legend-sigil-turn`, a
  *    component-local rotation defined in section 0.
- *  - **No shadows.** Depth is one step on the surface ramp plus a hairline. There is no
- *    `box-shadow` anywhere in the app — the focus ring is an `outline` (`base.css`).
+ *  - **Depth is the five-level ladder in `tokens.css`, spent through `--prl-elevation-*`.** This
+ *    file used to say "no shadows", which was true of a system with one card style; there are now
+ *    five levels and the replacement rule is tighter rather than looser — a shadow may never be a
+ *    literal, and `packages/ui/test/layout-guarantees.test.ts` reads that off this stylesheet.
+ *  - **No glass here either.** A profile card is content, not chrome travelling over content, and
+ *    nothing on these four routes is sticky. A translucent card would be a tint over a flat
+ *    colour: the material spent for nothing, and a `backdrop-filter` paid for per frame.
  *  - **A border that carries meaning uses `--prl-line-strong` or the accent.** `--prl-line-subtle`
- *    measures 1.44:1 and is decoration only, so it never marks a state or bounds a chart.
- *  - **Only `transform` and `opacity` animate.** The hover state changes a border colour
- *    instantly and rotates the sigil over `--prl-dur-quick`; nothing transitions a colour, a
- *    width or a height.
+ *    and the `--prl-edge-*` trio are decoration only, so none of them marks a state or bounds a
+ *    chart.
+ *  - **Only `transform`, `opacity` and colour animate**, in the 150-250ms material band. Nothing
+ *    transitions a width or a height, and there is no blur anywhere.
+ *
+ * ## What this section is FOR, which is the thing the layout kept forgetting
+ *
+ * This is the most marketing-adjacent surface in the product: twelve opponent profiles, each a
+ * sigil, three signature figures, a sixteen-axis radar and a block of framing. It is meant to read
+ * as an editorial page — a page you browse — and it read as a settings screen, because every block
+ * on it was drawn identically: a hairline box on a one-step fill, stacked, at the same weight,
+ * whether it held a profile or a radio group. What changed below is almost entirely hierarchy:
+ * which blocks are objects (L2, elevated), which are wells (L1, flat), and which are neither.
  */
 
 /* ==========================================================================================
@@ -112,12 +126,20 @@
   padding-block-end: var(--prl-space-12);
 }
 
+/**
+ * The masthead.
+ *
+ * `--prl-line-strong` under it rather than the decorative hairline: this rule is the boundary
+ * between the page's title and its contents, which is the one division on the page a reader
+ * navigates by, and at 1.44:1 the old one was not visible in either theme. That makes it a border
+ * carrying meaning, which is exactly what rule B reserves the strong token for.
+ */
 .prl-legend-head {
   display: grid;
   align-content: start;
   gap: var(--prl-space-5);
   padding-block: var(--prl-space-11) var(--prl-space-8);
-  border-block-end: var(--prl-hairline);
+  border-block-end: var(--prl-hairline-strong);
 }
 
 .prl-legend-head__title {
@@ -272,11 +294,11 @@
 
 .prl-legend-disclaimers {
   display: grid;
-  gap: var(--prl-space-4);
-  padding: var(--prl-space-5) var(--prl-space-6);
-  border: var(--prl-hairline);
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-6) var(--prl-space-7);
+  border: 1px solid var(--prl-line-subtle);
   border-inline-start: var(--prl-space-1) solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-1);
+  border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
 }
 
@@ -439,33 +461,65 @@
   min-width: 0;
 }
 
+/**
+ * A PROFILE CARD — level 2, and the object the whole section is about.
+ *
+ * Twelve of these are the page. They were `--prl-hairline` boxes on a one-step fill, which in dark
+ * mode is a 1.15:1 surface step behind a 1.44:1 border: measured, the boundary between two cards
+ * was not visible, so a grid of twelve portraits read as one column of run-together text with
+ * charts in it. The lit hairline and one step of elevation are what make a card an object.
+ *
+ * `align-content: start` and a shared `gap` so the twelve agree on where the sigil, the figures,
+ * the radar and the framing sit; `auto-fit` on the grid above does the rest.
+ */
 .prl-legend-card {
   display: grid;
   align-content: start;
   gap: var(--prl-space-6);
-  padding: var(--prl-space-7);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  padding: var(--prl-space-8);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
+  transition:
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    box-shadow var(--prl-dur-base) var(--prl-ease-material),
+    transform var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 /**
- * The hover state: the hairline goes accent.
+ * The hover state: the hairline goes accent and the card comes up one level.
  *
- * No transition on the colour — the design system permits `transform` and `opacity` only, and a
- * border that fades is also a border whose state is ambiguous for 180ms. `:focus-within` is
- * paired with `:hover` so a keyboard reader arriving at the card's link gets the same cue.
+ * The transition is the MATERIAL family — 150-250ms on the unremarkable curve — and not the
+ * narrative one. This file used to forbid transitioning the colour at all, on the argument that a
+ * border which fades is a border whose state is ambiguous for 180ms; that argument was about
+ * `--prl-dur-in`'s 420ms with a signature easing, and it does not survive the shorter family
+ * existing. A state change should be FELT and not SEEN, which is what 150ms buys.
+ *
+ * `:focus-within` is paired with `:hover` so a keyboard reader arriving at the card's link gets
+ * the same cue.
  */
 .prl-legend-card:hover,
 .prl-legend-card:focus-within {
   border-color: var(--prl-accent-edge);
+  box-shadow: var(--prl-elevation-2);
+  transform: translateY(calc(-1 * var(--prl-space-2)));
 }
 
+/**
+ * The three signature figures, banded off from the prose above and below them.
+ *
+ * `--prl-line-subtle` rather than the edge tokens: this pair of rules is INSIDE a card, describing
+ * a division of its contents rather than the edge of an object, so it is the same decorative
+ * hairline a table row takes.
+ */
 .prl-legend-card__metrics {
   display: grid;
   gap: var(--prl-space-6);
   grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-column-min)), 1fr));
-  padding-block: var(--prl-space-5);
+  padding-block: var(--prl-space-6);
   border-block: var(--prl-hairline);
 }
 
@@ -541,6 +595,24 @@
   border-block-end: 0;
 }
 
+/**
+ * SIXTEEN ROWS, AND THE FIGURES SIT IN ONE COLUMN.
+ *
+ * The row stays a flex line with the label taking the free space, which pushes `0.42` and `of 1` to
+ * the far end of every row — and because `formatChips` renders every axis to the same number of
+ * decimals and `--prl-numeric` makes every digit the same width, the sixteen figures land on one
+ * vertical line without a grid. A two-track grid was tried and is wrong here: the head holds five
+ * children, one of them a conditional "Signature axis" chip, so a fixed set of tracks would move
+ * the figure sideways on exactly the four rows that carry the chip.
+ *
+ * `--prl-numeric` replaces the `tabular-nums` + `font-feature-settings: "tnum"` pair this carried.
+ * The token states `tabular-nums lining-nums`, and the second half is the one that was missing:
+ * several faces in `--prl-font-sans` default to OLD-STYLE figures, which drops the `4` in `0.42`
+ * below the baseline of the `0` above it, in a column whose whole job is to be compared down.
+ *
+ * `min-width: 0` on the label so a long axis name wraps inside its own flex item rather than
+ * pushing the figure onto a second line and out of the column.
+ */
 .prl-legend-traits__head {
   display: flex;
   flex-wrap: wrap;
@@ -550,6 +622,7 @@
 
 .prl-legend-traits__label {
   flex: 1 1 auto;
+  min-width: 0;
   color: var(--prl-text);
   font-size: var(--prl-type-body);
   font-weight: var(--prl-weight-medium);
@@ -559,9 +632,10 @@
   flex: 0 0 auto;
   color: var(--prl-text);
   font-size: var(--prl-type-metric-sm);
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
+  font-variant-numeric: var(--prl-numeric);
+  font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-metric);
+  text-align: end;
 }
 
 /**
@@ -571,9 +645,9 @@
 .prl-legend-traits__track {
   display: flex;
   overflow: hidden;
-  block-size: var(--prl-space-4);
+  block-size: var(--prl-space-5);
   border: 1px solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-1);
+  border-radius: var(--prl-radius-pill);
   background-color: var(--prl-surface-inset);
 }
 
@@ -644,7 +718,7 @@
   color: var(--prl-text);
   font-size: var(--prl-type-body-sm);
   font-weight: var(--prl-weight-semibold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
 }
 
 .prl-legend-dist__size {
@@ -675,13 +749,24 @@
    the choice a learner actually feels.
    ========================================================================================== */
 
+/**
+ * The picker is level 1 — a grouped well, hairline, NO elevation.
+ *
+ * That is the distinction the section header is about. This block is a control group; the twelve
+ * profile cards below it are objects. Drawing both as an elevated card is what made the page read
+ * as a settings screen: if the thing you configure and the thing you are here to look at are the
+ * same material, there is no hierarchy for a reader to use.
+ */
 .prl-legend-difficulty {
   display: grid;
   gap: var(--prl-space-6);
-  padding: var(--prl-space-7);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  padding: var(--prl-space-8);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
+  box-shadow: var(--prl-elevation-0);
 }
 
 .prl-legend-difficulty__legend {
@@ -702,21 +787,39 @@
  */
 .prl-legend-difficulty__option {
   display: grid;
-  gap: var(--prl-space-3);
+  gap: var(--prl-space-4);
   grid-template-columns: auto 1fr;
   align-items: start;
   min-height: var(--prl-target-min);
-  padding: var(--prl-space-5);
-  border: 1px solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-1);
-  background-color: var(--prl-surface-panel);
+  padding: var(--prl-space-6);
+  border: 1px solid var(--prl-line);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-inset);
   cursor: pointer;
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    box-shadow var(--prl-dur-base) var(--prl-ease-material);
 }
 
-/** The selected state is an accent border AND the radio's own checked dot AND the word in the
-    label. Never the border alone: a tint or an edge disappears entirely in forced-colors mode. */
+.prl-legend-difficulty__option:hover {
+  border-color: var(--prl-line-strong);
+  background-color: var(--prl-surface-hover);
+}
+
+/**
+ * The selected state is an accent border AND a step up the surface ramp AND one level of elevation
+ * AND the radio's own checked dot AND the word in the label. Never the border alone: an edge is
+ * repainted `CanvasText` and a tint disappears entirely in forced-colors mode, which section 14
+ * restates for.
+ *
+ * The chosen option RISES out of the well the other two sit in, which is the same grammar the quiz
+ * uses for a chosen answer in `learn.css` — one selection idiom across the product rather than two.
+ */
 .prl-legend-difficulty__option:has(input:checked) {
   border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-active);
+  box-shadow: var(--prl-elevation-1);
 }
 
 /**
@@ -805,16 +908,28 @@
   gap: var(--prl-space-4);
   min-height: var(--prl-target-min);
   padding-inline: var(--prl-space-5);
-  border: 1px solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-1);
-  background-color: var(--prl-surface-panel);
+  border: 1px solid var(--prl-line);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-inset);
   color: var(--prl-text);
   font-size: var(--prl-type-body-sm);
   cursor: pointer;
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    box-shadow var(--prl-dur-base) var(--prl-ease-material);
 }
 
+.prl-legend-picker__option:hover {
+  border-color: var(--prl-line-strong);
+  background-color: var(--prl-surface-hover);
+}
+
+/* Same selection idiom as the difficulty option above and the quiz answer in `learn.css`. */
 .prl-legend-picker__option:has(input:checked) {
   border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-active);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-legend-picker__control {
@@ -916,10 +1031,13 @@
   display: grid;
   align-content: start;
   gap: var(--prl-space-6);
-  padding: var(--prl-space-7);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  padding: var(--prl-space-8);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
 /** A decision that was the learner's own is marked with an accent leading edge and a word. */
@@ -956,17 +1074,19 @@
   display: grid;
   align-content: start;
   gap: var(--prl-space-3);
-  padding: var(--prl-space-5);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-1);
+  padding: var(--prl-space-6);
+  border: 1px solid var(--prl-line-subtle);
+  border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
 }
 
 .prl-legend-action__value {
   color: var(--prl-text);
-  font-size: var(--prl-type-metric-sm);
-  font-variant-numeric: tabular-nums;
+  font-size: var(--prl-type-metric-md);
+  font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
 }
 
 .prl-legend-maths {
@@ -998,7 +1118,7 @@
     `--prl-line-strong` rather than a decorative hairline. */
 .prl-legend-table th,
 .prl-legend-table td {
-  padding: var(--prl-space-3) var(--prl-space-5);
+  padding: var(--prl-space-4) var(--prl-space-5);
   border-block-end: var(--prl-hairline);
   text-align: start;
   vertical-align: top;
@@ -1014,8 +1134,32 @@
   white-space: nowrap;
 }
 
-.prl-legend-table__figure {
-  font-variant-numeric: tabular-nums;
+.prl-legend-table tbody tr:last-child th,
+.prl-legend-table tbody tr:last-child td {
+  border-block-end: 0;
+}
+
+/**
+ * The numeric columns.
+ *
+ * `--prl-numeric` and not a bare `tabular-nums`: the token adds `lining-nums`, without which
+ * several faces in `--prl-font-sans` set old-style figures in a lowercase run and drop a `4` below
+ * the baseline of the row above it.
+ *
+ * THE `th`/`td` PREFIX IS THE FIX, not a tidy-up. This rule has declared `text-align: end` since
+ * the file was written and it has never once applied: `.prl-legend-table th, .prl-legend-table td
+ * { text-align: start }` sits above it at (0,2,1) and a bare `.prl-legend-table__figure` is
+ * (0,1,0). A declaration that loses a specificity contest fails silently, which is why this went
+ * unnoticed — the column simply looked like every other column. `.prl-review-table__pot` in
+ * `review.css` had the identical defect and is fixed the same way.
+ *
+ * `formatUnits` renders "12 units", so it is the unit WORD that lands on the column edge rather
+ * than the units digit. The firm right edge is still what separates the numeric half of the table
+ * from the text half; a true units-digit column would need the unit in its own cell.
+ */
+.prl-legend-table td.prl-legend-table__figure,
+.prl-legend-table th.prl-legend-table__figure {
+  font-variant-numeric: var(--prl-numeric);
   text-align: end;
   white-space: nowrap;
 }
@@ -1041,10 +1185,13 @@
   display: grid;
   align-content: start;
   gap: var(--prl-space-6);
-  padding: var(--prl-space-7);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  padding: var(--prl-space-8);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
 /* ==========================================================================================
@@ -1068,9 +1215,9 @@
   display: grid;
   align-content: start;
   gap: var(--prl-space-5);
-  padding: var(--prl-space-6);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-1);
+  padding: var(--prl-space-7);
+  border: 1px solid var(--prl-line-subtle);
+  border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
 }
 
@@ -1106,8 +1253,9 @@
 .prl-legend-contrast__delta {
   color: var(--prl-text);
   font-size: var(--prl-type-body-sm);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-semibold);
+  text-align: end;
 }
 
 .prl-legend-contrast__delta[data-direction="higher"] {

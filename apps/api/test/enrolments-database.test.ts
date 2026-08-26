@@ -340,6 +340,156 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   });
 
   // -------------------------------------------------------------------------
+  // Two operators at once
+  //
+  // The partial unique index decides who holds the slot. It does not make `grant` and `revoke`
+  // serialisable against each other, and both of the cases below were REPRODUCED against a real
+  // PostgreSQL 16 before `lockLearner` existed. Each needs two operator transactions genuinely
+  // interleaved, so each waits for a backend to actually block rather than for a timer — a case
+  // that "interleaved" without anybody blocking would pass over the defect, which is the "a sweep
+  // of nothing is not a pass" rule applied to a race.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Waits until some other backend is blocked on a lock, so the interleaving is a fact.
+   *
+   * Throws rather than proceeding: a case that never produced contention has not tested the thing
+   * it is named after, and a green result from it would be worse than no case at all.
+   */
+  async function untilABackendBlocks(): Promise<void> {
+    const blocked = await withAdminSql(async (watcher) => {
+      for (let attempt = 0; attempt < 250; attempt += 1) {
+        const rows = await watcher<{ waiting: number }[]>`
+          select count(*)::int as waiting
+            from pg_locks
+           where not granted and pid <> pg_backend_pid()
+        `;
+        if ((rows[0]?.waiting ?? 0) > 0) return true;
+        await new Promise((wake) => setTimeout(wake, 20));
+      }
+      return false;
+    });
+    assert.equal(blocked, true, 'nothing ever blocked, so this case interleaved nothing');
+  }
+
+  it('withdraws the place a concurrent re-grant created, instead of reporting nothing to withdraw', async () => {
+    // ## NEGATIVE CONTROL. Measured against PostgreSQL 16, two operator sessions:
+    //
+    // The learner held an EXPIRED, unrevoked enrolment, so it still occupied the partial index's
+    // slot. Operator A's `grant` closed it out and inserted a fresh UNBOUNDED one. Operator B's
+    // `revoke` blocked on the supersede's row lock, and when A committed its
+    // `update ... where revoked_at is null` re-checked the tuple it had waited for — now revoked —
+    // and matched nothing. A's new row was inserted after B's statement snapshot, so B could not
+    // see it. `revoke` returned NULL, the CLI told the operator there was nothing to withdraw, and
+    // `entitlementFor` still answered ENTITLED with no end date.
+    //
+    // No serial order produces that: grant-then-revoke withdraws the new row, revoke-then-grant
+    // withdraws the old one and returns it. Both return a record. Only the interleaving returns
+    // null, and only in the direction that keeps somebody in.
+    const cohortId = await makeCohort();
+    const userId = await makeUser();
+    await grantTo(cohortId, userId, { startsAt: at(-120), expiresAt: at(-1) });
+
+    let grantWritten!: () => void;
+    const written = new Promise<void>((wake) => {
+      grantWritten = wake;
+    });
+    let letTheGrantCommit!: () => void;
+    const revokeIsWaiting = new Promise<void>((wake) => {
+      letTheGrantCommit = wake;
+    });
+
+    const withdrawn = await withAdminSql(async (admin) => {
+      const granting = admin.begin(async (tx) => {
+        const out = await enrolments.grant(tx, {
+          cohortId,
+          userId,
+          grantedBy: 'J. Okafor',
+          reference: 'registry-row-91',
+          startsAt: null,
+          expiresAt: null,
+        });
+        grantWritten();
+        await revokeIsWaiting;
+        return { value: out };
+      });
+
+      await written;
+      const revoking = admin.begin(async (tx) => ({
+        value: await enrolments.revoke(tx, {
+          cohortId,
+          userId,
+          revokedBy: 'A. Reyes',
+          reason: 'place transferred',
+        }),
+      }));
+      await untilABackendBlocks();
+      letTheGrantCommit();
+
+      const [, revoked] = await Promise.all([granting, revoking]);
+      return revoked.value;
+    });
+
+    assert.notEqual(withdrawn, null, 'the withdrawal reported that there was nothing to withdraw');
+    assert.equal(
+      await enrolments.entitlementFor(sql(), userId),
+      null,
+      'the learner is still entitled after a withdrawal that was told it had succeeded',
+    );
+    const rows = await rowsFor(userId);
+    assert.equal(rows.length, 2, 'the re-grant did not leave both rows');
+    assert.equal(rows[0]?.revoked_reason, enrolments.SUPERSEDED_REASON);
+    assert.equal(rows[1]?.revoked_reason, 'place transferred', 'the live row was not the one withdrawn');
+  });
+
+  it('withdraws an enrolment granted after the withdrawing transaction opened', async () => {
+    // ## NEGATIVE CONTROL. `now()` is `transaction_timestamp()`, not the moment the row is written.
+    //
+    // A withdrawal issued from a transaction that opened BEFORE the grant it is withdrawing wrote
+    // `revoked_at` earlier than `granted_at`, and `enrolments_revoked_after_grant` refused it with
+    // a raw 23514 that nothing here maps — aborting the operator's whole transaction, which on the
+    // bulk path is the other twenty-nine people in the class list. Reproduced with a transaction
+    // opened 400 ms ahead of the grant.
+    //
+    // Serialising `grant` and `revoke` on the learner's row makes this the ORDINARY case rather
+    // than a race, which is why the two changes belong together: every queued withdrawal now waits
+    // for a grant whose `granted_at` is ahead of its own `now()`.
+    const cohortId = await makeCohort();
+    const userId = await makeUser();
+
+    await withAdminSql(async (admin) => {
+      const boxed = await admin.begin(async (tx) => {
+        // Opens the transaction — and therefore fixes its `now()` — before anything is granted.
+        await tx`select 1`;
+        await withAdminSql((other) =>
+          other.begin(async (inner) => {
+            await enrolments.grant(inner, {
+              cohortId,
+              userId,
+              grantedBy: 'J. Okafor',
+              reference: 'registry-row-92',
+              startsAt: null,
+              expiresAt: null,
+            });
+          }),
+        );
+        return {
+          value: await enrolments.revoke(tx, {
+            cohortId,
+            userId,
+            revokedBy: 'A. Reyes',
+            reason: 'entered in error',
+          }),
+        };
+      });
+      assert.notEqual(boxed.value, null, 'there was nothing to withdraw');
+      assert.equal(boxed.value?.revokedReason, 'entered in error');
+    });
+
+    assert.equal(await enrolments.entitlementFor(sql(), userId), null, 'the withdrawal did not take');
+  });
+
+  // -------------------------------------------------------------------------
   // The grant and its record are one fact
   // -------------------------------------------------------------------------
 

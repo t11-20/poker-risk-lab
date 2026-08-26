@@ -10,8 +10,10 @@
  * is the precedent.
  *
  * The table, the seats, the pot, the turn ring, the action bar and the Coach panel are all in
- * `@prl/ui` and styled by `components.css`. Nothing below restyles any of them; this file only
- * arranges them.
+ * `@prl/ui` and styled by `components.css`. Sections 0-11 only ARRANGE them. Section 12 onwards
+ * gives them a material, and the reason that is here rather than in `components.css` is stated at
+ * the top of section 12: those components are shared, this screen is not, and the route stylesheet
+ * is the only place a change can be scoped to the screen a player spends an hour on.
  *
  * ## The rules this file is written against
  *
@@ -19,12 +21,17 @@
  *    each is called out where it appears: `1px` as a hairline, `100%` and `0px` as structural
  *    geometry inside a `clamp()`, `100dvh` as the viewport, and the three breakpoints (600 / 900 /
  *    1280) which are literals because `var()` is invalid inside a media feature. Those three
- *    breakpoints are the ones the design system names in section 10.
- *  - **No shadows.** Depth is one step on the surface ramp plus a hairline. The sheet separates from
- *    the content behind it, and the decision band from the table above it, with a `--prl-line-strong`
- *    hairline and an opaque surface, never a blur.
+ *    breakpoints are the ones the design system names in section 10. Section 12 adds two more
+ *    kinds of literal and no more: a gradient STOP position (`45%`, `62%` — geometry, not colour)
+ *    and an `em` proportion inside a playing card, whose whole size system is `em`-relative to
+ *    `--prl-card-w`.
+ *  - **A shadow is a LEVEL, never a literal.** `--prl-elevation-0..4` and `--prl-focus-ring` are the
+ *    only things that may appear in a `box-shadow`, which `packages/ui/test/layout-guarantees.test.ts`
+ *    checks by reading this file. This replaces a blanket "no shadows" rule that predated the
+ *    material ladder; the performance argument behind it survives intact and is restated in
+ *    section 12.
  *  - **Only `transform` and `opacity` animate.** The sheet slides on `translateY`; nothing here
- *    transitions a height, a width or an inset.
+ *    transitions a height, a width or an inset. `backdrop-filter` is never transitioned.
  *  - **Mobile-first, so there is no gap between breakpoints.** The sheet is the DEFAULT and the rail
  *    is the override. Writing it the other way round (`max-width: 599px`) leaves a fractional
  *    viewport at 599.5px matching neither query, which is exactly the bug that produces a screen
@@ -314,17 +321,26 @@
    anything, and 90px of scroll brings the top seats back. The figure that mattered before was 0 of
    520px, at every desktop size.
 
-   The hairline and the opaque page-coloured background stay. They are what separates the band from
-   the field above it now that the two are neighbours rather than layers, and they are also what the
-   forced-colors block in section 11 repairs.
+   ## What separates the band from the field, since section 12
+
+   It used to be a `--prl-line-strong` hairline across the band's top edge and an opaque
+   page-coloured fill behind it. Both are gone, and neither is missed: section 12 makes the
+   ActionBar inside this band a floating glass pane with its own elevation, and a hairline drawn
+   two pixels above a pane that is already casting a shadow reads as a seam in the page rather than
+   as a separation. The band is now a transparent frame around a floating object, which is what it
+   has actually been since the day it stopped being pinned.
+
+   The fill had to go for a second reason: `--prl-surface-page` is opaque and exactly the colour of
+   the page, so it painted over `--prl-page-wash` — and a glass pane with a flat colour behind it is
+   a slightly different flat colour. The wash is the thing that makes the material read as material.
+
+   The forced-colors block in section 11 still names `.prl-play__decision`; see the note there.
    ========================================================================================== */
 
 .prl-play__decision {
   display: grid;
-  gap: var(--prl-space-4);
-  padding-block: var(--prl-space-4);
-  border-block-start: var(--prl-hairline-strong);
-  background-color: var(--prl-surface-page);
+  gap: var(--prl-space-5);
+  padding-block: var(--prl-space-5);
 }
 
 .prl-play__decision-idle {
@@ -801,6 +817,922 @@
 }
 
 /* ==========================================================================================
+   12. THE MATERIAL OF THE TABLE
+   ==========================================================================================
+   Everything from here down gives a component in `@prl/ui` a surface, an edge and a height. That
+   is a change of policy for this file, which said in its own header that it "only arranges" the
+   table, and the policy is worth stating rather than quietly breaking.
+
+   ## Why this is a route stylesheet and not `components.css`
+
+   `PokerTable`, `Seat`, `PlayingCard`, `ActionBar` and `CoachPanel` are shared. They are drawn in a
+   lesson, in a Lab scenario, in a hand review and at 22rem inside the Coach's own rail, and the
+   treatment below is tuned for exactly one of those: a six-max table at 46rem or more of column,
+   with a decision pending and a turn clock running. It spends elevation and glass on that screen
+   because that screen is where a learner spends the hour. Putting the same rules in the package
+   would spend them on a 200px scenario thumbnail too, which is how a design system ends up with
+   every surface at level three and no hierarchy left to express.
+
+   Scoping is `.prl-play <selector>`, which is one class of specificity over `components.css` and
+   therefore wins without a single `!important`.
+
+   ## What is NOT reversed from the design system
+
+   The performance rule. `tokens.css` argues that six seats, a board and a live Coach panel are
+   exactly the scene where large blurred layers cost frames, and that argument is untouched:
+
+     - `backdrop-filter` appears on ONE element on the desktop layout, the ActionBar, which is
+       bounded, promoted (`isolation: isolate`) and never moves. Nothing on the table field is
+       blurred, at any width.
+     - Every shadow below is on a STATIC element and is composited once. The only things that
+       animate are `transform` and `opacity`, plus colour, and the one shadow that changes does so
+       on a seat becoming active — once per turn, not once per frame.
+     - No `backdrop-filter` is transitioned, anywhere.
+
+   And the colour rule. There is still no felt green, no gold, no metallic gradient and no glow. The
+   table gets depth out of a shaded top edge, a lit bottom edge and elevation on the objects lying on
+   it — which is the graph-paper thesis rendered as a physical worksheet rather than as a rectangle.
+   ========================================================================================== */
+
+/* ------------------------------------------------------------------------------------------
+   12.1  THE FELT
+
+   A well, not a card. The field is the GROUND the seats lie on, so it is lit from above as a
+   recess is: the top inner edge falls into shadow and the bottom inner edge catches light, which
+   is the `--prl-edge-lit` / `--prl-edge-shade` pair used the other way up from a floating pane.
+   That inversion is the whole difference between "a panel" and "a table let into the page".
+
+   The gradient is drawn ahead of the grid in the `background-image` list so the graph paper sits
+   under the shading rather than over it. Its colour is a token in both themes and it therefore
+   inverts correctly: `--prl-edge-shade` is black at 34% on dark and ink at 14% on light, so the
+   top of the field darkens in both and never lightens in one.
+
+   `45%` is a gradient STOP POSITION — geometry, where along the box the shading has finished. There
+   is no token for a percentage of a box, and there should not be.
+   ------------------------------------------------------------------------------------------ */
+
+.prl-play .prl-table__field {
+  /* The grid steps back by one: under a shaded top edge the 32px pitch reads as a ruled surface
+     rather than as a wireframe drawn over the table. */
+  --prl-table-grid-color: var(--prl-surface-page);
+
+  border-color: var(--prl-edge);
+  border-block-start-color: var(--prl-edge-shade);
+  border-block-end-color: var(--prl-edge-lit);
+  border-radius: var(--prl-radius-3);
+  background-image:
+    linear-gradient(to bottom, var(--prl-edge-shade), transparent 45%),
+    repeating-linear-gradient(
+      to right,
+      var(--prl-table-grid-color) 0 1px,
+      transparent 1px var(--prl-table-grid-size)
+    ),
+    repeating-linear-gradient(
+      to bottom,
+      var(--prl-table-grid-color) 0 1px,
+      transparent 1px var(--prl-table-grid-size)
+    );
+}
+
+/**
+ * The rail. `components.css` draws this as a 1px ellipse in `--prl-line-subtle` and it reads as a
+ * construction line. Filled with `--prl-veil-4` — 4% of ink-000 on dark, 3% of ink-900 on light, so
+ * a barely-there step in either direction — it becomes the table top inside the room, and the eye
+ * has something to sit the seats on.
+ */
+.prl-play .prl-table__oval {
+  border-color: var(--prl-edge);
+  border-block-start-color: var(--prl-edge-shade);
+  border-block-end-color: var(--prl-edge-lit);
+  background-color: var(--prl-veil-4);
+}
+
+/* ------------------------------------------------------------------------------------------
+   12.2  THE POT, AS AN OBJECT IN THE MIDDLE
+
+   Two boxes became one. `.prl-table__centre` and the `.prl-pot` inside it were both hairlined panes
+   on a hairlined field — three nested rectangles for one number — so the pot gives up its own box
+   and the centre keeps it, one level up the ladder. The result is a single puck lying on the felt
+   with the pot, the board and the result inside it.
+
+   ## The INLINE padding is load-bearing and must not be spent for looks
+
+   Constraint 4 in `components.css`'s oval-layout comment says the bottom seat has to clear the
+   seats beside it, and the same arithmetic decides whether this block clears the two seats at
+   x = 17.1% and x = 82.9%. Measured at 1440x900 on the `complete` fixture, where the block is at
+   its widest (a side-pot line naming two seats): a 968px field puts those seats' inner edges at
+   269px and 698px, and the block is 431px wide centred, so it runs 268..700 — one pixel of overlap
+   at each end. Widening the inline padding by 12px a side, which is what this rule did on its first
+   draft, is exactly how that happened.
+
+   So the block padding grows and the inline padding does not. If a longer eligibility line ever
+   needs more room, take it from the block axis or wrap the line; do not take it from here.
+   ------------------------------------------------------------------------------------------ */
+
+.prl-play .prl-table__centre {
+  padding: var(--prl-space-6) var(--prl-space-5);
+  border-color: var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
+  box-shadow: var(--prl-elevation-2);
+}
+
+.prl-play .prl-table__centre .prl-pot {
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+}
+
+/** Side pots line up as a table: index, amount right-aligned against the widest figure, then who is
+    eligible. Misaligned numerals are the one thing a product about numbers cannot afford. */
+.prl-play .prl-pot__side-amount {
+  min-width: var(--prl-space-11);
+  text-align: end;
+}
+
+/* ------------------------------------------------------------------------------------------
+   12.3  A SEAT IS AN OBJECT, AND ITS STATE IS A MATERIAL
+
+   ## The chamfer goes
+
+   `--prl-chamfer` says of itself: "It survives on `.prl-seat` ... If that ever stops being true,
+   delete this token rather than reintroducing the cut on a control." This is that moment, for a
+   mechanical reason rather than a stylistic one. The cut is drawn by a `clip-path` on the two plate
+   pseudo-elements, and a `clip-path` clips a `box-shadow` — so a chamfered plate cannot cast one,
+   and a `box-shadow` on the seat itself would draw a square corner 10px outside the cut corner of
+   the plate. Elevation and the chamfer are mutually exclusive, and this screen needs state carried
+   by elevation.
+
+   The two-pseudo-element construction is KEPT and earns its place: `::before` is the plate's ring
+   and `::after` is its fill, so the ring's COLOUR and the ring's THICKNESS are two independent
+   channels. Both are used below.
+
+   ## Four states, three channels each, and never hue alone
+
+     to act    accent ring, 2px, elevation-3, 4px of lift        + the "to act" chip + the timer
+     all in    caution ring, 2px, elevation-1                    + the "all in" chip
+     folded    subtle ring, 1px, NO elevation, page-coloured fill + the word "folded"
+     marked    favourable ring, 2px, elevation-2                 + the phrase in the card's name
+
+   A reader who cannot separate cyan from amber still has ring thickness and height; a reader with no
+   colour at all still has the words, which were always there. Ring thickness is the gap between
+   `::before` (inset 0) and `::after`, so 2px is one declaration.
+   ------------------------------------------------------------------------------------------ */
+
+.prl-play .prl-seat {
+  padding: var(--prl-space-5) var(--prl-space-6);
+  /* Composes with the `translate: -50% -50%` the oval layout sets: `translate` and `transform` are
+     separate properties and both apply, translate first. */
+  transition: transform var(--prl-dur-base) var(--prl-ease-material);
+}
+
+.prl-play .prl-seat::before,
+.prl-play .prl-seat::after {
+  clip-path: none;
+  border-radius: var(--prl-radius-3);
+  transition: background-color var(--prl-dur-base) var(--prl-ease-material);
+}
+
+.prl-play .prl-seat::before {
+  box-shadow: var(--prl-elevation-1);
+  transition:
+    background-color var(--prl-dur-base) var(--prl-ease-material),
+    box-shadow var(--prl-dur-base) var(--prl-ease-material);
+}
+
+/** Your own plate sits proud of the others before any state is applied to it. */
+.prl-play .prl-seat--self::before {
+  box-shadow: var(--prl-elevation-2);
+}
+
+/**
+ * The seat to act — the single most important fact on the screen, and now three more cues than it
+ * had: the ring doubles, the plate rises, and the elevation goes to level 3. The lift is a
+ * `transform`, so it composites; the shadow changes once per turn.
+ */
+.prl-play .prl-seat--active,
+.prl-play .prl-seat--to-act {
+  transform: translateY(calc(var(--prl-space-2) * -1));
+}
+
+.prl-play .prl-seat--active::before,
+.prl-play .prl-seat--to-act::before {
+  box-shadow: var(--prl-elevation-3);
+}
+
+.prl-play .prl-seat--active::after,
+.prl-play .prl-seat--to-act::after,
+.prl-play .prl-seat--all-in::after,
+.prl-play .prl-seat--marked::after {
+  inset: var(--prl-space-1);
+}
+
+/**
+ * Folded and sitting out: the plate stops being an object and lies flat on the felt.
+ *
+ * `components.css` already swaps the FILL to `--prl-surface-page` rather than reaching for
+ * `opacity`, and that rule is right and stays — a folded seat is still information, and dimming it
+ * would take a 4.5:1 label under the floor. What is added is the removal of HEIGHT. A seat that has
+ * given up its hand should not be at the same altitude as one that has not, and altitude survives
+ * greyscale where a fill does not.
+ *
+ * ## The plate is NOT dropped a step in opacity, and this is the arithmetic
+ *
+ * Fading the whole folded plate so the eye skips it was considered and costs the contrast floor in
+ * the LIGHT theme, where the plate and the felt under it are within 0.09 of a relative luminance of
+ * each other and there is almost nothing to fade towards. An `opacity: o` on the plate composites
+ * BOTH its fill and its text with the felt behind it (`--prl-surface-table`, #e8edf1, L 0.8408), so
+ * the pairing that has to clear 4.5:1 is recomputed at both ends. `STACK` is `--prl-text-muted`
+ * (#55606f, L 0.1144) on `--prl-surface-page` (#f5f7f9, L 0.9277) — 5.95:1 as drawn:
+ *
+ *     o = 1.0    5.95:1     as it ships
+ *     o = 0.9    4.74:1     passes
+ *     o = 0.8    3.79:1     FAILS, light theme only
+ *
+ * ## Those figures are a correction, and the correction is the interesting part
+ *
+ * This block first carried 4.09:1 and 3.10:1 and called BOTH a failure. Those were derived by
+ * interpolating the two RELATIVE LUMINANCES. A browser composites `opacity` in gamma-encoded sRGB,
+ * not in linear light, and the numbers above are what Chrome actually paints — measured on the
+ * painted pixel by `check-contrast.mjs`'s third pass and confirmed against a screenshot probe.
+ * Redoing the old arithmetic in linear light reproduces 4.088 and 3.101, which is how the mistake
+ * was identified rather than merely suspected.
+ *
+ * So the conclusion survives and its reasoning did not: `o = 0.8` genuinely fails (48 findings,
+ * `3.79:1 needs 4.5:1`, every folded label, light theme only — dark sits at 5.78:1). But **`o = 0.9`
+ * was never unsafe.** If somebody wants the folded plate to recede, that step is available and
+ * measured; it was declined here on arithmetic that was wrong.
+ *
+ * ## Why it was written down at all
+ *
+ * At the time, `scripts/check-contrast.mjs` read TOKEN PAIRS and not composited layers, so an
+ * `opacity` here would have passed `design:contrast` while changing what a reader actually sees.
+ * That gap is now closed — pass 3 composites the real ancestor stack, including `::before`/`::after`
+ * plates like this one, and checks its model against the renderer. Which is why the numbers above
+ * could be corrected at all: the gate can now see what this comment was guessing at.
+ *
+ * The de-elevation above is what carries the state instead, and it costs no contrast at all.
+ */
+.prl-play .prl-seat--folded::before,
+.prl-play .prl-seat--sitting-out::before {
+  box-shadow: var(--prl-elevation-0);
+}
+
+.prl-play .prl-seat--all-in::before {
+  box-shadow: var(--prl-elevation-1);
+}
+
+/**
+ * The seat holding the marked hand — at a settled table, the winner.
+ *
+ * `Seat.tsx` adds `prl-seat--marked` when the seat's own hole cards are among the cards the caller
+ * asked to highlight. WHY they are marked is the caller's knowledge (`highlightLabel`, "part of the
+ * winning hand") and is already in each card's accessible name, so the plate is drawn for a fact
+ * this screen has stated in words for as long as the highlight has existed.
+ */
+.prl-play .prl-seat--marked::before {
+  background-color: var(--prl-favourable);
+  box-shadow: var(--prl-elevation-2);
+}
+
+/**
+ * Stack and street commitment, as a column of figures.
+ *
+ * They were a label column sized to its content and a value column that began wherever the label
+ * ended, so `STACK 935` and `IN FRONT 35` put their digits at two different x positions inside one
+ * plate — and six plates around a table multiplied that by six. Right-aligning the value against
+ * the plate's inner edge gives one column of digits per seat, units under units, which is what
+ * `--prl-numeric` was for in the first place.
+ */
+.prl-play .prl-seat__stats {
+  column-gap: var(--prl-space-5);
+}
+
+.prl-play .prl-seat__stat-value {
+  justify-self: end;
+  text-align: end;
+}
+
+/**
+ * A seat with no cards, given the SLOT the cards would have occupied.
+ *
+ * `CardRow` renders `<span class="prl-card-row__empty">no cards</span>` in place of the card strip,
+ * and nothing had ever sized it. In the compacted plate the cards live in their own grid column
+ * (`grid-area: cards`, `align-self: center`), so the width of that column is whatever its content
+ * measures — and measured in Chrome at 1440x900 on the `decision` fixture that is 68.0px of card
+ * pair on a seat still in the hand against 58.8px of running text on a folded one. Two
+ * consequences, both visible on every folded plate in the ring:
+ *
+ *   - the text column beside it changed width from seat to seat, so the stack figure's right edge
+ *     landed 116.0px into a plate holding cards and 125.2px into a folded one — a 9.2px stagger
+ *     around a ring of six, in the one place a product about numbers cannot afford one, and
+ *   - a single line of text centred against four rows of a grid sits on none of their baselines, so
+ *     the words read as a fragment that had escaped the plate rather than as a field in it.
+ *
+ * Giving the span the card pair's exact footprint fixes both at once: the column is the same width
+ * whether it holds two cards or none, every plate's inner right edge lands in the same place, and
+ * the words sit in the middle of the box the cards would have filled. The two lengths are the card
+ * pair's own arithmetic, not numbers picked to match it — `sm` is `--prl-card-w: --prl-space-9`,
+ * `.prl-card-row__cards` gaps them by `--prl-space-2`, and `5 / 7` is the `aspect-ratio` on
+ * `.prl-card` — so a change to the card size or the row gap carries through here.
+ *
+ * Scoped to `.prl-seat__cards` and not to `.prl-card-row__empty`: the board and the Coach's outs
+ * rows use the same span, are not in a fixed-width column, and want a sentence rather than a slot.
+ */
+.prl-play .prl-seat__cards .prl-card-row__empty {
+  display: grid;
+  place-items: center;
+  width: calc(var(--prl-space-9) * 2 + var(--prl-space-2));
+  height: calc(var(--prl-space-9) / 5 * 7);
+  /* Down one step from the `--prl-type-body-sm` `components.css` sets, to `--prl-type-label` — which
+     `tokens.css` calls the floor and this does not go below. Two reasons, and neither is taste: at
+     15px the phrase measures 58.8px inside a 68px box and would break across two lines on the first
+     reader who scales their type, and this is a placeholder in a field of labels rather than a
+     sentence, so it belongs at the size `STACK` and `IN FRONT` are set at. */
+  font-size: var(--prl-type-label);
+  text-align: center;
+}
+
+/* ------------------------------------------------------------------------------------------
+   12.3.1  A NAME IS TWO LINES, ALWAYS
+
+   The ring of six plates was four different heights, and the whole difference was the name.
+
+   Measured in Chrome at 1440x900 on the `decision` fixture. The compacted plate is 13rem wide, this
+   section's own `--prl-space-6` of inline padding takes 2rem of that, the card column takes 68px and
+   the grid gap 8px, which leaves the name a 100px track. At `--prl-type-body` (17px, semibold) the
+   six names then measured three lines, two, two, two, one and one — 66.3px, 44.2px and 22.1px of
+   name, which put the five bot plates at 147.2, 169.3, 169.3, 172.4 and 191.4px. Four heights, a
+   44.2px spread, and not one pixel of it was information. A ring of seats at different heights is
+   the loudest "unfinished" cue on the screen.
+
+   After: 164.1px on four of the five and 167.3px on the button, whose dealer badge is 3.2px taller
+   than a bare position label. That last 3.2px is a live badge and is left alone — it is a fact about
+   the hand, which is the test for whether a difference between two plates is allowed to exist.
+
+   Both halves of the fix, because either alone leaves a case open:
+
+     the size    `--prl-type-body-sm` (15px). It takes `Balanced bot` from two lines to one and
+                 `Tight-passive bot`/`Calling-station bot` from 44px to 39px, and it stops the name
+                 being the largest type on the plate — which it never should have been, because the
+                 figures are what a learner reads.
+     the box     `min-height` of exactly two lines, and a two-line clamp over the top. The minimum is
+                 what makes `Nit bot` the same height as `Calling-station bot`; the clamp is what
+                 stops a longer name reopening the defect. Two lines is the allowance in BOTH
+                 directions, and every plate's name box is now 39.0px.
+
+   One fixture name is clipped by it and that is the trade being made rather than an oversight:
+   `aggressive bot` measures 111.2px in a 100px track, so `Loose-aggressive bot` wants three lines at
+   any size the name is allowed to be and reads `Loose-aggressive…`. The clipped word is the generic
+   suffix every bot at the table shares; the strategy — which is the only part that tells one seat
+   from another — survives. A ring that is level is worth more than a fifth copy of the word "bot".
+
+   `-webkit-line-clamp` truncates the PIXELS only: the full name stays in the DOM and therefore in
+   the accessibility tree, so `${name} hole cards` and the turn timer's `${name} turn timer` are
+   unchanged and J3's seat assertions read exactly what they read before.
+
+   A CONTAINER query, matching the one in `components.css` that introduces the oval: below 46rem the
+   plate is a full-width row in a list, no name wraps, and reserving two lines on every seat would
+   add a blank line to five of them on a phone. The defect is a property of the ring, so the fix is
+   scoped to the ring.
+   ------------------------------------------------------------------------------------------ */
+
+@container prl-table (min-width: 46rem) {
+  .prl-play .prl-seat__name {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    /* Two lines of this element's own type: `components.css` sets `line-height: --prl-leading-snug`
+       and `em` here is the `font-size` declared below, so the reserve tracks both. */
+    min-height: calc(var(--prl-leading-snug) * 2em);
+    font-size: var(--prl-type-body-sm);
+  }
+}
+
+/* ------------------------------------------------------------------------------------------
+   12.4  THE CARDS
+
+   The one place in this product where craft is legible at a glance, and the place a flat treatment
+   shows most. Every change is proportional to `--prl-card-w`, so it holds at `sm`, `md` and `lg`
+   without three sets of rules — the size system `components.css` already established.
+
+   ## The index corner
+
+   The face was rank, then a large pip, then the suit letter, all centred: three things down the
+   middle of a 48px card, none of them where a card player's eye goes. It now reads as a real card
+   index — rank over suit letter, hard into the top-left corner — with the suit mark large in the
+   opposite corner. The rank identifies the card, and it is now the first thing at the corner a hand
+   fans from.
+
+   The three spans are `aria-hidden` children of a `role="img"`, so this is a purely visual
+   reordering with no accessibility-tree consequence: the card announces one name, from its
+   `aria-label`, exactly as before.
+
+   ## Radius
+
+   `--prl-card-w / 12` is 4px on a 48px card and 5.3px on a 64px one. A real playing card's corner
+   is about a twelfth of its width, which is why one ratio serves every size and a fixed 2px did not.
+
+   ## The `em` values
+
+   Every length inside a card face is `em`-relative to `--prl-card-w` by construction (see section
+   14.1 of `components.css`). These continue that system: they are proportions of a card, not
+   spacing, and the spacing ramp cannot express them.
+   ------------------------------------------------------------------------------------------ */
+
+.prl-play .prl-card {
+  border-radius: calc(var(--prl-card-w) / 12);
+  box-shadow: var(--prl-elevation-1);
+}
+
+/**
+ * The board is the focal point of the field and was drawn at exactly the size of a hole card
+ * tucked into a seat plate 300px away. `--prl-space-12` is the `lg` step, 4rem.
+ *
+ * Checked against the two constraints in `components.css`'s oval-layout comment before spending it,
+ * because the centre block's size is what those constraints are about. Measured at 1440x900 on the
+ * `complete` fixture, which is where the block is biggest — five cards, a side pot and a result:
+ *
+ *   constraint 3, the block must not collide with the plate below it
+ *     0.36 x 720 = 259 >= (centre 286 + plate 141) / 2 = 213, so 46px of slack. A card goes from
+ *     67px tall to 90px, which spends 23 of those 46.
+ *   constraint 4, the block must not reach the seats beside it
+ *     five 64px cards and four gaps is 336px, against the 431px the side-pot eligibility line
+ *     already makes the block. The board was never what set this width and still is not.
+ */
+.prl-play .prl-table__board .prl-card {
+  --prl-card-w: var(--prl-space-12);
+}
+
+.prl-play .prl-card__face {
+  grid-template-rows: auto auto minmax(0, 1fr);
+  justify-items: start;
+  padding: 0.2em 0.24em;
+}
+
+.prl-play .prl-card__rank {
+  grid-row: 1;
+  font-size: 1.24em;
+  letter-spacing: var(--prl-tracking-display-2);
+  line-height: 0.88;
+}
+
+/** Row 2, above the pip, because the markup order is rank, pip, letter and the index reads
+    rank-over-suit. Explicit rows are what let the visual order differ from the DOM order. */
+.prl-play .prl-card__suit-letter {
+  grid-row: 2;
+  /* NOT smaller than the 0.62em `components.css` sets. This glyph is the non-colour cue that
+     separates a club from a spade — the pair protanopia cannot tell apart by hue — so it is the one
+     thing on a card face that may never be traded for layout. Moving it into the index puts it
+     directly under the rank, where it is read with the rank rather than hunted for. */
+  font-size: 0.66em;
+  line-height: 1.05;
+}
+
+.prl-play .prl-card__pip {
+  grid-row: 3;
+  align-self: end;
+  justify-self: end;
+  font-size: 1.5em;
+  line-height: 0.78;
+}
+
+/**
+ * The back.
+ *
+ * `PlayingCard` renders `<span class="prl-card__back">` for a face-down card and nothing has ever
+ * styled it — the diagonal rule ran edge to edge on the card itself, so the back had no margin and
+ * no border of its own and read as a hatched rectangle rather than as the back of a card. The
+ * pattern moves onto that span, inset by a proportion of the card, with a hairline: a lattice panel
+ * floating inside a border, which is what the back of a card looks like.
+ *
+ * Still no crest, no logo, no livery — and, the property that is not a style decision, still not a
+ * single character of rank or suit anywhere. This is two gradients and a border: no text node, no
+ * `data-` attribute, no class carrying a value. The confidentiality assertion in
+ * `scripts/ax-assertions.mjs` (J3.8) reads the card's `outerHTML` as well as its accessible name
+ * and has nothing new to find, because the value never reaches the DOM at all — `PlayingCard`
+ * short-circuits before the card integer is described.
+ */
+.prl-play .prl-card--face-down {
+  border-color: var(--prl-card-back-pattern);
+  background-image: none;
+}
+
+.prl-play .prl-card__back {
+  display: block;
+  margin: 0.11em;
+  border: 1px solid var(--prl-card-back-pattern);
+  border-radius: calc(var(--prl-card-w) / 18);
+  background-image:
+    repeating-linear-gradient(-45deg, var(--prl-card-back-pattern) 0 1px, transparent 1px var(--prl-space-3)),
+    repeating-linear-gradient(45deg, var(--prl-card-back-pattern) 0 1px, transparent 1px var(--prl-space-3));
+}
+
+/* ------------------------------------------------------------------------------------------
+   12.5  THE ACTION BAR IS THE HERO
+
+   The block a learner looks at every few seconds under a turn clock. It is the one element on the
+   desktop layout that gets level 3 of the ladder: a bounded glass pane, blurred and saturated,
+   floating over the page wash with real elevation under it.
+
+   The two rules the material carries with it, both honoured rather than argued with:
+
+     1. A GLASS FILL IS NEVER USED WITHOUT `--prl-glass-filter`. Both are in this block, and
+        `layout-guarantees.test.ts` reads this file to check it. The nav header's ghosting bug is
+        what that rule exists for.
+     2. GLASS IS FOR BOUNDED SURFACES. This is a pane inside the table column, not a full-width
+        strip: at 1440 it is about 950px wide inside a 1360px page, it is promoted to its own layer
+        by `isolation: isolate`, and it does not move. It is the toolbar case the ladder names for
+        L3, and on a desktop it is the only blurred element on the route.
+
+   `--prl-glass-floating` is 90% opaque on dark and 94% on light, so the pass-through is a tenth of a
+   blurred backdrop. Every text ratio on it is measured over both bounding backdrops by
+   `scripts/check-contrast.mjs`; nothing here spends that margin.
+   ------------------------------------------------------------------------------------------ */
+
+.prl-play__decision > .prl-action-bar {
+  isolation: isolate;
+  gap: var(--prl-space-5) var(--prl-space-8);
+  padding: var(--prl-space-6) var(--prl-space-7);
+  border-color: var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-glass-floating);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  box-shadow: var(--prl-elevation-2);
+}
+
+/** The price strip is the bar's headline. `--prl-numeric` is restated on the figures because they
+    change between decisions and a figure that changes width is a figure you misread. */
+.prl-play .prl-action-bar__price {
+  gap: var(--prl-space-4) var(--prl-space-11);
+}
+
+.prl-play .prl-action-bar__price-value {
+  font-variant-numeric: var(--prl-numeric);
+}
+
+/**
+ * A key on a control surface.
+ *
+ * The buttons were transparent rectangles with a 1px outline, which on a flat panel reads as a
+ * wireframe rather than as something you press. They now have a fill (`--prl-veil-4`: 4% of ink-000
+ * on dark, 3% of ink-900 on light, so a key is lifted off the glass in one theme and pressed into
+ * it in the other), a real corner, one step of elevation, and a press that moves.
+ *
+ * `--prl-line-strong` STAYS as the border colour and is not swapped for an edge token. It is not
+ * decoration: it is the boundary of a user-interface component, which WCAG 1.4.11 asks 3:1 of, and
+ * the edge tokens measure about 1.5:1.
+ */
+.prl-play .prl-action-btn {
+  min-height: calc(var(--prl-space-12) + var(--prl-space-4));
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-veil-4);
+  box-shadow: var(--prl-elevation-1);
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    box-shadow var(--prl-dur-fast) var(--prl-ease-material),
+    transform var(--prl-dur-fast) var(--prl-ease-material);
+}
+
+.prl-play .prl-action-btn:hover:not(:disabled) {
+  background-color: var(--prl-veil-8);
+  box-shadow: var(--prl-elevation-2);
+  transform: translateY(-1px);
+}
+
+.prl-play .prl-action-btn:active:not(:disabled) {
+  box-shadow: var(--prl-elevation-0);
+  transform: translateY(1px);
+}
+
+/**
+ * `box-shadow` is one property, and `base.css` gives every `:focus-visible` element the halo through
+ * it. Without this rule the halo would REPLACE the elevation and the key would fall flat for exactly
+ * as long as the keyboard was on it. Ring first: shadows paint in list order, first on top.
+ */
+.prl-play .prl-action-btn:focus-visible {
+  box-shadow: var(--prl-focus-ring), var(--prl-elevation-1);
+}
+
+/** Disabled drops a level rather than fading. Fading a control on a translucent pane takes its label
+    towards the backdrop, which is the opposite of what a disabled state should cost. */
+.prl-play .prl-action-btn:disabled {
+  background-color: transparent;
+  box-shadow: var(--prl-elevation-0);
+}
+
+/**
+ * The primary action: unmistakable, and not a flat block of cyan.
+ *
+ * A single `--prl-accent-fill` rectangle is a slab. What makes a key look pressable is that its face
+ * is LIT — brighter where the light lands, darker where it falls away — so the fill runs
+ * `--prl-accent-400` to `--prl-accent-600` down the button and the elevation underneath does the
+ * rest. It is also given more of the row than its neighbours, because it is one action among three
+ * and the row should not read as three equal choices.
+ *
+ * The contrast of a gradient is the contrast of its WORST stop, so both ends were computed rather
+ * than assumed. Dark, `--prl-text-on-accent` = ink-900: 15.86:1 on accent-400 (#3ed6e6) and 6.68:1
+ * on accent-600 (#0fa6bd). Light, `--prl-text-on-accent` = white: 6.97:1 on accent-400 (which light
+ * remaps to #0a6274) and 9.90:1 on accent-600 (#08454f). The floor is 4.5:1 and the worst stop in
+ * either theme clears it with room. Hover moves one step up the ramp, which raises both figures.
+ *
+ * The gradient is a `background-image` on the existing `::before` plate, so `--prl-accent-fill` stays
+ * as the `background-color` underneath it — and forced-colors, which discards `background-image` and
+ * keeps `background-color`, lands on exactly the flat fill this button had before.
+ */
+.prl-play .prl-action-btn--primary {
+  flex-grow: 1.6;
+  box-shadow: var(--prl-elevation-2);
+}
+
+.prl-play .prl-action-btn--primary::before {
+  border-radius: var(--prl-radius-3);
+  background-image: linear-gradient(to bottom, var(--prl-accent-400), var(--prl-accent-600));
+}
+
+.prl-play .prl-action-btn--primary:hover:not(:disabled) {
+  box-shadow: var(--prl-elevation-3);
+}
+
+.prl-play .prl-action-btn--primary:hover:not(:disabled)::before {
+  background-image: linear-gradient(to bottom, var(--prl-accent-300), var(--prl-accent-500));
+}
+
+.prl-play .prl-action-btn--primary:active:not(:disabled) {
+  box-shadow: var(--prl-elevation-1);
+}
+
+.prl-play .prl-action-btn--primary:focus-visible {
+  box-shadow: var(--prl-focus-ring), var(--prl-elevation-2);
+}
+
+/* ------------------------------------------------------------------------------------------
+   12.6  THE BET SIZER
+
+   A recessed tray inside the floating pane rather than a second opaque panel on top of it: an
+   opaque `--prl-surface-inset` block sitting on glass cancels the glass over its own area, which is
+   most of the bar. `--prl-veil-4` is translucent, so the blurred backdrop still comes through.
+   ------------------------------------------------------------------------------------------ */
+
+.prl-play .prl-sizer {
+  border-color: var(--prl-edge);
+  border-block-start-color: var(--prl-edge-shade);
+  border-block-end-color: var(--prl-edge-lit);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-veil-4);
+}
+
+.prl-play .prl-preset {
+  background-color: var(--prl-veil-4);
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material);
+}
+
+.prl-play .prl-preset[aria-pressed="true"] {
+  background-color: var(--prl-veil-8);
+}
+
+/**
+ * The slider knob was a 44px cyan SQUARE — the loudest object in the bar, and a shape that reads as
+ * a rendering fault rather than as a control. It keeps every one of its 44 pixels, because that is
+ * the target floor and shrinking a knob to make it prettier is a trade this product does not make.
+ * What changes is that it is round, neutral-filled, ringed in the accent and elevated, so the accent
+ * MARKS the control instead of being the control.
+ *
+ * The two vendor pseudo-elements cannot be combined into one selector list: a list containing a
+ * pseudo-element an engine does not recognise is dropped WHOLE by that engine.
+ */
+.prl-play .prl-range::-webkit-slider-runnable-track {
+  height: var(--prl-space-4);
+  border-radius: var(--prl-radius-pill);
+}
+
+.prl-play .prl-range::-moz-range-track {
+  height: var(--prl-space-4);
+  border-radius: var(--prl-radius-pill);
+}
+
+.prl-play .prl-range::-webkit-slider-thumb {
+  margin-block-start: calc((var(--prl-space-4) - var(--prl-target-min)) / 2);
+  border: 2px solid var(--prl-accent-edge);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-2);
+}
+
+.prl-play .prl-range::-moz-range-thumb {
+  border: 2px solid var(--prl-accent-edge);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-2);
+}
+
+/* ------------------------------------------------------------------------------------------
+   12.7  THE COACH: A TYPOGRAPHIC HIERARCHY, NOT A STACK OF BOXES
+
+   Dense numeric content in a 22rem rail. It was five hairlined rectangles of the same weight inside
+   a sixth, so nothing on it was louder than anything else and the equity figure — the number the
+   whole panel exists to deliver — competed with the pot-and-price tile.
+
+   Three levels now, and they are levels of the material ladder rather than three shades of grey:
+
+     the panel        L2, opaque, elevation-1      it is a card and it carries prose
+     equity           L1 grouped, one step up      the subject, with the headline figure at metric-lg
+     everything else  a RULE, not a box            label left, figure right, digits in one column
+
+   The last does the most work. A supporting figure does not need a box around it; it needs to be
+   readable in a column with its neighbours, which means a shared baseline, a right-aligned value and
+   tabular figures. The boxes were what made four ordinary numbers look like four separate claims.
+   ------------------------------------------------------------------------------------------ */
+
+.prl-play .prl-coach {
+  gap: var(--prl-space-8);
+  padding: var(--prl-space-8);
+  border-color: var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
+  box-shadow: var(--prl-elevation-1);
+}
+
+.prl-play .prl-coach__section {
+  gap: var(--prl-space-6);
+  padding: var(--prl-space-6);
+  border-color: var(--prl-edge);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-raised);
+  box-shadow: var(--prl-elevation-0);
+}
+
+/** The subject of the panel, one step up: a lit top edge and a real contact shadow, so the eye lands
+    on the equity block before it lands on anything else in the rail. */
+.prl-play .prl-coach__section--equity {
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  background-color: var(--prl-surface-inset);
+  box-shadow: var(--prl-elevation-1);
+}
+
+/**
+ * The headline figure, and the step down under it.
+ *
+ * `Metric` at `size="lg"` already resolves to `--prl-type-metric-lg`; what was missing was the step
+ * DOWN. Break-even equity was `metric-md` inside an identical box, so two figures of similar size
+ * sat in two identical containers and the reader had to work out which one the panel was about. The
+ * supporting figures drop to `metric-sm` and lose their box; the headline keeps both.
+ */
+.prl-play .prl-coach__section:not(.prl-coach__section--equity) .prl-metric__value {
+  font-size: var(--prl-type-metric-sm);
+}
+
+/**
+ * A supporting figure is a ROW: label left, value right, a hairline above. `.prl-stat` renders a
+ * `<dl>` with the label and value as one pair and the note as a sibling paragraph, so the note falls
+ * outside the two columns and stays under the figure it qualifies.
+ */
+.prl-play .prl-coach__section .prl-stat {
+  gap: var(--prl-space-2);
+  padding: var(--prl-space-5) var(--prl-space-0) var(--prl-space-0);
+  border: 0;
+  border-block-start: var(--prl-hairline);
+  border-radius: var(--prl-radius-0);
+  background-color: transparent;
+}
+
+.prl-play .prl-coach__section .prl-stat__pair {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: var(--prl-space-5);
+}
+
+.prl-play .prl-coach__section .prl-stat__value {
+  justify-self: end;
+  /* `.prl-stat__value` is a flex row (figure, then unit), so BOTH are needed: `justify-content`
+     puts the flex children against the column's right edge and `text-align` puts the glyphs inside
+     each of them there too. With only one of the two, a tile whose value is a sentence rather than
+     a figure lands in the middle of its column. */
+  justify-content: flex-end;
+  text-align: end;
+}
+
+/**
+ * Clean and dirty outs, one under the other in the rail.
+ *
+ * `components.css` fits these on `minmax(8rem, 1fr)`, which inside a 22rem rail minus the panel's
+ * and the section's padding gives two 128px tracks — and each bucket carries a sentence
+ * ("These keep you in front of the range assumed below, with almost nothing left to go wrong"),
+ * which at 128px is eleven lines of two or three words. Ten rem is the width below which the pair
+ * should stop sharing a line; above it, where the Coach is full width, the two still sit side by
+ * side exactly as before.
+ */
+.prl-play .prl-outs__buckets {
+  grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-16), 1fr));
+}
+
+/**
+ * The per-player readout, as a table rather than as wrapped sentences.
+ *
+ * It was a flex row that wrapped, so a long player name pushed its percentage onto the next line and
+ * the second player's percentage started a line — two figures at two different x positions, for the
+ * two halves of one comparison. Three explicit tracks put every percentage in one right-aligned
+ * column and let the detail run underneath it.
+ */
+.prl-play .prl-equity-bar__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: var(--prl-space-3);
+}
+
+.prl-play .prl-equity-bar__swatch {
+  align-self: center;
+}
+
+.prl-play .prl-equity-bar__value {
+  grid-column: 3;
+  text-align: end;
+}
+
+.prl-play .prl-equity-bar__detail {
+  grid-column: 2 / -1;
+}
+
+.prl-play .prl-equity-bar__track {
+  border-radius: var(--prl-radius-pill);
+}
+
+/** The reading of the spot, and the caveats under it. The assumptions keep their body SIZE — the
+    design system is explicit that they and the guardrail notice are the two things a learner most
+    needs to read, so nothing here shrinks them — and become subordinate by container and tone
+    instead. The dashed edge stays: it says "annotation", not "aside you can skip". */
+.prl-play .prl-suggestion,
+.prl-play .prl-uncertainty {
+  border-radius: var(--prl-radius-3);
+}
+
+.prl-play .prl-assumptions {
+  padding: var(--prl-space-6) var(--prl-space-7);
+  border-color: var(--prl-line);
+  border-radius: var(--prl-radius-3);
+}
+
+/* ------------------------------------------------------------------------------------------
+   12.8  THE COACH SHEET, ON A PHONE
+
+   Below 600px the Coach is a fixed sheet over the table, which is level 4 of the ladder by
+   definition: a surface that travels over content and carries body text. It gets the overlay
+   material and the elevation that goes with it, and `--prl-glass-filter-strong` is what stops the
+   table reading through it while it is open — the ghosting rule, applied to the one other pinned
+   surface this route owns.
+
+   Above 600px it is not a sheet at all, so both the fill and the filter are removed rather than
+   hidden: an opaque element with a live `backdrop-filter` still pays for the blur.
+   ------------------------------------------------------------------------------------------ */
+
+.prl-play__coach {
+  border-start-start-radius: var(--prl-radius-3);
+  border-start-end-radius: var(--prl-radius-3);
+  background-color: var(--prl-glass-overlay);
+  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
+  backdrop-filter: var(--prl-glass-filter-strong);
+  box-shadow: var(--prl-elevation-3);
+}
+
+.prl-play__handle-grip {
+  width: var(--prl-space-9);
+  height: var(--prl-space-3);
+}
+
+@media (min-width: 600px) {
+  .prl-play__coach {
+    border-start-start-radius: var(--prl-radius-0);
+    border-start-end-radius: var(--prl-radius-0);
+    background-color: transparent;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: var(--prl-elevation-0);
+  }
+}
+
+/* ------------------------------------------------------------------------------------------
+   12.9  YOUR PLATE, BESIDE THE CONTROLS
+
+   The HUD repeats your cards, your stack and your street commitment next to the buttons. Its two
+   figures are the same two figures every seat carries, so they are set the same way.
+   ------------------------------------------------------------------------------------------ */
+
+.prl-play__hud-value {
+  font-variant-numeric: var(--prl-numeric);
+}
+
+/* ==========================================================================================
    10. NO SCRIPTING
    ==========================================================================================
    Without JavaScript nothing will ever set `data-open="true"`, so the phone sheet would be stuck at
@@ -826,13 +1758,27 @@
    11. FORCED COLORS
    ==========================================================================================
    `background-color` is discarded and every border is forced to CanvasText, so the two things that
-   separate one surface from its neighbour both disappear. The band and the sheet get a real border
-   back, and the grab bar — which is a background block and would vanish outright — gets one too.
+   separate one surface from its neighbour both disappear. The sheet gets a real border back, and the
+   grab bar — which is a background block and would vanish outright — gets one too.
+
+   Two things this block used to do and no longer has to. `.prl-play__decision` has had no border
+   since section 3 stopped drawing one, so forcing its colour was repairing something that is not
+   there; the object that needs an edge in this band is the ActionBar, and it has its own, which
+   forced-colors forces to CanvasText like every other. The seat plates need nothing either: every
+   state below section 12.3 is a `background-color` on a pseudo-element, which forced-colors keeps —
+   that is the reason `tokens.css` insists a meaningful state is a real border or a real fill rather
+   than a tint, and the elevation that carries the same state visually is simply dropped, leaving the
+   words ("to act", "folded", "all in") that were always the primary cue.
    ========================================================================================== */
 
 @media (forced-colors: active) {
-  .prl-play__decision,
   .prl-play__coach {
+    border-color: CanvasText;
+  }
+
+  /* The bar is the one object in the band with an edge, and in this mode it is the only thing
+     separating the controls from the table above them. */
+  .prl-play__decision > .prl-action-bar {
     border-color: CanvasText;
   }
 

@@ -26,12 +26,18 @@
  *
  * ## Why liveness is measured with the database's clock
  *
- * Every timestamp written here is `now()` evaluated by Postgres, and the takeover predicate
- * compares `heartbeat_at` against `now()` in the same statement. Two API processes have two
- * clocks, and if either of them supplied the timestamps then "has the holder stopped renewing?"
- * would be answered by comparing one machine's idea of the time with another's — which, with a
- * few seconds of skew, either strands rooms forever or hands them over while the holder is still
- * dealing. One clock, and it is the clock both processes are already talking to.
+ * Every timestamp written here is read from Postgres, and the takeover predicate compares
+ * `heartbeat_at` against `now()` in the same statement. Two API processes have two clocks, and if
+ * either of them supplied the timestamps then "has the holder stopped renewing?" would be answered
+ * by comparing one machine's idea of the time with another's — which, with a few seconds of skew,
+ * either strands rooms forever or hands them over while the holder is still dealing. One clock,
+ * and it is the clock both processes are already talking to.
+ *
+ * WHICH of Postgres' two clock functions is not a detail. `now()` is `transaction_timestamp()`,
+ * fixed before a statement waits for anything, so a renewal that queued behind a row lock recorded
+ * a liveness claim from before the wait — which `room_ownership_heartbeat_after_acquire` refused
+ * outright, taking every other room's renewal in the same statement with it. `heartbeat` therefore
+ * writes `clock_timestamp()`; the paragraph on it has the reproduction.
  *
  * ## What is NOT here
  *
@@ -141,6 +147,32 @@ export async function acquire(
  * fence is never behind the row's for a room it holds. The extra term would be a stricter test of
  * something that cannot happen, at the cost of a per-room parameter that is what forces this back
  * into one statement per room.
+ *
+ * ## Why `clock_timestamp()` and not `now()`
+ *
+ * ############################################################################
+ * ## `now()` IS THE TRANSACTION'S START, NOT THE MOMENT THE ROW WAS WRITTEN ##
+ * ############################################################################
+ *
+ * This beat is one statement over every room, so it takes one row lock after another and any one
+ * of them can wait. `now()` is frozen before the wait starts, so a beat that blocked wrote a
+ * heartbeat timestamped BEFORE the acquisition it had queued behind — and
+ * `room_ownership_heartbeat_after_acquire` then refused the whole statement. 0005 says of that
+ * constraint that "both are written with the database's `now()`, so on a healthy path this cannot
+ * fire", and that is the sentence this paragraph exists to correct.
+ *
+ * Reproduced against a real PostgreSQL 16, on pool handles, exactly as `rooms/ownership.ts` issues
+ * them: two rooms held by one owner, the beat blocked on the first room's lock while an `acquire`
+ * by the SAME owner re-took the second, and the beat came back
+ * `23514 room_ownership_heartbeat_after_acquire`. A beat is ONE statement, so the renewals for
+ * every other room were rolled back with it — the whole beat lost, on the exact path
+ * `RoomRegistry.releaseLeaseSoon` already documents as the one that produces the most of these
+ * (a database slow enough that beats block, rooms are evicted, and rooms are re-opened underneath).
+ *
+ * `clock_timestamp()` is read when the row is written, so it is after every commit this statement
+ * waited for. It is also the truer of the two for what the column MEANS: a heartbeat is a claim
+ * that the holder was alive at an instant, and dating that claim from before a wait makes a live
+ * lease look staler than it is — the direction that hands a room to a second process.
  */
 export async function heartbeat(
   handle: Db,
@@ -149,7 +181,7 @@ export async function heartbeat(
   if (input.roomIds.length === 0) return [];
   const rows = await handle<{ room_id: string }[]>`
     update prl.room_ownership
-       set heartbeat_at = now()
+       set heartbeat_at = clock_timestamp()
      where owner_id = ${input.ownerId}
        and room_id = any(${[...input.roomIds]}::text[])
     returning room_id

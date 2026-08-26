@@ -509,7 +509,7 @@ described.)
 | The roll-forward-only migration policy (`RUNBOOK` §11.3) | `test` (via `test:scripts` → `apps/api/scripts/migrate.test.mjs`). The scanner is gated; the wiring into `up` is not — see the table above |
 | That `apps/web/src/fixtures/**` still equals what the engine computes | `test` (via `test:integration` → `apps/api/test/web-fixture-figures.test.ts`). `pnpm run fixtures:check` is the operator-facing form of the same computation and `pnpm run fixtures:regenerate` is the remedy — which the repository did **not** contain until 2026-08-18, which is how a rule-of-2-and-4 estimate of `1.6` shipped and rendered as "160.0%" |
 | The live schema's security properties | `db:verify` — present in the gate before, but as the last link of a `&&` chain, so a failure anywhere earlier skipped it. It had never run inside `verify` |
-| Contrast ratios, both themes | `design:contrast` |
+| Contrast ratios, both themes | `design:contrast` — three passes: the token set, the pairings a component may use, and the **composited background of every element carrying text**, walked in real Chrome on every route in both themes (and under `prefers-reduced-transparency` and `prefers-contrast: more`). The third needs the web app **built** and a Chrome on `CHROME_PATH`; without either it fails rather than skipping |
 | §8's AA-vs-KK / AKs-vs-22 / AKo-vs-QQ figures, and Monte Carlo agreeing with exact enumeration | **Nothing.** See the row in the table above |
 | Accessibility, to the extent §12 says it is checked at all | `test:a11y` — **added to the gate 2026-08-18**; it lived only in `test:all`, which is not the gate |
 | Everything in the "NOT verified" table above | **Nothing.** That is what the table means |
@@ -526,7 +526,8 @@ pnpm run test:exhaustive       # all 133,784,560 seven-card hands (~7 s)
 pnpm run test:simulation       # AI profile axes (~2 min)
 pnpm run test:a11y
 pnpm run fixtures:check        # web fixtures still equal what the engine computes
-node scripts/check-contrast.mjs   # the design system's contrast claims
+pnpm run build                 # design:contrast measures the BUILT web app, in real Chrome
+pnpm run design:contrast       # the design system's contrast claims, and what a reader sees
 ```
 
 `build:packages` no longer needs to be a separate step before `test`: `dist/` is `.gitignore`d and

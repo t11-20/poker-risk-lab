@@ -40,6 +40,18 @@
  * `test/security-uncounted-requests.test.ts` holds each class, with the controls that show the
  * limiter is what refused them.
  *
+ * ## The one place this invariant is deliberately given up, and why
+ *
+ * `refuseNonNavigationOidc` in `routes/auth.ts` answers a cross-site SUBRESOURCE load of either
+ * OIDC GET route from an `onRequest` hook that `@fastify/rate-limit` appends its own hook after —
+ * so those requests are refused WITHOUT being counted, on purpose. Counting them is the defect:
+ * the OIDC ceiling is keyed on the hashed address, a browser can be made to issue the request by
+ * a page the victim merely visits, and 60 image tags therefore spent a whole campus address's
+ * sign-in ceiling for the window. Measured, and argued at length on that function. The refusal is
+ * one header comparison with no body parse, no database and no allocation, on two routes, for a
+ * request carrying a header that no navigation ever sends — which is a smaller thing to give up
+ * than a cohort's ability to sign in.
+ *
  * ## What is NOT here
  *
  * Sessions and authentication. This plugin defines the session cookie's *attributes* and
@@ -479,12 +491,19 @@ function clientRateLimitKey(request: FastifyRequest, config: AppConfig): string 
  * The address key, for anything that has to bucket a caller the same way `clientKeyedRateLimit`
  * does without being a `@fastify/rate-limit` route config.
  *
- * `routes/auth.ts` holds a second, tighter budget alongside the OIDC route limits — one spent by
- * FAILED sign-in outcomes rather than by requests (`plugins/failed-outcome-budget.ts`). It has to
- * bucket callers identically to the limiter it sits beside, and the way to guarantee that is to
- * call the same function rather than to write a second one that happens to agree today. The
- * prefix differs (`f:` there, `a:` here) because the two counters are separate; the identity they
- * are counting is the same one.
+ * `routes/auth.ts` holds two tighter budgets alongside the OIDC route limits — one spent by
+ * FAILED sign-in outcomes and one by UNREDEEMED STARTS, both `OutcomeBudget`s from
+ * `plugins/outcome-budget.ts`. They have to bucket callers identically to the limiter they sit
+ * beside, and the way to guarantee that is to call the same function rather than to write a
+ * second one that happens to agree today.
+ *
+ * This returns the BARE key, with no prefix, where `clientKeyedRateLimit` below returns `a:` plus
+ * the same key. That is safe and not an oversight: each `OutcomeBudget` is its own `Map`, so
+ * there is no shared namespace for the two to collide in, and adding a prefix here would only
+ * make the two counters look as though they shared one. (An earlier version of this comment
+ * claimed a `f:`/`a:` prefix split that the code never had, and named a file that does not exist.
+ * Both are corrected rather than deleted, because a comment asserting a namespace separation that
+ * is not there is exactly the kind of thing a later reader builds on.)
  */
 export function addressRateLimitKey(request: FastifyRequest, config: AppConfig): string {
   return clientRateLimitKey(request, config);

@@ -2,12 +2,13 @@
  * The Review section's own rules: the history table, the decision timeline, the replay stage and
  * the commitment verifier.
  *
- * Same boundaries and the same rules as `lab.css` — every value is a `--prl-*` token, no shadows,
- * meaningful borders use `--prl-line-strong` or the accent, and only `transform` and `opacity` are
- * animated. Every class is prefixed `prl-review-`, `prl-timeline-`, `prl-replay-` or
+ * Same boundaries and the same rules as `lab.css` — every value is a `--prl-*` token, elevation is
+ * spent only through `--prl-elevation-*`, a glass fill never appears without its blur in the same
+ * block, meaningful borders use `--prl-line-strong` or the accent, and only `transform`, `opacity`
+ * and colour animate. Every class is prefixed `prl-review-`, `prl-timeline-`, `prl-replay-` or
  * `prl-verifier-`, so nothing here can collide with a `@prl/ui` block.
  *
- * The two interesting problems in this file are both about the timeline, so they are worth naming
+ * The three interesting problems in this file are all about the scrubber, so they are worth naming
  * up front:
  *
  *  1. **The spine has to be a line behind the markers, drawn without a wrapper element.** It is a
@@ -18,6 +19,12 @@
  *     `data-analysis` and `aria-current` change the fill, the border and the ink — but each state
  *     also has a glyph and a sentence in the markup, so forced-colors mode and a text browser both
  *     still read correctly.
+ *  3. **The transport is the control this page turns on, and it used to scroll away.** A hand runs
+ *     to eleven steps and the table below it is a full screen tall, so by the third decision the
+ *     Previous/Next pair and the step counter were off the top of the viewport and the only way to
+ *     scrub was the arrow keys — which the instructions describe and which a pointer user has no
+ *     reason to have read. It is now a sticky level-3 pane: the ONE surface in this file that
+ *     genuinely travels over content, and therefore the one that takes glass.
  */
 
 /* ==========================================================================================
@@ -116,20 +123,25 @@
   display: inline-flex;
   align-items: center;
   min-height: var(--prl-target-min);
-  padding-inline: var(--prl-space-5);
-  border: var(--prl-hairline-strong);
-  border-radius: var(--prl-radius-1);
+  padding-inline: var(--prl-space-6);
+  border: 1px solid var(--prl-line);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-surface-inset);
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
   text-decoration: none;
   text-transform: uppercase;
-  transition: color var(--prl-dur-instant) var(--prl-ease-hover);
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 .prl-review-sorts__link:hover {
   border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-hover);
   color: var(--prl-accent-text);
 }
 
@@ -156,9 +168,12 @@
  */
 .prl-review-scroll {
   overflow-x: auto;
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-review-table {
@@ -199,12 +214,29 @@
   border-block-end: 0;
 }
 
+.prl-review-table tbody tr {
+  transition: background-color var(--prl-dur-fast) var(--prl-ease-material);
+}
+
 .prl-review-table tbody tr:hover {
   background-color: var(--prl-surface-hover);
 }
 
+/**
+ * EVERY NUMERIC COLUMN IS `--prl-numeric` AND END-ALIGNED.
+ *
+ * These four rules used to say `tabular-nums` and leave it there. The token says
+ * `tabular-nums lining-nums`, and the second half is the one that gets forgotten: several faces in
+ * `--prl-font-sans` default to OLD-STYLE figures in a lowercase run, which puts a descending `4`
+ * and a short `1` in the middle of a pot. Restating the guarantee means restating all of it.
+ *
+ * End-alignment is the other half of "numerals align in columns". Tabular figures make every digit
+ * the same width; start-aligned, a 3-digit pot and a 5-digit pot still have their units digits two
+ * characters apart, and scanning a column of pots for an outlier is exactly the task this table
+ * exists for. The headers move with their cells so the label sits over the column it names.
+ */
 .prl-review-table__hand {
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-semibold);
 }
 
@@ -214,7 +246,8 @@
   min-height: var(--prl-target-min);
   color: var(--prl-accent-text);
   font-size: var(--prl-type-metric-sm);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
+  font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-metric);
   text-decoration: none;
 }
@@ -225,12 +258,30 @@
 
 .prl-review-table__when {
   color: var(--prl-text-muted);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;
 }
 
-.prl-review-table__pot {
-  font-variant-numeric: tabular-nums;
+/**
+ * `.prl-review-table td.prl-review-table__pot`, and the extra `td` is not noise.
+ *
+ * `.prl-review-table th, .prl-review-table td { text-align: start }` is (0,2,1) and appears above
+ * this block. A bare `.prl-review-table__pot` is (0,1,0) and loses to it, silently — measured on
+ * `/review` at 1440x900, the pot column rendered start-aligned with `text-align: end` declared and
+ * inert. `.prl-legend-table__figure` in `legends.css` had exactly the same defect, in a file that
+ * had carried the declaration since it was written; both are fixed the same way.
+ *
+ * What end-alignment buys and what it does not: `formatUnits` renders "1,520 units", so the string
+ * ends in a word and it is the WORD that lands on the column edge, not the units digit. That is
+ * still worth having — a firm right edge is what separates the numeric half of the table from the
+ * text half, and `--prl-numeric` keeps the digits themselves from shifting as a value changes. A
+ * true units-digit column would need the unit in its own cell, which is a markup change and a
+ * different piece of work.
+ */
+.prl-review-table td.prl-review-table__pot,
+.prl-review-table th.prl-review-table__pot {
+  font-variant-numeric: var(--prl-numeric);
+  text-align: end;
   white-space: nowrap;
 }
 
@@ -254,7 +305,7 @@
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--prl-space-3);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;
 }
 
@@ -304,19 +355,45 @@
    2. THE REPLAY HEADER
    ========================================================================================== */
 
+/**
+ * The four figures under the `h1`, as a grouped readout rather than four loose stacks.
+ *
+ * L1 — a well that collects related rows, hairline, NO elevation. That is the level's whole job
+ * and it is the right one here: these four numbers are part of the page header, not an object
+ * lying on it, and giving them a shadow would put the hand's summary in front of the hand.
+ *
+ * The separators are `border-inline-start` on each item after the first rather than a gap, because
+ * a gap says "four things" and a rule says "one readout with four fields" — which is what a pot, a
+ * net, an ending and a decision count are.
+ */
 .prl-review-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--prl-space-6) var(--prl-space-10);
+  gap: var(--prl-space-6) var(--prl-space-0);
   margin: 0;
-  padding: 0;
+  padding: var(--prl-space-6) var(--prl-space-7);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-raised);
+  box-shadow: var(--prl-elevation-0);
   list-style: none;
 }
 
 .prl-review-summary > li {
   display: grid;
-  gap: var(--prl-space-2);
+  gap: var(--prl-space-3);
   align-content: start;
+  padding-inline: var(--prl-space-8);
+}
+
+.prl-review-summary > li:first-child {
+  padding-inline-start: var(--prl-space-0);
+}
+
+.prl-review-summary > li + li {
+  border-inline-start: var(--prl-hairline);
 }
 
 /**
@@ -330,7 +407,7 @@
 .prl-review-summary__value {
   color: var(--prl-text);
   font-size: var(--prl-type-metric-md);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-metric);
   line-height: var(--prl-leading-tight);
@@ -355,10 +432,13 @@
   min-inline-size: 0;
   margin-block: var(--prl-space-7);
   margin-inline: 0;
-  padding: var(--prl-space-7);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  padding: var(--prl-space-8);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-timeline__streets {
@@ -465,18 +545,36 @@
   display: flex;
 }
 
+/**
+ * A MARKER — the thing this page is scrubbed with, so it is the thing that has to feel precise.
+ *
+ * "Precise" is a material claim rather than a metaphor. A resting marker is RECESSED: an inset
+ * fill, a decorative edge, no elevation — a detent in the spine. Hovering firms it to the panel
+ * fill and lifts it one pixel. The current one is an accent fill lifted two pixels with a real
+ * shadow under it, which is the only marker in the row that is above the plane of the timeline.
+ * Reading down that list is reading a physical control: a groove with one raised stop in it.
+ *
+ * `--prl-line` and not `--prl-hairline-strong` at rest, which is a change that needs its reason
+ * stated because it moves a border DOWN the ramp: at `--prl-line-strong` all eleven markers were
+ * drawn at the same weight as the current one, so the row read as eleven equally-weighted buttons
+ * and the accent fill was doing all the work of saying where you are. `--prl-line-strong` is
+ * required of a border that carries MEANING, and a resting marker's edge carries none — the
+ * meaning is on the current marker, which takes the accent, and on the hovered one, which takes it
+ * too. WCAG 1.4.11's 3:1 applies to the state that has to be perceived, and both of those do.
+ */
 .prl-timeline__marker {
   display: inline-flex;
   align-items: center;
-  gap: var(--prl-space-2);
+  gap: var(--prl-space-3);
   /* 44px, exceeding WCAG 2.2's 24px floor: a scrub marker is small and consequential, and often
      used one-handed on a phone. */
   min-width: var(--prl-target-min);
   min-height: var(--prl-target-min);
   padding-inline: var(--prl-space-5);
-  border: var(--prl-hairline-strong);
-  border-radius: var(--prl-radius-1);
+  border: 1px solid var(--prl-line);
+  border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
+  box-shadow: var(--prl-elevation-0);
   color: var(--prl-text-secondary);
   font-family: var(--prl-font-sans);
   /* A marker's text is CONTENT — "raise 159", "call 33" — not a label, and it is the only place in
@@ -485,18 +583,24 @@
      extra tracking is the same treatment a table cell gets, and a timeline is a table of decisions
      laid on its side. */
   font-size: var(--prl-type-body-sm);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-medium);
   cursor: pointer;
-  /* Transform and colour only. Nothing here animates a layout property. */
+  /* Transform, colour and elevation only. Nothing here animates a layout property, and the
+     durations are the material band rather than `--prl-dur-instant`: 90ms with a signature curve
+     reads as a jump cut, because `--prl-ease-standard` spends most of its time settling. */
   transition:
-    transform var(--prl-dur-instant) var(--prl-ease-hover),
-    border-color var(--prl-dur-instant) var(--prl-ease-hover),
-    color var(--prl-dur-instant) var(--prl-ease-hover);
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    box-shadow var(--prl-dur-fast) var(--prl-ease-material),
+    color var(--prl-dur-fast) var(--prl-ease-material),
+    transform var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 .prl-timeline__marker:hover {
   border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
   color: var(--prl-text);
   transform: translateY(calc(-1 * var(--prl-space-1)));
 }
@@ -513,13 +617,32 @@
 
 /**
  * The scrub position. An accent fill with `--prl-text-on-accent` — never white, see the sort link
- * above — plus `aria-current="step"` in the markup, plus the `▸`/`·`/`■` glyph. Three signals.
+ * above — plus a two-pixel lift, plus a real elevation, plus `aria-current="step"` in the markup,
+ * plus the `▸`/`·`/`■` glyph. Five signals, and only one of them is hue.
  */
 .prl-timeline__marker[aria-current="step"] {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-accent-fill);
+  box-shadow: var(--prl-elevation-2);
   color: var(--prl-text-on-accent);
-  transform: translateY(calc(-1 * var(--prl-space-1)));
+  font-weight: var(--prl-weight-semibold);
+  transform: translateY(calc(-1 * var(--prl-space-2)));
+}
+
+/**
+ * The focus ring, restated WITH the elevation.
+ *
+ * `box-shadow` is one property, so a focused current marker that set only `var(--prl-focus-ring)`
+ * would drop its elevation for as long as the keyboard was on it — the marker falls back into the
+ * groove at the exact moment a keyboard reader arrives on it, which reads as the control breaking.
+ * The ring goes FIRST because shadows paint in list order, first on top.
+ */
+.prl-timeline__marker:focus-visible {
+  box-shadow: var(--prl-focus-ring), var(--prl-elevation-1);
+}
+
+.prl-timeline__marker[aria-current="step"]:focus-visible {
+  box-shadow: var(--prl-focus-ring), var(--prl-elevation-2);
 }
 
 .prl-timeline__glyph {
@@ -550,27 +673,82 @@
   margin-block: var(--prl-space-8);
 }
 
+/**
+ * THE TRANSPORT — a sticky level-3 pane, and the only glass in this file.
+ *
+ * It earns the material on the physics, not on taste. It is `position: sticky`, so it is a bounded
+ * pane that travels over the table, the metrics and the analysis as the page scrolls; it is small;
+ * `isolation: isolate` gives it its own stacking context, which is what stops the blur sampling
+ * siblings that were never meant to be behind it; and nothing about it is animated. Those are the
+ * four conditions `tokens.css` sets for a `backdrop-filter` that costs nothing per frame.
+ *
+ * THE DEFECT IT FIXES. Measured on `/review/hand-0042` at 1440x900: the replay stage below this row
+ * is 1,100px tall, so from the second decision onwards the Previous/Next pair and the step counter
+ * were above the top of the viewport. A pointer user scrubbing a hand had to scroll up, click, and
+ * scroll back down for every step of an eleven-step hand. The arrow keys always worked and are
+ * described in the instructions above the timeline — which is not an answer, because a control
+ * that is only reachable if you read a paragraph is a control most people do not have.
+ *
+ * `-webkit-backdrop-filter` is declared beside the fill because Safari still requires it, and the
+ * filter is declared beside the fill because a translucent bar with NO blur is the ghosting bug in
+ * `nav.css`'s header comment: the analysis passing underneath would read straight through it as a
+ * second, perfectly legible layer of type. `packages/ui/test/layout-guarantees.test.ts` reads that
+ * pairing off this block rather than trusting this paragraph.
+ *
+ * `backdrop-filter` is deliberately not in any transition list here.
+ */
 .prl-replay__transport {
+  position: sticky;
+  z-index: var(--prl-z-sticky);
+  isolation: isolate;
+  inset-block-start: var(--prl-space-13);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--prl-space-5);
+  /* BOUNDED, and that is a rule rather than a preference: `tokens.css` allows glass on a floating
+     PANE and forbids it on a full-width strip, because a `backdrop-filter` across the whole
+     content column is one of the most expensive things a compositor can be asked for on every
+     scroll frame. Unbounded this measured 1360px wide at a 1440px viewport — a strip. 34rem
+     (`3 x --prl-space-16 + --prl-space-12`, the same way `--prl-legend-card-min` is built) is what
+     the two buttons and the counter actually need, and a centred transport is what a scrubber
+     looks like anyway. */
+  max-inline-size: calc(3 * var(--prl-space-16) + var(--prl-space-12));
+  margin-inline: auto;
+  padding: var(--prl-space-5) var(--prl-space-6);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-glass-floating);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  box-shadow: var(--prl-elevation-2);
 }
 
+/**
+ * The step readout, at the centre of the transport.
+ *
+ * `metric-md` and not `metric-sm`: this is the figure a reader checks after every press, and at
+ * 18px it was the same size as the button labels either side of it. The counter is what tells you
+ * the press landed, so it is the loudest thing in the bar.
+ */
 .prl-replay__position {
   display: flex;
   align-items: baseline;
   gap: var(--prl-space-4);
   margin: 0;
+  padding-inline: var(--prl-space-4);
 }
 
 .prl-replay__position-value {
   color: var(--prl-text);
-  font-size: var(--prl-type-metric-sm);
-  font-variant-numeric: tabular-nums;
+  font-size: var(--prl-type-metric-md);
+  font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
 }
 
 /**
@@ -578,14 +756,18 @@
  *
  * Keyed on the step index in the component, so a scrub remounts it and replays this keyframe. It is
  * `transform` and `opacity` only — the two properties that get a compositor ride — which is what
- * makes stepping through a ten-decision hand cheap. `--prl-dur-quick` rather than `--prl-dur-in`
- * because a scrub is a small state change, not new information arriving, and 420ms of travel on
- * every arrow press would make holding the key feel like wading.
+ * makes stepping through a ten-decision hand cheap.
+ *
+ * `--prl-dur-base` with `--prl-ease-material` rather than `--prl-dur-in` with the signature curve.
+ * A scrub is a STATE change, not new information arriving: 420ms of travel on every arrow press
+ * would make holding the key feel like wading, and `--prl-ease-standard` spends most of its time
+ * settling, which is a signature you have to watch. 200ms on the unremarkable material curve is
+ * felt and not seen, which is what a state change should be.
  */
 .prl-replay__stage {
   display: grid;
-  gap: var(--prl-space-7);
-  animation: prl-replay-step var(--prl-dur-quick) var(--prl-ease-standard) both;
+  gap: var(--prl-space-8);
+  animation: prl-replay-step var(--prl-dur-base) var(--prl-ease-material) both;
 }
 
 @keyframes prl-replay-step {
@@ -614,9 +796,33 @@
   line-height: var(--prl-leading-body);
 }
 
+/* ------------------------------------------------------------------------------------------
+   THE SETTLED SEATS, AS A COLUMN OF FIGURES RATHER THAN A ROW OF PAIRS.
+
+   The base layout is the flex row this always had: name at one end, figure and direction word at
+   the other. Everything that makes the figures share a column is inside the `@supports` block
+   below, so a browser without subgrid gets exactly what it got before rather than a broken grid.
+
+   WHY IT NEEDS SUBGRID AT ALL, and the wrong answer that was tried first.
+
+   The obvious fix is a three-track grid on each `.prl-replay__result-row`. It does not work and it
+   LOOKS like it works, which is worse: each row is its own grid container, so `auto` tracks are
+   sized per row and each row's figure lands wherever that row's own content puts it. Measured on
+   `/review/hand-0042` at 1440x900 with three settled seats, the figures' right edges came out at
+   1325, 1342 and 1342 — one row seventeen pixels out of the column it was supposed to be in.
+
+   Tracks are only shared if they belong to ONE grid, so the tracks live on the `<dl>` and both
+   levels below it inherit them: the row spans all three and takes `subgrid`, and the `<dd>` spans
+   the last two and takes `subgrid` again. Chrome resolves nested subgrid.
+
+   `display: contents` on the `<dd>` would be shorter and is not used on purpose: dropping a `dd`'s
+   box has historically dropped it from the accessibility tree with it, and this list's `dt`/`dd`
+   pairing is what says whose figure this is. A layout trick may not cost a name.
+   ------------------------------------------------------------------------------------------ */
+
 .prl-replay__result {
   display: grid;
-  gap: var(--prl-space-4);
+  gap: var(--prl-space-0);
   margin: 0;
 }
 
@@ -626,19 +832,48 @@
   align-items: baseline;
   justify-content: space-between;
   gap: var(--prl-space-5);
-  padding-block-end: var(--prl-space-4);
+  padding-block: var(--prl-space-4);
   border-block-end: var(--prl-hairline);
+}
+
+.prl-replay__result-row:last-child {
+  border-block-end: 0;
 }
 
 .prl-replay__result-row dt {
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
+  overflow-wrap: anywhere;
 }
 
 .prl-replay__result-row dd {
   margin: 0;
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-semibold);
+}
+
+@supports (grid-template-columns: subgrid) {
+  /* The tracks are declared ONCE, here, and every row and every `dd` borrows them. */
+  .prl-replay__result {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    column-gap: var(--prl-space-5);
+  }
+
+  .prl-replay__result-row {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+  }
+
+  .prl-replay__result-row dd {
+    display: grid;
+    grid-column: 2 / 4;
+    grid-template-columns: subgrid;
+    align-items: baseline;
+    /* End-aligned inside the figure's own track, so the signed figures form one vertical edge and
+       the direction words start on another. */
+    text-align: end;
+  }
 }
 
 .prl-replay__result-row dd[data-sign="positive"] {
@@ -668,10 +903,13 @@
 .prl-verifier {
   display: grid;
   gap: var(--prl-space-6);
-  padding: var(--prl-space-7);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  padding: var(--prl-space-8);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-verifier__head {
@@ -697,17 +935,21 @@
   align-items: baseline;
 }
 
+/* A 64-character hex root is a figure, so it is set in the mono face with tabular figures: the one
+   thing a reader does with it is compare it, character by character, against another copy. */
 .prl-verifier__hash {
   margin: 0;
   overflow-wrap: anywhere;
   color: var(--prl-text-secondary);
+  font-family: var(--prl-font-mono);
   font-size: var(--prl-type-body-sm);
+  font-variant-numeric: var(--prl-numeric);
 }
 
 .prl-verifier__count {
   margin: 0;
   color: var(--prl-text);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   font-size: var(--prl-type-body-sm);
   font-weight: var(--prl-weight-medium);
 }

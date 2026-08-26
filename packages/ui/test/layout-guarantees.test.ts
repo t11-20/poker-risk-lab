@@ -24,7 +24,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 const componentsCss = readFileSync(new URL('../src/styles/components.css', import.meta.url), 'utf8');
@@ -182,19 +182,115 @@ describe('nothing can hide content until JavaScript arrives', () => {
   });
 });
 
+/**
+ * Every declaration block in a stylesheet, as `{ selector, body }`, comments stripped.
+ *
+ * The same deliberately-crude scan `declarationsFor` uses, kept separate because these two
+ * invariants are about blocks nobody named: the question is "does ANY rule do this", and a
+ * lookup by selector cannot ask it.
+ */
+function allBlocks(css: string): readonly { selector: string; body: string }[] {
+  const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const out: { selector: string; body: string }[] = [];
+  const pattern = /([^{}]+)\{([^{}]*)\}/g;
+  let match = pattern.exec(withoutComments);
+  while (match !== null) {
+    out.push({ selector: (match[1] ?? '').trim(), body: (match[2] ?? '').trim() });
+    match = pattern.exec(withoutComments);
+  }
+  return out;
+}
+
+/** Every stylesheet a glass fill could legitimately reach: the package's own class layer, the
+    app shell, and every route stylesheet. A guard that covered only `packages/ui` would miss the
+    exact file the ghosting bug shipped in. */
+const ROUTE_STYLE_DIR = new URL('../../../apps/web/src/styles/', import.meta.url);
+const GLASS_SCANNED: readonly (readonly [string, string])[] = [
+  ['packages/ui components.css', componentsCss],
+  [
+    'apps/web globals.css',
+    readFileSync(new URL('../../../apps/web/src/app/globals.css', import.meta.url), 'utf8'),
+  ],
+  ...readdirSync(ROUTE_STYLE_DIR)
+    .filter((file) => file.endsWith('.css'))
+    .sort()
+    .map((file) => [`apps/web ${file}`, readFileSync(new URL(file, ROUTE_STYLE_DIR), 'utf8')] as const),
+];
+
 describe('the design system rules that are stated in prose and checked nowhere', () => {
-  it('has no box-shadow in either stylesheet', () => {
-    for (const [name, css] of [
-      ['components.css', componentsCss],
-      ['play.css', playCss],
-    ] as const) {
+  /**
+   * This replaced a check that read `assert.doesNotMatch(css, /box-shadow/)`, and the
+   * replacement is TIGHTER rather than looser.
+   *
+   * The old rule was "no box-shadow at all", which was enforceable because the design system had
+   * no elevation to express. It now has five levels, so a blanket ban would have had to be
+   * deleted outright. What is asserted instead is that a shadow is never a LITERAL: every
+   * `box-shadow` value must be built from `--prl-elevation-*` and `--prl-focus-ring` and nothing
+   * else. That still forbids the thing the original rule existed to forbid - somebody inventing a
+   * blurred layer in a component, on the table, where six seats and a live Coach panel repaint -
+   * and it additionally forbids the ad-hoc `0 2px 8px rgba(...)` that a "no shadows" rule never
+   * had to think about because no shadow was allowed anywhere.
+   *
+   * `none` is permitted so a rule can explicitly cancel an inherited elevation.
+   */
+  const SHADOW_VALUE = /box-shadow\s*:\s*([^;]+)/g;
+  const ALLOWED_SHADOW_PART = /^(none|var\(--prl-elevation-[0-4]\)|var\(--prl-focus-ring\))$/;
+
+  it('spends a shadow only through an elevation or focus-ring token, never as a literal', () => {
+    for (const [name, css] of GLASS_SCANNED) {
       const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
-      assert.doesNotMatch(
-        withoutComments,
-        /box-shadow/,
-        `${name}: elevation is a step on the surface ramp plus a hairline (section 4.1)`,
-      );
+      for (const match of withoutComments.matchAll(SHADOW_VALUE)) {
+        const value = (match[1] ?? '').trim();
+        for (const part of value.split(',').map((piece) => piece.trim())) {
+          assert.match(
+            part,
+            ALLOWED_SHADOW_PART,
+            `${name}: \`box-shadow: ${value}\` spends a literal. Elevation is a level on the ` +
+              'material ladder (design system section 2.7); add a token before you add a shadow.',
+          );
+        }
+      }
     }
+  });
+
+  /**
+   * THE GHOSTING GUARD.
+   *
+   * `apps/web/src/styles/nav.css` documents the defect this exists for: a header resting at 92%
+   * opacity with NO `backdrop-filter` let the headings underneath read straight through it as a
+   * second, perfectly legible layer of text in the wrong place. Blur plus saturate is the
+   * legitimate way to make a translucent bar work, because it destroys the LEGIBILITY of what is
+   * behind while keeping its colour. Opacity alone destroys neither.
+   *
+   * So the rule is mechanical and has no exceptions: wherever a glass fill token goes, the
+   * filter goes with it, in the same block - including in a `:hover` block whose base rule
+   * already set it. Restating it costs nothing (the same value, re-declared, not re-computed)
+   * and it is what makes the rule readable off a stylesheet instead of off a comment.
+   *
+   * Scoped to the FILL tokens, not to the word "glass": `--prl-glass-filter` is the filter
+   * itself, and a block that sets it without a fill is a block adding blur to something that
+   * already has its own background, which is not this defect.
+   */
+  const GLASS_FILL = /var\(--prl-glass-(?:floating|overlay)(?:-hover|-active)?\)/;
+
+  it('never uses a glass fill without the blur that makes it legible', () => {
+    let seen = 0;
+    for (const [name, css] of GLASS_SCANNED) {
+      for (const block of allBlocks(css)) {
+        if (!GLASS_FILL.test(block.body)) continue;
+        seen += 1;
+        assert.match(
+          block.body,
+          /backdrop-filter\s*:/,
+          `${name}: \`${block.selector}\` sets a translucent glass fill with no backdrop-filter. ` +
+            'That is the ghosting bug in the header comment of apps/web/src/styles/nav.css: the ' +
+            'content behind stays perfectly legible, in the wrong place, as a second layer of text.',
+        );
+      }
+    }
+    // A sweep of nothing is not a pass. If the material classes are renamed or deleted, this
+    // guard would otherwise report success having examined zero blocks.
+    assert.ok(seen > 0, 'expected at least one glass fill to exist to be checked');
   });
 
   it('spends no raw duration or easing curve outside the token layer', () => {
@@ -206,5 +302,109 @@ describe('the design system rules that are stated in prose and checked nowhere',
       assert.doesNotMatch(withoutComments, /:\s*[\d.]+m?s\b/, `${name}: durations come from tokens`);
       assert.doesNotMatch(withoutComments, /cubic-bezier\(/, `${name}: easing comes from tokens`);
     }
+  });
+});
+
+/**
+ * A numeric column that declares `text-align: end` must actually win the cascade.
+ *
+ * ## The defect this exists for
+ *
+ * `.prl-legend-table__figure` carried `text-align: end` from the day that file was written and
+ * **never once applied**. `.prl-legend-table th, td { text-align: start }` is specificity (0,2,1);
+ * a bare class selector is (0,1,0) and loses silently. Every figure in that table had been
+ * left-aligned for the whole life of the file, and the stylesheet read as though it were not.
+ *
+ * That is not a one-off. The same trap was reproduced in a *new* rule in the same session before
+ * anybody noticed the first one, and again in the Coach's candidate table — the most numeric
+ * surface in the product — where `.prl-candidates__table td` (0,1,1) beat `.prl-candidates__cost`
+ * (0,1,0) and the costs and EVs rendered left-aligned under right-aligned intent.
+ *
+ * A declaration that applies to nothing is worse than a missing one: it reads as done.
+ *
+ * ## What this asserts
+ *
+ * For every rule that end-aligns a cell, the selector must be element-qualified (`td.` / `th.`),
+ * which is (0,1,1) and at least ties with the table-wide rule it must beat — and a later rule wins
+ * a tie, which is why placement below matters too and is asserted here as well.
+ */
+describe('numeric columns are actually end-aligned', () => {
+  /** `.prl-candidates__table th, .prl-candidates__table td { … text-align: start … }` */
+  const TABLE_WIDE_START = /([^{}]*\bth\b[^{}]*,[^{}]*\btd\b[^{}]*)\{[^{}]*text-align:\s*start[^{}]*\}/gu;
+  const CELL_END = /([^{}]+)\{[^{}]*text-align:\s*end[^{}]*\}/gu;
+  /** `prl-candidates__table` -> `prl-candidates`. The BEM block is what ties a cell to its table. */
+  const blockOf = (selector: string): string | null => /\.([a-z0-9-]+)__/u.exec(selector)?.[1] ?? null;
+  const strip = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//gu, '');
+
+  it('never end-aligns a cell through a selector that loses to its own table (REGRESSION)', () => {
+    const offenders: string[] = [];
+    let tablesFound = 0;
+    for (const [name, raw] of GLASS_SCANNED) {
+      // Comments stripped first. The first version of this scanned raw text and reported prose out
+      // of the very comment block explaining the defect — a check reading its own documentation as
+      // evidence. Every file here is heavily commented, so that is not a corner case.
+      const css = strip(raw);
+
+      // Only a table that sets `text-align: start` on its own cells can defeat anything. Without
+      // one, an unqualified class is perfectly fine — which is why the first version of this test
+      // produced three false positives on `div`/`span` layouts that merely end-align a value.
+      const guarded = new Set<string>();
+      for (const wide of css.matchAll(TABLE_WIDE_START)) {
+        const block = blockOf(wide[1] ?? '');
+        if (block !== null) {
+          guarded.add(block);
+          tablesFound += 1;
+        }
+      }
+      if (guarded.size === 0) continue;
+
+      for (const match of css.matchAll(CELL_END)) {
+        for (const selector of (match[1] ?? '').split(',').map((part) => part.trim())) {
+          const block = blockOf(selector);
+          if (block === null || !guarded.has(block)) continue;
+          // (0,1,1) or better beats the table-wide rule; a bare class at (0,1,0) does not.
+          const beatsIt = /\b(?:td|th)\./u.test(selector) || /(?:^|\s)(?:td|th)\b/u.test(selector);
+          if (!beatsIt) offenders.push(`${name}: ${selector}`);
+        }
+      }
+    }
+    assert.ok(tablesFound > 0, 'no table-wide start-align rule was found; the sweep proved nothing');
+    assert.deepEqual(
+      offenders,
+      [],
+      'a bare class cannot out-specify `<table> td`, so these declarations apply to nothing',
+    );
+  });
+
+  it('places the candidate table override BELOW the rule it has to beat', () => {
+    // (0,1,1) ties with (0,1,1); a tie is decided by source order, so this is load-bearing.
+    const wide = componentsCss.indexOf('.prl-candidates__table th,');
+    const override = componentsCss.indexOf('td.prl-candidates__cost');
+    assert.ok(wide > 0 && override > 0, 'both rules must exist for the ordering to matter');
+    assert.ok(override > wide, 'the end-align override must come after the table-wide start-align');
+  });
+
+  it('catches the historical defect when it is replayed (NEGATIVE CONTROL)', () => {
+    // The exact shape that shipped in legends.css and never applied: a bare class end-aligning a
+    // cell in a table whose own rule start-aligns every cell.
+    const replayed = `
+      .prl-x__table th, .prl-x__table td { text-align: start; }
+      .prl-x__figure { text-align: end; }
+    `;
+    const guarded = new Set<string>();
+    for (const wide of replayed.matchAll(TABLE_WIDE_START)) {
+      const block = blockOf(wide[1] ?? '');
+      if (block !== null) guarded.add(block);
+    }
+    assert.ok(guarded.has('prl-x'), 'the table-wide rule must be recognised');
+    const caught: string[] = [];
+    for (const match of replayed.matchAll(CELL_END)) {
+      const selector = (match[1] ?? '').trim();
+      const block = blockOf(selector);
+      if (block !== null && guarded.has(block) && !/\b(?:td|th)\./u.test(selector)) {
+        caught.push(selector);
+      }
+    }
+    assert.deepEqual(caught, ['.prl-x__figure']);
   });
 });

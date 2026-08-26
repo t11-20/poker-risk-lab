@@ -12,16 +12,26 @@
  *
  *  - **Every value is a `--prl-*` token.** No hex, no px, no ms, no bezier literal. The three
  *    exceptions are called out where they appear: `1px` on hairlines drawn as borders, the four
- *    media-query breakpoints (see below), and two feature-local custom properties in section 0.
- *  - **No shadows.** Depth is one step on the surface ramp plus a hairline. There is no
- *    `box-shadow` anywhere in the app — the focus ring is an `outline` (`base.css`).
+ *    media-query breakpoints (see below), and the feature-local custom properties in section 0.
+ *  - **Depth comes from the five-level ladder in `tokens.css`, spent through its tokens.**
+ *    This file's rules used to say "no shadows", and that was true of a system with one card
+ *    style. It now has five levels, so what replaced the ban is TIGHTER rather than looser:
+ *    an elevation may only be spent as `var(--prl-elevation-0..4)`, never as a literal, and
+ *    `packages/ui/test/layout-guarantees.test.ts` fails the file if it ever is.
+ *  - **A glass fill never appears without `--prl-glass-filter`, in the same block.** That is the
+ *    ghosting bug documented in `nav.css`, and the same test reads it off this stylesheet.
+ *  - **Glass is for bounded chrome that TRAVELS over content.** In this section that is exactly
+ *    two things: the sticky contents rail and the quiz's position pill. Lesson prose sits on an
+ *    opaque L2 sheet, because long-form text over a varying backdrop is a legibility problem no
+ *    amount of tint solves.
  *  - **A border that carries meaning uses `--prl-line-strong` or the accent.** `--prl-line-subtle`
- *    measures 1.44:1 and is decoration only, so it never marks a state.
- *  - **Only `transform` and `opacity` animate.** Nothing here transitions a width, a height or a
- *    colour, and there is no blur anywhere.
+ *    and the `--prl-edge-*` trio are decoration only, so none of them ever marks a state.
+ *  - **Only `transform`, `opacity` and colour animate**, in the 150-250ms material band
+ *    (`--prl-dur-fast`/`--prl-dur-base` with `--prl-ease-material`). `backdrop-filter` is never
+ *    transitioned — it is re-evaluated against the whole backdrop on every frame it changes.
  *  - **Nothing is distinguished by colour alone.** The active contents link takes an accent bar
- *    AND `aria-current`; a term's open state takes an underline AND `aria-expanded`; the outs
- *    swatches take a fill pattern AND a word (those live in `components.css`).
+ *    AND `aria-current`; a term's open state takes an underline AND `aria-expanded`; the chosen
+ *    quiz answer takes an accent edge, a raised level AND the radio's own checked dot.
  *
  * ## The breakpoint literals
  *
@@ -44,6 +54,21 @@
 .prl-learn-lesson {
   /* 14rem: the narrowest a contents rail can be and still fit two words of a heading per line. */
   --prl-learn-rail: calc(var(--prl-space-16) + var(--prl-space-12));
+
+  /* ------------------------------------------------------------------------------------
+     THE SHEET'S INLINE PADDING, NAMED BECAUSE THE PAGE WIDTH HAS TO KNOW IT.
+
+     Lesson prose now sits on an opaque card rather than directly on the page ground, and a card
+     has padding. `.prl-learn-lesson`'s width is computed from rail + gutter + MEASURE + gutter,
+     so a padded sheet inside it would eat the measure from both sides — the column would come
+     out four characters narrower than the value that was measured, at every width above 1280.
+     Naming the padding is what lets the width arithmetic add it back.
+
+     `--prl-space-9` is also exactly the negative margin `.prl-learn-lesson__heading` uses to pull
+     its index into the gutter at 900px and up, so the index lands on the sheet's inner edge
+     rather than in the middle of the padding. The two are a pair; change one and change both.
+     ------------------------------------------------------------------------------------ */
+  --prl-learn-sheet-x: var(--prl-space-9);
 }
 
 .prl-learn-page,
@@ -66,9 +91,19 @@
      and recording where each line actually broke gave 80, 80 and 88 characters. Past roughly 75 the
      eye starts losing its place on the return sweep, which is the whole reason the rule exists.
 
-     `52ch` measures out at 69-72 characters, and because the ratio between `ch` and the average
+     `52ch` measures out in the low seventies, and because the ratio between `ch` and the average
      character is a property of the typeface rather than of the size, one value holds at the 17px
      body, the 20px lede and the 15px caption alike.
+
+     RE-MEASURED after the reading sheet landed, by the same method — a Range walked character by
+     character down the first six `.prl-learn-prose` paragraphs at 1440x900, recording where each
+     line actually broke, discarding each paragraph's ragged last line. Eighteen full lines in two
+     columns of 557px and 533px: 66 characters at the low end, 77 at the high, mean 73. (One line
+     came out at 92; it is the paragraph carrying an inline `<code>` run, which is set in
+     `--prl-font-mono` at 0.9375em and therefore fits more characters in the same column. It is a
+     different typeface, not a longer line.) The sheet's padding is added back into
+     `.prl-learn-lesson`'s width cap in section 9, which is why the column did not narrow when the
+     prose gained a surface.
 
      This belongs in `tokens.css` — the same arithmetic applies to every reading column in the app.
      It is scoped here because that file is `packages/ui`, which this change does not own.
@@ -79,44 +114,18 @@
 /* ==========================================================================================
    0a. REPAIRS TO `@prl/ui`
    ==========================================================================================
-   `Panel` publishes its header as `.prl-panel__header` / `__heading` / `__index` / `__eyebrow` /
-   `__actions`, and `components.css` styles `.prl-panel__head` instead — so a panel with a title
-   currently renders its header unstyled everywhere in the app. `Panel.tsx` also publishes its
-   surface tone as `data-tone`, while the stylesheet selects `.prl-panel--inset`.
+   THE PANEL-HEADER REPAIR IS GONE, BECAUSE THE DEFECT IS.
 
-   REPAIR: the rules below restate the header treatment `.prl-panel__head` already defines, against
-   the class the component actually emits. Delete this whole section once `packages/ui` reconciles
-   the two — the fix belongs there, in one place, and it is not made here because that file is being
-   edited by several people at once. Call sites in this feature pass `prl-panel--inset` as a
-   `className` for the same reason.
+   This section used to restate `.prl-panel__header` / `__heading` / `__actions` here, because
+   `components.css` styled a `.prl-panel__head` that `Panel.tsx` has never emitted and every panel
+   header in the app therefore rendered unstyled. `packages/ui` now styles the classes the
+   component actually publishes, so the copy in this file was a second definition of the same
+   three rules with a slightly different `gap` — which is not a harmless duplicate, it is a
+   route stylesheet quietly overriding the design system from a file nobody reads when a panel
+   looks wrong. The rules are deleted rather than left in agreement.
 
-   No new values: every declaration below is the same token `.prl-panel__head` uses.
+   What is left below is the one repair that is still real.
    ========================================================================================== */
-
-.prl-panel__header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--prl-space-3) var(--prl-space-6);
-  padding-block-end: var(--prl-space-5);
-  border-block-end: var(--prl-hairline);
-}
-
-.prl-panel__heading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--prl-space-3) var(--prl-space-5);
-  min-width: 0;
-}
-
-.prl-panel__actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--prl-space-4);
-}
 
 /**
  * REPAIR: `AssumptionList` draws its own `01 02 03` index inside each `<li>`, and
@@ -243,7 +252,7 @@
   margin: 0;
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   letter-spacing: var(--prl-tracking-label);
   text-transform: uppercase;
 }
@@ -254,30 +263,61 @@
 }
 
 /**
- * A lesson card.
+ * A lesson card: level 2 of the ladder — opaque fill, lit hairline, one step of elevation.
  *
  * The number sits in its own column at every width, because a number that reflows above the title
  * on a phone stops reading as an index and starts reading as a stray digit.
+ *
+ * The lit hairline is what makes seventeen of these read as seventeen objects rather than as a
+ * ruled list. Before it, the card's border was `--prl-line-subtle` at 1.44:1 and its fill was one
+ * step off the page — measured on the curriculum index at 1440x900, the boundary between two
+ * cards was invisible in a screenshot and the grid read as one continuous field of text.
+ *
+ * `:focus-within` rides with `:hover` so arriving by keyboard lifts the same card, and the lift is
+ * a `translateY` rather than a margin: transform composites, layout does not.
  */
 .prl-learn-entry {
   display: grid;
   gap: var(--prl-space-4) var(--prl-space-6);
   grid-template-columns: auto minmax(0, 1fr);
-  padding: var(--prl-space-6);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  padding: var(--prl-space-7);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    box-shadow var(--prl-dur-base) var(--prl-ease-material),
+    transform var(--prl-dur-fast) var(--prl-ease-material);
+}
+
+.prl-learn-entry:hover,
+.prl-learn-entry:focus-within {
+  border-color: var(--prl-edge-lit);
+  background-color: var(--prl-surface-hover);
+  box-shadow: var(--prl-elevation-2);
+  transform: translateY(calc(-1 * var(--prl-space-1)));
 }
 
 /**
  * The suggested next lesson.
  *
- * An accent border on the inline start edge, and the card also carries a "start here" chip in the
- * markup — the border is the second cue, never the only one.
+ * An accent border on the inline start edge, one more step of elevation so it reads as the card
+ * nearest the reader, and a "start here" chip in the markup — three cues, never the edge alone.
  */
 .prl-learn-entry[data-start="true"] {
   border-color: var(--prl-accent-edge);
   border-inline-start-width: var(--prl-space-1);
+  box-shadow: var(--prl-elevation-2);
+}
+
+.prl-learn-entry[data-start="true"]:hover,
+.prl-learn-entry[data-start="true"]:focus-within {
+  border-color: var(--prl-accent-edge);
+  box-shadow: var(--prl-elevation-3);
 }
 
 .prl-learn-entry__index {
@@ -378,11 +418,14 @@
 .prl-learn-onboarding {
   display: grid;
   align-content: start;
-  gap: var(--prl-space-5);
+  gap: var(--prl-space-6);
   padding: var(--prl-space-8);
-  border: 1px solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-2);
-  background-color: var(--prl-surface-raised);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-learn-onboarding__head {
@@ -420,21 +463,30 @@
   justify-content: center;
   min-width: var(--prl-target-min);
   min-height: var(--prl-target-min);
-  border: 1px solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-1);
-  background-color: transparent;
+  border: 1px solid var(--prl-line);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-inset);
   color: var(--prl-text-muted);
+  font-variant-numeric: var(--prl-numeric);
+  font-weight: var(--prl-weight-medium);
   cursor: pointer;
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    box-shadow var(--prl-dur-base) var(--prl-ease-material),
+    color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 .prl-learn-onboarding__step-btn:hover {
   border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-hover);
   color: var(--prl-accent-text);
 }
 
 .prl-learn-onboarding__step-btn[aria-current="step"] {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-surface-active);
+  box-shadow: var(--prl-elevation-1);
   color: var(--prl-text);
 }
 
@@ -498,37 +550,73 @@
   min-width: 0;
 }
 
+/**
+ * THE READING SHEET — level 2, and the one place in this section that is deliberately NOT glass.
+ *
+ * A lesson is twelve minutes of prose, and prose over a backdrop that varies is a legibility
+ * problem no amount of tint solves; `tokens.css` says so in the MATERIALS block and this is the
+ * surface it is talking about. So the blocks sit on an opaque panel with the lit hairline and one
+ * step of elevation, and everything translucent in this feature travels OVER it.
+ *
+ * What this fixes, measured on `/learn/pot-odds` at 1440x900 before the change: the prose had no
+ * surface at all. It was 17px text sitting directly on the page ground, in a 669px column, with
+ * the contents rail beside it drawn in `--prl-surface-raised` (#12151b) on `--prl-surface-page`
+ * (#0b0d11) — a 1.05:1 fill step — behind a 1.44:1 hairline. The rail was legible, just: what it
+ * was not was an OBJECT. Neither was the prose. With no figure and no ground the page had nothing
+ * to say which of the two columns was the thing to read, and every callout, formula and table in
+ * the lesson was a slightly different rectangle floating in the same dark.
+ *
+ * So the prose gets a sheet and the rail gets a material (see the contents rail below), and the
+ * page acquires the one relationship it did not have: something in front of something else. The
+ * sheet also gives the lesson its own bottom edge, which is what stops a twelve-minute read ending
+ * in the same undifferentiated dark it started in.
+ */
 .prl-learn-lesson__blocks {
   display: grid;
   align-content: start;
   gap: var(--prl-space-7);
   min-width: 0;
+  padding: var(--prl-space-10) var(--prl-learn-sheet-x) var(--prl-space-11);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
 /**
  * A section heading, with its index in the gutter at wide widths.
  *
- * `--prl-space-11` of space above it and `--prl-space-2` below: a heading belongs to the text that
- * follows it, and the asymmetry is what makes a twelve-minute read scannable.
+ * `--prl-space-11` of space above it and `--prl-space-3` below: a heading belongs to the text that
+ * follows it, and the asymmetry is what makes a twelve-minute read scannable. The rule above it is
+ * the second half of the same idea — a hairline at the top of the space rather than a bigger gap,
+ * so the eye is told where a section ENDS instead of being asked to infer it from a measurement.
  */
 .prl-learn-lesson__heading {
   display: grid;
   gap: var(--prl-space-3);
   margin: 0;
-  padding-block-start: var(--prl-space-11);
+  padding-block-start: var(--prl-space-10);
+  margin-block-start: var(--prl-space-4);
+  border-block-start: var(--prl-hairline);
   max-width: var(--prl-measure);
   font-size: var(--prl-type-display-3);
   letter-spacing: var(--prl-tracking-display-3);
-  line-height: var(--prl-leading-snug);
+  line-height: var(--prl-leading-heading);
   scroll-margin-block-start: var(--prl-learn-sticky-top);
 }
 
+/** The first heading opens the sheet, so it takes neither the rule nor the space above it. */
 .prl-learn-lesson__heading:first-child {
   padding-block-start: 0;
+  margin-block-start: 0;
+  border-block-start: 0;
 }
 
 .prl-learn-lesson__heading-index {
   color: var(--prl-text-faint);
+  font-variant-numeric: var(--prl-numeric);
 }
 
 /**
@@ -564,14 +652,41 @@
 
 /* ---- contents rail ---------------------------------------------------------------------- */
 
+/**
+ * THE CONTENTS RAIL.
+ *
+ * Below 1280px it is an ordinary block sitting above the prose in the flow, so it is level 1 — a
+ * grouped well, hairline, no elevation, no material. It becomes glass in the 1280px block at the
+ * bottom of this file, and ONLY there, because that is the width at which it becomes `position:
+ * sticky` and starts travelling over the reading sheet. That is the whole test `tokens.css` sets
+ * for L3: bounded chrome that moves over content. A translucent pane that simply sits in a column
+ * is a tint, not a material, and it would be paying for a blur with nothing behind it to blur.
+ */
 .prl-learn-contents {
   display: grid;
   align-content: start;
-  gap: var(--prl-space-4);
+  gap: var(--prl-space-5);
   padding: var(--prl-space-6);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
+  box-shadow: var(--prl-elevation-0);
+}
+
+/**
+ * "On this page", set as the technical voice rather than as a heading.
+ *
+ * It carried `.prl-label` in the markup and nothing else, so it inherited the label size and
+ * colour and sat flush against the first link with no separation at all. The rule beneath it is
+ * what turns a stray line of small caps into a rail with a head.
+ */
+.prl-learn-contents__label {
+  display: block;
+  padding-block-end: var(--prl-space-4);
+  border-block-end: var(--prl-hairline);
+  color: var(--prl-text-muted);
 }
 
 .prl-learn-contents__list {
@@ -592,23 +707,36 @@
  * The 44px target comes from the padding rather than a fixed height, so a heading that wraps to
  * three lines still has one hit area. The inline-start border is transparent in the resting state
  * rather than absent, so nothing shifts sideways when it becomes current.
+ *
+ * `align-items: start` and not `baseline`: the index is a 13px small-cap and the label is 15px, so
+ * a shared baseline pulled the number down off the first line of a wrapping heading. On a rail
+ * where every row starts with a number, one misaligned number is the thing the eye finds first.
  */
 .prl-learn-contents__link {
   display: grid;
-  gap: var(--prl-space-2);
+  gap: var(--prl-space-4);
   grid-template-columns: auto minmax(0, 1fr);
-  align-items: baseline;
+  align-items: start;
   min-height: var(--prl-target-min);
   padding: var(--prl-space-3) var(--prl-space-4);
   border-inline-start: var(--prl-space-1) solid transparent;
+  border-radius: var(--prl-radius-1);
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
   line-height: var(--prl-leading-snug);
   text-decoration: none;
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    color var(--prl-dur-fast) var(--prl-ease-material);
+}
+
+.prl-learn-contents__index {
+  font-variant-numeric: var(--prl-numeric);
 }
 
 .prl-learn-contents__link:hover {
-  background-color: var(--prl-surface-hover);
+  background-color: var(--prl-veil-8);
   color: var(--prl-text);
   text-decoration: underline;
 }
@@ -618,11 +746,15 @@
  *
  * An accent bar, an accent index and a heavier weight — three cues, and `aria-current="true"` in
  * the markup carries the same fact to assistive technology. In forced-colors mode the bar becomes
- * a `Highlight` border (section 9), because a background tint is thrown away there.
+ * a `Highlight` border (section 10), because a background tint is thrown away there.
+ *
+ * `--prl-veil-8` rather than `--prl-surface-active`: this pane is translucent, so an opaque fill
+ * on one of its rows would punch a solid rectangle through the glass. A veil tints what is already
+ * there, which is what "the row I am on" should do on a material that is partly its backdrop.
  */
 .prl-learn-contents__link[aria-current="true"] {
   border-inline-start-color: var(--prl-accent-edge);
-  background-color: var(--prl-surface-active);
+  background-color: var(--prl-veil-8);
   color: var(--prl-text);
   font-weight: var(--prl-weight-medium);
 }
@@ -651,19 +783,32 @@
 
 .prl-learn-takeaways__index {
   color: var(--prl-text-faint);
+  font-variant-numeric: var(--prl-numeric);
 }
 
 /* ---- scenario link ---------------------------------------------------------------------- */
 
+/**
+ * "Now try it in the Lab" — the one call to action a lesson makes, so it takes a level of its own.
+ *
+ * L2 with the accent on its leading edge rather than an accent FILL: the design system allows
+ * roughly one accent action per view and the button inside this block is already it. An accent
+ * panel around an accent button is the same emphasis spent twice, and the second spend is the one
+ * that stops the first meaning anything.
+ */
 .prl-learn-scenario {
   display: grid;
   align-content: start;
   justify-items: start;
-  gap: var(--prl-space-4);
-  padding: var(--prl-space-7);
-  border: 1px solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-2);
-  background-color: var(--prl-surface-inset);
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-8);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-learn-scenario__prompt {
@@ -704,16 +849,28 @@
   color: var(--prl-text-secondary);
 }
 
-/** The stored situation. A grid of label/value pairs, tabular so the numbers align. */
+/**
+ * The stored situation. A grid of label/value pairs, tabular so the numbers align.
+ *
+ * INSET rather than panel, and the distinction is the whole point of putting it here: the
+ * calculation is recessed INTO the reading sheet it sits on, which is what "an instrument inset
+ * into the prose" means as a material. It was `--prl-surface-panel`, the same fill as the sheet
+ * around it, so the block had no edge a reader could see and the figures read as a stray table in
+ * the middle of a paragraph.
+ *
+ * `--prl-numeric` on the values rather than the bare `tabular-nums` this used to carry: the token
+ * states `lining-nums` too, and several faces in `--prl-font-sans` default to OLD-STYLE figures in
+ * a lowercase run — which puts a descending `4` and a short `1` in the middle of a pot size.
+ */
 .prl-learn-calc__inputs {
   display: grid;
-  gap: var(--prl-space-4) var(--prl-space-8);
+  gap: var(--prl-space-5) var(--prl-space-8);
   grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-15), 1fr));
   margin: 0;
-  padding: var(--prl-space-5);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-1);
-  background-color: var(--prl-surface-panel);
+  padding: var(--prl-space-6);
+  border: 1px solid var(--prl-line-subtle);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-inset);
 }
 
 .prl-learn-calc__input {
@@ -725,7 +882,11 @@
 .prl-learn-calc__input dd {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: var(--prl-type-body-sm);
+  color: var(--prl-text);
+  font-size: var(--prl-type-metric-sm);
+  font-variant-numeric: var(--prl-numeric);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-metric);
 }
 
 .prl-learn-calc__method {
@@ -763,7 +924,7 @@
 
 .prl-learn-calc__card dt {
   font-family: var(--prl-font-mono);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
 }
 
 .prl-learn-calc__card dd {
@@ -795,13 +956,16 @@
 
 .prl-learn-table__table th,
 .prl-learn-table__table td {
-  padding: var(--prl-space-3) var(--prl-space-5);
+  padding: var(--prl-space-4) var(--prl-space-5);
   border-block-end: var(--prl-hairline);
   text-align: start;
   vertical-align: top;
 }
 
+/* The header rule is the table's axis, so it carries meaning and takes the strong line rather than
+   the decorative one — the same rule `.prl-review-table` and `.prl-legend-table` follow. */
 .prl-learn-table__table thead th {
+  border-block-end: var(--prl-hairline-strong);
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-medium);
@@ -810,7 +974,13 @@
   white-space: nowrap;
 }
 
+.prl-learn-table__table tbody tr:last-child td,
+.prl-learn-table__table tbody tr:last-child th {
+  border-block-end: 0;
+}
+
 .prl-learn-table__table td {
+  font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;
 }
 
@@ -855,21 +1025,57 @@
   text-decoration-thickness: var(--prl-focus-width);
 }
 
+/**
+ * THE POPOVER — level 4, the one genuine overlay in this feature.
+ *
+ * It is a popover in the literal sense the ladder means: it opens ON TOP of the paragraph that
+ * spawned it, it is small and bounded, and it is dismissed rather than scrolled past. So it takes
+ * the overlay material — the darker, MORE opaque of the two glass tints in dark mode, which is not
+ * a mistake: this pane carries body text over content it cannot see, and the higher a pane floats
+ * the less it can rely on what is behind it.
+ *
+ * The fill and `--prl-glass-filter-strong` are declared together, here, for the reason the header
+ * of this file gives and `layout-guarantees.test.ts` enforces. Without the blur, the sentence the
+ * trigger sits in would read straight through the definition that is explaining it.
+ *
+ * It arrives on `transform` and `opacity` at `--prl-dur-slow` — the material band's top end, which
+ * is what a sheet arriving is for — and never on `backdrop-filter`, which would re-evaluate the
+ * blur against the whole backdrop on every frame of the animation.
+ */
 .prl-term__panel {
   position: absolute;
   z-index: var(--prl-z-raised);
+  isolation: isolate;
   inset-inline: 0;
-  inset-block-start: calc(100% + var(--prl-space-2));
+  inset-block-start: calc(100% + var(--prl-space-3));
   display: grid;
   align-content: start;
-  gap: var(--prl-space-4);
-  padding: var(--prl-space-6);
-  border: 1px solid var(--prl-line-strong);
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-7);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
   border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
-  border-radius: var(--prl-radius-2);
-  background-color: var(--prl-surface-raised);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-glass-overlay);
+  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
+  backdrop-filter: var(--prl-glass-filter-strong);
+  box-shadow: var(--prl-elevation-3);
   font-size: var(--prl-type-body);
   line-height: var(--prl-leading-body);
+  animation: prl-term-open var(--prl-dur-slow) var(--prl-ease-material) both;
+}
+
+@keyframes prl-term-open {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--prl-space-3)));
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .prl-term__head {
@@ -897,7 +1103,7 @@
   border-radius: var(--prl-radius-1);
   background-color: var(--prl-surface-inset);
   color: var(--prl-text);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   white-space: pre-wrap;
 }
 
@@ -920,41 +1126,156 @@
    There is no score anywhere in this section, and therefore nothing here styles one. No progress
    bar, no tally, no colour for "right" and "wrong": the verdict is a sentence, and each option is
    labelled with a chip that carries a word.
+
+   WHAT THIS SECTION HAD TO STOP LOOKING LIKE, measured on `/learn/pot-odds` at 1440x900.
+
+   Every option was `--prl-surface-panel` on a `--prl-surface-panel` panel behind a 1.44:1 hairline:
+   a 1:1 fill step and a border at the edge of visibility, four times over. The chosen answer was
+   marked by the radio dot and by nothing else on a 640px-wide block, the padding gave a 34px row
+   for a two-line label, and the correction sentence sat indented under it in the same voice as
+   everything else. That is a form. An assessment is a set of OBJECTS a reader picks one of, and
+   the difference is expressible entirely in material: an option is now a recessed well that lifts
+   to a raised card when it is the one you chose.
+
+   The refusal state is deliberately not drawn as an error. A wrong answer here costs nothing and
+   can be changed as often as the reader likes, so the correction takes the INFO edge and the
+   reading colour, and the only thing that goes adverse is the numeric field's own `aria-invalid`
+   border, which is about a malformed number rather than about a wrong one.
    ========================================================================================== */
 
+/**
+ * The question.
+ *
+ * `display-3` rather than `heading`: this is the sentence the whole panel exists to ask, and at
+ * 22px it was the same size as the panel title above it and two points above the options below it.
+ * A question that is not visibly the loudest thing in its own panel is a question a reader scrolls
+ * past. It stays an `h3` — this changes the size, not the outline.
+ */
 .prl-learn-quiz__heading {
   margin: 0;
   max-width: var(--prl-measure);
-  font-size: var(--prl-type-heading);
+  font-size: var(--prl-type-display-3);
   font-weight: var(--prl-weight-semibold);
-  line-height: var(--prl-leading-snug);
+  letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-heading);
+  text-wrap: balance;
 }
 
+/**
+ * "01 / 05" — the second of this feature's two glass surfaces, and the weaker argument for it.
+ *
+ * Worth stating the weakness rather than dressing it up. This pill sits in the quiz panel's header,
+ * so most of what is behind it is the panel's own opaque fill, and `tokens.css` is blunt about what
+ * that means: "a translucent pane over a flat colour is a slightly different flat colour". What it
+ * gets from the material here is not the blur; it is the lit edge and `--prl-elevation-2`, which
+ * lift the position off the header rather than letting it read as a third piece of the title. It
+ * keeps the glass fill because the page wash and the reading sheet DO pass under it as the panel
+ * scrolls, and because a progress chip that changed material between the quiz panel and anywhere
+ * else it appears would be two components with one name.
+ *
+ * It is a pill: bounded, tiny, its own layer, never animated — the shape `tokens.css` blesses. And
+ * it is NOT a score: there is no tally in this section, only a position in a sequence, which is why
+ * it reads as a coordinate rather than as a result.
+ */
 .prl-learn-quiz__position {
-  color: var(--prl-text-muted);
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--prl-space-2);
+  padding: var(--prl-space-2) var(--prl-space-5);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-pill);
+  background-color: var(--prl-glass-floating);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  box-shadow: var(--prl-elevation-2);
+  color: var(--prl-text-secondary);
+  font-variant-numeric: var(--prl-numeric);
 }
 
 .prl-learn-quiz__options {
   display: grid;
-  gap: var(--prl-space-4);
+  gap: var(--prl-space-5);
   margin: 0;
   padding: 0;
   border: 0;
 }
 
+/**
+ * ONE ANSWER.
+ *
+ * The padding lives on the `<label>` inside rather than here, which is what makes the whole block
+ * the hit area: a `<label>` extends a native control's activation region, so a 640x76 label is a
+ * 640x76 target — the pattern WCAG 2.5.8 is satisfied by, rather than a 44px minimum bolted onto
+ * a 16px dot. The fill and the edge stay on this element so a hover tints the whole option and not
+ * just the part the label covers.
+ *
+ * No `overflow: hidden`, deliberately. It would clip the focus ring's halo — the `box-shadow` half
+ * of the two-tone indicator — on the radio inside, and the ring is the one thing in this system
+ * that may never be degraded.
+ */
 .prl-learn-quiz__option {
   display: grid;
-  gap: var(--prl-space-3);
-  padding: var(--prl-space-4) var(--prl-space-5);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-1);
-  background-color: var(--prl-surface-panel);
+  gap: 0;
+  padding: 0;
+  border: 1px solid var(--prl-line-subtle);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-inset);
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    box-shadow var(--prl-dur-base) var(--prl-ease-material);
 }
 
+/**
+ * `align-items: start`, against `.prl-choice`'s own `center`.
+ *
+ * These labels run to two and three lines. Centred, the radio drifted to the middle of a 76px
+ * block and stopped reading as the marker for the first line — which is where the eye starts.
+ */
+.prl-learn-quiz__option .prl-choice {
+  align-items: start;
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-6);
+}
+
+.prl-learn-quiz__option .prl-choice__label {
+  max-width: var(--prl-measure);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-learn-quiz__option:hover {
+  border-color: var(--prl-line-strong);
+  background-color: var(--prl-surface-hover);
+}
+
+/**
+ * The answer this reader chose: an accent edge, a step up the surface ramp, and one level of
+ * elevation, plus the radio's own checked dot in the platform's own accent. Four cues, none of
+ * them hue on its own, and the elevation is the one that survives being photocopied.
+ */
+.prl-learn-quiz__option:has(.prl-choice__control:checked) {
+  border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-active);
+  box-shadow: var(--prl-elevation-1);
+}
+
+/**
+ * The note under an option, once the question has been answered.
+ *
+ * Separated by a hairline rather than by a gap: a gap says "there is more"; a rule says "this part
+ * is the response to the part above it". The inline-start padding lines the sentence up with the
+ * label rather than with the radio — `--prl-space-6` is the label's own padding and
+ * `--prl-space-7` + `--prl-space-5` is the control plus its gap.
+ */
 .prl-learn-quiz__option-feedback {
   display: grid;
-  gap: var(--prl-space-3);
-  padding-inline-start: var(--prl-space-11);
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-5) var(--prl-space-6) var(--prl-space-6);
+  padding-inline-start: calc(var(--prl-space-6) + var(--prl-space-7) + var(--prl-space-5));
+  border-block-start: var(--prl-hairline);
 }
 
 /**
@@ -962,7 +1283,9 @@
  *
  * Present in the DOM from the first render, empty, so the `aria-live` region is established before
  * its content changes — a region inserted together with its text is missed by several screen
- * readers. Empty, it takes no vertical space.
+ * readers. Empty, it takes no vertical space, which is why every box-drawing declaration below is
+ * on `:not(:empty)` rather than on the element: a bordered, padded, empty live region is a stray
+ * rectangle sitting above the options for the whole time before the first answer.
  */
 /** The answer to the question just asked. There is no version of this that is secondary text. */
 .prl-learn-quiz__verdict {
@@ -970,6 +1293,18 @@
   max-width: var(--prl-measure);
   color: var(--prl-text);
   font-size: var(--prl-type-body);
+  line-height: var(--prl-leading-body);
+}
+
+.prl-learn-quiz__verdict:not(:empty) {
+  padding: var(--prl-space-6) var(--prl-space-7);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-inline-start: var(--prl-space-1) solid var(--prl-line-strong);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-raised);
+  font-size: var(--prl-type-body-lg);
   line-height: var(--prl-leading-body);
 }
 
@@ -986,16 +1321,39 @@
  */
 .prl-learn-quiz__numeric {
   max-width: var(--prl-measure);
+  gap: var(--prl-space-4);
 }
 
 .prl-learn-quiz__numeric .prl-input {
   max-width: var(--prl-space-15);
+  font-size: var(--prl-type-metric-sm);
+  font-variant-numeric: var(--prl-numeric);
+  letter-spacing: var(--prl-tracking-metric);
+}
+
+/**
+ * A REFUSED ANSWER, drawn as a correction rather than as an alarm.
+ *
+ * `aria-describedby` picks up the error sentence before the hint, and `test:ax` asserts that
+ * ordering; nothing here touches it. What this does is give the sentence somewhere to be: an
+ * inset strip on the caution edge, at the reading colour rather than at `--prl-adverse`, because
+ * "that is not a number I can read" is a request to retype and not a failure. The control's own
+ * border stays adverse — that state is about the value being malformed, and it is the one the
+ * design system already draws.
+ */
+.prl-learn-quiz__numeric .prl-field__error {
+  padding: var(--prl-space-4) var(--prl-space-5);
+  border-inline-start: var(--prl-space-1) solid var(--prl-caution);
+  border-radius: var(--prl-radius-1);
+  background-color: var(--prl-surface-inset);
+  color: var(--prl-text);
+  font-size: var(--prl-type-body);
 }
 
 .prl-learn-quiz__working {
-  padding: var(--prl-space-6);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  padding: var(--prl-space-7);
+  border: 1px solid var(--prl-line-subtle);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-inset);
 }
 
@@ -1011,37 +1369,59 @@
   line-height: var(--prl-leading-body);
 }
 
+/**
+ * "Why" — the reasoning, which is the part the lesson actually wants read.
+ *
+ * The info edge and one step up the ramp, so it reads as the panel's conclusion rather than as a
+ * fifth option. It is deliberately the only block in the quiz that is BRIGHTER than the options
+ * around it: the options are wells, this is the thing standing on top of them.
+ */
 .prl-learn-quiz__explanation {
   display: grid;
-  gap: var(--prl-space-3);
+  gap: var(--prl-space-4);
   justify-items: start;
-  padding: var(--prl-space-6);
-  border: var(--prl-hairline);
+  padding: var(--prl-space-7);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
   border-inline-start: var(--prl-space-1) solid var(--prl-info);
-  border-radius: var(--prl-radius-2);
-  background-color: var(--prl-surface-panel);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-raised);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-learn-quiz__explanation p {
   margin: 0;
   max-width: var(--prl-measure);
+  line-height: var(--prl-leading-body);
 }
 
 .prl-learn-quiz__advice {
   margin: 0;
   max-width: var(--prl-measure);
-  font-size: var(--prl-type-heading);
-  line-height: var(--prl-leading-snug);
+  font-size: var(--prl-type-body-lg);
+  letter-spacing: var(--prl-tracking-heading);
+  line-height: var(--prl-leading-body);
 }
 
+/**
+ * The step controls, at the foot of the panel.
+ *
+ * `space-7` above the rule and `space-6` below it rather than one even `space-5` on both sides:
+ * the row belongs to the panel's frame rather than to the question, and the asymmetry is what
+ * says so. Same reasoning as the heading rhythm in section 4.
+ */
 .prl-learn-quiz__nav {
   align-items: center;
-  padding-block-start: var(--prl-space-5);
+  gap: var(--prl-space-5);
+  margin-block-start: var(--prl-space-4);
+  padding-block-start: var(--prl-space-7);
   border-block-start: var(--prl-hairline);
 }
 
 .prl-learn-quiz__skip {
   flex: 1 1 var(--prl-space-15);
+  margin: 0;
 }
 
 /* ==========================================================================================
@@ -1059,10 +1439,13 @@
   gap: var(--prl-space-6);
   grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-16), 1fr));
   align-items: start;
-  padding: var(--prl-space-6);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  padding: var(--prl-space-7);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
 /** The A–Z jump list. Each letter is a 44px target, because it is a link on a phone. */
@@ -1080,11 +1463,17 @@
   justify-content: center;
   min-width: var(--prl-target-min);
   min-height: var(--prl-target-min);
-  border: 1px solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-1);
+  border: 1px solid var(--prl-line);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-inset);
   color: var(--prl-text-secondary);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
+  font-weight: var(--prl-weight-medium);
   text-decoration: none;
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 .prl-learn-glossary__jump-link:hover {
@@ -1118,12 +1507,24 @@
 .prl-learn-glossary__entry {
   display: grid;
   align-content: start;
-  gap: var(--prl-space-4);
-  padding: var(--prl-space-6);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-7);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
   scroll-margin-block-start: var(--prl-learn-sticky-top);
+  transition:
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    box-shadow var(--prl-dur-base) var(--prl-ease-material);
+}
+
+.prl-learn-glossary__entry:target,
+.prl-learn-glossary__entry:focus-within {
+  border-color: var(--prl-accent-edge);
+  box-shadow: var(--prl-elevation-2);
 }
 
 .prl-learn-glossary__term {
@@ -1235,10 +1636,19 @@
    * Composed from tokens rather than being a new number: nothing here is a value the design system
    * does not already name.
    */
+  /* The two inline paddings of the reading sheet are added to the cap, so the measure inside it is
+     still the measure. See `--prl-learn-sheet-x` in section 0. */
   .prl-learn-lesson {
     width: min(
       var(--prl-container),
-      calc(var(--prl-learn-rail) + var(--prl-space-11) + var(--prl-measure) + var(--prl-space-11))
+      calc(
+        var(--prl-learn-rail) +
+        var(--prl-space-11) +
+        var(--prl-measure) +
+        2 *
+        var(--prl-learn-sheet-x) +
+        var(--prl-space-11)
+      )
     );
   }
 
@@ -1248,7 +1658,19 @@
   }
 
   /**
-   * The rail sticks below the header band.
+   * The rail sticks below the header band, and THAT is what earns it the glass.
+   *
+   * This is the only block in the file that spends a glass fill on the rail, and it is inside the
+   * media query on purpose: below this width the rail is a static block in the flow, where a
+   * translucent pane would be a tint over a flat colour — a blur paid for with nothing behind it
+   * to blur. From here up it travels over the reading sheet, which is exactly the bounded,
+   * promoted, unanimated case `tokens.css` reserves level 3 for.
+   *
+   * `-webkit-backdrop-filter` is beside the fill because Safari still needs it, and the filter is
+   * beside the fill because a translucent pane with no blur is a window: the lesson headings
+   * passing underneath would read through it as a second, perfectly legible layer of type. That is
+   * the ghosting bug `nav.css` documents, and `layout-guarantees.test.ts` reads this pairing off
+   * the stylesheet rather than trusting the comment.
    *
    * `max-height` plus `overflow-y` so a lesson with fifteen sections scrolls its own contents
    * rather than running off the bottom of the viewport. `dvh` rather than `vh` because a mobile
@@ -1256,9 +1678,14 @@
    */
   .prl-learn-contents {
     position: sticky;
+    isolation: isolate;
     inset-block-start: var(--prl-learn-sticky-top);
     overflow-y: auto;
     max-height: calc(100dvh - var(--prl-learn-sticky-top) - var(--prl-space-9));
+    background-color: var(--prl-glass-floating);
+    -webkit-backdrop-filter: var(--prl-glass-filter);
+    backdrop-filter: var(--prl-glass-filter);
+    box-shadow: var(--prl-elevation-2);
   }
 }
 
@@ -1287,6 +1714,15 @@
 
   .prl-learn-onboarding__step-btn[aria-current="step"] {
     border-color: Highlight;
+  }
+
+  /* The chosen answer is a fill, an edge and an elevation, and forced-colors keeps none of the
+     three: a background tint is discarded, every border becomes `CanvasText`, and a `box-shadow`
+     is removed outright. The radio's own checked dot survives — the platform repaints it — and
+     this restates the block-level cue as the one property the mode does keep. */
+  .prl-learn-quiz__option:has(.prl-choice__control:checked) {
+    border-color: Highlight;
+    border-width: var(--prl-focus-width);
   }
 
   .prl-term__trigger[aria-expanded="true"] {

@@ -356,7 +356,14 @@ export default async function ReviewIndexPage({
                   <th scope="col">Hand</th>
                   <th scope="col">When</th>
                   <th scope="col">Board</th>
-                  <th scope="col">Pot</th>
+                  {/* The class is on the header as well as on the cells so the label sits over the
+                      column it names: `.prl-review-table__pot` end-aligns a tabular figure, and a
+                      start-aligned "Pot" above end-aligned digits is the misalignment the rule was
+                      added to remove. Adding the class beats an `:nth-child(4)` in the stylesheet,
+                      which would silently point at the wrong column the day one is inserted. */}
+                  <th className="prl-review-table__pot" scope="col">
+                    Pot
+                  </th>
                   <th scope="col">Net to you</th>
                   <th scope="col">Ending</th>
                 </tr>

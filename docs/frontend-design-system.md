@@ -1,6 +1,13 @@
 # Poker Risk Lab — Frontend Design System
 
-**Version:** 2.0 (dark-primary) · **Last reviewed:** 2026-08-17
+**Version:** 3.0 (dark-primary, material ladder) · **Last reviewed:** 2026-08-26
+
+> **What changed in 3.0.** §2.7 is new: a five-level material ladder with translucent levels,
+> elevation tokens and a lit hairline, replacing "one step on the surface ramp plus a hairline".
+> §7.1 is new: the focus ring is two-tone, because a single-colour ring on a floating pane is only
+> as visible as a backdrop this stylesheet does not own. §7.2 is new: `prefers-reduced-transparency`
+> and `prefers-contrast: more`. §3.2, §4 and §4.1 had drifted from `tokens.css` and are corrected
+> against it. Every ratio here is reproduced by `node scripts/check-contrast.mjs`.
 
 This is the authority for every visual decision in `apps/web` and `packages/ui`. If a value
 is not in here, it does not belong in a component — see §11.
@@ -107,6 +114,21 @@ Text on every surface, worst case (`--prl-surface-inset #212630`):
 
 On the page ground `#0b0d11` every one of those is higher again (primary text is 17.95:1).
 
+The page ground now also carries **the wash** (§2.7) — two very low-alpha radial fields, which
+is what gives a translucent pane something worth showing through. A gradient has no single
+colour to assert, so what is asserted is its worst case: `--prl-wash-tint` is the brightest stop
+either gradient reaches, and the gate composites it over the page ground and measures the result
+as a content surface called `wash` alongside the flat ones. It costs almost nothing — primary
+text 16.38:1, `text-faint` 5.84:1 — because the tint is 7%. If a stop is ever made brighter, the
+token moves and every pairing in the table above is re-measured against it automatically.
+
+Where the wash is actually painted is the app shell's business rather than the package's, and it
+is **not** the `<body>` rule in `base.css`: that copy is switched off by `globals.css` and the
+field is drawn once as a viewport-fixed layer instead, so a pane four screens down a document
+still has something varying behind it. The stops are the same two tokens, deliberately, so the
+`wash` surface measured here remains the true ceiling of the page ground. §9.3 has the geometry
+and the worst-case arithmetic.
+
 **Two rules fall directly out of the measurements, and both are easy to get wrong:**
 
 1. **Text on an accent fill must be `--prl-ink-900`, never white.**
@@ -154,12 +176,14 @@ uses them instead of reaching for `--prl-accent-400/500` directly:
 None of the three needs a per-theme override, because §2.4a remaps the whole ramp. That is the
 payoff of remapping all of it rather than only the steps in use.
 
-**The gate reports two layers, and the difference matters.** `pnpm run design:contrast` measures
-`tokens.css` alone (what this document claims) and then `tokens.css` + `base.css` (what a browser
-paints). A failure in the first is a defect in the token set; a failure in the second is a defect
-a reader would meet. **Both currently pass, and the gap between them is zero** — which is the state
-to keep it in, because a repair layer in `base.css` is a second place to look for the value a
-browser actually paints.
+**The gate reports three layers, and the differences matter.** `pnpm run design:contrast` measures
+`tokens.css` alone (what this document claims), then `tokens.css` + `base.css` (the pairings a
+component may use), and then **the composited background of every piece of text the app actually
+paints, in real Chrome** (§7.3). A failure in the first is a defect in the token set; a failure in
+the second is a defect in the pairings; a failure in the third is a defect a reader would meet on a
+screen, and the first two cannot see it, because a translucent stack has no token pair. **All three
+currently pass, and the gap between the first two is zero** — which is the state to keep them in,
+because a repair layer in `base.css` is a second place to look for the value a browser paints.
 
 Getting there meant fixing three light-theme values at source. Each had been patched in
 `base.css` section 0; all three are now correct in the light theme of `tokens.css`, in *both* of
@@ -208,6 +232,198 @@ the pattern that fails for colour-vision deficiency.
 faint hairline grid at 32px drawn in `--prl-ink-800`. It reads as **graph paper**, which is
 the whole thesis: this is a worksheet you happen to be playing on.
 
+### 2.7 Materials — the depth ladder
+
+**What this replaced.** §4.1 used to say there were no shadows and no blur, and that depth was
+"one step on the surface ramp plus a hairline". The performance reasoning behind that is correct
+and is preserved below unchanged. What was wrong was the conclusion: one step on a ramp plus a
+hairline is not an elevation system, it is **one card style**, and one card style cannot tell a
+panel holding prose apart from a toolbar travelling over content or a popover floating above
+both. Everything in the app read as the same object at the same height.
+
+There are now five levels. Each step changes **material**, **elevation** and **border luminance**
+together — changing only the fill is what makes an interface look like cards stacked on cards.
+
+| L | Name | Material | Edge | Elevation | What it is for |
+| --- | --- | --- | --- | --- | --- |
+| 0 | page | `--prl-surface-page` + `--prl-page-wash` | none | none | the ground. Nothing sits *on* it; things float *over* it |
+| 1 | grouped | `--prl-surface-raised` | `--prl-edge` | **none, deliberately** | a well that collects related rows. What separates it from L2 is the *absence of elevation*, not the fill — an unshadowed pane reads as part of the page. In light it is white on a grey ground, so it is not a recess and is not meant to be |
+| 2 | raised | `--prl-surface-panel` | lit hairline | `--prl-elevation-1` | **the card, and where body text lives.** Opaque on purpose |
+| 3 | floating | `--prl-glass-floating` + blur | lit hairline | `--prl-elevation-2` | bounded chrome that travels over content: pills, toolbars, chips, the action bar |
+| 4 | overlay | `--prl-glass-overlay` + strong blur | lit hairline | `--prl-elevation-3` | popovers, menus, sheets. May carry body text |
+| 5 | modal | `--prl-scrim` + the L4 material | lit hairline | `--prl-elevation-4` | a modal dialog. The scrim is what makes it modal |
+
+Classes: `.prl-material` plus `--grouped` / `--raised` / `--floating` / `--overlay` / `--modal`,
+with `--interactive` adding the pointer states. `.prl-panel` **is** level 2 and needs no class.
+`.prl-panel--floating` and `--overlay` promote it.
+
+**Restraint is part of the definition.** Glass is for *floating, bounded* surfaces. Body text
+sits on solid surfaces — long prose over a backdrop that varies is a legibility problem no amount
+of tint solves. A wall of glass is worse than no glass.
+
+#### 2.7.1 Blur **and saturate**, and why the second half is not optional
+
+```css
+--prl-glass-filter:        blur(20px) saturate(180%);
+--prl-glass-filter-strong: blur(30px) saturate(180%);
+```
+
+Blur alone averages a backdrop towards grey, which reads as **fog**. Pushing saturation back past
+100% restores the chroma the averaging removed, and that is what makes a pane read as a tinted
+sheet of glass rather than as a dirty window. Most imitations of this look drop the saturation and
+then wonder why the result looks cloudy.
+
+**Wherever a glass fill goes, the filter goes with it — in the same block, every time, including
+in a `:hover` block whose base rule already set it.** This is the ghosting bug from the header
+comment in `apps/web/src/styles/nav.css`, stated as a rule: a 92%-opacity header with no
+`backdrop-filter` let the headings underneath read straight through it as a second, perfectly
+legible layer of text in the wrong place. Blur+saturate is the legitimate fix precisely because it
+destroys the *legibility* of the backdrop while keeping its colour; opacity alone destroys
+neither. `packages/ui/test/layout-guarantees.test.ts` fails any block in `packages/ui` or
+`apps/web` that sets a glass fill without the filter, and the guard was watched failing against a
+deliberately blur-less rule before it was believed.
+
+Restating the filter costs nothing at runtime: it is the same value re-declared, not re-computed.
+
+#### 2.7.2 The contrast floor for glass, and how it is established
+
+**A translucent surface does not have a contrast ratio. It has a range of them, one per backdrop,
+and the range is unbounded until something bounds it.** This is the point at which most design
+systems that adopt translucency quietly stop measuring.
+
+It is bounded here by construction rather than by convention. Nothing any display can paint is
+outside `[#000000, #ffffff]`, so **every glass tint is composited over both extremes and the
+worse of the two is the ratio this system claims** — declared in the stylesheet as
+`--prl-glass-backdrop-min` / `-max` so the claim lives with the tokens. A ratio that holds at both
+holds over a playing-card face, an accent fill, a chart, a photograph, and over whatever is added
+next year, with no rule to remember about where glass may float.
+
+Which extreme binds **flips with the theme**, which is why this is automated rather than
+eyeballed: dark paints light text on a dark tint, so its enemy is a bright backdrop lifting the
+composite; light paints dark text on a light tint, so its enemy is a dark backdrop pulling it
+down. Measuring one extreme passes one theme and misses the other.
+
+That is why the tints are as opaque as they are. At 90% the pass-through is 10% of a *blurred,
+180%-saturated* backdrop: enough colour to read as material, little enough structure to be safe.
+
+**Worst-of-both-extremes, dark theme** (`node scripts/check-contrast.mjs` prints all of it,
+including the per-extreme figures):
+
+| On | `text` | `secondary` | `muted` | `faint` | `adverse` | `line-strong` | `focus-color` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| L3 floating `rgb(18 21 27 / 90%)` | 12.88 | 9.14 | 6.51 | **4.59** | 5.61 | 3.12 | 9.16 |
+| L3 hovered `rgb(26 30 38 / 94%)` | 12.94 | 9.18 | 6.53 | **4.61** | 5.64 | 3.13 | 9.20 |
+| L3 pressed `rgb(33 38 48 / 97%)` | 12.76 | 9.06 | 6.45 | **4.55** | 5.56 | 3.09 | 9.08 |
+| L4 overlay `rgb(11 13 17 / 92%)` | 15.02 | 10.66 | 7.59 | 5.36 | 6.54 | 3.63 | 10.69 |
+| L4 hovered `rgb(20 24 30 / 95%)` | 14.40 | 10.22 | 7.27 | 5.14 | 6.27 | 3.48 | 10.25 |
+
+**Worst-of-both-extremes, light theme** (`faint` collapses onto `muted` in light, §2.4b):
+
+| On | `text` | `secondary` | `muted` | `favourable` | `line-strong` | `focus-color` |
+| --- | --- | --- | --- | --- | --- | --- |
+| L3 floating `rgb(255 255 255 / 94%)` | 16.21 | 8.52 | 5.60 | **4.68** | 3.93 | 9.33 |
+| L3 hovered `rgb(248 250 252 / 96%)` | 16.17 | 8.50 | 5.59 | 4.67 | 3.92 | 9.31 |
+| L3 pressed `rgb(240 244 248 / 97%)` | 15.70 | 8.26 | 5.43 | **4.53** | 3.81 | 9.04 |
+| L4 overlay `rgb(255 255 255 / 96%)` | 16.94 | 8.91 | 5.86 | 4.89 | 4.11 | 9.76 |
+| L4 hovered `rgb(248 250 252 / 97%)` | 16.59 | 8.73 | 5.74 | 4.79 | 4.02 | 9.56 |
+
+Text floor 4.5:1, non-text floor 3:1. **The whole content text ramp is permitted on glass**,
+`--prl-text-faint` included — but that is a measured result and it was not the first answer. At
+the tints this started with, `faint` landed at 4.00:1 over the bright extreme and was excluded in
+prose. The tints then had to get more opaque for an unrelated reason (`--prl-line-strong` on a
+hovered pane fell to 2.71:1), and the gate's negative control reported that the exclusion had gone
+stale. It is asserted now instead of written down. **`faint` at 4.55:1 has the least headroom of
+anything in the system and is the row that fails first if a tint is ever made more transparent.**
+
+The negative control that reported it now holds `--prl-line` and `--prl-line-subtle`, which are
+decorative *by definition* (§2.4 rule 2) and measure 1.03–1.99:1 on glass. Those cannot become
+vacuous by accident: if the palette ever lifted them past 3:1 they would still not be allowed to
+carry meaning.
+
+#### 2.7.3 The interactive states, and why they get *more* opaque
+
+On an opaque surface a state is a colour change. On glass the obvious move — brighten the tint —
+erodes the contrast floor from underneath every piece of text on the pane, and it did: the first
+hover tint here took `--prl-line-strong` to 2.71:1.
+
+So the states move **opacity** as well as lightness. Hovering firms the glass (90% → 94%),
+pressing firms it further (→ 97%) and drops the pane one elevation level with a 1px
+`translateY`. That is the physical reading of a press, and it is the direction that protects the
+floor rather than spending it. Every state above is measured over both extremes.
+
+**Disabled drops a level; it never fades.** `opacity` on a disabled pane is wrong twice over
+here: it fades the text with the surface, taking a 4.5:1 label towards 2:1, *and* on a translucent
+pane it lets more of the backdrop through, so the control gets less legible in exactly the
+proportion the backdrop is busy. The material collapses to the opaque level below — flat,
+unblurred, unelevated — which is a disabled control's honest description.
+
+#### 2.7.4 Elevation, and the performance rule that survived
+
+```css
+--prl-elevation-1: 0 1px 2px rgb(0 0 0 / 24%), 0 2px 8px rgb(0 0 0 / 18%);
+--prl-elevation-2: 0 2px 6px rgb(0 0 0 / 28%), 0 10px 24px rgb(0 0 0 / 26%);
+--prl-elevation-3: 0 4px 12px rgb(0 0 0 / 32%), 0 20px 48px rgb(0 0 0 / 36%);
+--prl-elevation-4: 0 8px 24px rgb(0 0 0 / 36%), 0 36px 80px rgb(0 0 0 / 48%);
+```
+
+Two shadows per level, because one cannot do both jobs: a short, tight, higher-alpha shadow is the
+**contact edge** that says the pane is a physical object, and a long, wide, lower-alpha one is the
+**ambient occlusion** that says how far above the page it is. A single blurred shadow reads as a
+glow. Light-theme alphas are roughly a fifth of these — on a light ground, a dark-theme shadow
+does not read as height, it reads as dirt.
+
+The old rule's reasoning is kept and made enforceable:
+
+* **Nothing on the table field takes a shadow or a blur.** Six seats, community cards and a live
+  Coach panel are exactly the scene the original objection was about.
+* **Blurred regions stay bounded, and there is exactly one exception.** `backdrop-filter` goes on
+  pills, chips, popovers and sheets — elements that are small, already promoted to their own layer
+  (`isolation: isolate`), and static. Never a page background, and never a second full-width strip.
+  The one that exists is the app-shell header (§9.3): a 92px `position: sticky` bar, promoted by
+  the filter itself, re-composited rather than re-laid-out as the page scrolls, and carrying the
+  blur because the ghosting bug this system was built around is a **legibility** failure that only
+  a blur fixes. That is a different scene from the objection this rule comes from, which is the
+  table field — six seats, community cards and a live Coach panel all repainting under a blurred
+  layer. If a second full-width blur is ever proposed, it needs its own version of that argument;
+  the exception is one element, not a category.
+* **`backdrop-filter` is never animated or transitioned.** It is re-evaluated against the entire
+  backdrop on every frame it changes, which is the one way to turn a cheap bounded blur into an
+  expensive one. It is absent from every `transition` list in the package.
+* **A shadow is never a literal.** Every `box-shadow` value must be built from
+  `--prl-elevation-*` and `--prl-focus-ring`. This is a *tighter* rule than the "no `box-shadow`
+  at all" it replaced, not a looser one: the old rule never had to forbid an ad-hoc
+  `0 2px 8px rgba(...)` because no shadow was allowed anywhere, and this one does.
+
+#### 2.7.5 The lit hairline
+
+A pane reads as a physical sheet when its top edge catches light and its bottom edge falls into
+shadow — one border, three colours, applied per side:
+
+```css
+border: 1px solid var(--prl-edge);
+border-block-start-color: var(--prl-edge-lit);
+border-block-end-color: var(--prl-edge-shade);
+```
+
+A border rather than an inset shadow, so it survives `forced-colors`. These are **decorative** in
+exactly the sense `--prl-line-subtle` is (§2.4 rule 2): they draw an object's edge, never its
+meaning. A border that carries meaning is still `--prl-line-strong` or the accent.
+
+#### 2.7.6 The wash
+
+```css
+--prl-wash-tint: rgb(23 198 219 / 7%);   /* light theme: rgb(10 98 116 / 6%) */
+```
+
+Two radial fields over the page ground. Without them the material system above is invisible: a
+translucent pane over a flat colour is a slightly different flat colour. It is `background-repeat:
+no-repeat` and `background-attachment: scroll` — **not** `fixed`, which re-resolves the background
+against the viewport on every scroll frame and is precisely the per-frame repaint this system
+avoids everywhere else. Scrolled, it is painted once into the page's own layer.
+
+It resolves to `none` under `prefers-reduced-transparency`, `prefers-contrast: more` and
+`forced-colors`, so no rule needs an override for it. Measured as a surface: §2.4.
+
 ---
 
 ## 3. Typography
@@ -231,49 +447,92 @@ grotesk on every target platform.
 
 Two scales, because display type and data type have different jobs.
 
-**Display / prose** — `clamp()` so it is fluid without breakpoints:
+**Display / prose** — `clamp()` so it is fluid without breakpoints. The sizes below are read off
+`tokens.css`; the reading end of the scale has a measured justification in the comment there
+(17px body, 15px secondary, 13px hard floor, sampled against products with strong reading
+typography rather than chosen by taste):
 
-| Token | Size | Weight | Tracking | Use |
-| --- | --- | --- | --- | --- |
-| `--prl-type-display-1` | `clamp(2.75rem, 6.5vw, 5.25rem)` | 700 | `-0.03em` | page hero |
-| `--prl-type-display-2` | `clamp(2rem, 4vw, 3.25rem)` | 700 | `-0.025em` | section opener |
-| `--prl-type-display-3` | `clamp(1.5rem, 2.4vw, 2rem)` | 600 | `-0.02em` | panel title |
-| `--prl-type-heading` | `1.125rem` | 600 | `-0.01em` | card title |
-| `--prl-type-body` | `0.9375rem` / 1.6 | 400 | `0` | prose |
-| `--prl-type-body-sm` | `0.8125rem` / 1.55 | 400 | `0` | secondary prose |
+| Token | Size | Weight | Tracking | Leading | Use |
+| --- | --- | --- | --- | --- | --- |
+| `--prl-type-display-1` | `clamp(2.5rem, 5vw, 4rem)` | 700 | `-0.03em` | 1.05 | page hero |
+| `--prl-type-display-2` | `clamp(1.875rem, 3.2vw, 2.75rem)` | 700 | `-0.025em` | 1.05 | section opener, `h1` |
+| `--prl-type-display-3` | `clamp(1.375rem, 2vw, 1.75rem)` | 600 | `-0.02em` | 1.3 | section title, `h2` |
+| `--prl-type-heading` | `1.375rem` (22px) | 600 | `-0.014em` | 1.2 | panel title, `h3` |
+| `--prl-type-body-lg` | `1.25rem` (20px) | 400 | `-0.014em` | 1.65 | lede, Coach conclusion |
+| `--prl-type-body` | `1.0625rem` (17px) | 400 | `-0.003em` | 1.65 | prose — the default |
+| `--prl-type-body-sm` | `0.9375rem` (15px) | 400 | `0` | 1.65 | secondary, captions, cells |
 
-Display type is **tight-tracked and uppercase-optional**. Tight tracking at large sizes is
-what makes a grotesk look engineered rather than merely big.
+**Tracking is a function of size, not of role**, and the ramp now says so all the way down:
+
+```css
+--prl-tracking-display-1: -0.03em;    /* 40-64px */
+--prl-tracking-display-2: -0.025em;   /* 30-44px */
+--prl-tracking-display-3: -0.02em;    /* 22-28px */
+--prl-tracking-heading:   -0.014em;   /* 20-22px */
+--prl-tracking-body:      -0.003em;   /* 17px    */
+--prl-tracking-flat:       0;         /* 15px and below */
+```
+
+It used to stop at `display-3`, so a 22px panel title borrowed the value for 28px and a 17px
+paragraph got nothing — over-tightened above, loose below, and the discontinuity is visible the
+moment a heading sits directly on top of its lede. Below the body size the direction reverses and
+the **label** tokens go positive: wide tracking is a legibility aid at small sizes and a
+legibility cost once the letterforms are big enough to read on their own.
 
 **Labels** — the technical voice:
 
 | Token | Size | Weight | Tracking | Transform |
 | --- | --- | --- | --- | --- |
-| `--prl-type-label` | `0.6875rem` | 500 | `0.09em` | uppercase |
-| `--prl-type-label-sm` | `0.625rem` | 500 | `0.11em` | uppercase |
-| `--prl-type-index` | `0.6875rem` | 400 | `0.14em` | tabular, mid-grey |
+| `--prl-type-label` | `0.8125rem` (13px, the floor) | 500 | `0.07em` | uppercase |
+| `--prl-type-label-sm` | `0.75rem` (12px, badge beside a label) | 500 | `0.09em` | uppercase |
+| `--prl-tracking-index` | applied at `--prl-type-label` | 400 | `0.12em` | tabular, mid-grey |
+
+There is deliberately **no `--prl-type-index` size token**: the index motif is the label size with
+its own tracking, and a second token holding the same number is a second thing to keep in step.
 
 **Metrics** — oversized numbers, the reason this system exists:
 
 | Token | Size | Weight | Tracking |
 | --- | --- | --- | --- |
-| `--prl-type-metric-hero` | `clamp(3rem, 7vw, 5.5rem)` | 700 | `-0.04em` |
+| `--prl-type-metric-hero` | `clamp(3rem, 7vw, 5.5rem)` | 700 | `-0.03em` |
 | `--prl-type-metric-lg` | `clamp(2rem, 3.6vw, 3rem)` | 700 | `-0.03em` |
-| `--prl-type-metric-md` | `1.5rem` | 600 | `-0.02em` |
-| `--prl-type-metric-sm` | `1.125rem` | 600 | `-0.01em` |
+| `--prl-type-metric-md` | `1.5rem` | 600 | `-0.03em` |
+| `--prl-type-metric-sm` | `1.125rem` | 600 | `-0.03em` |
 
 ### 3.3 The numeric rule — non-negotiable
 
-**Every figure that can change uses `font-variant-numeric: tabular-nums`.**
+**Every figure that can change uses `--prl-numeric`, and so does the document.**
 
 ```css
-.prl-metric__value { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+--prl-numeric: tabular-nums lining-nums;
+
+body       { font-variant-numeric: var(--prl-numeric); font-feature-settings: 'tnum' 1, 'lnum' 1; }
+th, td     { font-variant-numeric: var(--prl-numeric); }
+.prl-number{ font-variant-numeric: var(--prl-numeric); text-align: end; }
 ```
 
 Proportional digits change width as they change value, so a counting-up equity figure or a
 live pot jitters horizontally. That is not a polish issue: at a poker table, a number that
 moves while you are reading it is a number you misread. Tabular figures are also why a
 column of stacks aligns without manual padding.
+
+**`lining-nums` is the half that is usually forgotten.** Several faces in `--prl-font-sans`
+default to *old-style* figures next to lowercase, which puts a descending `4` and a short `1` in
+the middle of a stack size. `tabular-nums` alone does not fix that. Both are now stated in one
+token, so a component that restates the guarantee restates all of it — every one of the 24
+per-component restatements in `components.css` now reads `var(--prl-numeric)` rather than
+`tabular-nums`, which is how the second half reached them.
+
+**`th, td` restate it** even though `body` already sets it and inheritance would carry it down.
+That is not redundancy: any wrapper that sets `font-variant-numeric: normal` for a legitimate
+reason silently un-aligns every table below it, and the failure looks like a slightly ragged
+column rather than like a bug. A column is the one place the alignment is load-bearing — a stack
+of percentages that do not share a decimal position cannot be compared by eye, which is the whole
+reason a reader put them in a column.
+
+There is deliberately **no proportional counterpart token**. Tabular figures inside a sentence
+are slightly gappy, and that cost is paid knowingly: this app puts live figures inside prose, and
+an opt-out would eventually be applied to a paragraph whose numbers move.
 
 Metrics are always **value + unit + label**, in that visual order, with the unit at
 `--prl-type-label` beside the value and the label above it. A bare number is never shown.
@@ -288,34 +547,79 @@ An em/rem hybrid ramp, mirroring the reference's structure:
 `6` 1rem · `7` 1.25rem · `8` 1.5rem · `9` 2rem · `10` 2.5rem · `11` 3rem · `12` 4rem ·
 `13` 5rem · `14` 6.5rem · `15` 8rem · `16` 10rem
 
-**Section rhythm** is deliberately large: `--prl-section-y: clamp(4rem, 9vw, 8rem)`. The
-reference's confidence comes substantially from how much empty space it is willing to spend
-between sections, and copying the colours without the rhythm would miss the point.
+**Section rhythm** is deliberately large, but it is measured rather than generous:
+`--prl-section-y: clamp(3rem, 5vw, 5.5rem)`. This said `clamp(4rem, 9vw, 8rem)` and was wrong for
+a reason worth keeping — a section pads *both* block edges and sections stack, so every seam spent
+the value twice: a measured 257px of nothing on an 801px-tall viewport, which does not read as
+confidence, it reads as a page that failed to load. The intended amount is now the amount at the
+**seam** rather than at each edge.
 
 **Grid.** A 12-column grid inside `--prl-container: min(100% - 2 * var(--prl-gutter), 88rem)`
-with `--prl-gutter: clamp(1rem, 4vw, 2.5rem)`. Content that is prose caps at `68ch`.
+with `--prl-gutter: clamp(1rem, 4vw, 2.5rem)`. Prose caps at `--prl-measure: 60ch` — not 68ch.
+`ch` is the advance of `0`, which in this stack is wider than the average lowercase letter, so
+`68ch` measured out at 86 characters a line, well past the ~75 where the eye starts losing the
+line beginning on the return sweep. `60ch` is about 76 characters, which is the number the rule
+was always about.
 
 **Radii.** `--prl-radius-0: 0` · `-1: 2px` · `-2: 4px` · `-3: 8px` · `-pill: 999px`.
-Near-square is the default. `-pill` is for status chips only.
+Near-square is the default for SURFACES. **The material ladder uses `-3` for levels 3 and 4** — a
+floating pane is a physical object with a rounded edge and a lit hairline, and at `-1` the hairline
+reads as a mitre rather than as a bevel.
+
+**`-pill` is for controls and status chips, and it used to say "status chips only".** That sentence
+was written before the shell had any floating chrome in it, and the shipped product contradicted it
+in four places before this revision — `.prl-pill-group`, `.prl-nav__link`, `.prl-pillbar__cta` and
+`.prl-nav-trigger` are all capsules, because a floating navigation is a row of objects rather than a
+strip of tabs. Leaving the rule as written produced the defect it was supposed to prevent: on the
+home page the header's accent `PLAY` capsule sat directly above a 2px-radius `Start a hand`
+rectangle, and in one 1440px screenshot they read as two different products.
+
+The argument behind the old rule is preserved and is the reason the change is a capsule rather than
+a rounded rectangle: **a shape must be legible as deliberate at the size it is used at.** That is
+the same measurement that deleted the primary button's chamfer (§6.4) — at 100% on a 1440px
+viewport the chamfer read as a corner that had failed to render. A 999px radius on a 44px control is
+unambiguous at 100%; 2px is a rectangle with the corners sanded.
+
+Controls therefore share one set of metrics, declared as `--prl-control-*` at the head of section 5
+of `components.css` and spent by section 6 as well:
+
+| | |
+|---|---|
+| `--prl-control-h` | `--prl-target-min` (44px) — buttons, inputs, selects |
+| `--prl-control-radius` | `--prl-radius-pill` — every single-line control |
+| `--prl-control-radius-block` | `--prl-radius-3` — the textarea, which cannot be a capsule |
+| `--prl-control-pad-x` | `--prl-space-8` — a button's label is centred and short |
+| `--prl-control-pad-field` | `--prl-space-6` — a field's content is start-aligned and can be the longest `<option>` in a `<select>` |
+
+One set of names is what makes a row of mixed controls line up, and what stops a later change to
+the shape moving the buttons without the fields.
 
 **Borders.** `--prl-hairline: 1px solid var(--prl-line-subtle)`. Hairlines, not shadows,
 are how surfaces separate.
 
-### 4.1 No shadows for elevation
+### 4.1 Shadows are tokens, and only tokens
 
-There is no `--prl-shadow-*` token, deliberately. Depth comes from moving one step on the
-neutral ramp plus a hairline.
+**This section is superseded by §2.7, and the change is recorded rather than overwritten.** It
+used to read:
 
-**As shipped, `packages/ui` and `apps/web` contain zero `box-shadow` declarations — not one, not
-even for focus.** The focus ring is an `outline` (§7), which is the right primitive for it: an
-outline does not participate in layout, is not clipped by `overflow: hidden`, and is replaced
-wholesale under `forced-colors`, all of which a box-shadow ring gets wrong. So the rule is simply
-*no `box-shadow`*, with no carve-out to argue about. A `grep -rn box-shadow packages/ui/src
-apps/web/src` returning only prose is the check.
+> There is no `--prl-shadow-*` token, deliberately. Depth comes from moving one step on the
+> neutral ramp plus a hairline. As shipped, `packages/ui` and `apps/web` contain zero
+> `box-shadow` declarations — not one, not even for focus.
 
-Beyond taste, this is a performance decision: large blurred shadows on a table with six
-seats, community cards and a live panel are exactly the paint-heavy layers that cost frames
-on a mid-range laptop.
+The performance argument under that is correct and is preserved verbatim in §2.7.4: large blurred
+layers on a table with six seats, community cards and a live panel are exactly what costs frames
+on a mid-range laptop. What did not follow from it was a *system* — "one step on the ramp plus a
+hairline" gives one card style, and the app read as a single object repeated at a single height.
+
+What replaced the blanket ban is a narrower rule with more teeth: **a shadow may only be spent
+through `--prl-elevation-0..4` or `--prl-focus-ring`, never as a literal**, checked by
+`packages/ui/test/layout-guarantees.test.ts` across `packages/ui` *and* every `apps/web`
+stylesheet. The old rule never had to forbid an ad-hoc `0 2px 8px rgba(...)` in a component,
+because no shadow was allowed anywhere; this one does.
+
+The focus ring is still an `outline` and for the same reasons (§7): it does not participate in
+layout, is not clipped by `overflow: hidden`, and is replaced wholesale under `forced-colors`.
+What it gained is a second tone, as a `box-shadow`, which is a *supplement* — see §7.1.
 
 ---
 
@@ -337,6 +641,26 @@ on a mid-range laptop.
 
 The **in > out** asymmetry is taken from the reference (0.425s in / 0.375s out) and is what
 makes transitions feel considered: things arrive with weight and leave without ceremony.
+
+### 5.0 The second family: material motion
+
+The curves above answer *what changed* and *where did it come from*, and their timing is right
+for that. It is wrong for a **surface responding to a pointer**. A pill that takes 420ms to
+acknowledge a hover feels broken; 90ms with the signature curve reads as a jump cut, because
+`--prl-ease-standard` spends most of its duration settling.
+
+```css
+--prl-ease-material: cubic-bezier(0.4, 0, 0.2, 1);
+--prl-dur-fast: 150ms;   /* hover, active, a chip flipping state */
+--prl-dur-base: 200ms;   /* a surface changing level */
+--prl-dur-slow: 250ms;   /* a popover or a sheet arriving */
+```
+
+One symmetric curve, three durations in the 150–250ms band. The curve is the standard
+material/HIG interpolation — fast to leave, gentle to arrive, no overshoot — and it is the right
+one **precisely because it is unremarkable**. A state change should be *felt* and not *seen*; a
+signature easing on a hover is a signature you have to watch. Both families collapse to 1ms under
+`prefers-reduced-motion` (§5.3), in `tokens.css`, alongside the six original durations.
 
 ### 5.1 Motion must explain state, never decorate
 
@@ -390,7 +714,13 @@ hit-testable at the viewport centre.
 
 * Animate `transform` and `opacity` only. Never `width`, `height`, `top`, `left` or
   anything else that triggers layout.
-* No `filter: blur()` on anything that animates, and no backdrop-filter on a large surface.
+* No `filter: blur()` on anything that animates, and no `backdrop-filter` on a large surface —
+  see §2.7.4 for what "large" means now that the material ladder uses one, and for the single
+  full-width exception the app-shell header is. **`backdrop-filter` is
+  itself never animated or transitioned**, in either direction: it is re-evaluated against the
+  entire backdrop on every frame it changes, and it appears in no `transition` list in the
+  package. A pane that needs to arrive animates `opacity` and `transform`, with the filter already
+  in place.
 * `will-change` is applied on interaction start and removed on end, never left standing.
 * Reveals use `IntersectionObserver`, unobserving after the first trigger. No scroll
   listeners, no `getBoundingClientRect` in a scroll handler.
@@ -485,10 +815,53 @@ hard limits on what may be hidden:
 
 ### 6.4 Buttons
 
-* **Primary** — accent fill, `--prl-ink-900` text (§2.4 rule 1), 2px chamfer on the
-  top-right corner as the signature. One per view.
-* **Secondary** — transparent, `--prl-ink-400` hairline, accent hairline and text on hover.
-* **Ghost** — text only, accent on hover.
+All four families are `--prl-control-radius` capsules on `--prl-control-h`; see the **Radii** block
+in §4 for why, and for the metric tokens they share with the form controls in §6.4a.
+
+* **Primary** — accent fill on a `::before` plate, `--prl-text-on-accent` (§2.4 rule 1,
+  §2.4a — the pairing inverts with the theme), `--prl-elevation-1`, and a **sheen**: one stop of
+  `--prl-veil-8` at the top of the plate, reaching `transparent` before the halfway line. One per
+  view.
+
+  The chamfer is gone. It was a 2px diagonal cut on the top-right corner, judged at 100% on a
+  1440px viewport, and at that size it read as a corner that had failed to render rather than as a
+  signature — it looked deliberate only at 400%, which is the trap. It was also applied to the
+  primary and not the secondary, so a side-by-side pair showed one notched rectangle beside one
+  plain one. The `::before` plate survives it: `clip-path` clips an element's `outline` too, so the
+  fill lives on a pseudo-element at `z-index: -1` and the button's own box stays unclipped, which is
+  what keeps the focus ring whole.
+
+  **The sheen cannot move a measured ratio, and that is why it is spent through `--prl-veil-8`.**
+  The veil flips with the theme — `rgb(244 246 248 / 8%)` on dark, `rgb(16 20 26 / 6%)` on light —
+  so it lightens a bright fill carrying near-black ink and darkens a dark fill carrying white ink.
+  Contrast rises in both themes, and the untinted rest of the plate is exactly `--prl-accent-fill`,
+  the value `scripts/check-contrast.mjs` asserts at 9.39:1 dark / 6.97:1 light. The obvious
+  `rgb(255 255 255 / 8%)` improves dark and erodes light; this is the trap the token avoids.
+* **Secondary** — **L3 `floating` glass**: `--prl-glass-floating` with `--prl-glass-filter`,
+  `--prl-elevation-1`, and `--prl-line-strong` on all four edges. It was `background: transparent`
+  plus a hairline, which is a drawn rectangle rather than an object, and beside a filled primary it
+  read as absent rather than as subordinate. This family has no fill of its own to identify it, so
+  its border is the component boundary WCAG 1.4.11 is about and cannot take the primary's lit
+  hairline — every edge stays `--prl-line-strong`, which the gate asserts on all three floating
+  tints. Accent border and accent text on hover.
+* **Ghost** — text only: no fill, no border, no elevation. Subordinate by having none of the three
+  rather than by being a faint copy of the secondary. Accent on hover.
+* **Danger** — the secondary's glass with `--prl-adverse` for the border and the ink, so a
+  destructive control is recognisably the same object as the control beside it and differs only in
+  its colour and its word. Outline-only in both themes: a filled `--prl-adverse` cannot carry
+  legible text, because the light theme's rose is dark and neither ink-900 nor white clears 4.5:1
+  on it.
+* **States.** Hover moves fill and border; **press is a `translateY(1px)` and a darker fill, never
+  an elevation change.** `box-shadow` is one property, so a hover or active rule at (0,3,0) that set
+  an elevation would out-rank the `:focus-visible` rule at (0,2,0) that restates the focus halo, and
+  hovering a keyboard-focused button would silently delete half of its focus indicator. Elevation is
+  set once per family and restated beside the ring — `box-shadow: var(--prl-focus-ring),
+  var(--prl-elevation-1)`, ring first, because shadows paint in list order.
+* **Disabled** collapses to the opaque level below — flat, unblurred, unelevated, sheen removed,
+  `--prl-surface-inset` — never `opacity`. Fading a translucent control fades its label with the
+  surface AND lets more of the backdrop through, so it gets less legible in exactly the proportion
+  the backdrop is busy. `[aria-disabled="true"]` is styled beside `:disabled`, because an anchor
+  drawn as a button cannot carry the attribute the pseudo-class matches.
 * **Action bar buttons** (fold/check/call/bet/raise) are a distinct family: full-width in a
   row, larger target, each with its **cost printed in tabular figures** on the button. A
   player should never have to work out what a button will cost them.
@@ -500,7 +873,34 @@ hard limits on what may be hidden:
   height is a **table-visibility** constraint (§10.1), so it is spent deliberately: 462px stacked,
   325px reflowed at a desktop table, with nothing removed.
 * Minimum target 44×44 CSS px (exceeding WCAG 2.2's 24×24 floor, because these are
-  consequential and often used on a phone).
+  consequential and often used on a phone). The size modifiers narrow the **ink**, never the
+  target: `--sm` changes padding and type size only, and `--lg` is 3.5rem rather than the 4rem it
+  was — at 64px a capsule's straight section is shorter than its two end caps and the shape stops
+  reading as a capsule at all. `--md` is now declared as the default metrics, because four call
+  sites already wrote it against a modifier this stylesheet had never defined.
+
+### 6.4a Form controls
+
+Inputs, selects and the numeric field spend the same `--prl-control-*` metrics as the buttons —
+same height, same radius, same 1px `--prl-line-strong` boundary — so a row of mixed controls lines
+up. What separates them is **material, not shape**: a field is the recessed member of the pair
+(`--prl-surface-inset`, no elevation) against the button's raised one. You put something into a
+field and you press a button, and that reading is also what stops a row of eight controls looking
+like eight buttons.
+
+* The **textarea** is the one control that cannot be a capsule — its second line runs straight
+  through the end cap — so it takes `--prl-control-radius-block`, the same radius the material
+  ladder gives a floating pane.
+* The **select** keeps the platform's own arrow and gets one step more end padding than start
+  padding, because the engine draws that arrow flush to the padding edge and on a capsule it
+  otherwise lands inside the end cap's curve.
+* The **number input** keeps its native spinners, tabular figures and end alignment: the native
+  spinner already responds to arrow keys, respects `step` and is announced correctly, and a bet
+  sizer is the last place to reimplement stepping.
+* The **range** is a capsule track with a circular thumb at the full 44px target, and the track
+  grew one step so the knob is not a ball resting on a wire.
+* **Disabled is stated rather than inherited.** A field with no `:disabled` rule keeps its
+  `--prl-line-strong` boundary, which says "you may type here" at the one moment you may not.
 
 ### 6.5 Metric blocks
 
@@ -525,7 +925,10 @@ Deltas always carry an explicit `+`/`−` **and** a word, never colour alone.
 | 1.4.11 Non-text contrast | Meaningful borders use `--prl-ink-400` (4.34:1) or accent |
 | 1.4.1 Use of colour | Every semantic colour paired with a sign, glyph, label or pattern |
 | 2.1.1 Keyboard | Everything operable. Bet sizing is a slider **plus** a number input |
-| 2.4.7 Focus visible | `outline: 2px solid var(--prl-accent-300); outline-offset: 2px` — 12.77:1 on page. `:focus-visible`, never `:focus`, and **never removed** |
+| 2.4.7 Focus visible | Two-tone: `outline: 2px solid var(--prl-focus-color)` at `outline-offset: 2px`, plus a 1px `--prl-focus-halo` of the opposite polarity. 12.77:1 on the page ground, and proved against *every* backdrop — §7.1. `:focus-visible`, never `:focus`, and **never removed** |
+| 1.4.3 / 1.4.11 on glass | Every material tint measured over both bounding backdrops, worse of the two asserted — §2.7.2 |
+| 1.4.3 on composited stacks | Every element carrying text has its ancestors composited and measured in real Chrome, both themes, every route — §7.3 |
+| 1.4.12 / user preference | `prefers-reduced-transparency` and `prefers-contrast: more` both drop translucency for solid fills — §7.2 |
 | 2.4.11 Focus not obscured | Sticky nav has `scroll-padding-top` so a focused element is never behind it. No route pins a second surface to the bottom edge above 600px (§10.1) |
 | 2.4.3 Focus order, modal surfaces | A focus trap must cycle the **tabbable** set, not the focusable one — a radio group is ONE tab stop, at the *checked* radio. Cycling `focusable[length - 1]` traps only readers who happen to have selected the last radio. And because arrow keys move focus inside a group natively, with nothing for a `keydown` handler to cancel, Tab handling alone is not a trap: the sheet also pulls focus back from a `focusin` listener while it is open |
 | 2.5.8 Target size | 44×44 minimum |
@@ -537,6 +940,111 @@ Deltas always carry an explicit `+`/`−` **and** a word, never colour alone.
 form "ace of hearts"; decorative pips are `aria-hidden`. Every action button announces its
 cost ("call 50 units"). The board announces as a group: "community cards: queen of hearts,
 seven of hearts, two of clubs".
+
+### 7.1 The focus ring had to gain a second tone, and glass is why
+
+A single-colour ring is only ever as visible as its contrast with **what is behind it**, and
+`--prl-focus-offset` deliberately puts most of the ring's width on the backdrop rather than on the
+control. On a page of opaque panels that is fine. On a floating pane it is not, because the
+backdrop is not something this stylesheet owns: `accent-300` measures **1.52:1 against white**. On
+a pill lying over a playing-card face, the ring is not dim — it is absent.
+
+So the indicator is two-tone:
+
+```css
+--prl-focus-halo: var(--prl-ink-900);   /* light theme: #ffffff */
+--prl-focus-ring: 0 0 0 calc(offset + width + 1px) var(--prl-focus-halo);
+```
+
+The accent outline, plus a hairline of the opposite polarity immediately **outside** it and
+filling the offset gap immediately **inside** it — so both adjacencies carry the guarantee, which
+is what 1.4.11 actually asks for.
+
+**The claim is arithmetic, not aesthetic, and the gate proves it in closed form** rather than by
+sampling. A foreground of relative luminance `Lf` clears 3:1 against a backdrop of luminance `Lb`
+when `Lb ≤ (Lf + 0.05)/3 − 0.05` or `Lb ≥ 3(Lf + 0.05) − 0.05`, so each colour fails only strictly
+inside one open interval. The indicator is defeated exactly where the two intervals intersect:
+
+| Theme | Ring fails only for | Halo fails only for | Overlap |
+| --- | --- | --- | --- |
+| dark | `L ∈ (0.180, 2.018)` | `L ∈ (−0.032, 0.112)` | **empty** |
+| light | `L ∈ (−0.017, 0.246)` | `L ∈ (0.300, 3.100)` | **empty** |
+
+There is no backdrop in `[0, 1]` against which both tones disappear.
+
+The halo is a `box-shadow`, which means it is clipped by an ancestor's `overflow: hidden` and not
+painted under `forced-colors`. Both are accepted rather than hidden, because it is a
+**supplement**: in either case the indicator degrades to exactly the outline it was before, which
+is why the outline is still the primary tone. `box-shadow` is one property, so any rule giving an
+element an elevation must restate the ring beside it while focused —
+`box-shadow: var(--prl-focus-ring), var(--prl-elevation-2)`, ring first because shadows paint in
+list order — or the pane drops a level for as long as the keyboard is on it.
+
+### 7.2 Reduced transparency and increased contrast
+
+Two stated preferences, handled in `tokens.css` so no component needs an override.
+
+**`prefers-reduced-transparency: reduce`.** Translucency plus blur is a real cost for readers with
+low vision, migraine or vestibular sensitivity, which is why the switch is under Accessibility on
+macOS and iOS. Every glass tint collapses to the opaque surface one level below it, both filters
+go to `none`, and the wash goes to `none`. This is not a degraded fallback: it is the state this
+system was in before glass existed, and every ratio it produces is already asserted in §2.4.
+`--prl-glass-filter: none` is what makes the collapse complete — an opaque fill with a live
+`backdrop-filter` still *pays* for a blur nobody can see through.
+
+**`prefers-contrast: more`.** A superset, written out in full rather than referencing the block
+above, because a reader can ask for one preference without the other and a `var()` chain between
+two media queries resolves in cascade order rather than in the order the preferences were stated.
+Everything translucent goes solid, every decorative edge is promoted to the **meaningful** border
+token (`--prl-line-strong`, 4.34:1, from the edge tokens' ~1.5:1), `--prl-line-subtle` is promoted
+one step, and the focus ring goes from 2px to 3px.
+
+**`forced-colors: active`** additionally drops both filters and the wash: the palette is replaced
+wholesale so nothing can be seen through a pane, but the blur is still computed and still costs,
+and `background-image` survives forced-colors — an accent-tinted field under system-coloured text
+is precisely the author decoration that mode exists to remove.
+
+Both preference states are now **rendered and measured**, not only argued: §7.3 sweeps `/play` and
+`/learn` under each of them, in both themes.
+
+### 7.3 Contrast is measured on the composited background, not on a token pair
+
+A pair is two colours. A reader meets a **stack** — a tint over a tint over a gradient, with an
+`opacity` somewhere in the middle — and §2.4 cannot express one. `pnpm run design:contrast` closes
+that by walking the ancestor chain of every element carrying text, in real Chrome, on every route
+in both themes, compositing every layer the way a browser does (source-over in sRGB, as nested
+opacity groups, including each positioned `::before`/`::after` that covers the text — the plate
+under every seat at the table is an `::after`) and measuring the glyph against the result.
+
+Where the walk cannot finish it says so rather than guessing:
+
+| Verdict | When | What is asserted |
+| --- | --- | --- |
+| **exact** | the walk reached an opaque fill, or the page ground, with every layer a colour | the composited ratio |
+| **bounded** | the stack was still translucent when it crossed a floating or `backdrop-filter` element, or crossed a gradient | the **worse** of both bounding backdrops (§2.7.2's construction), and for a gradient the worst of its stop path |
+| **unmeasured** | a layer that is not a colour at all — a `url()` image, `background-clip: text`, a `mix-blend-mode` | nothing, and the run **fails**: an unmeasurable background under real text is the blind spot this pass exists to remove |
+| **exempt** | a disabled control (1.4.3 exempts inactive components) | nothing; measured and printed |
+
+The arithmetic is not trusted. A sample of rows is **probed against a real screenshot**: a 5×5
+patch is captured at a point inside the element that no glyph, no child box and no rounded corner
+covers, the painted pixel is compared with the prediction, and the ratio is re-measured on the
+pixel itself. On the current tree that is **10,884 text elements over 38 pages, and 145 probes of
+which every one agreed** — 99 matching the predicted composite exactly and 46 landing inside a
+bounded row's envelope. A probe that disagrees where no `box-shadow` can reach is a failure of the
+gate itself: the model has stopped predicting Chrome.
+
+**What this does not cover:** hover/focus/active states and per-element borders (asserted at the
+token layer, §2.4 and §7.1), `box-shadow` (a drop shadow paints over the surface *behind* the
+element casting it; every probe records whether one can reach it), and text overlapped by a
+non-ancestor sibling.
+
+**One number in `play.css` is wrong, and this pass is how we know.** The comment above
+`.prl-seat--folded` declines an `opacity` on folded seats with the table `1.0 → 5.95:1`,
+`0.9 → 4.09:1`, `0.8 → 3.10:1`. The composited measurement of that exact change is **4.74:1 and
+3.79:1** — the 0.9 step does not breach AA, the 0.8 step does. The declined table interpolates the
+two *luminances*; a browser composites `opacity` in gamma-encoded sRGB, which is what this gate
+does and what its probes confirm pixel-for-pixel. The conclusion (don't fade the plate) survives;
+the arithmetic under it does not.
 
 ---
 
@@ -579,9 +1087,11 @@ Five destinations, in learning order, with the numbered-system motif:
 05 REVIEW     hand history and analysis
 ```
 
-* Sticky header, `--prl-surface-page` at 92% with a hairline bottom, becoming opaque past
-  40px of scroll (a class toggled by `IntersectionObserver` on a sentinel — no scroll
-  listener).
+* Sticky header, `--prl-glass-floating` with a real `--prl-glass-filter` and a lit hairline
+  underneath, whose bottom edge is promoted from decorative to meaningful past 40px of scroll
+  (an attribute toggled by `IntersectionObserver` on a sentinel — no scroll listener). This
+  line used to read "`--prl-surface-page` at 92% … becoming opaque"; see §9.3 for what changed
+  and why the ghosting bug that produced the old wording cannot return through the new one.
 * Active destination marked by an accent underline **and** `aria-current="page"`.
 * Below 860px: a full-screen sheet, focus-trapped, `Escape` to close, opening with an accent
   wipe on `--prl-dur-in`.
@@ -608,26 +1118,99 @@ alone. There are no arrow glyphs: `content: "→"` in a pseudo-element is announ
 screen readers as "right arrow" between every step, and the ordered list plus the numerals
 already carry the ordering.
 
-### 9.2 The two app-shell tokens
+### 9.2 The app-shell tokens
 
-§11 rule 1 forbids one-off values, so the two numbers §9 states in prose are declared as tokens.
-Both live in `apps/web/src/app/globals.css` rather than in `tokens.css`, because they describe the
-**shell** rather than the system — no component outside that file has any use for either, and
-promoting them would invite one.
+§11 rule 1 forbids one-off values, so the numbers §9 states in prose are declared as tokens. They
+live in `apps/web/src/app/globals.css` rather than in `tokens.css`, because they describe the
+**shell** rather than the system — no component outside that file and `nav.css` has any use for
+them, and promoting them would invite one.
 
 | Token | Value | What it implements |
 | --- | --- | --- |
-| `--prl-shell-header-fill` | `color-mix(in srgb, var(--prl-surface-page) 92%, transparent)` | The header's resting surface: the page ground at 92%. `color-mix` rather than an `rgba()` literal, so it tracks whichever theme's page ground is in force instead of becoming a third hard-coded colour |
-| `--prl-shell-sentinel` | `var(--prl-space-10)` (2.5rem = 40px) | The scroll distance after which the header goes opaque, expressed as the **height of a sentinel element** rather than as a number in a JavaScript comparison |
+| `--prl-shell-nav-fill` | `var(--prl-surface-inset)` | The fill for a control that floats in the bar — the navigation pill, the units readout, the menu trigger. Opaque, two steps up the ramp from the strip's tint, so four controls read as objects lying on a sheet rather than as holes cut in it |
+| `--prl-shell-sentinel` | `var(--prl-space-10)` (2.5rem = 40px) | The scroll distance after which the header's edge is promoted, expressed as the **height of a sentinel element** rather than as a number in a JavaScript comparison |
+| `--prl-shell-field-falloff` | dark `rgb(0 0 0 / 55%)`, light `rgb(16 20 26 / 5%)` | The backdrop field's edge falloff. Two values because its direction is decided by contrast: away from the ink in each theme (§9.3) |
+| `--prl-shell-field` | four `radial-gradient()` layers | The backdrop field itself: three pools drawn with `--prl-wash-tint` / `--prl-wash-tint-2` and the falloff over them (§9.3) |
 
 The sentinel is the point of the second one. An `IntersectionObserver` watching a 40px-tall
 absolutely-positioned element at the top of the document reports the same fact a
 `scroll` handler would, off the main thread and only when the answer changes (§5.4) — and the
 threshold stays in the token system instead of becoming a literal in a comparison.
 
-There is deliberately **no `backdrop-filter`** on the header. A blur on a full-width strip that
-repaints on every scroll frame is one of the most expensive things a compositor can be asked
-for, and §5.4 rules it out on large surfaces.
+**`--prl-shell-header-fill` is gone.** It named the header's resting surface, first as the page
+ground at 92% and then as the page ground solid, and it is deleted rather than repointed at the
+glass because an alias hides a glass fill from the guard that exists to find one:
+`packages/ui/test/layout-guarantees.test.ts` matches `var(--prl-glass-*)` in a declaration block
+and fails it if no `backdrop-filter` sits beside it. A rule reading `background-color:
+var(--prl-shell-header-fill)` is invisible to that scan. The header strip now writes
+`var(--prl-glass-floating)` and both `backdrop-filter` declarations in the same block, in both
+`globals.css` and `nav.css`.
+
+### 9.3 The header strip is glass, and the page has a field under it
+
+This section used to say, in bold, that there is deliberately **no `backdrop-filter`** on the
+header strip, and that a blur "would not have fixed the ghosting bug anyway — it would only have
+made the ghost blurry at 92% opacity". The first half was a defensible trade. The second half was
+wrong, and correcting it is what this section is for.
+
+Ghosting is a **legibility** failure: the reader's complaint was that headings passing under the
+bar stayed readable, in the wrong place, as a second layer of type. Legibility is exactly what a
+blur destroys and exactly what opacity does not:
+
+| | destroys legibility | destroys colour |
+| --- | --- | --- |
+| 92% opacity | no | no |
+| `blur(20px) saturate(180%)` | **yes** | no — and keeping the colour is the point |
+
+So the strip is `--prl-glass-floating` with `--prl-glass-filter`, and the defect cannot return
+through it. The blur radius is larger than the x-height of every face in `--prl-font-sans` at
+every size in the ramp, so nothing that passes under the bar resolves into letterforms; it is
+blurred from the first paint at every scroll position, so there is no 40px window at the top of a
+page where it is translucent and unblurred, which is where the reader met the original bug; and
+under `prefers-reduced-transparency`, `prefers-contrast: more` and `forced-colors` the token layer
+resolves the fill to `--prl-surface-raised` and the filter to `none` **as a pair**, so the one
+combination that produces the defect — translucent fill, no blur — is not reachable.
+
+The performance argument in §2.7 is unchanged and is about a different thing: blur on surfaces
+that repaint under moving content, which is the table field with six seats and a live Coach panel.
+A `position: sticky` bar with `backdrop-filter` is promoted to its own compositor layer and
+re-composited rather than re-laid-out as the page scrolls. Nothing in the app animates or
+transitions a `backdrop-filter`.
+
+**The backdrop field.** Glass over a flat colour is a slightly different flat colour, which is why
+`--prl-page-wash` exists — and why it was not enough on its own. `base.css` paints it on `<body>`
+with `background-attachment: scroll` and both of its stops anchored near the top edge, so on any
+page longer than a viewport the varying part of the ground scrolls away: measured on `/terms` at
+1440×1200 it is gone by 700px of scroll, which is section 2 of a fourteen-section document.
+
+The shell therefore paints the field as `.prl-app::before` — one `position: fixed` layer at
+`z-index: -1`, the size of the viewport, promoted once and never repainted, never scrolled, never
+animated — and `globals.css` sets `body { background-image: none }` so the wash is not painted
+twice. (Two copies of a 7% tint composite to 13.5%, which is brighter than `--prl-wash-tint` and
+therefore brighter than the `--prl-surface-wash` §2.7 measures.)
+
+Its pools are drawn with `--prl-wash-tint` and `--prl-wash-tint-2` and **not** with brighter
+colours of the shell's invention, for the same reason: `scripts/check-contrast.mjs` derives
+`--prl-surface-wash` from the brightest stop of the wash and asserts every text pairing against
+it, so reusing those stops keeps that derived surface the true ceiling of the page ground. The
+falloff moves away from the ink in each theme, which only ever raises a ratio in dark; in light it
+spends headroom, so it was measured at the arithmetic worst case — every layer at full strength at
+one point, which the geometry does not actually produce — and clears the floors there:
+
+| | ground at worst case | text | secondary | muted / faint | line-strong |
+| --- | --- | --- | --- | --- | --- |
+| dark (pools at plateau, no falloff) | `#11222a` | 15.09:1 | 10.71:1 | 7.62:1 / 5.38:1 | 3.65:1 |
+| light (pools at plateau + full falloff) | `#d4dee2` | 13.47:1 | 7.08:1 | 4.66:1 | 3.27:1 |
+
+Floors are 4.5:1 for text and 3:1 for a meaningful border. `muted` in light is the row with the
+least headroom and is the one to re-measure if a stop moves.
+
+**The pills stay opaque.** Level 3 is for bounded panes, and a pill is one — but the strip is now
+the glass, so a pill in the same material would stack one tint on another and land within a
+rounding error of the sheet it sits on. They take `--prl-shell-nav-fill`, the lit hairline
+(`--prl-edge` / `--prl-edge-lit` / `--prl-edge-shade`) and `--prl-elevation-2` instead, which is
+the arrangement that reads as objects on a sheet. Every one of them that can take focus restates
+`box-shadow: var(--prl-focus-ring), var(--prl-elevation-2)` — see §2.7's composition rule.
 
 **Also of note:** a 2px rule is written as `var(--prl-space-1)` (0.125rem), never as
 `var(--prl-focus-width)`. Both resolve to 2px and only one of them means it; borrowing the focus
@@ -701,16 +1284,22 @@ not.**
 2. **Refactor before duplicating.** `packages/ui` already has `PlayingCard`, `CardRow`,
    `PokerTable`, `ActionBar`, `CoachPanel`, `EquityBar`, `StatTile`, `Callout`, `Formula`,
    `AssumptionList`, `UncertaintyNote`, `UnitsBadge`. Extend them.
-3. **Native CSS only.** No Tailwind, no CSS-in-JS, no preprocessor, no animation library.
+3. **Glass carries its blur, always.** A `--prl-glass-*` fill and a `backdrop-filter` go in the
+   same block, every time, including in a `:hover` block whose base rule already set one. A
+   translucent fill with no blur is the ghosting bug (§2.7.1), and
+   `packages/ui/test/layout-guarantees.test.ts` fails it. Glass is for bounded, floating surfaces
+   only; body text goes on level 2.
+4. **Native CSS only.** No Tailwind, no CSS-in-JS, no preprocessor, no animation library.
    The supply-chain policy makes every dependency a reviewed event; a utility-class
    framework is not worth one.
-4. **No remote assets.** No fonts, scripts, images or stylesheets from another origin. The
+5. **No remote assets.** No fonts, scripts, images or stylesheets from another origin. The
    CSP forbids it and so does this document.
-5. **Information beats aesthetics, always.** If a layout is prettier without the confidence
+6. **Information beats aesthetics, always.** If a layout is prettier without the confidence
    interval, the layout is wrong.
-6. **Test both themes and both motion settings.** Four combinations, all of which must be
-   legible and usable.
-7. Run **`pnpm run verify`** before claiming done. It is the release gate and it is the whole
+7. **Test both themes and both motion settings.** Four combinations, all of which must be
+   legible and usable — and now check the two transparency preferences as well (§7.2), which
+   `prefers-reduced-transparency` and `prefers-contrast` make trivially testable in DevTools.
+8. Run **`pnpm run verify`** before claiming done. It is the release gate and it is the whole
    list: fourteen gates including `lint`, `typecheck`, `build`, `test`, `design:contrast` and
    `test:a11y`, each reported `PASS`/`FAIL`, all of them run even after one fails. (This said
    *eleven*, which was the count when the line was written; the loop in `package.json` has since
@@ -723,7 +1312,10 @@ not.**
 
 ## 12. What is deliberately absent
 
-* **Shadow-based elevation.** §4.1.
+* **Ad-hoc shadows and unbounded blur.** A shadow may only come from `--prl-elevation-*` or
+  `--prl-focus-ring`; a `backdrop-filter` may only go on a small, bounded, static, already-promoted
+  element; and nothing on the table field takes either. §2.7.4 and §4.1. (This entry used to read
+  "shadow-based elevation" outright — see §4.1 for what changed and what did not.)
 * **A second font family.** One grotesk with four weights is enough, and a second family is
   a second thing to get wrong.
 * **Any celebration animation on winning a pot.** Chips move to the winner and the stack

@@ -1224,10 +1224,28 @@ async function checkSiteScopeOverHttp(origin) {
 // ===========================================================================
 
 /** Where a link is on the page, so it can be pressed rather than followed by script. */
+/**
+ * The centre of an element, in viewport coordinates, ready for a real mouse press.
+ *
+ * ## Why the scroll is `instant`
+ *
+ * `packages/ui/src/styles/reset.css` sets `scroll-behavior: smooth` globally, and
+ * `scrollIntoView`'s default `behavior: 'auto'` honours it. So the rect below was being read WHILE
+ * the page was still scrolling, and the press landed wherever the control had been mid-flight.
+ *
+ * That is exactly how this harness came to report a declaration that set no cookie: the button was
+ * found, the click was dispatched, and it hit nothing. Every HTTP-level check passed — the
+ * `Set-Cookie` was the right shape — because the failure was in the press, not the server.
+ *
+ * It was latent for as long as the control happened to be in view already, which made
+ * `scrollIntoView` a no-op and left no race to lose. A layout change that pushed it below the fold
+ * is what surfaced it — which is the worst way for a gate to go wrong: silently, on an edit that
+ * had nothing to do with it.
+ */
 const LINK_BOX = (selector) => `(() => {
   const link = document.querySelector(${JSON.stringify(selector)});
   if (link === null) return null;
-  link.scrollIntoView({ block: 'center' });
+  link.scrollIntoView({ block: 'center', behavior: 'instant' });
   const box = link.getBoundingClientRect();
   return { x: box.x + box.width / 2, y: box.y + box.height / 2, href: link.getAttribute('href') };
 })()`;

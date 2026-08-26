@@ -40,13 +40,19 @@
  *      pattern, a glyph, a sign or a word. Suits carry a letter, clean and dirty outs carry a
  *      hatch and a label, bar segments carry a pattern and a numeric readout, deltas carry a
  *      sign and a word, the active seat carries a chip and a ring.
- *   2. No shadow is used for elevation. Depth is one step on the surface ramp plus a hairline.
- *      There is no `box-shadow` in this package at all: the focus ring is an `outline`, which
- *      is the primitive that survives `overflow: hidden` and `forced-colors`.
+ *   2. Elevation is a five-level material ladder (section 4), and a shadow may only be spent
+ *      through an `--prl-elevation-*` token. A raw `box-shadow` literal in this file fails
+ *      `packages/ui/test/layout-guarantees.test.ts` - which is a tighter rule than the "no
+ *      box-shadow at all" it replaced, not a looser one. The focus ring is still an `outline`,
+ *      the primitive that survives `overflow: hidden` and `forced-colors`; what it gained is a
+ *      second tone, because a single-colour ring on a floating pane is only as visible as the
+ *      backdrop it does not own.
  *   3. Nothing interactive is smaller than `--prl-target-min` (44px). Where a control looks
  *      smaller than that, it is smaller only in its ink.
- *   4. Only `transform` and `opacity` are animated - never a layout property, never a blur.
- *      Colour transitions are permitted because they neither lay out nor composite badly.
+ *   4. Only `transform` and `opacity` are animated - never a layout property, never a blur, and
+ *      never `backdrop-filter`, which is re-evaluated against the whole backdrop on every frame
+ *      it changes. Colour transitions are permitted because they neither lay out nor composite
+ *      badly, and `box-shadow` is permitted between elevation levels for the same reason.
  */
 
 /* ==========================================================================================
@@ -311,14 +317,14 @@
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-regular);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   letter-spacing: var(--prl-tracking-index);
   line-height: var(--prl-leading-snug);
 }
 
 .prl-mono {
   font-family: var(--prl-font-mono);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
 }
 
 /* ==========================================================================================
@@ -392,7 +398,7 @@
   color: var(--prl-text);
   font-size: var(--prl-metric-size);
   font-weight: var(--prl-weight-bold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   font-feature-settings: "tnum" 1;
   letter-spacing: var(--prl-tracking-metric);
   line-height: var(--prl-leading-tight);
@@ -428,7 +434,7 @@
   gap: var(--prl-space-2);
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   line-height: var(--prl-leading-snug);
 }
 
@@ -456,12 +462,206 @@
 }
 
 /* ==========================================================================================
-   4. PANEL
+   4. MATERIALS - THE DEPTH LADDER
    ==========================================================================================
-   One step up the surface ramp plus a hairline. That is the entire elevation system: no blur,
-   no shadow, no glow. Beyond taste it is a performance decision - a six-seat table with a live
-   Coach panel is exactly the scene where large blurred layers cost frames on a mid-range
-   laptop.
+   The five levels declared in tokens.css, as classes. Read the MATERIALS block there first:
+   it carries the contrast argument, the performance argument, and the two rules.
+
+   WHAT REPLACED WHAT. This section used to be one rule - `.prl-panel`, one step up the surface
+   ramp plus a hairline - and the file's header called that "the entire elevation system". It
+   was not an elevation system; it was one card style, and a system that can only say "raised"
+   cannot distinguish a card holding prose from a toolbar travelling over content from a popover
+   floating above both. The performance reasoning attached to it was and is correct, and it is
+   preserved exactly: nothing on the table field takes a shadow or a blur, every blurred region
+   is small and bounded, no blurred layer is ever animated, and shadows may only be spent through
+   `--prl-elevation-*` (`layout-guarantees.test.ts` fails a raw `box-shadow` literal).
+
+   THE ONE RULE THAT IS MECHANICAL, AND WHY IT IS WORTH THE REPETITION
+
+     Wherever a glass FILL goes, `backdrop-filter` goes with it - in the same block, every
+     time, including in a `:hover` block whose base rule already set it.
+
+   A translucent fill with no blur is the ghosting bug this app shipped once: a 92%-opacity
+   header with no filter let the headings underneath read straight through it as a second layer
+   of type (see the header comment in `apps/web/src/styles/nav.css`). Blur plus saturate is the
+   legitimate fix, because it destroys the LEGIBILITY of the backdrop while keeping its colour;
+   opacity alone destroys neither. Restating the filter beside every fill costs nothing at
+   runtime - it is the same value, re-declared, not re-computed - and it turns "don't forget the
+   blur" from advice into something `layout-guarantees.test.ts` can read off a stylesheet.
+
+   FOUR PROPERTIES, ONE OBJECT. Each level changes material, elevation, border luminance and
+   radius together. Changing only the fill is what makes an interface look like cards stacked on
+   cards; changing all four is what makes it look like objects at different heights.
+   ========================================================================================== */
+
+/**
+ * The shared shape. Levels below add fill, edge and elevation.
+ *
+ * The lit hairline is one border with three colours: the block-start edge catches light, the
+ * block-end edge falls into shadow, and the inline edges sit between. That is what makes a pane
+ * read as a physical sheet rather than as a rectangle of a different colour, and it is a border
+ * rather than an inset shadow so that it survives `forced-colors`.
+ *
+ * The transition list is explicit and short on purpose. `backdrop-filter` is NOT in it and must
+ * never be: it is re-evaluated against the entire backdrop on every frame it changes, which is
+ * the one way to turn a cheap bounded blur into an expensive one.
+ */
+.prl-material {
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-2);
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    box-shadow var(--prl-dur-base) var(--prl-ease-material),
+    transform var(--prl-dur-fast) var(--prl-ease-material);
+}
+
+/**
+ * L1 GROUPED - a well that collects related rows.
+ *
+ * What separates it from L2 is the ABSENCE OF ELEVATION, not the fill. An unshadowed pane reads
+ * as part of the page; a shadowed one reads as an object lying on it. The fill does not do that
+ * work and cannot: in the light theme `--prl-surface-raised` is white on a grey page, so a
+ * grouped background is *brighter* than the ground it sits on. `--prl-elevation-0` is stated
+ * rather than omitted so that the level explicitly cancels any elevation it inherits.
+ */
+.prl-material--grouped {
+  border-color: var(--prl-edge);
+  background-color: var(--prl-surface-raised);
+  box-shadow: var(--prl-elevation-0);
+}
+
+/** L2 RAISED - the card, and the level BODY TEXT LIVES ON. Opaque on purpose: long prose over a
+    varying backdrop is a legibility problem no amount of tint solves. */
+.prl-material--raised {
+  background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
+}
+
+/**
+ * L3 FLOATING - bounded chrome that travels over content: pills, toolbars, chips, the action
+ * bar, a sticky summary. Labels, numbers and controls.
+ *
+ * `-webkit-backdrop-filter` is still required by Safari and is declared beside every use.
+ * `isolation: isolate` gives the pane its own stacking context, which is what stops a
+ * `backdrop-filter` sampling siblings that were never meant to be behind it.
+ */
+.prl-material--floating {
+  isolation: isolate;
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-glass-floating);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  box-shadow: var(--prl-elevation-2);
+}
+
+/** L4 OVERLAY - popovers, menus, sheets. May carry body text, which is why its tint is the
+    darker and more opaque of the two in dark mode rather than the lighter: the higher a pane
+    floats, the less it can rely on knowing what is behind it. */
+.prl-material--overlay {
+  isolation: isolate;
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-glass-overlay);
+  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
+  backdrop-filter: var(--prl-glass-filter-strong);
+  box-shadow: var(--prl-elevation-3);
+}
+
+/** L5 MODAL - the overlay material, one shadow step higher. The `--prl-scrim` behind it is what
+    makes it modal and belongs to whatever owns the dialog, not to the pane. */
+.prl-material--modal {
+  isolation: isolate;
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-glass-overlay);
+  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
+  backdrop-filter: var(--prl-glass-filter-strong);
+  box-shadow: var(--prl-elevation-4);
+}
+
+/**
+ * INTERACTIVE STATES ON GLASS.
+ *
+ * On an opaque surface a state is a colour change and that is the end of it. On glass it is
+ * harder, because the surface is partly whatever is behind it, and the obvious move - brighten
+ * the tint - erodes the contrast floor from underneath every piece of text on the pane. It did:
+ * the first hover tint here took `--prl-line-strong` to 2.71:1.
+ *
+ * So states move OPACITY as well as lightness. Hovering firms the glass (90% -> 94%), pressing
+ * firms it further (-> 97%) and drops the pane a level of elevation, which is the physical
+ * reading of a press and is also the direction that protects the floor rather than spending it.
+ * Every state is measured over both bounding backdrops by `scripts/check-contrast.mjs`.
+ *
+ * `translateY` and not `top`: transform composites, layout does not.
+ */
+.prl-material--floating.prl-material--interactive:hover {
+  border-color: var(--prl-edge-lit);
+  background-color: var(--prl-glass-floating-hover);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+}
+
+.prl-material--floating.prl-material--interactive:active {
+  background-color: var(--prl-glass-floating-active);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  box-shadow: var(--prl-elevation-1);
+  transform: translateY(1px);
+}
+
+.prl-material--overlay.prl-material--interactive:hover {
+  background-color: var(--prl-glass-overlay-hover);
+  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
+  backdrop-filter: var(--prl-glass-filter-strong);
+}
+
+/**
+ * The focus ring, restated with the elevation.
+ *
+ * `box-shadow` is one property: a focused pane that only set `var(--prl-focus-ring)` would drop
+ * its elevation for as long as the keyboard was on it, which reads as the pane falling over.
+ * The ring goes first because shadows paint in list order, first on top.
+ */
+.prl-material--floating:focus-visible,
+.prl-material--floating:has(:focus-visible) {
+  box-shadow: var(--prl-focus-ring), var(--prl-elevation-2);
+}
+
+.prl-material--overlay:focus-visible,
+.prl-material--overlay:has(:focus-visible) {
+  box-shadow: var(--prl-focus-ring), var(--prl-elevation-3);
+}
+
+/**
+ * DISABLED ON GLASS - drop a level, do not fade.
+ *
+ * `opacity` on a disabled pane is the usual shortcut and it is wrong twice over here: it fades
+ * the text with the surface, taking a 4.5:1 label towards 2:1, and on a translucent pane it
+ * ALSO lets more of the backdrop through, so a disabled control gets less legible in exactly
+ * the proportion the backdrop is busy. The material collapses to the opaque level below it
+ * instead - flat, unblurred, unelevated - which is a disabled control's honest description:
+ * it is not floating, because it is not going to do anything.
+ */
+.prl-material--floating:disabled,
+.prl-material--floating[aria-disabled="true"],
+.prl-material--overlay:disabled,
+.prl-material--overlay[aria-disabled="true"] {
+  border-color: var(--prl-line-subtle);
+  background-color: var(--prl-surface-raised);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: var(--prl-elevation-0);
+  color: var(--prl-text-disabled);
+  cursor: not-allowed;
+}
+
+/* ==========================================================================================
+   4b. PANEL
+   ==========================================================================================
+   The app's card, and now level 2 of the ladder above: opaque fill, lit hairline, one step of
+   elevation. It is not glass, and the restraint is the point - a panel is where prose and
+   tables live, and a wall of glass is worse than no glass.
    ========================================================================================== */
 
 .prl-panel {
@@ -469,17 +669,46 @@
   align-content: start;
   gap: var(--prl-space-6);
   padding: var(--prl-space-7);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-panel--inset {
   background-color: var(--prl-surface-inset);
 }
 
+/**
+ * A panel with no surface of its own. It is a grouping, not an object, so it takes no edge and
+ * no elevation either - a shadow under a transparent box is a shadow cast by nothing, which is
+ * the single most common way a depth system starts looking wrong.
+ */
 .prl-panel--quiet {
+  border-color: transparent;
   background-color: transparent;
+  box-shadow: var(--prl-elevation-0);
+}
+
+/** Level 3. For a panel that genuinely floats over content - a sticky summary, a rail that
+    travels. Not for a panel that is simply on the page. */
+.prl-panel--floating {
+  isolation: isolate;
+  background-color: var(--prl-glass-floating);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  box-shadow: var(--prl-elevation-2);
+}
+
+/** Level 4. For a panel presented as a popover or a sheet. */
+.prl-panel--overlay {
+  isolation: isolate;
+  background-color: var(--prl-glass-overlay);
+  -webkit-backdrop-filter: var(--prl-glass-filter-strong);
+  backdrop-filter: var(--prl-glass-filter-strong);
+  box-shadow: var(--prl-elevation-3);
 }
 
 /**
@@ -552,17 +781,70 @@
 }
 
 /* ==========================================================================================
-   5. BUTTONS
+   5. BUTTONS AND THE SHARED CONTROL METRICS
    ==========================================================================================
-   Four families and no more. Primary carries the signature chamfer and there is roughly one
-   per view: an accent that appears everywhere stops meaning "this matters".
+   Four families and no more. There is roughly one primary per view: an accent that appears
+   everywhere stops meaning "this matters".
 
-   THE CHAMFER IS DRAWN ON A PSEUDO-ELEMENT, NOT ON THE BUTTON. `clip-path` clips everything the
-   element paints, including its `outline` - so chamfering the button itself would cut a bite out
-   of the focus ring, which is the one thing in this package that may never be degraded. The fill
-   lives on a `::before` at `z-index: -1` inside an isolated stacking context; the button's own
-   box stays unclipped, so the ring is whole.
+   WHAT REPLACED WHAT, AND THE SCREENSHOT THAT SETTLED IT
+
+   These buttons were a 2px-radius rectangle with a flat fill. The floating header directly above
+   them is a row of `--prl-radius-pill` glass capsules, and in one 1440px screenshot of the home
+   page the header's `PLAY` capsule and the hero's `Start a hand` button read as two different
+   products: same accent, same label weight, entirely different object. That is the single most
+   visible inconsistency a first-time reader meets, because it is the first screen.
+
+   The system's own note beside `--prl-radius-*` says "near-square by default; pill is for status
+   chips only". That rule was written before the shell had any floating chrome in it. It is now
+   contradicted by the shipped product in four places (`.prl-pill-group`, `.prl-nav__link`,
+   `.prl-pillbar__cta`, `.prl-nav-trigger`), and a rule the product disagrees with in four places
+   is a rule that has already been superseded. What is preserved is the ARGUMENT behind it — that
+   a shape must be legible as deliberate at the size it is used at, which is exactly why the
+   chamfer was deleted from this file (see `.prl-btn--primary::before`). A 999px radius on a 44px
+   control is unambiguous at 100%; a 2px one is a rectangle with the corners sanded.
+
+   THE CHAMFER IS GONE AND THE PSEUDO-ELEMENT PLATE IS NOT. `clip-path` clips everything the
+   element paints, including its `outline`, so a clipped button would cut a bite out of the focus
+   ring — the one thing in this package that may never be degraded. The fill still lives on a
+   `::before` at `z-index: -1` inside an isolated stacking context; the button's own box stays
+   unclipped, so the ring is whole.
+
+   ONE SET OF METRICS FOR BUTTONS AND FIELDS. `--prl-control-*` below is spent by section 6 as
+   well, which is what makes a row of `button / input / select / chip` line up on one height and
+   one radius. It was not lining up before: a button was 2px and a chip was 999px in the same row.
    ========================================================================================== */
+
+/**
+ * THE CONTROL METRICS.
+ *
+ * Local custom properties in the sense the file header describes — component plumbing that
+ * resolves to a token — declared here rather than in `tokens.css` because that file belongs to
+ * another owner and because a value derived from THIS family belongs beside it. `nav.css` sets
+ * `--prl-pill-h` the same way and for the same reason.
+ *
+ * `--prl-control-h` is `--prl-target-min` and not a smaller number with a padded hit area: these
+ * controls are consequential and often used one-handed, and the size modifiers below narrow the
+ * INK rather than the target.
+ */
+:root {
+  --prl-control-h: var(--prl-target-min);
+  /* The capsule, at the same token the header's pills use — so the two are the same shape by
+     construction rather than by two people picking 999px on two different days. */
+  --prl-control-radius: var(--prl-radius-pill);
+  /* A multi-line surface cannot be a capsule: a textarea's second line would run past the curve.
+     `--prl-radius-3` is the radius the material ladder already gives a floating pane. */
+  --prl-control-radius-block: var(--prl-radius-3);
+  --prl-control-pad-x: var(--prl-space-8);
+  /**
+   * A field is padded one step tighter than a button, and the reason is measurable rather than
+   * aesthetic. A button's label is centred and short, so its padding is air around a word; a
+   * field's content is start-aligned and can be the longest option in a `<select>`. At the
+   * button's 1.5rem the Lab's topic filter lost the count off the end of
+   * "Fold equity and bluffing (1)" at 1280px, and the count is the most useful thing on that
+   * option. 1rem clears the capsule's end cap and gives the width back.
+   */
+  --prl-control-pad-field: var(--prl-space-6);
+}
 
 .prl-btn {
   position: relative;
@@ -570,22 +852,37 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--prl-space-3);
-  min-height: var(--prl-target-min);
-  min-width: var(--prl-target-min);
-  padding-inline: var(--prl-space-7);
+  gap: var(--prl-space-4);
+  min-height: var(--prl-control-h);
+  min-width: var(--prl-control-h);
+  padding-inline: var(--prl-control-pad-x);
   border: 1px solid transparent;
-  border-radius: var(--prl-radius-1);
+  border-radius: var(--prl-control-radius);
   color: var(--prl-text);
   font-size: var(--prl-type-body);
   font-weight: var(--prl-weight-medium);
+  /* A capsule reads as one object, so its label reads as one word-shape: the tiny negative
+     tracking the body carries is wrong on a centred, short, semibold run and opens it back to
+     the flat value. See the OPTICAL TRACKING block in tokens.css. */
+  letter-spacing: var(--prl-tracking-flat);
   line-height: var(--prl-leading-snug);
   text-align: center;
   text-decoration: none;
+  /**
+   * `transform` is in the list and `box-shadow` is not, and both omissions are deliberate.
+   *
+   * The press is a transform, which composites. No family below changes its elevation on hover
+   * or on press, because `box-shadow` is ONE property: a hover rule at (0,3,0) that set an
+   * elevation would out-rank the `:focus-visible` rule at (0,2,0) that restates the focus halo,
+   * and hovering a keyboard-focused button would silently delete half of its focus indicator.
+   * Elevation is therefore set once per family and restated beside the ring, and the states are
+   * carried by fill, border and movement — which is what a physical control does anyway.
+   */
   transition:
-    background-color var(--prl-dur-instant) var(--prl-ease-hover),
-    border-color var(--prl-dur-instant) var(--prl-ease-hover),
-    color var(--prl-dur-instant) var(--prl-ease-hover);
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    color var(--prl-dur-fast) var(--prl-ease-material),
+    transform var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 /**
@@ -597,14 +894,33 @@
  * leave `min-height` alone.
  */
 .prl-btn--sm {
-  padding-inline: var(--prl-space-5);
+  padding-inline: var(--prl-space-6);
   font-size: var(--prl-type-body-sm);
 }
 
+/**
+ * `--md` is the default, stated so the class is not a lie.
+ *
+ * Four call sites already write `prl-btn--md` (`learn/[lessonId]`, `QuizRunner`) against a
+ * modifier this file never defined, so it has been styling nothing. Declaring it as the default
+ * metrics costs one rule and means a reader who greps for it finds an answer.
+ */
+.prl-btn--md {
+  min-height: var(--prl-control-h);
+  padding-inline: var(--prl-control-pad-x);
+  font-size: var(--prl-type-body);
+}
+
+/**
+ * `--lg` was 4rem tall. That is a slab rather than a control: at 64px the capsule's straight
+ * section is shorter than its two end caps and the shape stops reading as a capsule at all.
+ * 3.5rem is the proportion the header's 44px pill has, one step up.
+ */
 .prl-btn--lg {
-  min-height: var(--prl-space-12);
-  padding-inline: var(--prl-space-9);
-  font-size: var(--prl-type-heading);
+  min-height: calc(var(--prl-space-11) + var(--prl-space-4)); /* 3.5rem */
+  padding-inline: var(--prl-space-10);
+  font-size: var(--prl-type-body-lg);
+  font-weight: var(--prl-weight-semibold);
 }
 
 .prl-btn--block {
@@ -613,9 +929,32 @@
 
 /* ---- primary ---------------------------------------------------------------------------- */
 
+/**
+ * The one filled control in the system, and the object the header's `PLAY` capsule is a copy of.
+ *
+ * The border is `--prl-accent-fill` so the plate has a crisp edge rather than an anti-aliased
+ * one, and the block-start edge is `--prl-edge-lit` — the lit hairline from the material ladder,
+ * spent here because on a FILLED control the border is decorative: the fill is what identifies
+ * the button, so §2.4 rule B's "a border that carries meaning must be `--prl-line-strong` or the
+ * accent" does not bind this edge. It binds every edge of the outline families below, and they
+ * keep `--prl-line-strong` on all four sides for exactly that reason.
+ */
 .prl-btn--primary {
+  border-color: var(--prl-accent-fill);
+  border-block-start-color: var(--prl-edge-lit);
+  box-shadow: var(--prl-elevation-1);
   color: var(--prl-text-on-accent);
   font-weight: var(--prl-weight-semibold);
+}
+
+/**
+ * The focus indicator, restated with the elevation. `box-shadow` is one property and `base.css`
+ * draws the halo with it at (0,1,0); this rule is (0,2,0) and later, so without it the halo would
+ * be silently deleted by the elevation above. Ring first — shadows paint in list order, first on
+ * top. See the composition rule beside `--prl-focus-ring` in tokens.css.
+ */
+.prl-btn--primary:focus-visible {
+  box-shadow: var(--prl-focus-ring), var(--prl-elevation-1);
 }
 
 /**
@@ -638,18 +977,62 @@
  * is never painted over, and it gives the hover transition something to animate that is not the
  * element's own background.
  */
+/**
+ * THE SHEEN, AND WHY IT CANNOT MOVE A MEASURED RATIO.
+ *
+ * A flat rectangle of one colour is the thing that made this button look like a slab. What
+ * replaces it is a single low-alpha stop at the top of the plate — the light falling on a
+ * physical object — and the token it is spent through is the reason the change is free.
+ *
+ * `--prl-veil-8` FLIPS with the theme: it is `rgb(244 246 248 / 8%)` on dark and
+ * `rgb(16 20 26 / 6%)` on light. On dark the fill is bright cyan carrying near-black ink, so a
+ * light veil raises the plate's luminance and the ink's contrast RISES. On light the fill is a
+ * dark teal carrying white ink, so a dark veil lowers the plate's luminance and the ink's
+ * contrast rises again. The gradient reaches `transparent` before the halfway line, so the rest
+ * of the plate is exactly `--prl-accent-fill` — the value `scripts/check-contrast.mjs` asserts
+ * at 9.39:1 dark / 6.97:1 light. Every pixel of this plate is therefore at or above the ratio
+ * the gate measures, in both themes, and no number in the design doc moves.
+ *
+ * A veil that did NOT flip would be wrong in one of the two themes, which is the trap: the
+ * obvious `rgb(255 255 255 / 8%)` improves dark and erodes light.
+ */
 .prl-btn--primary::before {
   content: "";
   position: absolute;
   z-index: -1;
   inset: 0;
-  border-radius: var(--prl-radius-1);
+  border-radius: inherit;
   background-color: var(--prl-accent-fill);
-  transition: background-color var(--prl-dur-instant) var(--prl-ease-hover);
+  background-image: linear-gradient(to bottom, var(--prl-veil-8), transparent 58%);
+  transition: background-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
+.prl-btn--primary:hover:not(:disabled) {
+  border-color: var(--prl-accent-400);
+}
+
+/**
+ * Hover moves the veil as well as the accent step, and the veil is the half that does the work in
+ * the light theme.
+ *
+ * tokens.css remaps the WHOLE accent ramp for light, and it collapses 400 and 500 onto the same
+ * `#0a6274` — so `background-color: var(--prl-accent-400)` is a no-op there and this button had
+ * no visible hover state at all in one of its two themes. Deepening the veil across the whole
+ * plate is visible in both, and it moves contrast in the safe direction in both for the reason
+ * the sheen does: `--prl-veil-8` is light on dark and dark on light.
+ */
 .prl-btn--primary:hover:not(:disabled)::before {
   background-color: var(--prl-accent-400);
+  background-image: linear-gradient(to bottom, var(--prl-veil-8), var(--prl-veil-4));
+}
+
+/**
+ * The press. A transform and a darker plate, never an elevation change — see the transition
+ * note on `.prl-btn`. 1px is small on purpose: a control that travels further than its own
+ * hairline reads as a lid rather than as a key.
+ */
+.prl-btn--primary:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .prl-btn--primary:active:not(:disabled)::before {
@@ -658,26 +1041,64 @@
 
 /* ---- secondary and ghost ---------------------------------------------------------------- */
 
-/** A hairline that carries meaning, so `--prl-line-strong` (4.34:1 dark / 4.17:1 light) rather
-    than the decorative `--prl-line`. On hover the border moves to the accent, which is also the
-    combination that stays over 3:1 on the hover and active surfaces. */
+/**
+ * SECONDARY IS REAL GLASS, AND THAT IS WHY IT LOOKS LIKE THE HEADER.
+ *
+ * It was `background-color: transparent` plus a hairline, which is a drawn rectangle rather than
+ * an object: nothing separated it from the page except a line, so beside a filled primary it read
+ * as absent rather than as subordinate.
+ *
+ * L3 `floating` is the level tokens.css gives to "bounded chrome that travels over content:
+ * pills, toolbars, chips", and a 44px capsule is precisely the bounded, small, already-promoted
+ * region the performance argument permits — the same material, from the same token, that
+ * `.prl-pill-group` uses two lines above it in the header. The fill and the filter are declared
+ * TOGETHER in every block including the hover and active ones, which is the ghosting rule
+ * `layout-guarantees.test.ts` reads off this file; `-webkit-backdrop-filter` is still required by
+ * Safari. Under `prefers-reduced-transparency` and `prefers-contrast: more`, tokens.css already
+ * resolves the fill to an opaque surface and the filter to `none`, so this degrades with no
+ * override here.
+ *
+ * All four edges stay `--prl-line-strong` (4.34:1 dark / 4.17:1 light, and asserted ON GLASS by
+ * the gate). This family has no fill of its own to identify it, so the border is the component
+ * boundary WCAG 1.4.11 is about, and the lit-hairline trick the primary uses is not available.
+ * On hover the border moves to the accent, which is the pairing that stays over 3:1 on the hover
+ * and active glass alike.
+ */
 .prl-btn--secondary {
   border-color: var(--prl-line-strong);
-  background-color: transparent;
+  background-color: var(--prl-glass-floating);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-btn--secondary:hover:not(:disabled) {
   border-color: var(--prl-accent-edge);
-  background-color: var(--prl-surface-hover);
+  background-color: var(--prl-glass-floating-hover);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
   color: var(--prl-accent-text);
 }
 
 .prl-btn--secondary:active:not(:disabled) {
-  background-color: var(--prl-surface-active);
+  background-color: var(--prl-glass-floating-active);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  transform: translateY(1px);
 }
 
+.prl-btn--secondary:focus-visible {
+  box-shadow: var(--prl-focus-ring), var(--prl-elevation-1);
+}
+
+/**
+ * TERTIARY. No fill, no border, no elevation — subordinate by having none of the three, rather
+ * than by being a faint copy of the secondary. It still takes the capsule and the full 44px
+ * target, so the hover fill arrives as the same shape as everything around it; before this the
+ * hover was a hard-cornered rectangle appearing under a rounded row.
+ */
 .prl-btn--ghost {
-  padding-inline: var(--prl-space-5);
+  padding-inline: var(--prl-space-6);
   background-color: transparent;
   color: var(--prl-text-secondary);
 }
@@ -687,34 +1108,78 @@
   color: var(--prl-accent-text);
 }
 
+.prl-btn--ghost:active:not(:disabled) {
+  background-color: var(--prl-surface-active);
+  transform: translateY(1px);
+}
+
 /**
  * Destructive, and outline-only in both themes on purpose. A filled `--prl-adverse` button
  * cannot carry legible text: ink-900 on the dark-theme rose is fine, but the light theme's rose
  * is dark and neither ink-900 nor white clears 4.5:1 on it. An outline plus the word in the
  * label is honest and measurable; a fill would be neither.
+ *
+ * It takes the secondary's glass so that a destructive control is recognisably the same OBJECT
+ * as the control beside it and differs only in its colour and its word. `--prl-adverse` is
+ * asserted on all three floating tints by the gate, so the ink is measured where it is used.
  */
 .prl-btn--danger {
   border-color: var(--prl-adverse);
-  background-color: transparent;
+  background-color: var(--prl-glass-floating);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  box-shadow: var(--prl-elevation-1);
   color: var(--prl-adverse);
 }
 
 .prl-btn--danger:hover:not(:disabled) {
   border-color: var(--prl-adverse);
-  background-color: var(--prl-surface-hover);
+  background-color: var(--prl-glass-floating-hover);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+}
+
+.prl-btn--danger:active:not(:disabled) {
+  background-color: var(--prl-glass-floating-active);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  transform: translateY(1px);
+}
+
+.prl-btn--danger:focus-visible {
+  box-shadow: var(--prl-focus-ring), var(--prl-elevation-1);
 }
 
 /* ---- states ----------------------------------------------------------------------------- */
 
-.prl-btn:disabled {
+/**
+ * DISABLED READS AS UNAVAILABLE, NOT AS BROKEN — and it is drawn the way the material ladder
+ * draws a disabled pane: drop to the opaque level below, do not fade.
+ *
+ * `opacity` is the usual shortcut and it is wrong twice on a translucent control: it fades the
+ * label with the surface, taking a 4.5:1 ratio towards 2:1, and it lets MORE of the backdrop
+ * through, so the control gets less legible in exactly the proportion the backdrop is busy. The
+ * material collapses instead — flat, unblurred, unelevated, sheen removed — which is a disabled
+ * control's honest description: it is not floating, because it is not going to do anything.
+ *
+ * `[aria-disabled="true"]` is listed beside `:disabled` because an anchor styled as a button
+ * cannot carry the attribute the pseudo-class matches.
+ */
+.prl-btn:disabled,
+.prl-btn[aria-disabled="true"] {
   border-color: var(--prl-line-subtle);
-  background-color: transparent;
+  background-color: var(--prl-surface-inset);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: var(--prl-elevation-0);
   color: var(--prl-text-disabled);
   cursor: not-allowed;
 }
 
-.prl-btn:disabled::before {
+.prl-btn:disabled::before,
+.prl-btn[aria-disabled="true"]::before {
   background-color: var(--prl-surface-inset);
+  background-image: none;
 }
 
 /**
@@ -727,12 +1192,19 @@
   cursor: progress;
 }
 
+/**
+ * The bar is INSET rather than full-bleed, and that is the capsule's doing: a strip running to
+ * `inset-inline: 0` on a 999px radius hangs outside the shape at both ends, which reads as a
+ * rendering fault rather than as progress. It is inset by the control's own end-cap radius, given
+ * the same radius as the control, and drawn at `--prl-space-1` (2px) so it is visible at 100%.
+ */
 .prl-btn[aria-busy="true"]::after {
   content: "";
   position: absolute;
-  inset-block-end: 0;
-  inset-inline: 0;
-  height: 1px;
+  inset-block-end: var(--prl-space-3);
+  inset-inline: var(--prl-control-pad-x);
+  height: var(--prl-space-1);
+  border-radius: var(--prl-control-radius);
   background-color: var(--prl-accent-edge);
   transform-origin: left center;
   animation: prl-btn-busy var(--prl-dur-count) var(--prl-ease-standard) infinite;
@@ -800,23 +1272,67 @@
   line-height: var(--prl-leading-snug);
 }
 
+/**
+ * THE FIELDS, ON THE BUTTONS' OWN METRICS.
+ *
+ * `--prl-control-h`, `--prl-control-radius` and `--prl-control-pad-x` are the same three
+ * properties `.prl-btn` spends, which is the entire point: the Lab's filter row, the bet sizer
+ * and every `.prl-btn-row` put a field and a button on one line, and they were 44px/2px beside
+ * 44px/2px before and would have been 44px/2px beside 44px/999px after. One set of names means a
+ * later change to the shape moves both at once and cannot move only one.
+ *
+ * The field is the RECESSED member of the pair: `--prl-surface-inset` with no elevation, against
+ * the button's raised material. That is the honest reading of the two — you put something into a
+ * field and you press a button — and it is also what stops a row of eight controls looking like
+ * eight buttons.
+ */
 .prl-input,
 .prl-select,
 .prl-textarea {
   width: 100%;
-  min-height: var(--prl-target-min);
-  padding: var(--prl-space-3) var(--prl-space-5);
+  min-height: var(--prl-control-h);
+  padding-block: var(--prl-space-3);
+  padding-inline: var(--prl-control-pad-field);
   border: 1px solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-1);
+  border-radius: var(--prl-control-radius);
   background-color: var(--prl-surface-inset);
   color: var(--prl-text);
   font-size: var(--prl-type-body);
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material);
+}
+
+/**
+ * A textarea is the one control here that cannot be a capsule: its second line runs straight
+ * through the end cap. `--prl-control-radius-block` is the material ladder's own floating radius,
+ * so the two shapes are visibly from the same family rather than from two decisions.
+ */
+.prl-textarea {
+  padding-block: var(--prl-space-5);
+  border-radius: var(--prl-control-radius-block);
+  line-height: var(--prl-leading-body);
+  resize: vertical;
 }
 
 .prl-input:hover:not(:disabled),
 .prl-select:hover:not(:disabled),
 .prl-textarea:hover:not(:disabled) {
   border-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-hover);
+}
+
+/**
+ * Disabled, stated rather than inherited. A field with no `:disabled` rule keeps its
+ * `--prl-line-strong` boundary, which says "you may type here" at the one moment you may not.
+ */
+.prl-input:disabled,
+.prl-select:disabled,
+.prl-textarea:disabled {
+  border-color: var(--prl-line-subtle);
+  background-color: var(--prl-surface-raised);
+  color: var(--prl-text-disabled);
+  cursor: not-allowed;
 }
 
 /**
@@ -846,7 +1362,7 @@
  * against the one on the button beside it.
  */
 .prl-number {
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   text-align: end;
 }
 
@@ -856,7 +1372,10 @@
  * recognise, on a form element that has to work in every browser this ships to.
  */
 .prl-select {
-  padding-inline-end: var(--prl-space-4);
+  /* The platform draws its arrow flush to the padding edge. On a 2px rectangle 8px of end padding
+     was enough; on a capsule the arrow lands inside the end cap's curve and looks bolted on, so
+     the end padding is a step wider than the start's. */
+  padding-inline-end: var(--prl-space-6);
 }
 
 /* ---- range ------------------------------------------------------------------------------- */
@@ -880,28 +1399,38 @@
   cursor: pointer;
 }
 
+/**
+ * The track is a capsule and the thumb is a circle, at the same radius token every other control
+ * in this section takes. A square knob in a square groove was the one control that still looked
+ * like a spreadsheet widget; a round knob is also the shape a thumb has on every platform this
+ * ships to, which is worth more than novelty on a control read by touch.
+ *
+ * The thumb keeps the full `--prl-target-min`. The track grows one step to `--prl-space-4` so the
+ * knob does not look like a ball resting on a wire.
+ */
 .prl-range::-webkit-slider-runnable-track {
-  height: var(--prl-space-3);
+  height: var(--prl-space-4);
   border: 1px solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-1);
+  border-radius: var(--prl-radius-pill);
   background-color: var(--prl-surface-inset);
 }
 
 .prl-range::-webkit-slider-thumb {
   width: var(--prl-target-min);
   height: var(--prl-target-min);
-  /* Pulls the 44px thumb back onto the centre line of a 6px track. */
-  margin-block-start: calc((var(--prl-space-3) - var(--prl-target-min)) / 2);
+  /* Pulls the 44px thumb back onto the centre line of an 8px track. */
+  margin-block-start: calc((var(--prl-space-4) - var(--prl-target-min)) / 2);
   border: 1px solid var(--prl-accent-edge);
-  border-radius: var(--prl-radius-1);
+  border-radius: var(--prl-radius-pill);
   background-color: var(--prl-accent-fill);
+  background-image: linear-gradient(to bottom, var(--prl-veil-8), transparent 58%);
   appearance: none;
 }
 
 .prl-range::-moz-range-track {
-  height: var(--prl-space-3);
+  height: var(--prl-space-4);
   border: 1px solid var(--prl-line-strong);
-  border-radius: var(--prl-radius-1);
+  border-radius: var(--prl-radius-pill);
   background-color: var(--prl-surface-inset);
 }
 
@@ -909,8 +1438,9 @@
   width: var(--prl-target-min);
   height: var(--prl-target-min);
   border: 1px solid var(--prl-accent-edge);
-  border-radius: var(--prl-radius-1);
+  border-radius: var(--prl-radius-pill);
   background-color: var(--prl-accent-fill);
+  background-image: linear-gradient(to bottom, var(--prl-veil-8), transparent 58%);
 }
 
 .prl-range:disabled {
@@ -1230,7 +1760,7 @@
 .prl-seat__stat-value {
   margin: 0;
   font-weight: var(--prl-weight-semibold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;
 }
 
@@ -1288,7 +1818,7 @@
   margin: 0;
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   text-align: start;
 }
 
@@ -1415,7 +1945,7 @@
   color: var(--prl-text);
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-semibold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   letter-spacing: normal;
   line-height: 1;
 }
@@ -1556,7 +2086,7 @@
  *   - the count is skipped entirely under reduced motion and for changes under one point.
  */
 .prl-count {
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   font-feature-settings: "tnum" 1;
 }
 
@@ -2029,7 +2559,7 @@
   color: var(--prl-text);
   font-family: var(--prl-font-mono);
   font-size: var(--prl-type-display-3);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   letter-spacing: var(--prl-tracking-display-3);
   line-height: var(--prl-leading-tight);
 }
@@ -2697,7 +3227,7 @@
 .prl-action-bar__price-value {
   font-size: var(--prl-type-metric-sm);
   font-weight: var(--prl-weight-semibold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   letter-spacing: var(--prl-tracking-metric);
   line-height: var(--prl-leading-tight);
 }
@@ -2754,7 +3284,7 @@
 .prl-action-btn__cost {
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   letter-spacing: var(--prl-tracking-label);
   text-transform: uppercase;
 }
@@ -2879,7 +3409,7 @@
 
 .prl-sizer__number {
   width: var(--prl-space-14);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   text-align: end;
 }
 
@@ -2955,7 +3485,7 @@
 
 .prl-sizer__readout-value {
   font-weight: var(--prl-weight-semibold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
 }
 
 .prl-sizer__bounds {
@@ -2965,7 +3495,7 @@
   max-width: none;
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
 }
 
 /**
@@ -3121,7 +3651,7 @@
   margin: 0;
   font-size: var(--prl-type-metric-md);
   font-weight: var(--prl-weight-bold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   letter-spacing: var(--prl-tracking-metric);
   line-height: var(--prl-leading-tight);
   overflow-wrap: break-word;
@@ -3216,7 +3746,7 @@
   margin: 0;
   font-size: var(--prl-type-metric-md);
   font-weight: var(--prl-weight-bold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   letter-spacing: var(--prl-tracking-metric);
   line-height: var(--prl-leading-tight);
 }
@@ -3286,12 +3816,68 @@
   text-align: start;
 }
 
+/**
+ * TABULAR FIGURES, RESTATED ON THE TABLE ITSELF.
+ *
+ * `base.css` already sets `font-variant-numeric: var(--prl-numeric)` on every `th` and `td`, so
+ * this is not new behaviour — it is the guarantee made local. This table is the one place in the
+ * app where three numeric columns are read DOWN rather than across, and a column of costs whose
+ * digits change width as they change value cannot be compared by eye, which is the entire reason
+ * a reader put them in a column. Restating it here means the guarantee survives the table being
+ * rendered inside a component that resets the property, and `--prl-numeric` carries `lining-nums`
+ * as well as `tabular-nums`: several faces in the stack default to OLD-STYLE figures next to
+ * lowercase, which puts a descending `4` in the middle of an EV.
+ */
+.prl-candidates__table {
+  font-variant-numeric: var(--prl-numeric);
+}
+
 .prl-candidates__table th,
 .prl-candidates__table td {
-  padding: var(--prl-space-3) var(--prl-space-5);
+  /* One step more block padding than before. Three of these rows are read against each other and
+     at `--prl-space-3` the rules were closer to the text than the text was to itself. */
+  padding: var(--prl-space-4) var(--prl-space-5);
   border-block-end: var(--prl-hairline);
   text-align: start;
   vertical-align: top;
+}
+
+/**
+ * The header rule is `--prl-line-strong` and the row rules stay decorative.
+ *
+ * A table with one weight of rule everywhere has no head: the eye finds the column names by
+ * reading them rather than by seeing where the data starts. This is the one border in the table
+ * that is doing structural work, so it is the one that gets the visible weight — and the `th`
+ * cells inside `thead` are the only ones it may go on, because `th[scope="row"]` is a data cell
+ * in every row of the body.
+ */
+.prl-candidates__table thead th {
+  border-block-end: 1px solid var(--prl-line-strong);
+}
+
+/**
+ * The two numeric columns end-align, so digits line up by place value.
+ *
+ * ## Why the selectors are `td.` and `th.` rather than bare classes
+ *
+ * `.prl-candidates__table td` above is (0,1,1) and sets `text-align: start`. A bare
+ * `.prl-candidates__cost` is (0,1,0) and **loses to it silently** — the declaration applies to
+ * nothing and the stylesheet reads as though the column were aligned. That is not hypothetical:
+ * `.prl-legend-table__figure` carried `text-align: end` from the day the file was written and
+ * never once applied, for exactly this reason, and the same trap was reproduced a second time in
+ * a new rule before anybody noticed the first.
+ *
+ * The element-qualified form is (0,1,1) and ties, and a later rule wins a tie — which is why this
+ * block sits below the one it has to beat rather than above it.
+ *
+ * The header cells are aligned with their columns by the same rule. A right-aligned column under
+ * a left-aligned name is the version of this that looks deliberate and is worse.
+ */
+td.prl-candidates__cost,
+td.prl-candidates__ev,
+.prl-candidates__table thead th:nth-child(2),
+.prl-candidates__table thead th:nth-child(3) {
+  text-align: end;
 }
 
 .prl-candidates__table th {
@@ -3303,19 +3889,43 @@
   white-space: nowrap;
 }
 
+/**
+ * The row-header cell is a DATA cell and takes the body ramp, not the column-name ramp.
+ *
+ * It was rendering as tracked uppercase small caps — "RAISE TO 120" — because
+ * `.prl-candidates__table th` is (0,1,1) and out-ranks `.prl-candidates__action` at (0,1,0), so
+ * the semibold that rule intended has never been applied and the uppercase intended for column
+ * names has been applied to the action words. Both are repaired here at (0,1,2) rather than by
+ * touching the class, which markup depends on.
+ */
+.prl-candidates__table tbody th {
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-flat);
+  text-transform: none;
+}
+
+/** The last row's rule is the table's own bottom edge, and a table needs no closing line: the
+    caption above it and the panel around it already bound it. */
+.prl-candidates__table tbody tr:last-child th,
+.prl-candidates__table tbody tr:last-child td {
+  border-block-end: 0;
+}
+
 .prl-candidates__action {
   font-weight: var(--prl-weight-semibold);
 }
 
 /** A grouped amount that wraps reads as two numbers, so the money columns never wrap. */
 .prl-candidates__cost {
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;
 }
 
 .prl-candidates__ev {
   font-weight: var(--prl-weight-semibold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;
 }
 
@@ -3498,7 +4108,7 @@
 
 .prl-equity-bar__value {
   font-weight: var(--prl-weight-semibold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;
 }
 
@@ -3545,7 +4155,7 @@
   gap: var(--prl-space-3);
   font-size: var(--prl-type-metric-sm);
   font-weight: var(--prl-weight-bold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   letter-spacing: var(--prl-tracking-metric);
   line-height: var(--prl-leading-tight);
 }
@@ -3654,7 +4264,7 @@
   background: none;
   font-family: var(--prl-font-mono);
   font-size: var(--prl-type-body-sm);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   line-height: var(--prl-leading-snug);
   white-space: pre-wrap;
   word-break: break-word;
@@ -3757,7 +4367,7 @@
   margin: 0;
   font-size: var(--prl-type-body-sm);
   font-weight: var(--prl-weight-semibold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
 }
 
 .prl-uncertainty__limitations {
@@ -3795,7 +4405,7 @@
   background-color: var(--prl-surface-inset);
   font-size: var(--prl-type-body-sm);
   font-weight: var(--prl-weight-semibold);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
   line-height: var(--prl-leading-snug);
 }
 

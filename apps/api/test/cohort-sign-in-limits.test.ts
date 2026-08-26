@@ -71,6 +71,7 @@
 
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import net from 'node:net';
 import { describe, it } from 'node:test';
 import type { UserKind } from '@prl/contracts';
 import type { FastifyInstance } from 'fastify';
@@ -1254,6 +1255,289 @@ describe('the OIDC GET routes and Fetch Metadata', () => {
           `${url}: an image load was treated the same as a navigation — the guard is not wired`,
         );
       }
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Property 2c — the outcome that has no status code
+// ---------------------------------------------------------------------------
+
+/**
+ * The lifecycle stage the failed-outcome budget was not enumerated against: the caller hangs up.
+ *
+ * The charge lives in an `onResponse` hook, and Fastify attaches its `onResponse` runner to the
+ * raw response's `finish` and `error` events (`lib/reply.js`, `setupResponseListeners`). A client
+ * that writes the request and then DESTROYS THE SOCKET produces neither. The handler keeps
+ * running — Node does not cancel it — so the token exchange still leaves this process, and the
+ * budget never hears about it.
+ *
+ * Measured against the code this block was written for, one address, `RATE_LIMIT_OIDC_MAX=400`
+ * so that only the failed-outcome budget could refuse:
+ *
+ *     start, then callback, read the answer      15 forced token exchanges, then 429
+ *     start, then callback, destroy the socket  120 forced token exchanges, never refused,
+ *                                               and a fresh /auth/oidc/start still answered 303
+ *
+ * 120 is where the loop stopped, not where the caller was refused. The one number the cohort
+ * change promised not to move was `curl --max-time 0.05` away from being unbounded.
+ *
+ * This is the one part of this file that needs a real socket. `app.inject` cannot reproduce it:
+ * light-my-request's response is a mock that always finishes, which is exactly why every earlier
+ * reading of this code came back clean. The listener is on 127.0.0.1 and talks to nothing.
+ */
+describe('a script that hangs up on its own callback', () => {
+  /** A refusing provider that counts what it was made to do. */
+  function countingRefusingRelyingParty(): { party: OidcRelyingParty; exchanges: () => number } {
+    let exchanges = 0;
+    return {
+      exchanges: () => exchanges,
+      party: {
+        discovery: () => Promise.reject(new Error('the counting relying party does not fetch discovery')),
+        authorizationUrl: (request) =>
+          Promise.resolve(
+            `${ISSUER}/authorize?state=${encodeURIComponent(request.state)}` +
+              `&nonce=${encodeURIComponent(request.nonce)}`,
+          ),
+        exchangeCode: async () => {
+          exchanges += 1;
+          // Long enough that the socket is gone before this settles, which is the case under test.
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          throw new Error('the provider refused this code');
+        },
+        verifyIdToken: () => Promise.reject(new Error('no token was ever obtained')),
+      },
+    };
+  }
+
+  /** Writes one GET and destroys the socket without ever reading the answer. */
+  function sendAndHangUp(port: number, path: string, cookie: string | null): Promise<void> {
+    return new Promise((resolve) => {
+      const socket = net.connect(port, '127.0.0.1', () => {
+        const cookieLine = cookie === null ? '' : `Cookie: ${cookie}\r\n`;
+        socket.write(`GET ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\n${cookieLine}Connection: close\r\n\r\n`);
+        setTimeout(() => {
+          socket.destroy();
+          resolve();
+        }, 15);
+      });
+      socket.on('error', () => resolve());
+    });
+  }
+
+  async function listening(
+    config: AppConfig,
+    relyingParty: OidcRelyingParty,
+  ): Promise<{ app: FastifyInstance; port: number }> {
+    const { app } = await harness(config, relyingParty);
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    const address = app.server.address();
+    assert.ok(address !== null && typeof address !== 'string', 'the probe needs a bound port');
+    return { app, port: address.port };
+  }
+
+  it('is still refused at the shipped fifteen forced exchanges (REGRESSION)', async () => {
+    // The ceiling is raised right out of the way so that the ONLY counter that can refuse this
+    // caller is the failed-outcome budget. Without that, a pass would prove nothing: at the
+    // shipped 60 the ceiling refuses at 60 and the budget could still be charging nothing.
+    const config = testConfig({ RATE_LIMIT_OIDC_MAX: '400' });
+    const counting = countingRefusingRelyingParty();
+    const { app, port } = await listening(config, counting.party);
+    try {
+      const base = `http://127.0.0.1:${String(port)}`;
+      for (let round = 0; round < config.rateLimit.oidcFailureMax * 3; round += 1) {
+        const start = await fetch(`${base}/api/v1/auth/oidc/start`, { redirect: 'manual' });
+        if (start.status !== 303) break;
+        const state = new URL(String(start.headers.get('location'))).searchParams.get('state');
+        const attemptCookie = start.headers
+          .getSetCookie()
+          .find((entry) => entry.startsWith('prl_oidc=') || entry.startsWith('__Host-prl_oidc='));
+        assert.ok(state !== null && attemptCookie !== undefined, 'a 303 start carries a state and a cookie');
+        await sendAndHangUp(
+          port,
+          `/api/v1/auth/oidc/callback?code=c-${String(round)}&state=${encodeURIComponent(state)}`,
+          attemptCookie.split(';')[0] ?? null,
+        );
+      }
+      // The aborted requests are still in flight; the charge lands when the socket closes.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      assert.equal(
+        counting.exchanges(),
+        config.rateLimit.oidcFailureMax,
+        `a script that hangs up forced ${String(counting.exchanges())} token-endpoint exchanges ` +
+          `from one address; the shipped configuration permits ${String(config.rateLimit.oidcFailureMax)}. ` +
+          'An outcome the caller declines to wait for is still an outcome',
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  /*
+   * There is deliberately NO separate positive control here, and that is worth stating rather
+   * than leaving as an omission.
+   *
+   * The assertion above is an EXACT equality, so it is two-sided on its own: a fix that charges
+   * nothing fails it at 45, and a fix that charges too eagerly fails it below fifteen. The other
+   * degenerate fix — charging every abort whether or not the request ever reached the handler —
+   * was tried against this file and is *behaviourally identical* here, because every stage above
+   * the handler on these routes answers from memory in microseconds and so cannot be aborted
+   * mid-flight. The gate on `chargeableOidcFailures` in `chargeAbandonedOutcome` is therefore
+   * belt-and-braces rather than something a test can observe, and it is not claimed as more.
+   *
+   * "Still charges a start that fails inside the handler" above is the control that catches a
+   * fix satisfied by never charging at all.
+   */
+});
+
+// ---------------------------------------------------------------------------
+// Property 2d — the COUNTER above the budgets is a third party's too
+// ---------------------------------------------------------------------------
+
+/**
+ * Two fixes went onto the budgets and nobody moved the counter above them.
+ *
+ * `@fastify/rate-limit` attaches its route hook at `onRequest`, one stage above `preValidation`
+ * and two above `preHandler`. So the cohort CEILING — `oidcMax`, 60 per 60 s, keyed on the same
+ * hashed address for a whole campus — was spent by a cross-site request before the schema looked
+ * at it and long before `refuseNonNavigationOidc` refused it. Measured against the code that had
+ * that guard at `preHandler`:
+ *
+ *     60 cross-site <img> loads of /auth/oidc/start     400 x60 (the guard refused every one)
+ *       -> attempt rows written                          0
+ *       -> the victim's own /auth/oidc/start             429, retryAfterSeconds 60
+ *
+ *     60 cross-site <img> loads of /auth/oidc/callback   400 x60 (refused by the SCHEMA: no query
+ *                                                        at all, so no hook of ours ever ran)
+ *       -> the victim's own /auth/oidc/callback          429, retryAfterSeconds 60
+ *
+ * Sixty image tags, no session, no CSRF token, no valid query, and a whole NAT is refused sign-in
+ * for the rest of the window — renewable every window for as long as the page is open. The guard
+ * now runs at `onRequest`, which `@fastify/rate-limit` appends its own hook AFTER, so it is above
+ * both the ceiling and the schema.
+ */
+describe('a hostile page spending the victim address’s SIGN-IN CEILING', () => {
+  const CROSS_SITE_SUBRESOURCE: Readonly<Record<string, string>> = {
+    origin: 'https://evil.test',
+    referer: 'https://evil.test/',
+    'sec-fetch-site': 'cross-site',
+    'sec-fetch-mode': 'no-cors',
+    'sec-fetch-dest': 'image',
+  };
+
+  it('cannot spend the start route’s ceiling with subresource loads (REGRESSION)', async () => {
+    const config = testConfig();
+    const { app } = await harness(config, cohortRelyingParty());
+    try {
+      const statuses: number[] = [];
+      // A full ceiling's worth. The earlier cross-site tests loop `oidcFailureMax + 5` = 20,
+      // which is under 60 and is the only reason they were green over this.
+      for (let attempt = 0; attempt < config.rateLimit.oidcMax; attempt += 1) {
+        const response = await app.inject({
+          method: 'GET',
+          url: '/api/v1/auth/oidc/start',
+          headers: CROSS_SITE_SUBRESOURCE,
+        });
+        statuses.push(response.statusCode);
+      }
+      assert.ok(
+        statuses.every((status) => status === 400),
+        `the subresource loads must all be refused, or this asserts nothing: ${statuses.join(',')}`,
+      );
+      const victim = await app.inject({ method: 'GET', url: '/api/v1/auth/oidc/start' });
+      assert.equal(
+        victim.statusCode,
+        303,
+        `${String(config.rateLimit.oidcMax)} cross-site image loads spent the victim address's ` +
+          `sign-in ceiling: ${victim.payload}`,
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('cannot spend the callback route’s ceiling either, above the schema (REGRESSION)', async () => {
+    const config = testConfig();
+    const { app } = await harness(config, cohortRelyingParty());
+    try {
+      // No query string at all, which is what `<img src=".../auth/oidc/callback">` produces. The
+      // schema refuses it, and the schema runs above every `preHandler` — so only a guard at
+      // `onRequest` can keep this off the victim's ceiling.
+      for (let attempt = 0; attempt < config.rateLimit.oidcMax; attempt += 1) {
+        const response = await app.inject({
+          method: 'GET',
+          url: '/api/v1/auth/oidc/callback',
+          headers: CROSS_SITE_SUBRESOURCE,
+        });
+        assert.equal(response.statusCode, 400, response.payload);
+      }
+      // The whole flow, not just the start: the callback is the half this attack denies.
+      const outcome = await signIn(app);
+      assert.equal(
+        outcome.callbackStatus,
+        303,
+        `${String(config.rateLimit.oidcMax)} cross-site image loads of the callback denied a real ` +
+          `learner the second half of their sign-in (start ${String(outcome.startStatus)}, ` +
+          `callback ${String(outcome.callbackStatus)})`,
+      );
+      assert.ok(outcome.sessionIssued, 'the learner must end up with a session');
+    } finally {
+      await app.close();
+    }
+  });
+
+  /**
+   * The positive control. "Do not spend the ceiling" is trivially satisfied by not having a
+   * ceiling, so this asserts the ceiling is still there and still doing the counting.
+   *
+   * Asserted on the LIMITER'S OWN SIGNATURE rather than on "the 61st request is refused", because
+   * the first draft did the latter and was decoration: `oidcUnredeemedStarts` also refuses at
+   * `oidcMax`, so a route with `config: { rateLimit: false }` still produced a refusal at
+   * exactly 60 and the test stayed green over a deleted ceiling. The two counters are told apart
+   * by the wait they hand back — the ceiling's window is 60 s and the unredeemed budget's is the
+   * attempt TTL, ten minutes — and by `x-ratelimit-*`, which only the limiter sets.
+   */
+  it('still counts an ordinary caller against that ceiling — the positive control', async () => {
+    const config = testConfig();
+    const { app } = await harness(config, cohortRelyingParty());
+    try {
+      const first = await app.inject({ method: 'GET', url: '/api/v1/auth/oidc/start' });
+      assert.equal(
+        first.headers['x-ratelimit-limit'],
+        String(config.rateLimit.oidcMax),
+        'the route limiter did not run for an ordinary caller: the ceiling is gone',
+      );
+      assert.equal(
+        first.headers['x-ratelimit-remaining'],
+        String(config.rateLimit.oidcMax - 1),
+        'the route limiter ran without counting',
+      );
+
+      const statuses: number[] = [first.statusCode];
+      let last = first;
+      for (let attempt = 1; attempt <= config.rateLimit.oidcMax; attempt += 1) {
+        last = await app.inject({ method: 'GET', url: '/api/v1/auth/oidc/start' });
+        statuses.push(last.statusCode);
+      }
+      assert.equal(
+        statuses.filter((status) => status === 303).length,
+        config.rateLimit.oidcMax,
+        `the ceiling stopped counting ordinary callers: ${statuses.join(',')}`,
+      );
+      assert.equal(
+        last.statusCode,
+        429,
+        `the caller past the ceiling must be refused: ${statuses.join(',')}`,
+      );
+      assert.equal(
+        retryAfterSeconds(last.payload),
+        config.rateLimit.oidcWindowMs / 1_000,
+        'the refusal came from a budget other than the ceiling, so the ceiling is not what stopped ' +
+          'this caller — see the note above this test',
+      );
     } finally {
       await app.close();
     }

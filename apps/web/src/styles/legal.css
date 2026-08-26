@@ -44,26 +44,82 @@
    A legal document is read, not scanned, so it is one column at the reading measure rather than
    the multi-column grids the rest of the app uses. `--prl-measure` is the system's own line-length
    ceiling; anything wider is where a reader loses their place between lines.
+
+   WHAT WAS WRONG WITH THAT, AND WHY THE FIX IS ON THE CONTAINER
+
+   The measure was right and its PLACEMENT was not. These routes render the column inside
+   `.prl-container`, which is 88rem — 1360px on a laptop — so a 728px column of prose sat hard
+   against the left edge with 630px of empty page beside it for fourteen sections. That is not
+   restraint, it is a document that has been left in a layout meant for a dashboard, and it is the
+   single reason these pages read as the plainest surface in the app: nothing is wrong with any
+   line of them, and the shape of the page says nobody set it.
+
+   A document is set on its own page. So the container is narrowed for the routes that hold a
+   legal column, and because `.prl-container` is already `margin-inline: auto` that one declaration
+   centres the whole document — the opener above it included, which is what keeps the `h1`, the
+   standfirst and the body on one axis instead of splitting the page in two.
+
+   `:has()` rather than a new class on the markup. There is no markup change in this work — the web
+   tests and the accessibility-tree assertions read these class names — and the relationship is a
+   real one to state: this container is narrow BECAUSE it holds a document. A class would say the
+   same thing one step further from the fact.
    ========================================================================================== */
+
+/**
+ * The width is derived from the measure rather than taken from `--prl-container-narrow`, and the
+ * difference is visible: `--prl-container-narrow` is 60rem (960px) and the column inside it is
+ * 60ch (about 728px at the reading size), which leaves 230px of dead space down one side of a
+ * centred document — the same defect as before, one third the size. A page whose width IS its
+ * column plus a margin has nothing left over to look unbalanced.
+ *
+ * `--prl-space-9` on each side rather than the gutter, because this is the document's own margin
+ * and not the app's: it stays constant as the viewport grows, which is what makes the block read
+ * as a sheet of paper rather than as a fluid layout that happens to have stopped.
+ */
+.prl-container:has(> .prl-legal),
+.prl-container:has(> .prl-gate) {
+  width: min(100% - 2 * var(--prl-gutter), calc(var(--prl-measure) + 2 * var(--prl-space-9)));
+}
 
 .prl-legal {
   display: grid;
-  gap: var(--prl-space-10);
+  /* The seam between two sections of a document, which is a bigger unit than the seam between two
+     rows of a panel. `--prl-space-10` was the same value the paragraphs inside a section were
+     nearly getting, so a fourteen-section document read as one undifferentiated column. */
+  gap: var(--prl-space-12);
   max-width: var(--prl-measure);
-  padding-block: var(--prl-space-10);
+  padding-block: var(--prl-space-11) var(--prl-space-10);
+}
+
+/**
+ * The section rule.
+ *
+ * A hairline above every section but the first, at the section's own gap. It is the cheapest thing
+ * that turns a wall into a document: a reader scanning for §7 can see where §6 ended without
+ * reading either. `:not(:first-child)` rather than `+` so it survives a section being wrapped, and
+ * the padding is inside the rule so the hairline sits in the middle of the seam rather than
+ * against the heading below it.
+ */
+.prl-legal__section:not(:first-of-type) {
+  padding-block-start: var(--prl-space-10);
+  border-block-start: var(--prl-hairline);
 }
 
 .prl-legal__section {
   display: grid;
-  gap: var(--prl-space-5);
+  gap: var(--prl-space-6);
 }
 
+/* Tight to the paragraph it introduces, loose from the section above it — the same proximity rule
+   the page opener is built on. The grid gap is the tight value; the air above the heading is the
+   section seam and is spent by the rule above. */
 .prl-legal__section h2 {
   margin: 0;
+  max-width: var(--prl-measure);
 }
 
 .prl-legal__section h3 {
-  margin-block: var(--prl-space-6) 0;
+  margin-block: var(--prl-space-7) 0;
 }
 
 /** Paragraph rhythm inside a document, matching `.prl-prose` without inheriting its width rules. */
@@ -78,6 +134,20 @@
   line-height: var(--prl-leading-body);
 }
 
+/**
+ * The opening paragraph of the document, set one step larger.
+ *
+ * Not a decorative flourish: the first section of every one of these pages is the one that says
+ * what the document is and how much weight to give it, and a reader who reads only one paragraph
+ * should read that one. It is the same `--prl-type-body-lg` lede voice the page opener's
+ * standfirst uses, so the two read as one opening rather than as two.
+ */
+.prl-legal__section:first-of-type > p:first-of-type {
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-lg);
+  letter-spacing: var(--prl-tracking-heading);
+}
+
 /* ==========================================================================================
    2. THE DOCUMENT'S OWN METADATA
    ==========================================================================================
@@ -86,14 +156,24 @@
    not after.
    ========================================================================================== */
 
+/**
+ * Level 1 of the material ladder: `--prl-surface-raised`, the lit hairline, and NO elevation. The
+ * L1/L2 distinction in `tokens.css` is the absence of a shadow rather than the fill, and this is
+ * the textbook L1 — "a well that collects related rows" is a literal description of a `<dl>` of
+ * five metadata pairs. `--prl-elevation-0` is stated rather than omitted so the level cancels any
+ * elevation it might inherit rather than merely not adding one.
+ */
 .prl-legal__meta {
   display: grid;
-  gap: var(--prl-space-3) var(--prl-space-6);
+  gap: var(--prl-space-4) var(--prl-space-8);
   margin: 0;
-  padding: var(--prl-space-6);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-1);
+  padding: var(--prl-space-7) var(--prl-space-8);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
+  box-shadow: var(--prl-elevation-0);
 }
 
 .prl-legal__meta dt {
@@ -104,10 +184,18 @@
   text-transform: uppercase;
 }
 
+/**
+ * The values are the app's numeric voice, not prose: a revision string, three dates and an
+ * operator name, every one of which is a fact you look up rather than read. `--prl-numeric` is the
+ * token that carries both halves of that guarantee (`tabular-nums lining-nums`), restated here for
+ * the reason `base.css` gives for restating it in components — so it survives being read outside
+ * the stylesheet that sets the document default.
+ */
 .prl-legal__meta dd {
   margin: 0;
   color: var(--prl-text);
   font-size: var(--prl-type-body-sm);
+  font-variant-numeric: var(--prl-numeric);
   line-height: var(--prl-leading-snug);
 }
 
@@ -126,12 +214,17 @@
    whole document rather than one clause: a full caution border rather than a single rule.
    ========================================================================================== */
 
+/* The radius comes up to `--prl-radius-3` with the meta block below it, and the caution border
+   stays exactly as it was: it is the meaningful border on this page and `--prl-caution` is the
+   token that carries the meaning. Rounding a warning does not soften it — the WORD is the carrier
+   here, as the header note says — and two panes at two different radii on one page is the detail
+   that says nobody looked. */
 .prl-legal__banner {
   display: grid;
-  gap: var(--prl-space-4);
-  padding: var(--prl-space-7);
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-8);
   border: 1px solid var(--prl-caution);
-  border-radius: var(--prl-radius-1);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-inset);
 }
 
@@ -153,13 +246,18 @@
 
 .prl-legal-flag {
   display: grid;
-  gap: var(--prl-space-3);
-  padding: var(--prl-space-6);
-  border: var(--prl-hairline);
+  gap: var(--prl-space-4);
+  padding: var(--prl-space-7);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
   /* The rule at the inline start is `--prl-space-1` wide, matching `.prl-callout`, so a flagged
-     clause and a lesson's callout read as the same kind of object at the same weight. */
+     clause and a lesson's callout read as the same kind of object at the same weight. It is
+     declared AFTER the shorthand and after the two lit-edge colours, so nothing above can take it
+     back — this is the border that carries the meaning on this page and the other three only
+     describe the pane's edge. */
   border-inline-start: var(--prl-space-1) solid var(--prl-caution);
-  border-radius: var(--prl-radius-1);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-inset);
 }
 
@@ -181,10 +279,19 @@
    exist and would need a horizontal scroll on a phone to deliver them.
    ========================================================================================== */
 
+/* One hairline between entries, and none above the first or below the last: this is a list of
+   terms, and a rule between two of them says "these are separate entries" where a box around all
+   of them would say "this is a panel". The gap is the section's rhythm halved — related rows
+   inside one group, which is the tight end of the scale. */
 .prl-legal__inventory {
   display: grid;
-  gap: var(--prl-space-6);
+  gap: var(--prl-space-7);
   margin: 0;
+}
+
+.prl-legal__inventory dt:not(:first-of-type) {
+  padding-block-start: var(--prl-space-7);
+  border-block-start: var(--prl-hairline);
 }
 
 .prl-legal__inventory dt {
@@ -192,6 +299,7 @@
   font-family: var(--prl-font-mono);
   font-size: var(--prl-type-body-sm);
   font-weight: var(--prl-weight-medium);
+  letter-spacing: var(--prl-tracking-flat);
 }
 
 .prl-legal__inventory dd {
@@ -208,15 +316,24 @@
    than an overlay, so it needs no scrim, no trap and no z-index.
    ========================================================================================== */
 
+/**
+ * Level 2 of the ladder — the card, and the level body text lives on: opaque `--prl-surface-panel`,
+ * the lit hairline, one step of elevation. It gets a shadow where the meta block above does not,
+ * and the difference is the whole point of having five levels rather than one: the metadata is a
+ * well inside a document, and this is a single object the page exists to present.
+ */
 .prl-gate {
   display: grid;
-  gap: var(--prl-space-6);
+  gap: var(--prl-space-7);
   max-width: var(--prl-measure);
-  margin-block: var(--prl-space-9);
-  padding: var(--prl-space-9);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-2);
+  margin-block: var(--prl-space-10);
+  padding: var(--prl-space-10);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-gate__title {
@@ -237,8 +354,10 @@
  * NOT do, and every age gate on the internet puts that sentence where it will not be read.
  */
 .prl-gate__caveat {
-  padding: var(--prl-space-5) var(--prl-space-6);
+  padding: var(--prl-space-6) var(--prl-space-7);
   border-inline-start: var(--prl-focus-width) solid var(--prl-line-strong);
+  border-start-end-radius: var(--prl-radius-2);
+  border-end-end-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
   color: var(--prl-text);
 }
@@ -264,9 +383,9 @@
 .prl-gate__problems {
   display: grid;
   gap: var(--prl-space-4);
-  padding: var(--prl-space-6);
+  padding: var(--prl-space-7);
   border: 1px solid var(--prl-caution);
-  border-radius: var(--prl-radius-1);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-inset);
 }
 
