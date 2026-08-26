@@ -162,6 +162,13 @@ jobs:
         # decision somebody makes rather than one nobody knows is available.
         run: node scripts/supply-chain/ci-pinning.mjs --freshness
 
+      - name: Repository hygiene
+        # The second of the fourteen gates, and one this workflow did not run. It
+        # is the check that first-party source carries no C0 control characters, no
+        # secrets and none of the shapes the campaign snapshot lists — cheap, and
+        # exactly the sort of gate whose absence from a RELEASE is worst.
+        run: pnpm run security:hygiene
+
       - name: Lint
         run: pnpm run lint
 
@@ -258,6 +265,176 @@ jobs:
       - name: Test
         run: pnpm run test
 
+      - name: Enumerate every seven-card hand
+        # `test:exhaustive` and `test:simulation` are two of the fourteen gates and
+        # ran nowhere in this workflow. They are the two that decide whether the
+        # thing being released EVALUATES POKER CORRECTLY, which makes their absence
+        # from the release pipeline the least defensible of the nine.
+        #
+        # `!cancelled()` rather than the default: these are independent measurements
+        # and a failure in one must not hide the verdict of the other, for the same
+        # reason `pnpm run verify` runs every gate after a failure.
+        if: ${{ !cancelled() }}
+        run: pnpm run test:exhaustive
+
+      - name: Simulate the opponent profiles
+        if: ${{ !cancelled() }}
+        run: pnpm run test:simulation
+
+  # -------------------------------------------------------------------------
+  # 2b. The browser gates, on the same commit, BEFORE anything is built.
+  #
+  # These five ran in `ci.yml` and nowhere here, so a commit that failed the
+  # contrast budget, shipped an inaccessible control, lost the CSP negative
+  # control or broke the age gate — a LEGAL control, off by default, whose whole
+  # point is that it is provably correct when switched on — was built into an
+  # immutable artefact, scanned, staged and offered to `release-sign.yml`. The
+  # release pipeline was green throughout; the red was in another workflow, which
+  # is a thing a person has to notice.
+  #
+  # `scripts/release-gate-coverage.mjs` is the guard that keeps this job in step
+  # with `verify`, and it runs inside `pnpm run test` in the job above — so a
+  # fifteenth gate added to `verify` and not wired in here fails THIS pipeline.
+  # -------------------------------------------------------------------------
+  browser-gates:
+    name: Contrast, a11y, ax tree, CSP and age gate (real Chrome)
+    needs: gates
+    runs-on: ubuntu-24.04
+    # Five browser sweeps on top of a full build. `test:ax` alone plays a hand at
+    # a live table and waits on bots.
+    timeout-minutes: 60
+
+    services:
+      postgres:
+        # postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:60f4761b9035e0b8d5218f701a8c3382f641bf12b1604822574cf5be3baeb537
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: poker_risk_lab_browser
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username postgres --dbname poker_risk_lab_browser"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # As in `tests`: the job default is the least-privileged runtime identity, so
+      # the servers these gates drive run as a `prl_app` member and a missing GRANT
+      # fails the release rather than the deployment.
+      DATABASE_URL: postgres://prl_ci_app:prl-ci-not-a-secret@127.0.0.1:5432/poker_risk_lab_browser
+      DATABASE_URL_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_browser
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build
+        # The `build` gate itself, and a precondition of the five below: every one
+        # of them measures a PRODUCTION build and says so, because the development
+        # Content-Security-Policy adds `'unsafe-eval'` and an HMR websocket on
+        # purpose and a pass against `next dev` would be worth nothing.
+        run: pnpm run build
+
+      - name: Wait for PostgreSQL
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
+        run: pnpm run db:wait
+
+      - name: Migrate and seed
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
+        run: |
+          pnpm run db:migrate
+          pnpm run db:seed
+
+      - name: Grant a login identity membership of prl_app
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql --host 127.0.0.1 --username postgres --dbname poker_risk_lab_browser \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'prl_ci_app') THEN
+              CREATE ROLE prl_ci_app LOGIN PASSWORD 'prl-ci-not-a-secret';
+            END IF;
+          END
+          $$;
+          GRANT prl_app TO prl_ci_app;
+          GRANT CONNECT ON DATABASE poker_risk_lab_browser TO prl_ci_app;
+          SQL
+
+      - name: Resolve the browser
+        id: browser
+        # Same list, same reason, as the browser jobs in ci.yml. A missing Chrome
+        # FAILS: four of the five gates below cannot run without one, and a release
+        # pipeline that skips them quietly is the hole this job was added to close.
+        run: |
+          for candidate in /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser; do
+            if [ -x "$candidate" ]; then
+              "$candidate" --version
+              echo "CHROME_PATH=$candidate" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "no Chrome on this runner image, so the gates below cannot run."
+          echo "They need one of: /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser"
+          exit 1
+
+      - name: Contrast budget
+        run: pnpm run design:contrast
+
+      - name: Accessibility audit
+        # Every gate below carries `!cancelled() && steps.browser.outcome`: five
+        # independent measurements, and one failing must not hide the other four's
+        # verdicts. The condition is on the BROWSER step rather than `always()`,
+        # because with no browser there is nothing to measure and a second
+        # confusing failure helps nobody.
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:a11y -- --with-api --out a11y-report.json
+
+      - name: Accessibility tree
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:ax -- --json ax-tree-report.json
+
+      - name: CSP negative control
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:csp -- --out csp-negative-control.json
+
+      - name: Age gate
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:age-gate -- --out age-gate-report.json
+
+      - name: Upload the browser-gate reports
+        # `always()`, because the report of a FAILING run is the one worth reading.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-browser-gate-reports
+          path: |
+            a11y-report.json
+            ax-tree-report.json
+            csp-negative-control.json
+            age-gate-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
   # -------------------------------------------------------------------------
   # 3. BUILD ONCE.
   #
@@ -268,7 +445,10 @@ jobs:
   # -------------------------------------------------------------------------
   build:
     name: Build immutable artefacts
-    needs: tests
+    # BOTH, and the pairing is the invariant: a gate that runs BESIDE this job
+    # turns the workflow red without stopping anything, because the artefact is
+    # still built, scanned, pushed through staging and offered for signing.
+    needs: [tests, browser-gates]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
