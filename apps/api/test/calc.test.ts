@@ -616,9 +616,27 @@ describe('POST /math/equity', () => {
       const summary = equityOf(response.body);
       assert.equal(summary['method'], 'exact-enumeration');
       // ADR 0005 records 81.26%–82.64% across the 36 suit configurations, averaging 81.946%.
-      // AhAs against KdKc is one of them.
+      // AhAs against KdKc is one of them — specifically the MINIMUM, because the kings hold
+      // the two suits the aces do not and so have the cleanest run at a flush the aces cannot
+      // match. Its exact value is 0.81255489679402726, enumerated over all C(48,5) = 1,712,304
+      // boards by `packages/poker-math/test/equity-published-figures.test.ts`.
+      //
+      // This assertion used to read `> 0.8 && < 0.84`. That window is four percentage points
+      // wide on a figure whose entire spread across all 36 configurations is 1.4 points, and
+      // `docs/VERIFICATION.md` §12 named it as the reason the published equity figures were
+      // effectively unguarded. Measured 2026-08-26 with `popCount13(suitC) >= 5` changed to
+      // `>= 6` in the evaluator — i.e. club flushes silently stop existing — the AA-vs-KK
+      // average moved to 82.098% and this spot to a value the old window still accepted.
+      //
+      // The route returns `hero.equity` unrounded (`routes/calc.ts`), so the bound can be as
+      // tight as the JSON round trip allows. It is not asserted as an exact equality only
+      // because this is an HTTP test and a future serialisation change should fail in
+      // `equity-published-figures.test.ts`, where the claim lives, rather than here.
       const heroEquity = numberAt(summary, 'heroEquity');
-      assert.ok(heroEquity > 0.8 && heroEquity < 0.84, `AA vs KK should be about 82%, got ${heroEquity}`);
+      assert.ok(
+        Math.abs(heroEquity - 0.81255489679402726) < 1e-9,
+        `AhAs vs KdKc enumerates to 0.81255489679402726, the route returned ${heroEquity}`,
+      );
       assert.equal(numberAt(summary, 'trials'), 1_712_304);
       assert.equal(
         summary['confidenceHalfWidthPoints'],

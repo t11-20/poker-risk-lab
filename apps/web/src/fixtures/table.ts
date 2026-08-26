@@ -407,7 +407,7 @@ export const FLOP_DECISION_REPORT: CoachReport = {
     reason:
       'Raising is worth more than calling under the assumptions listed below, because a hand with 15 improving cards keeps its value when the raise is called and picks up the pot when it is not. Confidence is moderate rather than high because the figure turns on an assumed fold frequency of 35%, which is a guess about one opponent rather than a measurement.',
     whatWouldChangeIt: [
-      'A cutoff who folds far less often than 35% to a flop raise. Below roughly 20% the raise and the call are worth about the same.',
+      'A cutoff who folds far less often than 35% to a flop raise — though on its own that does not flip the decision, and it is worth seeing why. Each point of fold equity is worth about 0.56 chips here, so at 20% the raise is still 17.0 chips ahead of the call and at zero fold equity it is 5.7 ahead. What carries the raise is 54.1%, not the folds: above an even share, more units in the middle is worth more than more folds. The two lines are worth exactly the same at 50% equity, and below it the call is better.',
       'A shorter effective stack. With less than about three times the pot behind, raising commits the stack on this street and the flush draw no longer has two cards to arrive.',
       'A board where a heart also completes a straight for the range, which would move cards out of the clean column and into the dirty one.',
       'Any read that the cutoff is betting a range containing sets and two pair rather than one pair, which lowers the estimated 54.1% directly.',

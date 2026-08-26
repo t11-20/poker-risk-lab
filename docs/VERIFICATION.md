@@ -339,12 +339,47 @@ on AhAs vs KdKc (exact 81.255%), 20,000 samples, three seeds: |diff| 0.455 / 0.1
 points against 95% half-widths of ±0.544 / ±0.540 / ±0.538 — inside all three. A single seed
 proves less than it looks like it proves, which is why three are quoted.
 
-> **None of this is reproduced by any gate.** No test in the tree enumerates the 36
-> configurations, and none compares a Monte Carlo result against exact enumeration; the closest
-> is `apps/api/test/calc.test.ts:527`, which checks one configuration lies between 0.80 and 0.84
-> — wide enough to pass on a materially wrong evaluator. The figures above are a result somebody
-> obtained, now obtained a second time and by a different route, which is worth something and is
-> still not the same as a gate. Recorded in §12 with what would close it.
+### And all of it is now reproduced by a gate
+
+`packages/poker-math/test/equity-published-figures.test.ts` — inside `test`, so inside `verify`.
+**Every one of the 132 configurations above is enumerated on every run**, 1,712,304 boards each,
+by a second implementation written for this file: five nested loops over the remaining 48 cards
+and nothing else, deliberately sharing none of `exactEquity`'s machinery. 25 s, measured
+2026-08-26.
+
+What it asserts, beyond the three averages and their extremes:
+
+* **The suit-isomorphism structure.** Suits are interchangeable in hold'em, so configurations
+  that differ by a relabelling of the four suits must have *bit-identical* equity. That forces
+  the multiplicity profile — 6/24/6 for AA-vs-KK, 12/12 for AKs-vs-22, 12/24/24/12 for
+  AKo-vs-QQ — and an evaluator with any suit-dependent behaviour splits a class and changes
+  those counts even if the average survives. Asserted on the raw floats, not on rounded strings.
+* **`exactEquity` agrees with the longhand enumerator to the last bit** on one configuration from
+  each matchup. The two are tied together by equality, not by a tolerance.
+* **Monte Carlo against exact enumeration, with the tolerance derived from the sample size and
+  not chosen.** 200 seeds × 20,000 samples, each bounded by *its own* 95% half-width
+  (1.96·sd/√n, computed by `monteCarloEquity` from the variance it observed): 184 of 200 intervals
+  contained the exact value where ~190 is expected, worst single miss 1.66 half-widths. Then all
+  200 shards pooled through the production `combineMonteCarlo` — 4,000,000 samples against a
+  ±0.038-point interval, landing 0.016 points out. Seeds are fixed, so a 95% interval cannot
+  flake a gate; what the fixed seeds cost is generality, which is why the assertions are about the
+  ensemble rather than about any one run.
+* `apps/api/test/calc.test.ts`'s AA-vs-KK bound, which used to be `> 0.8 && < 0.84`, is now
+  `|x − 0.81255489679402726| < 1e-9`. The old window was four percentage points wide on a figure
+  whose entire spread across all 36 configurations is 1.4.
+
+**Negative controls, each run.** With `popCount13(suitC) >= 5` changed to `>= 6` in the evaluator
+— club flushes silently stop existing — the AA-vs-KK average moves to 82.098% and the test fails;
+**the old 0.80–0.84 bound accepts it**. With ties scored as losses in `Tally.record`, the
+production/longhand equality fails at 0.81065 against 0.81255. With the interval's `1.96` changed
+to `1.0`, coverage falls to 138 of 200. With the Monte Carlo run-out pool short by one card, the
+pooled 4,000,000 samples land 0.1335 points out against their own ±0.0382.
+
+Two things this does *not* prove, recorded because the row above them used to overclaim: the
+longhand enumerator shares `evaluate` with production, so it is independent of the equity code and
+not of the evaluator — what pins the evaluator is the constants, which are published results and
+§2's exhaustive enumeration. And 132 configurations is every configuration of *these three*
+matchups, not of hold'em.
 
 ---
 
@@ -353,9 +388,13 @@ proves less than it looks like it proves, which is why three are quoted.
 `packages/content/test/scenarios.test.ts` — **13 tests, all passing**
 
 ```
-17 lessons · 17 quizzes (80 questions) · 36 scenarios · 90 glossary terms · 11 topics
+17 lessons · 17 quizzes (81 questions) · 36 scenarios · 90 glossary terms · 11 topics
 36/36 scenarios carry claims: 74 independent verification claims, 0 regression locks
 ```
+
+*(This said **80** questions until 2026-08-26. `contentStats()` says 81 and prints it on every run;
+the figure was another one nobody re-derived, which is the whole subject of the note at the top of
+this document.)*
 
 ### What is verified
 
@@ -380,6 +419,82 @@ proves less than it looks like it proves, which is why three are quoted.
   equity 6, outs 5, position 4, rules 3, sizing 3, fold-equity 2, ranges 2, variance 2,
   tournaments 2, psychology 1. By difficulty: 6 intro, 16 core, 14 advanced.
 * Analysis is **deterministic for a given seed**, so every learner sees the same numbers.
+
+### The other kind of number, and the gap it sat in
+
+`packages/content/test/taught-figures.test.ts` — **2 tests**, added 2026-08-26.
+
+Everything above is about *computed* figures: an equity, a price, an out count, produced at
+runtime and never stored. That rule left a whole class untouched — the arithmetic a lesson
+**works through**, which a learner is meant to follow line by line. "13 pairs at six each, which
+is 78." "The next raise must therefore reach at least 100, not 80 and not 120." "The short
+stack's chance of finishing first is 100/400 = 25%, so they take 25% of first plus 75% of second:
+0.25×70 + 0.75×30 = 40." None of that is a computed figure dressed as prose; it *is* the
+teaching, and nothing checked it.
+
+Two halves:
+
+* **27 registered claims, recomputed.** Each names a record and quotes the sentence, and each
+  value the entry compares is DERIVED — the 1,326 combinations from `allHandClasses()` and from
+  C(52,2); the minimum raise from a hand actually dealt through `startHand`/`applyAction` and
+  read off `minimumRaiseTo`; the 60/160 side pots from `buildPotLayers`; the 60/40 prize equity
+  from `icmEquity`; the wheel's rank and the category ladder from `evaluate`. A quote that no
+  longer appears **exactly once** fails as loudly as a wrong number, because a registry entry
+  that stops matching is a guard that stopped guarding. 66 derived values are matched back into
+  the prose.
+* **A mechanical sweep of all 61 live calculations and numeric quiz questions**, comparing 112
+  graded inputs against the prose around them. The failure it exists for is an edit to one side
+  only — a prompt reworded to "the pot stands at 120" over the `{ pot: 100 }` the learner is
+  marked against. For the rule of 2 and 4 it compares the *multiplier the prose names* against
+  `cardsToCome`, which is worth more than the digits: a caption reading "the rule of 4" over a
+  one-card calculation teaches the wrong shortcut while every number on the page still agrees.
+
+Prose that deliberately omits a number — "the identical bet", "same edge and same standard
+deviation, but with three times the bankroll" — is an explicit table of exemptions, each naming
+the phrase that earns it and why, and **an exemption that fires for nothing fails the test**.
+
+**Negative controls, each run on 2026-08-26.** `1326` → `1327` in the lesson, `60` → `50` in the
+side-pot answer, `100` → `90` in the minimum-raise chain: all three fail. A quiz prompt changed to
+"the pot now stands at 120" while `potOdds` is still graded on 100: fails. A caption still reading
+"one card left to come" over a `cardsToCome: 2` calculation: fails, naming the multiplier. And in
+the other direction, with the content untouched and `combosOfClass` made to drop one offsuit
+combination, the 1,326 chain fails — the entry is tied to the code, not to a second copy of the
+answer.
+
+### What the audit of 2026-08-26 found
+
+Every numeric claim in `packages/content`, in the Coach's generated prose, and in the
+hand-written prose of `apps/web/src/fixtures/**` was decided against computation. **One was
+wrong**, in the fixture the live table falls back to when the API is unreachable:
+
+> `apps/web/src/fixtures/table.ts`, under "what would change it":
+> *"A cutoff who folds far less often than 35% to a flop raise. **Below roughly 20% the raise
+> and the call are worth about the same.**"*
+
+Measured through `evOfRaise` and `evOfCall` on the report's own inputs — pot 100, 35 to call,
+raise to 105, 54.1% equity — at 20% fold equity the raise is **17.0 chips ahead** of the call,
+not level with it, and solving for the frequency at which they meet gives **−10.2%**: there is
+no fold frequency at or above zero at which the claim is true. With equity above an even share
+the raise beats the call against an opponent who never folds, because more units in the middle
+at better than half the pot is worth more than the folds. The sentence gave a learner a
+threshold that does not exist, and told them to fold out of a line that was ahead by 5.7 chips
+at worst. It now states the real quantities — 0.56 chips per point of fold equity, 5.7 ahead at
+zero, 17.0 ahead at 20% — and the crossover that *does* exist, which is 50% **equity** and not
+a fold frequency at all. `apps/web/test/table-fixture-figures.test.ts` recomputes all of it,
+and asserts the shape too: the fixture may name a fold-equity threshold only if solving for one
+gives a non-negative answer.
+
+The file's own header derives most of its figures by hand, and **every figure it derives is
+right**. The one that was wrong is the one the header does not derive, which is the argument
+for the guard in one line.
+
+Three further figures are rounded teaching approximations and are left, each because the text
+that carries them says so: "a small pair flops a set about one time in eight" (exactly 11.755%,
+one in 8.51, and the same scenario's reasoning states 11.8% two paragraphs later); "each unseen
+card is roughly one in fifty" (47 on the flop, and the lesson names 47 in the sentence before);
+and the rule of 2 and 4 itself, whose inaccuracy is the lesson. One more figure was wrong in
+this document rather than in the product: §9 said 80 quiz questions where `contentStats()` says
+81.
 
 ### Content defects these checks found
 
@@ -486,7 +601,8 @@ The honest section.
 | **Who owns schema `prl`** | **Now checked.** It was not, and that gap was found by breaking it: `verify-schema.mjs` check 6 asserts `prl_app` owns no relation and holds no `CREATE`, but never asked who *did* own the schema. Restoring a dump as `prl_api` without `--exit-on-error` leaves all relations in `prl` owned by `prl_api` — which then holds `CREATE` and can `DROP` every table it serves — and `db:verify` exited **0** over it. Check 6b now asserts `pg_namespace.nspowner` and every `pg_class.relowner` in `prl` is `prl_migrator`. It earned its place immediately: on first run it failed the shared development database, whose migration ledger was still owned by the bootstrapping superuser, and `pnpm run db:migrate` repaired it. |
 | **That `up` actually calls the destructive-statement gate** | The gate's logic is well covered — `apps/api/scripts/migrate.test.mjs`, 10 tests, run inside `test:scripts`: `down` refuses without a database, the scanner fires on each destructive kind, ignores a `DROP` that is only mentioned in prose, catches one hidden in a `DO` block, and rejects a bare `-- prl:irreversible:` with no reason. What no test covers is the **wiring** — that `up` consults it before applying — because that needs a live database and a deliberately-bad pending migration |
 | **That a test which runs actually asserts anything** | The reachability guard (`apps/api/test/workspace-test-reachability.test.ts`) now proves each package's suite *would execute* tests — a real `node --test` runner, at least one `test()`/`it()` per file, no declaration disabled by a literal skip — but it is a static reader. A test whose body asserts nothing still counts as executing. Closing that needs each package's runner to emit a machine-readable summary a root script asserts on, which is a change to every workspace manifest |
-| **§8's headline equity figures** | Computed, correct, and **reproduced by no test**. Nothing in the tree enumerates the 36 AA-vs-KK suit configurations, and nothing compares a Monte Carlo result against exact enumeration. The closest gated assertion is `apps/api/test/calc.test.ts:527`, which bounds one configuration to 0.80–0.84 — wide enough to pass on a materially wrong evaluator. Closing it is a test in `packages/poker-math/test/equity.test.ts` that enumerates the configurations and asserts the average, which is ~30 s of compute |
+| **§8's headline equity figures** | **Closed 2026-08-26**, and the row is kept rather than deleted because what it said was true for as long as it stood. `packages/poker-math/test/equity-published-figures.test.ts` enumerates all 132 suit configurations of the three published matchups on every `verify`, asserts the averages, the extremes and the suit-isomorphism multiplicities, ties `exactEquity` to a second implementation bit-for-bit, and measures 4,000,000 Monte Carlo samples against exact enumeration inside an interval derived from the sample size. `apps/api/test/calc.test.ts`'s 0.80–0.84 window — the reason this row existed — is now 1e-9. See §8 |
+| **Teaching prose outside the registry** | `packages/content/test/taught-figures.test.ts` recomputes 27 named claims and sweeps all 61 live calculations against the prose around them, which is 112 graded inputs. It cannot decide a sentence nobody registered. The hand-written prose in `apps/web/src/fixtures/table.ts` and `legends.ts` in particular is checked by nothing: unlike `scenarios.ts` and `review.ts`, whose analysis blocks `fixtures:check` regenerates, those two are baked demo copy end to end. Every figure in them was decided by hand on 2026-08-26 and none was wrong; nothing reproduces that |
 | **Everything outside the gate** | See the table below. A ✔ in this document that no gate reproduces is a result somebody obtained once |
 
 ### What the release gate actually enforces
@@ -508,10 +624,13 @@ sentence. Nothing in the table below maps onto
 | AI profile axes (`REPORT.md` §7) | `test:simulation` — also added to the gate 2026-08-18 |
 | §10 supply chain | `security:audit` (fourteen gates, including `ci-pinning` since 2026-08-19, `secret-scan`/`container-scan` since, and `image-provenance`, `log-policy` and `keyless-signing-identity` since 2026-08-25), `security:hygiene` |
 | The roll-forward-only migration policy (`RUNBOOK` §11.3) | `test` (via `test:scripts` → `apps/api/scripts/migrate.test.mjs`). The scanner is gated; the wiring into `up` is not — see the table above |
+| The hand-typed Coach report in `apps/web/src/fixtures/table.ts`, which `fixtures:check` does not reach | `test` (via `test:unit` → `apps/web/test/table-fixture-figures.test.ts`). Every figure in it recomputed from `@prl/poker-math` on the report's own inputs: the price, the rule-of-2-and-4 error against `probabilityOfHitting`, the interval against its own trial count, both expected values against `evOfCall`/`evOfRaise`, the SPR, and the out counts. **Added 2026-08-26 because it found a wrong one** — see §9 |
+| The counts the product prints about itself — lessons, topics, glossary terms, scenarios, claims | `test` (via `test:unit` → `apps/web/test/product-counts.test.ts`), against `contentStats()` and the bundle. Added 2026-08-26 for the reason §9 records: the same class of figure had already drifted inside this document |
 | That `apps/web/src/fixtures/**` still equals what the engine computes | `test` (via `test:integration` → `apps/api/test/web-fixture-figures.test.ts`). `pnpm run fixtures:check` is the operator-facing form of the same computation and `pnpm run fixtures:regenerate` is the remedy — which the repository did **not** contain until 2026-08-18, which is how a rule-of-2-and-4 estimate of `1.6` shipped and rendered as "160.0%" |
 | The live schema's security properties | `db:verify` — present in the gate before, but as the last link of a `&&` chain, so a failure anywhere earlier skipped it. It had never run inside `verify` |
 | Contrast ratios, both themes | `design:contrast` — three passes: the token set, the pairings a component may use, and the **composited background of every element carrying text**, walked in real Chrome on every route in both themes (and under `prefers-reduced-transparency` and `prefers-contrast: more`). The third needs the web app **built** and a Chrome on `CHROME_PATH`; without either it fails rather than skipping |
-| §8's AA-vs-KK / AKs-vs-22 / AKo-vs-QQ figures, and Monte Carlo agreeing with exact enumeration | **Nothing.** See the row in the table above |
+| §8's AA-vs-KK / AKs-vs-22 / AKo-vs-QQ figures, and Monte Carlo agreeing with exact enumeration | `test` (via `test:unit` → `packages/poker-math/test/equity-published-figures.test.ts`). **This row said "Nothing" until 2026-08-26.** All 132 suit configurations enumerated per run by a second implementation, ~25 s; the averages, the extremes, the multiplicity profile forced by suit isomorphism, `exactEquity` tied to the longhand path by bit equality, and 200 × 20,000 Monte Carlo samples measured against the enumeration inside their own 95% half-widths |
+| §9's teaching prose — the arithmetic a lesson works through, as opposed to a computed figure | `test` (via `test:unit` → `packages/content/test/taught-figures.test.ts`). 27 registered claims, each recomputed from `@prl/poker-engine` or `@prl/poker-math` and required to appear verbatim in the record it names; plus a sweep of all 61 live calculations and numeric quiz questions comparing 112 graded inputs against the prose a learner reads. Deliberate omissions are an explicit table with reasons, and **an exemption that fires for nothing fails the test** |
 | Accessibility, to the extent §12 says it is checked at all | `test:a11y` — **added to the gate 2026-08-18**; it lived only in `test:all`, which is not the gate |
 | That the primary journeys can be driven with a keyboard alone | `test:keyboard` — real `Input.dispatchKeyEvent` through Chrome's own input pipeline on every route: tab order against the focusable set, focus visibility under `:focus-visible` measured focused against blurred, no trap, the skip link, the modal sheet's trap and its Escape, the bet-size slider under the arrow keys, and one whole hand opened, sat down at, dealt and folded from the keyboard at a live socket-backed table. **Added to the gate 2026-08-26**; before that it was in no gate and no workflow, because it had no `--start` and needed a person to bring up two servers first. 146 checks on 2026-08-26 |
 | That the app's text does not paint over itself, escape its column or get cut off | `test:layout` — `Range.getClientRects()` over every text node, every route, both themes, at 360/768/1024/1440/1920, in real Chrome. It measures the GLYPHS: the defect it was written for was a grid track that collapsed to 0px, where the element boxes do not overlap and the text does. Six injected negative controls run before the sweep — one per check it can report, the first of them the offending CSS rule put back verbatim — and each must be caught. This document made no claim about layout before it, which is the point — the defect shipped past every row above |
