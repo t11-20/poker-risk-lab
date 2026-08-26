@@ -108,10 +108,53 @@
  *
  * ## Usage
  *
- *     node scripts/keyboard-audit.mjs [--web http://localhost:3000] [--headful] [--json <path>]
+ *     node scripts/keyboard-audit.mjs [--web http://127.0.0.1:3464] [--start] [--with-api]
+ *                                     [--api http://127.0.0.1:3001] [--headful] [--json <path>]
  *
  * Exits non-zero on any failure, so it is usable as a release gate. Run it against a PRODUCTION
  * build (`next start`): a development build ships extra dev-only overlays that are not what ships.
+ *
+ * ## `--start`, and why this gate ran nowhere until it had one
+ *
+ * For most of this file's life it had no server lifecycle: the RUNBOOK said it "needs a running
+ * production build on :3000 and a running API — it is not started for you", and the mechanical
+ * consequence was that `grep -rl 'test:keyboard' .github/workflows/` matched NOTHING and
+ * `pnpm run verify` did not list it. A gate that only runs when a person remembers is not a gate,
+ * and on a product about to onboard students, keyboard operability is not a thing to leave to
+ * memory. `--start`/`--with-api` are the same lifecycle `scripts/ax-tree-audit.mjs` has, for the
+ * same reason, so this can be one of `verify`'s gates rather than a paragraph in a runbook.
+ *
+ * The port is **3464**, and the whole rest of the map is taken: 3000/3001 are the dev app and the
+ * dev API, 3456 is `test:ax`, 3457 is `test:csp`, 3458/3459 are the age gate's two scopes, 3462 is
+ * `design:contrast` and 3463 is `test:layout`. Two gates sharing a port is a flake that only
+ * appears when somebody runs them at once, which is precisely what `verify` does.
+ *
+ * The API stays on **3001** and that is not a free choice: `apps/web/next.config.ts` freezes the
+ * `/api/*` rewrite destination into `.next/routes-manifest.json` at BUILD time, and a build made
+ * without `PRL_API_REWRITE_ORIGIN` points at `http://localhost:3001`. The browser calls its own
+ * origin, Next proxies to that frozen destination, so an API started anywhere else is an API the
+ * page cannot reach — the live-table journey would then fail with a socket that never opens and
+ * the report would blame the app. `test:ax` starts its API on 3001 for exactly this reason.
+ *
+ * ## Is it stable enough to BLOCK a release?
+ *
+ * Measured, because a flaky release gate is worse than an unwired one — it teaches people to re-run
+ * until green, and then a real failure gets one more `pnpm run verify` instead of a reader. On
+ * 2026-08-26, on this machine, against a production build with `--start --with-api`: **twelve
+ * consecutive runs, every one exit 0, every one exactly 146 checks passed, 1 not-applicable, 0
+ * warnings, 0 failures, 56-59s each.**
+ *
+ * The interesting half is WHY, because "a real hand at a real table" sounds like the definition of
+ * flaky. The cards are random and reach no assertion: the audit takes the first seat and acts first
+ * preflop, so the decision it is driven to is always the same shape — fold / call the blind / raise
+ * to the minimum — and all six of the private-table checks are structural (is it named, is it
+ * tabbable, does the slider move, did the server accept a Fold). Across those twelve runs the
+ * offered-action list and the slider range came back byte-identical every time. What varies is which
+ * two cards are on screen, and nothing here reads them.
+ *
+ * The one intermittency that HAS been seen was the audit's own and is fixed: reading focus on "no
+ * enabled action" caught the in-flight moment when the row is disabled and the browser has blurred
+ * it. It now waits for `.prl-action-bar__idle`. See the comment at that wait.
  *
  * The checkers that are pure — the two matchers, and the route declarations they are driven by —
  * are exported and covered by `scripts/keyboard-audit.test.mjs`, so the run block below is guarded
@@ -122,8 +165,9 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 // The gate's own constants, imported rather than re-typed. `age-gate.ts` is a leaf module with no
 // imports of its own precisely so that things outside the Next runtime can read it, and a second
 // copy of a cookie name here is the failure its header describes: a harness that seeds
@@ -148,6 +192,10 @@ const flag = (name, fallback) => {
 const WEB_ORIGIN = flag('--web', process.env['PRL_WEB_ORIGIN'] ?? 'http://localhost:3000');
 const HEADFUL = args.includes('--headful');
 const JSON_OUT = flag('--json', null);
+const START = args.includes('--start');
+const WITH_API = args.includes('--with-api');
+const API_ORIGIN = flag('--api', process.env['PRL_API_ORIGIN'] ?? 'http://127.0.0.1:3001');
+const READY_TIMEOUT_SECONDS = Number(flag('--ready-timeout', '120'));
 
 /** Chrome, wherever this platform keeps it. */
 const CHROME_CANDIDATES = [
@@ -201,6 +249,28 @@ const skip = (label, detail) => {
   console.log(`${DIM}  -${RESET} ${label} ${DIM}${detail}${RESET}`);
 };
 const section = (title) => console.log(`\n${BOLD}${title}${RESET}`);
+
+/**
+ * True when THIS process started the API, so "the table never came up" is a defect and not an
+ * environment.
+ *
+ * The live-table journey used to report every one of its abort points as a warning — "could not
+ * reach 'Open the table' by keyboard; is the API running?" — and a warning does not fail the run.
+ * That was right while this harness was pointed at somebody else's deployment: it cannot tell a
+ * broken keyboard from an API nobody started, and guessing in the failing direction makes a gate
+ * that cries wolf. Under `--start --with-api` there is nothing to guess. This process started the
+ * API, waited for `/api/v1/health`, and owns the port — so a table that never went live is the
+ * app's problem, and letting it pass as a warning would mean the ONLY journey here that touches a
+ * real socket could go dark without turning the gate red. That is the exact shape of the defect
+ * that made `checkPokerActions` decoration for two releases.
+ */
+const OWNS_API = START && WITH_API;
+
+/** A step of the live journey that did not happen: a failure when we own the stack, else a warning. */
+const unproven = (label, detail) => {
+  if (OWNS_API) bad(label, `${detail} (this run started the API itself, so there is nothing else to blame)`);
+  else warn(label, detail);
+};
 
 // ---------------------------------------------------------------------------
 // The age gate
@@ -1472,7 +1542,7 @@ async function playOneHandByKeyboard(page) {
 
   const opened = await activateByLabel(/^open the table$/i);
   if (!opened.activated) {
-    warn('Private table', 'could not reach "Open the table" by keyboard; is the API running?');
+    unproven('Private table', 'could not reach "Open the table" by keyboard; is the API running?');
     return;
   }
   ok('Private table: "Open the table" reached and activated by keyboard');
@@ -1482,19 +1552,19 @@ async function playOneHandByKeyboard(page) {
     25,
   );
   if (!liveSocket) {
-    warn('Private table', 'the socket did not go live within 25s; the rest of this journey is unproven');
+    unproven('Private table', 'the socket did not go live within 25s; the rest of this journey is unproven');
     return;
   }
   ok('Private table: the socket went live');
 
   const seated = await activateByLabel(/take seat/i);
   if (seated.activated) ok(`Private table: "${seated.name.trim()}" reached and activated by keyboard`);
-  else warn('Private table', 'no free seat to take by keyboard');
+  else unproven('Private table', 'no free seat to take by keyboard');
 
   await waitFor('/Deal the next hand/.test(document.body.innerText)', 20);
   const dealt = await activateByLabel(/deal the next hand/i);
   if (!dealt.activated) {
-    warn('Private table', 'could not reach "Deal the next hand" by keyboard');
+    unproven('Private table', 'could not reach "Deal the next hand" by keyboard');
     return;
   }
   ok('Private table: "Deal the next hand" reached and activated by keyboard');
@@ -1517,7 +1587,7 @@ async function playOneHandByKeyboard(page) {
 
   const myTurn = await waitFor(ANY_ENABLED_ACTION, 45);
   if (!myTurn) {
-    warn('Private table', 'the hand never reached this seat within 45s');
+    unproven('Private table', 'the hand never reached this seat within 45s');
     return;
   }
   ok('Private table: the hand reached this seat');
@@ -1660,6 +1730,100 @@ export const ROUTES = [
 ];
 
 // ---------------------------------------------------------------------------
+// Servers
+// ---------------------------------------------------------------------------
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/** The port `next start` should bind, taken from the origin this audit will drive. */
+function portFromOrigin(origin) {
+  const port = new URL(origin).port;
+  return port === '' ? '3000' : port;
+}
+
+/**
+ * A child server this script owns and must clean up.
+ *
+ * The SIXTH copy of this class, and copied on purpose. `scripts/ax-tree-audit.mjs` carries the
+ * argument in full and the others cross-reference it: the alternative is a shared module that five
+ * release gates import, so that a mistake in it takes out contrast, markup, the accessibility tree,
+ * the age gate, the painted text and now the keyboard at once. Sixty lines of duplication buys six
+ * gates that fail independently, which is the property `verify` is built around.
+ *
+ * The behaviour that matters and is easy to get wrong: `pnpm --filter ... start` is a WRAPPER, so
+ * killing the wrapper leaves the real server holding the port, and the orphan then answers the next
+ * run — which audits a build nobody meant to test, from a checkout that may since have changed.
+ * Detached, so the child gets its own process group; signalled by NEGATIVE pid, so the group goes
+ * with it; ESRCH tolerated, because a server that already exited is the outcome asked for.
+ */
+class ManagedServer {
+  constructor(label, args, readyUrl, env) {
+    this.label = label;
+    this.args = args;
+    this.readyUrl = readyUrl;
+    this.env = env;
+    this.child = null;
+    this.output = [];
+    this.exited = null;
+  }
+
+  start() {
+    this.child = spawn('pnpm', this.args, {
+      cwd: REPO_ROOT,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+      env: { ...process.env, ...this.env },
+    });
+    const keep = (chunk) => {
+      // Kept, not printed: a healthy Next boot is twenty lines of noise, and it is only wanted when
+      // the server fails to come up.
+      this.output.push(chunk.toString());
+      if (this.output.length > 200) this.output.shift();
+    };
+    this.child.stdout.on('data', keep);
+    this.child.stderr.on('data', keep);
+    this.child.on('exit', (code, signal) => {
+      this.exited = signal ?? code;
+    });
+  }
+
+  async waitUntilReady(timeoutSeconds) {
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    for (;;) {
+      if (this.exited !== null) {
+        throw new Error(
+          `${this.label} exited (${this.exited}) before it was ready:\n${this.output.join('')}`,
+        );
+      }
+      try {
+        const response = await fetch(this.readyUrl, { signal: AbortSignal.timeout(2000) });
+        // Any HTTP answer means it is listening; a 404 on the ready URL is still a live server.
+        if (response.status > 0) return;
+      } catch {
+        // Not up yet.
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `${this.label} was not ready at ${this.readyUrl} within ${timeoutSeconds}s:\n${this.output.join('')}`,
+        );
+      }
+      await delay(300);
+    }
+  }
+
+  stop() {
+    if (this.child === null || this.child.pid === undefined) return;
+    try {
+      process.kill(-this.child.pid, 'SIGTERM');
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) {
+        console.log(`${DIM}  could not stop ${this.label}: ${error.message}${RESET}`);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Run
 // ---------------------------------------------------------------------------
 
@@ -1773,12 +1937,66 @@ async function main() {
     `${DIM}  Real Chrome, real Input.dispatchKeyEvent. This is the check scripts/a11y-audit.mjs says it cannot do.${RESET}`,
   );
 
+  // `--with-api` alone is a caller who believes they asked for an API and did not get one. Refusing
+  // beats the alternative this repository keeps finding: a flag that quietly does nothing, and a
+  // green run over a live-table journey that never had a server behind it.
+  if (WITH_API && !START) {
+    console.error(
+      `\n${RED}--with-api only means anything with --start; without it there is no API to start.${RESET}\n`,
+    );
+    process.exit(1);
+  }
+  if (!Number.isFinite(READY_TIMEOUT_SECONDS) || READY_TIMEOUT_SECONDS <= 0) {
+    console.error(`\n${RED}--ready-timeout must be a positive number of seconds.${RESET}\n`);
+    process.exit(1);
+  }
+
+  const servers = [];
+  let exitCode = 0;
+
   try {
+    if (START) {
+      if (WITH_API) {
+        // Inherit `DATABASE_URL` and the rest from the parent, exactly as `ax-tree-audit.mjs`
+        // does, and do NOT force `NODE_ENV=production`: that refuses the development secrets in
+        // `.env`, the API then serves an error page, and the live-table journey below scores it.
+        //
+        // `PUBLIC_WEB_ORIGIN` must be THIS audit's origin. It is one allowlist for CORS and for the
+        // WebSocket `Origin` check, and `.env` holds a developer's `http://localhost:3000`; with it
+        // inherited, the upgrade from `http://127.0.0.1:3464` is answered `forbidden` and the
+        // socket never opens. Measured on `ax-tree-audit.mjs` first, where the table simply said
+        // "You do not have access to that. (forbidden)".
+        const api = new ManagedServer(
+          'api',
+          ['--filter', '@prl/api', 'start'],
+          new URL('/api/v1/health', API_ORIGIN).toString(),
+          {
+            PORT: portFromOrigin(API_ORIGIN),
+            HOST: '127.0.0.1',
+            PUBLIC_WEB_ORIGIN: new URL(WEB_ORIGIN).origin,
+          },
+        );
+        servers.push(api);
+        console.log(`${DIM}  starting the API on ${API_ORIGIN}...${RESET}`);
+        api.start();
+        await api.waitUntilReady(READY_TIMEOUT_SECONDS);
+      }
+      const web = new ManagedServer('web', ['--filter', '@prl/web', 'start'], WEB_ORIGIN, {
+        NODE_ENV: 'production',
+        PRL_API_ORIGIN: API_ORIGIN,
+        PORT: portFromOrigin(WEB_ORIGIN),
+      });
+      servers.push(web);
+      console.log(`${DIM}  starting the web app on ${WEB_ORIGIN}...${RESET}`);
+      web.start();
+      await web.waitUntilReady(READY_TIMEOUT_SECONDS);
+    }
+
     const probe = await fetch(WEB_ORIGIN, { headers: { accept: 'text/html' } }).catch(() => null);
     if (probe === null || !probe.ok) {
-      console.error(`\n${RED}${WEB_ORIGIN} is not serving. Start it first:${RESET}`);
+      console.error(`\n${RED}${WEB_ORIGIN} is not serving. Start it first, or pass --start:${RESET}`);
       console.error(`${DIM}  pnpm --filter @prl/web build && pnpm --filter @prl/web start${RESET}\n`);
-      process.exit(1);
+      throw new Error(`${WEB_ORIGIN} is not serving`);
     }
 
     // Is this even our app? Asked before a single key is pressed.
@@ -1798,6 +2016,12 @@ async function main() {
     // The marker is the shell class the root layout always emits. It is not a version and does not
     // need to be: the question is "is this the app", not "is this the build". `age-gate-audit.mjs`
     // answers the build question separately, from `.next/BUILD_ID`, and refuses `next dev`.
+    //
+    // `--start` does not retire this check, it sharpens it. `next start` binds the port it is given
+    // or exits, so a foreign process already on 3464 makes THIS run's web server die and the audit
+    // then measures the squatter — which is the same failure with a different first step. Measured
+    // on 2026-08-26 against an unrelated Vite app holding :3000 on this machine: exit 1, "No
+    // 'prl-app' or 'prl-shell' in the landing HTML (828 bytes)", zero keys pressed.
     const landing = await probe.text();
     if (!landing.includes('prl-app') && !landing.includes('prl-shell')) {
       console.error(`\n${RED}${WEB_ORIGIN} is serving, but it is not Poker Risk Lab.${RESET}`);
@@ -1806,7 +2030,7 @@ async function main() {
           `Something else is on that port.${RESET}`,
       );
       console.error(`${DIM}  Pass --web <origin>, or set PRL_WEB_ORIGIN.${RESET}\n`);
-      process.exit(1);
+      throw new Error(`${WEB_ORIGIN} is serving something that is not Poker Risk Lab`);
     }
 
     // Said before anything else, and said in colour: a run whose routes were all reached past a
@@ -1826,14 +2050,24 @@ async function main() {
       );
     }
 
+    // A sweep of nothing is not a pass, and this is the cheap half of saying so: an empty `ROUTES`
+    // — a merge that lost the array, an edit that left it behind a filter — would otherwise walk no
+    // page, press no key, and print a summary of zero failures.
+    if (ROUTES.length === 0) {
+      throw new Error('the route list is empty, so this run would audit no page at all');
+    }
+
+    let journeys = 0;
     await withChrome(async (page) => {
       for (const route of ROUTES) {
+        journeys += 1;
         try {
           await auditRoute(page, route);
         } catch (error) {
           bad(`${route.title}: audit`, error instanceof Error ? error.message : String(error));
         }
       }
+      journeys += 3;
       try {
         await auditNarrowViewport(page);
       } catch (error) {
@@ -1850,10 +2084,19 @@ async function main() {
         bad('Private table: audit', error instanceof Error ? error.message : String(error));
       }
     });
+    // The expensive half. `withChrome` swallowing its callback would leave `journeys` at zero, and
+    // so would a browser that opened and closed without driving anything.
+    if (journeys === 0) bad('scope', 'no journey ran, so nothing was audited');
   } catch (error) {
     console.error(`\n${RED}${error instanceof Error ? error.message : String(error)}${RESET}\n`);
-    process.exit(1);
+    exitCode = 1;
+  } finally {
+    // Before any `process.exit`, because `process.exit` does not run a `finally`. That is the
+    // difference between this and an orphaned `next start` holding 3464 until somebody reboots.
+    for (const server of servers) server.stop();
   }
+
+  if (exitCode !== 0) process.exit(exitCode);
 
   if (JSON_OUT !== null) {
     await writeFile(JSON_OUT, `${JSON.stringify({ origin: WEB_ORIGIN, record }, null, 2)}\n`);
@@ -1874,6 +2117,13 @@ async function main() {
     console.log(`  ${RED}${failures.length} failure(s)${RESET}`);
     for (const failure of failures) console.log(`${RED}    - ${failure}${RESET}`);
     console.log('');
+    process.exit(1);
+  }
+  // Zero failures over zero checks reads exactly like a clean run, and is the report this file has
+  // already produced once from a matcher that could not fire. The route list being non-empty is not
+  // the same claim: every route can load and every check can still decline to examine anything.
+  if (passed === 0) {
+    console.log(`\n${RED}${BOLD}FAIL — no check ran at all, so nothing was proven.${RESET}\n`);
     process.exit(1);
   }
   console.log(`${GREEN}${BOLD}\nKeyboard audit passed.${RESET}\n`);

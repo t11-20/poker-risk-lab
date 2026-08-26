@@ -873,7 +873,22 @@ jobs:
           retention-days: 14
 
   # -------------------------------------------------------------------------
-  # 8. The COMPUTED accessibility tree, walked in real Chrome.
+  # 8. The COMPUTED accessibility tree and the KEYBOARD, both in real Chrome.
+  #
+  # `test:keyboard` was added here on 2026-08-26 for the same reason this job
+  # exists at all, one step further along: it was a gate of `pnpm run verify`
+  # that ran nowhere, and before that it was not even in `verify` —
+  # `grep -rl 'test:keyboard' .github/workflows/` matched NOTHING, and the
+  # RUNBOOK told a person to bring up two servers by hand first. It now has the
+  # same `--start --with-api` lifecycle `test:ax` has.
+  #
+  # It is HERE and not in `browser-gates` below, which is where the other Chrome
+  # gates live, because `browser-gates` deliberately has no API and no database
+  # — read its header. `test:keyboard` folds a real hand at a socket-backed
+  # table, so it needs exactly the three things this job already supplies: a
+  # production build, a migrated Postgres, and a browser. Putting it beside
+  # `test:ax` costs one extra step; putting it in `browser-gates` would cost
+  # that job a second Postgres service and the property its header claims.
   #
   # `test:ax` is one of the fourteen gates `pnpm run verify` blocks a release on,
   # and it ran in no workflow at all: before this job,
@@ -933,11 +948,13 @@ jobs:
   # at a step that says exactly that instead of two minutes into an audit.
   # -------------------------------------------------------------------------
   ax-tree:
-    name: Accessibility tree (real Chrome)
+    name: Accessibility tree and keyboard journeys (real Chrome)
     needs: supply-chain
     runs-on: ubuntu-24.04
-    # The audit plays a hand at a live table and waits on bots, on top of a full
-    # workspace build. It takes about three minutes on a warm laptop.
+    # Two audits that each play a hand at a live table and wait on bots, on top
+    # of a full workspace build. `test:ax` takes about three minutes on a warm
+    # laptop and `test:keyboard` about one — measured over six consecutive runs
+    # on 2026-08-26: 56-59s each, 146 checks, 0 failures every time.
     timeout-minutes: 45
 
     services:
@@ -1042,12 +1059,23 @@ jobs:
         # wants it so the next step can publish the findings.
         run: pnpm run test:ax -- --json ax-tree-report.json
 
-      - name: Upload the accessibility-tree report
+      - name: Keyboard journeys
+        # Not conditioned on the step above: they are two independent
+        # measurements of two different layers, and a broken accessibility tree
+        # must not hide a broken tab order. `!cancelled()` rather than `always()`
+        # for the reason `browser-gates` gives — a cancelled run has nothing to
+        # say.
+        if: ${{ !cancelled() }}
+        run: pnpm run test:keyboard -- --json keyboard-report.json
+
+      - name: Upload the accessibility-tree and keyboard reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ax-tree-report
-          path: ax-tree-report.json
+          path: |
+            ax-tree-report.json
+            keyboard-report.json
           if-no-files-found: warn
           retention-days: 14
 

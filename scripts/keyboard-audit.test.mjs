@@ -38,17 +38,26 @@
  *   - Every scan asserts the size of the set it examined, because "nothing wrong was found" and
  *     "nothing was examined" read identically in a passing report.
  *
- * Three reverts were run against the real file, and the numbers are what came back:
+ * Six reverts have been run against the real files, and the numbers are what came back. The first
+ * three were measured when this file held 18 tests and re-measured on 2026-08-26 at 21:
  *
  *   - `actionControlName` back to `textContent` only and `isPokerActionName` back to
- *     `/^(fold|check|call|bet|raise|all.?in)\b/i`  →  5 of 18 tests failed.
- *   - `landedOnAgeGate` loosened to `landedPath.includes(AGE_GATE_PATH)`  →  2 of 18 failed.
- *   - `actionControls: 'required'` deleted from the fixture route in ROUTES  →  1 of 18 failed.
+ *     `/^(fold|check|call|bet|raise|all.?in)\b/i`  →  5 of 21 tests failed.
+ *   - `landedOnAgeGate` loosened to `landedPath.includes(AGE_GATE_PATH)`  →  2 of 21 failed.
+ *   - `actionControls: 'required'` deleted from the fixture route in ROUTES  →  1 of 21 failed.
  *
- * Restoring each one returned the file to 18 passing.
+ * The last three are for the gate-wiring block at the bottom, added when `test:keyboard` gained a
+ * server lifecycle and became one of `verify`'s gates:
+ *
+ *   - `test:keyboard` removed from the `for gate in ...` clause of `verify`  →  1 of 21 failed.
+ *   - `--start --with-api` dropped from the `test:keyboard` script  →  1 of 21 failed.
+ *   - its port changed from 3464 to 3456, which `test:ax` already holds  →  1 of 21 failed.
+ *
+ * Restoring each one returned the file to 21 passing.
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
   AGE_GATE_COOKIE_NAMES,
@@ -296,5 +305,66 @@ describe('the declaration the harness seeds', () => {
       assert.match(cookie.value, /^\d{1,3}$/u);
       assert.equal(cookie.path, '/');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The gate wiring
+//
+// `test:keyboard` was a finished, thorough audit that ran NOWHERE for as long as it existed:
+// `grep -rl 'test:keyboard' .github/workflows/` matched nothing and `pnpm run verify` did not list
+// it, because it had no `--start` and `docs/RUNBOOK.md` told a person to bring up two servers by
+// hand first. `scripts/release-gate-coverage.mjs` now holds the workflows to the gate list. What it
+// cannot see is the two properties below, both of which would turn a wired gate back into a
+// decoration — a run that starts no servers, and a run whose server fights another gate's.
+// ---------------------------------------------------------------------------
+
+describe('the gate starts its own servers, on a port nothing else claims', () => {
+  const PACKAGE_JSON = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
+  it('runs the audit with a lifecycle rather than expecting one to be there', () => {
+    const script = PACKAGE_JSON.scripts['test:keyboard'];
+    assert.ok(typeof script === 'string' && script !== '', 'package.json has no `test:keyboard`');
+    // `--with-api` is not decoration here: the private-table journey folds a real hand over a real
+    // socket, and without an API every one of its checks reports "is the API running?".
+    assert.match(script, /--start\b/u);
+    assert.match(script, /--with-api\b/u);
+    assert.match(script, /scripts\/keyboard-audit\.mjs/u);
+  });
+
+  it('claims a port no other gate in package.json claims', () => {
+    // Two gates on one port is a flake that only appears when somebody runs them at once, which is
+    // exactly what `pnpm run verify` does. Read off the scripts rather than off a comment, because
+    // a comment listing the port map is the thing that goes stale.
+    //
+    // The API port is deliberately NOT in this sweep: `test:a11y`, `test:ax` and `test:keyboard` all
+    // start an API on 3001 and must, because `apps/web/next.config.ts` freezes the `/api/*` rewrite
+    // destination into the build. They run as separate steps, never at once.
+    const claimed = new Map();
+    const collisions = [];
+    for (const [name, body] of Object.entries(PACKAGE_JSON.scripts)) {
+      const web = /PRL_WEB_ORIGIN=http:\/\/127\.0\.0\.1:(\d+)/u.exec(body);
+      if (web === null) continue;
+      const port = web[1];
+      if (claimed.has(port)) collisions.push(`${claimed.get(port)} and ${name} both bind :${port}`);
+      claimed.set(port, name);
+    }
+    assert.ok(
+      claimed.size >= 3,
+      `only ${claimed.size} gate(s) declared a web origin; the sweep read nothing`,
+    );
+    assert.deepEqual(collisions, []);
+    assert.equal(claimed.get('3464'), 'test:keyboard');
+  });
+
+  it('is one of the gates `verify` actually runs', () => {
+    // The whole point. `release-gate-coverage.mjs` proves the workflows match this list; nothing
+    // else proves this list contains the keyboard at all.
+    const gates = /for\s+gate\s+in\s+([^;]+);\s*do/u.exec(PACKAGE_JSON.scripts.verify);
+    assert.notEqual(gates, null, 'the `verify` script no longer has a `for gate in ...; do` clause');
+    assert.ok(
+      gates[1].trim().split(/\s+/u).includes('test:keyboard'),
+      'keyboard operability is back to depending on somebody remembering to run it',
+    );
   });
 });

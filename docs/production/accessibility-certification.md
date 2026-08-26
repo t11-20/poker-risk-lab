@@ -142,7 +142,9 @@ pnpm --filter @prl/web start &
 ```
 
 Then confirm the automated gates are green **before** starting, so that a failure heard here is not
-one a machine could have caught:
+one a machine could have caught. Run these with the two servers above **stopped**: all three start
+their own — `test:ax` on :3456 and `test:keyboard` on :3464, both with an API on :3001 — and a
+manual API already holding :3001 makes them fail at boot rather than measure anything:
 
 ```sh
 pnpm run test:a11y

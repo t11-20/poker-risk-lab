@@ -96,13 +96,13 @@ The container stack has no such split: there is exactly one published origin (§
 | `pnpm run test:exhaustive` | **All 133,784,560 seven-card hands** against published frequencies | ~7 s |
 | `pnpm run test:simulation` | AI-Legends declared traits against a large simulation | ~2 min |
 | `pnpm run test:a11y` | Static accessibility audit of the rendered pages. Starts web on **:3000** itself, or pass `--no-start --base-url <url>` | ~30 s |
-| `pnpm run test:keyboard` | **Real keyboard journeys in real Chrome** over the DevTools Protocol: focus order, focus visibility, keyboard traps, the modal sheet, the bet-size slider, and one hand folded from the keyboard at a live table. Needs a **running production build** on :3000 and a running API — it is not started for you, because a dev build ships overlays that do not ship | ~2 min |
+| `pnpm run test:keyboard` | **Real keyboard journeys in real Chrome** over the DevTools Protocol: focus order, focus visibility, keyboard traps, the modal sheet, the bet-size slider, and one hand folded from the keyboard at a live table. **Starts both servers itself** — web on **:3464**, API on **:3001** — so it is one of `verify`'s gates. Needs a database. `--no-start` is not a flag; drop `--start --with-api` and pass `--web <origin>` to point it at a deployment instead | ~1 min |
 | `pnpm run test:smoke` | End-to-end smoke against a running stack; `-- --strict` fails on warnings | seconds |
 | `pnpm run alerts:verify` | Brings Prometheus and Alertmanager up beside the **running staging stack**, checks all 35 alert rules load/agree/ground/evaluate, then **stops the API** and follows `ApiDown` through to a receiver, floods the limiter to follow `RateLimitBans` to the ticket tier, and finally follows the `Watchdog` heartbeat — including **stopping Alertmanager** so the dead man's switch is observed actually firing. `-- --skip-provoke` does the first four checks only and leaves the API alone; `-- --only-heartbeat` does those plus the heartbeat, also without touching the API | ~10 min |
 | `pnpm run alerts:ack` | Sends a **real page** through this deployment's Alertmanager and refuses to exit 0 until a person types back a one-time code, inside `--within` (default 5m) and inside five attempts. **Fails loudly when nobody answers.** It is evidence a cooperating operator produces for themselves, **not** an attestation against a hostile caller: the code travels through Alertmanager, which echoes it back unauthenticated, and the caller both chooses the URL and owns the process that mints the code | the window |
 | `pnpm run alerts:preflight` | Refuses a paging destination that is a placeholder, malformed, missing a credential, or routed to a receiver with nothing in it. Needs no stack and no containers. `-- --handshake` also speaks TCP/TLS/`EHLO`/`AUTH`/`QUIT` to the configured relay — never `MAIL FROM`, so it cannot send anybody a page. Run by `staging promote`, which refuses on it | seconds |
 | `pnpm run test:load` | WebSocket load harness against a local server | configurable |
-| `pnpm run test:all` | test + exhaustive + simulation + a11y + ax | ~5 min |
+| `pnpm run test:all` | test + exhaustive + simulation + a11y + ax + keyboard + layout | ~8 min |
 | `pnpm run fixtures:check` | Report drift between `apps/web/src/fixtures/**` and what the engine computes today. Changes nothing | seconds |
 | `pnpm run fixtures:regenerate` | Rewrite those fixtures from the engine. **The remedy for a failing fixture guard** | seconds |
 
@@ -148,7 +148,7 @@ never receive another player's hole cards. A guardrail that skips is not a guard
 
 | Command | What it does |
 | --- | --- |
-| `pnpm run security:audit` | **All fourteen supply-chain gates.** Itself one of the *fifteen* gates inside `pnpm run verify`, which is the release gate as a whole. The two numbers were coincidentally equal — fourteen and fourteen — until `test:layout` was added to `verify`; they are unrelated lists and were never comparable. It was eleven until `image-provenance`, `log-policy` and `keyless-signing-identity` were added |
+| `pnpm run security:audit` | **All fourteen supply-chain gates.** Itself one of the *sixteen* gates inside `pnpm run verify`, which is the release gate as a whole. The two numbers were coincidentally equal — fourteen and fourteen — until `test:layout` and then `test:keyboard` were added to `verify`; they are unrelated lists and were never comparable. It was eleven until `image-provenance`, `log-policy` and `keyless-signing-identity` were added |
 | `pnpm run security:audit -- --offline` | Skips the three network gates and **exits 2** — *not* a valid release audit |
 | `pnpm run security:policy` | Is the supply-chain policy actually in effect? |
 | `pnpm run security:hygiene` | Source encoding, NUL bytes, hidden/bidi characters |
@@ -220,12 +220,12 @@ privilege boundary working, not a broken command.
 ```bash
 pnpm run verify
 # security:audit · security:hygiene · lint · build · typecheck · design:contrast
-# test · test:a11y · test:ax · test:layout · test:csp · test:age-gate · test:exhaustive
-# test:simulation · db:verify
-# — fifteen gates. This comment said fourteen, and thirteen, and before that eleven. The
-#   eleven was a comment that had fallen behind the loop (test:ax and test:csp were missing
-#   from it, not from package.json); thirteen was correct until test:age-gate joined, and
-#   fourteen until test:layout did.
+# test · test:a11y · test:ax · test:keyboard · test:layout · test:csp · test:age-gate
+# test:exhaustive · test:simulation · db:verify
+# — sixteen gates. This comment said fifteen, and fourteen, and thirteen, and before that
+#   eleven. The eleven was a comment that had fallen behind the loop (test:ax and test:csp
+#   were missing from it, not from package.json); thirteen was correct until test:age-gate
+#   joined, fourteen until test:layout did, and fifteen until test:keyboard did.
 #   Read the list in package.json, never this comment, if the two ever disagree.
 ```
 
@@ -250,6 +250,12 @@ Three gates were added because a claim no gate enforces is a claim, not a result
 (accessibility is a stated functional requirement, and it was in no gate at all), `test:exhaustive`
 (the strongest single check in the project, and 7 seconds) and `test:simulation` (the AI profiles'
 only statistical evidence, ~2 minutes — which is what a release gate is for).
+
+`test:keyboard` was added on 2026-08-26 for a fourth reason, which is worse than a missing claim: it
+was a finished, thorough gate that **ran nowhere**. `grep -rl 'test:keyboard' .github/workflows/`
+matched nothing and `verify` did not list it, because it had no `--start` and this runbook told a
+person to bring up two servers by hand first. It now starts its own web app on :3464 and its own API
+on :3001, and keyboard operability stopped depending on somebody remembering.
 
 ## 4. Adding a dependency
 

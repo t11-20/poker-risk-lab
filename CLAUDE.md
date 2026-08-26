@@ -18,17 +18,17 @@ against the repo — if a statement here and the code disagree, the code is righ
 
 ## The gate
 
-`pnpm run verify` is the release gate: **fifteen** gates, in order —
+`pnpm run verify` is the release gate: **sixteen** gates, in order —
 
     security:audit  security:hygiene  lint  build  typecheck  design:contrast  test
-    test:a11y  test:ax  test:layout  test:csp  test:age-gate  test:exhaustive
-    test:simulation  db:verify
+    test:a11y  test:ax  test:keyboard  test:layout  test:csp  test:age-gate
+    test:exhaustive  test:simulation  db:verify
 
 It runs every gate even after one fails, then exits non-zero listing them. `security:audit` is
 itself **fourteen** supply-chain gates (`scripts/supply-chain/audit.mjs`). Those two counts were
 equal for a while — worse than being different, because the lists are unrelated and equal numbers
-look interchangeable — and `test:layout` has since made them fifteen and fourteen. Read each count
-off its own list anyway; they will collide again.
+look interchangeable — and `test:layout` and then `test:keyboard` have since made them sixteen and
+fourteen. Read each count off its own list anyway; they will collide again.
 
 `scripts/release-gate-coverage.mjs` reads the `for gate in ...` clause of `verify` against the job
 graphs of both workflows and fails when they disagree, so **adding a gate is a three-file change by
@@ -52,6 +52,19 @@ the box. If you write a layout check, measure the glyphs.
 Its negative controls run on every invocation: six stylesheets injected into real pages, one of
 them the `minmax(0, 1fr) auto` rule put back verbatim, each of which must be caught. A detector
 that stops working fails the gate instead of going quiet.
+
+`pnpm run test:keyboard` is the newest, and it is the only one that was added without writing a
+check. It already drove **real keys through Chrome's own input pipeline** — `Input.dispatchKeyEvent`,
+not a synthesised `KeyboardEvent`, which does not move focus — over every route: tab order against
+the page's own focusable set, focus visibility measured under `:focus-visible` focused against
+blurred, no trap, the skip link, the modal sheet's trap and its Escape, the bet-size slider under the
+arrow keys, and a whole hand opened, sat down at, dealt and **folded from the keyboard** at a live
+socket-backed table. And it **ran nowhere**: `grep -rl 'test:keyboard' .github/workflows/` matched
+nothing and `verify` did not list it, for one mechanical reason — it had no `--start`, so
+`docs/RUNBOOK.md` told a person to bring up a production build and an API by hand first. A gate that
+needs somebody to remember is not a gate. It now starts its own servers (web on **3464**, API on
+**3001** — the API port is not a free choice, see the script's header on the frozen `/api/*` rewrite)
+and reports 146 checks.
 
 Gates outside `verify` because they need a deployment: `alerts:verify`, `alerts:preflight`,
 `alerts:ack`, `staging`, `backup`, `test:load`, `test:drills`, `release:artifacts`,

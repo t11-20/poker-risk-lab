@@ -299,11 +299,12 @@ jobs:
   # fifteenth gate, and this job is where that guard said it had to be wired.
   # -------------------------------------------------------------------------
   browser-gates:
-    name: Contrast, a11y, ax tree, painted text, CSP and age gate (real Chrome)
+    name: Contrast, a11y, ax tree, keyboard, painted text, CSP and age gate (real Chrome)
     needs: gates
     runs-on: ubuntu-24.04
-    # Six browser sweeps on top of a full build. `test:ax` alone plays a hand at
-    # a live table and waits on bots.
+    # Seven browser sweeps on top of a full build. `test:ax` and `test:keyboard`
+    # each play a hand at a live table and wait on bots; the keyboard pass takes
+    # about a minute on its own.
     timeout-minutes: 60
 
     services:
@@ -347,7 +348,7 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Build
-        # The `build` gate itself, and a precondition of the five below: every one
+        # The `build` gate itself, and a precondition of the seven below: every one
         # of them measures a PRODUCTION build and says so, because the development
         # Content-Security-Policy adds `'unsafe-eval'` and an HMR websocket on
         # purpose and a pass against `next dev` would be worth nothing.
@@ -385,7 +386,7 @@ jobs:
       - name: Resolve the browser
         id: browser
         # Same list, same reason, as the browser jobs in ci.yml. A missing Chrome
-        # FAILS: four of the five gates below cannot run without one, and a release
+        # FAILS: six of the seven gates below cannot run without one, and a release
         # pipeline that skips them quietly is the hole this job was added to close.
         run: |
           for candidate in /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser; do
@@ -403,8 +404,8 @@ jobs:
         run: pnpm run design:contrast
 
       - name: Accessibility audit
-        # Every gate below carries `!cancelled() && steps.browser.outcome`: five
-        # independent measurements, and one failing must not hide the other four's
+        # Every gate below carries `!cancelled() && steps.browser.outcome`: seven
+        # independent measurements, and one failing must not hide the other six's
         # verdicts. The condition is on the BROWSER step rather than `always()`,
         # because with no browser there is nothing to measure and a second
         # confusing failure helps nobody.
@@ -414,6 +415,16 @@ jobs:
       - name: Accessibility tree
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: pnpm run test:ax -- --json ax-tree-report.json
+
+      - name: Keyboard journeys
+        # Real `Input.dispatchKeyEvent` through Chrome's own input pipeline: tab
+        # order, focus visibility, the modal sheet's trap, the bet-size slider,
+        # and a whole hand opened, sat down at, dealt and folded from the
+        # keyboard at a live socket-backed table. It ran NOWHERE until 2026-08-26
+        # — not in `verify`, not in either workflow — because it had no `--start`
+        # and so needed a person to bring up two servers first.
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:keyboard -- --json keyboard-report.json
 
       - name: CSP negative control
         if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
@@ -441,6 +452,7 @@ jobs:
           path: |
             a11y-report.json
             ax-tree-report.json
+            keyboard-report.json
             csp-negative-control.json
             age-gate-report.json
             text-layout-report.json
