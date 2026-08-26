@@ -111,6 +111,7 @@ import {
   registryTagReference,
   verifyRegistryDigest,
 } from './registry-digest.mjs';
+import { MUST_BE_IGNORED, NEVER_TRACKED } from './supply-chain/secret-scan.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -427,14 +428,71 @@ function inspectImage(reference, iidDigest) {
  * package count from 88 to 18 and with it every `find` a Debian layout implied),
  * which is the argument for depending on node and nothing else.
  */
-const filesystemProbe = (root) => `
+/**
+ * The credential shapes the probe looks for, DERIVED from `secret-scan.mjs` rather than typed
+ * out here.
+ *
+ * ## The defect this exists for
+ *
+ * The probe below matched two things: a `.md` name, and a basename starting `.env`. Those cover
+ * three of the nine paths in `MUST_BE_IGNORED` — `.env`, `.env.local`, `.env.staging` — and
+ * miss the other six, which are the six that matter most: `deploy/signing/cosign.key` (mints
+ * signatures `security:image-provenance` accepts), `deploy/backup/backup.env` (decrypts every
+ * archive ever taken), `deploy/signing/signing.env`, `deploy/staging/observability/metrics-token`
+ * and both staging TLS private keys. `backup.env` and `signing.env` slipped through because the
+ * test was `/^\.env/` — the basename must START with `.env`, and `backup.env` does not.
+ *
+ * Measured, not reasoned: an image was built containing `/app/deploy/signing/cosign.key`,
+ * `/app/deploy/staging/tls/staging-key.pem`, `/app/deploy/signing/signing.env` and
+ * `/app/deploy/staging/observability/metrics-token`, run through this exact probe and through
+ * `filesystemProblems`, and the answer was `[]` — a clean release. `.dockerignore`'s single
+ * `deploy` line is the only thing standing between that image and a real one, and nothing
+ * asserted that line exists.
+ *
+ * So the list is imported. `MUST_BE_IGNORED` supplies the exact basenames an operator is told
+ * to create, `NEVER_TRACKED` supplies the shapes (`*.pem`, `*.key`, `id_rsa`, …), and a new
+ * entry in either extends this probe on the same commit instead of a year later. `*.env` is
+ * added on top of both, because `NEVER_TRACKED` is written for a repository — where a tracked
+ * `backup.env` is the finding — while an image should carry no environment file at all,
+ * whatever it is called.
+ */
+const CREDENTIAL_PATTERNS = [
+  ...NEVER_TRACKED.map((rule) => rule.pattern.source),
+  // Any `*.env`, not only `.env` and `.env.<x>`: `backup.env` and `signing.env` are the two
+  // this repository already documents, and both were invisible to the old test.
+  '\\.env$',
+];
+
+/** The basenames themselves, so a rename of `metrics-token` to something shapeless still fires. */
+const CREDENTIAL_BASENAMES = [
+  ...new Set(MUST_BE_IGNORED.map((entry) => entry.path.split('/').pop()).filter((name) => name)),
+];
+
+/**
+ * A sweep of nothing is not a pass — the corollary this repository has been bitten by twice.
+ * If an import ever resolves to an empty list, every image is clean by construction and this
+ * check becomes decoration. Fail at module load, where it cannot be mistaken for a green run.
+ */
+if (CREDENTIAL_PATTERNS.length < 4 || CREDENTIAL_BASENAMES.length < 4) {
+  throw new Error(
+    `the credential detectors derived from secret-scan.mjs collapsed to ${CREDENTIAL_PATTERNS.length} ` +
+      `pattern(s) and ${CREDENTIAL_BASENAMES.length} basename(s). A probe with no detectors reports ` +
+      'every image clean; refusing to run one',
+  );
+}
+
+export const filesystemProbe = (root) => `
 const fs = require('node:fs');
 const path = require('node:path');
 const root = ${JSON.stringify(root)};
+// Credential detectors, interpolated from scripts/supply-chain/secret-scan.mjs — see
+// CREDENTIAL_PATTERNS above for the six secret-bearing paths the hand-written test missed.
+const credentialPatterns = ${JSON.stringify(CREDENTIAL_PATTERNS)}.map((source) => new RegExp(source));
+const credentialNames = new Set(${JSON.stringify(CREDENTIAL_BASENAMES)});
 // \`examined\` is the load-bearing field, and \`unreadable\` records why a directory produced
 // none. See \`probeRoot\` and \`checkArtefact\`: the walk used to swallow a missing directory and
 // report an empty \`hits\`, which is indistinguishable from a clean image.
-const hits = { root, exists: false, examined: 0, unreadable: [], markdown: [], dotenv: [] };
+const hits = { root, exists: false, examined: 0, unreadable: [], markdown: [], dotenv: [], credentials: [] };
 const walk = (dir, depth) => {
   if (depth > 12) return;
   let entries;
@@ -447,7 +505,12 @@ const walk = (dir, depth) => {
     if (!entry.isFile()) continue;
     hits.examined += 1;
     if (/\\.md$/i.test(entry.name)) hits.markdown.push(full);
-    if (/^\\.env/.test(entry.name)) hits.dotenv.push(full);
+    if (/^\\.env/.test(entry.name)) { hits.dotenv.push(full); continue; }
+    // Matched against the WHOLE path, not the basename: the NEVER_TRACKED shapes are anchored
+    // with (^|/) and a basename-only test would silently drop that anchor.
+    if (credentialNames.has(entry.name) || credentialPatterns.some((re) => re.test(full))) {
+      hits.credentials.push(full);
+    }
   }
 };
 try { hits.exists = fs.statSync(root).isDirectory(); }
@@ -529,6 +592,30 @@ export function filesystemProblems(hits, workingDir) {
   if (hits.dotenv.length > 0) {
     problems.push(`environment file(s) in the image: ${hits.dotenv.join(', ')} — these carry credentials`);
   }
+  /**
+   * Credential material that is not an `.env`.
+   *
+   * Separate from `dotenv` because the remedy is different and because this list is derived
+   * from `secret-scan.mjs` rather than written here — see `CREDENTIAL_PATTERNS`. The old probe
+   * saw none of it: `deploy/signing/cosign.key` inside a release image hands every puller the
+   * ability to mint signatures `security:image-provenance` accepts, and the check that was
+   * supposed to notice reported a clean pass.
+   */
+  if (!Array.isArray(hits.credentials)) {
+    // A probe that stopped reporting the bucket is indistinguishable from a clean image, which
+    // is the exact shape of the `examined === 0` defect above. Refuse rather than assume empty.
+    problems.push(
+      'the filesystem probe returned no `credentials` list, so nothing looked for key material. ' +
+        'An absent result is not a clean one — see CREDENTIAL_PATTERNS',
+    );
+  } else if (hits.credentials.length > 0) {
+    problems.push(
+      `credential material in the image: ${hits.credentials.slice(0, 5).join(', ')}` +
+        `${hits.credentials.length > 5 ? ', …' : ''} (${hits.credentials.length} file(s)) — these are ` +
+        'the paths scripts/supply-chain/secret-scan.mjs calls credential-bearing; a key in a layer is ' +
+        'published to everybody who pulls the image, and rotating it is the only remedy',
+    );
+  }
   return problems;
 }
 
@@ -557,6 +644,15 @@ export function filesystemProblems(hits, workingDir) {
  *   * **No `.env*` anywhere.** Same class of bug, one that has not happened yet:
  *     `.env` in .dockerignore was root-anchored too, so `apps/api/.env` would have
  *     entered the context and been copied wholesale into the web image.
+ *   * **No credential material anywhere**, where "credential material" is
+ *     `secret-scan.mjs`'s own list rather than a second copy of it. This bullet
+ *     used to be the one above and nothing else, and that covered three of the
+ *     nine paths in `MUST_BE_IGNORED`: an image built for the measurement,
+ *     carrying `/app/deploy/signing/cosign.key`, `/app/deploy/signing/signing.env`,
+ *     `/app/deploy/staging/tls/staging-key.pem` and
+ *     `/app/deploy/staging/observability/metrics-token`, produced `[]` problems.
+ *     `.dockerignore`'s single `deploy` line was the whole defence, and no gate
+ *     asserts that line is there.
  *
  * Dependency READMEs under node_modules are skipped, not because they are
  * desirable but because removing them would mean rewriting a third-party tree
@@ -607,8 +703,9 @@ function checkArtefact(reference, meta, note) {
   problems.push(...filesystemProblems(hits, meta.workingDir));
   if (problems.length === 0) {
     note(
-      `no markdown and no .env among ${hits.examined} files under ${root} outside node_modules; ` +
-        `runs as ${meta.user}`,
+      `no markdown, no .env and no credential material among ${hits.examined} files under ${root} ` +
+        `outside node_modules (${CREDENTIAL_BASENAMES.length} named path(s) and ` +
+        `${CREDENTIAL_PATTERNS.length} shape(s) from secret-scan.mjs); runs as ${meta.user}`,
     );
   }
   return problems;

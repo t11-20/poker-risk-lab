@@ -252,12 +252,24 @@ RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@prl/api...
 # the workspace. So keep package.json and delete the rest, and the next root-level
 # file somebody adds to the web app cannot repeat this. Everywhere else the deny
 # list stands, for the reason in the header — its worst case is a fat image.
+#
+# `docker-compose*.yml`, not the two names it used to spell out. The deny list
+# named `docker-compose.yml` and `docker-compose.staging.yml` and there is a
+# third: prl-api@sha256:acd1139c and prl-web@sha256:6a63e44f both shipped
+# `/app/docker-compose.observability.yml` — measured with `docker export`, the
+# whole Prometheus/Alertmanager/blackbox overlay including the metrics-token mount
+# path and the internal service topology. Nothing failed, because
+# `release-artifacts.mjs`'s image probe looks for `*.md` and `.env*`. A glob
+# cannot drift the way three hand-written names did. `.gitignore` and
+# `.dockerignore` go with them for the same reason they are in .dockerignore's
+# "prose" section: they are a map of where this deployment keeps its secrets, and
+# nothing in a runtime image reads either one.
 RUN rm -rf \
       apps/*/src apps/*/test apps/*/scripts apps/*/public \
       packages/*/src packages/*/test \
       apps/*/tsconfig*.json packages/*/tsconfig*.json tsconfig.base.json \
       biome.json db .github scripts Dockerfile.api Dockerfile.web \
-      docker-compose.yml docker-compose.staging.yml deploy \
+      docker-compose*.yml .dockerignore .gitignore deploy \
       ./*.md apps/*/*.md packages/*/*.md \
  && find apps/web -mindepth 1 -maxdepth 1 ! -name package.json -exec rm -rf {} +
 

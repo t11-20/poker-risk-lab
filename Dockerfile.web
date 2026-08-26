@@ -132,12 +132,17 @@ RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@prl/web...
 # image — prl-web shipped apps/api/tsconfig.test.json and five
 # packages/*/tsconfig.test.json under a .dockerignore that says the test trees and
 # tsconfigs "are removed inside the images by the prune stages".
+# `docker-compose*.yml`, not the two names it used to spell out: there is a third
+# compose file and prl-web@sha256:6a63e44f shipped it — see the same paragraph in
+# Dockerfile.api for the measurement. `.gitignore` and `.dockerignore` go with
+# them; nothing at runtime reads either, and .gitignore is a list of where this
+# deployment's secrets live.
 RUN rm -rf \
       apps/*/src apps/*/test apps/*/scripts \
       packages/*/src packages/*/test \
       apps/*/tsconfig*.json packages/*/tsconfig*.json tsconfig.base.json \
       biome.json db .github scripts Dockerfile.api Dockerfile.web \
-      docker-compose.yml docker-compose.staging.yml deploy \
+      docker-compose*.yml .dockerignore .gitignore deploy \
       ./*.md apps/*/*.md packages/*/*.md
 
 FROM source AS build

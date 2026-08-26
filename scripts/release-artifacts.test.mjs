@@ -63,11 +63,14 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { filesystemProblems, MANIFEST_SCHEMA, probeRoot } from './release-artifacts.mjs';
+import { filesystemProbe, filesystemProblems, MANIFEST_SCHEMA, probeRoot } from './release-artifacts.mjs';
+import { MUST_BE_IGNORED } from './supply-chain/secret-scan.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SCRIPT = readFileSync(join(REPO_ROOT, 'scripts', 'release-artifacts.mjs'), 'utf8');
@@ -80,6 +83,7 @@ const probeResult = (overrides = {}) => ({
   unreadable: [],
   markdown: [],
   dotenv: [],
+  credentials: [],
   ...overrides,
 });
 
@@ -333,5 +337,101 @@ describe('filesystemProblems', () => {
       const problems = filesystemProblems(hits, '/app');
       assert.ok(problems.length > 0, `${JSON.stringify(hits)} must not read as clean`);
     }
+  });
+
+  it('reports credential material that is not an .env, and says rotation is the remedy', () => {
+    const problems = filesystemProblems(
+      probeResult({ credentials: ['/app/deploy/signing/cosign.key'] }),
+      '/app',
+    );
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /cosign\.key/);
+    assert.match(problems[0], /rotating it is the only remedy/, 'the message must say what to do');
+  });
+
+  it('refuses a probe result with no credentials list rather than reading it as clean', () => {
+    // The `examined === 0` defect, one field along: a probe that stopped emitting the bucket
+    // would look exactly like an image with no key material in it.
+    const { credentials, ...withoutBucket } = probeResult();
+    assert.equal(Array.isArray(credentials), true, 'the helper must model the real probe output');
+    const problems = filesystemProblems(withoutBucket, '/app');
+    assert.equal(problems.length, 1);
+    assert.match(problems[0], /no `credentials` list/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The in-image probe itself
+//
+// `filesystemProblems` judges a hit list; these run the WALK that produces one. The probe used
+// to look for `*.md` and a basename starting `.env`, which covers three of the nine paths in
+// `MUST_BE_IGNORED` and misses `cosign.key`, `signing.env`, `backup.env`, `metrics-token` and
+// both staging TLS keys. Measured before the fix, against a real image built to carry four of
+// them: `filesystemProblems` returned `[]` — a clean release over an image publishing the key
+// that mints signatures `security:image-provenance` accepts.
+//
+// The probe source is executed here rather than pattern-matched, on the host and with `node -e`,
+// which is exactly how it runs inside the image.
+// ---------------------------------------------------------------------------
+
+describe('the in-image credential probe', () => {
+  /** Runs the real probe body over a real directory tree and returns the hits it emits. */
+  const runProbe = (files) => {
+    const dir = mkdtempSync(join(tmpdir(), 'prl-probe-'));
+    try {
+      for (const relative of files) {
+        const full = join(dir, relative);
+        mkdirSync(dirname(full), { recursive: true });
+        writeFileSync(full, 'placeholder, not a credential\n');
+      }
+      const out = execFileSync(process.execPath, ['-e', filesystemProbe(dir)], { encoding: 'utf8' });
+      return { dir, hits: JSON.parse(out) };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('finds every path MUST_BE_IGNORED names, at the depth the deployment writes it', () => {
+    // The list is imported, not copied: a tenth entry in secret-scan.mjs must extend this probe
+    // on the same commit. That is the whole point of the import.
+    assert.ok(MUST_BE_IGNORED.length >= 9, 'a shrunken list would make this assertion vacuous');
+    const paths = MUST_BE_IGNORED.map((entry) => entry.path);
+    const { dir, hits } = runProbe(paths);
+    assert.equal(hits.examined, paths.length, 'the walk must have seen all of them');
+    const found = new Set([...hits.credentials, ...hits.dotenv].map((full) => full.slice(dir.length + 1)));
+    for (const path of paths) {
+      assert.equal(found.has(path), true, `${path} must be reported by the probe`);
+    }
+  });
+
+  it('finds key material by shape, wherever in the tree it landed', () => {
+    // NEVER_TRACKED's extension rules, which is what catches a key this repository has never
+    // documented — a TLS cert copied in by hand, an SSH key baked into a build step.
+    const paths = ['a/b/c/server.pem', 'x/private.key', 'deep/id_rsa', 'y/keystore.p12'];
+    const { dir, hits } = runProbe(paths);
+    const found = new Set(hits.credentials.map((full) => full.slice(dir.length + 1)));
+    for (const path of paths) assert.equal(found.has(path), true, `${path} must be reported`);
+  });
+
+  it('finds any *.env, not only names starting with a dot', () => {
+    // `backup.env` holds PRL_BACKUP_KEY, which decrypts every archive ever taken, and the old
+    // `/^\.env/` test did not match it because the basename does not begin `.env`.
+    const { dir, hits } = runProbe(['deploy/backup/backup.env', 'deploy/signing/signing.env']);
+    const found = new Set(hits.credentials.map((full) => full.slice(dir.length + 1)));
+    assert.equal(found.has('deploy/backup/backup.env'), true);
+    assert.equal(found.has('deploy/signing/signing.env'), true);
+  });
+
+  it('leaves an ordinary application tree alone', () => {
+    // The positive control. A probe that flagged everything would satisfy every assertion above
+    // and would be worked around within a week.
+    const { hits } = runProbe([
+      'package.json',
+      'apps/api/dist/server.js',
+      'packages/content/data/glossary.json',
+      'apps/web/.next/BUILD_ID',
+    ]);
+    assert.deepEqual(hits.credentials, [], 'no ordinary file may be called credential material');
+    assert.deepEqual(hits.markdown, []);
   });
 });

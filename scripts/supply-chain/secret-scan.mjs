@@ -215,8 +215,18 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
  * failure needs to know what would have been published, and "an env file" is not
  * that. Add an entry here whenever a document starts telling somebody to write a
  * secret to a path inside this repository.
+ *
+ * Exported because this list is the AUTHORITY on what counts as credential
+ * material here, and a second guard used to keep its own shorter copy of it.
+ * `scripts/release-artifacts.mjs` probes the built images for these; before it
+ * imported this list it looked for `*.md` and `/^\.env/` alone, so an image
+ * carrying `deploy/signing/cosign.key`, `deploy/backup/backup.env`,
+ * `deploy/signing/signing.env`, `metrics-token` or either staging TLS key passed
+ * the release check with zero problems — measured, against a real image built for
+ * the purpose. Adding an entry here must extend both gates at once or they drift
+ * again.
  */
-const MUST_BE_IGNORED = [
+export const MUST_BE_IGNORED = [
   {
     path: '.env',
     why: 'the API session cookie secret and the database URL (.env.example, docs/production/deployment.md)',
@@ -284,7 +294,7 @@ const MUST_BE_IGNORED = [
  * to edit this list with a comment saying which file and why. That friction is
  * the right amount for a decision that puts a `.pem` in a public repository.
  */
-const NEVER_TRACKED = [
+export const NEVER_TRACKED = [
   { pattern: /(^|\/)\.env$/, what: 'an environment file' },
   /**
    * `.env.<anything>`, with two exemptions carved out by name.
