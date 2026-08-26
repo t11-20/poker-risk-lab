@@ -61,11 +61,12 @@
 > `7e861ae0a9f1`: **`pnpm run verify` passes 15 of the 15 that existed then, 3,586 tests, 0
 > failures**.
 >
-> **`verify` is sixteen gates today, and has now been run as sixteen.** At `27014bb2` — the commit
-> that wired `test:keyboard` in — `pnpm run verify` was **15 of 16 PASS, 3,643 tests, 0 test
-> failures**, with the single red being `security:audit` → `release-image-signatures`, which is the
-> expected-red described at the top of this document and clears at go-live step 2.3. Every other
-> gate passed, `test:keyboard` among them at 146 checks. `test:keyboard` — real keyboard journeys in real Chrome — was added on 2026-08-26. It
+> **`verify` is sixteen gates today, and the closing run of 2026-08-27 was at `cb1fcca`:
+> 15 of 16 PASS, 3,694 tests, 0 test failures.** The single red is `security:audit` →
+> `release-image-signatures`, the expected-red described at the top of this document, which clears
+> at go-live step 2.3. Every other gate passed, and `security:audit`'s own fifteen were 14 pass / 1
+> fail — that one. (An earlier run at `27014bb2`, the commit that wired `test:keyboard` in, was
+> 15 of 16 with 3,643 tests; the difference is the guards added after it.) `test:keyboard` — real keyboard journeys in real Chrome — was added on 2026-08-26. It
 > was not a new check: it existed, it was thorough, and it ran NOWHERE, because it had no `--start`
 > and so needed a person to bring up a web server and an API by hand first. Measured on its own at
 > that commit: **146 checks, 0 failures**, over six consecutive runs, 56-59s each.
