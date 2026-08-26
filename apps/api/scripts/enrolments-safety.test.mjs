@@ -127,6 +127,39 @@ describe('the enrolment CLI cannot write before it has refused', () => {
     }
   });
 
+  it('the whole batch is ONE transaction, not one per learner (REGRESSION)', () => {
+    // go-live 6.4's pass condition: "one transaction; rows and audit entries land together". The
+    // CLI's own comment says why — "thirty rows and their thirty audit entries land together, so a
+    // closed terminal leaves a class either wholly enrolled or wholly not."
+    //
+    // Inverting the loop and the transaction would satisfy every other assertion in this file: the
+    // write is still after both refusals, and `sql.begin(` still appears once. What changes is that
+    // a class becomes partly enrolled when the terminal closes — the exact state the transaction
+    // exists to make impossible, reached by a refactor that reads as a tidy-up.
+    for (const name of WRITING_COMMANDS) {
+      const body = functionBody(SOURCE, name);
+      const begin = body.indexOf('sql.begin(');
+      const loop = body.indexOf('for (const { user } of resolution.resolved)', begin === -1 ? 0 : begin);
+      assert.notEqual(begin, -1, `${name} no longer opens a transaction`);
+      assert.notEqual(
+        loop,
+        -1,
+        `${name} no longer loops over the resolved learners inside its transaction, so this guard ` +
+          'cannot tell whether the batch is still atomic',
+      );
+      assert.ok(
+        begin < loop,
+        `${name} opens its transaction inside the per-learner loop, so a batch is one transaction ` +
+          'per learner and a closed terminal leaves a class partly enrolled',
+      );
+      assert.equal(
+        body.split('sql.begin(').length - 1,
+        1,
+        `${name} opens more than one transaction; the batch is no longer one unit`,
+      );
+    }
+  });
+
   it('NEGATIVE CONTROL — a write hoisted above either refusal is caught', () => {
     const body = functionBody(SOURCE, 'commandGrant');
     assert.ok(body !== null);
