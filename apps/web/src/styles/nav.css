@@ -106,20 +106,64 @@
   --prl-pillbar-pad-block: var(--prl-space-6);
 
   /**
-   * The height the bar occupies, as one expression rather than as a number repeated in a
-   * `scroll-padding` and a `top` and a comment. Anything that has to clear the bar reads this.
+   * The TALLEST the bar can be at this width, as one expression rather than as a number repeated
+   * in a `scroll-padding` and a `top` and a comment. Anything that has to clear the bar reads this.
+   *
+   * "Tallest", not "the height", and the difference is a defect this shipped with. Below the nav
+   * breakpoint the bar is a wordmark beside `.prl-shell__header-tools`, which is `flex-wrap:
+   * wrap` — so the units readout and the menu trigger take a row each as soon as they do not fit
+   * side by side. Measured against the production build with scripting disabled, so this is the
+   * server's own markup and not an outage state: the bar is 129px at every width up to 381px and
+   * 77px from 382px up. In the units-unavailable state the readout is the longer string
+   * `units — not available`, and the wrap starts at 412px instead.
+   *
+   * 129px is `2 * 44 + 8 + 2 * 16` plus the 1px bottom edge — two pill rows, the tools row-gap
+   * (`--prl-space-4`, from `.prl-shell__header-tools`) and the block padding. The one-row value
+   * this used to hold was 92px including its step of air, which is 37px short, and 37px is enough
+   * to put a whole control behind the glass. See the scroll-padding rule below for what that did.
    */
-  --prl-pillbar-h: calc(var(--prl-pill-h) + 2 * var(--prl-pillbar-pad-block));
+  --prl-pillbar-h: calc(2 * var(--prl-pill-h) + var(--prl-space-4) + 2 * var(--prl-pillbar-pad-block));
 }
 
 /**
- * An in-page anchor must not land underneath the bar.
+ * From the nav breakpoint up the bar cannot wrap: the tools sit in their own `auto` column beside
+ * a centred navigation pill, and every width from 382px was measured at one row anyway. Narrowing
+ * the token here rather than widening it in a `max-width` query keeps this file on the two
+ * breakpoints section 9 already owns, and keeps the DEFAULT on the safe side — a bar that is
+ * shorter than the padding reserved for it costs a reader some air above an anchor; a bar that is
+ * taller than it hides the thing they were sent to.
+ */
+@media (min-width: 860px) {
+  :root {
+    --prl-pillbar-h: calc(var(--prl-pill-h) + 2 * var(--prl-pillbar-pad-block));
+  }
+}
+
+/**
+ * An in-page anchor — and a control the browser scrolls to because it was focused — must not land
+ * underneath the bar.
  *
  * `base.css` already sets `scroll-padding-block-start: var(--prl-space-13)` (80px) on the root for
  * exactly this reason. That number was chosen against the old strip; this one is derived from the
  * bar that is actually there, plus a step of breathing room so the target does not sit welded to
  * the pill above it. Restated on `:root` rather than edited in `base.css` because the token layer
  * belongs to another owner — and because a value derived from THIS bar belongs beside it.
+ *
+ * ## The defect, and how to see it again
+ *
+ * This resolved to 92px at every width, against a bar that is 129px below 382px — see
+ * `--prl-pillbar-h` above. Reproduce at 360x640 in Chrome: load any long route, scroll to the
+ * bottom, then Shift+Tab back up. Every control the browser has to scroll into view is delivered
+ * with its top edge at exactly 92px, the padding, and the bar's bottom edge is at 129px, so 37px
+ * of it is behind the glass. Measured on `/review` ("Replay hand 41", top 91.8), `/lab` (the
+ * street filter `<select>`, top 91.7), `/record` ("Your hand history" and "Open a table", top 92,
+ * both 25px tall and therefore entirely hidden) and `/learn/pot-odds` ("Open the glossary", top
+ * 91.9, and every glossary term trigger). At 1440x900 nothing was delivered under the bar on any
+ * route, which is why nobody had seen it: the bar is one row there.
+ *
+ * `pnpm run test:keyboard` asserts this at 360x640 now. It did not before, and could not have:
+ * its narrow-viewport journey runs at 390x844, which is nine pixels past the width where the bar
+ * stops wrapping.
  */
 :root {
   scroll-padding-block-start: calc(var(--prl-pillbar-h) + var(--prl-space-6));

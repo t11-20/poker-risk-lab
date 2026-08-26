@@ -865,7 +865,7 @@
 .prl-learn-calc__inputs {
   display: grid;
   gap: var(--prl-space-5) var(--prl-space-8);
-  grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-15), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
   margin: 0;
   padding: var(--prl-space-6);
   border: 1px solid var(--prl-line-subtle);
@@ -1437,7 +1437,7 @@
 .prl-learn-glossary__controls {
   display: grid;
   gap: var(--prl-space-6);
-  grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-16), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-16)), 1fr));
   align-items: start;
   padding: var(--prl-space-7);
   border: 1px solid var(--prl-edge);

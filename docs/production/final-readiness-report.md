@@ -1,6 +1,6 @@
 # Final readiness report
 
-**Candidate SHA:** `b5bbdd734169efe2cd2e2092f19d6d31be720612`
+**Candidate SHA:** `b9687b19ca2ad13461ed472f251d0f8807e4fb3b`
 **Tree at freeze:** clean — the release manifest records `dirty: false`.
 **Branch:** `production-hardening-2`
 **Date:** 2026-08-26
@@ -31,7 +31,7 @@ this SHA unless a line says otherwise.
 
 **PRODUCTION HARDENING COMPLETE — EXTERNAL ACCESSIBILITY CERTIFICATION REQUIRED**
 
-`pnpm run verify` exits **0** at this candidate: all fourteen gates, **3,497 tests, zero failures**,
+`pnpm run verify` exits **0** at this candidate: all fourteen gates, **3,511 tests, zero failures**,
 including a supply-chain audit of **fourteen** gates — release image signature verification,
 container log policy and the keyless-signing identity gate were all added on 2026-08-25 and all
 measured passing here. The container
@@ -226,7 +226,7 @@ shell, node path and a Node version below the `engines` floor. The base is now
 
 | Gate | Result | Capture |
 | --- | --- | --- |
-| `pnpm run verify` | **every gate passed, exit 0** — all 14 gates; **3,497 tests, 0 failures** — 1,313 unit, 994 API, 1,165 script, 2 exhaustive, 23 simulation | `verify-13.log` |
+| `pnpm run verify` | **every gate passed, exit 0** — all 14 gates; **3,511 tests, 0 failures** | `verify-ui2.log` |
 | `pnpm run security:audit` | **14 of 14 gates pass** — `release-image-signatures`, `log policy` and `keyless-signing-identity` were all added on 2026-08-25 | inside `verify-6.log` |
 | API tests | **994 / 994** | inside `verify-13.log` |
 | Script tests | **1,165 / 1,165** | inside `verify-13.log` |
@@ -274,8 +274,8 @@ that has to reconcile a digest with the manifest's, which is why the drift surfa
 
 | Service | Digest built, pushed and **signed** | Registry reference |
 | --- | --- | --- |
-| api | `sha256:6733f638cd188e551d7e95381724bf3662cd55a3fa487335676eeb0701999cd9` | `127.0.0.1:5001/prl-api@sha256:6733f6…` |
-| web | `sha256:ad70e2f1eaa71cdc939691fd0d5fd2611d432fda56e37eb6f6c32695c3c24bf2` | `127.0.0.1:5001/prl-web@sha256:ad70e2…` |
+| api | `sha256:e5f8f21d56b2a9fda2d9c7fd7a007b3db5f4aef7003b85d994956bcfb1bb1614` | `127.0.0.1:5001/prl-api@sha256:e5f8f2…` |
+| web | `sha256:d034b815abf455471111ff10c4dcb5d7d3f4a89a25d7bf9557ff68f525957f20` | `127.0.0.1:5001/prl-web@sha256:d034b8…` |
 
 The registry digest equals the build digest for both — checked rather than assumed: the manifest is
 re-fetched from the registry over HTTP and re-hashed in process, and `pnpm run release:sign` refuses

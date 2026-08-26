@@ -1246,6 +1246,180 @@ async function auditNarrowViewport(page) {
 }
 
 /**
+ * A control the keyboard reached must not be delivered UNDERNEATH the sticky bar.
+ *
+ * ## The defect this exists for
+ *
+ * The bar is `position: sticky`, so `scroll-padding-block-start` on the root is the only thing
+ * that stops the browser scrolling a newly focused control to y=0 and leaving it behind the
+ * glass. `apps/web/src/styles/nav.css` derived that padding from `--prl-pillbar-h`, which
+ * described a ONE-ROW bar — and below 382px `.prl-shell__header-tools` wraps, so the bar is two
+ * rows and 129px tall while the padding was 92px. Every control the browser had to scroll up to
+ * arrived with its top edge at exactly 92px and 37px of it behind the bar; a 25px link arrived
+ * entirely behind it. Measured on `/review`, `/lab`, `/record` and `/learn/pot-odds`.
+ *
+ * ## Why 360x640 and not the 390x844 the section above uses
+ *
+ * Because at 390 the bar does not wrap. The narrow-viewport journey has always run nine pixels
+ * past the width where this is visible, which is why every keyboard gate in this repo passed over
+ * it. 360x640 is the most common Android portrait size and it is inside the wrapped range; the
+ * sheet journey above keeps 390 so the two are not testing the same width.
+ *
+ * ## Why backwards
+ *
+ * Forward tabbing from the top mostly walks INTO the page, and the browser only scrolls when it
+ * has to — a control already on screen is left where it is, and the padding is never consulted.
+ * Scrolling to the bottom and walking back up is what makes every stop a scroll-into-view, which
+ * is the path a reader takes when they Shift+Tab out of the footer. It is also the path that was
+ * broken.
+ *
+ * The skip link is excluded by ancestry rather than by name: it is `position: fixed` at
+ * `--prl-z-toast` (500) against the bar's 200, so it is painted OVER the bar and its geometry
+ * says "under" while a reader sees it perfectly well.
+ */
+async function auditStickyBarOcclusion(page) {
+  section(`Narrow viewport — nothing focusable lands under the bar  ${DIM}360x640${RESET}`);
+  await page.send('Emulation.setDeviceMetricsOverride', {
+    width: 360,
+    height: 640,
+    deviceScaleFactor: 2,
+    mobile: true,
+  });
+  const FOCUSABLE =
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+    'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+  try {
+    for (const path of ['/review', '/lab', '/record', '/learn/pot-odds']) {
+      await page.goto(`${WEB_ORIGIN}${path}`);
+
+      /**
+       * Scrolling is forced instant for the length of this walk.
+       *
+       * `reset.css` sets `scroll-behavior: smooth` on the root under `prefers-reduced-motion:
+       * no-preference`, so every Tab-driven scroll is asynchronous and a rectangle read straight
+       * after the key is a rectangle from mid-flight. The first version of this check measured
+       * mid-flight and produced both false passes and a false failure ("top=-22.9"). The property
+       * under test is `scroll-padding-block-start`, not the animation, and an instant scroll
+       * consults exactly the same padding.
+       *
+       * Then: to the bottom of the page, and onto the last control that is really on screen. The
+       * 4px floor is not fussiness — the last focusable in the document is a theme radio wearing
+       * `.prl-visually-hidden`, a 1px box, and focusing it took the page back to y=0, so the walk
+       * started at the top, never scrolled, and reported a confident pass.
+       */
+      const started = await page.evaluate(
+        `(() => {
+          const root = document.documentElement;
+          root.style.scrollBehavior = 'auto';
+          if (document.querySelector('.prl-shell__header') === null) {
+            return { ok: false, why: 'no sticky bar on this page' };
+          }
+          window.scrollTo(0, root.scrollHeight);
+          const visible = [...document.querySelectorAll(${JSON.stringify(FOCUSABLE)})].filter((element) => {
+            const box = element.getBoundingClientRect();
+            return box.width >= 4 && box.height >= 4;
+          });
+          const last = visible.at(-1);
+          if (last === undefined) return { ok: false, why: 'no visible focusable control' };
+          last.focus();
+          window.scrollTo(0, root.scrollHeight);
+          return { ok: true, scrollY: Math.round(window.scrollY), viewport: window.innerHeight };
+        })()`,
+      );
+      if (started.ok !== true) {
+        bad(`Sticky bar: ${path}`, `${started.why}, so nothing could be walked`);
+        continue;
+      }
+      // A walk that begins at the top of a long page never scrolls, so it never consults the
+      // padding. Refuse rather than report a pass over it.
+      if (started.scrollY < started.viewport) {
+        bad(
+          `Sticky bar: ${path}`,
+          `the page would not scroll to its end before the walk (scrollY ${started.scrollY}), so a ` +
+            'backwards walk from here proves nothing',
+        );
+        continue;
+      }
+
+      const offenders = [];
+      let stops = 0;
+      let barHeight = 0;
+      let padding = '';
+      for (let step = 0; step < 45; step += 1) {
+        await page.press('Tab', { shift: true });
+        const stop = await page.evaluate(
+          `(() => {
+            const element = document.activeElement;
+            const header = document.querySelector('.prl-shell__header');
+            if (element === null || header === null || element === document.body) return null;
+            if (header.contains(element)) return { skip: true };
+            const style = getComputedStyle(element);
+            // Painted OVER the bar rather than behind it — the skip link is \`position: fixed\` at
+            // z 500 against the bar's 200 — so its geometry says "under" while a reader sees it.
+            if (
+              style.position === 'fixed' &&
+              Number(style.zIndex) > Number(getComputedStyle(header).zIndex || 0)
+            ) {
+              return { skip: true };
+            }
+            const box = element.getBoundingClientRect();
+            if (box.width < 4 || box.height < 4) return { skip: true };
+            const bar = header.getBoundingClientRect();
+            return {
+              name: (element.textContent ?? element.getAttribute('aria-label') ?? '').trim().slice(0, 44),
+              top: Number(box.top.toFixed(1)),
+              bottom: Number(box.bottom.toFixed(1)),
+              height: Number(box.height.toFixed(1)),
+              barBottom: Number(bar.bottom.toFixed(1)),
+              barHeight: Number(bar.height.toFixed(1)),
+              padding: getComputedStyle(document.documentElement).scrollPaddingBlockStart,
+            };
+          })()`,
+        );
+        if (stop === null) break;
+        if (stop.skip === true) continue;
+        stops += 1;
+        barHeight = stop.barHeight;
+        padding = stop.padding;
+        // Off the bottom of the screen is a different question and not this check's business. A
+        // control whose top edge is above the bar's bottom edge, while any of it is on screen, is.
+        if (stop.top < stop.barBottom - 1 && stop.bottom > 0) {
+          offenders.push(stop);
+        }
+      }
+
+      // A walk that reached nothing is not a pass: a route that stopped offering controls, or a
+      // Shift+Tab that stopped moving focus, would otherwise report success over zero stops.
+      if (stops === 0) {
+        bad(`Sticky bar: ${path}`, 'Shift+Tab reached no control outside the bar, so nothing was checked');
+      } else if (offenders.length === 0) {
+        ok(
+          `Sticky bar: ${path} — ${stops} stop(s) walked backwards, none behind the bar`,
+          `bar ${barHeight}px, scroll-padding ${padding}`,
+        );
+      } else {
+        bad(
+          `Sticky bar: ${path}`,
+          `${offenders.length} of ${stops} stop(s) were scrolled to underneath the sticky bar. The ` +
+            `bar is ${barHeight}px here and the root's \`scroll-padding-block-start\` is ${padding} — ` +
+            'see apps/web/src/styles/nav.css. ' +
+            offenders
+              .slice(0, 3)
+              .map(
+                (o) =>
+                  `"${o.name}" top=${o.top}, bar ends at ${o.barBottom} ` +
+                  `(${(o.barBottom - o.top).toFixed(1)}px of a ${o.height}px control behind it)`,
+              )
+              .join('; '),
+        );
+      }
+    }
+  } finally {
+    await page.send('Emulation.clearDeviceMetricsOverride');
+  }
+}
+
+/**
  * The one journey that cannot be done with a fixture: sitting down and acting.
  *
  * ## Why it is here and not left to the fixture route
@@ -1607,6 +1781,34 @@ async function main() {
       process.exit(1);
     }
 
+    // Is this even our app? Asked before a single key is pressed.
+    //
+    // This harness does not start the server it measures, and the default origin is
+    // `localhost:3000` — the most contended port on any developer's machine. An adversarial review
+    // ran this exactly as documented, attached to an unrelated process holding that port, and got
+    // thirty specific, product-shaped failures out of it: "42 focusable elements never reached",
+    // "no visible menu trigger at 390px". Every one was true of somebody else's application, and
+    // nothing in the output said so.
+    //
+    // The failing direction is survivable — somebody investigates and finds the port. The PASSING
+    // direction is the dangerous one: a green keyboard audit against a page that happens to have a
+    // reachable tab order is a gate reporting on nothing at all, which is the shape this repository
+    // spends most of its guards refusing.
+    //
+    // The marker is the shell class the root layout always emits. It is not a version and does not
+    // need to be: the question is "is this the app", not "is this the build". `age-gate-audit.mjs`
+    // answers the build question separately, from `.next/BUILD_ID`, and refuses `next dev`.
+    const landing = await probe.text();
+    if (!landing.includes('prl-app') && !landing.includes('prl-shell')) {
+      console.error(`\n${RED}${WEB_ORIGIN} is serving, but it is not Poker Risk Lab.${RESET}`);
+      console.error(
+        `${DIM}  No 'prl-app' or 'prl-shell' in the landing HTML (${landing.length} bytes). ` +
+          `Something else is on that port.${RESET}`,
+      );
+      console.error(`${DIM}  Pass --web <origin>, or set PRL_WEB_ORIGIN.${RESET}\n`);
+      process.exit(1);
+    }
+
     // Said before anything else, and said in colour: a run whose routes were all reached past a
     // gate is a different run, and the reader of the output has to be told which one they are
     // holding. Silence here is what would let a gated deployment be audited as if it were open.
@@ -1636,6 +1838,11 @@ async function main() {
         await auditNarrowViewport(page);
       } catch (error) {
         bad('Narrow viewport: audit', error instanceof Error ? error.message : String(error));
+      }
+      try {
+        await auditStickyBarOcclusion(page);
+      } catch (error) {
+        bad('Sticky bar: audit', error instanceof Error ? error.message : String(error));
       }
       try {
         await playOneHandByKeyboard(page);

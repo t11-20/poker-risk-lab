@@ -240,7 +240,12 @@
   font-weight: var(--prl-weight-semibold);
 }
 
-.prl-review-table__link {
+/* `a.` and `td.` rather than a bare class, for the reason the `.prl-review-table__pot` block below
+   spells out at length: this table styles its own cells through type selectors, and a bare class is
+   (0,1,0) against their (0,1,1). Both of these happen to sit on an element no cell rule can match
+   today, so nothing renders differently — the qualification is what stops that being luck the next
+   time a `.prl-review-table <type>` rule takes a property one of them declares. */
+a.prl-review-table__link {
   display: inline-flex;
   align-items: center;
   min-height: var(--prl-target-min);
@@ -256,7 +261,7 @@
   text-decoration: underline;
 }
 
-.prl-review-table__when {
+td.prl-review-table__when {
   color: var(--prl-text-muted);
   font-variant-numeric: var(--prl-numeric);
   white-space: nowrap;

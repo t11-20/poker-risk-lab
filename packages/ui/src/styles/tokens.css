@@ -870,9 +870,28 @@
    `--prl-glass-filter: none` is what makes the collapse complete: an opaque fill with a
    live `backdrop-filter` still pays for the blur, on an element where nothing can be seen
    through it. The blur is removed, not hidden.
+
+   `:root:root`, NOT a bare `:root`, and that doubled pseudo-class is the whole defect this
+   block shipped with. A media query contributes nothing to specificity, so a bare `:root`
+   here is (0,1,0) — and the light theme is declared twice above at (0,2,0):
+   `:root[data-theme="light"]`, and `:root:not([data-theme="dark"])` inside the
+   `prefers-color-scheme` query, because `:not()` takes the specificity of its argument.
+   Both set `--prl-glass-floating` and `--prl-glass-overlay` themselves, so both beat this
+   block and NEITHER light reader got the collapse. Measured in Chrome 151 at 1440x900
+   against the production build with `prefers-color-scheme: light` emulated and
+   `prefers-reduced-transparency: reduce`: `--prl-glass-floating` resolved to `#fffffff0`
+   — 94% translucent — both with `<html data-theme="light">` and with no `data-theme` at
+   all; it is `#ffffff` with this selector. Worse than "no collapse": `--prl-glass-filter`
+   is set by neither theme scope, so it DID go to `none`, leaving a translucent pane with
+   no blur behind it. That is the ghosting failure `nav.css` documents at length, handed
+   to the one reader who asked the operating system for less translucency.
+
+   Doubling the pseudo-class costs nothing, matches the root element unconditionally, and
+   ties with both theme scopes at (0,2,0) — and this block is written after them, so it
+   wins the tie. `packages/ui/test/preference-cascade.test.ts` fails if it stops winning.
    ============================================================================ */
 @media (prefers-reduced-transparency: reduce) {
-  :root {
+  :root:root {
     --prl-glass-floating: var(--prl-surface-raised);
     --prl-glass-floating-hover: var(--prl-surface-hover);
     --prl-glass-floating-active: var(--prl-surface-active);
@@ -896,9 +915,16 @@
    reference to it: a reader can ask for one without the other, and a `var()` chain between
    two media queries resolves in cascade order rather than in the order the two preferences
    were stated.
+
+   `:root:root` for the reason given in the reduced-transparency block above, and the loss
+   here was the worse of the two: measured with `prefers-contrast: more`
+   emulated and `<html data-theme="light">`, `--prl-edge` stayed `#10141a1a` — 10% ink,
+   about 1.1:1 on a white pane — instead of being promoted to `--prl-line-strong` (`#6e7885`,
+   4.34:1). Every pane edge in the interface stayed decorative for the one reader who had
+   asked the operating system for edges.
    ============================================================================ */
 @media (prefers-contrast: more) {
-  :root {
+  :root:root {
     --prl-glass-floating: var(--prl-surface-raised);
     --prl-glass-floating-hover: var(--prl-surface-hover);
     --prl-glass-floating-active: var(--prl-surface-active);
@@ -924,9 +950,15 @@
    real border rather than a background tint — a tint disappears entirely in
    forced-colors mode, and a table whose active seat was only tinted would lose
    the only cue for whose turn it is.
+
+   `:root:root` for the reason given in the reduced-transparency block above. Forced colors
+   replaces the fills regardless, so this scope loses less than the other two
+   do — but `--prl-edge*` and `--prl-line*` are set by `:root[data-theme="light"]` as well,
+   and a border colour that stays an author rgba() instead of `CanvasText` is exactly the
+   edge this block exists to keep.
    ============================================================================ */
 @media (forced-colors: active) {
-  :root {
+  :root:root {
     --prl-line-subtle: CanvasText;
     --prl-line: CanvasText;
     --prl-line-strong: CanvasText;

@@ -1633,7 +1633,7 @@
  * side exactly as before.
  */
 .prl-play .prl-outs__buckets {
-  grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-16), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-16)), 1fr));
 }
 
 /**

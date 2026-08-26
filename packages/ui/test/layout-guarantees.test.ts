@@ -408,3 +408,150 @@ describe('numeric columns are actually end-aligned', () => {
     assert.deepEqual(caught, ['.prl-x__figure']);
   });
 });
+
+/**
+ * The same trap as the block above, one level out: a BEM part that loses to its own block's
+ * element rules.
+ *
+ * ## The defect this exists for
+ *
+ * `.prl-legal-flag__mark { color: var(--prl-caution) }` had never once painted. The mark is a
+ * `<p>`, and `.prl-legal-flag p { color: var(--prl-text-secondary) }` sits four lines below it:
+ * (0,1,1) against a bare class's (0,1,0). Measured in Chrome, the caution marker on /terms,
+ * /privacy and /responsible-use rendered `rgb(59, 69, 83)` — body-secondary — on all fifteen
+ * instances, and `.prl-legal__banner-mark` did the same on all three banners. The colour is the
+ * only thing separating "this clause has not been reviewed by counsel" from the paragraph beneath
+ * it, so this is the legal surface's one visual signal, and it was off.
+ *
+ * The end-aligned-cell guard above could not see it: that one is scoped to tables, and this block
+ * is a `<div>` of paragraphs. What the two share is the shape — an element selector inside a block
+ * quietly out-ranking the block's own part classes — and that shape is not about tables at all.
+ *
+ * ## What this asserts
+ *
+ * For every block that styles a bare element type of its own (`.prl-legal-flag p`), any part class
+ * of that block declaring the same property must be TYPE-QUALIFIED (`p.prl-legal-flag__mark`),
+ * which is (0,1,1) and at least ties; and where it ties on the same type, it must be declared
+ * BELOW the rule it has to beat, because a tie is decided by source order.
+ *
+ * Scoped to `color` and `text-align` deliberately, and not to every property: those are the two
+ * this has now bitten (four times for `text-align`, twice for `color`), and they are the two where
+ * a block's element rules and its part classes routinely both have an opinion. Widening it to
+ * layout properties would flag every `.prl-x li { margin }` against every `.prl-x__item { margin }`
+ * pair in the repo, most of which are on different elements entirely.
+ */
+describe('a block never lets its element rules out-rank its own parts', () => {
+  const CONTESTED = ['color', 'text-align'] as const;
+  /** `.prl-legal-flag p` — a block, then a bare element type, and nothing else. (0,1,1). */
+  const BLOCK_TYPE = /^\.(prl-[a-z0-9_-]+)\s+([a-z][a-z0-9]*)$/u;
+  /** `.prl-legal-flag__mark`, optionally type-qualified as `p.prl-legal-flag__mark`. */
+  const PART = /^([a-z][a-z0-9]*)?\.(prl-[a-z0-9_-]+)$/u;
+
+  /** Is `cls` a part of `scope`? BEM's `__` and this repo's hyphenated variants both count. */
+  const partOf = (cls: string, scope: string): boolean =>
+    cls !== scope && (cls.startsWith(`${scope}__`) || cls.startsWith(`${scope}-`));
+
+  interface Guard {
+    readonly file: string;
+    readonly scope: string;
+    readonly type: string;
+    readonly property: string;
+    readonly at: number;
+  }
+
+  function scan(): { guards: Guard[]; unqualified: string[]; misordered: string[] } {
+    const guards: Guard[] = [];
+    const unqualified: string[] = [];
+    const misordered: string[] = [];
+
+    for (const [name, raw] of GLASS_SCANNED) {
+      const css = raw.replace(/\/\*[\s\S]*?\*\//gu, '');
+      const blocks = allBlocks(css).map((block) => ({ ...block, at: css.indexOf(block.selector) }));
+
+      for (const block of blocks) {
+        for (const selector of block.selector.split(',').map((part) => part.trim())) {
+          const match = BLOCK_TYPE.exec(selector);
+          if (match === null) continue;
+          for (const property of CONTESTED) {
+            if (!new RegExp(`(^|;)\\s*${property}\\s*:`, 'u').test(block.body)) continue;
+            guards.push({
+              file: name,
+              scope: match[1] ?? '',
+              type: match[2] ?? '',
+              property,
+              at: block.at,
+            });
+          }
+        }
+      }
+
+      for (const block of blocks) {
+        for (const selector of block.selector.split(',').map((part) => part.trim())) {
+          const match = PART.exec(selector);
+          if (match === null) continue;
+          const [, type, cls = ''] = match;
+          for (const property of CONTESTED) {
+            if (!new RegExp(`(^|;)\\s*${property}\\s*:`, 'u').test(block.body)) continue;
+            for (const guard of guards) {
+              if (guard.file !== name || guard.property !== property) continue;
+              if (!partOf(cls, guard.scope)) continue;
+              if (type === undefined) {
+                unqualified.push(
+                  `${name}: \`${selector} { ${property} }\` loses to \`.${guard.scope} ${guard.type}\``,
+                );
+              } else if (type === guard.type && block.at < guard.at) {
+                misordered.push(
+                  `${name}: \`${selector}\` ties with \`.${guard.scope} ${guard.type}\` and is declared above it`,
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+    return { guards, unqualified, misordered };
+  }
+
+  it('type-qualifies every part that competes with one of its block’s element rules', () => {
+    const { guards, unqualified } = scan();
+    // A sweep of nothing is not a pass: if the BEM convention or the file list changes shape, this
+    // guard would otherwise report success having compared zero pairs.
+    assert.ok(guards.length > 0, 'no `.block <type>` rule setting a contested property was found');
+    assert.deepEqual(
+      unqualified,
+      [],
+      'a bare class is (0,1,0) and an element selector inside the block is (0,1,1), so these ' +
+        'declarations apply to nothing. Qualify with the element type the part is rendered as.',
+    );
+  });
+
+  it('declares a tying part BELOW the element rule it has to beat', () => {
+    const { misordered } = scan();
+    assert.deepEqual(misordered, [], '(0,1,1) ties with (0,1,1); source order is what decides it');
+  });
+
+  it('catches the historical defect when it is replayed (NEGATIVE CONTROL)', () => {
+    // The exact shape that shipped in legal.css: a bare part class colouring a mark inside a block
+    // whose own `p` rule colours every paragraph.
+    const replayed = `
+      .prl-x-flag p { color: var(--prl-text-secondary); }
+      .prl-x-flag__mark { color: var(--prl-caution); }
+    `;
+    const caught: string[] = [];
+    const guards: { scope: string; type: string }[] = [];
+    for (const block of allBlocks(replayed)) {
+      for (const selector of block.selector.split(',').map((part) => part.trim())) {
+        const guard = BLOCK_TYPE.exec(selector);
+        if (guard !== null && /color\s*:/u.test(block.body)) {
+          guards.push({ scope: guard[1] ?? '', type: guard[2] ?? '' });
+          continue;
+        }
+        const part = PART.exec(selector);
+        if (part === null || !/color\s*:/u.test(block.body)) continue;
+        const [, type, cls = ''] = part;
+        if (type === undefined && guards.some((entry) => partOf(cls, entry.scope))) caught.push(selector);
+      }
+    }
+    assert.deepEqual(caught, ['.prl-x-flag__mark']);
+  });
+});

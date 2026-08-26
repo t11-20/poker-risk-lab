@@ -228,14 +228,27 @@
   background-color: var(--prl-surface-inset);
 }
 
-.prl-legal__banner-mark {
-  color: var(--prl-caution);
-}
-
 .prl-legal__banner p {
   margin: 0;
   color: var(--prl-text-secondary);
   line-height: var(--prl-leading-body);
+}
+
+/**
+ * THE MARK IS A `<p>`, WHICH IS WHY THIS SELECTOR CARRIES THE TYPE.
+ *
+ * Measured in Chrome on /terms, /privacy and /responsible-use: the mark rendered
+ * `rgb(59, 69, 83)` — `--prl-text-secondary` — on every one of them, because
+ * `.prl-legal__banner-mark` is (0,1,0) and both `.prl-legal__section p` and the rule directly
+ * above are (0,1,1). The caution colour had never once been painted, and the stylesheet read as
+ * though it had been. Type-qualified it is (0,1,1), which TIES, and a tie is decided by source
+ * order — so the placement below the `p` rule is load-bearing and not cosmetic.
+ *
+ * `layout-guarantees.test.ts` sweeps for this shape; see the historical `.prl-legend-table__figure`
+ * defect it was written for.
+ */
+p.prl-legal__banner-mark {
+  color: var(--prl-caution);
 }
 
 /* ==========================================================================================
@@ -261,14 +274,17 @@
   background-color: var(--prl-surface-inset);
 }
 
-.prl-legal-flag__mark {
-  color: var(--prl-caution);
-}
-
 .prl-legal-flag p {
   margin: 0;
   color: var(--prl-text-secondary);
   line-height: var(--prl-leading-body);
+}
+
+/* The same defect and the same fix as the banner mark above: eight marks on /terms, four on
+   /privacy and three on /responsible-use all rendered `--prl-text-secondary`, because a bare class
+   cannot out-specify `.prl-legal-flag p`. Type-qualified AND below the rule it has to beat. */
+p.prl-legal-flag__mark {
+  color: var(--prl-caution);
 }
 
 /* ==========================================================================================

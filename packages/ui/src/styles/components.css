@@ -458,7 +458,7 @@
 .prl-metric-row {
   display: grid;
   gap: var(--prl-space-8);
-  grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-15), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
 }
 
 /* ==========================================================================================
@@ -2980,7 +2980,10 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  grid-template-columns: repeat(auto-fit, minmax(calc(var(--prl-space-16) + var(--prl-space-11)), 1fr));
+  grid-template-columns: repeat(
+      auto-fit,
+      minmax(min(100%, calc(var(--prl-space-16) + var(--prl-space-11))), 1fr)
+    );
 }
 
 /** The viewer's own plate: last in the stack, which is where a player expects to be sitting. */
@@ -3569,11 +3572,32 @@
  * narrow for a figure like `62.4% +/- 0.8 points (95% interval)`. 10rem-scale columns would be
  * worse still; this yields three comfortable tracks at that width and two on a tablet.
  */
+/**
+ * The `min(100%, …)` is load-bearing, and it is missing from this rule's history.
+ *
+ * `minmax()` with a bare length is a HARD FLOOR: the track cannot go below it even when the grid
+ * container is narrower, so the whole panel overflows its parent instead of shrinking. 19rem is
+ * 304px, and the Coach's own padding takes it to 346px — wider than the 328px a 360px viewport
+ * leaves inside the gutter. Measured on `/review/hand-0042` at 360x640: `.prl-coach` laid out
+ * 346px wide starting at x=16, so its right edge was at 362 and `document.scrollWidth` was 362
+ * against a 360px client width. That is a whole page that scrolls sideways by two pixels, with
+ * every pane inside `.prl-replay` — the timeline, the transport, the table, the metrics, the
+ * verifier — stretched to the same 346px and hanging over the right gutter, because the grid
+ * track that holds them is sized to the widest thing in it.
+ *
+ * `min(100%, …)` lets the floor collapse to the container's own width and nothing else changes:
+ * above 346px the track is still 19rem or more, and `auto-fit` still packs the same number of
+ * columns. Same idiom, same reason, as `legends.css` and `review.css`, which already carry it.
+ * `packages/ui/test/auto-fit-tracks.test.ts` fails a bare floor anywhere in the app now.
+ */
 .prl-coach__grid {
   display: grid;
   gap: var(--prl-space-6);
   /* 19rem. */
-  grid-template-columns: repeat(auto-fit, minmax(calc(var(--prl-space-16) * 2 - var(--prl-space-6)), 1fr));
+  grid-template-columns: repeat(
+      auto-fit,
+      minmax(min(100%, calc(var(--prl-space-16) * 2 - var(--prl-space-6))), 1fr)
+    );
 }
 
 .prl-coach__section {
@@ -3690,7 +3714,7 @@
   display: grid;
   gap: var(--prl-space-5);
   margin: 0;
-  grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-15), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
 }
 
 .prl-outs__bucket {
@@ -3775,7 +3799,7 @@
 .prl-outs__lists {
   display: grid;
   gap: var(--prl-space-6);
-  grid-template-columns: repeat(auto-fit, minmax(var(--prl-space-15), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
 }
 
 .prl-outs__list {
