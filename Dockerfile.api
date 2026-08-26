@@ -190,6 +190,32 @@
 FROM node:24.18.0-alpine3.24@sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd AS base
 WORKDIR /app
 
+# OpenSSL, ahead of the base image.
+#
+# CVE-2026-14456, HIGH, in libcrypto3/libssl3 3.5.7-r0 — which is what this
+# pinned digest ships. `security:audit` blocked the release on it: 4 findings, 0
+# unfixable, across both images. It is not a false positive and it is not
+# waivable; it is the TLS library the API terminates nothing with but links
+# against, in an image about to serve students.
+#
+# Upstream has not rebuilt the tag. Measured on 2026-08-26: the pinned digest is
+# still what `node:24.18.0-alpine3.24` resolves to, and `node:24-alpine`
+# (v24.19.0) ships the same 3.5.7-r0. So there is no newer base to move to, and
+# waiting is not a plan when the fix is sitting in the repository the image
+# already trusts — `apk policy` reports 3.5.8-r0 in alpine/v3.24/main.
+#
+# Pinned to the exact version rather than a bare `apk upgrade`. An unpinned
+# upgrade makes two builds of the same commit differ, which is the property
+# `release-artifacts.mjs` exists to protect. The cost is that this line FAILS the
+# build when Alpine drops 3.5.8-r0 for a later fix — and that is the safe
+# direction: a build that stops and names the package is a bump somebody makes on
+# purpose, where a silently-floating one is a version nobody chose.
+#
+# In `base`, so every stage derived from it — toolchain, build and runtime —
+# carries the fix. The runtime filesystem is read-only and the process is uid
+# 1000, so nothing can undo it later.
+RUN apk add --no-cache --upgrade libcrypto3=3.5.8-r0 libssl3=3.5.8-r0
+
 FROM base AS toolchain
 # corepack activates the exact pnpm named in the root package.json's
 # `packageManager` field, and verifies it against the sha256 recorded there. That
