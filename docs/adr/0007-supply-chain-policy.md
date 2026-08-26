@@ -121,3 +121,29 @@ The other eleven are unchanged in name and order. Nothing about the *decision* �
 release-blocking, no flag that turns one off, the OSV allowlist as the only escape hatch — has
 changed; three gates were added under it. `docs/SECURITY.md` and `docs/VERIFICATION.md` both carry
 fourteen. Read the count off `audit.mjs`, never off a document.
+
+## Amendment 2026-08-27 — a fifteenth gate, and the half of the pinning argument that was missing
+
+**`scripts/supply-chain/audit.mjs` now runs fifteen.** The amendment above is left as written, for
+the same reason the Decision is: the count moves, the record does not. The delta since it:
+
+| # | Gate | In the numbered list above |
+| ---: | --- | --- |
+| 12 | **pinned action advisories** (`action-advisories.mjs`) | no — added 2026-08-27 |
+
+`release image signatures` is gate **15** from this date, not 14; nothing else moved.
+
+The decision that did need stating is the one this gate exposes. The Decision section treats
+"mutable references are how supply-chain attacks land" as the whole problem and pinning as the whole
+answer, and for the pipeline's own dependencies that is only half true: **a pinned SHA of a version
+later found vulnerable stays pinned and stays vulnerable.** Pinning makes the reference immutable; it
+does not make it safe, and immutability is precisely what stops it from ever being fixed by accident.
+That is not a change of policy — every gate is still release-blocking and there is still no flag that
+turns one off — it is a gap in the reasoning the policy was written from, and the new gate is the
+consequence.
+
+One thing the new gate does *not* inherit: it has **no allowlist**. The OSV allowlist exists because
+a transitive npm dependency can be affected with no fixed version available and nothing this
+repository can do about it. An action reference is one line in a workflow this repository owns, and
+repinning to a fixed release is always available. If that ever stops being true, add the allowlist —
+with a reason and an expiry, as the Decision requires — and not a flag.

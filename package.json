@@ -52,6 +52,7 @@
     "security:denylist": "node scripts/supply-chain/deny-list.mjs",
     "security:shapes": "node scripts/supply-chain/dep-shapes.mjs",
     "security:osv": "node scripts/supply-chain/osv-scan.mjs",
+    "security:actions": "node scripts/supply-chain/action-advisories.mjs",
     "security:provenance": "node scripts/supply-chain/provenance.mjs",
     "security:ioc": "node scripts/supply-chain/ioc-scan.mjs",
     "security:sbom": "node scripts/supply-chain/sbom.mjs",

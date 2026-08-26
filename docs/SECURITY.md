@@ -63,7 +63,7 @@ fetched at build time rather than pinned.
 pnpm run deps:quarantine      # resolve in a throwaway dir with a scrubbed environment
 git diff -- pnpm-lock.yaml    # review every added line
 pnpm install --frozen-lockfile
-pnpm run security:audit       # all fourteen gates must pass
+pnpm run security:audit       # all fifteen gates must pass
 ```
 
 `deps:quarantine` resolves in a temporary directory with a throwaway `HOME`, no `.git`, no
@@ -186,8 +186,8 @@ These are the rules a reviewer will actually check.
 ## 4. Running the gates
 
 ```bash
-pnpm run security:audit          # all fourteen supply-chain gates
-pnpm run security:audit -- --offline   # skip the three network gates — EXITS 2, see below
+pnpm run security:audit          # all fifteen supply-chain gates
+pnpm run security:audit -- --offline   # skip the four network gates — EXITS 2, see below
 
 pnpm run security:policy         # is the policy actually in effect?
 pnpm run security:hygiene        # source encoding, hidden characters
@@ -197,25 +197,28 @@ pnpm run security:ioc            # Shai-Hulud IOC sweep
 pnpm run security:secrets        # committed credentials, and the ignore rules that prevent them
 pnpm run security:pinning        # CI actions by commit SHA, base images by digest
 pnpm run security:provenance     # lockfile ↔ registry integrity, release age
-pnpm run security:osv            # OSV.dev vulnerabilities
+pnpm run security:osv            # OSV.dev vulnerabilities, npm ecosystem
+pnpm run security:actions        # OSV advisories against the pinned GitHub Actions
 pnpm run security:sbom           # CycloneDX 1.6 SBOM
 pnpm run security:containers     # trivy against the built release images
 pnpm run security:image-provenance  # are those images signed — and by WHICH posture?
 pnpm run security:keyless        # does the keyless identity policy match the workflow?
 ```
 
-**`--offline` exits 2, deliberately.** It skips *integrity + release age*, *OSV* and
-*container image CVEs*, prints `3 network gate(s) skipped — NOT a valid release audit`, and
-then exits non-zero. It used to exit 0, which is the defect: an audit that did not run three
-of its gates is indistinguishable, to anything reading only the exit code, from one that ran
-all eleven and passed. Exit 2 rather than 1 so a caller can still tell "skipped" from "a gate
-failed".
+**`--offline` exits 2, deliberately.** It skips *integrity + release age*, *OSV*, *pinned
+action advisories* and *container image CVEs*, prints `4 network gate(s) skipped — NOT a valid
+release audit`, and then exits non-zero. It used to exit 0, which is the defect: an audit that
+did not run four of its gates is indistinguishable, to anything reading only the exit code,
+from one that ran all fifteen and passed. Exit 2 rather than 1 so a caller can still tell
+"skipped" from "a gate failed".
 
 This section said *two* network gates and pasted a `2 network gate(s) skipped` transcript,
-which was true when the container scan did not exist. There are three, and the container scan
+which was true when the container scan did not exist; then *three*, until
+`action-advisories` was added on 2026-08-27. There are four, and the container scan
 is skipped by `--offline` even on a machine with no release images: `audit.mjs` evaluates the
 offline branch before the artefact branch, so the gate is reported as **skipped** — which
-exits 2 — rather than as *not applicable*, which would not. Re-captured 2026-08-25:
+exits 2 — rather than as *not applicable*, which would not. The transcript below was captured
+2026-08-25 and predates the fourth gate; read the number off the run:
 
 ```
 $ node scripts/supply-chain/audit.mjs --offline; echo $?
@@ -249,13 +252,14 @@ Artifacts land in `docs/sbom/`: the SBOM, the OSV report and the provenance repo
 SBOM is content-derived and byte-stable, so `git diff` shows dependency changes rather than
 a fresh timestamp.
 
-`security:audit` and `security:hygiene` are **two of the fourteen gates in `pnpm run verify`**, which
+`security:audit` and `security:hygiene` are **two of the sixteen gates in `pnpm run verify`**, which
 is the release gate as a whole (`RUNBOOK.md` §3). They are the first two it runs, and it runs the
-other twelve whether or not they pass — a supply-chain failure must not be the reason nobody found out
-that the schema check also fails. (This has said *eleven and nine*, then *thirteen and eleven*, and
-is now fourteen and twelve: the loop in `package.json` gained `test:ax` and `test:csp`, and then
-`test:age-gate`. Do not read the eleven inside `security:audit` as the same number — it was the same
-one by coincidence for a while, and is not any more.)
+other fourteen whether or not they pass — a supply-chain failure must not be the reason nobody found out
+that the schema check also fails. (This has said *eleven and nine*, then *thirteen and eleven*, then
+*fourteen and twelve*, and is now sixteen and fourteen: the loop in `package.json` gained `test:ax`
+and `test:csp`, then `test:age-gate`, then `test:layout` and `test:keyboard`. Do not read the fifteen
+inside `security:audit` as the same number — it was the same one by coincidence for a while, and is
+not any more. Read each off its own list.)
 
 Findings are not waived to unblock a release — fix the dependency, pin an older version, or remove
 it. The single escape hatch is an entry in `scripts/supply-chain/osv-allowlist.json`, which requires
@@ -294,6 +298,11 @@ it. The headline items:
   not prove the image or the action was benign when that digest was taken, and it cannot: a
   pinned digest of a compromised artefact is pinned to the compromise. The control it buys is
   that an upstream cannot change what runs here without a diff in this repository.
-* **Nothing re-checks a pin for a newly disclosed advisory.** OSV covers npm packages only.
-  An advisory against `node:24.18.0-alpine3.24` or a pinned action surfaces through
-  whatever watches those ecosystems, which today is a human.
+* **A pinned reference is re-checked against new advisories, by two different gates, and by
+  neither for the base image's own code.** `container-scan` reads the Alpine package database
+  inside the built images, which is how CVE-2026-14456 reached a gate. `action-advisories`
+  resolves every pinned action SHA to the version it is — by asking GitHub which tags point at
+  that commit, never by reading the trailing comment — and matches it against OSV's published
+  `GitHub Actions` corpus. What still reaches nobody automatically is an advisory against the
+  *upstream project* of a base image where the finding is not in a distro package: that
+  surfaces through whatever watches that ecosystem, which today is a human.

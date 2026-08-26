@@ -24,7 +24,7 @@ pnpm --version             # must be 11.10.0
 cd poker-risk-lab
 
 pnpm install --frozen-lockfile     # never --no-frozen-lockfile
-pnpm run security:audit            # 14 gates; must pass before anything else
+pnpm run security:audit            # 15 gates; must pass before anything else
 
 cp .env.example .env
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
@@ -148,8 +148,8 @@ never receive another player's hole cards. A guardrail that skips is not a guard
 
 | Command | What it does |
 | --- | --- |
-| `pnpm run security:audit` | **All fourteen supply-chain gates.** Itself one of the *sixteen* gates inside `pnpm run verify`, which is the release gate as a whole. The two numbers were coincidentally equal — fourteen and fourteen — until `test:layout` and then `test:keyboard` were added to `verify`; they are unrelated lists and were never comparable. It was eleven until `image-provenance`, `log-policy` and `keyless-signing-identity` were added |
-| `pnpm run security:audit -- --offline` | Skips the three network gates and **exits 2** — *not* a valid release audit |
+| `pnpm run security:audit` | **All fifteen supply-chain gates.** Itself one of the *sixteen* gates inside `pnpm run verify`, which is the release gate as a whole. The two numbers were coincidentally equal — fourteen and fourteen — until `test:layout` and then `test:keyboard` were added to `verify` and `pinned-action-advisories` was added to the audit; they are unrelated lists and were never comparable. It was eleven until `image-provenance`, `log-policy` and `keyless-signing-identity` were added |
+| `pnpm run security:audit -- --offline` | Skips the four network gates and **exits 2** — *not* a valid release audit |
 | `pnpm run security:policy` | Is the supply-chain policy actually in effect? |
 | `pnpm run security:hygiene` | Source encoding, NUL bytes, hidden/bidi characters |
 | `pnpm run security:denylist` | Banned packages anywhere in the graph |
@@ -159,7 +159,8 @@ never receive another player's hole cards. A guardrail that skips is not a guard
 | `pnpm run security:secrets -- --history` | The same sweep over every blob in git history. Not part of the audit — see `docs/production/security.md` |
 | `pnpm run security:pinning` | CI actions pinned by commit SHA, base images by digest, no undeclared workflow |
 | `pnpm run security:provenance` | Lockfile ↔ registry integrity, release-age cooldown. **npm packages** — not images |
-| `pnpm run security:osv` | OSV.dev vulnerability scan |
+| `pnpm run security:osv` | OSV.dev vulnerability scan of the resolved graph. **npm ecosystem only** — the actions are the row below |
+| `pnpm run security:actions` | Advisories against the pinned GitHub Actions. Resolves each pinned SHA to a version by asking GitHub which tags point at it — never by reading the `# v7.0.1` comment, which it checks rather than trusts. Network: it fails, and does not skip, when the advisory corpus is unreachable |
 | `pnpm run security:sbom` | Generate the CycloneDX 1.6 SBOM |
 | `pnpm run security:containers` | Trivy CVE scan of the built release images |
 | `pnpm run security:image-provenance` | **Are the release images signed?** Verifies each digest against the committed `deploy/signing/cosign.pub`, and verifies the SBOM attestation bound to it. Needs no private key |
@@ -182,15 +183,20 @@ this repository has no CI signing identity; `.github/workflows/*` therefore run
 [`deploy/signing/README.md`](../deploy/signing/README.md) for custody, rotation, and what a
 verification failure means.
 
-**`--offline` exits 2 and that is the point.** It prints `3 network gate(s) skipped — NOT a
+**`--offline` exits 2 and that is the point.** It prints `4 network gate(s) skipped — NOT a
 valid release audit` and exits non-zero, so a pipeline reading only the exit code cannot
 mistake a partial audit for a passing one. Exit **2**, not 1, so a caller can still
 distinguish "gates were skipped" from "a gate failed". It used to exit 0 with the network
 gates unrun, which is exactly the failure this project keeps finding: a check that cannot
-fail. (This paragraph said *two* network gates, and quoted a `2 network gate(s) skipped`
-transcript. There are three — `provenance`, `osv-scan` and `container-scan` — and the
-container gate is among them under `--offline` because the audit checks the offline branch
-before it checks whether release artefacts exist.)
+fail. (This paragraph said *two* network gates, then *three*, and quoted the matching
+transcript each time. There are four — `provenance`, `osv-scan`, `action-advisories` and
+`container-scan` — and the container gate is among them under `--offline` because the audit
+checks the offline branch before it checks whether release artefacts exist. Read the number
+off the run, not off this paragraph: it has been wrong twice.)
+
+`--offline` is the ONLY way `action-advisories` does not run. Invoked on its own with no
+network it **fails**: an advisory database that cannot be reached leaves every pinned action
+unknown, and unknown is not clean.
 
 ### Database
 

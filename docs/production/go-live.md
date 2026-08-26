@@ -22,7 +22,7 @@ gates are.
 | 1.2 | `pnpm run verify` | `=== verify: every gate passed ===`, exit 0 |
 | 1.3 | `pnpm run db:verify` | `every documented schema security property holds` |
 
-`verify` is sixteen gates and `security:audit` inside it is fourteen. The two counts are over
+`verify` is sixteen gates and `security:audit` inside it is fifteen. The two counts are over
 unrelated lists; read each off its own.
 
 ## 2. The artefacts (machine, ~10 min)

@@ -888,6 +888,53 @@ export function discoverContainerFiles(root) {
   return { dockerfiles: dockerfiles.sort(), composeFiles: composeFiles.sort() };
 }
 
+/**
+ * Every `uses:` reference in the workflows and the local action files, as the
+ * gate above reads them, plus the trailing `# v7.0.1`-style comment beside each.
+ *
+ * Exported for `action-advisories.mjs`, which asks a question this file cannot:
+ * pinning stops a tag being repointed, and does nothing at all about a pinned SHA
+ * of a version that was later found vulnerable. Answering that needs the same set
+ * of references this gate judges — read through the same discovery and matched by
+ * the same regex — so that a reference one of them sees is a reference the other
+ * sees. Re-implementing the walk there would let the two drift apart silently,
+ * which is the failure this directory keeps finding in itself.
+ *
+ * One entry per OCCURRENCE, not per distinct reference: the count has to be
+ * comparable with the `action reference(s)` note above, which is the floor the
+ * advisory gate refuses to scan below.
+ *
+ * The comment is captured and deliberately NOT trusted as the version. See
+ * `action-advisories.mjs` for what it is used for instead — a claim to be
+ * checked against GitHub's own refs, so that a pin labelled with a version it is
+ * not fails rather than misleading the next reader.
+ *
+ * @param {string} root
+ * @returns {Array<{reference: string, comment: string|null, at: string, line: string}>}
+ */
+export function collectActionReferences(root) {
+  const found = [];
+  const readFile = (rel) => {
+    for (const [index, rawLine] of readFileSync(join(root, rel), 'utf8').split('\n').entries()) {
+      const line = uncomment(rawLine);
+      const uses = /^\s*-?\s*uses:\s*(\S+)/.exec(line);
+      if (uses === null) continue;
+      const trailing = /\s#\s*(.+?)\s*$/.exec(rawLine);
+      found.push({
+        reference: uses[1] ?? '',
+        comment: trailing === null ? null : (trailing[1] ?? null),
+        at: `${rel}:${index + 1}`,
+        line: rawLine.trim(),
+      });
+    }
+  };
+
+  const workflowDir = join(root, '.github', 'workflows');
+  for (const name of listWorkflowFiles(workflowDir)) readFile(`.github/workflows/${name}`);
+  for (const rel of discoverLocalActionFiles(root)) readFile(rel);
+  return found;
+}
+
 export function runCiPinningGate() {
   const gate = new Gate('ci-and-container-pinning');
   return runGate(gate, () => {

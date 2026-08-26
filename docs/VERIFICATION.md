@@ -517,7 +517,7 @@ is enforced rather than documented.
 
 ## 10. Supply chain
 
-`pnpm run security:audit` — **14 gates**. Figures below are from the run of 2026-08-19 and
+`pnpm run security:audit` — **15 gates**. Figures below are from the run of 2026-08-19 and
 were copied out of that run's output, not carried forward, **except the rows that carry their
 own later date**, which were re-captured because the gate list had grown and the pinning
 figures had gone stale. This section said "9 gates" for both reasons at once: `secret-scan` and
@@ -534,6 +534,7 @@ figures had gone stale. This section said "9 gates" for both reasons at once: `s
 | CI + container pinning | *2026-08-25:* **3 workflows, 46 action references** all 40-hex commit SHAs; 2 Dockerfiles with 2 external base images and **3 compose files with 8 image references**, all `@sha256:` digests; no undeclared workflow. (Was recorded as 2 workflows / 24 actions / 1 compose file / 2 images, measured 2026-08-19) |
 | Integrity + release age | **all 162 lockfile hashes match the registry**; every version clears the 7-day cooldown |
 | OSV | **0 advisories** across 162 versions |
+| Pinned action advisories | *2026-08-27:* **63 action references over 4 distinct pins in 4 repositories**, each resolved to the version it is by `git ls-remote --tags` — v7.0.1, v7.0.0, v7.0.1, v6.0.0, every one agreeing with its trailing comment — matched against **55** published `GitHub Actions` advisories from OSV: **0 findings**. Its 6 built-in controls behaved on the same run |
 | SBOM | *2026-08-25:* CycloneDX 1.6, **170 components, 171 dependency records**, content-derived serial |
 | Container image CVEs | trivy at the HIGH floor against the built release images. Not run by a commit-time audit — on a checkout with no release images the gate reports **not applicable** and the summary says so. Last measured against the candidate digests 2026-08-24 (trivy 0.72.0): **0 blocking, 60 unfixable, 0 allowed**; see `docs/production/staging-verification.md` for the CRITICAL/HIGH breakdown |
 
@@ -543,12 +544,59 @@ repository's *own* dependencies were held to "no mutable references" by six gate
 header comments. `uses: actions/cache@v4` added tomorrow would have passed all eight, and that
 is a pointer its owner can repoint at code which then runs here with this repository's secrets.
 
-`--offline` skips *integrity + release age*, *OSV* and *container image CVEs* — **three** gates,
-not the two this paragraph used to name — and then **exits 2** rather than 0, because an audit
-that did not run three of its gates has not passed and a pipeline reading only the exit code
-could not previously tell the difference. The container gate is skipped rather than reported
+`--offline` skips *integrity + release age*, *OSV*, *pinned action advisories* and *container
+image CVEs* — **four** gates, not the two this paragraph used to name and not the three it named
+after that — and then **exits 2** rather than 0, because an audit that did not run four of its
+gates has not passed and a pipeline reading only the exit code could not previously tell the
+difference. The advisory gate skips only under that flag: run on its own with no network it
+**fails**, because an advisory database that cannot be reached makes every pinned action unknown,
+and unknown is not clean. The container gate is skipped rather than reported
 not-applicable under `--offline` because `audit.mjs` tests the offline branch first, which is
 what makes the run exit 2 instead of 0 on a machine that has no release images either way.
+
+### Pinning is not safety, and for a while nothing here said so
+
+`ci-pinning.mjs` proves every `uses:` is a full commit SHA, which stops a tag being repointed. It
+says nothing about a pinned SHA of a version an advisory was later published against — that stays
+pinned, and stays vulnerable, silently and for ever. `action-advisories.mjs` closes it, and two
+measurements against the live services on 2026-08-27 decided how:
+
+* OSV's **version-qualified** query returns `{}` for the `GitHub Actions` ecosystem even for a
+  version squarely inside a published range (`canonical/get-workflow-version-action` 1.0.0 against
+  an advisory covering everything below 1.0.1), while the same query with no `version` key returns
+  the advisory and the identical shape against `npm` returns six. The ecosystem is real — a garbage
+  one is rejected with `invalid ecosystem`. A gate built the way `osv-scan.mjs` is built would have
+  queried successfully, matched nothing, ever, and printed a green tick over an empty answer.
+* OSV's **name** query is case-sensitive and GitHub's `uses:` is not: `Azure/setup-kubectl` returns
+  GHSA-p756-rfxh-x63h and `azure/setup-kubectl` returns `{}`.
+
+So the gate downloads the ecosystem's whole published corpus (one request, 55 records) and indexes
+it case-insensitively — which also lets it assert its advisory source is non-empty, something a
+per-name query cannot do.
+
+The version comes from GitHub, never from the `# v7.0.1` comment: a gate whose answer comes from a
+comment is turned green by editing the comment. `git ls-remote --tags` gives the tags at a commit,
+peeled `^{}` line included, and the most specific one is the release — `v7` and `v7.0.1` both point
+at the pinned checkout commit and reading `7` as a version too would make every advisory fixed
+inside the current major fire against a pin that is not affected. The comment is checked *against*
+that answer, so a mislabelled pin is its own failure.
+
+Eight failure modes, each demonstrated by running the real gate against the real repository with one
+deliberate defect at a time on 2026-08-27:
+
+| Defect | What the gate did |
+| --- | --- |
+| one `actions/download-artifact` pin moved to `f44cd7b4…` — real commit, real release v4.1.0, real advisory | ✗ `GHSA-cxww-7g56-2vh6 affects actions/download-artifact@4.1.0 severity=HIGH`, exit 1 |
+| the correct `actions/checkout` SHA relabelled `# v9.9.9` | ✗ *actions/checkout is labelled `# v9.9.9` and GitHub says that commit is v7, v7.0.1*, exit 1 |
+| `actions/checkout` pinned to the head of `main` — a real commit no tag names | ✗ `no tag of actions/checkout points at the pinned commit`, exit 1 |
+| every HTTP request sent to a dead proxy | ✗ `the GitHub Actions advisory corpus could not be read`, exit 1 |
+| `git` alone sent to a dead proxy | ✗ `could not read the tags of actions/download-artifact`, exit 1 |
+| the action-reference floor raised to 64 | ✗ `found 63 action reference(s); this gate refuses to run below 64`, exit 1 |
+| the advisory-corpus floor raised to 999 | ✗ `the advisory corpus holds 55 record(s)`, exit 1 |
+| `actions/upload-artifact` pinned to a real SHA that belongs to `actions/checkout` — a copy-paste swap | ✗ *no tag of actions/upload-artifact points at the pinned commit 3d3c42e5aac5*, exit 1 |
+
+The first is the one that matters: a real, published, HIGH advisory against a real version of an
+action this repository really uses, found from the SHA rather than from the label beside it.
 
 ### A finding worth recording
 
@@ -596,7 +644,7 @@ The honest section.
 | **Accessibility, fully** | The audit is static (server-rendered HTML) because a headless browser needs install scripts the supply-chain policy forbids. It reports exactly what it covers. THREAT-MODEL G5 |
 | **Load behaviour at scale** | The harness measures a local dev server, not production capacity, and says so in its output |
 | **Container image digests** | *Presence* is now verified and gated: every base image and every GitHub Action is `@sha256:`/40-hex pinned and `ci-pinning` fails the release otherwise (2026-08-19). What is **not** verified is that any pinned artefact was benign when its digest was taken — a digest pins bytes, not trustworthiness. This row used to say digests were partly absent; that is no longer true, and it is recorded here rather than deleted |
-| **A pinned digest staying safe** | **Half true, and the half that was wrong was disproved here on 2026-08-26.** The OSV gate does query the `npm` ecosystem only. But the container CVE gate inside `security:audit` runs trivy against the built images, and trivy reads the Alpine package database — so an advisory against the OS packages a pinned base image ships is caught automatically, at the gate, without anybody reading a feed. That is exactly how **CVE-2026-14456** (HIGH, OpenSSL, in the `node:24.18.0-alpine3.24` digest's libcrypto3/libssl3 3.5.7-r0) surfaced: four findings across both images, release-blocking, hours after they were built. What genuinely nothing re-checks is a pinned **GitHub Action** — no gate scans those, and an advisory against one still reaches this repository only through a person |
+| **A pinned digest staying safe** | **Half true, and the half that was wrong was disproved here on 2026-08-26.** The OSV gate does query the `npm` ecosystem only. But the container CVE gate inside `security:audit` runs trivy against the built images, and trivy reads the Alpine package database — so an advisory against the OS packages a pinned base image ships is caught automatically, at the gate, without anybody reading a feed. That is exactly how **CVE-2026-14456** (HIGH, OpenSSL, in the `node:24.18.0-alpine3.24` digest's libcrypto3/libssl3 3.5.7-r0) surfaced: four findings across both images, release-blocking, hours after they were built. The same used to be false of a pinned **GitHub Action**, and since 2026-08-27 it is not: `action-advisories` — gate twelve of `security:audit` — resolves every one of the 63 pinned SHAs to the version it is by asking GitHub which tags point at that commit, and matches those versions against OSV's published `GitHub Actions` advisory corpus. It does not read the `# v7.0.1` trailing comment for the answer; it checks the comment against the answer, so a mislabelled pin fails too. A pinned SHA that no tag names, an unreachable corpus and a corpus that arrives short all fail rather than pass — see `scripts/supply-chain/action-advisories.mjs` for the two measurements that decided the design, and §10 for the eight demonstrated failure modes |
 | **The backup and restore procedure** (`RUNBOOK` §11.4) | Rehearsed by hand on 2026-08-19 — dump, `migrate.mjs roles`, `pg_restore --exit-on-error`, `db:verify` exit 0, `db:migrate:status` exit 0 — and **enforced by nothing**. No gate restores a dump. `db:verify` runs inside `verify` against the *development* database, which proves the checks work, not that a restore produces a database they would pass |
 | **Who owns schema `prl`** | **Now checked.** It was not, and that gap was found by breaking it: `verify-schema.mjs` check 6 asserts `prl_app` owns no relation and holds no `CREATE`, but never asked who *did* own the schema. Restoring a dump as `prl_api` without `--exit-on-error` leaves all relations in `prl` owned by `prl_api` — which then holds `CREATE` and can `DROP` every table it serves — and `db:verify` exited **0** over it. Check 6b now asserts `pg_namespace.nspowner` and every `pg_class.relowner` in `prl` is `prl_migrator`. It earned its place immediately: on first run it failed the shared development database, whose migration ledger was still owned by the bootstrapping superuser, and `pnpm run db:migrate` repaired it. |
 | **That `up` actually calls the destructive-statement gate** | The gate's logic is well covered — `apps/api/scripts/migrate.test.mjs`, 10 tests, run inside `test:scripts`: `down` refuses without a database, the scanner fires on each destructive kind, ignores a `DROP` that is only mentioned in prose, catches one hidden in a `DO` block, and rejects a bare `-- prl:irreversible:` with no reason. What no test covers is the **wiring** — that `up` consults it before applying — because that needs a live database and a deliberately-bad pending migration |
@@ -622,7 +670,7 @@ sentence. Nothing in the table below maps onto
 | §2.1 five-card enumeration, §3 betting, §4 side pots, §5 whole-hand invariants, §6 hidden information, §7 randomness and commitment, §8 mathematics, §9 content | `test` (via `test:unit`) |
 | §2.2 the 133,784,560-hand exhaustive check | `test:exhaustive` — **added to the gate 2026-08-18**; it was in neither `test` nor `verify` before that |
 | AI profile axes (`REPORT.md` §7) | `test:simulation` — also added to the gate 2026-08-18 |
-| §10 supply chain | `security:audit` (fourteen gates, including `ci-pinning` since 2026-08-19, `secret-scan`/`container-scan` since, and `image-provenance`, `log-policy` and `keyless-signing-identity` since 2026-08-25), `security:hygiene` |
+| §10 supply chain | `security:audit` (fifteen gates, including `ci-pinning` since 2026-08-19, `secret-scan`/`container-scan` since, `image-provenance`, `log-policy` and `keyless-signing-identity` since 2026-08-25, and `action-advisories` since 2026-08-27), `security:hygiene` |
 | The roll-forward-only migration policy (`RUNBOOK` §11.3) | `test` (via `test:scripts` → `apps/api/scripts/migrate.test.mjs`). The scanner is gated; the wiring into `up` is not — see the table above |
 | The hand-typed Coach report in `apps/web/src/fixtures/table.ts`, which `fixtures:check` does not reach | `test` (via `test:unit` → `apps/web/test/table-fixture-figures.test.ts`). Every figure in it recomputed from `@prl/poker-math` on the report's own inputs: the price, the rule-of-2-and-4 error against `probabilityOfHitting`, the interval against its own trial count, both expected values against `evOfCall`/`evOfRaise`, the SPR, and the out counts. **Added 2026-08-26 because it found a wrong one** — see §9 |
 | The counts the product prints about itself — lessons, topics, glossary terms, scenarios, claims | `test` (via `test:unit` → `apps/web/test/product-counts.test.ts`), against `contentStats()` and the bundle. Added 2026-08-26 for the reason §9 records: the same class of figure had already drifted inside this document |
@@ -642,7 +690,7 @@ sentence. Nothing in the table below maps onto
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm run security:audit        # 14 gates
+pnpm run security:audit        # 15 gates
 pnpm run test                  # builds the packages first, then unit + integration + scripts
 pnpm run test:exhaustive       # all 133,784,560 seven-card hands (~7 s)
 pnpm run test:simulation       # AI profile axes (~2 min)

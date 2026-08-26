@@ -91,7 +91,9 @@ this SHA unless a line says otherwise.
 `pnpm run verify` exits **0**: at this candidate it was all fourteen of the gates that existed
 then, with **3,555 tests passing**, and at `7e861ae0a9f1` — the re-measurement in the banner above —
 all fifteen of the gates that existed by then and **3,586 tests, zero failures**,
-including a supply-chain audit of **fourteen** gates — release image signature verification,
+including a supply-chain audit which ran fourteen of its gates then. `security:audit` is
+**fifteen gates** since `pinned-action-advisories` joined it on 2026-08-27, which is later than
+every measurement in this document. Release image signature verification,
 container log policy and the keyless-signing identity gate were all added on 2026-08-25 and all
 measured passing here. The container
 scan reports **zero** findings at or above HIGH on either image. Staging runs these digests with a
@@ -289,7 +291,7 @@ shell, node path and a Node version below the `engines` floor. The base is now
 | Gate | Result | Capture |
 | --- | --- | --- |
 | `pnpm run verify` | **every gate passed, exit 0** — all 15 of the gates that existed then; **3,586 tests, 0 failures**. Measured at `7e861ae0a9f1`, not at the candidate SHA — see the banner at the top. `verify` is **sixteen gates** since `test:keyboard` was added on 2026-08-26, and this row predates it | `verify-rules.log` |
-| `pnpm run security:audit` | **14 of 14 gates pass** — `release-image-signatures`, `log policy` and `keyless-signing-identity` were all added on 2026-08-25 | inside `verify-6.log` |
+| `pnpm run security:audit` | **every gate passed** — all 14 of the gates that existed then; `release-image-signatures`, `log policy` and `keyless-signing-identity` had all been added on 2026-08-25. `security:audit` is **fifteen gates** since `pinned-action-advisories` was added on 2026-08-27, and this row predates it | inside `verify-6.log` |
 | API tests | **994 / 994** | inside `verify-13.log` |
 | Script tests | **1,165 / 1,165** | inside `verify-13.log` |
 | Package + web tests | engine 134, contracts 21, maths 256, ui 265, content 29, AI 156, web 358 | — |
@@ -579,8 +581,9 @@ under a real network partition.
    `127.0.0.1:5001` and **signed by digest**, each carrying a **signed CycloneDX SBOM attestation**
    of its own contents (api 103 components, web 61). `pnpm run security:image-provenance` verifies
    both against the committed public key `deploy/signing/cosign.pub` and **needs no private key** —
-   verification is something a deployer can do. It is gate fourteen of `security:audit` — the last
-   in the `GATES` array, corrected 2026-08-26 from "twelve" — and it is a
+   verification is something a deployer can do. It is gate fifteen of `security:audit` — the last
+   in the `GATES` array, corrected 2026-08-26 from "twelve" and again 2026-08-27 when
+   `pinned-action-advisories` was inserted ahead of it — and it is a
    refusal rather than a report: it fails on an unsigned digest, on a digest signed by another key,
    on a transplanted signature, on a signature record that names no images, on an attestation whose
    subject is a different artefact, and on an attestation over an empty predicate. Three of those
@@ -622,7 +625,7 @@ under a real network partition.
    * `pnpm run security:image-provenance` verifies **whichever posture an image is actually in**, and
      refuses a signature record that is in neither — an unsigned release is exactly what "neither"
      looks like, so "absent" is never read as "the other posture, presumably".
-   * `pnpm run security:keyless` — gate 8 of the fourteen in `security:audit`, hermetic — fails if
+   * `pnpm run security:keyless` — gate 8 of the fifteen in `security:audit`, hermetic — fails if
      the policy and the workflow stop agreeing: a rename, a trigger that can run on another ref,
      `id-token: write` at the top level or in a second job or in **any** other workflow, a wildcard
      in the ref, or an issuer that is not GitHub's. Demonstrated failing, live, for the tag-trigger

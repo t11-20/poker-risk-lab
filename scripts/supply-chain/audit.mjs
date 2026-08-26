@@ -100,6 +100,16 @@ const GATES = [
   { file: 'log-policy.mjs', label: 'log policy', network: false },
   { file: 'provenance.mjs', label: 'integrity + release age', network: true },
   { file: 'osv-scan.mjs', label: 'OSV vulnerabilities', network: true },
+  // Sits beside the OSV gate because it asks the same question of the other half
+  // of the dependency graph, and it is a separate gate because that half needed a
+  // different answer: `osv-scan.mjs` queries the `npm` ecosystem, and OSV's
+  // version-qualified query returns an empty result for the `GitHub Actions`
+  // ecosystem even when the version is squarely inside a published range —
+  // measured, see that file's header. `ci-pinning.mjs` proves every action is
+  // pinned to a commit SHA; nothing re-checked whether that SHA is a version an
+  // advisory has since been published against, and a pinned vulnerable version
+  // stays pinned for ever.
+  { file: 'action-advisories.mjs', label: 'pinned action advisories', network: true },
   { file: 'sbom.mjs', label: 'SBOM generation', network: false },
   {
     file: 'container-scan.mjs',

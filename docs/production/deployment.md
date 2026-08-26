@@ -110,7 +110,7 @@ GitHub gives each job a fresh machine, so the images built in `build` do not exi
 
 ## 3. Stage 1 — gates
 
-`pnpm run security:audit` runs **fourteen** gates, each in its own child process so one crashing gate cannot prevent the others reporting, in this order: policy in effect, source encoding hygiene, denied packages, dependency shapes, Shai-Hulud IOC sweep, **committed credentials**, CI + container pinning, **keyless signing identity**, **log policy**, integrity + release age, OSV vulnerabilities, SBOM generation, container image CVEs, and **release image signatures**. Then lint, `build:packages`, typecheck. (This paragraph has said "ten" and then "eleven"; the count and the order are the `GATES` array in `scripts/supply-chain/audit.mjs`, and `security:audit` prints the count on its first line. The last three landed on 2026-08-25.)
+`pnpm run security:audit` runs **fifteen** gates, each in its own child process so one crashing gate cannot prevent the others reporting, in this order: policy in effect, source encoding hygiene, denied packages, dependency shapes, Shai-Hulud IOC sweep, **committed credentials**, CI + container pinning, **keyless signing identity**, **log policy**, integrity + release age, OSV vulnerabilities, **pinned action advisories**, SBOM generation, container image CVEs, and **release image signatures**. Then lint, `build:packages`, typecheck. (This paragraph has said "ten" and then "eleven"; the count and the order are the `GATES` array in `scripts/supply-chain/audit.mjs`, and `security:audit` prints the count on its first line. Three landed on 2026-08-25 and `pinned-action-advisories` on 2026-08-27.)
 
 The install is `pnpm install --frozen-lockfile --ignore-scripts`: this job installs a dependency graph in order to decide whether it is safe, so it must not run that graph's install-time hooks first.
 
@@ -287,7 +287,7 @@ Everything below was measured on 2026-08-22. Nothing else here is claimed as ver
 | `node scripts/supply-chain/ci-pinning.mjs --freshness` | 0 | all 3 pinned tags re-resolved against the registry, drifted 0 |
 | `node scripts/supply-chain/container-scan.mjs` | 0 | trivy 0.72.0, floor HIGH; api and web 30 findings each, all unfixable; 0 blocking, 0 allowed |
 | the same, against the **pre-fix** web image | 1 | 8 blocking findings under `/usr/local/lib/node_modules/npm` |
-| `node scripts/supply-chain/audit.mjs` | 0 | all gates pass, container gate included — 10 of them on that date; the array holds **fourteen** today |
+| `node scripts/supply-chain/audit.mjs` | 0 | all gates pass, container gate included — 10 of them on that date; the array holds **fifteen** today |
 | `node scripts/supply-chain/audit.mjs --skip-containers` | 2 | `1 network gate(s) skipped — NOT a valid release audit.` |
 | `node scripts/staging.mjs up` | 1 | stack verified; the smoke test then found two application defects (53 passed, 2 failed). No attestation written — correct behaviour |
 | `node scripts/staging.mjs status` | 0 | both images match the manifest; `attestation absent — nothing has been verified` |
