@@ -1,4 +1,13 @@
 # ---------------------------------------------------------------------------
+# The `saturation` group — the four resources that can actually run out:
+# `EventLoopBlocked`, `DbPoolSaturated`, `WorkerPoolQueueDeep` and
+# `AnalysisTimeouts`. Three of the four had no unit test until the mutation
+# audit; the fourth is the one below, which had a threshold no host could reach.
+#
+# The last case in this file is the one that ties the group together: a single
+# stalled event loop makes three of these fire at once along with both latency
+# rules, which is the incident `inhibit_rules` exists for.
+#
 # `WorkerPoolQueueDeep`, and a threshold the gauge could not reach.
 #
 # The rule was `avg_over_time(prl_worker_pool_queued[10m]) > 4`. The queue is
@@ -90,4 +99,389 @@ tests:
         eval_time: 30m
         exp_samples:
           - labels: 'ALERTS{alertname="WorkerPoolQueueDeep", alertstate="firing", severity="ticket"}'
+            value: 1
+
+  # -------------------------------------------------------------------------
+  # EventLoopBlocked — page
+  #
+  # `prl_event_loop_delay_p99_seconds > 0.25`, `for: 5m`. The simplest rule in
+  # the file: a bare gauge against a constant. What makes it worth two cases
+  # anyway is that a bare gauge is also the easiest thing to write a test for
+  # that proves nothing — a series of zeroes and a series of ones would pass
+  # against any threshold between them. The healthy case below is therefore a
+  # real healthy reading (tens of microseconds, which is what `metrics.ts` says
+  # a healthy loop shows) and a real near miss.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: a loop delayed past 250 ms for five minutes pages
+    input_series:
+      # 400 ms at p99: one synchronous stretch of work per scrape window,
+      # blocking every socket, timer and turn clock at once.
+      - series: 'prl_event_loop_delay_p99_seconds'
+        values: '0.00004+0x40 0.4+0x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="EventLoopBlocked"}'
+        eval_time: 5m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="EventLoopBlocked", alertstate="pending"}'
+        eval_time: 14m
+        exp_samples:
+          - labels: 'ALERTS{alertname="EventLoopBlocked", alertstate="pending", severity="page"}'
+            value: 1
+      - expr: 'ALERTS{alertname="EventLoopBlocked", alertstate="firing"}'
+        eval_time: 15m15s
+        exp_samples:
+          - labels: 'ALERTS{alertname="EventLoopBlocked", alertstate="firing", severity="page"}'
+            value: 1
+
+  - interval: 15s
+    name: a healthy loop and a single 300 ms stall do not page
+    input_series:
+      # Tens of microseconds, with one scrape window that caught a 300 ms stall
+      # — a garbage collection, or one large hand history serialised. Over the
+      # bar for fifteen seconds against a `for:` of five minutes.
+      - series: 'prl_event_loop_delay_p99_seconds'
+        values: '0.00004+0x40 0.3 0.00004+0x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="EventLoopBlocked", alertstate="firing"}'
+        eval_time: 12m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="EventLoopBlocked", alertstate="firing"}'
+        eval_time: 60m
+        exp_samples: []
+      # It did reach pending, so the silence is the `for:` doing its job rather
+      # than a renamed series evaluating over nothing.
+      - expr: 'ALERTS{alertname="EventLoopBlocked", alertstate="pending"}'
+        eval_time: 10m15s
+        exp_samples:
+          - labels: 'ALERTS{alertname="EventLoopBlocked", alertstate="pending", severity="page"}'
+            value: 1
+
+  - interval: 15s
+    name: a loop sitting at exactly 250 ms does not page
+    input_series:
+      # The boundary, held for an hour. `> 0.25` and not `>=`, and a mutation
+      # from one to the other is invisible to every other case in this file.
+      - series: 'prl_event_loop_delay_p99_seconds'
+        values: '0.25+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="EventLoopBlocked"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="EventLoopBlocked"}'
+        eval_time: 90m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # DbPoolSaturated — page
+  #
+  # `histogram_quantile(0.95, sum by (le) (rate(prl_db_probe_duration_seconds_bucket[5m]))) > 0.5`,
+  # `for: 5m`. `select 1` is the cheapest query there is, so its time is spent
+  # waiting for a pooled connection rather than in the query — which is what
+  # makes this the pool-exhaustion signal and why the threshold is three orders
+  # of magnitude above a healthy probe. 0.5 is a boundary of `DB_PROBE_BUCKETS`,
+  # for the reason `alerts.md` § Why the thresholds fall on bucket boundaries
+  # gives, so the silent case below sits in the bucket immediately under it.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: a probe taking over half a second at p95 pages
+    input_series:
+      # A tenth of probes past 500 ms: every pooled connection busy and the
+      # probe queueing behind them. p95 interpolates to 750 ms inside (0.5, 1].
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.001"}'
+        values: '0+0x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.005"}'
+        values: '0+0x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.01"}'
+        values: '0+0x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.05"}'
+        values: '0+20x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.1"}'
+        values: '0+50x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.5"}'
+        values: '0+90x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="1"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="5"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="10"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="+Inf"}'
+        values: '0+100x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="DbPoolSaturated", alertstate="firing"}'
+        eval_time: 4m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="DbPoolSaturated", alertstate="firing"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DbPoolSaturated", alertstate="firing", severity="page"}'
+            value: 1
+
+  - interval: 15s
+    name: a probe answering in under a millisecond raises nothing
+    input_series:
+      # The healthy shape `metrics.ts` describes: `select 1` against a pool with
+      # a free connection is sub-millisecond, three orders of magnitude under
+      # the threshold.
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.001"}'
+        values: '0+98x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.005"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.01"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.05"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.1"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.5"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="1"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="5"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="10"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="+Inf"}'
+        values: '0+100x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="DbPoolSaturated"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="DbPoolSaturated"}'
+        eval_time: 90m
+        exp_samples: []
+
+  - interval: 15s
+    name: a pool that is busy but not exhausted does not page
+    input_series:
+      # p95 lands inside (0.1, 0.5] at about 340 ms — the pool under real load,
+      # answering slower than usual and not queueing. The near miss.
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.001"}'
+        values: '0+0x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.005"}'
+        values: '0+0x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.01"}'
+        values: '0+0x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.05"}'
+        values: '0+20x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.1"}'
+        values: '0+50x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.5"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="1"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="5"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="10"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="+Inf"}'
+        values: '0+100x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="DbPoolSaturated"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="DbPoolSaturated"}'
+        eval_time: 90m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # AnalysisTimeouts — ticket
+  #
+  # `sum(rate(prl_analysis_total{outcome="timeout"}[10m])) / sum(rate(prl_analysis_total[10m])) > 0.05`,
+  # `for: 15m`. The window is SHORTER than the `for:`, which is the
+  # `RoomOwnershipRefused` shape, and it buys the third case below: a burst of
+  # timeouts that stops cannot stay true for fifteen minutes, because after the
+  # last one the ratio decays out of the ten-minute window.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: one Coach analysis in ten abandoning its budget raises a ticket
+    input_series:
+      # Twenty analyses per scrape, two of them abandoned past COACH_TIMEOUT_MS.
+      # `prl_analysis_total` carries kind as well as outcome and the rule sums
+      # over both, so an `ok` series on a different kind belongs in the
+      # denominator — which this input checks by having one.
+      - series: 'prl_analysis_total{kind="coach", outcome="timeout"}'
+        values: '0+2x400'
+      - series: 'prl_analysis_total{kind="coach", outcome="ok"}'
+        values: '0+14x400'
+      - series: 'prl_analysis_total{kind="equity", outcome="ok"}'
+        values: '0+4x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AnalysisTimeouts", alertstate="firing"}'
+        eval_time: 14m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AnalysisTimeouts", alertstate="pending"}'
+        eval_time: 14m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AnalysisTimeouts", alertstate="pending", severity="ticket"}'
+            value: 1
+      - expr: 'ALERTS{alertname="AnalysisTimeouts", alertstate="firing"}'
+        eval_time: 16m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AnalysisTimeouts", alertstate="firing", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: two percent of analyses timing out is the tail and raises nothing
+    input_series:
+      # Abandoning a run past its budget is a designed outcome, not a failure,
+      # and a few percent is the tail. Deliberately non-zero: a rule tested only
+      # against a deployment with no timeouts at all would pass at any threshold.
+      - series: 'prl_analysis_total{kind="coach", outcome="timeout"}'
+        values: '0+1x400'
+      - series: 'prl_analysis_total{kind="coach", outcome="ok"}'
+        values: '0+49x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AnalysisTimeouts"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AnalysisTimeouts"}'
+        eval_time: 90m
+        exp_samples: []
+
+  - interval: 15s
+    name: a burst of timeouts during one cold deploy does not raise a ticket
+    input_series:
+      # Two minutes of a cold worker pool abandoning half of everything it is
+      # handed — 128 timeouts, a ratio of 50% while it lasts — and then it
+      # stops. Far over the threshold, and it still must not open a ticket: the
+      # ten-minute window drains before the fifteen-minute `for:` elapses. That
+      # is what a window shorter than the `for:` buys, and it is the only reason
+      # this deployment does not raise one after every deploy. Measured across
+      # the hour below: the ratio is above 0.05 from t=10m30s to about t=21m30s,
+      # which is eleven minutes of truth against a `for:` of fifteen.
+      - series: 'prl_analysis_total{kind="coach", outcome="timeout"}'
+        values: '0+0x40 0+16x8 128+0x400'
+      - series: 'prl_analysis_total{kind="coach", outcome="ok"}'
+        values: '0+16x460'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AnalysisTimeouts", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AnalysisTimeouts", alertstate="firing"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AnalysisTimeouts"}'
+        eval_time: 60m
+        exp_samples: []
+      # …and it did get as far as pending, so the three silences above are the
+      # `for:` outlasting the burst rather than an expression that never became
+      # true at all.
+      - expr: 'ALERTS{alertname="AnalysisTimeouts", alertstate="pending"}'
+        eval_time: 14m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AnalysisTimeouts", alertstate="pending", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: a Coach that has never timed out leaves the ratio empty and silent
+    input_series:
+      # `prl_analysis_total` is not primed, so `outcome="timeout"` does not
+      # exist until the first abandoned run. The numerator is the empty vector
+      # and the ratio is empty rather than zero — the correct reading here,
+      # because no timeouts is no ticket, and worth pinning because the same
+      # shape was the defect in `HandCompletionGap` where the empty side WAS
+      # the incident.
+      - series: 'prl_analysis_total{kind="coach", outcome="ok"}'
+        values: '0+20x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AnalysisTimeouts"}'
+        eval_time: 60m
+        exp_samples: []
+      - expr: 'sum(rate(prl_analysis_total{outcome="timeout"}[10m]))'
+        eval_time: 60m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # One stalled process, four alerts — the incident `inhibit_rules` was written
+  # for, evaluated here rather than described.
+  #
+  # `alerts.md` § One incident is one notification records it as a measurement:
+  # "one blocked event loop raises `EventLoopBlocked`, and because the process is
+  # not answering it also raises `DbPoolSaturated`, `HttpLatencyP99High` and
+  # `HttpLatencyP95Degraded` — three pages and a ticket for one cause", with four
+  # notifications before the inhibition and one after. That sentence was true of
+  # a real Alertmanager and had never been evaluated against the rules.
+  #
+  # This case is the rule half of it: one input in which a single stalled process
+  # makes all four fire at once. The suppression itself is Alertmanager's and
+  # cannot be asserted by `promtool`, which evaluates rules and knows nothing
+  # about routing — so what this pins is the PREMISE. The inhibition in
+  # `alertmanager.template.yml` names `EventLoopBlocked` as source and exactly
+  # `DbPoolSaturated|HttpLatencyP99High|HttpLatencyP95Degraded` as targets, and
+  # the four alertnames below are that list plus its source. If a fifth rule ever
+  # joins this set, this case fires five and the target list is one short.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: one stalled event loop raises all four alerts the inhibition pairs
+    input_series:
+      # The loop is stuck at 800 ms…
+      - series: 'prl_event_loop_delay_p99_seconds'
+        values: '0.8+0x400'
+      # …the `select 1` probe cannot get its callback run, so it reads as a
+      # saturated pool while the pool is idle — the wrong-subsystem reading
+      # `DbPoolSaturated`'s own description admits to…
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.001"}'
+        values: '0+0x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.005"}'
+        values: '0+0x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.01"}'
+        values: '0+0x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.05"}'
+        values: '0+0x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.1"}'
+        values: '0+0x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="0.5"}'
+        values: '0+0x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="1"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="5"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="10"}'
+        values: '0+100x400'
+      - series: 'prl_db_probe_duration_seconds_bucket{le="+Inf"}'
+        values: '0+100x400'
+      # …and every request queues behind the same stall, on endpoints with
+      # nothing to do with the cause.
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.005"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.01"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.025"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.05"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.1"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.25"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.5"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="1"}'
+        values: '0+500x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="2.5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="10"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="+Inf"}'
+        values: '0+1000x400'
+    promql_expr_test:
+      # Past the longest `for:` in the set, which is the ticket's thirty minutes.
+      - expr: 'count(ALERTS{alertname=~"EventLoopBlocked|DbPoolSaturated|HttpLatencyP99High|HttpLatencyP95Degraded", alertstate="firing"})'
+        eval_time: 40m
+        exp_samples:
+          - labels: '{}'
+            value: 4
+      - expr: 'ALERTS{alertname="EventLoopBlocked", alertstate="firing"}'
+        eval_time: 40m
+        exp_samples:
+          - labels: 'ALERTS{alertname="EventLoopBlocked", alertstate="firing", severity="page"}'
+            value: 1
+      - expr: 'ALERTS{alertname="DbPoolSaturated", alertstate="firing"}'
+        eval_time: 40m
+        exp_samples:
+          - labels: 'ALERTS{alertname="DbPoolSaturated", alertstate="firing", severity="page"}'
             value: 1

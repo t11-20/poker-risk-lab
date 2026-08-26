@@ -1,0 +1,441 @@
+# ---------------------------------------------------------------------------
+# The `latency-and-errors` group: `HttpErrorRateHigh`, `HttpLatencyP99High` and
+# `HttpLatencyP95Degraded`. Two pages and a ticket, and none of them had a unit
+# test until this file — they were in the nineteen the mutation audit found.
+#
+# ## What a histogram rule can be wrong about, and is not here
+#
+# `histogram_quantile` interpolates INSIDE a bucket, so a threshold that is not a
+# bucket boundary fires on an assumption rather than a count. `alerts.md`
+# § Why the thresholds fall on bucket boundaries makes that argument, and the two
+# latency rules obey it — 1 s and 250 ms are both boundaries of
+# `prl_http_request_duration_seconds`. The consequence is worth stating because
+# it decides what the cases below have to look like: with the threshold ON a
+# boundary, an alert can only fire when observations are counted ABOVE it, never
+# from interpolation within it. Every "silent" case here therefore puts real
+# traffic in the bucket immediately under the threshold and shows it does not
+# fire, which is the half a test written only against zeroes would miss.
+#
+# ## The ratio rules and an empty denominator
+#
+# `HttpErrorRateHigh` is a ratio, and a ratio has two ways to be nonsense. Both
+# are asserted: an overnight hour with no traffic at all leaves 0/0, which is NaN
+# and is not greater than 0.02; and a deployment that has never served a 5xx has
+# no `status="5xx"` series, which makes the numerator the empty vector and the
+# whole expression empty. Both must be silent, and both are the states this
+# deployment spends most of its life in.
+#
+# ## Two rules, one cause
+#
+# `HttpLatencyP99High` and `HttpLatencyP95Degraded` can both be true of one slow
+# deployment, and `alertmanager.template.yml` does NOT inhibit the pair — it is
+# not one of the five in `alerts.md`. That is not an oversight this file can fix
+# by assertion, and it is defensible: p99 over a second does not imply p95 over
+# 250 ms (a fast body with a slow tail is exactly that shape), so neither rule is
+# a consequence of the other. The last case below is the one where both DO fire,
+# stated explicitly so that the pair is a known fact about the deployment rather
+# than a surprise at 3am. What does suppress both is `EventLoopBlocked` and
+# `ApiDown`, which are the two causes that genuinely make them downstream
+# readings, and both of those inhibitions are in the table in `alerts.md`.
+# ---------------------------------------------------------------------------
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # -------------------------------------------------------------------------
+  # HttpErrorRateHigh — page
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: three percent of requests answering 5xx pages after five minutes
+    input_series:
+      # A hundred requests per scrape, three of them 5xx. The status label is a
+      # class rather than a code — `metrics.ts` buckets it — so these two series
+      # are the whole denominator.
+      - series: 'prl_http_requests_total{method="GET", route="/api/v1/rooms/:id", status="5xx"}'
+        values: '0+3x400'
+      - series: 'prl_http_requests_total{method="GET", route="/api/v1/rooms/:id", status="2xx"}'
+        values: '0+97x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HttpErrorRateHigh", alertstate="firing"}'
+        eval_time: 4m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HttpErrorRateHigh", alertstate="pending"}'
+        eval_time: 4m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HttpErrorRateHigh", alertstate="pending", severity="page"}'
+            value: 1
+      - expr: 'ALERTS{alertname="HttpErrorRateHigh", alertstate="firing"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HttpErrorRateHigh", alertstate="firing", severity="page"}'
+            value: 1
+
+  - interval: 15s
+    name: one percent of requests answering 5xx does not page
+    input_series:
+      # Under the bar and staying there for an hour. Deliberately not zero: a
+      # rule tested only against a clean deployment would pass while the
+      # threshold had been moved to anything at all.
+      - series: 'prl_http_requests_total{method="POST", route="/api/v1/analysis", status="5xx"}'
+        values: '0+1x400'
+      - series: 'prl_http_requests_total{method="POST", route="/api/v1/analysis", status="2xx"}'
+        values: '0+99x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HttpErrorRateHigh"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HttpErrorRateHigh"}'
+        eval_time: 90m
+        exp_samples: []
+
+  - interval: 15s
+    name: a wall of 4xx is the product working and must not page
+    input_series:
+      # Every refusal in this API is a 4xx carrying a contract error code, and
+      # `alerts.md` says in as many words that 4xx is the product working — a
+      # spike of `not_authenticated` has its own rules in the security group. If
+      # the status matcher were ever dropped from the numerator this is the case
+      # that fails.
+      - series: 'prl_http_requests_total{method="POST", route="/api/v1/session", status="4xx"}'
+        values: '0+60x400'
+      - series: 'prl_http_requests_total{method="GET", route="/api/v1/rooms", status="2xx"}'
+        values: '0+40x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HttpErrorRateHigh"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AuthFailureSpike"}'
+        eval_time: 30m
+        exp_samples: []
+
+  - interval: 15s
+    name: a deployment that has never served a 5xx leaves the ratio empty and silent
+    input_series:
+      # `prl_http_requests_total` is not primed on `status`, so a deployment
+      # that has served no 5xx has no such series at all. The numerator is the
+      # empty vector, and `empty / anything` is empty rather than zero. That is
+      # the correct reading here — no 5xx is no alert — but it is the same shape
+      # that killed the old `HandCompletionGap`, where the empty side was the
+      # catastrophe itself. Asserted so the difference stays deliberate.
+      - series: 'prl_http_requests_total{method="GET", route="/api/v1/rooms", status="2xx"}'
+        values: '0+100x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HttpErrorRateHigh"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'sum(rate(prl_http_requests_total{status="5xx"}[5m]))'
+        eval_time: 30m
+        exp_samples: []
+
+  - interval: 15s
+    name: an evening of traffic followed by a quiet night does not page on 0/0
+    input_series:
+      # Half an hour of a class, at one 5xx in a hundred, and then nobody until
+      # morning. Two things have to hold and both are asserted: the busy half is
+      # under the threshold and silent, and the quiet half leaves BOTH rates at
+      # zero, so the ratio is 0/0 — NaN, which is not greater than 0.02.
+      #
+      # That NaN is the only reason a deployment used by day and not by night
+      # does not page every night, and it is also what makes the two windows
+      # having to MATCH load-bearing. A numerator reading an hour while the
+      # denominator reads five minutes divides a real count by zero at 45m,
+      # which is `+Inf` and pages at 3am about the evening's traffic. This case
+      # is what refuses that.
+      - series: 'prl_http_requests_total{method="GET", route="/api/v1/rooms", status="2xx"}'
+        values: '0+99x120 11880+0x400'
+      - series: 'prl_http_requests_total{method="GET", route="/api/v1/rooms", status="5xx"}'
+        values: '0+1x120 120+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HttpErrorRateHigh"}'
+        eval_time: 20m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HttpErrorRateHigh"}'
+        eval_time: 45m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HttpErrorRateHigh"}'
+        eval_time: 90m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # HttpLatencyP99High — page
+  #
+  # `histogram_quantile(0.99, sum by (le) (rate(..._bucket[5m]))) > 1`, `for: 10m`.
+  # The bucket series are cumulative, which is what `_bucket` means, and every
+  # boundary from `HTTP_BUCKETS` is rendered — a histogram missing its `+Inf`
+  # bucket produces no quantile at all, and rendering the full ladder is what
+  # makes these inputs the shape `metrics.ts` actually exports.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: fifteen requests in a thousand over a second pages at p99
+    input_series:
+      # A fast body with a slow tail, which is the shape that separates these
+      # two rules: 96% of requests answer inside 250 ms, and 15 in every 1000
+      # take between 1 s and 2.5 s. p99 is counted ABOVE the boundary rather
+      # than interpolated up to it, and p95 is 247 ms — under its own.
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.005"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.01"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.025"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.05"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.1"}'
+        values: '0+400x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.25"}'
+        values: '0+960x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.5"}'
+        values: '0+975x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="1"}'
+        values: '0+985x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="2.5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="10"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="+Inf"}'
+        values: '0+1000x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HttpLatencyP99High", alertstate="firing"}'
+        eval_time: 9m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HttpLatencyP99High", alertstate="firing"}'
+        eval_time: 15m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HttpLatencyP99High", alertstate="firing", severity="page"}'
+            value: 1
+      # p95 is 247 ms here, so the ticket stays silent while the page fires.
+      # This is the case that makes the missing inhibition between the two
+      # correct rather than an omission: p99 over a second genuinely does not
+      # imply p95 over 250 ms, so a rule suppressing one by the other would
+      # suppress a true reading.
+      - expr: 'ALERTS{alertname="HttpLatencyP95Degraded"}'
+        eval_time: 45m
+        exp_samples: []
+
+  - interval: 15s
+    name: five requests in a thousand over a second is under the bar and does not page
+    input_series:
+      # 995 under 1 s. p99 lands inside the (0.5, 1] bucket and interpolates to
+      # 875 ms, which is not greater than 1. A rule whose threshold had drifted
+      # below the boundary would fire here, and so would one that had lost its
+      # `histogram_quantile` and started comparing a raw bucket count.
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.005"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.01"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.025"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.05"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.1"}'
+        values: '0+400x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.25"}'
+        values: '0+960x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.5"}'
+        values: '0+975x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="1"}'
+        values: '0+995x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="2.5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="10"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="+Inf"}'
+        values: '0+1000x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HttpLatencyP99High"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HttpLatencyP99High"}'
+        eval_time: 90m
+        exp_samples: []
+
+  - interval: 15s
+    name: a healthy API answering in a hundred milliseconds raises neither latency rule
+    input_series:
+      # The everyday shape: JSON assembled from memory or one indexed query.
+      # 99% of requests under 100 ms, nothing at all above 250 ms.
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.005"}'
+        values: '0+600x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.01"}'
+        values: '0+900x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.025"}'
+        values: '0+980x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.05"}'
+        values: '0+995x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.1"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.25"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="1"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="2.5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="10"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="+Inf"}'
+        values: '0+1000x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname=~"HttpLatency.*"}'
+        eval_time: 45m
+        exp_samples: []
+      - expr: 'ALERTS{alertname=~"HttpLatency.*"}'
+        eval_time: 90m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # HttpLatencyP95Degraded — ticket
+  #
+  # `[10m]` window, threshold 250 ms, `for: 30m`. The longest `for:` in the file,
+  # and the reason is in its own description: sluggish without being broken is a
+  # working-hours question. Half an hour is also long enough that the two silent
+  # cases below have to be evaluated well past it to mean anything.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: p95 at 375 ms for half an hour raises a ticket and not a page
+    input_series:
+      # A tenth of requests over 250 ms and none over a second: the shape of a
+      # query that lost an index. p95 interpolates to 375 ms inside (0.25, 0.5].
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.005"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.01"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.025"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.05"}'
+        values: '0+100x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.1"}'
+        values: '0+500x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.25"}'
+        values: '0+900x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="1"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="2.5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="10"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="+Inf"}'
+        values: '0+1000x400'
+    promql_expr_test:
+      # Twenty-nine minutes in, and still not a ticket. The `for:` is the whole
+      # rule here: without this half, a mutation shortening it to `5m` would
+      # pass every other assertion in this case.
+      - expr: 'ALERTS{alertname="HttpLatencyP95Degraded", alertstate="firing"}'
+        eval_time: 29m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HttpLatencyP95Degraded", alertstate="pending"}'
+        eval_time: 29m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HttpLatencyP95Degraded", alertstate="pending", severity="ticket"}'
+            value: 1
+      - expr: 'ALERTS{alertname="HttpLatencyP95Degraded", alertstate="firing"}'
+        eval_time: 35m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HttpLatencyP95Degraded", alertstate="firing", severity="ticket"}'
+            value: 1
+      # Nothing is over a second, so the page must not ring. This is the half
+      # that keeps the ticket tier from becoming a page tier by accident.
+      - expr: 'ALERTS{alertname="HttpLatencyP99High"}'
+        eval_time: 35m
+        exp_samples: []
+
+  - interval: 15s
+    name: p95 just under 250 ms for an hour and a half raises nothing
+    input_series:
+      # 96% of requests under 250 ms, so p95 is inside (0.1, 0.25] and the
+      # threshold — which is a boundary — is not crossed. The nearest miss the
+      # rule can have.
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.005"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.01"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.025"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.05"}'
+        values: '0+100x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.1"}'
+        values: '0+500x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.25"}'
+        values: '0+960x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="1"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="2.5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="10"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="+Inf"}'
+        values: '0+1000x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HttpLatencyP95Degraded"}'
+        eval_time: 45m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="HttpLatencyP95Degraded"}'
+        eval_time: 90m
+        exp_samples: []
+
+  - interval: 15s
+    name: a deployment slow at both quantiles raises the page and the ticket, uninhibited
+    input_series:
+      # Everything past 500 ms and a fifth of it past a second — the state a
+      # saturated box actually reaches. Both rules are true, `alertmanager`'s
+      # `inhibit_rules` has no pair for them, and so two notifications arrive
+      # for one cause: a page that says "requests are queueing behind something"
+      # and a ticket that says "the app feels sluggish".
+      #
+      # Recorded rather than silently accepted. Neither rule is a consequence of
+      # the other — a fast body with a slow tail lifts p99 alone, which the
+      # first case in this file is — so an inhibition would suppress a real
+      # ticket in that case, and the pair is what `group_by: ['alertname']` and
+      # a shared runbook (`elevated-error-rate.md`) are there to make cheap.
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.005"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.01"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.025"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.05"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.1"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.25"}'
+        values: '0+0x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="0.5"}'
+        values: '0+200x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="1"}'
+        values: '0+800x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="2.5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="5"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="10"}'
+        values: '0+1000x400'
+      - series: 'prl_http_request_duration_seconds_bucket{le="+Inf"}'
+        values: '0+1000x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="HttpLatencyP99High", alertstate="firing"}'
+        eval_time: 40m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HttpLatencyP99High", alertstate="firing", severity="page"}'
+            value: 1
+      - expr: 'ALERTS{alertname="HttpLatencyP95Degraded", alertstate="firing"}'
+        eval_time: 40m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HttpLatencyP95Degraded", alertstate="firing", severity="ticket"}'
+            value: 1

@@ -40,7 +40,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
@@ -1008,5 +1008,82 @@ describe("NEGATIVE CONTROL: the dead man's switch alarming", () => {
     const arrivals = [Date.now() - 1_000];
     setTimeout(() => arrivals.push(Date.now()), 200);
     assert.equal(await watchForSilence(() => arrivals, 3_000, 6_000), null);
+  });
+});
+
+describe('every rule is covered by a promtool unit test, in both directions', () => {
+  /**
+   * The guard that closes the gap this whole directory was created for.
+   *
+   * ## The measurement it exists because of
+   *
+   * A mutation audit compared the `- alert:` names in `alert-rules.yml` against
+   * every `alertname=` in `deploy/staging/observability/rule-tests/`: **nineteen
+   * of thirty-five rules had no unit test at all**, and the rules file's own
+   * header claimed two of them — `SeatReleaseFailing` and `RoomOwnershipRefused` —
+   * were covered "in both directions". They were not. The sentence describing the
+   * coverage was the only evidence of it, which is the same class of defect as a
+   * runbook that names the wrong alert: a claim nothing was checking.
+   *
+   * The auditor named this check and declined to add it, because it would have
+   * failed immediately for those nineteen. That is the right reason to write a
+   * guard and the wrong reason to skip one, so it is here now that they are
+   * covered, and it is what stops the gap reopening one convenient rule at a
+   * time.
+   *
+   * ## Why here and not in `run.sh`
+   *
+   * `promtool test rules` reads the cases and the rules and cannot see that a
+   * rule has no case — silence and absence are the same to it. This is also why
+   * the check runs under `test:scripts`, and therefore under `pnpm run verify`,
+   * rather than only under `alerts:unit`: `alerts:unit` needs Docker, and a
+   * coverage claim that only holds on machines with a daemon running is a
+   * coverage claim that lapses on the machine that matters.
+   *
+   * ## Both directions, and what this can honestly assert about them
+   *
+   * A name appearing in a file is not proof that both directions were asserted —
+   * only a reader can judge that. What this CAN do is refuse the two states that
+   * make the question moot, and it does both: a rule with no case anywhere, and a
+   * case naming a rule that does not exist. The second is not hypothetical
+   * bookkeeping. `ALERTS{alertname="ApiDwon"}` with `exp_samples: []` passes
+   * against any rules file ever written, so a typo in a silent assertion is a
+   * green test over nothing — and `exp_samples: []` is precisely the spelling of
+   * the "stays silent" half.
+   */
+  const RULE_TESTS = join(OBSERVABILITY, 'rule-tests');
+  const caseFiles = readdirSync(RULE_TESTS)
+    .filter((name) => name.endsWith('.test.yml'))
+    .map((name) => ({ name, text: readFileSync(join(RULE_TESTS, name), 'utf8') }));
+  const declared = alertsInRulesFile(RULES);
+
+  it('read a non-empty rules file and a non-empty set of case files', () => {
+    // A sweep of nothing is not a pass. A renamed directory, a glob that stopped
+    // matching or a parser that quietly returned an empty map would make every
+    // assertion below vacuously true — which is the exact shape of the defect
+    // this suite exists to catch, one level up.
+    assert.ok(caseFiles.length >= 7, `only ${caseFiles.length} *.test.yml files were read`);
+    assert.ok(declared.size >= 35, `only ${declared.size} rules parsed out of alert-rules.yml`);
+  });
+
+  it('names every rule in alert-rules.yml in some rule-tests/*.test.yml', () => {
+    const uncovered = [...declared.keys()].filter(
+      (alert) => !caseFiles.some(({ text }) => text.includes(`alertname="${alert}"`)),
+    );
+    assert.deepEqual(
+      uncovered,
+      [],
+      `${uncovered.length} of ${declared.size} rules have no promtool unit test: ${uncovered.join(', ')}`,
+    );
+  });
+
+  it('asserts on no alertname that alert-rules.yml does not define', () => {
+    const unknown = new Set();
+    for (const { name, text } of caseFiles) {
+      for (const [, alert] of text.matchAll(/alertname="([A-Za-z0-9_]+)"/g)) {
+        if (!declared.has(alert)) unknown.add(`${alert} (${name})`);
+      }
+    }
+    assert.deepEqual([...unknown], [], `assertions on alerts that do not exist: ${[...unknown].join(', ')}`);
   });
 });

@@ -1,4 +1,10 @@
 # ---------------------------------------------------------------------------
+# The `availability` group: `ApiDown`, `ApiNotReady` and `ProcessRestartLoop`.
+# All three are pages, and two of the three have fired for nothing — one because
+# of the series under it, one because of the arithmetic in it. Each rule is
+# asserted in both directions and each defect is reproduced rather than
+# described, so the old expression's behaviour stays checkable in the repository.
+#
 # `ProcessRestartLoop`, and the defect that made it page with zero restarts.
 #
 # The rule is `changes(prl_process_start_time_seconds[15m]) >= 3` and it is
@@ -81,3 +87,238 @@ tests:
         exp_samples:
           - labels: 'ALERTS{alertname="ProcessRestartLoop", alertstate="firing", severity="page"}'
             value: 1
+
+  # -------------------------------------------------------------------------
+  # ApiDown
+  #
+  # `absent(up{job="prl-api"}) or max_over_time(up{job="prl-api"}[2m]) == 0`, on
+  # `for: 2m`. The two halves answer two different questions and both are
+  # exercised below: `up == 0` is a target that is configured and failing, and
+  # `absent()` is a job whose targets have gone — deleting the API from the
+  # compose file, or a relabelling that drops it. Without the second half that
+  # deletion would silence the rule and leave nothing to say so.
+  #
+  # ## The latency is four minutes, not two, and that is arithmetic
+  #
+  # `max_over_time(up[2m]) == 0` is true only once EVERY sample in the window is
+  # zero, which cannot happen until two minutes of scrapes have been missed. The
+  # `for: 2m` then starts counting from there. Measured below: the first missed
+  # scrape lands at 10m15s and the alert fires at 14m. `alerts.md` states this
+  # plainly for `AlertmanagerDown`, which is the same expression; the sentence
+  # under `ApiDown` there says "eight consecutive misses" and means the inner
+  # condition rather than the page.
+  #
+  # That doubling is deliberate here in a way it is not for `ApiNotReady` below:
+  # `max_over_time` cannot be satisfied by a shorter outage than its window, so
+  # the `for:` adds latency and cannot subtract sensitivity. The failure mode
+  # this shape does NOT have is the one that bit the readiness rule.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: an API that stops answering scrapes pages, four minutes after the first miss
+    input_series:
+      # Ten minutes of healthy scrapes, then the container is gone. Prometheus
+      # keeps the target and reports `up 0` for it, which is the half of this
+      # rule that `absent()` cannot see.
+      - series: 'up{job="prl-api", instance="api:3001"}'
+        values: '1+0x40 0+0x200'
+    promql_expr_test:
+      # Two minutes of misses have not yet accumulated: the inner condition is
+      # still false, so there is not even a pending alert.
+      - expr: 'ALERTS{alertname="ApiDown"}'
+        eval_time: 11m
+        exp_samples: []
+      # Pending, and not yet firing, one evaluation before the `for:` elapses.
+      # Asserted because it is what separates "the `for:` is holding it" from
+      # "the expression never became true" — the distinction the two dead
+      # zero-tolerance rules in this file's header failed.
+      - expr: 'ALERTS{alertname="ApiDown", alertstate="pending"}'
+        eval_time: 13m45s
+        exp_samples:
+          - labels: 'ALERTS{alertname="ApiDown", alertstate="pending", severity="page", job="prl-api", instance="api:3001"}'
+            value: 1
+      - expr: 'ALERTS{alertname="ApiDown", alertstate="firing"}'
+        eval_time: 14m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ApiDown", alertstate="firing", severity="page", job="prl-api", instance="api:3001"}'
+            value: 1
+
+  - interval: 15s
+    name: a rolling deploy's ninety seconds of missed scrapes must never page
+    input_series:
+      # Six consecutive misses while the container is replaced. This is the
+      # ordinary shape of every deploy in this repository, and `alerts.md` says
+      # in as many words that a shorter window would page on it.
+      - series: 'up{job="prl-api", instance="api:3001"}'
+        values: '1+0x40 0 0 0 0 0 0 1+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ApiDown"}'
+        eval_time: 12m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ApiDown"}'
+        eval_time: 30m
+        exp_samples: []
+      # And the inner condition never became true either, so the silence above
+      # is the shape of the expression rather than the `for:` running late.
+      - expr: 'max_over_time(up{job="prl-api"}[2m]) == 0'
+        eval_time: 12m
+        exp_samples: []
+
+  - interval: 15s
+    name: a job whose targets have gone entirely still pages, through absent()
+    input_series:
+      # There is no `up{job="prl-api"}` series at all — the API was removed from
+      # `prometheus.yml`, or a relabelling dropped it. `up == 0` over nothing is
+      # the empty vector and reports nothing; `absent()` is the only half that
+      # can speak. Alertmanager's own target is present so that this case is a
+      # missing API rather than a missing Prometheus.
+      - series: 'up{job="prl-alertmanager", instance="alertmanager:9093"}'
+        values: '1+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ApiDown", alertstate="pending"}'
+        eval_time: 1m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ApiDown", alertstate="pending", severity="page", job="prl-api"}'
+            value: 1
+      # `absent()` carries the equality matcher's own labels and no instance,
+      # which is the honest reading: there is no instance to name.
+      - expr: 'ALERTS{alertname="ApiDown", alertstate="firing"}'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ApiDown", alertstate="firing", severity="page", job="prl-api"}'
+            value: 1
+      - expr: 'ALERTS{alertname="AlertmanagerDown"}'
+        eval_time: 30m
+        exp_samples: []
+
+  - interval: 15s
+    name: an API answering every scrape raises nothing at all
+    input_series:
+      - series: 'up{job="prl-api", instance="api:3001"}'
+        values: '1+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ApiDown"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ApiDown"}'
+        eval_time: 90m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # ApiNotReady, and a page that arrived five minutes after the blip had healed.
+  #
+  # The rule was `min_over_time(prl_readiness_state[5m]) == 0` with `for: 5m`,
+  # and its own summary says "degraded for five continuous minutes". Those two
+  # are not the same sentence, and the gap between them is the length of the
+  # window: `min_over_time` remembers a zero for a full five minutes after the
+  # last degraded sample has left, so the condition outlives the outage and the
+  # `for:` spends its whole five minutes counting the afterglow.
+  #
+  # Measured with `promtool test rules` and reproduced in the first case below:
+  # TWO consecutive degraded scrapes — thirty seconds, with readiness back at 1
+  # for the following four and a half minutes — fired this PAGE at t=15m15s. One
+  # degraded scrape was 285 s of truth against a 300 s `for:` and never fired. So
+  # the real threshold was two scrapes, and the exact shape the description calls
+  # expected and self-healing — a Postgres failover blip — was a phone call.
+  #
+  # The rule is now `prl_readiness_state == 0`, which is true only while
+  # readiness is actually zero. The `for:` measures the outage instead of the
+  # window's memory of it, and one healthy scrape restarts the clock. What that
+  # gives up on purpose is a FLAPPING gauge, which no longer accumulates here:
+  # `ReadinessFlapping` is the rule for that and it is a ticket, because a
+  # marginal database is not a dead one. Both are asserted below.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: a thirty-second failover blip must never page, and used to
+    input_series:
+      # Two degraded scrapes at 10m15s and 10m30s, and healthy for the rest of
+      # the hour. This is a Postgres failover: the load balancer took the
+      # instance out and put it back, which is the mechanism working.
+      - series: 'prl_readiness_state'
+        values: '1+0x40 0 0 1+0x300'
+    promql_expr_test:
+      # 15m15s is the exact evaluation point at which the old expression fired.
+      - expr: 'ALERTS{alertname="ApiNotReady"}'
+        eval_time: 15m15s
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ApiNotReady"}'
+        eval_time: 20m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ApiNotReady"}'
+        eval_time: 60m
+        exp_samples: []
+      # It did become true, briefly, and then reset — so the silence above is
+      # the rule reading the outage correctly rather than an expression that
+      # evaluates over nothing. A series renamed away would pass the three
+      # assertions above having seen no data at all.
+      - expr: 'ALERTS{alertname="ApiNotReady", alertstate="pending"}'
+        eval_time: 10m30s
+        exp_samples:
+          - labels: 'ALERTS{alertname="ApiNotReady", alertstate="pending", severity="page"}'
+            value: 1
+      # The old expression, on the same thirty seconds: still true at 15m, ten
+      # evaluation points after readiness came back. The reproduction stays in
+      # the repository rather than in a review comment.
+      - expr: 'count(min_over_time(prl_readiness_state[5m]) == 0)'
+        eval_time: 15m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: 'count(min_over_time(prl_readiness_state[5m]) == 0)'
+        eval_time: 16m
+        exp_samples: []
+
+  - interval: 15s
+    name: readiness that stays degraded pages after five continuous minutes
+    input_series:
+      # The failure the rule is named for: the database did not come back.
+      - series: 'prl_readiness_state'
+        values: '1+0x40 0+0x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ApiNotReady", alertstate="firing"}'
+        eval_time: 15m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ApiNotReady", alertstate="pending"}'
+        eval_time: 15m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ApiNotReady", alertstate="pending", severity="page"}'
+            value: 1
+      # 10m15s + 5m. The stated latency is now the measured one.
+      - expr: 'ALERTS{alertname="ApiNotReady", alertstate="firing"}'
+        eval_time: 15m15s
+        exp_samples:
+          - labels: 'ALERTS{alertname="ApiNotReady", alertstate="firing", severity="page"}'
+            value: 1
+
+  - interval: 15s
+    name: a marginal database flapping raises the ticket and not the page
+    input_series:
+      # In and out of the load balancer every ninety seconds for half an hour.
+      # Nothing is down for five continuous minutes and nothing self-heals
+      # either, which is precisely the case the two rules divide between them.
+      - series: 'prl_readiness_state'
+        values: '1+0x5 0+0x5 1+0x5 0+0x5 1+0x5 0+0x5 1+0x5 0+0x5 1+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ApiNotReady"}'
+        eval_time: 20m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ReadinessFlapping", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ReadinessFlapping", alertstate="firing", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: an instance that is ready throughout raises neither
+    input_series:
+      - series: 'prl_readiness_state'
+        values: '1+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ApiNotReady"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ApiNotReady"}'
+        eval_time: 90m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ReadinessFlapping"}'
+        eval_time: 90m
+        exp_samples: []

@@ -43,8 +43,26 @@ groups:
             deployment that /api/v1/health is unreachable before treating it as a scrape problem.
           runbook: docs/production/runbooks/api-unhealthy.md
 
+      # `min_over_time(prl_readiness_state[5m]) == 0` with `for: 5m` was this file's own dead-
+      # arithmetic warning arriving from the other side: not a `for:` that can never be satisfied,
+      # but one that is satisfied by THIRTY SECONDS of the thing it says takes five minutes.
+      # `min_over_time` stays 0 for a full five minutes AFTER the degraded samples leave, so the
+      # condition outlives the outage by the length of its own window and the `for:` was counting
+      # that afterglow. Measured with `promtool test rules`: two consecutive degraded scrapes —
+      # 30 s — and readiness back at 1 for four and a half minutes fired this PAGE at t=15m15s;
+      # one degraded scrape never fired. So the real threshold was "two scrapes", the alert
+      # arrived five minutes after the blip had healed, and the exact shape its own description
+      # calls expected and self-healing — a Postgres failover — was a 3am phone call.
+      #
+      # The rule is now the sentence itself. A bare comparison is true only while readiness is
+      # actually 0, so the `for:` measures the outage rather than the window's memory of it, and
+      # a single healthy scrape resets it. That does mean a gauge FLAPPING between 0 and 1 no
+      # longer accumulates here — deliberately: `ReadinessFlapping` is the rule for that, it is a
+      # ticket because flapping is a marginal database rather than a dead one, and having the
+      # page fire for it was the same event being reported twice at the wrong tier.
+      # `rule-tests/availability.test.yml` holds the blip, the flap and the real outage.
       - alert: ApiNotReady
-        expr: min_over_time(prl_readiness_state[5m]) == 0
+        expr: prl_readiness_state == 0
         for: 5m
         labels:
           severity: page
@@ -53,7 +71,8 @@ groups:
           description: >-
             prl_readiness_state is set by the probe, so this cannot fire unless something is
             calling /ready. A brief blip during a Postgres failover is expected and self-healing;
-            five minutes is not healing.
+            five minutes is not healing. Five CONTINUOUS minutes: one healthy scrape restarts the
+            clock, and readiness that flaps rather than stays down is ReadinessFlapping.
           runbook: docs/production/runbooks/db-unavailable.md
 
       # This rule is only as good as the flatness of the series under it, and for a while that

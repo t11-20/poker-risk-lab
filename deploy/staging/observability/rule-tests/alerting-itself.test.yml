@@ -1,0 +1,329 @@
+# ---------------------------------------------------------------------------
+# The alerting system reporting on itself, and the dead man's switch that
+# reports when it cannot: `AlertmanagerNotificationsFailing`, `AlertmanagerDown`
+# and `Watchdog`. Two pages and the one rule in this deployment whose severity is
+# neither tier.
+#
+# ## Why these three are in one file
+#
+# They are one argument in three steps, and the steps only make sense together.
+# Every other rule in `alert-rules.yml` reports a failure by ARRIVING through
+# Alertmanager, so the failure none of them can report is Alertmanager failing to
+# deliver — an expired provider key, a rotated SMTP password, a relay that starts
+# answering 550, an intake URL that quietly began returning 404. The first rule
+# catches a broken RECEIVER, which is almost always one receiver and can be
+# reported down the other path. The second catches Alertmanager being gone, which
+# it cannot report at all and says so in its own description: Prometheus goes on
+# evaluating it and showing it firing in a UI nobody is watching. The third is the
+# only one that survives both, because its signal is not a notification — it is
+# the GAP between notifications, noticed by a machine outside this deployment.
+#
+# ## What promtool can and cannot say about `Watchdog`
+#
+# It can say the rule always fires, that it fires with no input series at all,
+# and that it carries `severity: heartbeat` and neither human tier — which is the
+# assertion that matters, because `Watchdog` at `page` would wake somebody every
+# repeat interval forever and `alerts.md` calls that the fastest known way to
+# make a channel unreadable. It cannot say anything about where the notification
+# goes: that is `alerts:preflight` (which refuses a promotion whose heartbeat
+# destination is either human tier's address) and `alerts:verify` check 7, which
+# stops Alertmanager and watches the silence being detected.
+#
+# `Watchdog` is also the one rule here with no failure direction, and pretending
+# otherwise would be a decoration. Its "must not" is not "must not fire" — it is
+# "must not depend on anything", and that is what the second case tests.
+#
+# ## Measured: the Alertmanager counter is primed, unlike this repository's own
+#
+# `RateLimitBans` and the two seat rules needed `primeLabels` in `metrics.ts`,
+# because `increase()` over a series that appears mid-window sees no rise and the
+# FIRST occurrence is the one a zero-tolerance rule exists for. That trap does
+# not apply to `alertmanager_notifications_failed_total`, and the reason is a
+# fact about Alertmanager rather than a hope: started from the digest this
+# deployment pins (`prom/alertmanager:v0.28.1@sha256:27c475db…`) with a config
+# holding two webhook receivers and nothing else, `/metrics` rendered **eighty**
+# series of that counter at zero — every integration Alertmanager knows how to
+# build, times five `reason` values — before any notification had been attempted.
+# So the first failed notification is a 0 -> 1 step on a series Prometheus has
+# already scraped, which is what the first case below evaluates. Re-measure it if
+# the digest moves; it is the assumption under a zero-tolerance page.
+# ---------------------------------------------------------------------------
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # -------------------------------------------------------------------------
+  # AlertmanagerNotificationsFailing — page
+  #
+  # `sum(increase(alertmanager_notifications_failed_total[15m])) > 0`, no `for:`.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: one notification that could not be delivered pages, on a primed counter
+    input_series:
+      # The webhook receiver started answering 404. One failure, then Alertmanager
+      # gives up on that notification — the shape of a receiver URL that was
+      # quietly retired. The other integrations stay at the zero they were
+      # rendered with at boot, and must not stop this from being seen.
+      - series: 'alertmanager_notifications_failed_total{job="prl-alertmanager", integration="webhook", reason="clientError"}'
+        values: '0+0x40 1+0x300'
+      - series: 'alertmanager_notifications_failed_total{job="prl-alertmanager", integration="email", reason="serverError"}'
+        values: '0+0x341'
+      - series: 'up{job="prl-alertmanager", instance="alertmanager:9093"}'
+        values: '1+0x341'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AlertmanagerNotificationsFailing"}'
+        eval_time: 5m
+        exp_samples: []
+      # Zero tolerance and no `for:`: one page that did not arrive is the alert.
+      - expr: 'ALERTS{alertname="AlertmanagerNotificationsFailing", alertstate="firing"}'
+        eval_time: 11m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AlertmanagerNotificationsFailing", alertstate="firing", severity="page"}'
+            value: 1
+      # Alertmanager is up, so the page that says "nothing can be delivered"
+      # must not also ring. One fault, one notification.
+      - expr: 'ALERTS{alertname="AlertmanagerDown"}'
+        eval_time: 11m
+        exp_samples: []
+
+  - interval: 15s
+    name: an SMTP relay refusing this sender is seen through the email integration
+    input_series:
+      # A rotated SMTP password, or a relay that started answering 550 for this
+      # sender. Every notification down that path fails, repeatedly, and the
+      # rule sums over integrations so the reason and integration labels are
+      # evidence in the notification rather than something it filters on.
+      - series: 'alertmanager_notifications_failed_total{job="prl-alertmanager", integration="email", reason="serverError"}'
+        values: '0+0x20 0+1x400'
+      - series: 'alertmanager_notifications_failed_total{job="prl-alertmanager", integration="webhook", reason="clientError"}'
+        values: '0+0x421'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AlertmanagerNotificationsFailing", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AlertmanagerNotificationsFailing", alertstate="firing", severity="page"}'
+            value: 1
+
+  - interval: 15s
+    name: an Alertmanager delivering everything for ninety minutes pages nobody
+    input_series:
+      # Notifications are being sent and none are failing. `_sent_total` moving
+      # while `_failed_total` stays flat is the healthy state, and it is rendered
+      # here so that a rule which had lost its `failed` and started reading
+      # `sent` would fail this case rather than passing over an absent series.
+      - series: 'alertmanager_notifications_failed_total{job="prl-alertmanager", integration="webhook", reason="clientError"}'
+        values: '0+0x400'
+      - series: 'alertmanager_notifications_failed_total{job="prl-alertmanager", integration="email", reason="serverError"}'
+        values: '0+0x400'
+      - series: 'alertmanager_notifications_total{job="prl-alertmanager", integration="webhook"}'
+        values: '0+2x400'
+      - series: 'up{job="prl-alertmanager", instance="alertmanager:9093"}'
+        values: '1+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AlertmanagerNotificationsFailing"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AlertmanagerNotificationsFailing"}'
+        eval_time: 90m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AlertmanagerDown"}'
+        eval_time: 90m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # AlertmanagerDown — page
+  #
+  # `absent(up{job="prl-alertmanager"}) or max_over_time(up{job="prl-alertmanager"}[2m]) == 0`,
+  # `for: 2m`. The same expression as `ApiDown`, and `alerts.md` says so
+  # explicitly: two minutes of missed scrapes have to accumulate before the inner
+  # condition can hold at all, and the `for:` starts counting from there. Four
+  # minutes, not two, and `availability.test.yml` measures the same arithmetic on
+  # the other rule.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: an Alertmanager that stops answering scrapes pages four minutes later
+    input_series:
+      - series: 'up{job="prl-alertmanager", instance="alertmanager:9093"}'
+        values: '1+0x40 0+0x300'
+      - series: 'up{job="prl-api", instance="api:3001"}'
+        values: '1+0x341'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AlertmanagerDown"}'
+        eval_time: 11m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AlertmanagerDown", alertstate="pending"}'
+        eval_time: 13m45s
+        exp_samples:
+          - labels: 'ALERTS{alertname="AlertmanagerDown", alertstate="pending", severity="page", job="prl-alertmanager", instance="alertmanager:9093"}'
+            value: 1
+      - expr: 'ALERTS{alertname="AlertmanagerDown", alertstate="firing"}'
+        eval_time: 14m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AlertmanagerDown", alertstate="firing", severity="page", job="prl-alertmanager", instance="alertmanager:9093"}'
+            value: 1
+      # The API is fine, and must not be reported as down by a rule about the
+      # thing that delivers the report.
+      - expr: 'ALERTS{alertname="ApiDown"}'
+        eval_time: 14m
+        exp_samples: []
+
+  - interval: 15s
+    name: an Alertmanager deleted from the configuration still pages, through absent()
+    input_series:
+      # No `up{job="prl-alertmanager"}` series at all — the container was removed
+      # from the compose overlay, or the scrape job was dropped. `up == 0` over
+      # nothing is empty and reports nothing; without `absent()` the deployment
+      # would lose its whole delivery path silently.
+      - series: 'up{job="prl-api", instance="api:3001"}'
+        values: '1+0x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AlertmanagerDown", alertstate="firing"}'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AlertmanagerDown", alertstate="firing", severity="page", job="prl-alertmanager"}'
+            value: 1
+      - expr: 'ALERTS{alertname="ApiDown"}'
+        eval_time: 30m
+        exp_samples: []
+
+  - interval: 15s
+    name: an Alertmanager restarted by a config reload does not page
+    input_series:
+      # Ninety seconds of missed scrapes while the container is replaced — the
+      # ordinary shape of every deploy of the observability overlay. The inner
+      # condition never becomes true, so there is not even a pending alert.
+      - series: 'up{job="prl-alertmanager", instance="alertmanager:9093"}'
+        values: '1+0x40 0 0 0 0 0 0 1+0x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="AlertmanagerDown"}'
+        eval_time: 12m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="AlertmanagerDown"}'
+        eval_time: 40m
+        exp_samples: []
+      - expr: 'max_over_time(up{job="prl-alertmanager"}[2m]) == 0'
+        eval_time: 12m
+        exp_samples: []
+
+  - interval: 15s
+    name: a dead Alertmanager and a stalled notification counter are one incident, and the inhibition covers it
+    input_series:
+      # Both rules are true at once, and they are the same fault seen twice: of
+      # course notifications are failing, the thing that sends them is gone.
+      # `alertmanager.template.yml` has the pair — `AlertmanagerDown` as source,
+      # `AlertmanagerNotificationsFailing` as target — and `alerts.md` lists it
+      # as one of the five.
+      #
+      # What that inhibition does NOT do is stop either page arriving, because
+      # neither can be delivered while it is true. It stops the pair reading as
+      # two faults in the Prometheus UI, which is where `AlertmanagerDown`'s own
+      # description says it will be seen. `promtool` evaluates rules and knows
+      # nothing about routing, so what is pinned here is the premise: this input
+      # is exactly the source-and-target pair, and nothing else.
+      - series: 'up{job="prl-alertmanager", instance="alertmanager:9093"}'
+        values: '1+0x40 0+0x300'
+      - series: 'alertmanager_notifications_failed_total{job="prl-alertmanager", integration="webhook", reason="clientError"}'
+        values: '0+0x40 0+2x300'
+    promql_expr_test:
+      - expr: 'count(ALERTS{alertname=~"Alertmanager.*", alertstate="firing"})'
+        eval_time: 20m
+        exp_samples:
+          - labels: '{}'
+            value: 2
+      - expr: 'ALERTS{alertname="AlertmanagerNotificationsFailing", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AlertmanagerNotificationsFailing", alertstate="firing", severity="page"}'
+            value: 1
+
+  # -------------------------------------------------------------------------
+  # Watchdog — heartbeat
+  #
+  # `vector(1)`, no `for:`, no metric, no scrape.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: the heartbeat fires from the first evaluation and never stops
+    input_series:
+      # Something has to be here for the test to have a series, and it is
+      # deliberately not anything `Watchdog` reads — the point of the next case
+      # is that it reads nothing.
+      - series: 'up{job="prl-api", instance="api:3001"}'
+        values: '1+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="Watchdog", alertstate="firing"}'
+        eval_time: 15s
+        exp_samples:
+          - labels: 'ALERTS{alertname="Watchdog", alertstate="firing", severity="heartbeat"}'
+            value: 1
+      - expr: 'ALERTS{alertname="Watchdog", alertstate="firing"}'
+        eval_time: 90m
+        exp_samples:
+          - labels: 'ALERTS{alertname="Watchdog", alertstate="firing", severity="heartbeat"}'
+            value: 1
+      # The half that is not "does it fire": it must reach NEITHER human tier.
+      # A `Watchdog` labelled `page` would wake somebody every repeat interval
+      # forever, and one labelled `ticket` would do the same to the queue more
+      # slowly — the exact harm the two-tier rule exists to prevent, arriving
+      # from the inside. `alerts:preflight` guards the destination; this guards
+      # the label the route tree reads to choose it.
+      - expr: 'ALERTS{alertname="Watchdog", severity=~"page|ticket"}'
+        eval_time: 90m
+        exp_samples: []
+      # And it is the only rule in the file that may carry this severity. A
+      # second one would mean a real incident routed to a machine that counts
+      # pings and pages nobody.
+      - expr: 'count(ALERTS{severity="heartbeat"})'
+        eval_time: 90m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  - interval: 15s
+    name: the heartbeat fires with every series in the deployment absent
+    input_series:
+      # A dead man's switch conditional on anything would go quiet for reasons
+      # other than the one it watches for, and would then be turned off by the
+      # person it woke. So: no API, no readiness, no Alertmanager, no counters —
+      # a deployment in which every other rule is either firing or blind. The
+      # heartbeat still arrives, because `vector(1)` needs no scrape.
+      #
+      # This is `Watchdog`'s negative direction. It has no "must not fire", so
+      # the honest thing to assert is what it must not DEPEND on, and this input
+      # is that assertion: every series it could have depended on is gone.
+      - series: 'prl_metrics_series'
+        values: '0+0x40'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="Watchdog", alertstate="firing"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="Watchdog", alertstate="firing", severity="heartbeat"}'
+            value: 1
+      # Nothing else in the file is firing on this input except the three rules
+      # whose whole job is to notice absence — `ApiDown`, `AlertmanagerDown` and
+      # `PublicOriginProbeDown`, each of which leads with `absent()`. Every other
+      # rule here is blind, because a rule that reads a series cannot speak when
+      # the series is gone. That is the picture the heartbeat exists to be
+      # checked against, and the count is asserted so that a rule losing its
+      # `absent()` half shows up here as a two.
+      - expr: 'count(ALERTS{alertstate="firing", alertname!="Watchdog"})'
+        eval_time: 10m
+        exp_samples:
+          - labels: '{}'
+            value: 3
+      - expr: 'ALERTS{alertname="PublicOriginProbeDown", alertstate="firing"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PublicOriginProbeDown", alertstate="firing", severity="ticket", job="prl-public-origin"}'
+            value: 1
+      - expr: 'ALERTS{alertname="ApiDown", alertstate="firing"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ApiDown", alertstate="firing", severity="page", job="prl-api"}'
+            value: 1
+      - expr: 'ALERTS{alertname="AlertmanagerDown", alertstate="firing"}'
+        eval_time: 10m
+        exp_samples:
+          - labels: 'ALERTS{alertname="AlertmanagerDown", alertstate="firing", severity="page", job="prl-alertmanager"}'
+            value: 1

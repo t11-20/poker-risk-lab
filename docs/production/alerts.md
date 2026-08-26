@@ -72,11 +72,18 @@ absent(up{job="prl-api"}) or max_over_time(up{job="prl-api"}[2m]) == 0
 ### `ApiNotReady` — page
 
 ```
-min_over_time(prl_readiness_state[5m]) == 0
+prl_readiness_state == 0
 ```
 
 **For:** 5m.
 **Why 5m, not immediately:** `/ready` reports degraded whenever the database does not answer, and a brief blip during a Postgres failover is expected and self-healing — the load balancer has already stopped sending traffic, which is the mechanism working. Five continuous minutes of degraded means it is not healing.
+
+**Why a bare comparison, and the page it used to send about a healed blip.** It was `min_over_time(prl_readiness_state[5m]) == 0` with `for: 5m`, and those two clauses do not add up to the sentence above them. `min_over_time` keeps returning 0 for a full five minutes *after* the last degraded sample has left the window, so the condition outlives the outage by the length of its own window and the `for:` spends its five minutes counting that afterglow rather than the fault. Measured with `promtool test rules` and reproduced in [`rule-tests/availability.test.yml`](../../deploy/staging/observability/rule-tests/availability.test.yml): **two consecutive degraded scrapes — thirty seconds, with readiness back at 1 for the following four and a half minutes — fired this page at t=15m15s.** One degraded scrape was 285 s of truth against a 300 s `for:` and never fired. So the real threshold was *two scrapes*, the page arrived five minutes after the blip had healed, and the exact event this entry calls expected and self-healing was a phone call at 3 a.m. This is the `for:`-versus-window arithmetic at the head of the product-correctness group arriving from the other side: not a `for:` that can never be satisfied, but one satisfied by a thirtieth of what it claims to measure.
+
+The rule is now the sentence itself. A bare comparison is true only while readiness is *actually* 0, so the `for:` measures the outage and one healthy scrape restarts the clock. The latency for the failure it names is unchanged — five minutes from the first degraded scrape, asserted at that exact evaluation point.
+
+**What that gives up, deliberately.** A gauge *flapping* between 0 and 1 no longer accumulates here. That is the correct division rather than a loss: flapping is `ReadinessFlapping` below, it is a **ticket** because a marginal database is not a dead one, and having the page fire for it meant one event reported twice at two tiers. Both sides are asserted — a database in and out of the load balancer every ninety seconds raises the ticket and not the page; a database that goes and stays gone raises the page and not the ticket.
+
 **Note:** `prl_readiness_state` is a *gauge set by the probe*, so it only updates when `/ready` is called. If nothing calls `/ready`, this rule cannot fire — which is why `ApiDown` above is keyed on `up` and not on this.
 **First action:** → [`runbooks/db-unavailable.md`](runbooks/db-unavailable.md).
 
@@ -875,16 +882,29 @@ A rule that has never fired is a rule that has never been tested. Each of the fo
 
 Provoking a rule and watching it fire is the only evidence that it is wired correctly.
 
-**And every rule whose expression was changed now has that evidence without a deployment.**
+**And every one of the thirty-five rules now has that evidence without a deployment.**
 `pnpm run alerts:unit` runs `deploy/staging/observability/rule-tests/` through `promtool test
 rules` — Prometheus' own rule engine, on the digest the overlay pins — and asserts each rule in
-**both** directions: that it fires for the failure it is named after, and that it stays silent for
-the healthy shape it must not fire on. Several of the cases in there are the reproduction of a
-defect this document used to describe as working: `HandsFailing` sitting in `pending` forever,
-`WorkerPoolQueueDeep` against a queue that is full and capped at 3, `HandCompletionGap` firing on
-twenty healthy tables, `WebSocketReconnectStorm` firing on an ordinary morning and silent through
-a real storm. Those cases are kept, pointed at the current expressions, so the fixes cannot quietly
-come undone.
+**both** directions: that it fires for the failure it is named after, at a stated evaluation point
+and with the right `severity`, and that it stays silent for the healthy shape it must not fire on.
+Several of the cases in there are the reproduction of a defect this document used to describe as
+working: `HandsFailing` sitting in `pending` forever, `WorkerPoolQueueDeep` against a queue that is
+full and capped at 3, `HandCompletionGap` firing on twenty healthy tables, `WebSocketReconnectStorm`
+firing on an ordinary morning and silent through a real storm, `ApiNotReady` paging about a
+thirty-second blip that had healed five minutes earlier. Those cases are kept, pointed at the
+current expressions, so the fixes cannot quietly come undone.
+
+**"Every one" is a claim something checks.** It did not used to be. A mutation audit compared the
+`- alert:` names in `alert-rules.yml` against every `alertname=` in that directory and found
+**nineteen of thirty-five rules with no unit test at all** — including the two this file's own rules
+header named as the models for the zero-tolerance and persistence shapes, and claimed were covered
+"in both directions". The sentence describing the coverage was the only evidence of it. So the
+comparison is now a test rather than an audit: `scripts/alert-delivery.test.mjs` refuses a rule that
+appears in no case file *and* a case file asserting on an alertname no rule defines, because
+`ALERTS{alertname="ApiDwon"}` with `exp_samples: []` passes against any rules file ever written.
+It runs under `test:scripts`, and therefore under `pnpm run verify`, rather than only under
+`alerts:unit` — a coverage claim that lapses on a machine with no Docker daemon is not a coverage
+claim.
 
 That has now been done, and what it proved is narrower than "these alerts work". `pnpm run
 alerts:verify` brings up a real Prometheus and a real Alertmanager beside the staging stack

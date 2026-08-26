@@ -1,4 +1,11 @@
 # ---------------------------------------------------------------------------
+# The `connection-churn` group: `WebSocketReconnectStorm` and
+# `WebSocketConnectionsHigh`. Both are tickets, both read
+# `prl_websocket_connections`, and they read it for two different questions —
+# churn and volume. The cases at the end of this file hold that line in both
+# directions, because one signal answering two questions badly is how a capacity
+# alert starts firing on a storm and a storm alert starts firing on a full house.
+#
 # `WebSocketReconnectStorm`, which fired on healthy mornings and could not fire
 # on the failure it names.
 #
@@ -119,4 +126,123 @@ tests:
     promql_expr_test:
       - expr: 'ALERTS{alertname="WebSocketReconnectStorm"}'
         eval_time: 40m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # WebSocketConnectionsHigh — ticket
+  #
+  # `prl_websocket_connections > 67`, `for: 10m`. 67 is 70% of 96, the concurrent
+  # seated players at which one instance saturated in `docs/production/load-test.md`,
+  # and `alerts.md` says that number must be re-derived whenever the measurement
+  # is repeated rather than copied from anywhere else.
+  #
+  # The two churn rules read the same gauge and must not be confused: this one is
+  # VOLUME — sockets standing — and `WebSocketReconnectStorm` above is CHURN,
+  # sockets opening faster than the number standing. Both directions of that
+  # distinction are asserted below, because a capacity ticket that also fired on
+  # a storm, or a storm ticket that fired on a full house, would each be one
+  # signal doing two jobs badly.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: seventy standing connections raise the capacity ticket after ten minutes
+    input_series:
+      # Past 70% of the measured saturation point and staying there: two cohorts
+      # in at once, everybody connected, nobody reconnecting.
+      - series: 'prl_websocket_connections'
+        values: '40+0x40 70+0x300'
+      # One open per minute against seventy standing connections, which is far
+      # under the storm bar of 75. The capacity ticket must speak and the churn
+      # ticket must not.
+      - series: 'prl_websocket_opened_total'
+        values: '0+0.25x341'
+      - series: 'prl_websocket_closed_total{code="normal"}'
+        values: '0+0.05x341'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh"}'
+        eval_time: 10m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="pending"}'
+        eval_time: 19m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="pending", severity="ticket"}'
+            value: 1
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="firing"}'
+        eval_time: 20m15s
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="firing", severity="ticket"}'
+            value: 1
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm"}'
+        eval_time: 40m
+        exp_samples: []
+
+  - interval: 15s
+    name: a full class of sixty raises nothing, and neither does exactly sixty-seven
+    input_series:
+      # Sixty is two cohorts of thirty and is the deployment being used. Then it
+      # sits at exactly 67 for half an hour — the threshold, and `> 67` rather
+      # than `>=`, which no other case in this file can tell apart.
+      - series: 'prl_websocket_connections'
+        values: '60+0x80 67+0x300'
+      - series: 'prl_websocket_opened_total'
+        values: '0+0.25x381'
+      - series: 'prl_websocket_closed_total{code="normal"}'
+        values: '0+0.05x381'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh"}'
+        eval_time: 15m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh"}'
+        eval_time: 40m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh"}'
+        eval_time: 90m
+        exp_samples: []
+
+  - interval: 15s
+    name: a five-minute spike over the bar does not raise a capacity ticket
+    input_series:
+      # Everybody joining for the last five minutes of a class and then leaving.
+      # Over the threshold, and nowhere near ten continuous minutes of it.
+      - series: 'prl_websocket_connections'
+        values: '40+0x40 80+0x19 40+0x300'
+      - series: 'prl_websocket_opened_total'
+        values: '0+0.25x360'
+      - series: 'prl_websocket_closed_total{code="normal"}'
+        values: '0+0.25x360'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="firing"}'
+        eval_time: 16m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="firing"}'
+        eval_time: 60m
+        exp_samples: []
+      # And it did reach pending, so the silence is the `for:` outlasting the
+      # spike rather than a gauge that was never read.
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="pending"}'
+        eval_time: 13m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="pending", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: a reconnect storm on a small deployment is churn and not capacity
+    input_series:
+      # Thirty standing connections re-establishing themselves constantly. The
+      # churn ticket is the one that must speak; the capacity ticket must not,
+      # because there is no capacity problem — the same gauge, read for the
+      # other question.
+      - series: 'prl_websocket_opened_total'
+        values: '0+45x400'
+      - series: 'prl_websocket_closed_total{code="abnormal"}'
+        values: '0+45x400'
+      - series: 'prl_websocket_connections'
+        values: '30+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketReconnectStorm", alertstate="firing", severity="ticket"}'
+            value: 1
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh"}'
+        eval_time: 20m
         exp_samples: []

@@ -1,0 +1,162 @@
+# ---------------------------------------------------------------------------
+# `RetentionSweepStalled` — the one rule in this file whose subject is a promise
+# made to a reader rather than something a learner would notice breaking.
+#
+# `max(prl_retention_sweep_age_seconds) > 27000`, `for: 15m`.
+#
+# ## Why this rule is the whole detection surface
+#
+# Nothing degrades when the retention sweep stops. Every request still succeeds,
+# every table still reads, no counter moves, no error is logged after the one
+# that killed the timer — and rows that `/privacy` promises are gone simply stay.
+# `legal-register.md` §5 L5 names the shape: "this is where a wrong answer is
+# invisible: nothing fails, data simply persists." So if this rule cannot fire,
+# nothing in this deployment reports a broken retention promise at all, and that
+# is a different kind of stake from a latency ticket.
+#
+# ## The two shapes that are the same flat line, and the one that is not
+#
+# `prl_retention_rows_deleted_total` staying flat means either "there was nothing
+# to remove" or "nothing ran", and on a deployment of this size the first is the
+# NORMAL state — which is why there is no rule on that counter and why the sweep
+# exports its own age instead. The first two cases below are exactly those two
+# flat counters: a healthy sweep that removes nothing, and a dead timer. The
+# gauge tells them apart and the alert must too.
+#
+# ## The restart caveat, evaluated
+#
+# The gauge counts from process start when no sweep has completed, so it RESETS
+# on every restart — and `metrics.ts` records that this was once a real hole:
+# with the first sweep at T+6h a deployment redeployed more often than that swept
+# zero times and drew a sawtooth that never reached 27,000. The first sweep is
+# now at T+60s (`FIRST_SWEEP_DELAY_MS`), which is what makes the defence in that
+# comment true — three processes that each die before sweeping fit inside
+# `ProcessRestartLoop`'s fifteen-minute window. The last case here is the
+# sawtooth, so the claim stays checkable from this side as well as from
+# `test/retention-sweep.test.ts`.
+# ---------------------------------------------------------------------------
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    name: a sweep that has not completed for seven and a half hours raises a ticket
+    input_series:
+      # The timer died just after a successful sweep, so the age climbs from
+      # zero and never resets. One second per second, which is what an age is.
+      # 1800 samples of 15 s is seven and a half hours.
+      - series: 'prl_retention_sweep_age_seconds'
+        values: '0+15x2400'
+    promql_expr_test:
+      # 27,000 s is 7h30m. Still under it at seven hours, so nothing yet — and
+      # this half is what a rule broken into firing on everything would fail.
+      - expr: 'ALERTS{alertname="RetentionSweepStalled"}'
+        eval_time: 7h
+        exp_samples: []
+      - expr: 'ALERTS{alertname="RetentionSweepStalled", alertstate="pending"}'
+        eval_time: 7h35m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RetentionSweepStalled", alertstate="pending", severity="ticket"}'
+            value: 1
+      # A little under eight hours after the last successful sweep, which is the
+      # latency `alerts.md` states for this rule.
+      - expr: 'ALERTS{alertname="RetentionSweepStalled", alertstate="firing"}'
+        eval_time: 7h50m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RetentionSweepStalled", alertstate="firing", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: a sweep running on time every six hours raises nothing, even removing nothing
+    input_series:
+      # The healthy sawtooth: the age climbs to 21,600 and drops to zero as each
+      # sweep completes. Every one of these sweeps may have deleted zero rows —
+      # on a deployment this size most of them do — and that is why the rule
+      # reads the age and not the row counter. 21,600 against 27,000 is the
+      # margin that lets a slow sweep or an awkwardly landing scrape pass.
+      - series: 'prl_retention_sweep_age_seconds'
+        values: '0+15x1439 0+15x1439 0+15x1439'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="RetentionSweepStalled"}'
+        eval_time: 5h
+        exp_samples: []
+      # The peak of the first tooth: the closest a healthy deployment comes to
+      # the threshold, and it must not even go pending.
+      - expr: 'ALERTS{alertname="RetentionSweepStalled"}'
+        eval_time: 5h59m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="RetentionSweepStalled"}'
+        eval_time: 11h59m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="RetentionSweepStalled"}'
+        eval_time: 17h
+        exp_samples: []
+
+  - interval: 15s
+    name: one missed tick is caught rather than a day of them
+    input_series:
+      # A sweep at six hours, then the next one never happens. `alerts.md` gives
+      # the reason for 27,000 in exactly these terms: short enough that a SINGLE
+      # missed tick is caught. The age climbs through the threshold on the
+      # second tooth and stays there.
+      - series: 'prl_retention_sweep_age_seconds'
+        values: '0+15x1439 0+15x2400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="RetentionSweepStalled"}'
+        eval_time: 11h59m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="RetentionSweepStalled", alertstate="firing"}'
+        eval_time: 13h50m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RetentionSweepStalled", alertstate="firing", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: a process restarting every hour resets the age, and ProcessRestartLoop is the rule that sees it
+    input_series:
+      # The hole that was real when the first sweep was at T+6h: the gauge
+      # counts from process start, so a deployment restarting more often than
+      # the sweep interval draws a sawtooth that never reaches 27,000 while
+      # sweeping exactly zero times. This rule is blind to it and always was —
+      # asserted here so the blindness is a documented property rather than a
+      # surprise.
+      - series: 'prl_retention_sweep_age_seconds'
+        values: '0+15x239 0+15x239 0+15x239 0+15x239 0+15x239 0+15x239 0+15x239 0+15x239'
+      # What closes the hole is the other rule and the sweep's own schedule.
+      # The first sweep is at T+60s, so an hourly restart sweeps every hour; and
+      # a process dying fast enough to never reach that first sweep restarts
+      # three times inside fifteen minutes, which is this page.
+      - series: 'prl_process_start_time_seconds'
+        values: '1787678914+0x239 1787682514+0x239 1787686114+0x239 1787689714+0x239 1787693314+0x239 1787696914+0x239 1787700514+0x239 1787704114+0x239'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="RetentionSweepStalled"}'
+        eval_time: 7h50m
+        exp_samples: []
+      # An hourly restart is not a crash loop either, so neither rule speaks —
+      # which is correct, because at T+60s per process the sweep is running.
+      - expr: 'ALERTS{alertname="ProcessRestartLoop"}'
+        eval_time: 7h50m
+        exp_samples: []
+
+  - interval: 15s
+    name: a process crashing before its first sweep is a page, which is what covers the blind spot
+    input_series:
+      # The only restart pattern that can hide a dead sweep is one fast enough
+      # to never reach T+60s — and that pattern is three restarts in fifteen
+      # minutes, which pages. The sweep age never gets near its threshold here,
+      # and it does not have to.
+      - series: 'prl_retention_sweep_age_seconds'
+        values: '0+15x11 0+15x11 0+15x11 0+15x11 0+15x11 0+15x11 0+15x300'
+      - series: 'prl_process_start_time_seconds'
+        values: '1787678914+0x11 1787679094+0x11 1787679274+0x11 1787679454+0x11 1787679634+0x11 1787679814+0x11 1787679994+0x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="RetentionSweepStalled"}'
+        eval_time: 40m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ProcessRestartLoop", alertstate="firing"}'
+        eval_time: 15m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ProcessRestartLoop", alertstate="firing", severity="page"}'
+            value: 1

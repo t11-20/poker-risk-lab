@@ -184,3 +184,107 @@ tests:
         exp_samples:
           - labels: 'ALERTS{alertname="WebSocketRefusalSpike", alertstate="firing", severity="ticket"}'
             value: 1
+
+  # -------------------------------------------------------------------------
+  # RateLimitBans — ticket
+  #
+  # `sum(increase(prl_rate_limit_events_total{kind="banned"}[15m])) > 0`, no
+  # `for:`. The zero-tolerance shape, and the fourth security rule — the one the
+  # other three were measured against, because a caller fast enough to trip them
+  # was already banned by the limiter and reported here.
+  #
+  # ## The half that is about the counter and not the rule
+  #
+  # This rule is the reason `prl_rate_limit_events_total` carries `primeLabels`.
+  # A counter series is created by its FIRST increment, and `increase()` is
+  # computed only from samples inside its range — Prometheus does not assume a
+  # series that appears mid-range began at zero. So an unprimed counter hides
+  # exactly the occurrence a zero-tolerance rule exists for. `alerts.md` records
+  # the measurement against staging: "a real ban sat in the counter at 1 and this
+  # rule stayed silent". The last case below is that measurement, evaluated: the
+  # same first ban, on a series that appears at 1 rather than rising from 0, and
+  # the rule cannot see it. It is not a test of the rule — the rule is fine — it
+  # is the test that stops somebody deleting `primeLabels` as tidying.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: the first ban raises a ticket, because the counter was primed at zero
+    input_series:
+      # Primed from boot on both values of a closed two-member set, so the first
+      # ban is a 0 -> 1 step and `increase()` can see the rise.
+      - series: 'prl_rate_limit_events_total{kind="banned"}'
+        values: '0+0x40 1+0x300'
+      # 429s are the limiter doing its job for a busy client and must never
+      # raise anything on their own.
+      - series: 'prl_rate_limit_events_total{kind="limited"}'
+        values: '0+3x341'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="RateLimitBans"}'
+        eval_time: 5m
+        exp_samples: []
+      # No `for:`, so the evaluation after the step is the alert.
+      - expr: 'ALERTS{alertname="RateLimitBans", alertstate="firing"}'
+        eval_time: 11m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RateLimitBans", alertstate="firing", severity="ticket"}'
+            value: 1
+      # Fifteen minutes after the last ban the window has drained and the ticket
+      # resolves. That is correct for a zero-tolerance counter — the ticket is
+      # already open — and it is asserted so that "still firing an hour later"
+      # cannot be mistaken for the healthy silence in the next case.
+      - expr: 'ALERTS{alertname="RateLimitBans"}'
+        eval_time: 40m
+        exp_samples: []
+
+  - interval: 15s
+    name: a busy client collecting 429s all afternoon is never banned and raises nothing
+    input_series:
+      # Three 429s per scrape, forever: a client that is over the limit and
+      # honouring `Retry-After`. This is the shape the rule must not fire on,
+      # and it is what separates `kind="banned"` from the metric it lives in —
+      # a rule that had lost its label matcher would fire here immediately.
+      - series: 'prl_rate_limit_events_total{kind="limited"}'
+        values: '0+3x400'
+      - series: 'prl_rate_limit_events_total{kind="banned"}'
+        values: '0+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="RateLimitBans"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="RateLimitBans"}'
+        eval_time: 90m
+        exp_samples: []
+
+  - interval: 15s
+    name: the same first ban on an unprimed counter is invisible, which is why priming exists
+    input_series:
+      # `prl_rate_limit_events_total{kind="banned"}` does not exist until t=10m15s
+      # and then reads 1 forever — a counter created by its first increment,
+      # which is what this one was before `primeLabels`. Every sample inside the
+      # window is 1, there is nothing to subtract from, and the increase is zero.
+      - series: 'prl_rate_limit_events_total{kind="banned"}'
+        values: '_x40 1+0x300'
+      - series: 'prl_rate_limit_events_total{kind="limited"}'
+        values: '0+3x341'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="RateLimitBans"}'
+        eval_time: 11m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="RateLimitBans"}'
+        eval_time: 20m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="RateLimitBans"}'
+        eval_time: 60m
+        exp_samples: []
+      # The series is there and holds a ban. Nothing is missing except the zero
+      # in front of it, and that is the whole difference between this case and
+      # the first one in this section.
+      - expr: 'sum(prl_rate_limit_events_total{kind="banned"})'
+        eval_time: 20m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: 'sum(increase(prl_rate_limit_events_total{kind="banned"}[15m]))'
+        eval_time: 20m
+        exp_samples:
+          - labels: '{}'
+            value: 0

@@ -21,6 +21,18 @@
 # failure it names, and it stays silent for the healthy shape it must not fire on.
 # That is the only difference between an alert and a decoration.
 #
+# ## What this script cannot check, and what does
+#
+# `promtool` reads the cases and the rules; a rule with no case at all is silence,
+# and silence and absence are the same to it. A mutation audit found nineteen of
+# the thirty-five rules in that state while this suite reported SUCCESS on every
+# file. The comparison is therefore a test rather than an audit — see
+# `scripts/alert-delivery.test.mjs`, "every rule is covered by a promtool unit
+# test", which refuses a rule named in no case file AND a case file asserting on
+# an alertname no rule defines. It lives under `test:scripts`, and so under
+# `pnpm run verify`, because this script needs Docker and a coverage claim that
+# only holds where a daemon is running is not a coverage claim.
+#
 # ## Why a container, and why this digest
 #
 # `promtool` is Prometheus' own rule engine, so a test here is evaluated by the
