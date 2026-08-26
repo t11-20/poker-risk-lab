@@ -384,6 +384,68 @@ describe('numeric columns are actually end-aligned', () => {
     assert.ok(override > wide, 'the end-align override must come after the table-wide start-align');
   });
 
+  /**
+   * The scan above is a check on SELECTORS. It says nothing about VALUES, and that is a hole.
+   *
+   * `offenders` is built from the blocks that declare `text-align: end`, so deleting the
+   * declaration — or changing it to `start` — removes the thing being scanned and the sweep goes
+   * quiet. Measured: with `td.prl-candidates__cost, td.prl-candidates__ev, …`'s
+   * `text-align: end` changed to `start`, `packages/ui` passed 297 of 297, `apps/web` 425 of 425
+   * and `design:contrast` passed twice — while the Coach's candidate table, the most numeric
+   * surface in the product, rendered its costs and EVs left-aligned. The "places the override
+   * BELOW" case survives it too: it only looks for the selector, which is still there.
+   *
+   * So the value is resolved here rather than assumed, by the cascade rather than by grep: every
+   * rule in `components.css` that can match `td.prl-candidates__cost` is collected, ordered by
+   * (specificity, source position), and the winner's `text-align` is what a reader sees.
+   */
+  it("resolves the candidate table's numeric cells to `end`, not merely to a declaration", () => {
+    const css = strip(componentsCss);
+    /** Rules that could match this element, with the specificity of the matching selector. */
+    const matching: { selector: string; at: number; specificity: number; value: string | null }[] = [];
+    for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/gu)) {
+      const body = match[2] ?? '';
+      const align = /(?:^|;)\s*text-align:\s*([a-z-]+)/u.exec(body);
+      if (align === null) continue;
+      for (const selector of (match[1] ?? '').split(',').map((part) => part.trim())) {
+        // Only the selectors that can actually match `<td class="prl-candidates__cost">` inside a
+        // `.prl-candidates__table`. Anything else is irrelevant to what this cell renders as.
+        const classes = [...selector.matchAll(/\.([a-z0-9_-]+)/gu)].map((entry) => entry[1]);
+        const known = new Set(['prl-candidates__table', 'prl-candidates__cost']);
+        if (!classes.every((name) => known.has(String(name)))) continue;
+        const elements = [...selector.matchAll(/(?:^|[\s>+~])([a-z]+)\b/gu)].map((entry) => entry[1]);
+        if (!elements.every((name) => name === 'td')) continue;
+        matching.push({
+          selector,
+          at: match.index ?? 0,
+          // (0, classes, elements) as one comparable number. No ids anywhere in this stylesheet.
+          specificity: classes.length * 100 + elements.length,
+          value: align[1] ?? null,
+        });
+      }
+    }
+    // A sweep of nothing is not a pass: at minimum the table-wide rule and the override must both
+    // have been found, or this is resolving an empty list to `undefined` and calling it a pass.
+    assert.ok(
+      matching.length >= 2,
+      `only ${matching.length} rule(s) could match the candidate cost cell; the resolver found nothing to arbitrate`,
+    );
+    matching.sort((a, b) => a.specificity - b.specificity || a.at - b.at);
+    const winner = matching.at(-1);
+    assert.equal(
+      winner?.value,
+      'end',
+      `the candidate table's cost cell resolves to ${winner?.value} via \`${winner?.selector}\`; ` +
+        'a column of money that reads left-aligned is the defect this whole block exists for',
+    );
+    // And the losing rule really is the table-wide one, so the arithmetic above was arithmetic
+    // rather than a single-element list agreeing with itself.
+    assert.ok(
+      matching.some((rule) => rule.value === 'start' && rule !== winner),
+      'no table-wide start-align rule was in the comparison, so nothing was actually beaten',
+    );
+  });
+
   it('catches the historical defect when it is replayed (NEGATIVE CONTROL)', () => {
     // The exact shape that shipped in legends.css and never applied: a bare class end-aligning a
     // cell in a table whose own rule start-aligns every cell.

@@ -28,7 +28,8 @@
  * 1440px, the lines broke at 80, 80 and 88 characters; past about 75 the eye starts losing the line
  * beginning on the return sweep. `52ch` lands at 69-72, and since the ratio between `ch` and the
  * average character belongs to the typeface rather than to the size, the one value holds for the
- * 20px lede and the 15px caption as well as for the 17px body.
+ * 18px lede and the 14px caption as well as for the 16px body — which is the whole reason the cap
+ * is written in `ch` and survived the scale coming down.
  *
  * It is the token, given a tighter value on this route, so every rule that reads it — including
  * `base.css`'s bare `<p>` — narrows together. It belongs in `tokens.css`; it is scoped here only
@@ -48,13 +49,44 @@
  * A section opener.
  *
  * The asymmetry is the point: `--prl-space-5` between the heading and the sentence that belongs to
- * it, `--prl-space-10` before the content it introduces. A heading with equal space on both sides
+ * it, `--prl-space-9` before the content it introduces. A heading with equal space on both sides
  * floats between two blocks and belongs to neither, which is what makes a long page feel unsorted.
+ *
+ * The gap under the opener came down a step with the type it separates — 40px rather than 48px —
+ * because the seam ABOVE each section is what says "new chapter", and a gap almost as large under
+ * the heading competes with it. Hierarchy in spacing means the steps have to be different sizes.
  */
 .prl-home__section-head {
   display: grid;
   gap: var(--prl-space-5);
-  margin-block-end: var(--prl-space-10);
+  margin-block-end: var(--prl-space-9);
+}
+
+/**
+ * THE OPENER TAKES THE ROW IT SITS IN.
+ *
+ * Every section on this page is a full-width band — four spine steps, three modules, four metrics,
+ * a two-column proof table — introduced by a heading and a sentence stacked in the leftmost 500px
+ * of it. So the widest thing on the page was repeatedly announced by the narrowest, and each
+ * announcement cost three lines of height it did not need to.
+ *
+ * Beside each other the two are a masthead: the heading names the section on the left, the
+ * sentence qualifies it on the right, and the pair spans the same row the content below it spans.
+ * The lede keeps its own `--prl-measure` cap, so nothing about the line length changes — only
+ * where the column sits, which is the same trade `play.css` section 1 documents.
+ *
+ * 1000px matches the breakpoint the hero gains its second column at and the one `page.css` and
+ * `learn.css` use for their openers, so the app has ONE wide layout rather than four that arrive at
+ * different times. The arithmetic behind the number is in `page.css` section 1a.
+ */
+@media (min-width: 1000px) {
+  .prl-home__section-head {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--prl-space-11);
+    /* First baseline to first baseline, which is what makes a 24px heading and an 18px sentence
+       read as one line of the page rather than as two blocks that happen to be adjacent. */
+    align-items: baseline;
+  }
 }
 
 /**
@@ -63,20 +95,30 @@
  * The cap lives on the two children rather than on the head, because the head's `ch` would resolve
  * against the head's own 17px and hand the 20px lede a 51-character line.
  *
- * THE TYPOGRAPHIC STEP THAT WAS MISSING. The hero opens at `--prl-type-display-1` (4rem at 1440px)
- * and every section heading under it fell straight through to `base.css`'s bare `h2`, measured at
- * 1.75rem. A page whose second-largest text is 44% of its largest has one voice and then a long
- * murmur: with no middle register the four sections read as one undifferentiated scroll rather
- * than as four chapters. `--prl-type-display-2` is the token that exists for this step, and it
- * brings its own optical tracking — which matters more here than the size, because a grotesk set
- * at 2.5rem with body tracking looks slack, and slack is what reads as unconsidered.
+ * THE TYPOGRAPHIC STEP THAT WAS MISSING, AND THEN OVERPAID FOR.
+ *
+ * This was `--prl-type-display-2`, and the note that put it there was answering a real defect: a
+ * section heading falling through to a bare `h2` was 44% of the hero and the four sections read as
+ * one undifferentiated scroll. But the fix was applied while `display-2` meant 44px, so the cure
+ * was a 44px heading under a 64px one — two display sizes, 1.45 apart, and the page went from
+ * having no middle register to having no top. Measured at 1440x1100, the `h1` and the `h2` on this
+ * page were near enough the same size that the levels did not separate.
+ *
+ * `display-3` — 24px — is the section register, and the step is now carried three ways at once:
+ * 40 to 24 in size, bold to semibold in weight, and `--prl-text` over a full section seam in
+ * space. That is what a chapter opening looks like. A heading does not have to be big to be first;
+ * it has to be unmistakably not-body, and 24px semibold above an 18px secondary-coloured lede is
+ * not-body by a distance.
+ *
+ * The `ch` cap moves with the size: 20ch of 44px type is a wide headline and 20ch of 24px type is
+ * a stub that breaks "The loop this is built around" across three lines.
  */
 .prl-home__section-title {
   margin: 0;
-  max-width: 20ch;
-  font-size: var(--prl-type-display-2);
-  font-weight: var(--prl-weight-bold);
-  letter-spacing: var(--prl-tracking-display-2);
+  max-width: 28ch;
+  font-size: var(--prl-type-display-3);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-display-3);
   line-height: var(--prl-leading-heading);
   text-wrap: balance;
 }
@@ -94,10 +136,19 @@
    2. HERO
    ========================================================================================== */
 
+/**
+ * `--prl-space-10` over the eyebrow, not `--prl-space-12`.
+ *
+ * The header band is 92px of sticky chrome and the hero used to open 64px below it, which put the
+ * first word of the product 156px down a 1100px screen. With the headline no longer 64px tall
+ * there is nothing that space is protecting: the whole point of cutting the type was to get the
+ * page's argument — headline, lede, the two actions, the guardrail — onto the first screen
+ * together, and 40px of the saving went straight back out as padding.
+ */
 .prl-home__hero {
   display: grid;
   gap: var(--prl-space-8);
-  padding-block: var(--prl-space-12) var(--prl-section-y);
+  padding-block: var(--prl-space-10) var(--prl-section-y);
 }
 
 /**
@@ -279,9 +330,19 @@
   border-block-start: 0;
 }
 
+/* `--prl-space-2` between the index and the name because they are one label in two parts, and a
+   separate `--prl-space-4` before the sentence because that is a different voice. One gap for all
+   three is what made the numeral look like a heading with two subtitles under it. */
 .prl-home__section .prl-spine__step {
-  gap: var(--prl-space-4);
-  padding-block-start: var(--prl-space-9);
+  gap: var(--prl-space-2);
+  padding-block-start: var(--prl-space-8);
+}
+
+.prl-home__section .prl-spine__detail {
+  margin-block-start: var(--prl-space-4);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-body);
 }
 
 /**
@@ -318,24 +379,41 @@
 }
 
 /**
- * The step number, promoted from a caption to the thing that carries the ordering.
+ * THE NUMERAL AND THE LABEL, THE RIGHT WAY ROUND.
  *
- * The `01…04` numerals are `aria-hidden` — the `<ol>` already announces "item 2 of 4" — so their
- * whole job is visual, and at `--prl-type-label` they were losing that job to the label beside
- * them. At the metric size, tabular and in the accent, the eye reads the order before it reads a
- * single word, which is what a process graphic is for.
+ * The numeral used to be set at `--prl-type-metric-sm` in the accent, above a 13px uppercase
+ * label — so each of the four cards was a large cyan digit with a caption under it, and the four
+ * digits were the loudest thing in the section. That is an inversion: the numerals are
+ * `aria-hidden` precisely because they carry no information the `<ol>` does not already announce.
+ * A reader scanning "the loop this is built around" needs to read LEARN, CALCULATE, DECIDE,
+ * REVIEW; the ordering is a property of the row they are sitting in, and the rail and its four
+ * nodes already state it.
+ *
+ * So the number goes back to being an index — label size, tabular, in the muted ink the rest of
+ * the app's indices use — and the step's name becomes the heading it always was: 20px, semibold,
+ * full-strength ink, and not uppercase. Uppercase with 0.07em of tracking is the technical-label
+ * voice, and it is a voice for something sitting ABOVE data. Here the word IS the data.
+ *
+ * `text-transform` and `letter-spacing` are overridden rather than the class being changed:
+ * `.prl-spine__label` carries `prl-label prl-label--strong` from `ProcessSpine.tsx`, and the
+ * markup is not this pass's to touch.
  */
 .prl-home__section .prl-spine__index {
-  color: var(--prl-accent-text);
-  font-size: var(--prl-type-metric-sm);
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-label);
   font-variant-numeric: var(--prl-numeric);
-  font-weight: var(--prl-weight-semibold);
-  letter-spacing: var(--prl-tracking-metric);
-  line-height: var(--prl-leading-tight);
+  font-weight: var(--prl-weight-regular);
+  letter-spacing: var(--prl-tracking-index);
+  line-height: var(--prl-leading-snug);
 }
 
 .prl-home__section .prl-spine__label {
-  font-size: var(--prl-type-label);
+  color: var(--prl-text);
+  font-size: var(--prl-type-heading);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-heading);
+  line-height: var(--prl-leading-heading);
+  text-transform: none;
 }
 
 /* ==========================================================================================
@@ -609,7 +687,7 @@
   }
 
   .prl-home__hero {
-    padding-block: var(--prl-space-13) var(--prl-section-y);
+    padding-block: var(--prl-space-11) var(--prl-section-y);
   }
 
   .prl-home__modules {
@@ -673,11 +751,23 @@
  *
  * The rows are explicit because the guardrail has to span the three of them. `grid-row: 2 / -1`
  * would depend on how many rows the auto-placement happens to create.
+ *
+ * 1280 -> 1000. That threshold was measured against a 17px reading size, where a half-shell at
+ * 900px held about 30 characters — too narrow to read, hence 1280. At the 16px size the same half
+ * at 1000px holds about 60, which is inside the measure rather than under it, and the display size
+ * now falls to 32px at that width so the headline still sets in two lines beside it. The number a
+ * measurement produced changes when the thing it measured does.
  */
-@media (min-width: 1280px) {
+/* Two halves rather than `5fr 3fr`.
+   With the shell at 78rem and the type at the compressed scale, the left column's contents cap out
+   at 576px (`.prl-home__title`, 24ch of 40px type) and 499px (`.prl-home__lede`, the 52ch measure
+   this route sets). A 5fr track was 740px, so the wider half held the narrower content and the
+   hero carried a void down the middle of itself as well as one down its side. Halves put the
+   headline and the notice on the same width and the two objects read as a pair. */
+@media (min-width: 1000px) {
   .prl-home__hero {
-    grid-template-columns: minmax(0, 5fr) minmax(0, 3fr);
-    column-gap: var(--prl-space-12);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--prl-space-11);
     align-items: start;
   }
 

@@ -187,7 +187,7 @@ interface Harness {
   readonly config: AppConfig;
 }
 
-async function harness(sessionTtlMs = 60 * 60_000): Promise<Harness> {
+async function harness(sessionTtlMs = 60 * 60_000, heartbeatIntervalMs?: number): Promise<Harness> {
   const config = testConfig();
   const app = await buildApp({ config, database: stubDatabase });
   openApps.push(app);
@@ -212,7 +212,11 @@ async function harness(sessionTtlMs = 60 * 60_000): Promise<Harness> {
   });
   await registerRoutes(app, [
     createAuthRoutes({ store }),
-    createWsHub({ registry, sessionStore: store.sessions }),
+    createWsHub({
+      registry,
+      sessionStore: store.sessions,
+      ...(heartbeatIntervalMs === undefined ? {} : { heartbeatIntervalMs }),
+    }),
   ]);
   await app.listen({ port: 0, host: '127.0.0.1' });
   const address = app.server.address() as AddressInfo;
@@ -445,6 +449,50 @@ describe('a websocket and the session that opened it', () => {
       client.frames.filter((frame) => frame.type === 'pong').length,
       0,
       'an expired session was answered',
+    );
+  });
+
+  /**
+   * The other half of the same guard, and the half that had never been observed failing.
+   *
+   * `hub.ts` enforces the session's expiry on a socket in TWO places, and they cover two different
+   * peers. The per-frame check in the `message` handler catches a socket that is still talking —
+   * which is what the case above drives, because it sends a `ping` after the session lapses. The
+   * sweep inside the heartbeat catches one that has gone QUIET, and its own comment says so: "a
+   * socket that sends nothing must expire too". That is the stolen-cookie shape — a peer that
+   * opens a socket, holds it, and says nothing while the TCP stack answers the pings for it.
+   *
+   * Measured before this case existed: with `if (entry.sessionExpiresAtMs <= now)` in the sweep
+   * turned into `if (false && …)`, the whole `@prl/api` suite passed 1,001 of 1,001. Every case in
+   * this file waits at most `CLOSE_TIMEOUT_MS` (5,000 ms) and the shipped sweep runs every
+   * `WS_LIMITS.heartbeatIntervalMs` (15,000 ms), so no case here could reach it even in principle.
+   * `createWsHub`'s `heartbeatIntervalMs` seam exists for exactly this, and nothing else uses it.
+   *
+   * Nothing is sent after `hello`. If this case ever starts sending a frame it stops testing the
+   * sweep and silently becomes a duplicate of the one above.
+   */
+  it('a socket that has gone quiet is closed by the heartbeat sweep (NEGATIVE CONTROL)', async () => {
+    const harnessed = await harness(250, 40);
+    const browser = await signIn(harnessed);
+    const client = new Client();
+    await client.connect(harnessed, browser);
+    await client.helloInto(ROOM, 'nonce-quiet0001');
+
+    // Not a frame after this line. The socket answers the protocol-level pings `ws` handles for it
+    // — which is what keeps `missedHeartbeats` at zero — and sends nothing the router ever sees.
+    const close = await client.waitForClose();
+    assert.equal(
+      close.code,
+      WS_CLOSE.unauthenticated,
+      'a quiet socket outlived the session that opened it: the heartbeat sweep did not expire it',
+    );
+    assert.equal(close.reason, 'session expired', 'the socket was closed for some other reason');
+    // The positive control for the other direction: a sweep that closed everything would satisfy
+    // the assertions above and would drop every healthy socket in the product. The hello was
+    // answered before the session lapsed, so the connection was live and serving.
+    assert.ok(
+      client.frames.some((frame) => frame.type === 'state' || frame.type === 'welcome'),
+      'the socket never became live, so the close proves nothing about expiry',
     );
   });
 });

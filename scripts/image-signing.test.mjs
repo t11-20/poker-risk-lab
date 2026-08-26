@@ -25,8 +25,10 @@ import { describe, it } from 'node:test';
 import {
   ATTESTATION_PREDICATE_TYPE,
   attestationProblems,
+  COSIGN_KEYLESS_SIGN_FLAGS,
   COSIGN_SIGN_FLAGS,
   COSIGN_VERIFY_FLAGS,
+  keylessVerifyFlags,
   parseAttestationStatements,
   parseSignatureRecord,
   publicKeyFingerprint,
@@ -287,5 +289,99 @@ describe('the cosign flag sets', () => {
     // The property the whole two-script split exists to hold: a machine that can CHECK a signature
     // must not be able to MINT one.
     assert.ok(!COSIGN_VERIFY_FLAGS.some((flag) => /cosign\.key|--key/.test(flag)));
+  });
+});
+
+/**
+ * The KEYLESS flag sets, which nothing checked at all.
+ *
+ * ## The defect this exists for
+ *
+ * `keylessVerifyFlags` and `COSIGN_KEYLESS_SIGN_FLAGS` are exported from `image-signing.mjs` and
+ * were imported by NO test. `keylessVerifyFlags`'s own header calls its two flags "the entire
+ * difference between provenance and arithmetic", and `verifyKeylessSignature` in
+ * `supply-chain/image-provenance.mjs` says of the same pair that "with a WIDER version of them it
+ * accepts a signature made by a workflow in a repository nobody has heard of, because Fulcio
+ * issues a certificate to anybody's GitHub Actions job". Neither sentence was asserted anywhere.
+ *
+ * Measured against the suite as it stood: `node --test 'scripts/**\/*.test.mjs'` reported
+ * 130 of 130 passing with each of these applied one at a time —
+ *
+ *   * `--certificate-identity <identity>` replaced by `--certificate-identity-regexp '.*'`
+ *     (and the issuer likewise). cosign then verifies any Fulcio certificate from any repository:
+ *     the signature is real, the provenance is gone, and the gate prints the same green line.
+ *   * `--certificate-oidc-issuer <issuer>` dropped. An identity string is not self-authenticating;
+ *     without the issuer another provider can assert any subject it likes.
+ *   * `--insecure-ignore-tlog` ADDED to the keyless verify set. The keyed posture turns Rekor off
+ *     and pays for it with a stated residual; keyless without the log keeps the cost and throws
+ *     away the point, which is the paragraph `COSIGN_KEYLESS_SIGN_FLAGS` ends on.
+ *   * `--tlog-upload=false` added to the keyless SIGN set, so nothing ever reaches Rekor.
+ *
+ * `keylessVerifyFlags` is asserted as an exact ORDERED pairing rather than with `includes`,
+ * because `--certificate-identity` followed by the wrong value is the failure being guarded and
+ * `includes('--certificate-identity')` cannot see it.
+ */
+describe('the keyless flag sets — who signed, not merely that somebody did', () => {
+  const DEMANDED = {
+    identity: 'https://github.com/prl/poker-risk-lab/.github/workflows/release-sign.yml@refs/heads/main',
+    issuer: 'https://token.actions.githubusercontent.com',
+  };
+
+  it('pins the certificate identity to the value it was given, as a literal and not a pattern', () => {
+    const flags = keylessVerifyFlags(DEMANDED);
+    const at = flags.indexOf('--certificate-identity');
+    assert.notEqual(at, -1, 'a keyless verification with no identity is a signature by "somebody"');
+    assert.equal(flags[at + 1], DEMANDED.identity, 'the identity flag carries something else');
+    // The regexp forms are what a widening looks like, and cosign accepts them happily.
+    assert.ok(
+      !flags.some((flag) => /^--certificate-identity-regexp$/.test(String(flag))),
+      'a regexp identity accepts a workflow in a repository nobody reviewed',
+    );
+  });
+
+  it('pins the OIDC issuer the same way, because an identity string is not self-authenticating', () => {
+    const flags = keylessVerifyFlags(DEMANDED);
+    const at = flags.indexOf('--certificate-oidc-issuer');
+    assert.notEqual(at, -1, 'without an issuer, any provider may assert any subject');
+    assert.equal(flags[at + 1], DEMANDED.issuer);
+    assert.ok(!flags.some((flag) => /^--certificate-oidc-issuer-regexp$/.test(String(flag))));
+  });
+
+  it('takes both values from its argument, so a record cannot choose what it is compared against', () => {
+    // The positive control. A function that returned the committed policy's constants whatever it
+    // was handed would satisfy both cases above against the real policy and would be unable to
+    // refuse anything, because the value it compared with would be the value under test.
+    const other = keylessVerifyFlags({
+      identity: 'https://example.invalid/x@refs/tags/v9',
+      issuer: 'https://idp.invalid',
+    });
+    assert.equal(
+      other[other.indexOf('--certificate-identity') + 1],
+      'https://example.invalid/x@refs/tags/v9',
+    );
+    assert.equal(other[other.indexOf('--certificate-oidc-issuer') + 1], 'https://idp.invalid');
+  });
+
+  it('never turns the transparency log off on either side of the keyless posture', () => {
+    // The absence is load-bearing and is the one thing an `includes` check cannot state, so it is
+    // stated here: keyless signing without Rekor keeps the keyed posture's cost and loses its
+    // benefit, and `deploy/signing/keyless-policy.json` requires the log.
+    for (const flag of keylessVerifyFlags(DEMANDED)) {
+      assert.ok(!/tlog|transparency/i.test(String(flag)), `keyless verify must not carry ${flag}`);
+    }
+    for (const flag of COSIGN_KEYLESS_SIGN_FLAGS) {
+      assert.ok(!/tlog|transparency/i.test(String(flag)), `keyless signing must not carry ${flag}`);
+    }
+    // A sweep of nothing is not a pass: both sets must actually have been read.
+    assert.ok(keylessVerifyFlags(DEMANDED).length >= 4);
+    assert.ok(COSIGN_KEYLESS_SIGN_FLAGS.length >= 1);
+  });
+
+  it('carries no key material into the keyless path at all', () => {
+    // Same property as the keyed verify set above, for the side where there is no key to carry:
+    // a `--key` here would mean the keyless posture had quietly become the keyed one.
+    for (const flag of [...keylessVerifyFlags(DEMANDED), ...COSIGN_KEYLESS_SIGN_FLAGS]) {
+      assert.ok(!/cosign\.key|^--key$/.test(String(flag)));
+    }
   });
 });

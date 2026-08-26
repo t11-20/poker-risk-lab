@@ -202,6 +202,17 @@ export interface WsHubOptions {
   readonly onRouterReady?: (router: WsRouter) => void;
   /** Defaults to the process-wide metrics. A test that wants isolation passes its own. */
   readonly metrics?: AppMetrics;
+  /**
+   * Test seam: how often the sweep below runs. Defaults to `WS_LIMITS.heartbeatIntervalMs`.
+   *
+   * Here because the sweep enforces something no other code path does — the session's expiry on a
+   * socket that has gone QUIET — and at the shipped fifteen seconds no test could reach it. That
+   * is not a hypothetical gap: an adversarial review removed the expiry check from the sweep and
+   * the whole 1,001-test suite stayed green, because `ws-session-revocation.test.ts` reached the
+   * per-frame check instead by sending a `ping`. A guard whose failure mode has never been
+   * observed is decoration, and this option is what makes it observable.
+   */
+  readonly heartbeatIntervalMs?: number;
 }
 
 /**
@@ -520,7 +531,7 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
         entry.connection.missedHeartbeats += 1;
         entry.heartbeat.ping();
       }
-    }, WS_LIMITS.heartbeatIntervalMs);
+    }, options.heartbeatIntervalMs ?? WS_LIMITS.heartbeatIntervalMs);
     heartbeat.unref();
 
     /**

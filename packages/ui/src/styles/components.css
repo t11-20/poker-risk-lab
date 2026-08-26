@@ -2450,8 +2450,13 @@
 
 /** An error carries the word "error" and a glyph in the markup as well as the colour, so it is
     still an error with the stylesheet's colours thrown away. */
+/* Capped for the same reason `.prl-callout` is, and measured on the same screen: on `/play` this
+   drew a 1360px red-edged band with three lines of text in its left half. Its paragraphs were
+   already capped — by `base.css`'s bare `p` rule — so the box was the only part of it that was
+   not. Measure plus this rule's own two paddings. */
 .prl-error {
   display: grid;
+  max-width: calc(var(--prl-measure) + 2 * var(--prl-space-6));
   gap: var(--prl-space-4);
   padding: var(--prl-space-6);
   border: 1px solid var(--prl-adverse);
@@ -4211,8 +4216,23 @@ td.prl-candidates__ev,
 
 /** Tone is carried by a WORD in the marker ("Insight", "Watch out", "Common misconception") as
     well as by the leading edge. Remove the colour and the callout is still understandable. */
+/**
+ * THE BOX IS CAPPED, NOT JUST THE TEXT IN IT.
+ *
+ * `.prl-callout__body` has always been capped at `--prl-measure`. The box was not, so on any
+ * full-width surface a callout drew a bordered band the width of the page with four lines of text
+ * in its left third and nothing in the other two — measured at 1440x1100 on `/play`, a 1360px
+ * band holding a 612px paragraph. A reader does not see "prose respecting a reading measure"; they
+ * see a panel that failed to fill.
+ *
+ * An aside should be shaped like an aside. The cap is the measure plus this rule's own two
+ * paddings, which is exactly the width the content uses — composed from the same tokens rather
+ * than being a new number, so it tracks both if either changes. Narrower parents are unaffected:
+ * `max-width` only ever takes width away.
+ */
 .prl-callout {
   display: grid;
+  max-width: calc(var(--prl-measure) + 2 * var(--prl-space-6));
   gap: var(--prl-space-3);
   padding: var(--prl-space-6);
   border: var(--prl-hairline);

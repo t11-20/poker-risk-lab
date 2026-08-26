@@ -237,6 +237,63 @@ describe('the required disclosures are on the pages', () => {
     assert.match(gate, /PLAY_MONEY_WARNING/u);
   });
 
+  /**
+   * The warning has to be RENDERED, not merely imported.
+   *
+   * `assert.match(source, /PLAY_MONEY_WARNING/u)` above is satisfied by the import line on its own,
+   * and every surface here imports the constant. Measured: adding one word — `hidden` — to the
+   * paragraph in `AgeGate.tsx` left `apps/web` passing 425 of 425 and `packages/ui` 297 of 297,
+   * with the product's single most important honesty sentence invisible at the one screen where
+   * the reader is deciding whether to enter. `test:age-gate` does not read it either; nothing in
+   * the repository mentions the sentence outside this file and the constant that holds it.
+   *
+   * A source check rather than a render, and the reason is worth stating rather than hiding: the
+   * three surfaces are Next server and client components reaching `next/link` and the `@/` alias,
+   * so `packages/ui`'s `loadComponent` cannot compile them and there is no equivalent here. What
+   * this can do — and what the presence check could not — is insist that the interpolation sits in
+   * an element that is actually shown: no `hidden`, no `aria-hidden`, no `display: none`, and not
+   * behind a falsy guard. Those are the ways a paragraph stops being read while the identifier
+   * stays exactly where it was.
+   */
+  it('renders the warning in an element a reader can actually see', () => {
+    const surfaces: readonly (readonly [string, readonly string[]])[] = [
+      ['the age gate', ['components', 'AgeGate.tsx']],
+      ['the responsible-use page', [...PAGES['responsible-use']]],
+      ['the terms page', [...PAGES.terms]],
+    ];
+    // A sweep of nothing is not a pass: if `PAGES` ever stops naming these, the loop must not go
+    // quiet.
+    assert.equal(surfaces.length, 3);
+
+    for (const [name, parts] of surfaces) {
+      const source = read(...parts);
+      // The opening tag immediately enclosing `{PLAY_MONEY_WARNING}`, plus whatever encloses that.
+      // Collapsed first, because the formatter reflows a long tag across lines.
+      const flattened = flat(source);
+      const at = flattened.indexOf('{PLAY_MONEY_WARNING}');
+      assert.notEqual(at, -1, `${name} imports the warning and never renders it`);
+      // Everything from the start of the enclosing element's opening tag. 400 characters is more
+      // than any of these tags plus the one above it, and the assertions below are about what is
+      // in that window rather than about its length.
+      const enclosing = flattened.slice(Math.max(0, at - 400), at);
+      const lastTag = enclosing.lastIndexOf('<');
+      assert.notEqual(lastTag, -1, `${name}: the warning is not inside an element at all`);
+      const window = enclosing.slice(lastTag);
+
+      assert.doesNotMatch(window, /\bhidden\b/u, `${name}: the warning is rendered hidden`);
+      assert.doesNotMatch(window, /aria-hidden/u, `${name}: the warning is hidden from the a11y tree`);
+      assert.doesNotMatch(window, /display:\s*['"]?none/u, `${name}: the warning is displayed none`);
+      // `{false && …}` and `{null && …}` keep the identifier and render nothing.
+      assert.doesNotMatch(
+        enclosing,
+        /\{\s*(?:false|null|undefined|0)\s*&&/u,
+        `${name}: the warning is behind a guard that is never true`,
+      );
+      // And it must not be commented out, which keeps the identifier in the file too.
+      assert.doesNotMatch(window, /\{\/\*/u, `${name}: the warning is inside a JSX comment`);
+    }
+  });
+
   it('the age gate says outright that it verifies nothing', () => {
     const gate = flat(read('components', 'AgeGate.tsx'));
     assert.match(

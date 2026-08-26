@@ -376,13 +376,43 @@
 
   /* Display — fluid via clamp(), so there are no typographic breakpoints.
      Tight tracking at large sizes is what makes a grotesk read as engineered
-     rather than merely big. */
-  --prl-type-display-1: clamp(2.5rem, 5vw, 4rem);
-  --prl-type-display-2: clamp(1.875rem, 3.2vw, 2.75rem);
-  --prl-type-display-3: clamp(1.375rem, 2vw, 1.75rem);
-  --prl-tracking-display-1: -0.03em;
-  --prl-tracking-display-2: -0.025em;
-  --prl-tracking-display-3: -0.02em;
+     rather than merely big.
+
+     THE STEPS WERE THE PROBLEM, NOT THE FACES.
+
+     Measured in Chrome at 1440x1100 against the deployed app: the home `h1` set at 64px/67px, a
+     section `h2` at 44px, a lesson `h1` at 44px, body at 17px. Two things follow from those four
+     numbers and both were visible on every screen.
+
+     First, 64 to 44 is a ratio of 1.45. A step that large between the top two levels does not
+     read as two levels — it reads as two SIZES of the same shout, because 44px inside a 1360px
+     shell is already display type. Everything on the page was emphatic, so nothing was.
+
+     Second, a lesson `h1` and a home section `h2` were the same 44px. The scale had run out of
+     room, so a page title and a subheading a level below it landed on the same value and the
+     levels stopped meaning anything across surfaces.
+
+     The ramp below is 40 / 30 / 24 over a 20 / 18 / 16 / 14 reading scale: adjacent steps of
+     1.33, 1.25, 1.2, 1.11, 1.13, 1.14 rather than one step of 1.45 and then a cliff. 40px is the
+     top and it appears exactly once in the app (the home hero); a page title is 30px and a
+     section is 24px, and the two are told apart by WEIGHT and SPACE as much as by size — see the
+     `h1`/`h2` block in `base.css`, where `h2` drops to semibold rather than borrowing more size
+     it does not need.
+
+     The floors are raised, not lowered, because the same compression applies at 375px: a 40px
+     headline that falls to 32px on a phone is still the largest thing on the screen. */
+  /* The middle term is genuinely fluid rather than a slope that saturates immediately: this reads
+     32px at 1000px, 38px at 1280px and 40px from 1400px up, so the one display size on the page
+     comes down as the column holding it does. A `vw` slope steep enough to hit the cap at 1100px
+     is a step function with extra syntax. */
+  --prl-type-display-1: clamp(2rem, 0.4rem + 2.5vw, 2.5rem); /* 32 -> 40px */
+  --prl-type-display-2: clamp(1.75rem, 1.3rem + 1.2vw, 1.875rem); /* 28 -> 30px */
+  --prl-type-display-3: clamp(1.375rem, 1.15rem + 0.6vw, 1.5rem); /* 22 -> 24px */
+  /* Tracking follows the size down. -0.03em is the value for a 64px line; applied to 40px it
+     closes the counters and the word starts to read as one blot. */
+  --prl-tracking-display-1: -0.022em;
+  --prl-tracking-display-2: -0.018em;
+  --prl-tracking-display-3: -0.013em;
 
   /* ------------------------------------------------------------------------
      READING SIZES — the floor is 13px, and the reason is measured rather than
@@ -398,19 +428,50 @@
      for legal fine print. Linear sets body and navigation at 16px. Neither uses
      a small size as a general-purpose voice.
 
-     So: 17px body (one step above the common baseline, because this app asks
-     people to read explanations of probability, not scan marketing copy), 15px
-     for secondary text, and 13px as an absolute floor for labels. Nothing in
+     That paragraph argued its way to 17px body / 15px secondary, and the sample
+     it cites says 16 / 14. The extra step was taken on the theory that this app
+     asks people to READ rather than scan — but a size is not what makes a
+     paragraph readable, and 17px was doing measurable damage everywhere else:
+     it is `1em` for every `ch` cap in the app, so every reading column got 6%
+     wider, every panel title had to grow to stay above it, and the whole ramp
+     was levered up from underneath. This IS an application — a navigation bar,
+     panels, tables, chips and controls — and 16px is the size those read at.
+
+     So: 16px body, 14px secondary, 13px an absolute floor for labels. Nothing in
      this product is fine print — the guardrail notice and the assumptions behind
      a number are the two things a learner most needs to read.
+
+     LEADING. `--prl-leading-body` was 1.65, which is a long-form-reading value
+     (a blog measure of 700px and one column of text on the page). Applied to UI
+     body it is the single most expensive number in this file: it inflates every
+     paragraph, every list, every table cell and every card by a sixth, which is
+     why the home page's four loop cards were cut off at the fold. 1.5 is the UI
+     value. Long-form lesson prose keeps the looser setting — see
+     `--prl-leading-prose` below, which is the one place the space is earned.
      ------------------------------------------------------------------------ */
-  --prl-type-heading: 1.375rem; /* 22px */
-  --prl-type-body-lg: 1.25rem; /* 20px — lead paragraphs, Coach conclusions */
-  --prl-type-body: 1.0625rem; /* 17px — the default reading size */
-  --prl-type-body-sm: 0.9375rem; /* 15px — secondary, captions, table cells */
-  --prl-leading-tight: 1.05;
+  --prl-type-heading: 1.25rem; /* 20px — panel titles, h3 */
+  --prl-type-body-lg: 1.125rem; /* 18px — lead paragraphs, Coach conclusions */
+  --prl-type-body: 1rem; /* 16px — the default reading size */
+  --prl-type-body-sm: 0.875rem; /* 14px — secondary, captions, table cells */
+  /* 1.05 was the value for a 64px headline. At 40px it clips the descenders of a
+     two-line title against the ascenders of the line below it. */
+  --prl-leading-tight: 1.1;
   --prl-leading-snug: 1.3;
-  --prl-leading-body: 1.65;
+  --prl-leading-body: 1.5;
+
+  /**
+   * THE ONE PLACE LOOSE LEADING IS EARNED.
+   *
+   * A lesson is the only surface in this app that is genuinely long-form: one column of
+   * continuous prose that somebody reads top to bottom rather than scans. That is the reading
+   * situation 1.6 is for, and it is the reading situation `--prl-leading-body` used to assume
+   * about every table cell and every chip in the product.
+   *
+   * Deliberately below the 1.65 it replaces, because the measure came down with the type: at
+   * 16px a 52ch column is ~500px, and leading and measure move together — a shorter line needs
+   * less vertical separation to keep the return sweep on the right row.
+   */
+  --prl-leading-prose: 1.6;
 
   /**
    * OPTICAL TRACKING — the scale continues below the display sizes, because it has to.
@@ -420,18 +481,22 @@
    * `--prl-tracking-display-3` (-0.02em), which is the value for 28px, and a 17px paragraph
    * got 0 — a discontinuity you can see as soon as a heading and its lede sit together.
    *
-   * These three continue the same curve down through the reading sizes. Body carries a
-   * whisper of negative tracking because every grotesk in `--prl-font-sans` is spaced for
-   * 15-16px and looks loose at 17; 15px and below get nothing, because below the body size
-   * tracking becomes a legibility aid rather than a cost (which is why the LABEL tokens go
-   * positive and keep going).
+   * These three continue the same curve down through the reading sizes.
+   *
+   * Body is now ZERO, and that is a consequence of the size change rather than a taste change.
+   * The reason body carried -0.003em was written down: every grotesk in `--prl-font-sans` is
+   * spaced for 15-16px and looks loose at 17. Body IS 16px now, so the correction it was
+   * compensating for no longer exists, and leaving it in would tighten the reading size below
+   * what the face was drawn for. It stays a separate token from `--prl-tracking-flat` because
+   * the two say different things: this one is "the reading size, optically correct", and the
+   * flat one is "small enough that tracking is a legibility aid, so do not take any away".
    */
-  --prl-tracking-heading: -0.014em; /* 20-22px — panel titles, h3, lede */
-  --prl-tracking-body: -0.003em; /* 17px — the reading size */
-  --prl-tracking-flat: 0; /* 15px and below, and anything already tracked */
+  --prl-tracking-heading: -0.008em; /* 18-20px — panel titles, h3, lede */
+  --prl-tracking-body: 0; /* 16px — the reading size, at the face's own spacing */
+  --prl-tracking-flat: 0; /* 14px and below, and anything already tracked */
 
-  /** Between `tight` (display) and `snug` (headings-with-two-lines). A 22px title that wraps
-      needs more than 1.05 and less than 1.3, and every panel title in the app wraps somewhere. */
+  /** Between `tight` (display) and `snug` (headings-with-two-lines). A 20px title that wraps
+      needs more than 1.1 and less than 1.3, and every panel title in the app wraps somewhere. */
   --prl-leading-heading: 1.2;
 
   /**
@@ -461,12 +526,19 @@
   --prl-tracking-label-sm: 0.09em;
   --prl-tracking-index: 0.12em;
 
-  /* Metrics — oversized numbers. The reason this system exists. */
-  --prl-type-metric-hero: clamp(3rem, 7vw, 5.5rem);
-  --prl-type-metric-lg: clamp(2rem, 3.6vw, 3rem);
-  --prl-type-metric-md: 1.5rem;
-  --prl-type-metric-sm: 1.125rem;
-  --prl-tracking-metric: -0.03em;
+  /* Metrics — oversized numbers. The reason this system exists.
+
+     They come down with the ramp, and by less than it. A metric is allowed to be the loudest
+     thing on its panel — that is the product — but "loudest on the panel" is a relationship, not
+     a size, and the old hero at 88px was set against a 64px headline. Against a 40px headline the
+     same number is a billboard on a dashboard. 64 / 36 / 22 / 17 keeps every metric comfortably
+     above the heading beside it (the hero is 2.6x the section heading it sits under) while
+     leaving the page a top. */
+  --prl-type-metric-hero: clamp(2.5rem, 1.5rem + 3vw, 4rem); /* 40 -> 64px */
+  --prl-type-metric-lg: clamp(1.75rem, 1.2rem + 1.6vw, 2.25rem); /* 28 -> 36px */
+  --prl-type-metric-md: 1.375rem; /* 22px */
+  --prl-type-metric-sm: 1.0625rem; /* 17px */
+  --prl-tracking-metric: -0.025em;
 
   /* ==========================================================================
      SPACING — em/rem hybrid ramp, 17 steps. Section rhythm is deliberately
@@ -500,11 +572,28 @@
      reads as a page that failed to load.
      Generous space between sections is still the intent; what changed is that the intended
      amount is now the amount at the SEAM rather than at each edge. 5vw caps at 5.5rem, so the
-     seam lands near 144px on a laptop and 96px on a phone. */
-  --prl-section-y: clamp(3rem, 5vw, 5.5rem);
+     seam lands near 144px on a laptop and 96px on a phone.
+
+     CUT AGAIN, WITH THE TYPE. Section rhythm is a RATIO to the type it separates, not an absolute
+     length: 144px at a seam was proportionate under a 44px section heading with 28px body lines,
+     and under a 24px heading with 24px body lines it is the same "page that failed to load" the
+     paragraph above describes. 3.2vw caps at 4rem, so the seam is near 104px on a laptop and 80px
+     on a phone — still, by a distance, the largest vertical step in the app, which is what makes
+     it read as hierarchy rather than as one repeated value. */
+  --prl-section-y: clamp(2.5rem, 3.2vw, 4rem);
   --prl-gutter: clamp(1rem, 4vw, 2.5rem);
-  --prl-container: min(100% - 2 * var(--prl-gutter), 88rem);
-  --prl-container-narrow: min(100% - 2 * var(--prl-gutter), 60rem);
+  /* 78rem, not 88rem.
+     Measured at 1440x1100: the shell was 1360px wide and the content columns inside it ran
+     810-940px, so every page carried a 400px void down one side. Two things fix that and this file
+     owns one of them — the shell comes in to 1248px, and the surfaces that had a column and a void
+     gain a real second column (`.prl-page-head` in `page.css`, `.prl-learn-page__head` in
+     `learn.css`, both following the pattern `play.css` section 1 already established). Neither
+     alone was enough: narrowing a frame around a column that still uses 60% of it just makes a
+     smaller void, and a second column inside a 1360px frame is two columns adrift.
+     78rem is where the 1248px shell holds two 560px columns with a 128px gutter between them,
+     which is the widest arrangement in the app. */
+  --prl-container: min(100% - 2 * var(--prl-gutter), 78rem);
+  --prl-container-narrow: min(100% - 2 * var(--prl-gutter), 52rem);
   /* THE MEASURE. `ch` is the advance of "0", which in this stack is 0.60em — noticeably WIDER
      than the average lowercase letter. So `68ch` never meant 68 characters: measured on the
      Learn index at the new body size it produced a 728px column running 86 characters a line,

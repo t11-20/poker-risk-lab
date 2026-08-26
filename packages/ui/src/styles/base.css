@@ -155,14 +155,34 @@ h6 {
   font-weight: var(--prl-weight-bold);
 }
 
+/**
+ * THE LEVELS ARE TOLD APART BY WEIGHT AND SPACE, NOT ONLY BY SIZE.
+ *
+ * `h1` and `h2` are 30px and 24px — a step of 1.25, where they used to be 44 and 28. A 1.25 step
+ * is not, on its own, enough to read as two levels at a glance, and the answer to that is NOT to
+ * put the size back: it is to spend the other two axes a heading has.
+ *
+ * So `h1` stays bold and `h2` drops to semibold, and `h2` gets a large space above it and a small
+ * one below. Those two asymmetries do more work than 14px of size ever did — a reader locates a
+ * subheading by the gap that precedes it long before they compare its cap height with the title's.
+ * `margin-block-start` is set with `:where()` at zero specificity on the first-child case so a
+ * heading that opens a block does not push itself away from the top of it.
+ */
 h1 {
   font-size: var(--prl-type-display-2);
   letter-spacing: var(--prl-tracking-display-2);
 }
 
 h2 {
+  margin-block: var(--prl-space-11) var(--prl-space-5);
   font-size: var(--prl-type-display-3);
+  font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-display-3);
+  line-height: var(--prl-leading-heading);
+}
+
+:where(h2:first-child) {
+  margin-block-start: 0;
 }
 
 /**
@@ -174,10 +194,18 @@ h2 {
  * lede. The ramp now continues down through the reading sizes instead of stopping at display.
  */
 h3 {
+  /* A third of the step above `h2`. The rhythm is what carries the level: a large gap says "new
+     section", a small one says "next part of this section", and a reader reads the two apart
+     without ever comparing the type. Uniform spacing is what makes a long page feel unsorted. */
+  margin-block: var(--prl-space-9) var(--prl-space-4);
   font-size: var(--prl-type-heading);
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-heading);
   line-height: var(--prl-leading-heading);
+}
+
+:where(h3:first-child) {
+  margin-block-start: 0;
 }
 
 h4,

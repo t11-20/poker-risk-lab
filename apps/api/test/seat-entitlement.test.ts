@@ -41,7 +41,8 @@ import { type AppConfig, ConfigError, type EnvRecord, loadConfig } from '../src/
 import { closeDatabase, configureDatabase, type DatabaseHandle } from '../src/db.ts';
 import { AppMetrics } from '../src/observability/metrics.ts';
 import type { ProblemDetail } from '../src/observability/telemetry.ts';
-import type { SeatEntitlement } from '../src/rooms/entitlement.ts';
+import type { Db } from '../src/repositories/sql.ts';
+import { postgresSeatEntitlement, type SeatEntitlement } from '../src/rooms/entitlement.ts';
 import { RoomRegistry, resetRoomRegistryForTests, roomRegistry } from '../src/rooms/registry.ts';
 import { createManualClock } from '../src/rooms/timers.ts';
 import { registerApiRoutes } from '../src/routes/index.ts';
@@ -779,5 +780,53 @@ describe('reading PRL_ENROLMENT_REQUIRED', () => {
         `"${value}" was accepted`,
       );
     }
+  });
+});
+
+/**
+ * The binding a deployment actually runs, and the one thing about it that has no database in it.
+ *
+ * `postgresSeatEntitlement`'s header is explicit: "Nothing is caught here. A database that cannot
+ * answer 'is this person entitled' must not produce a seat, and it must not produce
+ * `enrolment_required` either — that code is a permanent refusal and the client is told never to
+ * retry it (`wsCloseForError` maps 4xx to a permanent close)." Nothing asserted it.
+ *
+ * `enrolments-database.test.ts` drives this binding against a real schema, but only on the paths
+ * where the query SUCCEEDS. The registry-level case in this file — "fails closed but honestly when
+ * the entitlement read itself fails" — drives a fake `SeatEntitlement` that rejects, so it proves
+ * what the REGISTRY does with a rejection and nothing about whether this binding ever produces
+ * one. Measured: wrapping the call in `try { … } catch { return false; }` left the whole
+ * `@prl/api` suite passing 1,001 of 1,001.
+ *
+ * What that ships is a database outage rendered as `enrolment_required` — every learner told their
+ * place has been withdrawn, and told it in a form their client will never retry — instead of
+ * `internal_error` and a 4503 close the client reconnects from. Fail closed on the seat, and
+ * honest about which direction the failure was in; a swallowed error is only the first half.
+ */
+describe('the real seat entitlement, with no database behind it', () => {
+  it('lets a failed read propagate rather than answering "not entitled"', async () => {
+    const failure = new Error('connection terminated unexpectedly');
+    const guard = postgresSeatEntitlement(() => {
+      throw failure;
+    });
+    await assert.rejects(
+      () => guard.entitledToSit('usr_ada'),
+      (error: unknown) => error === failure,
+      'a database that could not answer was reported as a withdrawn enrolment',
+    );
+  });
+
+  it('answers false only when the query itself says nobody is entitled', async () => {
+    // The positive control for the other direction: a binding that rethrew everything, or one that
+    // never answered at all, would satisfy the case above and refuse nothing.
+    const answering = (rows: readonly unknown[]): Db => (() => Promise.resolve([...rows])) as unknown as Db;
+    const nobody = postgresSeatEntitlement(() => answering([]));
+    assert.equal(await nobody.entitledToSit('usr_ada'), false);
+    const somebody = postgresSeatEntitlement(() =>
+      answering([
+        { id: 'enr_1', cohort_id: 'coh_1', cohort_key: 'k', cohort_name: 'n', from: new Date(), until: null },
+      ]),
+    );
+    assert.equal(await somebody.entitledToSit('usr_ada'), true);
   });
 });

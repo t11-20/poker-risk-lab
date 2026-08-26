@@ -222,17 +222,31 @@ function manualTimer(): {
   readonly clearIntervalImpl: typeof clearInterval;
   readonly tick: () => void;
   readonly cleared: () => boolean;
+  /**
+   * The two clears, told apart.
+   *
+   * They used to share one `cleared` flag, and that is how `stops when asked` came to prove
+   * nothing: the case never ticked, so the interval had never been armed, `stop()` reached only
+   * `clearTimeoutFn`, and one flag cannot say which of the two ran. Measured — with `stop()`
+   * reduced to `clearTimeoutFn(first)` alone, dropping both `stopped = true` and the
+   * `clearIntervalFn(interval)`, the whole `@prl/api` suite passed 1,001 of 1,001.
+   */
+  readonly timeoutsCleared: () => number;
+  readonly intervalsCleared: () => number;
+  /** True while an interval callback is armed and would fire on the next `tick()`. */
+  readonly intervalArmed: () => boolean;
 } {
   let pendingTimeout: (() => void) | null = null;
   let interval: (() => void) | null = null;
-  let cleared = false;
+  let timeoutsCleared = 0;
+  let intervalsCleared = 0;
   return {
     setTimeoutImpl: ((fn: () => void) => {
       pendingTimeout = fn;
       return { id: 'fake-timeout' } as unknown as NodeJS.Timeout;
     }) as unknown as typeof setTimeout,
     clearTimeoutImpl: (() => {
-      cleared = true;
+      timeoutsCleared += 1;
       pendingTimeout = null;
     }) as unknown as typeof clearTimeout,
     setIntervalImpl: ((fn: () => void) => {
@@ -240,7 +254,10 @@ function manualTimer(): {
       return { id: 'fake-interval' } as unknown as NodeJS.Timeout;
     }) as unknown as typeof setInterval,
     clearIntervalImpl: (() => {
-      cleared = true;
+      intervalsCleared += 1;
+      // Actually forgotten, not merely counted: a `clearInterval` that leaves the callback armed
+      // could not tell a shutdown that stopped the sweep from one that only said it had.
+      interval = null;
     }) as unknown as typeof clearInterval,
     tick: () => {
       const once = pendingTimeout;
@@ -251,7 +268,10 @@ function manualTimer(): {
       }
       interval?.();
     },
-    cleared: () => cleared,
+    cleared: () => timeoutsCleared + intervalsCleared > 0,
+    timeoutsCleared: () => timeoutsCleared,
+    intervalsCleared: () => intervalsCleared,
+    intervalArmed: () => interval !== null,
   };
 }
 
@@ -627,6 +647,91 @@ describe('the schedule', () => {
       ...timer,
     });
     handle.stop();
-    assert.equal(timer.cleared(), true);
+    assert.equal(timer.timeoutsCleared(), 1, 'the first delay was left armed');
+  });
+
+  /**
+   * The interval, which is the timer a running process actually holds.
+   *
+   * The case above stops a schedule whose first delay has not elapsed, so the only thing there is
+   * to cancel is a `setTimeout`. That is the shutdown of a process that has just booted. Every
+   * OTHER shutdown — the one a deploy performs, every time — stops a schedule that has been
+   * running for hours and whose live timer is the six-hourly `setInterval`. Nothing reached it.
+   *
+   * `server.ts` calls `retention?.stop()` and then closes the pool. An interval left armed against
+   * a closed pool is the race this test's NAME claims to prevent, and it is what the sweep does
+   * every six hours afterwards, forever, in a process that is trying to exit.
+   */
+  it('clears the six-hourly interval too, not only the first delay (NEGATIVE CONTROL)', async () => {
+    const { sql, calls } = fakeSql({ sessions: [0], attempts: [0] });
+    const timer = manualTimer();
+    const handle = startRetentionSweep({
+      sql: () => sql,
+      onSwept: () => undefined,
+      onProblem: () => undefined,
+      ...timer,
+    });
+
+    // The first delay elapses: the boot sweep runs and the recurring interval is armed. This is
+    // the state a process is in for all but the first few minutes of its life.
+    timer.tick();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(timer.intervalArmed(), 'the schedule never armed an interval, so there is nothing to stop');
+    const afterFirst = calls.sessions.length + calls.attempts.length;
+    assert.ok(afterFirst > 0, 'the boot sweep issued no statements, so this asserts over nothing');
+
+    handle.stop();
+    assert.equal(timer.intervalsCleared(), 1, 'stop() left the six-hourly interval armed');
+    assert.ok(!timer.intervalArmed(), 'the interval callback survived the stop');
+
+    // And the consequence, asserted rather than argued: nothing sweeps a pool the shutdown is
+    // about to close.
+    timer.tick();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      calls.sessions.length + calls.attempts.length,
+      afterFirst,
+      'a sweep ran after the schedule was stopped',
+    );
+  });
+
+  /**
+   * `stop()` between arming the first delay and it firing.
+   *
+   * A SIGTERM in the first few minutes of a process's life lands exactly here, and the fake timers
+   * a test injects do not all cancel — which is why `startRetentionSweep` checks `stopped` inside
+   * the timeout callback rather than trusting `clearTimeout`. Without that flag a stopped schedule
+   * arms an interval nobody holds a handle to: `stop()` has already returned, so nothing will ever
+   * clear it.
+   *
+   * Measured: with `if (stopped) return;` deleted, the whole `@prl/api` suite passed 1,001 of
+   * 1,001.
+   */
+  it('a schedule stopped before its first delay never arms an interval (NEGATIVE CONTROL)', async () => {
+    const { sql, calls } = fakeSql({ sessions: [0], attempts: [0] });
+    // A timer whose `clearTimeout` does NOT cancel, which is the case the `stopped` flag exists
+    // for and the one a real fake timer library reproduces.
+    const timer = manualTimer();
+    const uncancellable = {
+      ...timer,
+      clearTimeoutImpl: (() => undefined) as unknown as typeof clearTimeout,
+    };
+    const handle = startRetentionSweep({
+      sql: () => sql,
+      onSwept: () => undefined,
+      onProblem: () => undefined,
+      ...uncancellable,
+    });
+
+    handle.stop();
+    timer.tick();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(
+      calls.sessions.length + calls.attempts.length,
+      0,
+      'a stopped schedule still ran its boot sweep',
+    );
+    assert.ok(!timer.intervalArmed(), 'a stopped schedule armed an interval nothing holds a handle to');
   });
 });

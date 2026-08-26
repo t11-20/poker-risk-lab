@@ -300,3 +300,131 @@ tests:
       - expr: 'ALERTS{alertname="HandCompletionGap"}'
         eval_time: 45m
         exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # SeatReleaseFailing, RoomOwnershipFenced, RoomOwnershipRefused
+  #
+  # `alert-rules.yml` names two of these in its own header — "`SeatReleaseFailing`
+  # below is the model for zero tolerance ... `RoomOwnershipRefused` is the model
+  # for the other shape ... `rule-tests/product-correctness.test.yml` holds both
+  # directions for each" — and until these cases were written this file held
+  # NEITHER. An adversarial review compared the 35 `- alert:` names in the rule
+  # file against every `alertname=` in this directory: nineteen rules had no unit
+  # test, and the two the header points at as the models were among them. The
+  # sentence describing the coverage was itself the only evidence of it.
+  #
+  # `RoomOwnershipFenced` is the one that matters most. Its own description is two
+  # processes authoritative for one room's in-flight hand state, which is the
+  # condition `db/migrations/0005` and `rooms/ownership.ts` exist to make
+  # impossible, and its counter is the one `RoomRegistry.releaseLeaseSoon` calls a
+  # zero-tolerance series. A rule that could not fire for it would be the exact
+  # shape this whole directory was created for.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: one unreleased chair raises a ticket, and a quiet table does not
+    input_series:
+      # Primed from boot, so the step is 0 -> 1 and `increase()` can see the rise.
+      # A series that simply appears at 1 is not a rise, which is the trap
+      # `primeLabels` in `observability/metrics.ts` exists to close.
+      - series: 'prl_seat_release_failures_total'
+        values: '0+0x40 1+0x300'
+    promql_expr_test:
+      # Before the step: silent. Without this half a rule that fired on everything
+      # would satisfy the assertion below.
+      - expr: 'ALERTS{alertname="SeatReleaseFailing"}'
+        eval_time: 5m
+        exp_samples: []
+      # No `for:` on this rule, so the first occurrence is the alert: the step
+      # lands at 10m15s and the very next evaluation raises it.
+      - expr: 'ALERTS{alertname="SeatReleaseFailing"}'
+        eval_time: 11m
+        exp_samples:
+          - labels: 'ALERTS{alertname="SeatReleaseFailing", alertstate="firing", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: a table that never loses a chair raises nothing at all
+    input_series:
+      - series: 'prl_seat_release_failures_total'
+        values: '0+0x341'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="SeatReleaseFailing"}'
+        eval_time: 40m
+        exp_samples: []
+
+  - interval: 15s
+    name: a single fencing pages immediately, because two processes served one room
+    input_series:
+      - series: 'prl_room_fencings_total{reason="fenced"}'
+        values: '0+0x40 1+0x300'
+      - series: 'prl_room_fencings_total{reason="lease_expired"}'
+        values: '0+0x341'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="RoomOwnershipFenced"}'
+        eval_time: 5m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="RoomOwnershipFenced"}'
+        eval_time: 11m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RoomOwnershipFenced", alertstate="firing", severity="page"}'
+            value: 1
+
+  - interval: 15s
+    name: a process that never loses a room pages nobody
+    input_series:
+      - series: 'prl_room_fencings_total{reason="fenced"}'
+        values: '0+0x341'
+      - series: 'prl_room_fencings_total{reason="lease_expired"}'
+        values: '0+0x341'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="RoomOwnershipFenced"}'
+        eval_time: 40m
+        exp_samples: []
+
+  - interval: 15s
+    name: a rolling deploy's burst of refusals must never page
+    input_series:
+      # Six rooms refused while the old container drains, and then it stops. This
+      # is the ordinary shape of every deploy, and the rule's own description
+      # promises it does not page for it: the 5m window is SHORTER than the 10m
+      # `for:`, so a burst that stops cannot stay true long enough.
+      - series: 'prl_room_ownership_refusals_total'
+        values: '0+0x40 6+0x300'
+    promql_expr_test:
+      # Measured across every evaluation point in the hour: the rule reaches
+      # `pending` and never `firing`. Asserted at the two points where a rule with
+      # a shorter `for:` would already have fired, and at the point after the
+      # window has drained.
+      - expr: 'ALERTS{alertname="RoomOwnershipRefused", alertstate="firing"}'
+        eval_time: 14m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="RoomOwnershipRefused", alertstate="firing"}'
+        eval_time: 21m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="RoomOwnershipRefused"}'
+        eval_time: 40m
+        exp_samples: []
+      # …and that it did get as far as `pending`, so the silence above is the
+      # `for:` holding it back rather than the expression never being true. A
+      # rule whose series had been renamed away would pass the three assertions
+      # above having evaluated over nothing.
+      - expr: 'ALERTS{alertname="RoomOwnershipRefused", alertstate="pending"}'
+        eval_time: 11m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RoomOwnershipRefused", alertstate="pending", severity="page"}'
+            value: 1
+
+  - interval: 15s
+    name: refusals that do not stop page, which is the failure the rule names
+    input_series:
+      # The other direction, and the one the rule exists for: a second replica that
+      # keeps taking traffic and keeps being refused every room it does not hold.
+      # One refusal per scrape, indefinitely.
+      - series: 'prl_room_ownership_refusals_total'
+        values: '0+0x40 0+1x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="RoomOwnershipRefused", alertstate="firing"}'
+        eval_time: 25m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RoomOwnershipRefused", alertstate="firing", severity="page"}'
+            value: 1

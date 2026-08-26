@@ -221,6 +221,15 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
     assert.equal(revoked?.revokedReason, 'place transferred');
     assert.equal(revoked?.revokedBy, 'J. Okafor');
     assert.notEqual(revoked?.revokedAt, null);
+    // And the operator's view of the same row. `entitled_now` is computed by `enrolmentSelect`
+    // as a SECOND expression — `revoked_at is null and <window>` — and nothing held it to the
+    // same answer as `entitlementFor`. Measured: with the `e.revoked_at is null` term dropped
+    // from `entitled_now` alone, this file passed 42 of 42; `pnpm run enrolments list` then
+    // counts a withdrawn learner in its "N entitled right now" line, which is the one number an
+    // operator reads to check that a revocation took effect.
+    const [record] = await enrolments.forUser(sql(), userId);
+    assert.equal(record?.entitledNow, false, 'the operator view still calls a revoked place live');
+    assert.notEqual(record?.revokedAt, null, 'the operator view lost the withdrawal itself');
   });
 
   it('does not entitle an EXPIRED enrolment (NEGATIVE CONTROL)', async () => {

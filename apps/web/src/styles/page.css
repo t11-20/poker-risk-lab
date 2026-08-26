@@ -75,7 +75,12 @@
   align-content: start;
   justify-items: start;
   gap: var(--prl-space-4);
-  padding-block: var(--prl-space-13) var(--prl-space-10);
+  /* `--prl-space-11`, not `--prl-space-13`. The note above argues for 80px because 48px "under a
+     92px sticky bar left the eyebrow reading as part of the chrome". That argument was made against
+     a 44px `h1`; the title is 30px now, and the thing that separates it from the chrome is the step
+     between the two, not the absolute distance. 80px of nothing above a 30px title on a 1100px
+     screen is a third of the first fold spent before the page has said anything. */
+  padding-block: var(--prl-space-11) var(--prl-space-9);
   border-block-end: var(--prl-hairline);
 }
 
@@ -104,6 +109,56 @@
   font-size: var(--prl-type-body-lg);
   letter-spacing: var(--prl-tracking-heading);
   line-height: var(--prl-leading-body);
+}
+
+/* ==========================================================================================
+   1a. THE OPENER'S SECOND COLUMN
+   ==========================================================================================
+   Measured at 1440x1100: the shell is 1248px wide and this block used a single column of it — the
+   title capped at `--prl-measure-display` (22ch, ~400px) and the standfirst at `--prl-measure`
+   (60ch, ~576px), with the remaining ~670px empty from the header rule to the hairline under the
+   block. That is the "narrow column inside a wide frame" the whole pass is about, and it is not
+   only a cosmetic cost: it is also ~90px of height, because a standfirst stacked under a title
+   pushes everything the page is for further down.
+
+   The fix is the one `play.css` section 1 already made for `.prl-play__head` and `legends.css`
+   made for its opener — the standfirst takes a column of its own beside the title, capped at the
+   same measure it had underneath, so the line length does not change and the height comes back.
+   This is the third copy of that layout, which is why it is HERE, in the file both route groups
+   already import, rather than a fourth copy in `lab.css`.
+
+   `grid-row: 1 / span 6` and not `1 / -1`: with no explicit rows declared, `-1` resolves to the
+   end of the EXPLICIT grid, which is line 1, and the standfirst would stretch the eyebrow's row to
+   its own height. Spanning past the end of the content spans everything and stretches nothing.
+   The same trap is written up at length in `legends.css` section 1; this is the same layout.
+
+   1000px is the width at which the app gains its wide layout, and it is one number used by all
+   three openers that have one — this block, `.prl-learn-page__head`, and the home hero and section
+   heads. At 1000px the shell is 920px and a half of it is 436px, which at the 16px reading size is
+   about 60 characters: comfortably inside the measure, and well past the ~46 that the note on the
+   home hero identified as the floor for a readable second column. (That note measured 30 characters
+   at 900px against 17px type; the same column is wider in characters now that the type is smaller,
+   which is what moved the threshold down.) Below 1000px every one of them stacks.
+   ========================================================================================== */
+
+@media (min-width: 1000px) {
+  .prl-page-head {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--prl-space-11);
+  }
+
+  .prl-page-head > * {
+    grid-column: 1;
+  }
+
+  .prl-page-head__standfirst {
+    grid-column: 2;
+    grid-row: 1 / span 6;
+    align-self: start;
+    /* It is level with the title rather than with the eyebrow, and the eyebrow is a caption on the
+       title rather than a line of its own — so the standfirst starts one eyebrow-line down. */
+    margin-block-start: var(--prl-space-8);
+  }
 }
 
 /** The trail back up. Quiet, and never the only way out of a page — see `.prl-page-nav`. */

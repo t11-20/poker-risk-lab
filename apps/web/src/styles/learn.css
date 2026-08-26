@@ -204,6 +204,84 @@
 }
 
 /* ==========================================================================================
+   1a. THE CURRICULUM OPENER'S SECOND COLUMN
+   ==========================================================================================
+   Measured at 1440x1100: this opener was the worst void in the app. Three lead paragraphs capped
+   at the 52ch measure and a three-cell figures row, all stacked in a 640px column, with the entire
+   right half of a 1360px shell empty from the header rule to the fixture notice 700px below it.
+
+   The three figures are what belong beside the prose, and the reason is editorial rather than
+   geometric: "17 lessons, 10 topics, 179 minutes end to end" is the answer to the question the
+   three paragraphs are answering at length. A reader deciding whether to start the curriculum
+   either reads the argument or checks the size of it, and putting the two side by side lets them
+   do whichever they came to do. Stacked, the figures were the fourth thing after the third
+   paragraph, which is where a reader who wanted them had already stopped looking.
+
+   `row-gap: 0` with margins doing the vertical spacing is not a style choice — it is the trap
+   `play.css` section 1 and `legends.css` section 1 both document. `grid-row: 1 / span 8` spans past
+   the end of the content so the figures stretch nothing, but the implicit rows it creates beyond
+   the last real one are still rows, and a `row-gap` would pay for every one of them.
+   1000px is the app-wide threshold for a second column — see the note on `.prl-page-head` in
+   `page.css`, which carries the arithmetic. One number for all three openers.
+   ========================================================================================== */
+
+@media (min-width: 1000px) {
+  /**
+   * The page comes in to exactly two reading columns.
+   *
+   * `--prl-container` is 1248px and this page's widest real arrangement is two of them: the opener
+   * below, and the two-column lesson grid at 1280px. Two measures plus the gutter between them is
+   * 1048px, so 200px of the shell was frame around nothing — and a frame around nothing is what
+   * makes every block inside it look like it stopped short. Composed from the tokens rather than
+   * typed as a number, the same way `.prl-learn-lesson` below computes its own width from rail +
+   * gutter + measure.
+   */
+  .prl-learn-page {
+    width: min(var(--prl-container), calc(2 * var(--prl-measure) + var(--prl-space-11)));
+  }
+
+  .prl-learn-page__head {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: var(--prl-space-11);
+    row-gap: var(--prl-space-0);
+  }
+
+  .prl-learn-page__head > * {
+    grid-column: 1;
+    margin-block-end: var(--prl-space-5);
+  }
+
+  .prl-learn-page__head > :last-child {
+    margin-block-end: var(--prl-space-0);
+  }
+
+  /**
+   * The figures sit level with the title, not with the eyebrow: the eyebrow is a caption ON the
+   * title rather than a line above it, and a stat block level with a caption reads as a fourth
+   * navigation item.
+   */
+  .prl-learn-page__figures {
+    grid-column: 2;
+    grid-row: 1 / span 8;
+    /* Centred against the three paragraphs rather than pinned to the top of them. Pinned, the
+       column below it is a 400px void; centred, the same emptiness is split above and below a
+       block that is obviously a sidebar, which is the difference between a layout and a gap. */
+    align-self: center;
+    /* One column, not three. `.prl-metric-row` fits three cells to whatever width it is given, and
+       given half of this opener that is 166px a cell — narrow enough that "READING, END TO END"
+       breaks across two lines with "END" alone on the second. Stacked, each label has the whole
+       column and none of them wrap. */
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--prl-space-7);
+    /* The rule is what says "sidebar". Without it three figures beside three paragraphs read as a
+       block that was left behind rather than one that was placed. */
+    padding-inline-start: var(--prl-space-8);
+    border-inline-start: var(--prl-hairline);
+    margin-block: var(--prl-space-0);
+  }
+}
+
+/* ==========================================================================================
    2. CURRICULUM INDEX
    ========================================================================================== */
 
@@ -521,12 +599,38 @@
    sequence out of step with the page (WCAG 1.3.2).
    ========================================================================================== */
 
+/**
+ * THE ORPHANED "To,".
+ *
+ * Measured at 1440x1100 on `/learn/pot-odds`, this line broke as
+ *
+ *     ASSUMES YOU HAVE READ Actions, and What Each One Commits You
+ *     To, Outs: Clean, Dirty and Imaginary
+ *
+ * — two words of a lesson title stranded on their own line, with the separator comma from the NEXT
+ * item pushed up against them, so the line read as if "To" were a prerequisite called To.
+ *
+ * The cause was `max-width: var(--prl-measure)`, which is the READING measure: the ~75-character
+ * cap that stops the eye losing the line beginning on the return sweep. There is no return sweep
+ * here. This is a metadata row — a label and a comma-separated list of links, scanned rather than
+ * read — and capping it at a prose measure is applying a rule to a case its argument does not
+ * cover. Uncapped it sets in about 700px inside an 880px reading page and does not wrap at all.
+ *
+ * `text-wrap: pretty` is the insurance for the case where it does: a fourth prerequisite, or a
+ * narrow window. It is the property whose entire job is to stop a short last line, and unlike
+ * `balance` it does not reflow a paragraph — on a block that fits on one line it costs nothing.
+ */
 .prl-learn-lesson__prereq {
   display: block;
+  /* `none`, not "no declaration": this is a `<p>`, and `base.css` caps every bare paragraph at the
+     measure. Dropping the declaration here just hands the cap back to the element rule, which is
+     the rule the paragraph above is arguing against. */
+  max-width: none;
   margin: 0;
-  max-width: var(--prl-measure);
   color: var(--prl-text-muted);
   font-size: var(--prl-type-body-sm);
+  line-height: var(--prl-leading-body);
+  text-wrap: pretty;
 }
 
 .prl-learn-lesson__prereq .prl-label {
@@ -626,19 +730,27 @@
  * block for a glossary popover, which is how the popover spans the reading column instead of being
  * pinned to a word near the right edge and clipped. See `GlossaryTerm.tsx`.
  */
+/* `--prl-leading-prose`, not `--prl-leading-body`.
+   The body token came down from 1.65 to 1.5 across the app, because 1.65 is a long-form-reading
+   value and almost nothing in this product is long-form reading — it was inflating every table
+   cell, chip and card by a sixth. A lesson IS long-form reading: one column, read top to bottom,
+   and this is the surface the looser setting was always for. It is the only place in the app that
+   spends it. */
 .prl-learn-prose {
   position: relative;
   margin: 0;
   max-width: var(--prl-measure);
-  line-height: var(--prl-leading-body);
+  line-height: var(--prl-leading-prose);
 }
 
+/* The same leading as the paragraphs it sits between — a list inside a lesson is prose. */
 .prl-learn-lesson__list {
   display: grid;
   gap: var(--prl-space-4);
   margin: 0;
   padding-inline-start: var(--prl-space-8);
   max-width: var(--prl-measure);
+  line-height: var(--prl-leading-prose);
 }
 
 .prl-learn-lesson__list .prl-learn-prose {

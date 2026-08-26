@@ -422,3 +422,68 @@ describe('a ban is recorded once per caller per window, not once per refused req
     );
   });
 });
+
+/**
+ * The other half of "once per caller PER WINDOW", which nothing reached.
+ *
+ * The two cases above prove `once per caller`. Neither lets a window elapse, so the expiry arm of
+ * `bansRecordedUntil` — the `now + config.rateLimit.globalWindowMs` that makes the entry temporary
+ * — was never exercised, and the describe block's own name promised it.
+ *
+ * Measured: with `bansRecordedUntil.set(key, now + config.rateLimit.globalWindowMs)` replaced by
+ * `bansRecordedUntil.set(key, Number.POSITIVE_INFINITY)`, the whole `@prl/api` suite passed 1,001
+ * of 1,001, three runs out of three. What that ships is a caller who is recorded ONCE and then
+ * never again for the life of the process: the `warn`, the `prl.audit_log` row and the
+ * `prl_rate_limit_events_total{kind="banned"}` increment all go silent for every repeat offender,
+ * and the `RateLimitBans` rule — `sum(increase(...[15m])) > 0` — stops being able to fire for a
+ * flood that has been going on since before the last deploy. The failure direction is the wrong
+ * one: the longer an attacker persists, the quieter the alerting gets.
+ *
+ * A one-second window, which is the floor `config.ts` allows, so the wait is a wait and not a
+ * sleep. The window is deliberately the limiter's own window rather than a separate knob: they are
+ * the same number in production and the deduplication is defined in terms of it.
+ */
+describe('a caller who is still flooding in the next window is recorded again', () => {
+  const WINDOW_MS = 1_000;
+  let built: Built;
+
+  before(async () => {
+    built = await buildIsolated({ RATE_LIMIT_BAN_AFTER: '0', RATE_LIMIT_WINDOW_MS: String(WINDOW_MS) });
+  });
+  after(async () => {
+    await built?.app.close();
+  });
+
+  it('records a second ban for the same key once the window has rolled', async () => {
+    const cookie = bucket(built.app, 'persistent-flood');
+    const flood = async (): Promise<number[]> =>
+      (
+        await repeat(built.app, GLOBAL_MAX + 3, () => ({
+          method: 'GET',
+          url: '/api/v1/ready',
+          headers: { cookie },
+        }))
+      ).statuses;
+
+    const before = bannedCount(built.metrics);
+    const first = await flood();
+    assert.ok(first.includes(429), `the first flood must actually be refused: ${first}`);
+    assert.equal(bannedCount(built.metrics) - before, 1, 'the first window did not record exactly one ban');
+
+    // The window rolls. Nothing about the caller has changed: it is the same key, still flooding.
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, WINDOW_MS + 150);
+      timer.unref();
+    });
+
+    const second = await flood();
+    assert.ok(second.includes(429), `the second flood must actually be refused: ${second}`);
+    assert.equal(
+      bannedCount(built.metrics) - before,
+      2,
+      'the same caller flooding in a later window was never recorded again: the deduplication ' +
+        'entry is permanent rather than per-window, so a persistent attacker goes quiet in the ' +
+        'log, the audit table and the metric that RateLimitBans reads',
+    );
+  });
+});
