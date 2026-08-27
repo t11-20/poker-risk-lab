@@ -545,8 +545,12 @@ under a real network partition.
    and is routed to a **third** receiver — neither the pager nor the ticket queue — whose
    destination is `PRL_ALERT_HEARTBEAT_WEBHOOK_URL`, a snitch outside this deployment. Its
    *silence* is the alarm, which makes it the only report here that does not travel the channel
-   that broke. `alerts:verify` check 7 proves the whole emitting half against the running overlay,
-   and the run below is **33 of 33 checks, exit 0**: the rule fires; **17 pings** arrive on the
+   that broke. `alerts:verify` check 7 proves the whole emitting half against the running overlay.
+   The run described below is the one taken against the SUPERSEDED image pair, and it is kept
+   because every measurement in this paragraph comes from it: **33 of 33 checks, exit 0**. The
+   re-run of 2026-08-27 against the deployed pair is **35 of 35** with the same shape — 15 pings,
+   gaps of 20-25 s, the silence detected past the 60 s deadline, the heartbeat resuming 19 s after
+   the restart. In the earlier run: the rule fires; **17 pings** arrive on the
    heartbeat path with measured gaps of 20–25 s against a 60 s deadline (20 s repeat rounded up to
    the next 5 s flush, which is why `group_interval` is deliberately not equal to
    `repeat_interval`); **not one** of them reaches a human tier over either transport; and then —
