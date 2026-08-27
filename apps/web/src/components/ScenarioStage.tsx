@@ -216,9 +216,31 @@ function Verdict({
             {`${formatSignedUnits(judgement.bestEv, { decimals: 1 })}${best}`}
           </dd>
         </div>
+        {/*
+          The benchmark, and the distance from it.
+
+          Without these two rows the panel showed the chosen EV, the best row and the tolerance —
+          three numbers whose only natural reading is "consistent when the best row minus mine fits
+          inside the tolerance". That is not the rule. The rule asks whether the action beats
+          FOLDING, so a learner could see +20.6 against a best row of +51.4, a tolerance of 10, and
+          the words "consistent with the analysis", with no way to tell that the panel was right.
+          `@prl/poker-math` publishes `measuredBestEv` and `shortfallUnits` precisely so a caller
+          can show the reader the number the verdict used rather than a different one; this one
+          dropped both.
+        */}
         <div className="prl-stage__ev-row">
-          <dt className="prl-label">Called consistent within</dt>
-          <dd className="prl-stage__ev-value">{`${judgement.toleranceUnits} units`}</dd>
+          <dt className="prl-label">Judged against</dt>
+          <dd className="prl-stage__ev-value">
+            {judgement.benchmarkEv === 0
+              ? 'folding, worth 0'
+              : `${formatSignedUnits(judgement.benchmarkEv, { decimals: 1 })}, the best row that assumes no folds`}
+          </dd>
+        </div>
+        <div className="prl-stage__ev-row">
+          <dt className="prl-label">Shortfall against that</dt>
+          <dd className="prl-stage__ev-value">
+            {`${formatSignedUnits(-judgement.shortfallUnits, { decimals: 1 })}, against a ${judgement.toleranceUnits} unit allowance`}
+          </dd>
         </div>
       </dl>
     </>
