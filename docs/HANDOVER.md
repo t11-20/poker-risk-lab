@@ -159,8 +159,18 @@ Reviewing it the way it was written means distrusting green results. Specificall
   (fixed). Comments claiming coverage without naming a test: 67 candidates, all but four inside the
   test that does the asserting; all four source-file claims verified against the test that backs
   them. The one that was unbacked — `audit.ts` promising a pairing test that did not exist — was
-  found and closed on 2026-08-27. **The rot was in the review archive, not the code**: see the
-  indexes now in `docs/audit/` and `docs/reviews/`.
+  found and closed on 2026-08-27. A fourth sweep looked for tests that cannot fail: **0 skipped, 0
+  `.todo`, 0 tautological assertions, and 0 of 3,535 test bodies without an assertion** — the 42
+  that a naive scan flags all assert through a local helper (`closeTo`, `assertClose`,
+  `rejectsWith`). **The rot was in the review archive, not the code**: see the indexes now in
+  `docs/audit/` and `docs/reviews/`.
+- **My checkers were wrong more often than the codebase was.** Across those sweeps I wrote five
+  scanners and four had bugs — a resolver missing the package root, a walk that skipped
+  `apps/api/test` entirely, `^\s*` matching newlines under `re.M`, and an assert pattern that could
+  not see `assert.deepEqual` because it demanded a `(` straight after the word. Every one made the
+  code look worse than it is. If you write a scanner here, make it fail loudly on an empty or
+  absurd result before you believe a headline number from it — mine each said something alarming
+  and each was my error.
 - **Every new guard has a negative control**, and each commit message states the measurement. If a
   control is not demonstrated by *running* it, treat the guard as decoration — that is this
   repository's own rule and it caught several of these.
