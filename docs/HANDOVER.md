@@ -376,6 +376,30 @@ The ones worth knowing, because they say where to look next:
    the Coach from the bet level, so a limped pot at the big blind's option is a "bet" on the button
    and a "raise" in the table beside it.
 
+**The unjoined-constant sweep, and its result.** 141 comments across `scripts/`, `apps/` and
+`packages/` claim that a value agrees with something in another file. They were checked for the
+shape that bites: a literal, a comment asserting agreement, and nothing importing the original.
+**One genuine instance**, now fixed — the samples-and-seed pair existed as four literals across
+`scenario-analysis.ts`, `routes/content.ts`, `regenerate-web-fixtures.mjs` and
+`web-fixture-figures.test.ts`, two of them under comments asserting the agreement, and one of those
+two was a guard. `@prl/content` owns the pair now.
+
+The rest came back clean, and *how* they are clean is the useful part, because it is the pattern to
+copy:
+
+- **Joined by a test that reads the other file.** `HSTS_EXPECTED` in `staging.mjs` looks like an
+  unjoined literal and is not — `staging.test.mjs` parses `deploy/staging/nginx.conf` and asserts
+  exactly one `add_header` carrying that value. Four test files read `.env.example` the same way.
+- **Argued, and honest about being manual.** `db-wait.mjs` says "if you change one, change the
+  other; there is no third place these live", and `reliability-drills.test.mjs` writes its list out
+  rather than importing it *so that it cannot shrink in step with the thing it checks* — a
+  deliberate anti-join, which is a different thing from an accident.
+
+`config.test.ts` records what this class costs when it does bite: the API's port fallback said 8080
+while `.env.example`, `docker-compose.yml`, the README, the runbook and `apps/web/src/lib/api.ts`
+all said 3001, so the documented dev flow started the API where the browser was not looking. Found,
+fixed, and the incident is in the test.
+
 **Where a reader still beats a gate.** Nothing computes a definition, a strategic claim, or the
 preconditions a rule of thumb leaves unstated. Every defect above was found by reading with the
 engine open beside the prose, and that is the method to repeat — not another scanner.
