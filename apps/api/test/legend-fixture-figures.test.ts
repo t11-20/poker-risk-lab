@@ -236,6 +236,46 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
     );
   });
 
+  it('carries the SAME trait numbers the served profiles do (REGRESSION)', () => {
+    // The fixture does not derive these — it copies them. `OLD_SCHOOL_PRESSURE_TRAITS` in
+    // `apps/web/src/fixtures/legends.ts` is `old-school-pressure`'s trait block from
+    // `packages/poker-ai/src/profiles.ts`, digit for digit, and eleven more like it: measured
+    // 2026-08-27, 110 twelve-line blocks are byte-identical between the two files.
+    //
+    // Nothing joined the numbers. The check above pairs the two rosters by `id` and stops there, so
+    // tuning a profile — raising `pressureTendency` from 0.8, widening a `vpip` — left `/legends`
+    // describing the old one. A learner would read a radar chart and a trait description for a
+    // style the bot no longer plays, which is the same defect as the Coach sentence that priced a
+    // threshold that did not exist: the page teaches something the product does not do.
+    //
+    // Compared over the keys the FIXTURE declares rather than the profile's full set: `makeTraits`
+    // fills unspecified axes from `DEFAULT_TRAITS`, so a profile always has every key and the
+    // fixture is the side that can silently omit one. The count is asserted so that a fixture which
+    // stopped declaring traits could not pass this by comparing nothing.
+    let compared = 0;
+    for (const card of PROFILE_CARDS) {
+      const profile = PROFILES.find((candidate) => candidate.naming.id === card.id);
+      assert.ok(profile !== undefined, `${card.id} is in the fixture and not in PROFILES`);
+      const keys = Object.keys(card.traits) as (keyof typeof profile.traits)[];
+      assert.ok(keys.length >= 12, `${card.id} declares only ${keys.length} traits in the fixture`);
+      for (const key of keys) {
+        assert.equal(
+          card.traits[key as keyof typeof card.traits],
+          profile.traits[key],
+          `${card.id}.${String(key)}: the fixture says ` +
+            `${String(card.traits[key as keyof typeof card.traits])} and @prl/poker-ai says ` +
+            `${String(profile.traits[key])}`,
+        );
+        compared += 1;
+      }
+    }
+    assert.ok(
+      compared >= 150,
+      `only ${compared} trait value(s) were compared across ${PROFILE_CARDS.length} profile(s); ` +
+        'a pass over an empty comparison is the failure this assertion rules out',
+    );
+  });
+
   it('never claims to have observed anything', () => {
     // A fixture has observed nothing by definition. This shipped as a `ProfileObservedStats` of 128
     // invented hands under the caption "Measured over 128 hands of your own play".
