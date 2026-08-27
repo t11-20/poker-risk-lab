@@ -67,8 +67,21 @@ and fails outright if a keyless record is committed while it is null.
 | Step | Command | Pass looks like |
 | --- | --- | --- |
 | 3.1 | `pnpm run staging up` | migrations applied, strict smoke passes, all containers healthy |
-| 3.2 | `pnpm run test:drills` | every reliability drill passes |
+| 3.2 | `pnpm run test:drills` | 16 of 16. **This does not test the deployment**, despite sitting in this section — see below |
 | 3.3 | `pnpm run backup create` then `backup verify --deep` | a real scratch restore, then dropped |
+
+**3.2 is in this section and is not a measurement of what you just deployed.** The drills break ONE
+LOCAL API process against the development database over loopback — the script says so in its own
+output (`measuredAgainst: 'one local API process, loopback, a development database; NOT a
+deployment'`). They prove named failures are handled: a database that goes away mid-hand, an OIDC
+provider that refuses or black-holes, a disk that fills. They prove nothing about these images, this
+network, or this proxy. What covers the deployment is 3.1's strict smoke over TLS and §4's alert
+verification, both of which drive the real containers.
+
+It is kept here because the order is right — drill the failure handling around the time you deploy —
+but an operator who reads "every reliability drill passes" under a heading called *The deployment*
+and concludes the deployment was drilled has been misled, and this checklist used to do exactly
+that.
 
 ## 4. Alerting (machine, then PERSON)
 

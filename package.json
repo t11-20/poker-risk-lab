@@ -35,7 +35,7 @@
     "test:age-gate": "node scripts/age-gate-audit.mjs",
     "test:layout": "node scripts/text-layout-audit.mjs --start",
     "test:load": "node scripts/load-test.mjs",
-    "test:drills": "node scripts/reliability-drills.mjs",
+    "test:drills": "node --env-file-if-exists=.env scripts/reliability-drills.mjs",
     "test:all": "pnpm run test && pnpm run test:exhaustive && pnpm run test:simulation && pnpm run test:a11y && pnpm run test:ax && pnpm run test:keyboard && pnpm run test:layout",
     "fixtures:regenerate": "node scripts/regenerate-web-fixtures.mjs",
     "fixtures:check": "node scripts/regenerate-web-fixtures.mjs --check",
