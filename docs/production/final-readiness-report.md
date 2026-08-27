@@ -68,12 +68,13 @@
 > `7e861ae0a9f1`: **`pnpm run verify` passes 15 of the 15 that existed then, 3,586 tests, 0
 > failures**.
 >
-> **`verify` is sixteen gates today, and the closing run of 2026-08-27 was at `cb1fcca`:
-> 15 of 16 PASS, 3,694 tests, 0 test failures.** The single red is `security:audit` →
-> `release-image-signatures`, the expected-red described at the top of this document, which clears
-> at go-live step 2.3. Every other gate passed, and `security:audit`'s own fifteen were 14 pass / 1
-> fail — that one. (An earlier run at `27014bb2`, the commit that wired `test:keyboard` in, was
-> 15 of 16 with 3,643 tests; the difference is the guards added after it.) `test:keyboard` — real keyboard journeys in real Chrome — was added on 2026-08-26. It
+> **`verify` is sixteen gates, and on 2026-08-27 all sixteen passed: `=== verify: every gate
+> passed ===`, exit 0, 3,694 tests, 0 failures.** `security:audit`'s own fifteen all pass with it,
+> `release-image-signatures` included — the run before this one was 15 of 16 on exactly that gate,
+> because the images had been rebuilt for CVE-2026-14456 and not yet re-signed. Signing and
+> deploying closed it. (An earlier run at `27014bb2` was 15 of 16 with 3,643 tests; the difference
+> to 3,694 is the guards added after it — the taught figures, the session choke point, the
+> pinned-action advisories.) `test:keyboard` — real keyboard journeys in real Chrome — was added on 2026-08-26. It
 > was not a new check: it existed, it was thorough, and it ran NOWHERE, because it had no `--start`
 > and so needed a person to bring up a web server and an API by hand first. Measured on its own at
 > that commit: **146 checks, 0 failures**, over six consecutive runs, 56-59s each.
