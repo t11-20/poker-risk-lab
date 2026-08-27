@@ -1290,3 +1290,84 @@ test('a raise states the defence frequency for a RAISE, not for a bet of the sam
     );
   }
 });
+
+test('the price sentence is chosen, not appended — a hero who misses the price is told so (REGRESSION)', () => {
+  // The sentence used to be one template with only its final word conditional:
+  // "You clear that with X% equity, a Y point ${ok ? 'surplus' : 'shortfall'}". Neither the lead
+  // clause nor the sign of Y was conditional, so a hero with no equity at all read
+  //
+  //     "You clear that with 0.0% equity, a -24.3 point shortfall."
+  //
+  // Twelve of the thirty-six Lab scenarios rendered that, and every gate was green: nothing
+  // asserted on the prose the panel prints, only on the numbers behind it.
+  const board = parseCards('Ks 9h 4c 2d 8s');
+  const base = {
+    board,
+    street: 'river' as const,
+    pot: 220,
+    contestablePot: 220,
+    toCall: 80,
+    heroCommittedThisStreet: 0,
+    heroStack: 300,
+    opponentStacks: [300],
+    bigBlind: 10,
+  };
+  const missing: CoachInput = {
+    ...base,
+    heroCards: parseCards('7c 7d'),
+    opponents: [{ label: 'the button', range: exactRange(parseCards('Kh Qd')) }],
+  };
+  const clearing: CoachInput = {
+    ...base,
+    heroCards: parseCards('Kh Qd'),
+    opponents: [{ label: 'the button', range: exactRange(parseCards('7c 7d')) }],
+  };
+
+  const missed = buildCoachReport(missing).potOdds;
+  assert.ok(
+    missed.equitySurplus < 0,
+    'the fixture must actually be a losing price for this to test anything',
+  );
+  assert.ok(
+    !missed.explanation.includes('You clear that'),
+    `a hero who misses the price was told they clear it: "${missed.explanation}"`,
+  );
+  assert.match(missed.explanation, /do not clear that/u);
+  assert.ok(
+    !/-\d/u.test(missed.explanation),
+    `the shortfall is stated as a negative number: "${missed.explanation}"`,
+  );
+
+  const cleared = buildCoachReport(clearing).potOdds;
+  assert.ok(cleared.equitySurplus > 0, 'the fixture must actually clear the price');
+  assert.match(cleared.explanation, /You clear that/u);
+  assert.match(cleared.explanation, /surplus/u);
+});
+
+test('"loses more often than it wins" is keyed to hero equity, not to the price (REGRESSION)', () => {
+  // Keyed to `equitySurplus > 0` alone this note fired on 23 of the 36 Lab scenarios and was false
+  // on 15, including one whose own reasoning reads "hero's hand wins this showdown outright".
+  // A profitable call CAN lose more often than it wins — only when hero is under 50%.
+  const winning: CoachInput = {
+    heroCards: parseCards('Kh Qd'),
+    board: parseCards('Ks 9h 4c 2d 8s'),
+    street: 'river',
+    opponents: [{ label: 'the button', range: exactRange(parseCards('7c 7d')) }],
+    pot: 220,
+    contestablePot: 220,
+    toCall: 80,
+    heroCommittedThisStreet: 0,
+    heroStack: 300,
+    opponentStacks: [300],
+    bigBlind: 10,
+  };
+  const report = buildCoachReport(winning);
+  assert.ok(report.equity.heroEquity > 0.5, 'the fixture must have hero ahead for this to test anything');
+  assert.ok(report.potOdds.equitySurplus > 0, 'and the call must be profitable, which is the old trigger');
+  const claim = report.teachingNotes.find((note) => note.includes('loses more often than it wins'));
+  assert.equal(
+    claim,
+    undefined,
+    `a hero ahead at ${(report.equity.heroEquity * 100).toFixed(1)}% was told the call "loses more often than it wins"`,
+  );
+});

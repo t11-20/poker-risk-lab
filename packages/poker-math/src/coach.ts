@@ -755,6 +755,28 @@ function sidePotNote(pot: number, contestablePot: number, toCall: number): strin
  * different things. `CoachReport.potTotal` carries the whole middle beside it, so a caller
  * that wants to show both has both and neither has to be re-derived.
  */
+/**
+ * Whether hero's equity beats the price, said in the right direction.
+ *
+ * WHY THIS IS A FUNCTION. It used to be one template with only the last word conditional:
+ * "You clear that with X% equity, a Y point ${ok ? 'surplus' : 'shortfall'}". The lead clause was
+ * not conditional and neither was the sign of Y, so a hero who missed the price read
+ *
+ *     "You clear that with 0.0% equity, a -24.3 point shortfall."
+ *
+ * — the opposite of the fact, followed by a negated negative. Twelve of the thirty-six Lab
+ * scenarios rendered it, `fl-top-pair-weak-kicker-river` among them, where hero has no equity at
+ * all. A verdict word appended to a sentence that has already asserted the verdict cannot fix it;
+ * the sentence has to be chosen, so it is chosen here.
+ */
+function describePriceGap(heroEquity: number, breakEvenEquity: number): string {
+  const points = (Math.abs(heroEquity - breakEvenEquity) * 100).toFixed(1);
+  const equity = (heroEquity * 100).toFixed(1);
+  return heroEquity >= breakEvenEquity
+    ? `You clear that with ${equity}% equity, a ${points} point surplus.`
+    : `You do not clear that: ${equity}% equity is ${points} points short of it.`;
+}
+
 function buildPotOddsSummary(
   pot: number,
   contestablePot: number,
@@ -771,9 +793,7 @@ function buildPotOddsSummary(
     explanation:
       toCall === 0
         ? 'Nothing to call, so there is no price to beat — checking keeps you in for free.'
-        : `${odds.explanation} You clear that with ${(heroEquity * 100).toFixed(1)}% equity, ` +
-          `a ${((heroEquity - odds.breakEvenEquity) * 100).toFixed(1)} point ` +
-          `${heroEquity >= odds.breakEvenEquity ? 'surplus' : 'shortfall'}.` +
+        : `${odds.explanation} ${describePriceGap(heroEquity, odds.breakEvenEquity)}` +
           sidePotNote(pot, contestablePot, toCall),
   };
 }
@@ -1438,9 +1458,15 @@ function buildTeachingNotes(
       `At an SPR of ${stacks.spr.toFixed(1)} there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests.`,
     );
   }
-  if (potOddsSummary.equitySurplus > 0 && potOddsSummary.toCall > 0) {
+  // Keyed to hero's equity, which is what the sentence is ABOUT. Keyed instead to the break-even
+  // point — `equitySurplus > 0` alone — it fired on 23 of the 36 Lab scenarios and was false on 15
+  // of them, including `fl-small-straight-beats-trips`, whose own reasoning says "hero's hand wins
+  // this showdown outright, not partially" and which then told the reader the call "still loses
+  // more often than it wins". A profitable call CAN lose more often than it wins; it does so only
+  // when hero is under 50%, and that is the spot the note is worth making.
+  if (potOddsSummary.equitySurplus > 0 && potOddsSummary.toCall > 0 && equitySummary.heroEquity < 0.5) {
     notes.push(
-      'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
+      'A profitable call can still lose more often than it wins: you are under 50% here and the price is lower than that. Losing this hand would not make the call wrong.',
     );
   }
   return notes;

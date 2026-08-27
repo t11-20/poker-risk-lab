@@ -616,7 +616,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     teachingNotes: [
       'The pot is laying you 3.0 to 1, so you need 25.0% to break even on a call. That number depends only on the price — not on your cards.',
       'The rule of 2 and 4 gives 36% on your 9 cards of clean outs, understating the exact chance of hitting one of them by 0.4 points. Your equity here is 38.4%, which is a different question again: hitting is not the same as winning.',
-      'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
+      'A profitable call can still lose more often than it wins: you are under 50% here and the price is lower than that. Losing this hand would not make the call wrong.',
     ],
   },
   'turn-gutshot-price': {
@@ -664,7 +664,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       oddsRatio: 3,
       equitySurplus: -0.1590909090909091,
       explanation:
-        "Hero risks 100 to win the 300 already in the middle, a price of 3 to 1. Calling breaks even at 100 / (300 + 100) = 25.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 300 is what is in the middle before hero's own 100 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 9.1% equity, a -15.9 point shortfall.",
+        "Hero risks 100 to win the 300 already in the middle, a price of 3 to 1. Calling breaks even at 100 / (300 + 100) = 25.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 300 is what is in the middle before hero's own 100 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 9.1% equity is 15.9 points short of it.",
     },
     candidates: [
       {
@@ -796,7 +796,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       oddsRatio: 1.5,
       equitySurplus: -0.014912499999999995,
       explanation:
-        "Hero risks 60 to win the 90 already in the middle, a price of 1.50 to 1. Calling breaks even at 60 / (90 + 60) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 90 is what is in the middle before hero's own 60 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 38.5% equity, a -1.5 point shortfall.",
+        "Hero risks 60 to win the 90 already in the middle, a price of 1.50 to 1. Calling breaks even at 60 / (90 + 60) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 90 is what is in the middle before hero's own 60 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 38.5% equity is 1.5 points short of it.",
     },
     candidates: [
       {
@@ -1109,7 +1109,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       oddsRatio: 1.6666666666666667,
       equitySurplus: -0.13175675675675674,
       explanation:
-        "Hero risks 540 to win the 900 already in the middle, a price of 1.67 to 1. Calling breaks even at 540 / (900 + 540) = 37.5% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 900 is what is in the middle before hero's own 540 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 24.3% equity, a -13.2 point shortfall.",
+        "Hero risks 540 to win the 900 already in the middle, a price of 1.67 to 1. Calling breaks even at 540 / (900 + 540) = 37.5% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 900 is what is in the middle before hero's own 540 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 24.3% equity is 13.2 points short of it.",
     },
     candidates: [
       {
@@ -1319,7 +1319,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     teachingNotes: [
       'The pot is laying you 3.8 to 1, so you need 21.1% to break even on a call. That number depends only on the price — not on your cards.',
-      'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
+      'A profitable call can still lose more often than it wins: you are under 50% here and the price is lower than that. Losing this hand would not make the call wrong.',
     ],
   },
 };

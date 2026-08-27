@@ -283,7 +283,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           oddsRatio: 1.5,
           equitySurplus: -0.12311666666666654,
           explanation:
-            "Hero risks 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before hero's own 20 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 27.7% equity, a -12.3 point shortfall.",
+            "Hero risks 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before hero's own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.7% equity is 12.3 points short of it.",
         },
         candidates: [
           {
@@ -574,7 +574,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           'The pot is laying you 3.0 to 1, so you need 25.0% to break even on a call. That number depends only on the price — not on your cards.',
           'Notice the split: 8 clean and 7 dirty, out of 15 outs in total. A card that improves you is not the same as a card that wins you the hand — an opponent who is behind after it lands can still draw out on the last card.',
           'The rule of 2 and 4 gives 32% on your 8 cards of clean outs, overstating the exact chance of hitting one of them by 0.5 points. Your equity here is 43.3%, which is a different question again: hitting is not the same as winning.',
-          'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
+          'A profitable call can still lose more often than it wins: you are under 50% here and the price is lower than that. Losing this hand would not make the call wrong.',
         ],
       },
     },
@@ -741,7 +741,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           'The pot is laying you 3.0 to 1, so you need 25.0% to break even on a call. That number depends only on the price — not on your cards.',
           'The rule of 2 and 4 gives 24% on your 12 cards of clean outs, understating the exact chance of hitting one of them by 2.1 points. Your equity here is 32.1%, which is a different question again: hitting is not the same as winning.',
           'At an SPR of 1.9 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
-          'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
+          'A profitable call can still lose more often than it wins: you are under 50% here and the price is lower than that. Losing this hand would not make the call wrong.',
         ],
       },
     },
@@ -894,7 +894,6 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         teachingNotes: [
           'The pot is laying you 3.6 to 1, so you need 21.7% to break even on a call. That number depends only on the price — not on your cards.',
           'At an SPR of 0.8 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
-          'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
         ],
       },
     },
@@ -1021,7 +1020,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
           oddsRatio: 1.5,
           equitySurplus: -0.12216666666666665,
           explanation:
-            "Hero risks 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before hero's own 20 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 27.8% equity, a -12.2 point shortfall.",
+            "Hero risks 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before hero's own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.8% equity is 12.2 points short of it.",
         },
         candidates: [
           {

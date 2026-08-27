@@ -42,8 +42,22 @@ const CHECK_ONLY = process.argv.includes('--check');
 // a workspace project and therefore cannot resolve `@prl/*`. Each package's own directory can, so
 // resolution of their internal imports still works normally.
 const fromRepo = (rel) => import(pathToFileURL(join(REPO, rel)).href);
-const { buildCoachReport, deriveContestablePot } = await fromRepo('packages/poker-math/dist/index.js');
-const { readSituation } = await fromRepo('packages/content/dist/index.js');
+
+//
+// FROM `src/`, NOT `dist/`. These two read `dist/index.js` until 2026-08-27, which made this
+// script answer its question — "are the fixtures what the engine produces today?" — against
+// whatever the engine was the last time somebody ran `tsc`. A fix landed in `coach.ts` (the Coach
+// told a hero with no equity "You clear that with 0.0% equity, a -24.3 point shortfall") and both
+// `fixtures:check` and `fixtures:regenerate` reported the fixtures current while they still
+// carried the wrong sentence. Building the two packages surfaced drift in five places at once.
+//
+// A staleness check was written first and thrown away: `tsc` does not rewrite an output whose
+// content has not changed, so `dist` legitimately stays older than `src` and the guard refused a
+// tree that was perfectly built. Reading the source removes the question instead of policing it —
+// and `build-review.ts` below has always been imported this way, so nothing new is being asked of
+// the runtime.
+const { buildCoachReport, deriveContestablePot } = await fromRepo('packages/poker-math/src/index.ts');
+const { readSituation } = await fromRepo('packages/content/src/index.ts');
 const { buildHandReview } = await fromRepo('apps/api/src/review/build-review.ts');
 
 const load = (file) => import(pathToFileURL(join(FIXTURES, file)).href);
