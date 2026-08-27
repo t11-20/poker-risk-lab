@@ -51,7 +51,7 @@ positions.
 corepack enable                      # Node 24.18.0 and pnpm 11.10.0 required
 
 pnpm install --frozen-lockfile
-pnpm run security:audit              # 11 supply-chain gates — run this first
+pnpm run security:audit              # 15 supply-chain gates — run this first
 
 cp .env.example .env
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"

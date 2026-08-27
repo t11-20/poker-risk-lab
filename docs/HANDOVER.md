@@ -17,6 +17,20 @@ says what changed, what is measured, what is *not* done, and where to be sceptic
 Everything below is reproducible. Nothing here should be taken on the strength of this file — the
 repository's own rule is that if a document and the code disagree, the code is right.
 
+**What `verify` needs before it can run**, because four of its sixteen gates fail for want of a
+tool rather than a defect and that is a confusing first impression:
+
+| Needed by | What | If it is missing |
+| --- | --- | --- |
+| everything | Node **24.18.0** and pnpm 11.10.0 (`corepack enable`), then `pnpm install --frozen-lockfile` | — |
+| `test`, `db:verify`, `test:a11y`, `test:ax`, `test:keyboard` | PostgreSQL on `DATABASE_URL` — `cp .env.example .env`, set `SESSION_COOKIE_SECRET`, then `pnpm run db:setup` | the database-backed suites SKIP LOUDLY, naming what was skipped; a quiet skip would be a pass |
+| `design:contrast`, `test:ax`, `test:layout`, `test:csp`, `test:age-gate`, `test:keyboard` | Chrome, found automatically or via `CHROME_PATH` | the gate FAILS rather than skipping — these measure a real browser and a pass without one would be worth nothing |
+| `security:audit` | Docker, for the container CVE scan; and network access, for OSV and the GitHub Actions advisory corpus | `--offline` skips the network gates and **exits 2** — deliberately not a valid release audit |
+
+The browser gates start their own servers. Ports they take: 3456, 3457, 3458/3459, 3462, 3463,
+3464, 3465/3467, and 3000/3001 for the API and web app. A gate that binds a port another process
+holds fails for a reason that has nothing to do with what it measures.
+
 ```bash
 pnpm run verify          # 16 gates, ~50 min. Expect: "=== verify: every gate passed ==="
 pnpm run db:verify       # every documented schema security property holds
