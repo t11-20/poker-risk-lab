@@ -164,6 +164,15 @@ Reviewing it the way it was written means distrusting green results. Specificall
   that a naive scan flags all assert through a local helper (`closeTo`, `assertClose`,
   `rejectsWith`). **The rot was in the review archive, not the code**: see the indexes now in
   `docs/audit/` and `docs/reviews/`.
+- **Fixtures that COPY data are the productive place to look.** Two were found unjoined and are now
+  joined: `fixtures/legends.ts` carried the AI profiles' trait numbers digit for digit (110
+  byte-identical blocks with `poker-ai/src/profiles.ts`), and `fixtures/learn-lesson-summaries.ts`
+  carries all seventeen lesson titles and summaries from `@prl/content`, served from
+  `generateMetadata` whenever the API is unreachable. Neither had drifted; nothing was stopping
+  them. Of the ten fixtures in `apps/web/src/fixtures/`, eight already had a join and
+  `learn-lessons.ts` reformats rather than copies. The question that found both — *what does this
+  claim, and what would notice if it stopped being true?* — is worth pointing at anything else that
+  restates a value computed elsewhere.
 - **My checkers were wrong more often than the codebase was.** Across those sweeps I wrote five
   scanners and four had bugs — a resolver missing the package root, a walk that skipped
   `apps/api/test` entirely, `^\s*` matching newlines under `re.M`, and an assert pattern that could
