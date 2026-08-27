@@ -788,6 +788,9 @@ export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesR
 
     const counts = new Map<string, { count: number; readonly fractions: number[] }>();
     let last: PolicyDecision | null = null;
+    // One decision kept per action TYPE, so the explanation can be taken from a trial that actually
+    // chose the action the bar marks. See `representative` below for what went wrong without it.
+    const exemplars = new Map<string, PolicyDecision>();
     for (let trial = 0; trial < trials; trial += 1) {
       const decision = decide(
         buildPolicyInput({
@@ -801,6 +804,7 @@ export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesR
       );
       last = decision;
       const action = decision.action;
+      if (!exemplars.has(action.type)) exemplars.set(action.type, decision);
       const bucket = counts.get(action.type) ?? { count: 0, fractions: [] };
       bucket.count += 1;
       if (action.type === 'bet' || action.type === 'raise') {
@@ -821,20 +825,38 @@ export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesR
       .sort((left, right) => right.probability - left.probability);
     const modal = distribution[0];
 
+    /**
+     * The trial the explanation is taken from, chosen to MATCH the bar above it.
+     *
+     * This was `last` — whatever the final trial happened to draw — while `modalAction` and
+     * `actionDistribution` aggregate all of them. They disagree constantly, because that is what
+     * sampling a probabilistic style means: measured over 12 profiles x 33 spots, 161 of 396
+     * columns rendered a bar marked one action above a sentence beginning "This model prefers to"
+     * and naming a different one, often while reporting that action's weight as single digits.
+     * `/legends/compare`'s own default spot showed it in 6 of 12 columns — one of them marking
+     * "raise" over "prefers to fold, with 3.3% of its weight" on a set of sevens.
+     *
+     * `drivingTraits` and `whatChangedIt` came from the same trial and described the same wrong
+     * action, so all three parts of the explanation moved together and none of them contradicted
+     * each other — only the bar. Falling back to `last` keeps the old behaviour for the case that
+     * cannot happen (no exemplar for the modal action), rather than inventing a second failure.
+     */
+    const representative = (modal === undefined ? undefined : exemplars.get(modal.action)) ?? last;
+
     return {
       profileId: profile.naming.id,
       disclosure: profileDisclosure(profile.naming, request.namingMode),
       actionDistribution: distribution,
       modalAction: modal?.action ?? last.action.type,
       reasoning: {
-        modelPreference: last.modelPreference,
-        drivingTraits: last.drivingTraits.map((trait) => ({
+        modelPreference: representative.modelPreference,
+        drivingTraits: representative.drivingTraits.map((trait) => ({
           key: traitKeyOf(trait.key),
           label: trait.label,
           value: trait.value,
         })),
-        whatChangedIt: last.whatChangedIt,
-        actionProbabilities: last.distribution.map((weighted) => ({
+        whatChangedIt: representative.whatChangedIt,
+        actionProbabilities: representative.distribution.map((weighted) => ({
           action: weighted.action.type,
           probability: weighted.probability,
         })),
