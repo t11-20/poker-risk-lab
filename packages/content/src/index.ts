@@ -157,11 +157,6 @@ export function content(): ContentBundle {
   return cached;
 }
 
-/** Forces a reload. Tests only; nothing in the server should need this. */
-export function resetContentCacheForTests(): void {
-  cached = null;
-}
-
 // ---------------------------------------------------------------------------
 // Lookups
 // ---------------------------------------------------------------------------

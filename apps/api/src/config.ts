@@ -1199,8 +1199,3 @@ export function getConfig(): AppConfig {
   cached ??= loadConfig(process.env);
   return cached;
 }
-
-/** Test seam: drops the memoised config so a later `getConfig()` re-parses. */
-export function resetConfigForTests(): void {
-  cached = null;
-}
