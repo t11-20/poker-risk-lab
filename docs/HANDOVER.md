@@ -14,7 +14,11 @@ including the commits correcting it, is a figure that should not be written down
 the answer; that they replaced a number here is the first worked example of this document's closing
 advice.*
 
-**Gate:** `pnpm run verify` — **16 of 16, exit 0**. For the test count, run it; the figure here was stale within a day, twice, for the reason argued above.
+**Gate:** `pnpm run verify` — **16 of 16 at commit `83f3e3e`**, run in batches against that one
+commit with the tree clean at the first gate and the last. Batches only because `test` alone
+exceeds this machine's background-task cap; the hash was re-read after every batch, because a
+batched run is equivalent to a single one *only* if nothing moved in between, and the way to know
+that is to record it rather than to remember not to commit. For the test count, run it; the figure here was stale within a day, twice, for the reason argued above.
 **Deployment:** staging is up on signed, CVE-clean digests that match `deploy/staging/release-manifest.json`
 
 This document exists so a reviewer can pick the branch up without reading every commit message. It
