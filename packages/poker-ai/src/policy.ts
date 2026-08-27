@@ -717,10 +717,38 @@ function assessStrength(input: PolicyInput, situation: Situation): StrengthAsses
 // Stage 2: build the candidate set, with sizes
 // ---------------------------------------------------------------------------
 
+/**
+ * Above this equity, folding to a bet is not a style — it is an error, so the noise floor does not
+ * fund it.
+ *
+ * The module comment says the floor exists "to keep a style unpredictable, not to make it play
+ * worse than any style plays", and excluded exactly one thing: a fold when checking is free. The
+ * justification reaches further than the exclusion did. Facing a bet with the effective nuts, every
+ * profile still folded at `noise / plausibleCount`, because the score-driven share of a fold is
+ * ~0 there and the floor becomes the whole probability.
+ *
+ * Measured on the flop nut flush (Ah5h on Kh 9h 2h) facing half pot, 40 trials x 12 profiles:
+ *
+ *     realistic    P(fold) up to 0.075, 10 of 12 profiles folded it at least once
+ *     educational  P(fold) up to 0.125, 12 of 12 — and `educational` is what every Legends page
+ *                  defaults to, the setting aimed at beginners
+ *
+ * The spread across twelve profiles whose `foldToPressure` spans 0.14-0.76 was 0.002: the trait had
+ * no effect, the floor was the number. A learner watching a bot fold a made flush learns nothing
+ * about that bot's style.
+ *
+ * The bar is deliberately high rather than at the break-even price. Folding a marginal hand at a
+ * bad price IS a style choice and the floor should still fund it; folding this is not.
+ */
+const FOLD_IS_AN_ERROR_ABOVE = 0.9;
+
 interface Candidate {
   readonly legal: LegalAction;
   readonly action: Action;
-  /** False only for a fold that costs nothing to decline. See the module comment. */
+  /**
+   * False for a fold that no style would make: one that costs nothing to decline, and one facing a
+   * bet with the hand already won. See the module comment and `FOLD_IS_AN_ERROR_ABOVE`.
+   */
   readonly plausible: boolean;
   readonly isAggressive: boolean;
   readonly isPassiveContinue: boolean;
@@ -739,7 +767,7 @@ function planCandidates(
         out.push({
           legal,
           action: { type: 'fold' },
-          plausible: situation.toCall > 0,
+          plausible: situation.toCall > 0 && strength.equity < FOLD_IS_AN_ERROR_ABOVE,
           isAggressive: false,
           isPassiveContinue: false,
         });
