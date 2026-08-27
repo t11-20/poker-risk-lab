@@ -20,6 +20,19 @@ advice.*
 This document exists so a reviewer can pick the branch up without reading every commit message. It
 says what changed, what is measured, what is *not* done, and where to be sceptical.
 
+**Where this stands, before the detail.** An operator can enrol a student today — `pnpm run
+enrolments` creates cohorts, grants and revokes places, and a seat is gated at one choke point with
+a guard that proves a fourth way in would be caught. **The application does not and will not take
+money**: there is no `amount`, `currency` or `price` column anywhere in `db/migrations`, and
+`apps/web/test/legal-pages.test.ts` holds `/terms` and the schema to that answer in both
+directions. A fee is collected out of band, which is why a scholarship cohort and a paid one
+produce identical rows.
+
+So what is left before this opens to the public is **not code**, and §6 has the detail: counsel
+answering the eleven decisions in `docs/production/counsel-pack.md`, a paging account, a git remote
+(which turns signing from `KEY` to `KEYLESS`), and one short screen-reader session. Every gate the
+repository defines is green; none of those four is a gate.
+
 ---
 
 ## 1. Verify it yourself before believing any of this
