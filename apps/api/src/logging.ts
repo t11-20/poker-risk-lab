@@ -328,7 +328,12 @@ type SerializedError = {
  * argument as `FastifyError`, but anything at all can be thrown, and a serializer that
  * assumes otherwise crashes inside the logger — which is the worst possible place.
  */
-function serializeError(value: unknown, depth = 0): SerializedError {
+/**
+ * Exported for `log-error-fields.test.ts`, for the reason `scrubLogObject` is: the safety here is a
+ * property of WHICH FIELDS this reads, and a test that drives it through pino would be asserting
+ * pino's behaviour as much as this function's.
+ */
+export function serializeError(value: unknown, depth = 0): SerializedError {
   if (value === null || typeof value !== 'object') {
     return { type: typeof value, message: String(value), stack: '', code: null, cause: null };
   }
