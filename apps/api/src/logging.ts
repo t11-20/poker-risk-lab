@@ -61,7 +61,7 @@ export const CENSOR = '[redacted]';
  * silently returning false.
  */
 export const SENSITIVE_KEY_PATTERN =
-  /token|secret|password|passwd|cookie|authorization|invite|credential|bearer|assertion|signature|apikey|api_key|privatekey|private_key|databaseurl|database_url|connectionstring|connection_string|dsn/i;
+  /token|secret|password|passwd|cookie|authorization|invite|credential|bearer|assertion|signature|apikey|api_key|privatekey|private_key|databaseurl|database_url|connectionstring|connection_string|dsn|deck|salt|hole_?card/i;
 
 /**
  * Key names censored by exact match, where the name gives no hint that the value is
@@ -70,16 +70,39 @@ export const SENSITIVE_KEY_PATTERN =
  * `displayName` is user-supplied text. The rest is hidden game state that the server
  * authority rules say never leaves this process — see `redactFor()` in the engine. A log
  * line is an exit this project has to close explicitly.
+ *
+ * ## `deck`, `salt` and `holecard` moved to the pattern above, and why
+ *
+ * This list used to carry `deck`, `deckorder`, `salt`, `salts`, `commitmentsalt`, `holecards`
+ * and `holecard`. `SeatState.holeCards` and `HandState.deck` are real; `deckOrder`,
+ * `commitmentSalt`, `salt` and `salts` are names nothing in this repository has ever used. The
+ * fields that actually hold a hand's secrets are `deck`, `deckCursor`, `deckSalts`,
+ * `holeCardPositions` and `boardPositions`, and an exact-match list matched one of the five.
+ * Measured on 2026-08-27 by handing a real dealt `HandState` to `scrubLogObject`:
+ *
+ *     deck=REDACTED  deckCursor=present  deckSalts=present  holeCardPositions=present
+ *     deckSalts logged: {"0":208,"1":81,"2":117,...}  — identical to the real bytes
+ *
+ * `deckSalts` is a `Uint8Array`, so the recursive scrub walks it as an object and emits the
+ * first `MAX_KEYS_PER_OBJECT` bytes: two complete 32-byte commitment salts, verbatim. The
+ * header of this file promises "hole cards, decks and commitment salts" never reach a log. Hole
+ * cards and the deck were censored; the salts — the third of the three, and the one `types.ts`
+ * groups with the deck and the cursor as "the hand's secrets" — were not, and neither were the
+ * cursor or the hole-card positions.
+ *
+ * So the three hidden-state families are substrings in the pattern above, for exactly the
+ * reason that comment already gives: they get invented constantly (`deckCursor`, `deckSalts`,
+ * `holeCardPositions`, `saltHex`) and an exact list is always one commit behind. `hole_?card`
+ * covers `holeCardPositions` and the snake_case column name `hole_cards` that a row logged
+ * straight out of the database would carry; `boardPositions` is the one remaining secret field
+ * whose name contains none of the three, and it stays here.
+ *
+ * No production call site logs a `HandState` today. This is the layer that would have to
+ * hold if one ever did, which is the whole reason it exists.
  */
 export const EXPLICIT_SENSITIVE_KEYS: ReadonlySet<string> = new Set([
   'displayname',
-  'holecards',
-  'holecard',
-  'deck',
-  'deckorder',
-  'salt',
-  'salts',
-  'commitmentsalt',
+  'boardpositions',
   'csrf',
 ]);
 

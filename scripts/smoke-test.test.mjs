@@ -76,9 +76,11 @@ import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  auditReviewSeats,
   classifyGuestLimit,
   classifyHostileRefusal,
   listIsMissingOrEmpty,
+  liveHandTruth,
   originBucketNote,
   parseArgs,
   parseDeltaSeconds,
@@ -727,5 +729,202 @@ describe('unentitledHoleCardSeats', () => {
     assert.deepEqual(unentitledHoleCardSeats({ type: 'ack', requestId: 'r' }), []);
     assert.deepEqual(unentitledHoleCardSeats({ type: 'state', view: null }), []);
     assert.deepEqual(unentitledHoleCardSeats(undefined), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The archive's confidentiality check — the one that examined nothing
+// ---------------------------------------------------------------------------
+
+/**
+ * Section 8's card check, and the defect it replaced.
+ *
+ * ## What was there
+ *
+ *     const foreignCards = aliceRows.filter((hand) => {
+ *       const seats = Array.isArray(hand.seats) ? hand.seats : [];
+ *       return seats.some((seat) => seat.holeCards != null && seat.isSelf !== true && ...);
+ *     });
+ *
+ * `aliceRows` are the rows of `GET /api/v1/hands`, whose contract is `HandListResponse` — rows of
+ * `HandSummary`, which has no `seats` field, because `routes/hands.ts` deliberately never projects
+ * `hand_seats.hole_cards` into a summary. So `hand.seats` was `undefined` on every row, `[]` was
+ * substituted, `.some()` over `[]` is false, and section 8 printed
+ * `✓ an archived hand carries no opponent's unshown hole cards` having walked zero seats.
+ *
+ * Measured on 2026-08-27 against the real routes and a real database, with a two-seat fold-out
+ * hand archived: `row keys: ["id","roomId","handNumber","startedAt","completedAt","board",
+ * "heroNet","endedByFold","potTotal"]`, `row.seats is undefined`, `foreignCards=0, seats actually
+ * examined=0`. `GET /hands/:handId` — the one route in this API that ever serves a hole card — was
+ * never fetched by the script for a hand that exists.
+ *
+ * ## Would this fail against the old code?
+ *
+ * Measured, on the same real routes, with BOTH server-side redaction layers removed — the SQL
+ * `case` in `routes/hands.ts` and `toReviewSeat`'s `maySeeCards` in `build-review.ts` — so that
+ * the route genuinely served the opponent's cards on a hand nobody showed down:
+ *
+ *     served seats: [{"seat":0,…,"holeCards":["Ah","Ks"],"showedDown":false},
+ *                    {"seat":1,…,"holeCards":["7c","2d"],"showedDown":false}]
+ *     auditReviewSeats -> {"leaked":[1],"overclaimed":[],"examined":2,"ownCards":true}
+ *     the OLD check, same run: rows=1 foreignCards=0  -> a green tick
+ *
+ * `oldSectionEightSaidClean` below is that expression, spelled out, so restoring it fails here by
+ * construction rather than by coincidence.
+ */
+describe('auditReviewSeats', () => {
+  /** The old expression, verbatim, so the two can be compared on one payload. */
+  const oldSectionEightSaidClean = (listRows) =>
+    listRows.filter((hand) => {
+      const seats = Array.isArray(hand.seats) ? hand.seats : [];
+      return seats.some((seat) => seat.holeCards != null && seat.isSelf !== true && seat.showedDown !== true);
+    }).length === 0;
+
+  /** What `GET /api/v1/hands` really returns, measured against the live routes. */
+  const LIST_ROW = {
+    id: 'hand_realshapeaaaaaaaaaaa',
+    roomId: 'room_realshapeaaaaaaaaaaa',
+    handNumber: 1,
+    startedAt: '2026-08-27T00:00:00.000Z',
+    completedAt: '2026-08-27T00:00:01.000Z',
+    board: [],
+    heroNet: -1,
+    endedByFold: true,
+    potTotal: 2,
+  };
+
+  const truth = { handId: LIST_ROW.id, viewerSeat: 0, shownSeats: [], complete: true };
+  const seat = (index, cards, showedDown = false) => ({
+    seat: index,
+    displayName: `Seat ${index}`,
+    isBot: false,
+    startingStack: 200,
+    net: 0,
+    holeCards: cards,
+    showedDown,
+  });
+
+  it('passes an honest fold-out review: own cards, nobody else’s', () => {
+    const review = { seats: [seat(0, ['Ah', 'Ks']), seat(1, null)] };
+    assert.deepEqual(auditReviewSeats(review, truth), {
+      leaked: [],
+      overclaimed: [],
+      examined: 2,
+      ownCards: true,
+    });
+  });
+
+  it('finds the leak the old check could not see, on the payload the old check was given', () => {
+    // The server leaks; the review carries the opponent's cards on a hand nobody showed down.
+    const review = { seats: [seat(0, ['Ah', 'Ks']), seat(1, ['7c', '2d'])] };
+    assert.deepEqual(auditReviewSeats(review, truth).leaked, [1]);
+
+    // And the old check, handed the list response that accompanies exactly this leak, is clean.
+    // It is not that it disagrees — it never looked. `seats` is not a field of a hand summary.
+    assert.equal(LIST_ROW.seats, undefined, 'the fixture must reproduce the shape that has no seats');
+    assert.equal(oldSectionEightSaidClean([LIST_ROW]), true, 'the old expression printed a tick here');
+  });
+
+  it('exempts a seat that genuinely showed down, so the rule is not "never send cards"', () => {
+    // The positive control. A predicate that flagged every foreign holeCards would fail every
+    // honest showdown, which is the product working.
+    const shown = { seats: [seat(0, ['Ah', 'Ks']), seat(1, ['7c', '2d'], true)] };
+    const showdownTruth = { ...truth, shownSeats: [0, 1] };
+    assert.deepEqual(auditReviewSeats(shown, showdownTruth), {
+      leaked: [],
+      overclaimed: [],
+      examined: 2,
+      ownCards: true,
+    });
+  });
+
+  it('refuses to take showedDown on trust when the wire named no such showdown', () => {
+    // `showedDown` is the server's own assertion, and it is the flag that opens the column. A
+    // server that marked every seat as having shown would open every hand ever played and satisfy
+    // `leaked === []` while doing it. Held to `result.showdowns` from the live hand instead.
+    const overclaiming = { seats: [seat(0, ['Ah', 'Ks']), seat(1, ['7c', '2d'], true)] };
+    const audit = auditReviewSeats(overclaiming, truth);
+    assert.deepEqual(audit.leaked, [], 'the flag does exempt it from the card rule');
+    assert.deepEqual(audit.overclaimed, [1], 'and the flag itself is what fails');
+  });
+
+  it('reports a sweep of nothing as a sweep of nothing, rather than as clean', () => {
+    // The whole defect, in two shapes. Neither may read as a pass: `leaked` is empty for both.
+    const noSeats = auditReviewSeats({ seats: [] }, truth);
+    assert.deepEqual(noSeats.leaked, []);
+    assert.equal(noSeats.examined, 0, 'section 8 fails on this');
+
+    const noCards = auditReviewSeats({ seats: [seat(0, null), seat(1, null)] }, truth);
+    assert.deepEqual(noCards.leaked, []);
+    assert.equal(noCards.ownCards, false, 'and on this');
+
+    // And a response that is not a review at all.
+    assert.equal(auditReviewSeats(undefined, truth).examined, 0);
+    assert.equal(auditReviewSeats({ hands: [] }, truth).examined, 0);
+  });
+
+  it('treats an ABSENT holeCards key as absent rather than as a leak', () => {
+    const dropped = { seats: [seat(0, ['Ah', 'Ks']), { seat: 1, showedDown: false }] };
+    assert.deepEqual(auditReviewSeats(dropped, truth).leaked, []);
+  });
+
+  it('does not exempt anybody when the caller’s own seat is unknown', () => {
+    // `HandReviewSeat` has no `isSelf`, so the own seat comes from the wire. If it went missing the
+    // scan would call every seat foreign — stricter, and wrong, which is why section 8 refuses to
+    // run at all rather than reporting on it. Pinned here so the shape of that failure is known.
+    const review = { seats: [seat(0, ['Ah', 'Ks']), seat(1, null)] };
+    const audit = auditReviewSeats(review, { ...truth, viewerSeat: null });
+    assert.deepEqual(audit.leaked, [0]);
+    assert.equal(audit.ownCards, false);
+  });
+});
+
+describe('liveHandTruth', () => {
+  const stateFrame = (view) => ({ type: 'state', view });
+
+  it('reads the terminal frame, not the first', () => {
+    const truth = liveHandTruth([
+      stateFrame({ handId: 'hand_a', viewerSeat: 0, street: 'preflop', result: null }),
+      { type: 'event', event: { kind: 'street' } },
+      stateFrame({
+        handId: 'hand_a',
+        viewerSeat: 0,
+        street: 'complete',
+        result: { showdowns: [{ seat: 0 }, { seat: 1 }] },
+      }),
+    ]);
+    assert.deepEqual(truth, {
+      handId: 'hand_a',
+      viewerSeat: 0,
+      shownSeats: [0, 1],
+      complete: true,
+    });
+  });
+
+  it('returns null when no state frame arrived, so section 8 refuses rather than guesses', () => {
+    assert.equal(liveHandTruth([{ type: 'ack', requestId: 'r' }]), null);
+    assert.equal(liveHandTruth([]), null);
+    assert.equal(liveHandTruth(undefined), null);
+  });
+
+  it('reports a missing viewerSeat as null rather than letting undefined stand in for a seat', () => {
+    // `seat.seat === truth.viewerSeat` against `undefined` is false for every seat, which widens
+    // the scan to "no seat is your own" — stricter by accident and a broken check. Section 8 fails
+    // on a null instead.
+    const truth = liveHandTruth([stateFrame({ handId: 'h', street: 'complete', result: null })]);
+    assert.equal(truth.viewerSeat, null);
+    assert.deepEqual(truth.shownSeats, [], 'a null result exempts nobody');
+  });
+
+  it('drops a showdown entry that carries no seat index', () => {
+    const truth = liveHandTruth([
+      stateFrame({
+        handId: 'h',
+        viewerSeat: 1,
+        street: 'complete',
+        result: { showdowns: [{ seat: 1 }, { playerId: 'usr_x' }] },
+      }),
+    ]);
+    assert.deepEqual(truth.shownSeats, [1], 'an entry with no seat exempts nothing');
   });
 });

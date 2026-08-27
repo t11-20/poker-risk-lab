@@ -561,6 +561,104 @@ export function unentitledHoleCardSeats(frame) {
 }
 
 /**
+ * What the live wire said about the hand section 7 just played, for section 8 to hold the archive
+ * to.
+ *
+ * The ground truth has to come from the socket and not from the archive, because the archive is
+ * the thing being checked. `viewerSeat` says which seat's cards this caller is entitled to and
+ * `result.showdowns` says which other seats legitimately opened theirs; a review that disagrees
+ * with either is either serving cards nobody showed or claiming a showdown that never happened.
+ *
+ * Read off the LAST `state` frame, which for a completed hand is the terminal one. Every field is
+ * type-checked rather than defaulted: a rename that turned `viewerSeat` into `undefined` would
+ * otherwise make `seat.seat === truth.viewerSeat` false for every seat and quietly widen the
+ * caller's entitlement to nothing, which reads as a stricter check and is in fact a broken one.
+ * Absence returns null, and the caller treats null as a failure rather than as "nothing to check".
+ *
+ * @returns {{handId: string|null, viewerSeat: number|null, shownSeats: number[], complete: boolean}|null}
+ */
+export function liveHandTruth(frames) {
+  const states = (Array.isArray(frames) ? frames : []).filter(
+    (frame) => frame?.type === 'state' && frame.view !== null && frame.view !== undefined,
+  );
+  const last = states[states.length - 1];
+  if (last === undefined) return null;
+  const view = last.view;
+  const showdowns = Array.isArray(view.result?.showdowns) ? view.result.showdowns : [];
+  return {
+    handId: typeof view.handId === 'string' ? view.handId : null,
+    viewerSeat: typeof view.viewerSeat === 'number' ? view.viewerSeat : null,
+    shownSeats: showdowns.map((showdown) => showdown?.seat).filter((seat) => typeof seat === 'number'),
+    complete: view.street === 'complete',
+  };
+}
+
+/**
+ * Audits one served `GET /hands/:handId` against what the live wire said about the same hand.
+ *
+ * ## The defect this exists for
+ *
+ * Section 8's card check was:
+ *
+ *     const foreignCards = aliceRows.filter((hand) => {
+ *       const seats = Array.isArray(hand.seats) ? hand.seats : [];
+ *       return seats.some((seat) => seat.holeCards != null && seat.isSelf !== true && ...);
+ *     });
+ *
+ * over the rows of `GET /api/v1/hands`. That response is `HandListResponse`, whose rows are
+ * `HandSummary` — `id, roomId, handNumber, startedAt, completedAt, board, heroNet, endedByFold,
+ * potTotal` — and it has no `seats` field at all, by design: `routes/hands.ts` says "hand_seats.
+ * hole_cards is never projected here". So `hand.seats` was `undefined` on every row, the ternary
+ * substituted `[]`, `.some()` over `[]` is false, and the run printed
+ * `✓ an archived hand carries no opponent's unshown hole cards` having examined zero seats and
+ * zero cards. Measured against the real routes and a real database on 2026-08-27, with a two-seat
+ * fold-out hand in the archive: `row keys: ["id","roomId","handNumber","startedAt","completedAt",
+ * "board","heroNet","endedByFold","potTotal"]`, `row.seats is undefined`, `foreignCards=0, seats
+ * actually examined=0`. The one route that does serve hole cards, `GET /hands/:handId`, was never
+ * fetched by this script for a real hand — only `hand_doesnotexist`.
+ *
+ * That is the same shape as the incident `unentitledHoleCardSeats` above was written for: the
+ * strongest confidentiality claim in this file, green over a surface it had never looked at.
+ *
+ * ## The rule, and why `overclaimed` is part of it
+ *
+ * `HandReviewSeat` carries `{seat, displayName, isBot, startingStack, net, holeCards, showedDown}`
+ * and — unlike a live `SeatView` — has no `isSelf`, so the caller's own seat has to come from the
+ * wire (`truth.viewerSeat`). Cards may appear for that seat, or for a seat whose `showedDown` is
+ * true, and nowhere else: the rule in `apps/api/src/review/build-review.ts`'s `toReviewSeat` and
+ * in the SQL `case` it is fed from.
+ *
+ * `showedDown` is itself an assertion the server makes, so trusting it alone would let a server
+ * that marked every seat as having shown open every hand and still pass. `overclaimed` holds it
+ * to `result.showdowns` from the live hand: a seat the wire did not name as having shown must not
+ * be marked as having shown in the archive.
+ *
+ * `examined` and `ownCards` exist because a sweep of nothing is not a pass. A review with no seat
+ * rows, or one carrying no hole cards whatsoever, satisfies `leaked.length === 0` for free — which
+ * is exactly how the old check passed. The caller fails on both.
+ *
+ * @returns {{leaked: number[], overclaimed: number[], examined: number, ownCards: boolean}}
+ */
+export function auditReviewSeats(review, truth) {
+  const seats = Array.isArray(review?.seats) ? review.seats : [];
+  const shown = new Set(Array.isArray(truth?.shownSeats) ? truth.shownSeats : []);
+  const ownSeat = typeof truth?.viewerSeat === 'number' ? truth.viewerSeat : null;
+  const leaked = [];
+  const overclaimed = [];
+  let ownCards = false;
+  for (const seat of seats) {
+    // `!= null`, not `!== null`: an absent key is a seat whose cards were not sent, which is the
+    // safe state. The idiom `unentitledHoleCardSeats` already uses, for the same reason.
+    const hasCards = seat?.holeCards != null;
+    const isOwn = ownSeat !== null && seat?.seat === ownSeat;
+    if (seat?.showedDown === true && !shown.has(seat.seat)) overclaimed.push(seat.seat);
+    if (hasCards && isOwn) ownCards = true;
+    if (hasCards && !isOwn && seat?.showedDown !== true) leaked.push(seat.seat);
+  }
+  return { leaked, overclaimed, examined: seats.length, ownCards };
+}
+
+/**
  * What a hostile calculation input's response actually proves.
  *
  * ## The defect this exists for
@@ -1726,9 +1824,17 @@ async function sectionLegends(alice) {
   }
 }
 
-/** 7. Rooms, a real hand over a real socket, and the confidentiality property on the wire. */
+/**
+ * 7. Rooms, a real hand over a real socket, and the confidentiality property on the wire.
+ *
+ * Returns the second client AND `truth` — what the terminal `state` frame said about the hand that
+ * was played. Section 8 needs it: the archive cannot be checked against its own account of which
+ * seats showed down, and `HandReviewSeat` has no `isSelf` for the caller's own seat to be found by.
+ * Null when no hand completed, which section 8 treats as a failure rather than as nothing to do.
+ */
 async function sectionRooms(alice) {
   section('7. Rooms and hidden information');
+  let truth = null;
   const bob = createClient('bob');
   const seed = await bob.request('GET', '/api/v1/auth/session');
   if (typeof seed.json?.csrfToken === 'string') bob.setCsrf(seed.json.csrfToken);
@@ -1847,13 +1953,17 @@ async function sectionRooms(alice) {
           'check ran over nothing',
       );
     }
+
+    // What the wire said about this hand, so section 8 can hold the ARCHIVE to it rather than to
+    // the archive's own account of itself. See `liveHandTruth` and `auditReviewSeats`.
+    truth = liveHandTruth(played.frames);
   }
 
-  return bob;
+  return { bob, truth };
 }
 
 /** 8. Hand history isolation. */
-async function sectionHandHistory(alice, bob) {
+async function sectionHandHistory(alice, bob, truth) {
   section('8. Hand history isolation');
   const aliceHands = await alice.request('GET', '/api/v1/hands');
   const aliceRows = aliceHands.json?.hands ?? [];
@@ -1878,16 +1988,17 @@ async function sectionHandHistory(alice, bob) {
     if (leaked.length > 0) bad('hidden information', `the hand list exposes ${leaked.join(', ')}`);
     else if (aliceRows.length >= 1) ok('the hand list exposes no deck, cursor or salt key');
 
-    // A row in your own history must carry your own cards and nobody else's, unless they showed
-    // down. Only checkable now that there is a row.
-    const foreignCards = aliceRows.filter((hand) => {
-      const seats = Array.isArray(hand.seats) ? hand.seats : [];
-      return seats.some((seat) => seat.holeCards != null && seat.isSelf !== true && seat.showedDown !== true);
-    });
-    if (foreignCards.length > 0) {
-      bad('hidden information', `${foreignCards.length} archived hand(s) carry an opponent's unshown cards`);
-    } else if (aliceRows.length >= 1) {
-      ok("an archived hand carries no opponent's unshown hole cards");
+    // The list must carry no hole card under ANY key, which is a real property of this route:
+    // `routes/hands.ts` never projects `hand_seats.hole_cards` into a summary. Stated as "the key
+    // is absent" rather than as a scan of `hand.seats`, because `hand.seats` does not exist — the
+    // check that used to stand here walked it anyway and examined zero seats. See
+    // `auditReviewSeats` for the measurement.
+    if (aliceRows.length >= 1) {
+      if (keys.has('holeCards') || keys.has('seats')) {
+        bad('hidden information', 'a hand summary now carries seats or hole cards; it never did');
+      } else {
+        ok('a hand summary carries no seats and no hole cards', `${keys.size} distinct keys walked`);
+      }
     }
   } else {
     bad(
@@ -1926,10 +2037,114 @@ async function sectionHandHistory(alice, bob) {
     }
   }
 
+  // ---- The archive's ONE card-bearing route, fetched for a real hand ----
+  //
+  // `GET /hands/:handId` is the only route in this API that ever serves a hole card over HTTP, and
+  // until this block existed no smoke run had ever asked it for a hand that exists — only
+  // `hand_doesnotexist`, below. The check that claimed to cover it walked `hand.seats` on a
+  // `HandSummary`, which has no such field. See `auditReviewSeats` for what that measured.
+  await sectionHandReview(alice, aliceRows, truth);
+
   // Requesting a hand that does not exist must 404, not 403 or 500.
   const missing = await alice.request('GET', '/api/v1/hands/hand_doesnotexist');
   if (missing.status === 404) ok('an unknown hand returns 404');
   else warn('unknown hand', `status ${missing.status}`);
+}
+
+/**
+ * The hole-card rule on the served review, held to what the live wire said about the same hand.
+ *
+ * Split out of `sectionHandHistory` only for length: it is section 8, and it is the half of it
+ * that touches cards at all.
+ *
+ * Every branch that cannot check the property FAILS rather than falling through. A hand id that
+ * did not survive section 7, a review that would not load, a review with no seats, a review
+ * carrying no hole cards whatsoever — each of those makes the scan below prove nothing, and each
+ * used to be the state this script was silently in.
+ */
+async function sectionHandReview(alice, aliceRows, truth) {
+  if (truth === null) {
+    bad(
+      'hidden information',
+      'section 7 produced no terminal state frame, so there is no wire account of the hand to hold ' +
+        'the archive to and the review scan would have nothing to compare against',
+    );
+    return;
+  }
+  if (truth.viewerSeat === null) {
+    bad(
+      'hidden information',
+      "the terminal frame named no viewerSeat, so the caller's own seat is unknown and every seat " +
+        'in the review would read as foreign — a scan that is stricter by accident and wrong',
+    );
+    return;
+  }
+  // The hand section 7 played, by id, and not merely "the first row": the list is ordered by start
+  // time and this run has created exactly one, but keying on the id is what makes the seat indices
+  // below belong to the same hand as `truth`.
+  const row = aliceRows.find((hand) => hand.id === truth.handId);
+  if (row === undefined) {
+    bad(
+      'hidden information',
+      `the hand played over the socket (${String(truth.handId)}) is not in Alice's history, so the ` +
+        'review below would be about a different hand than the wire account it is checked against',
+    );
+    return;
+  }
+
+  // `GET /hands/:handId` takes `app.expensiveRateLimit`, the same bucket sections 5 and the
+  // `hand_doesnotexist` probe below draw on. Named as its own failure rather than folded into
+  // 'hidden information', because a run that reported a confidentiality failure when what actually
+  // happened was a spent budget is the mis-attribution `classifyHostileRefusal` above exists for.
+  // Counted at the time of writing: Alice spends eight expensive tokens before this call, against
+  // a default `RATE_LIMIT_EXPENSIVE_MAX` of 20.
+  const review = await alice.request('GET', `/api/v1/hands/${row.id}`);
+  if (review.status === 429) {
+    bad(
+      'hand review',
+      "the expensive rate limit refused the review of Alice's own hand, so the confidentiality " +
+        'scan below did not run. This is a budget problem, not a leak — see RATE_LIMIT_EXPENSIVE_MAX.',
+    );
+    return;
+  }
+  if (review.status !== 200) {
+    bad('hidden information', `the review of Alice's own hand returned ${review.status}`);
+    return;
+  }
+  ok('a learner can review their own hand', `${row.id}, seat ${truth.viewerSeat}`);
+
+  const audit = auditReviewSeats(review.json, truth);
+  if (audit.examined === 0) {
+    bad(
+      'hidden information',
+      'the served review carried no seat rows, so the hole-card scan ran over nothing. This is the ' +
+        'exact state the old check was permanently in, against a response shape that has no seats.',
+    );
+  } else if (audit.leaked.length > 0) {
+    bad(
+      'hidden information',
+      `the review served seat(s) ${audit.leaked.join(', ')}'s hole cards, which are neither the ` +
+        "caller's own seat nor a seat that showed down",
+    );
+  } else if (audit.overclaimed.length > 0) {
+    bad(
+      'hidden information',
+      `the review marks seat(s) ${audit.overclaimed.join(', ')} as having shown down, which the ` +
+        'live hand never did — the archive is opening cards the game did not',
+    );
+  } else if (!audit.ownCards) {
+    bad(
+      'hidden information',
+      "the review carried no hole cards at all, not even the caller's own, so a scan for foreign " +
+        'cards would have passed whatever the server sent',
+    );
+  } else {
+    ok(
+      "the served review carries the caller's own cards and no unshown opponent's",
+      `${audit.examined} seat(s) checked against a wire account naming ` +
+        `${truth.shownSeats.length} showdown(s)`,
+    );
+  }
 }
 
 /** 9. Progress carries no score. */
@@ -2224,8 +2439,8 @@ async function main() {
   await sectionContent(alice);
   await sectionCalculation(alice);
   await sectionLegends(alice);
-  const bob = await sectionRooms(alice);
-  await sectionHandHistory(alice, bob);
+  const { bob, truth } = await sectionRooms(alice);
+  await sectionHandHistory(alice, bob, truth);
   await sectionProgress(alice);
   await sectionWebHeaders();
   await sectionGuestBootstrap();
