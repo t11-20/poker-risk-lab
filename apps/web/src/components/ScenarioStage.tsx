@@ -187,13 +187,37 @@ function Verdict({
   return (
     <>
       <div className="prl-stage__verdict">
-        <Chip tone={consistent ? 'favourable' : 'caution'} glyph={consistent ? '=' : '≠'}>
-          {consistent ? 'consistent with the analysis' : 'not the line the analysis leans towards'}
-        </Chip>
+        {/*
+          Three states, not two.
+
+          `@prl/poker-math` states the hazard outright: "A caller that renders the boolean without
+          reading `pricing` will tell somebody their decision disagreed with an analysis that never
+          looked at it." This component did exactly that. The Coach prices discrete rungs while the
+          ActionBar exposes a continuous range, so a learner shown "Raise — 51 to 95 units" who
+          picks 70 was told their decision was not the line the analysis leans towards, when the
+          analysis had no opinion about 70 at all.
+
+          The unpriced case is `info`, deliberately, and not `caution`: nothing is wrong with the
+          decision. Chip.tsx notes there is no "danger" tone because nothing here escalates, and a
+          learner who sized outside the priced rungs has not made a mistake to be cautioned about.
+        */}
+        {judgement.pricing !== 'priced' ? (
+          <Chip tone="info" glyph="?">
+            {judgement.pricing === 'sizing-not-priced'
+              ? 'this analysis did not price that size'
+              : 'this analysis did not price that action'}
+          </Chip>
+        ) : (
+          <Chip tone={consistent ? 'favourable' : 'caution'} glyph={consistent ? '=' : '≠'}>
+            {consistent ? 'consistent with the analysis' : 'not the line the analysis leans towards'}
+          </Chip>
+        )}
         <span className="prl-note">
           {server.state === 'live'
             ? server.recorded
-              ? 'This is the server’s own verdict on your action — the same one it recorded.'
+              ? judgement.pricing !== 'priced'
+                ? 'The analysis covers particular sizes rather than every one, and yours is not among them. That is not a judgement on your decision — there is nothing here to compare it with.'
+                : 'This is the server’s own verdict on your action — the same one it recorded.'
               : 'This is the server’s own verdict on your action. Nothing was recorded, because there is no session to attach it to.'
             : server.state === 'pending'
               ? 'Asking the server for its verdict. The figures below are the shared rule applied here, and the two agree.'

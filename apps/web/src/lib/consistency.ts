@@ -34,7 +34,7 @@
  */
 
 import type { ActionCandidate, CoachReport } from '@prl/contracts';
-import { judgeConsistency as judgeShared } from '@prl/poker-math';
+import { type ConsistencyPricing, judgeConsistency as judgeShared } from '@prl/poker-math';
 
 /** The action names a learner can commit to. Matches `ScenarioAttemptRequest.action`. */
 export type ScenarioAction = ActionCandidate['action'];
@@ -82,6 +82,20 @@ export interface Consistency {
    * an assumption at them. `@prl/poker-math` publishes it as `measuredBestEv` for exactly this.
    */
   readonly benchmarkEv: number;
+  /**
+   * Whether the analysis priced this decision at all, and if not, which half was missing.
+   *
+   * `@prl/poker-math` carries the warning this field exists for, in as many words: "A caller that
+   * renders the boolean without reading `pricing` will tell somebody their decision disagreed with
+   * an analysis that never looked at it." This layer did not carry the field at all, so
+   * `ScenarioStage` had a binary chip and an unpriced size got "not the line the analysis leans
+   * towards" — a verdict on a decision nothing had judged.
+   *
+   * It happens on ordinary use. The Coach prices discrete rungs while the ActionBar exposes a
+   * continuous range, so a panel reading "Raise — 51 to 95 units" accepts 70 and prices neither 70
+   * nor anything between the two ends.
+   */
+  readonly pricing: ConsistencyPricing;
 }
 
 /**
@@ -127,5 +141,6 @@ export function judgeConsistency(
     toleranceUnits: verdict.marginUnits,
     shortfallUnits: verdict.shortfallUnits,
     benchmarkEv: action === 'fold' ? verdict.measuredBestEv : 0,
+    pricing: verdict.pricing,
   };
 }
