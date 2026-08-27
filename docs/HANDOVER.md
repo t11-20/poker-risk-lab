@@ -146,6 +146,11 @@ Reviewing it the way it was written means distrusting green results. Specificall
 - **Every new guard has a negative control**, and each commit message states the measurement. If a
   control is not demonstrated by *running* it, treat the guard as decoration — that is this
   repository's own rule and it caught several of these.
+- **`README.md` is joined to nothing, and its numbers drift silently.** Two were wrong when this
+  branch was reviewed: its Quick start called `security:audit` eleven gates when it is fifteen
+  (stale across four additions), and its soak figure said 50,236 applied actions when the seeded
+  soaks produce 50,234. Both fixed, neither guarded — the other documents have joins and this one
+  does not, so treat every precise figure in it as unverified until you re-derive it.
 - **Counts drift.** `verify` is sixteen and `security:audit` is fifteen; those were both fourteen and
   the equal numbers hid a stale claim for weeks. `readiness-report.test.mjs` now attributes each
   "N gates" claim by its nearest marker, but only for that document.

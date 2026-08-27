@@ -119,9 +119,9 @@ through EV-of-bet to zero; the closed-form two-card hit probability is confirmed
 enumerating run-outs through the engine; ICM with 3:1 stacks and 70/30 payouts gives
 exactly 60/40.
 
-**The rules** are checked by three randomised soaks — **8,500 hands and 50,236 applied
-actions** in total (4,000 general-invariant, 1,500 shove-heavy, 3,000 short-blind-heavy),
-measured 2026-08-19 — asserting, after **every single action**, that chips are conserved,
+**The rules** are checked by three randomised soaks — **8,500 hands and 50,234 applied
+actions** in total (4,000 general-invariant → 27,233 actions, 1,500 shove-heavy → 6,845,
+3,000 short-blind-heavy → 16,156), re-measured 2026-08-27 — asserting, after **every single action**, that chips are conserved,
 that no card is dealt twice, that the bet level agrees with the seats, that pots always
 balance, and that a rejected action leaves the state byte-identical. Each soak also asserts
 its own coverage, so a generator that degenerated into folding every hand fails rather than
