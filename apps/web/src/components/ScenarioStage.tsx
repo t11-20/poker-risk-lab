@@ -88,6 +88,7 @@ import {
   Chip,
   CoachPanel,
   formatSignedUnits,
+  formatUnits,
   type LegalAction,
   Panel,
   type PlayerView,
@@ -180,7 +181,7 @@ function Verdict({
   const best =
     judgement.bestAction === null
       ? ''
-      : ` — ${ACTION_WORD[judgement.bestAction]}${judgement.bestTo === null ? '' : ` to ${judgement.bestTo}`}`;
+      : ` — ${ACTION_WORD[judgement.bestAction]}${judgement.bestTo === null ? '' : ` to ${formatUnits(judgement.bestTo)}`}`;
   // The server's answer wins when there is one: it is the verdict that was recorded, and showing
   // the reader a different one is the defect this component was fixed for.
   const consistent = server.state === 'live' ? server.consistent : judgement.consistent;
@@ -263,7 +264,7 @@ function Verdict({
         <div className="prl-stage__ev-row">
           <dt className="prl-label">Shortfall against that</dt>
           <dd className="prl-stage__ev-value">
-            {`${formatSignedUnits(-judgement.shortfallUnits, { decimals: 1 })}, against a ${judgement.toleranceUnits} unit allowance`}
+            {`${formatSignedUnits(-judgement.shortfallUnits, { decimals: 1 })}, against an allowance of ${formatUnits(judgement.toleranceUnits)}`}
           </dd>
         </div>
       </dl>
@@ -409,7 +410,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
               <span className="prl-label">You chose</span>
               <span className="prl-stage__chosen-action">
                 {ACTION_WORD[committed.action]}
-                {committed.to === null ? '' : ` to ${committed.to}`}
+                {committed.to === null ? '' : ` to ${formatUnits(committed.to)}`}
               </span>
             </p>
             <Button variant="secondary" size="sm" onClick={() => setCommitted(null)}>
