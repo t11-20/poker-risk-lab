@@ -174,6 +174,13 @@ Reviewing it the way it was written means distrusting green results. Specificall
   keyboard reader [being left] on `<body>`" would never have fired. **When you find a value or a
   predicate that exists twice, the question is not whether they agree today — it is what would
   notice when they stop.**
+  The signal that separates a dangerous copy from a fine one is **whether the duplication is
+  argued**. `ManagedServer` is copy-pasted across six gate scripts and `readStorage`/`writeStorage`
+  across `theme.ts` and `SessionDuration.tsx`, each with a comment saying why sharing would be
+  worse — those are decisions. All four defects above carried the opposite: a comment asserting the
+  copy was in step with an original that had since moved. A scan at a 4-line window over
+  `apps/` and `packages/` found 29 cross-file logic duplications and no fifth instance; the rest are
+  legal-page markup, which a test already holds together.
 - **Fixtures that COPY data are the productive place to look.** Two were found unjoined and are now
   joined: `fixtures/legends.ts` carried the AI profiles' trait numbers digit for digit (110
   byte-identical blocks with `poker-ai/src/profiles.ts`), and `fixtures/learn-lesson-summaries.ts`
