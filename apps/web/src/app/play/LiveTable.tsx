@@ -51,7 +51,7 @@
  * somewhere else entirely.
  */
 
-import { Button, Callout, Panel, type TableAction } from '@prl/ui';
+import { Button, browserAbandonedFocus, Callout, Panel, type TableAction } from '@prl/ui';
 import {
   type FocusEvent,
   type FormEvent,
@@ -363,7 +363,12 @@ function ConnectionControls({
     if (!hadFocus.current) return;
     // Only when the browser has actually given up. If anything else legitimately holds focus — the
     // reader tabbed on while the socket was opening — it keeps it.
-    if (document.activeElement !== document.body && document.activeElement !== null) return;
+    //
+    // `browserAbandonedFocus` rather than a local `!== body && !== null`, which is what this was.
+    // `ActionBar` measured Chrome parking the caret on `<html>` after blurring a control, so a test
+    // that knows only `body` never fires — the same shape of stale copy that stopped `HandReplay`'s
+    // rescue from ever running. One definition, in the package that measured it.
+    if (!browserAbandonedFocus()) return;
     fallbackRef.current?.focus();
     hadFocus.current = false;
   }, [signature, fallbackRef]);

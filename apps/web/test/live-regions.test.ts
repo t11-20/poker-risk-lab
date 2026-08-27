@@ -64,6 +64,9 @@ import {
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const read = (...parts: readonly string[]): string => readFileSync(join(SRC, ...parts), 'utf8');
+/** `@prl/ui`'s source, for the one predicate three components in this app now share. */
+const UI_SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'packages', 'ui', 'src');
+const readUi = (...parts: readonly string[]): string => readFileSync(join(UI_SRC, ...parts), 'utf8');
 
 /**
  * Source with its comments removed.
@@ -572,11 +575,31 @@ describe('a refusal interrupts, and everything else is polite', () => {
     // reader is in the Coach panel yanks them back to the controls; without the second, this steals
     // focus from whatever legitimately holds it.
     assert.match(stage, /if \(submission === null \|\| !hadFocus\.current\) return;/u);
+    // The second guard used to be spelled out here as three comparisons. It is now one call to
+    // `browserAbandonedFocus`, shared from `@prl/ui`, because three components carried a copy and
+    // one of them — `LiveTable` — was a version behind and would never have fired. So this asserts
+    // the call, and the three states are asserted where the predicate actually lives.
     assert.match(
       stage,
-      /if \(active !== null && active !== document\.body && active !== document\.documentElement\) return;/u,
-      'the rescue must also recognise Chrome’s <html> activeElement as abandoned focus',
+      /if \(!browserAbandonedFocus\(\)\) return;/u,
+      'the rescue must still stand down when something legitimately holds focus',
     );
+    const predicate = readUi('components', 'ActionBar.tsx');
+    assert.match(
+      predicate,
+      /export function browserAbandonedFocus\(\): boolean \{[\s\S]*?active === null[\s\S]*?\}/u,
+      'browserAbandonedFocus no longer treats a null activeElement as abandoned',
+    );
+    for (const state of ['document\\.body', 'document\\.documentElement']) {
+      assert.match(
+        predicate,
+        new RegExp(
+          `export function browserAbandonedFocus\\(\\): boolean \\{[\\s\\S]*?${state}[\\s\\S]*?\\}`,
+          'u',
+        ),
+        `browserAbandonedFocus must recognise ${state} as abandoned focus — Chrome uses both`,
+      );
+    }
   });
 
   it('gives the caret somewhere with a name to land on', () => {

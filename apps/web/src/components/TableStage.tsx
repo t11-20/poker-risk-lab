@@ -104,6 +104,7 @@
 import type { CoachReport } from '@prl/contracts';
 import {
   ActionBar,
+  browserAbandonedFocus,
   Callout,
   CardRow,
   CoachPanel,
@@ -502,10 +503,11 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
 
   useEffect(() => {
     if (submission === null || !hadFocus.current) return;
-    // Chrome 151 after disabling a focused button: `activeElement` can be `<html>`, not
+    // Chrome after disabling a focused button: `activeElement` can be `<html>`, not
     // `document.body`. Both mean the caret is on the document. A real control or panel must win.
-    const active = document.activeElement;
-    if (active !== null && active !== document.body && active !== document.documentElement) return;
+    // Shared with `ActionBar` and `LiveTable` rather than copied — this was right and the copy in
+    // `LiveTable` was a version behind, which is the argument for having one of these.
+    if (!browserAbandonedFocus()) return;
     acknowledgementRef.current?.focus();
     hadFocus.current = false;
   }, [submission]);
