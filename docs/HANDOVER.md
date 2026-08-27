@@ -223,6 +223,22 @@ Reviewing it the way it was written means distrusting green results. Specificall
   well, which does not depend on when the blur lands.
   **If a focus or announcement check starts failing without a code change, suspect the browser
   before the branch** — and re-measure rather than loosening the assertion.
+- **A guard written against the instance is narrower than the class, and mine were — four times.**
+  Each was found the same way: change something and notice what did NOT go red.
+  - The prose join for the Legends fixture covered axis labels, axis descriptions and `styleNotes`,
+    and not `learnFrom` or `counterStrategy` — the same object, the same cards, and the strings that
+    carry the actual teaching. I wrote it immediately after fixing 25 drifted strings, then drifted
+    three more past it.
+  - The `optionNotes` guard's comment claimed to catch an option reorder. Its own negative control
+    proved it cannot, and cannot in principle.
+  - The confidentiality guard searched a reveal for cards in NOTATION when reveals encode deck
+    INDICES, so its needle could not appear in its haystack under any input.
+  - `fixtures:check` was moved off `dist` for the Lab scenarios and left on it for the hand-review
+    fixtures, because `buildHandReview` resolves `@prl/poker-math` through `node_modules`.
+
+  When you write a join here, enumerate the fields the object HAS, not the ones the bug happened to
+  touch — and then break each one to see the guard fail. Every one of these passed its own author's
+  reading.
 - **My checkers were wrong more often than the codebase was.** Across those sweeps I wrote five
   scanners and four had bugs — a resolver missing the package root, a walk that skipped
   `apps/api/test` entirely, `^\s*` matching newlines under `re.M`, and an assert pattern that could
