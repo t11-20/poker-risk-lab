@@ -65,7 +65,8 @@
 >
 > What changed, and why the counts here moved: `verify` gained a fifteenth gate, `test:layout`, and
 > the release pipeline gained the nine `verify` gates it had never run. The measured result at
-> `7e861ae0a9f1`: **`pnpm run verify` passes 15 of the 15 that existed then, 3,586 tests, 0
+> `7e861ae0a9f1`: **`pnpm run verify` passed all 15 of the gates that existed then, with 3,586
+> tests passing, 0
 > failures**.
 >
 > **`verify` is sixteen gates, and on 2026-08-27 all sixteen passed: `=== verify: every gate
@@ -99,7 +100,7 @@ this SHA unless a line says otherwise.
 
 `pnpm run verify` exits **0**: at this candidate it was all fourteen of the gates that existed
 then, with **3,555 tests passing**, and at `7e861ae0a9f1` — the re-measurement in the banner above —
-all fifteen of the gates that existed by then and **3,586 tests, zero failures**,
+all fifteen of the gates that existed by then, with **3,586 tests passing**,
 including a supply-chain audit which ran fourteen of its gates then. `security:audit` is
 **fifteen gates** since `pinned-action-advisories` joined it on 2026-08-27, which is later than
 every measurement in this document. Release image signature verification,
@@ -299,7 +300,7 @@ shell, node path and a Node version below the `engines` floor. The base is now
 
 | Gate | Result | Capture |
 | --- | --- | --- |
-| `pnpm run verify` | **every gate passed, exit 0** — all 15 of the gates that existed then; **3,586 tests, 0 failures**. Measured at `7e861ae0a9f1`, not at the candidate SHA — see the banner at the top. `verify` is **sixteen gates** since `test:keyboard` was added on 2026-08-26, and this row predates it | `verify-rules.log` |
+| `pnpm run verify` | **every gate passed, exit 0** — all **16 gates**, **3,694 tests, 0 failures**, measured 2026-08-27 after the CVE rebuild was signed and deployed. (This row previously recorded the `7e861ae0a9f1` run: all fifteen of the gates that existed then, with 3,586 tests passing.) | `verify-green.log` |
 | `pnpm run security:audit` | **every gate passed** — all 14 of the gates that existed then; `release-image-signatures`, `log policy` and `keyless-signing-identity` had all been added on 2026-08-25. `security:audit` is **fifteen gates** since `pinned-action-advisories` was added on 2026-08-27, and this row predates it | inside `verify-6.log` |
 | API tests | **994 / 994** | inside `verify-13.log` |
 | Script tests | **1,165 / 1,165** | inside `verify-13.log` |
