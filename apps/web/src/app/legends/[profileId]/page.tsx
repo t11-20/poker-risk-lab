@@ -194,7 +194,14 @@ function observedRows(observed: ProfileObservedStats): readonly ObservedRow[] {
     {
       label: 'Folded to a bet',
       value: observed.foldToBetFrequency,
-      note: 'The frequency its card describes as folding under pressure.',
+      // Not "the frequency its card describes". `stats.ts` says of this exact pairing that "the
+      // trait is about giving up a made hand; the observed rate includes every fold to a bet, most
+      // of which are hands that never had value", and `commentary.ts` refuses the same substitution
+      // for two other axes precisely so the app does not print a false accusation. Under the old
+      // wording, calling-station read as declaring 0.14 and doing 37.3% — a gap fifteen times the
+      // sampling interval printed on that very row, and not a disagreement at all. The neighbouring
+      // rows all describe the observed number plainly; this one now does too.
+      note: 'How often it folded facing a bet, on any street. Not the fold-under-pressure trait on its card, which is about giving up a made hand.',
       kind: 'frequency',
     },
     {
