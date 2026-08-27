@@ -14,7 +14,7 @@ including the commits correcting it, is a figure that should not be written down
 the answer; that they replaced a number here is the first worked example of this document's closing
 advice.*
 
-**Gate:** `pnpm run verify` — **16 of 16, exit 0, 3,767 tests**
+**Gate:** `pnpm run verify` — **16 of 16, exit 0**. For the test count, run it; the figure here was stale within a day, twice, for the reason argued above.
 **Deployment:** staging is up on signed, CVE-clean digests that match `deploy/staging/release-manifest.json`
 
 This document exists so a reviewer can pick the branch up without reading every commit message. It
@@ -229,3 +229,81 @@ Reviewing it the way it was written means distrusting green results. Specificall
   away: a commit made before reading `biome`'s output, and a `git add -A` that swept a concurrent
   agent's in-flight files into a commit (undone with a soft reset). Both are the same error the
   branch spent its time finding in the codebase — acting on a result that had not actually been read.
+
+---
+
+## 8. Prompts to start the review session
+
+Four prompts, each a session's worth of work, ordered so a bad result in one changes what you do in
+the next. Paste one into a fresh session at the repository root. **Prompt 0 is not optional** — it
+is the safety brief, and every other prompt assumes it has been given.
+
+Give the reviewer the branch and this file, and nothing else: the point of a second reviewer is that
+they are not carrying my conclusions. Sections 3 and 7 above are worth *more* to them after they
+have formed their own view than before.
+
+### Prompt 0 — the safety brief (prepend to any of the others)
+
+> This repository has a running staging deployment and real secrets on disk. Constraints, all of
+> them hard: never stop, restart, recreate or `exec` into a running staging container without
+> telling me first; never run `staging down`, `clean`, `backup restore`, `backup prune --apply` or
+> `db:reset`; never modify or drop the live `poker_risk_lab` or staging databases — create a scratch
+> database and drop it; never read, print, copy or commit `deploy/signing/cosign.key` or
+> `deploy/signing/signing.env`; never send mail to a real address, `.invalid` sinks only; no blanket
+> `git stash`, it has swept concurrent work before; do not push, add a git remote, or trigger a
+> workflow. Read `CLAUDE.md` first — it is accurate and load-bearing. Run `pnpm run verify` in the
+> **background**, never the foreground: it takes ~50 minutes and a foreground shell will be killed
+> at its timeout, and run nothing else while it runs, because a concurrent job starves Chrome and
+> `design:contrast` fails for that reason and not a real one.
+
+### Prompt 1 — cold start: does the green result survive a stranger?
+
+> Read `docs/HANDOVER.md` §1, then reproduce it from a cold checkout without trusting anything else
+> in that file. Get `pnpm run verify` to 16 of 16 yourself and tell me what you had to do that §1
+> does not mention — a missing tool, an unstated env var, a port collision, a step that only works
+> because of something already on my machine. Then tell me which gates would still have passed if
+> the thing they measure were broken. I am more interested in the second answer than the first.
+
+### Prompt 2 — the highest-yield lens: guards that are green over nothing
+
+> This branch's finding was that almost every defect was in a *guard*, not the product: a check that
+> looked like coverage and asserted nothing. Examples found and fixed: a confidentiality test that
+> examined zero seats, a release pipeline running 5 of its 14 gates, two focus rescues whose early
+> return meant they could never once fire.
+>
+> Do that hunt again, and assume I missed some. For each guard in `scripts/`, `apps/*/test/` and
+> `packages/*/test/`, ask the repository's own question: *what would have to break for this to go
+> red, and has anyone ever seen it do so?* Prove your answer by breaking the thing on purpose —
+> stash the change, watch the guard fail, restore. A guard you cannot make fail is the finding.
+> Start with the ones I added on this branch; they are the least weathered. Do not fix anything
+> until you have the full list — I want the shape of what I missed, not a patch.
+
+### Prompt 3 — the named defect class, in the places I did not reach
+
+> `docs/HANDOVER.md` §7 names this branch's most common defect: a copied value or condition left
+> behind by its source, four instances, three of which carried a comment claiming they were in step
+> with an original that had already moved. My sweeps covered `apps/` and `packages/` source at a
+> four-line window and fixtures that copy data.
+>
+> They did **not** cover: SQL in `db/migrations` against the queries in `apps/api/src/repositories`,
+> the Prometheus rules in `deploy/staging/observability/alert-rules.yml` against the metric names
+> actually registered in `apps/api/src/observability/`, the Compose files against `.env.example`, or
+> any constant restated in `docs/` that a test does not join. Hunt there. The test that separates a
+> dangerous copy from a fine one is whether the duplication is *argued* in a comment — an unargued
+> second copy is the finding, and a comment asserting agreement is a reason to check harder, not
+> less.
+
+### Prompt 4 — the review I did not do: the product a student actually meets
+
+> Everything on this branch was infrastructure, guards and release process. What got almost no
+> attention is the surface a paying student sees: whether the lessons teach correctly, whether the
+> Coach's numbers are right, whether the Lab's explanations match what the engine actually does.
+>
+> One defect of this kind was found and it was found by reading, not by a gate: the Coach taught a
+> break-even threshold of −10.2%, a number that does not exist. Every gate was green.
+>
+> So read `packages/content` and the Lab and Coach components as a poker player and a teacher, not
+> as an engineer. Check the arithmetic. Check that a claimed probability matches what
+> `packages/poker-math` computes. Check that an explanation of variance is not merely fluent. This
+> is the part of the application a fee is being charged for, and it has had the least adversarial
+> attention of anything here.
