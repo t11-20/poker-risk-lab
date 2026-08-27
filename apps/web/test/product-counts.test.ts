@@ -35,6 +35,7 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { content, contentStats } from '@prl/content';
+import { LEARN_LESSON_SUMMARIES } from '../src/fixtures/learn-lesson-summaries.ts';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const read = (...parts: readonly string[]): string => readFileSync(join(SRC, ...parts), 'utf8');
@@ -142,6 +143,33 @@ describe('the counts the product prints about itself', () => {
       );
       assert.ok(LEARN.includes(stated.word), `${stated.where}: "${stated.word}" is no longer on the page`);
     }
+  });
+
+  it('the lesson-summary fixture still says what the lessons say (REGRESSION)', () => {
+    // `LEARN_LESSON_SUMMARIES` copies all seventeen lesson titles and summaries out of
+    // `@prl/content`, and `app/learn/[lessonId]/page.tsx` serves them from `generateMetadata` when
+    // `loadLesson` returns null — the path taken when the API is unreachable. Nothing joined the
+    // two, so a lesson retitled in the content package would keep its old title in the tab and the
+    // link preview for exactly as long as the API stayed down, which is the moment somebody is
+    // most likely to be looking.
+    //
+    // Measured 2026-08-27: no drift today. This is the guard, not the fix — the same shape as the
+    // Legends trait numbers, which were also copied, also undrifted, and also joined by nothing.
+    const byId = new Map(bundle.lessons.map((lesson) => [lesson.id, lesson]));
+    assert.equal(
+      LEARN_LESSON_SUMMARIES.length,
+      bundle.lessons.length,
+      'the fixture and the bundle no longer describe the same number of lessons',
+    );
+    let compared = 0;
+    for (const summary of LEARN_LESSON_SUMMARIES) {
+      const real = byId.get(summary.id);
+      assert.ok(real !== undefined, `${summary.id} is in the fixture and not in the content bundle`);
+      assert.equal(summary.title, real.title, `${summary.id}: the fixture's title is stale`);
+      assert.equal(summary.summary, real.summary, `${summary.id}: the fixture's summary is stale`);
+      compared += 2;
+    }
+    assert.ok(compared >= 30, `only ${compared} field(s) compared; a sweep of nothing is not a pass`);
   });
 
   it('does not let the quiz-question count drift the way the verification record did', () => {
