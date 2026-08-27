@@ -174,6 +174,21 @@ export interface SprResult {
  * chain rather than a table because a table with an inclusive top edge needs a
  * "nextAfter(13)" to express, and the chain is what the tests can pin exactly.
  */
+/**
+ * The band for a ratio, for callers that hold the ratio and not the two figures behind it.
+ *
+ * Exported because `@prl/ui`'s `describeSpr` had its OWN edges — 1/4/8/15 against the 1/3/6/13
+ * here — and `CoachPanel` renders its label directly above the sentence this module generates. So
+ * one panel said "3.3 — low" over prose reading 'which is the "medium" band', thirteen lines apart,
+ * on five of the thirty-six Lab scenarios. Worse at 6.82, where the two disagreed about the
+ * MEANING and not just the word: "roughly two streets of betting" against "several streets fit".
+ *
+ * A learner cannot tell which to believe, and neither can a reviewer. There is now one classifier.
+ */
+export function sprBandFor(spr: number): SprBand {
+  return bandOf(spr);
+}
+
 function bandOf(spr: number): SprBand {
   if (spr < 1) return 'very-low';
   if (spr < 3) return 'low';

@@ -182,6 +182,7 @@ export {
   type SprResult,
   StackError,
   sizingLadder,
+  sprBandFor,
   stackInBigBlinds,
   stackToPotRatio,
 } from './stacks.ts';

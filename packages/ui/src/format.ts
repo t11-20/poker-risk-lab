@@ -57,6 +57,8 @@
  * ambiguous to a screen reader, so every component that can render this pairs it
  * with real text (see `StatTile`, which supplies an `aria-label`).
  */
+import { sprBandFor } from '@prl/poker-math';
+
 export const NOT_AVAILABLE = '—';
 
 /** Raised for arguments that are not numbers at all, which is a caller bug. */
@@ -321,7 +323,17 @@ export function describeSpr(spr: number): SprDescription {
     };
   }
   const shown = trimTrailingZeros(formatFixed(spr, 1));
-  if (spr < 1) {
+  // ONE classifier, in `@prl/poker-math`. These edges used to live here as 1/4/8/15 against that
+  // module's 1/3/6/13, and `CoachPanel` renders this label directly above the sentence that module
+  // generates — so a panel showed "3.3 — low" over prose reading 'which is the "medium" band', and
+  // at 6.82 the two disagreed about the meaning rather than the word: "roughly two streets of
+  // betting" against "several streets fit". Five of the thirty-six Lab scenarios showed a pair.
+  //
+  // The vocabulary stays this module's own: `committed` and `deep` read better on a tile than
+  // `very-low` and `very-high`, and the wording of `meaning` is presentation. Only the EDGES are
+  // now shared, which is the part a learner can catch the app out on.
+  const band = sprBandFor(spr);
+  if (band === 'very-low') {
     return {
       band: 'committed',
       value: spr,
@@ -330,30 +342,30 @@ export function describeSpr(spr: number): SprDescription {
         'Below 1 the pot is already larger than the stack behind it, so any bet is effectively a decision about the whole stack.',
     };
   }
-  if (spr < 4) {
+  if (band === 'low') {
     return {
       band: 'low',
       value: spr,
       label: `${shown} — low`,
       meaning:
-        'Between 1 and 4 a bet and a raise puts the stacks in, so the commitment decision usually arrives on this street.',
+        'Between 1 and 3 a bet and a raise puts the stacks in, so the commitment decision usually arrives on this street.',
     };
   }
-  if (spr < 8) {
+  if (band === 'medium') {
     return {
       band: 'medium',
       value: spr,
       label: `${shown} — medium`,
-      meaning: 'Between 4 and 8 there is room for roughly two streets of betting before the stacks are in.',
+      meaning: 'Between 3 and 6 there is room for roughly two streets of betting before the stacks are in.',
     };
   }
-  if (spr < 15) {
+  if (band === 'high') {
     return {
       band: 'high',
       value: spr,
       label: `${shown} — high`,
       meaning:
-        'Between 8 and 15 several streets of choices remain, so position and implied odds carry more of the decision.',
+        'Between 6 and 13 several streets of choices remain, so position and implied odds carry more of the decision.',
     };
   }
   return {
@@ -361,7 +373,7 @@ export function describeSpr(spr: number): SprDescription {
     value: spr,
     label: `${shown} — deep`,
     meaning:
-      'At 15 and above the stacks are deep relative to the pot, so most of the money is still decided on later streets.',
+      'Above 13 the stacks are deep relative to the pot, so most of the money is still decided on later streets.',
   };
 }
 
