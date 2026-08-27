@@ -164,6 +164,16 @@ Reviewing it the way it was written means distrusting green results. Specificall
   that a naive scan flags all assert through a local helper (`closeTo`, `assertClose`,
   `rejectsWith`). **The rot was in the review archive, not the code**: see the indexes now in
   `docs/audit/` and `docs/reviews/`.
+- **A copied value or condition, left behind by its source, is this branch's most common defect.**
+  Four instances, two of them data and two behaviour, all found by asking who else holds a copy:
+  `fixtures/legends.ts` carried the AI profiles' trait numbers digit for digit;
+  `fixtures/learn-lesson-summaries.ts` carries seventeen lesson titles from `@prl/content`;
+  `HandReplay` carried a two-condition abandoned-focus test whose comment claimed it matched
+  `ActionBar`, which had since gone to three and then to not sampling at all; and `LiveTable`
+  carried the same stale two-condition test, so the rescue its own comment says stops "every
+  keyboard reader [being left] on `<body>`" would never have fired. **When you find a value or a
+  predicate that exists twice, the question is not whether they agree today — it is what would
+  notice when they stop.**
 - **Fixtures that COPY data are the productive place to look.** Two were found unjoined and are now
   joined: `fixtures/legends.ts` carried the AI profiles' trait numbers digit for digit (110
   byte-identical blocks with `poker-ai/src/profiles.ts`), and `fixtures/learn-lesson-summaries.ts`
