@@ -68,7 +68,16 @@ and fails outright if a keyless record is committed while it is null.
 | --- | --- | --- |
 | 3.1 | `pnpm run staging up` | migrations applied, strict smoke passes, all containers healthy |
 | 3.2 | `pnpm run test:drills` | 16 of 16. **This does not test the deployment**, despite sitting in this section — see below |
-| 3.3 | `pnpm run backup create` then `backup verify --deep` | a real scratch restore, then dropped |
+| 3.3 | `pnpm run backup create` then `backup verify --deep` | a real scratch restore, then dropped. **Needs `PRL_BACKUP_KEY` first** — see below |
+
+**3.3 fails as written until the archive key exists.** `pnpm run backup create` with nothing set
+answers `✗ no archive key: set PRL_BACKUP_KEY or pass --key-file` and exits 1 — correctly, because
+that key decrypts every archive ever taken with it and there is deliberately no `--key` flag to put
+it in a shell history. It does **not** come from `.env`: it lives in `deploy/backup/backup.env`,
+which `deploy/backup/README.md` tells the operator to create and which `security:secrets` asserts is
+gitignored. Generate it with `pnpm run backup keygen`, escrow it somewhere that is not the backup
+host, and read `docs/production/backup-restore.md` §"the key" before running 3.3 — losing it loses
+every archive.
 
 **3.2 is in this section and is not a measurement of what you just deployed.** The drills break ONE
 LOCAL API process against the development database over loopback — the script says so in its own
