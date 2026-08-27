@@ -71,7 +71,7 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     id: 'big-blind',
     term: 'Big blind',
     definition:
-      'The larger of the two forced bets posted before any cards are dealt, by the player two seats left of the button. It also sets the size of the smallest legal opening bet, and is the unit stack depths are usually quoted in.',
+      'The larger of the two forced bets posted before any cards are dealt, by the player two seats left of the button, or one seat left heads-up, where the button posts the small blind. It also sets the size of the smallest legal opening bet, and is the unit stack depths are usually quoted in.',
     topics: ['positions-and-blinds', 'rules-and-flow'],
     seeAlso: ['small-blind', 'option', 'blinds'],
   },
@@ -168,7 +168,7 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     id: 'check',
     term: 'Check',
     definition:
-      'Declining to bet when nothing is owed. It keeps your hand at no cost and passes the decision to the next player. Checking is only available when no bet has been made on the current street.',
+      'Declining to bet when nothing is owed. It keeps your hand at no cost and passes the decision to the next player. Checking is available whenever nothing is owed — which includes the big blind preflop in an unraised pot, even though a bet has been made.',
     topics: ['rules-and-flow'],
     seeAlso: ['bet', 'call', 'continuation-bet'],
   },
@@ -176,7 +176,7 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     id: 'clean-out',
     term: 'Clean out',
     definition:
-      'An out that makes you the winner against the hand you are assuming: when it lands, you are ahead. Clean outs are the only ones a price comparison can safely be built on.',
+      "An out that does not merely put you in front but keeps you there: when it lands you are at or above 90% against the hand you are assuming. That 90% is the app's bar, not a rule of poker. Clean outs are the only ones a price comparison can safely be built on.",
     topics: ['hand-reading-and-outs'],
     seeAlso: ['outs', 'dirty-out', 'blocker', 'nuts'],
   },
@@ -210,7 +210,7 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     id: 'counterfeit',
     term: 'Counterfeit',
     definition:
-      'When a later board card makes one of your cards redundant — most often a board pair higher than your bottom pair, turning your two pair into a hand every opponent shares. Nothing about your cards changed; their contribution did.',
+      "When a later board card makes one of your cards redundant \u2014 most often a board pair higher than your bottom pair, demoting your two pair to the board's pair plus your higher card. Nothing about your cards changed; their contribution did, and what is left is a kicker contest rather than the hand you had.",
     topics: ['hand-reading-and-outs'],
     seeAlso: ['kicker', 'split-pot', 'playing-the-board', 'reverse-implied-odds'],
   },
@@ -218,7 +218,7 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     id: 'cutoff',
     term: 'Cutoff',
     definition:
-      'The seat immediately right of the button, so named because opening from there can cut the button out of the hand. It acts last whenever the button folds.',
+      'The seat immediately right of the button, so named because opening from there can cut the button out of the hand. On the flop, turn and river it acts last whenever the button folds. Preflop the blinds still act after it.',
     topics: ['positions-and-blinds'],
     seeAlso: ['button', 'position', 'open', 'under-the-gun'],
   },
@@ -234,7 +234,7 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     id: 'dirty-out',
     term: 'Dirty out',
     definition:
-      'A card that improves your hand but can still lose — because it improves your opponent more, because the hand it makes is second best, or because there is another card to come for them to draw out. Counting dirty outs as though they were clean is the most common way an outs count becomes optimistic.',
+      'A card that leaves you in front but beatable — above 50% and below the 90% a clean out has to clear, usually because there is another card to come for your opponent to draw out. A card that lands you below 50% is not counted as an out at all. Counting dirty outs as though they were clean is the most common way an outs count becomes optimistic.',
     topics: ['hand-reading-and-outs'],
     seeAlso: ['outs', 'clean-out', 'dominated-hand', 'reverse-implied-odds'],
   },
@@ -242,7 +242,7 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     id: 'dirty-outs',
     term: 'Dirty outs',
     definition:
-      'Cards that improve your hand but still leave you able to lose — because the same card completes something better for an opponent, or because they can still draw out on you afterwards. Counting a dirty out as a clean one is one of the most common ways players talk themselves into a call the price does not justify.',
+      'Cards that leave you in front but beatable — above 50% and short of the 90% a clean out has to clear, usually because your opponent can still draw out on you afterwards. A card that leaves you behind is not counted in either column. Counting a dirty out as a clean one is one of the most common ways players talk themselves into a call the price does not justify.',
     formula: 'total outs = clean outs + dirty outs',
     topics: ['hand-reading-and-outs', 'probability-and-equity'],
     seeAlso: ['outs', 'redraw', 'combo-draw'],
@@ -594,7 +594,7 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     id: 'rule-of-2-and-4',
     term: 'Rule of 2 and 4',
     definition:
-      'A table-friendly approximation: multiply your outs by two for the chance of hitting with one card to come, or by four with two cards to come. It is deliberately rough — it treats the unseen deck as fifty cards, and the four-times version assumes you see both cards without paying again.',
+      'A table-friendly approximation: multiply your outs by two for the chance of hitting with one card to come, or by four with two cards to come. It is deliberately rough, and the two halves miss in opposite directions. The two-times form understates a little, charging 2% per out where one card off a 46-card stub is worth about 2.17%. The four-times form OVERSTATES, because doubling the one-card chance counts the runouts that hit on both cards twice, and the error grows with the out count: at 9 outs it says 36% against a true 35.0%, at 15 outs 60% against 54.1%. It also assumes you see both cards without paying again, which a bet on the turn takes away.',
     formula:
       'chance of hitting (percent) ~= 2 x outs with one card to come; ~= 4 x outs with two cards to come',
     topics: ['probability-and-equity', 'hand-reading-and-outs'],
@@ -671,7 +671,7 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     id: 'standard-deviation',
     term: 'Standard deviation',
     definition:
-      'Variance in the same units as the results themselves, so it can be compared directly with a win rate. Because it grows with the square root of the number of hands while expectation grows linearly, the signal eventually overtakes the noise — slowly.',
+      'The square root of variance, which puts it in the same units as the results themselves, so it can be compared directly with a win rate. Because it grows with the square root of the number of hands while expectation grows linearly, the signal eventually overtakes the noise — slowly.',
     formula: 'standard deviation over n hands = (standard deviation per 100 hands) x sqrt(n / 100)',
     topics: ['variance-and-bankroll'],
     seeAlso: ['variance', 'sample-size', 'risk-of-ruin', 'expected-value'],
@@ -736,7 +736,7 @@ export const LEARN_GLOSSARY: readonly GlossaryEntry[] = [
     id: 'under-the-gun',
     term: 'Under the gun (UTG)',
     definition:
-      'The first seat to act preflop, immediately left of the big blind. It is the worst position at the table: every opponent still gets to react to what you do, on this street and on every street after it.',
+      'The first seat to act preflop, immediately left of the big blind. It is the worst seat preflop: every opponent still gets to react to what you do. Postflop the order restarts left of the button, so the blinds act before it and the small blind is first of all.',
     topics: ['positions-and-blinds'],
     seeAlso: ['position', 'cutoff', 'button', 'open'],
   },

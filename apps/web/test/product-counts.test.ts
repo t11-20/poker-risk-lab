@@ -35,7 +35,10 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { content, contentStats } from '@prl/content';
+import { LEARN_GLOSSARY } from '../src/fixtures/learn-glossary.ts';
 import { LEARN_LESSON_SUMMARIES } from '../src/fixtures/learn-lesson-summaries.ts';
+import { LEARN_LESSONS } from '../src/fixtures/learn-lessons.ts';
+import { LEARN_QUIZZES } from '../src/fixtures/learn-quizzes.ts';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const read = (...parts: readonly string[]): string => readFileSync(join(SRC, ...parts), 'utf8');
@@ -170,6 +173,99 @@ describe('the counts the product prints about itself', () => {
       compared += 2;
     }
     assert.ok(compared >= 30, `only ${compared} field(s) compared; a sweep of nothing is not a pass`);
+  });
+
+  /**
+   * The other three fixtures, joined for the first time.
+   *
+   * `learn.ts`'s own header says what these are: "roughly 140 KB of teaching prose copied verbatim
+   * from `packages/content/data`", split across four modules. One of the four — the lesson
+   * summaries, above — was joined on this branch. The other three were not, and they carry the
+   * material a fee is actually charged for: every definition, every lesson body, every quiz
+   * question and its marked answer.
+   *
+   * This is not hypothetical drift. It was MEASURED on 2026-08-27, by causing it: a correction to
+   * the `under-the-gun` definition in `packages/content/data/glossary.json` — it taught that UTG
+   * is worst "on this street and on every street after it", when postflop the blinds act first,
+   * which is the answer `position-q2` marks CORRECT — landed in the content package and not in the
+   * fixture. `pnpm run fixtures:regenerate` reported "already the analysis the engine produces
+   * today" and `fixtures:check` passed, because that script covers scenario analysis and has never
+   * read these files. The web app serves these fixtures from `generateMetadata` and wherever the
+   * API is unreachable, so the corrected glossary would have shipped while the fallback kept
+   * teaching the error, and every gate would have stayed green.
+   *
+   * Definitions and question text are compared, not just ids and titles: an id-only join would
+   * have passed the very drift that prompted this.
+   */
+  it('the glossary fixture still says what the content package says (REGRESSION)', () => {
+    const byId = new Map(bundle.glossary.map((entry) => [entry.id, entry]));
+    assert.equal(LEARN_GLOSSARY.length, bundle.glossary.length, 'the fixture lost or gained entries');
+    let compared = 0;
+    for (const entry of LEARN_GLOSSARY) {
+      const real = byId.get(entry.id);
+      assert.ok(real !== undefined, `${entry.id} is in the fixture and not in the content bundle`);
+      assert.equal(entry.term, real.term, `${entry.id}: the fixture's term is stale`);
+      assert.equal(entry.definition, real.definition, `${entry.id}: the fixture's definition is stale`);
+      compared += 2;
+    }
+    assert.ok(compared >= 150, `only ${compared} field(s) compared; a sweep of nothing is not a pass`);
+  });
+
+  it('the lesson fixture still says what the content package says (REGRESSION)', () => {
+    // A SUBSET, deliberately: the fixture's header says eight of the seventeen, chosen so that
+    // between them they exercise every `LessonBlock` variant. So this joins what is there and does
+    // not assert the counts match — but it does assert the subset is non-empty and still eight, so
+    // a fixture emptied by a bad edit cannot pass as "nothing to compare".
+    const byId = new Map(bundle.lessons.map((lesson) => [lesson.id, lesson]));
+    assert.equal(LEARN_LESSONS.length, 8, 'the fixture no longer carries the eight lessons it documents');
+    let compared = 0;
+    for (const lesson of LEARN_LESSONS) {
+      const real = byId.get(lesson.id);
+      assert.ok(real !== undefined, `${lesson.id} is in the fixture and not in the content bundle`);
+      assert.equal(lesson.title, real.title, `${lesson.id}: the fixture's title is stale`);
+      assert.equal(lesson.summary, real.summary, `${lesson.id}: the fixture's summary is stale`);
+      assert.deepEqual(
+        lesson.keyTakeaways,
+        real.keyTakeaways,
+        `${lesson.id}: the fixture's key takeaways are stale`,
+      );
+      compared += 3;
+      // The one documented exception, named rather than skipped silently: `counting-outs` ends
+      // with an authored `scenarioLink` block because no lesson in `packages/content` uses that
+      // variant yet and `LessonBlockRenderer` has to handle it. Its other blocks are still joined.
+      if (lesson.id === 'counting-outs') {
+        assert.deepEqual(
+          lesson.blocks.slice(0, real.blocks.length),
+          real.blocks,
+          `${lesson.id}: the fixture's blocks are stale ahead of its authored scenarioLink`,
+        );
+        assert.equal(
+          lesson.blocks.at(-1)?.kind,
+          'scenarioLink',
+          'the documented counting-outs exception is gone; join its blocks like the others',
+        );
+      } else {
+        assert.deepEqual(lesson.blocks, real.blocks, `${lesson.id}: the fixture's blocks are stale`);
+      }
+      compared += 1;
+    }
+    assert.ok(compared >= 30, `only ${compared} field(s) compared; a sweep of nothing is not a pass`);
+  });
+
+  it('the quiz fixture still says what the content package says, answers included (REGRESSION)', () => {
+    // The marked answer is the field that matters most here. A quiz whose `correctIndex` drifted
+    // would mark a student wrong for a right answer, on the offline path, with nothing to notice.
+    // A subset, like the lessons: eight of the seventeen. Non-emptiness is asserted instead.
+    const byId = new Map(bundle.quizzes.map((quiz) => [quiz.id, quiz]));
+    assert.equal(LEARN_QUIZZES.length, 8, 'the fixture no longer carries the eight quizzes it documents');
+    let compared = 0;
+    for (const quiz of LEARN_QUIZZES) {
+      const real = byId.get(quiz.id);
+      assert.ok(real !== undefined, `${quiz.id} is in the fixture and not in the content bundle`);
+      assert.deepEqual(quiz.questions, real.questions, `${quiz.id}: the fixture's questions are stale`);
+      compared += 1;
+    }
+    assert.ok(compared >= 8, `only ${compared} quiz(zes) compared; a sweep of nothing is not a pass`);
   });
 
   it('does not let the quiz-question count drift the way the verification record did', () => {

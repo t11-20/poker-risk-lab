@@ -269,7 +269,7 @@
         "explanation": "From the flop onwards the order is fixed by distance to the left of the button, so the small blind acts first on every remaining street. Under the gun is the worst seat preflop, but once the flop comes the blinds are the first to act, and the small blind is first of all.",
         "optionNotes": [
           "The button is the best postflop seat, acting last on every street.",
-          "The cutoff acts second-to-last when the button folds, which makes it one of the better seats.",
+          "The cutoff acts immediately before the button, and last of all when the button folds, which makes it one of the better seats.",
           "Correct: the small blind acts first on the flop, turn and river.",
           "Under the gun is worst preflop, but postflop the blinds act before it."
         ]
