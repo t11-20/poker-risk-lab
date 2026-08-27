@@ -92,23 +92,24 @@ armed and attached to a phone is a fact about an account this repository does no
 
 | Step | Command | Pass looks like |
 | --- | --- | --- |
-| 5.1 | `pnpm run test:ax` | 116 checks, 0 failed — 70 of the 72 certification assertions |
-| 5.2 **PERSON** | `pnpm run certify:screen-reader` | the remaining **4**, with VoiceOver or NVDA, ~5 min |
+| 5.1 | `pnpm run test:ax` | 116 checks, 0 failed — **70 of the 72** certification assertions |
+| 5.2 **PERSON** | `pnpm run certify:screen-reader` | the remaining **2**, with VoiceOver or NVDA, ~3 min |
 
-The 4 are: what a virtual cursor does past the end of a modal (7.4 — measured, 29 content-bearing
-nodes behind the open sheet are still in the computed tree, because the sheet holds the background
-in scope with `aria-modal` rather than `inert`, so reachability is the reader's own behaviour); plus
-three states no honest fixture reaches — a failing deck proof, which would need a server that lies
-about a deal (6.7); the root-layout boundary, which would need a deliberately broken build (8.3);
-and the Scenario Lab's filter count (4.2).
+**The 2 are both "no honest fixture reaches this state", not "a machine cannot judge it":** a
+failing deck proof, which would need a server that lies about a deal (6.7), and the root-layout
+error boundary, which would need a deliberately broken build (8.3). SSR-rendering the fallback would
+check the fallback's tree without checking that the boundary is wired, which reads as covered twice
+and is covered zero times. 6.7 is reachable with a pass-through proxy that flips one byte inside a
+real reveal — costed in `accessibility-certification.md` §5, and not taken, because it puts a third
+server and a proxy inside a release gate for one row.
 
-**4.2 is a defect, not a limit, and a reviewer will record SILENT against it.** The filter is a plain
-`GET` form, so submitting it replaces the document; measured in Chrome 151, the summary region takes
-zero mutations on the new page — it arrives already holding "Showing 14 of 36 scenarios.", and a
-live region that arrives with its text announces nothing. Nothing else says the count either: the
-title is identical before and after. Closing it is a product change — the count in the document
-title of a filtered view is the zero-JavaScript fix, and `ScenarioFilters` ships no JavaScript on
-purpose — so it is listed here rather than automated away.
+**Two rows that used to be here were product defects, and were fixed rather than certified around**
+(2026-08-26). 4.2: the Scenario Lab's filter count was announced to nobody — the `GET` form replaces
+the document, and the summary region arrived already holding its text, which announces nothing. The
+count is now in the `<title>` of a filtered view, which a document load announces, with no
+JavaScript. 7.4: the background behind the mobile sheet was held with `aria-modal`, a request to the
+reader, so reachability was the reader's behaviour; every non-sheet subtree is now `inert`, and 0 of
+188 content-bearing elements behind an open sheet remain in the computed tree.
 
 `test:ax` starts a **second** web app of its own on `:3459` with no API behind it, for assertion
 8.2. It is torn down with the rest; if that port is taken, pass `--offline-url`.
@@ -132,6 +133,22 @@ land — nothing is lost, but the first morning of a course is the wrong time to
   was sold and what must be disclosed before it; refunds and cooling-off; what deleting an account
   should do to a live entitlement, which today the `ON DELETE CASCADE` destroys. Every engineering
   dependency the register named is closed; none of the decisions are engineering's to make.
+  **The deletion question narrowed on 2026-08-26** and counsel should be given the narrower one: a
+  cascade writes no audit row, so a live place used to end with nothing saying so and the operator's
+  trail showed an entitlement that was never closed. `deleteAccount` now writes an
+  `enrolment.ended_by_erasure` row per enrolment, before the rows go, detached, carrying the cohort,
+  the authority, the external reference and whether the place was still live. So the question is no
+  longer "can a destroyed entitlement be evidenced at all" — it can, on both sides — but what the
+  operator owes the holder of a live place who erases themselves.
+- **PERSON — a git remote, which is what turns `KEY` into `KEYLESS`.** This repository has none, so
+  every release is signed with the long-lived key on the release machine. That proves possession of
+  a key and **not** the identity of a builder: `security:image-provenance` says `KEY` and
+  `deploy/signing/README.md` says what that is worth. Push to a remote and let
+  `.github/workflows/release-sign.yml` run once on a `v*` tag, and the signature carries a Fulcio
+  certificate naming the workflow instead. Until then `deploy/signing/keyless-policy.json` has
+  `"repository": null`, which warns on every run and fails outright if a keyless record is
+  committed while it is null. Nothing about this blocks a deployment; it bounds what an outsider
+  can check about one.
 - **PERSON — the screen-reader session** (5.2).
 - **PERSON — the acknowledged page** (4.4), and the external snitch behind it.
 - **PERSON — someone on call.** An acknowledgement records that somebody answered one page at a
