@@ -1,10 +1,13 @@
 # Branch handover — `production-hardening`
 
-**State:** 83 commits ahead of `main` · 346 files · +94,025 / −2,898 · working tree clean · nothing pushed
+**State:** 84 commits ahead of `main` · 347 files · +94,167 / −2,898 · working tree clean · nothing pushed
+*(Counted at `5c94060`, which is this file. Re-derive with `git rev-list --count main..HEAD` and
+`git diff --shortstat main..HEAD` — every number in this document is meant to be checkable, and one
+that only describes the moment before it was written is the first thing a reviewer should catch.)*
 **Gate:** `pnpm run verify` — **16 of 16, exit 0, 3,767 tests** (last run at `8768035`)
 **Deployment:** staging is up on signed, CVE-clean digests that match `deploy/staging/release-manifest.json`
 
-This document exists so a reviewer can pick the branch up without reading 83 commit messages. It
+This document exists so a reviewer can pick the branch up without reading 84 commit messages. It
 says what changed, what is measured, what is *not* done, and where to be sceptical.
 
 ---
