@@ -57,18 +57,20 @@ const fromRepo = (rel) => import(pathToFileURL(join(REPO, rel)).href);
 // and `build-review.ts` below has always been imported this way, so nothing new is being asked of
 // the runtime.
 const { buildCoachReport, deriveContestablePot } = await fromRepo('packages/poker-math/src/index.ts');
-const { readSituation } = await fromRepo('packages/content/src/index.ts');
+const { readSituation, SCENARIO_ANALYSIS_SAMPLES, SCENARIO_ANALYSIS_SEED } = await fromRepo(
+  'packages/content/src/index.ts',
+);
 const { buildHandReview } = await fromRepo('apps/api/src/review/build-review.ts');
 
 const load = (file) => import(pathToFileURL(join(FIXTURES, file)).href);
 
 // --- the Scenario Lab -------------------------------------------------------
 
-// These must equal `routes/content.ts`'s CONTENT_SAMPLES/CONTENT_SEED, because the fixture stands in
-// for what that route serves. The guard asserts the same pair; a mismatch here regenerates figures
-// the running API would never produce.
-const SCENARIO_SAMPLES = 40_000;
-const SCENARIO_SEED = 20_260_817;
+// Imported, not restated. These must equal what `routes/content.ts` serves, because the fixture
+// stands in for that route — and the comment here used to assert that agreement over two literals
+// that nothing joined. `@prl/content` owns the pair now and all four consumers read it from there.
+const SCENARIO_SAMPLES = SCENARIO_ANALYSIS_SAMPLES;
+const SCENARIO_SEED = SCENARIO_ANALYSIS_SEED;
 
 const opponentLabelFor = (scenario) =>
   scenario.opponentRange.kind === 'exact' ? 'the opponent' : scenario.opponentRange.label;

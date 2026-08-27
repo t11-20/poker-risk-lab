@@ -53,6 +53,8 @@ export {
   checkScenarioClaims,
   describeAnalysis,
   readSituation,
+  SCENARIO_ANALYSIS_SAMPLES,
+  SCENARIO_ANALYSIS_SEED,
   ScenarioAnalysisError,
 } from './scenario-analysis.ts';
 export type { RawContent } from './validate.ts';

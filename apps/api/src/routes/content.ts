@@ -50,6 +50,8 @@ import {
   quizById,
   quizForLesson,
   readSituation,
+  SCENARIO_ANALYSIS_SAMPLES,
+  SCENARIO_ANALYSIS_SEED,
   scenarioById,
   scenarios,
 } from '@prl/content';
@@ -132,10 +134,10 @@ const IMMUTABLE_CACHE_CONTROL = 'public, max-age=300';
  * at a different one would let the endpoint and the test disagree about a claim the test is
  * supposed to be guarding.
  */
-const CONTENT_SAMPLES = 40_000;
+const CONTENT_SAMPLES = SCENARIO_ANALYSIS_SAMPLES;
 
 /** Fixed, so a scenario's figures are the same for every learner and every reload. */
-const CONTENT_SEED = 20_260_817;
+const CONTENT_SEED = SCENARIO_ANALYSIS_SEED;
 
 // The indifference margin used to be declared here as `CONSISTENCY_MARGIN_BIG_BLINDS`. It now lives
 // with the rule that uses it, as `CONSISTENCY_MARGIN_BIG_BLINDS` in `@prl/poker-math/consistency` —

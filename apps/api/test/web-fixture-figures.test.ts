@@ -41,16 +41,23 @@ import assert from 'node:assert/strict';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { readSituation } from '@prl/content';
+import { readSituation, SCENARIO_ANALYSIS_SAMPLES, SCENARIO_ANALYSIS_SEED } from '@prl/content';
 import type { CoachReport, HandReviewResponse, Scenario } from '@prl/contracts';
 import { buildCoachReport, deriveContestablePot } from '@prl/poker-math';
 import { buildHandReview, type HandActionRow, type HandSeatRow } from '../src/review/build-review.ts';
 
 const WEB_FIXTURES = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'src', 'fixtures');
 
-/** The sample count and seed the fixture header names, and the API's own `CONTENT_SAMPLES`/`CONTENT_SEED`. */
-const SCENARIO_SAMPLES = 40_000;
-const SCENARIO_SEED = 20_260_817;
+/**
+ * The sample count and seed, IMPORTED rather than restated.
+ *
+ * These were two literals under a comment saying they were "the API's own
+ * `CONTENT_SAMPLES`/`CONTENT_SEED`". They were not: nothing imported those, and nothing could,
+ * because they were not exported. A comment asserting an agreement that nothing enforces is this
+ * branch's most common defect, and this was an instance of it sitting inside a guard.
+ */
+const SCENARIO_SAMPLES = SCENARIO_ANALYSIS_SAMPLES;
+const SCENARIO_SEED = SCENARIO_ANALYSIS_SEED;
 
 /*
  * There used to be a `normaliseRuleOfThumb` helper here, dividing the producer's

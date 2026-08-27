@@ -74,6 +74,25 @@ export interface ScenarioSituation {
  * hero's pending call — chips carried from earlier streets, plus everything committed
  * on this street by anyone, hero included. `toCall` is then what hero must add on top.
  */
+/**
+ * The sampling this analysis is defined by, owned here because four places need the same pair.
+ *
+ * `analyseScenario` is what VALIDATES a scenario's claims; `routes/content.ts` is what serves the
+ * numbers a student reads; `scripts/regenerate-web-fixtures.mjs` bakes them into the offline
+ * fixture; and `apps/api/test/web-fixture-figures.test.ts` checks that fixture. All four have to
+ * sample identically or the figure the build verifies is not the figure the page prints.
+ *
+ * They agreed by coincidence and by four separate literals. The test carried the comment "the
+ * sample count and seed the fixture header names, and the API's own CONTENT_SAMPLES/CONTENT_SEED"
+ * above its own copy, imported neither, and could not have: they were not exported. That is this
+ * branch's most common defect exactly — a copy with a comment asserting an agreement nothing
+ * enforces — and it was found by measuring the two analyses against each other across all 36
+ * scenarios, which came back identical to the last digit (0.2836375 both, on
+ * `fl-same-cards-under-the-gun`). Identical today; joined now.
+ */
+export const SCENARIO_ANALYSIS_SAMPLES = 40_000;
+export const SCENARIO_ANALYSIS_SEED = 20_260_817;
+
 export function readSituation(scenario: Scenario): ScenarioSituation {
   const hero = scenario.seats.find((seat) => seat.isHero === true);
   if (hero === undefined) throw new ScenarioAnalysisError(`scenario "${scenario.id}" has no hero seat`);
@@ -158,8 +177,8 @@ export function analyseScenario(scenario: Scenario, options: AnalyseOptions = {}
       board: situation.board,
     },
     {
-      samples: options.samples ?? 40_000,
-      seed: options.seed ?? 20260817,
+      samples: options.samples ?? SCENARIO_ANALYSIS_SAMPLES,
+      seed: options.seed ?? SCENARIO_ANALYSIS_SEED,
     },
   );
   const hero = result.players[0];
