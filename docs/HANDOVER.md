@@ -461,6 +461,40 @@ defect with a right answer:
    most of which are hands that never had value". `commentary.ts` refuses this exact substitution
    for two other axes to avoid printing a false accusation; the page makes it anyway.
 
+**The live-table audit.** The surface a student spends most of their time on, and the last one
+examined. Its negative results are large and worth trusting: **69,016 redacted views with zero
+confidentiality leaks** (spectators, outsiders, folded players, seat reuse), **38,805 action-bound
+checks** with zero offered-but-rejected and zero legal-but-never-offered, and **171 mid-hand
+reconnections** restoring state field-for-field. Pot total, bet level, whose turn, button, stacks
+and commitments all matched engine truth exactly. Four things did not:
+
+- **A side pot that did not exist**, on 65% of decision points — and on the first frame of every
+  hand, because the blinds are unequal. `redactFor` filled `pots` with `buildPots`, which layers by
+  `committedTotal` and is correct only at SETTLEMENT; on a live state it turns an uncalled bet into
+  a layer. The component drawing it says in its own header that it exists so "a learner needs to see
+  that a side pot is a layer with an eligibility list rather than a bonus", so the concept was being
+  taught with data wrong two thirds of the time — while the Coach on the same screen priced the same
+  spot correctly.
+- **A folded player quoted a price**, in the caution tone, for the rest of the hand (6,772
+  occurrences). `amountToCall` has no status check — right for the betting logic, which only asks
+  about the seat to act, wrong for a view built for every recipient on every frame.
+- **An all-in call offered like any other.** The engine sets `allInAtMax` and writes "Calling puts
+  your whole remaining stack in."; the ActionBar rendered neither.
+- **A hand-authored play fixture nothing checked** — and it held the CORRECT answer while the engine
+  held the wrong one, which is exactly why the phantom survived every screenshot review: the one
+  screen a human looks at was the one showing the truth.
+
+**A local command is not a proxy for the gate.** Five changes of mine failed a gate in one round,
+each caught by a different mechanism and none visible to the command I reached for first:
+
+    node --test <file>     does not type-check at all
+    pnpm run build         runs tsconfig.json, which EXCLUDES test files
+    pnpm run typecheck     runs the packages' configs, not apps/web's test/tsconfig.json
+    npx tsx --test         tolerates a .tsx in the import graph that plain node --test refuses
+    a passing unit suite   does not run the deterministic baselines a policy change invalidates
+
+None of them is wrong; they answer different questions. Run the gate.
+
 **Where a reader still beats a gate.** Nothing computes a definition, a strategic claim, or the
 preconditions a rule of thumb leaves unstated. Every defect above was found by reading with the
 engine open beside the prose, and that is the method to repeat — not another scanner.
