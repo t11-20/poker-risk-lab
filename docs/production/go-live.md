@@ -218,6 +218,18 @@ land — nothing is lost, but the first morning of a course is the wrong time to
   tasks queued on the worker pool. So thirty players is demonstrated, not a ceiling found — the
   saturation point was not reached, and CPU is the resource that will reach it first.
 
+  **At a human pace the picture is much quieter, and that is the run to plan from.** The figures
+  above use zero think time — thirty bots racing each other, which is the most work thirty seats can
+  offer and not what a class does. Re-run at `--think 3000` with the same thirty players holding for
+  60 s: **CPU 0.12 cores, event loop p99 3.1 ms, db probe p99 ≤ 10 ms, zero errors**, and the
+  numbers a student actually feels — **Coach p95 179 ms, Hand Review p95 658 ms**, action p99
+  26.6 ms. The worker pool still reports 3 tasks queued against a threshold of 1, and it costs
+  nothing measurable: that threshold is an early warning on the Monte Carlo pool, not a limit.
+
+  One cold-start cost is worth knowing before a class starts rather than during one: the FIRST Coach
+  analysis runs its Monte Carlo on the main thread, so its 83.6 ms is also the event loop blocked for
+  that long. It happens once per process. `pnpm run staging up` already warms it.
+
   The rate limits had to be raised for the run, which is itself the finding worth carrying:
   `RATE_LIMIT_GUEST_MAX` defaults to 10 and refused the eleventh of thirty guest sessions. That is
   correct behaviour for a public address and exactly what `COHORT_SIZE` exists to catch — see 6.5.
