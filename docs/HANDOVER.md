@@ -173,6 +173,17 @@ Reviewing it the way it was written means distrusting green results. Specificall
   `learn-lessons.ts` reformats rather than copies. The question that found both — *what does this
   claim, and what would notice if it stopped being true?* — is worth pointing at anything else that
   restates a value computed elsewhere.
+- **Browser measurements in this repo are pinned to Chrome 151, and the gate now runs 152.** There
+  are 56 references to "Chrome 151" across tests, components and docs. Recording the version a
+  behaviour was measured against is right, and it means those facts have an expiry date — one has
+  already expired. `J6.5` went red at a commit whose gate had passed an hour earlier with no code
+  change between: `HandReplay`'s focus rescue sampled `document.activeElement` in a React effect,
+  and Chrome blurs a control that becomes `disabled` AFTER that effect, so the guard saw the caret
+  still on the button and returned early **every time**. The rescue had never once run. It was a
+  race the old browser happened to win. Fixed by rescuing the caret-on-a-disabled-control case as
+  well, which does not depend on when the blur lands.
+  **If a focus or announcement check starts failing without a code change, suspect the browser
+  before the branch** — and re-measure rather than loosening the assertion.
 - **My checkers were wrong more often than the codebase was.** Across those sweeps I wrote five
   scanners and four had bugs — a resolver missing the package root, a walk that skipped
   `apps/api/test` entirely, `^\s*` matching newlines under `re.M`, and an assert pattern that could
