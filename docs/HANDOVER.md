@@ -1,13 +1,23 @@
 # Branch handover — `production-hardening`
 
-**State:** 84 commits ahead of `main` · 347 files · +94,167 / −2,898 · working tree clean · nothing pushed
-*(Counted at `5c94060`, which is this file. Re-derive with `git rev-list --count main..HEAD` and
-`git diff --shortstat main..HEAD` — every number in this document is meant to be checkable, and one
-that only describes the moment before it was written is the first thing a reviewer should catch.)*
-**Gate:** `pnpm run verify` — **16 of 16, exit 0, 3,767 tests** (last run at `8768035`)
+**State:** the branch is many commits ahead of `main`; run the two commands below rather than
+trusting a number here.
+
+```bash
+git rev-list --count main..HEAD    # commits on this branch
+git diff --shortstat main..HEAD    # files and lines changed
+```
+
+*This file quoted its own commit count twice and was wrong both times — once off by one the moment
+it was committed, and again six commits later. A figure that every subsequent commit invalidates,
+including the commits correcting it, is a figure that should not be written down. The commands are
+the answer; that they replaced a number here is the first worked example of this document's closing
+advice.*
+
+**Gate:** `pnpm run verify` — **16 of 16, exit 0, 3,767 tests**
 **Deployment:** staging is up on signed, CVE-clean digests that match `deploy/staging/release-manifest.json`
 
-This document exists so a reviewer can pick the branch up without reading 84 commit messages. It
+This document exists so a reviewer can pick the branch up without reading every commit message. It
 says what changed, what is measured, what is *not* done, and where to be sceptical.
 
 ---

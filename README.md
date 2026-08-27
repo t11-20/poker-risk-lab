@@ -245,7 +245,7 @@ transpiler in the test path.
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Commands, configuration, troubleshooting |
 | [`docs/adr/`](docs/adr/) | Twelve decision records |
 | [`docs/REPORT.md`](docs/REPORT.md) | Final delivery report: what was built, tested, and left undone |
-| [`docs/HANDOVER.md`](docs/HANDOVER.md) | **Start here to review the hardening branch**: what changed across 84 commits, every measurement with its caveats, what is deliberately not done, and where to be sceptical |
+| [`docs/HANDOVER.md`](docs/HANDOVER.md) | **Start here to review the hardening branch**: what changed across the branch, every measurement with its caveats, what is deliberately not done, and where to be sceptical |
 
 ## Licence
 
