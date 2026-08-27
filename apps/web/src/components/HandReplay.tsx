@@ -250,6 +250,18 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
     // case. What is added is the case before: the caret is on a disabled control inside this row.
     // Either way the reader cannot be told where they are, and either way the answer is the
     // transport control that survived.
+    // Why this is two conditions and not `ActionBar`'s design. `ActionBar` faces the same problem
+    // and solves it more thoroughly: it tracks focus with `onFocusCapture`/`onBlurCapture` so its
+    // `hadFocus` flag SURVIVES the disable — `focusout` fires with a null `relatedTarget` in that
+    // case — and it rescues in a `useLayoutEffect`, before paint, because "a delayed rescue can
+    // lose to Chrome parking the caret on `<html>` with nobody watching". That is the right shape
+    // for a bar whose whole row is replaced by the server's next frame.
+    //
+    // This row is two buttons that never unmount and where exactly one is disabled at a time, so
+    // covering BOTH timings is enough and needs no focus bookkeeping: whether Chrome has already
+    // blurred, or is still holding the disabled control, the caret is somewhere the reader cannot
+    // be told about and the destination is the same. If this component ever grows a third control
+    // or starts remounting the row, take `ActionBar`'s approach rather than extending this one.
     const active = document.activeElement;
     const caretOnDisabledControl =
       active instanceof HTMLButtonElement && active.disabled && row.contains(active);
