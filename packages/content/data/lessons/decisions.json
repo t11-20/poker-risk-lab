@@ -717,7 +717,7 @@
           "standardDeviationBbPer100": 100,
           "hands": 250000
         },
-        "caption": "The same assumed edge and the same assumed standard deviation over a far longer stretch. Compare the width of this interval with the previous one, and notice that it narrows with the square root of the hands rather than with the hands."
+        "caption": "The same assumed edge and the same assumed standard deviation over a far longer stretch. Compare the width of this interval with the previous one: twenty-five times the hands, and the spread is five times as wide, because it grows with the square root of the hands rather than with the hands. What narrows is the uncertainty about the win rate itself, which this calculator does not show."
       },
       {
         "kind": "heading",
@@ -838,7 +838,7 @@
       {
         "kind": "formula",
         "expression": "risk of ruin is approximately e^(-2 x win rate x bankroll / standard deviation^2), with the bankroll in big blinds and both rates per 100 hands",
-        "explanation": "Three features matter more than the formula: risk falls exponentially as the bankroll grows, it falls exponentially as the edge grows, and it rises with the square of the standard deviation. Variance is the only one of the three that enters squared, which is why it dominates the answer."
+        "explanation": "Three features matter more than the formula: risk falls exponentially as the bankroll grows, it falls exponentially as the edge grows, and it rises with the standard deviation, which enters the exponent squared. That squaring is why the standard deviation has more leverage than the other two, though the risk itself does not scale as its square — it cannot, being a probability. Double the standard deviation in the calculator below and watch what the risk actually does."
       },
       {
         "kind": "liveCalculation",
@@ -908,7 +908,7 @@
       "Samples in the tens of thousands of hands usually leave an interval wide enough to contain both a winner and a loser, so the midpoint alone is not a result.",
       "Risk of ruin falls exponentially with bankroll and with edge, and rises with the square of the standard deviation, which makes variance the dominant term.",
       "Tripling the edge and tripling the bankroll reduce risk of ruin identically, so the buffer is the lever available to everyone.",
-      "The model assumes a fixed edge, normal results, unchanged stakes, no tilt and infinite play, and every one of those assumptions makes the real risk higher than the number shown."
+      "The model assumes a fixed edge, normal results, unchanged stakes, no tilt and infinite play, and those assumptions do not all point the same way. Fat tails and tilt make the real risk higher than the number shown; moving down when the bankroll shrinks, and playing a finite stretch rather than for ever, both make it lower."
     ],
     "quizId": "quiz-sample-size-and-risk-of-ruin",
     "glossaryTerms": ["sample-size", "risk-of-ruin", "bankroll", "standard-deviation", "variance"]
@@ -948,10 +948,10 @@
       {
         "kind": "list",
         "items": [
-          "The chips you stand to win are worth less each than the chips you stand to lose. In any structure that pays more than one place, an all-in that is an exact coin flip in chips is a loss in prize terms when your tournament life is on the line.",
+          "The chips you stand to win are worth less each than the chips you stand to lose. With three or more players left, an all-in that is an exact coin flip in chips is a loss in prize terms when your tournament life is on the line. Heads-up it is not: with two players the model is exactly linear in stack size, so a chip-neutral flip is prize-neutral too.",
           "Survival has value of its own, which it never has in a cash game. Folding is sometimes worth chips it would not be worth if chips were linear.",
           "A large stack can pressure a medium one, because busting costs the medium stack far more than the large stack risks, and both players know it.",
-          "The break-even equity that the chip arithmetic gives you understates what you need when calling risks elimination. How much it understates depends on the payout schedule and on the other stacks, so it is not a fixed markup you can memorise."
+          "The break-even equity that the chip arithmetic gives you understates what you need when calling risks elimination. How much it understates depends on the payout schedule and on the other stacks, so it is not a fixed markup you can memorise — and heads-up, where the model is linear, it understates by nothing at all."
         ]
       },
       {
