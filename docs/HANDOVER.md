@@ -51,6 +51,15 @@ pnpm run security:containers      # 0 blocking, 0 unfixable, 0 allowed
 `verify` runs **every** gate even after one fails and exits listing them, so a single run tells you
 the whole story rather than the first failure.
 
+**It may take hours rather than the ~50 minutes above, and that is the machine, not the repo.**
+`test` runs `--test-concurrency=1` with per-file process isolation, so a large suite is serial by
+construction, and the Chrome gates are starved by anything else on the box. If a runner kills it on
+a duration cap, run it in batches — the gates are independent, and four batches of four report the
+same thing as one run of sixteen. Two things to watch when you do: **`pnpm run verify | tail` reports
+`tail`'s exit code, not the gate's**, which is how a run that failed `lint` reached me labelled a
+success; and a `nohup ... &` wrapper reports the shell's. Read the log for
+`=== verify: every gate passed ===` rather than trusting a number.
+
 ---
 
 ## 2. What this branch is, in one paragraph
@@ -318,3 +327,55 @@ have formed their own view than before.
 > general. That is the ungated surface. So read `packages/content/data/` and the Lab and Coach as a
 > poker player and a teacher rather than as an engineer: check that an explanation of variance is
 > correct and not merely fluent, and that a claim stated without qualification deserves to be.
+
+---
+
+## 9. The content audit, and the three things it left open
+
+Four agents read the 5,438 lines of student-facing content against the engine — glossary, quizzes,
+the seventeen lessons, and the scenarios plus the Coach and Lab that render them. Every numeric
+claim was recomputed rather than eyeballed. The quizzes came back **clean**: all 25 numeric answers
+and all 54 `correctIndex` values correct, which is what `taught-figures.test.ts` is for and evidence
+that it works.
+
+Everything else found was in the class no gate can compute — a *definition*, a *strategic* claim, a
+*label*, or a sentence whose verdict contradicted the number beside it. Nine commits.
+
+The ones worth knowing, because they say where to look next:
+
+- **The Coach told losing hands they had cleared the price.** One template with only its final word
+  conditional, so a hero with no equity read "You clear that with 0.0% equity, a -24.3 point
+  shortfall". Twelve of thirty-six Lab scenarios. A verdict word appended to a sentence that has
+  already delivered the verdict cannot correct it.
+- **A panel that could not explain its own verdict.** It showed the chosen EV, the best row and the
+  tolerance — three numbers whose only natural reading is a rule the app does not use. Five shipped
+  cases where a "consistent" verdict sat beside a best-row gap of up to 132.9 against a tolerance
+  of 20.
+- **Two producers disagreeing about the same question.** The Lab offered a Raise the Coach refused
+  to price; `describeSpr` banded SPR at 1/4/8/15 while `poker-math` used 1/3/6/13, and one panel
+  rendered both.
+- **A gate reading a stale build.** `regenerate-web-fixtures.mjs` imported `poker-math/dist`, so it
+  answered "are the fixtures current?" against whatever the engine was the last time somebody ran
+  `tsc` — and printed "already the analysis the engine produces today" over fixtures carrying a
+  defect. It reads `src/` now. The same root cause bit again later through a different consumer:
+  adding an export to `poker-math` failed 42 `@prl/ui` tests until the package was rebuilt.
+
+**Three were deliberately NOT fixed, and each is a decision rather than a defect:**
+
+1. **`readSituation` feeds every non-hero seat into `opponentStacks`**, so a folded seat contributes
+   its full stack — `rk-when-survival-outweighs-chip-ev` reports "at most 7,000 can change hands"
+   where the 7,000 belongs to a button its own `facingAction` says folded. A `Scenario` carries one
+   `opponentRange` and has no field for who is still in the hand. Fixing it means adding one and
+   revisiting 36 scenarios.
+2. **SPR has a third convention and a measurement-point mismatch.** `coach.ts`'s teaching notes use
+   `<3` shallow / `>10` deep, and `glossary.json` defines SPR as measured "at the start of a street"
+   while `buildStackContext` measures after this street's bets — so `rk-low-spr-commit-top-pair`
+   shows 0.5 on a page whose own prose says "barely one pot behind" and means 1.26. That one moves
+   numbers, not labels.
+3. **The Lab and the Coach name the same action differently.** The Lab names it from what hero owes,
+   the Coach from the bet level, so a limped pot at the big blind's option is a "bet" on the button
+   and a "raise" in the table beside it.
+
+**Where a reader still beats a gate.** Nothing computes a definition, a strategic claim, or the
+preconditions a rule of thumb leaves unstated. Every defect above was found by reading with the
+engine open beside the prose, and that is the method to repeat — not another scanner.
