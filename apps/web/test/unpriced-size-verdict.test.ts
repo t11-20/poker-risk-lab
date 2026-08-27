@@ -82,7 +82,7 @@ describe('an unpriced size is reported as unpriced', () => {
     );
     assert.match(stage, /did not price that size/u);
     assert.ok(
-      !/tone="caution"[^]{0,80}did not price/u.test(stage),
+      !/tone="caution"[\s\S]{0,80}did not price/u.test(stage),
       'the unpriced case is being shown as a caution; it is not a mistake the learner made',
     );
   });
