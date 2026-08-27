@@ -123,6 +123,62 @@ describe('matching a gate name is exact', () => {
   });
 });
 
+/**
+ * The README's Quick start is the first command a new reader runs, and its gate count is joined to
+ * nothing.
+ *
+ * It said "11 supply-chain gates" until 2026-08-27 — stale across FOUR additions
+ * (`image-provenance`, `log-policy`, `keyless-signing-identity`, `pinned-action-advisories`) while
+ * five other documents were kept in step, because every one of those has a join and this file does
+ * not. A reader following the Quick start would have watched fifteen gates run under a comment
+ * promising eleven and had no way to know which was wrong.
+ *
+ * Deliberately narrow: exactly the one line, matched on its own shape. A repo-wide sweep for
+ * "<N> gates" would have to tell a current claim from a historical one — "it was eleven until…" is
+ * correct prose that must not fail — and `readiness-report.test.mjs` already carries that
+ * attribution logic for the one document that needs it. This is the single claim that actually
+ * drifted, so this is the claim that gets a guard.
+ */
+describe('the README does not promise a gate count the audit does not run', () => {
+  const README = readFileSync(join(REPO_ROOT, 'README.md'), 'utf8');
+
+  /** The number of gates `security:audit` really runs, read from its own array. */
+  function auditGateCount() {
+    const source = readFileSync(join(REPO_ROOT, 'scripts', 'supply-chain', 'audit.mjs'), 'utf8');
+    const block = /const GATES = \[([\s\S]*?)\n\];/u.exec(source);
+    assert.ok(block !== null, 'the GATES array is no longer where this guard looks for it');
+    return [...(block[1] ?? '').matchAll(/file:\s*'/gu)].length;
+  }
+
+  it('states the count `security:audit` actually runs (REGRESSION)', () => {
+    const stated = /pnpm run security:audit\s+#\s*(\d+)\s+supply-chain gates/u.exec(README);
+    assert.ok(
+      stated !== null,
+      'the README Quick start no longer states a supply-chain gate count in the shape this guard ' +
+        'reads. If the line was reworded, teach this the new shape; if it was deleted, delete this ' +
+        'guard deliberately rather than leaving it matching nothing.',
+    );
+    const gates = auditGateCount();
+    assert.ok(gates >= 10, `parsed ${gates} gates out of audit.mjs; the array is not being read`);
+    assert.equal(
+      Number(stated[1]),
+      gates,
+      `README.md says security:audit is ${stated[1]} gates and audit.mjs runs ${gates}`,
+    );
+  });
+
+  it('NEGATIVE CONTROL — a stale count is caught, and a reworded line is refused not passed', () => {
+    const stale = README.replace(/(security:audit\s+#\s*)\d+(\s+supply-chain gates)/u, '$111$2');
+    assert.notEqual(stale, README, 'the Quick start line moved; this control is stale');
+    const found = /pnpm run security:audit\s+#\s*(\d+)\s+supply-chain gates/u.exec(stale);
+    assert.equal(Number(found[1]), 11, 'the control did not actually make the count stale');
+    assert.notEqual(Number(found[1]), auditGateCount());
+
+    // And the shape it cannot read is refused rather than silently passing over nothing.
+    assert.equal(/pnpm run security:audit\s+#\s*(\d+)\s+supply-chain gates/u.exec('# audit'), null);
+  });
+});
+
 describe('the real pipelines', () => {
   it('release.yml runs every verify gate before an artefact exists', () => {
     const gates = gatesInVerify(PKG);
