@@ -413,6 +413,54 @@ while `.env.example`, `docker-compose.yml`, the README, the runbook and `apps/we
 all said 3001, so the documented dev flow started the API where the browser was not looking. Found,
 fixed, and the incident is in the test.
 
+**The Legends and hand-review audits.** Two surfaces a student uses that the content audit did not
+touch: 8,811 lines of AI opponent code, and the review screen where a learner sees their own hand
+analysed. Both were read the same way — compute, do not eyeball.
+
+The hand review came back **largely sound**, and the negative result is worth as much as the rest:
+686 hero decisions across 500 engine-played hands, every one's street, pot, price and full Coach
+report matching an independent recomputation; 300 completed hands x 3 viewers with no hole-card
+leak. Its per-decision analysis does describe the decision actually made.
+
+What the two found and what was fixed:
+
+- **The compare page explained an action other than the one it marked.** `reasoning` came from the
+  last of forty trials while the bar aggregated all of them — 161 of 396 columns, and 6 of 12 on
+  the page's own default spot. The three parts of the explanation agreed with *each other*, so only
+  the bar contradicted them, which is why reading the page did not reveal it.
+- **A confidentiality guard that could not fail.** It searched a reveal for the folder's cards in
+  notation (`"7c"`) while a reveal encodes each card as a deck index (`"card":51`). It now compares
+  indices, and asserts the positive half too — every showdown seat's cards MUST be found — so an
+  encoding change breaks it loudly instead of silently satisfying it.
+- **The AI folded hands it had already won.** The noise floor funded any fold facing a bet, and on
+  a lock the score-driven share is ~0, so the floor was the whole number. At `educational` — every
+  Legends page's default, aimed at beginners — all twelve profiles folded a made nut flush. The
+  module's own comment said the floor exists "not to make it play worse than any style plays"; the
+  exclusion was narrower than its justification.
+- **The offline fixture served wording the package had retracted**, 25 strings, including the
+  unconditional `aggressionFrequency` reading a sibling test proves is unsatisfiable for four
+  profiles.
+- **`fixtures:check` read `dist` for half of what it checks.** Correcting an earlier commit of
+  mine that claimed to have removed exactly this.
+
+**Three findings deliberately left open**, because each is a curriculum judgement rather than a
+defect with a right answer:
+
+1. **`calling-station` teaches the opposite of what it does.** Its entire purpose is fold equity —
+   "against this profile you have almost none" — and measured over 6,000 hands per profile on two
+   seeds it has the **third-highest** fold rate of the twelve, above profiles whose counter-strategy
+   says to bluff them less. The trait works in a fixed spot; the inversion is range composition, as
+   `vpip 0.52` reaches far more postflop turns holding air. Retune the profile, or reword the
+   lesson.
+2. **`foldToPressure`'s ±0.25 tolerance cannot discriminate.** Declared values span 0.14–0.76 and
+   observed 0.37–0.70, so almost any behaviour passes; Spearman rho is 0.599 where `vpip` and
+   `aggressionFrequency` reach 1.000 and 0.937 on the same runs. It is asserted alongside those two,
+   which lends it their apparent authority.
+3. **A profile page presents `foldToBetFrequency` as the trait's observed counterpart**, which
+   `stats.ts` says in as many words it is not — "the observed rate includes every fold to a bet,
+   most of which are hands that never had value". `commentary.ts` refuses this exact substitution
+   for two other axes to avoid printing a false accusation; the page makes it anyway.
+
 **Where a reader still beats a gate.** Nothing computes a definition, a strategic claim, or the
 preconditions a rule of thumb leaves unstated. Every defect above was found by reading with the
 engine open beside the prose, and that is the method to repeat — not another scanner.
