@@ -49,9 +49,20 @@
 > nothing had signed and leave `security:audit` red across the whole rehearsal — the window in which
 > somebody decides the gate is noise. An earlier version of this banner had it backwards.
 >
-> Every staging-derived measurement below the fold was taken against the SUPERSEDED pair and is
-> marked as such where it appears. The strict smoke has been re-run against the new pair and passed;
-> the alert verification and the reliability drills have **not** been re-taken.
+> **Everything staging-derived has now been re-taken against the deployed pair**, on 2026-08-27:
+> the strict smoke (71 checks, plus the X-Forwarded-For overwrite against 24 forged client
+> addresses) as part of `staging up`, and `alerts:verify` at **35 of 35** — both tiers end to end
+> over webhook and SMTP, the ticket proven not to page and the page proven not to ticket, and the
+> dead man's switch detected by stopping Alertmanager and outlasting the 60s deadline.
+>
+> `test:drills` was re-run too, 16 of 16, but it does not belong in that sentence and this document
+> used to imply it did: the drills break ONE LOCAL process against the development database over
+> loopback. They say named failures are handled. They are not a measurement of these images.
+>
+> What is still not rehearsed, by construction rather than omission: that a real provider accepts
+> this deployment's credentials, that the configured address is one a phone watches, and that
+> anybody is awake. The watching half of a dead man's switch is external — a watcher on this host
+> dies with the host it is watching.
 >
 > ## Re-measured 2026-08-26 at `7e861ae0a9f1`
 >
@@ -108,7 +119,10 @@ container log policy and the keyless-signing identity gate were all added on 202
 measured passing here. The container
 scan reports **zero** findings at or above HIGH on either image. Staging runs these digests with a
 71-check strict smoke over TLS; both alerting tiers are verified end to end over both transports;
-sixteen reliability drills pass; backup/restore including a real scratch restore passes; and a
+sixteen reliability drills pass — re-run 2026-08-27, 16 of 16, though note their own caveat: they
+break ONE LOCAL process against the development database over loopback, so unlike the smoke and the
+alert verification they are not a measurement of the deployed images at all, and this document used
+to imply they were; backup/restore including a real scratch restore passes; and a
 rollback to the previous digest pair and back was rehearsed.
 
 Two things are true here that were not true of any previous capture. Every alert rule's series is
@@ -314,7 +328,7 @@ shell, node path and a Node version below the `engines` floor. The base is now
 | `security:secrets` | pass — working tree and all history blobs | — |
 | `release:artifacts` | `ARTIFACTS_EXIT=0`, manifest `dirty: false` | `artifacts.log` |
 | `staging up` | `STAGING_EXIT=0`, **62-check strict smoke**, digests matched, XFF overwritten 24/24, HSTS single-sourced | `staging.log` |
-| `alerts:verify` | **33 of 33, exit 0** — re-run after the dead man's switch landed. BOTH tiers provoked end to end: `ApiDown` (page) reached firing 244s after the API stopped, was delivered on `/page`, was emailed over a real SMTP transaction, resolved 19s after recovery and did **not** raise a ticket; `RateLimitBans` (ticket) was provoked by driving the limiter past its ban threshold (`{"ok":300,"refused":400}`), was delivered on `/ticket` and over SMTP, and did **not** page | `alerts-final.log` |
+| `alerts:verify` | **35 of 35, exit 0**, re-run 2026-08-27 against the SIGNED, CVE-patched pair now deployed — the earlier record was 33 of 33 against the superseded pair, before the count grew. BOTH tiers provoked end to end: `ApiDown` (page) reached firing 244s after the API stopped, was delivered on `/page`, was emailed over a real SMTP transaction, resolved 19s after recovery and did **not** raise a ticket; `RateLimitBans` (ticket) was provoked by driving the limiter past its ban threshold (`{"ok":300,"refused":400}`), was delivered on `/ticket` and over SMTP, and did **not** page | `alerts-final.log` |
 | `alerts:verify`, grounding | **35 rules — 16 page, 18 ticket, 1 heartbeat** — all loaded, all agreeing with `alerts.md`, every runbook on disk, every expression evaluating, and every series they name present in a **live scrape** of this candidate's image: 44 metric families from the API, plus `up{job="prl-alertmanager"} = 1` and `alertmanager_notifications_failed_total` among 109. The room-ownership, retention-sweep and Alertmanager series are grounded here for the first time — the previous capture failed this check because they existed in the tree and not in the deployed image, which is the check working | `alerts-final.log` |
 | `alerts:preflight` | **REFUSES the staging configuration, exit 1**, and that is correct: staging's paging destinations are `alerts:verify`'s own throwaway `.invalid` sinks. The seven structural checks pass — 6 destinations parsed, both tiers distinct, TLS to every off-host destination, 35 rules over 3 severities all resolving to receivers that have somewhere to send. `staging promote` will not call a release promotable while this fails | — |
 | Proxy log leak, **live** | A sentinel request to `/api/v1/auth/oidc/callback?code=…&state=…` against the **running** staging proxy: **0** occurrences in the access log and **0** in the error log. What it logged instead: `"GET /api/v1/auth/oidc/callback?" 501 rt=0.031 up=172.20.0.3:3001 rid=ee14e2aa-…` — path without query, address truncated to `/24`, agent classed, the API's own request id joined | — |

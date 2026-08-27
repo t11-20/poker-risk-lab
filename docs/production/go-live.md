@@ -74,7 +74,7 @@ and fails outright if a keyless record is committed while it is null.
 
 | Step | Command | Pass looks like |
 | --- | --- | --- |
-| 4.1 | `pnpm run alerts:verify` | 33 of 33. **Stops the API for ~4 minutes** — do this before students arrive |
+| 4.1 | `pnpm run alerts:verify` | 35 of 35 (it was 33 before the heartbeat checks grew; read the count off the run). **Stops the API for ~4 minutes** — do this before students arrive |
 | 4.2 | `pnpm run alerts:preflight` | exit 0 with *this* environment's `PRL_ALERT_*` set |
 | 4.3 | `pnpm run alerts:preflight -- --handshake` | must **not** say `CREDENTIALS UNPROVEN` |
 | 4.4 **PERSON** | `pnpm run alerts:ack -- --by <name> --out ack.json` | a real page arrives and **a human types the code back** |
