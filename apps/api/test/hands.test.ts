@@ -486,8 +486,17 @@ describe('the reveal is verified, and an empty one is a pass', () => {
     const serialised = JSON.stringify(review.reveal);
     assert.ok(serialised.includes('"saltHex"'), 'a proof carries the salt for a card already public');
 
-    const proved = new Set((review.reveal?.cards ?? []).map((entry) => entry.card));
-    assert.ok(proved.size > 0, 'a sweep of nothing is not a pass');
+    // `HandReviewResponse.reveal` is deliberately `unknown` — it is an opaque proof payload the
+    // route passes through. Narrowed here rather than cast past, so the shape this guard depends on
+    // is itself asserted: if the encoding ever changes from a deck index, this fails loudly instead
+    // of silently comparing nothing, which is the failure being fixed.
+    const revealed = review.reveal as { readonly cards?: readonly { readonly card?: unknown }[] };
+    const indices = (revealed.cards ?? []).map((entry) => entry.card);
+    assert.ok(
+      indices.length > 0 && indices.every((card) => typeof card === 'number'),
+      `a reveal must carry cards as deck indices; got ${JSON.stringify(indices.slice(0, 3))}`,
+    );
+    const proved = new Set(indices as readonly number[]);
 
     const folderCards = fixture.state.seats.find((seat) => seat.seat === 0)?.holeCards ?? [];
     assert.equal(folderCards.length, 2, 'the fixture must seat a folder holding cards to test this');
