@@ -456,12 +456,33 @@ interval printed on the same row.
 **The finding still open**, and it is a genuine curriculum judgement rather than a defect with a
 right answer:
 
-1. **`calling-station` teaches the opposite of what it does.** Its entire purpose is fold equity —
-   "against this profile you have almost none" — and measured over 6,000 hands per profile on two
-   seeds it has the **third-highest** fold rate of the twelve, above profiles whose counter-strategy
-   says to bluff them less. The trait works in a fixed spot; the inversion is range composition, as
-   `vpip 0.52` reaches far more postflop turns holding air. Retune the profile, or reword the
-   lesson.
+1. **`calling-station` teaches something its behaviour does not reliably support**, and the
+   mechanism is now measured rather than guessed at, because the obvious explanation is wrong.
+
+   Its purpose is fold equity — `learnFrom` says "against this profile you have almost none". Over
+   6,000 hands per profile it has the **third-highest** unconditional fold rate of the twelve. The
+   tempting reframe is that this is a conditional-versus-unconditional error like the one on the
+   profile page: it plays `vpip 0.52`, so it reaches far more postflop turns holding air, and an
+   unconditional rate would be swamped by composition. **That reframe was tested and it fails.**
+   Holding the spot and the hand fixed across all twelve profiles:
+
+       9h9d on Kc 7s 2d  (clear overpair)   calling-station folds  8th lowest of 12
+       TsTd on Ah 8c 3s  (marginal)                               11th
+       8h8d on Ah Kc 3s  (marginal)                                3rd
+       6c6d on Qh Jc 4s  (marginal)                               11th
+       7c4d on Kh Js 2d  (air)                                     5th
+
+   It is not consistently the least-folding profile even in the spots the lesson is about. The cause
+   is visible in `policy.ts`: the fold weight is
+   `(1 - continueAppetite) * (FOLD_BASE + FOLD_TRAIT_SPAN * foldToPressure) * ...`, so the trait's
+   2.5x span is scaled by `1 - continueAppetite` — which collapses toward zero on a clear hand —
+   and then competes with `priceSteepness`, `risk`, `survival` and the observed adjustments, all of
+   which vary by profile. The trait is wired in and is too weak to dominate.
+
+   So the choice is a real one: raise `FOLD_TRAIT_SPAN` (or restructure the weight) until the trait
+   produces the behaviour the card promises, which moves every profile's baselines and the
+   differentiation suite with it — or reword `learnFrom` and `counterStrategy` to claim only what
+   the model does. Both are defensible; neither is a defect with a right answer.
 
 **The live-table audit.** The surface a student spends most of their time on, and the last one
 examined. Its negative results are large and worth trusting: **69,016 redacted views with zero
