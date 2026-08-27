@@ -6,7 +6,7 @@
  * A newcomer at a table with a rotation already running waits for the big blind to reach them
  * rather than being dealt straight in — that is the dead-button rule, and it is what stops four of
  * the fifteen seating combinations handing an arriving player a completely free hand. The table
- * enforces it (`LiveTable.owesBlind`, `TableSnapshot.awaitingBigBlind`) and `test/table-blinds.ts`
+ * enforces it (`LiveTable.owesBlind`, `TableSnapshot.awaitingBigBlind`) and `test/table-blinds.test.ts`
  * proves the enforcement.
  *
  * But there was **no wire field**. `PlayerView.seats` contains only the seats that were dealt in,

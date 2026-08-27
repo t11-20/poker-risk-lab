@@ -7,7 +7,8 @@
  * `.ts`/`.tsx` in `src/`. There is no `dist/`, no bundler config here, and no build step
  * to forget before a change shows up in the dev server. That is why:
  *
- *  - relative imports carry their real extension (`./cards.ts`, `./PlayingCard.tsx`) —
+ *  - relative imports carry their real extension (`./cards.ts`,
+ *    `./components/PlayingCard.tsx`) —
  *    that is what lets Node and Next resolve them without a resolver plugin;
  *  - `'use client'` lives at the top of the individual component files that need it, so
  *    the client boundary is per component rather than swallowing the whole package;
