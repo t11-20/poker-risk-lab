@@ -202,6 +202,25 @@ land — nothing is lost, but the first morning of a course is the wrong time to
   ([ADR 0013](../adr/0013-room-affinity-and-horizontal-scale.md)), so no configuration serves
   hundreds of concurrent *seated* players. Vertical scale is available and buys exactly the
   resources that run out first.
+
+  **A cohort of thirty is comfortably inside it, and that was measured rather than assumed**
+  (2026-08-27, `pnpm run test:load --ramp 1,2,4,8,10 --seats 3`). One API process carried the ramp
+  to **30 concurrent seated players across 10 tables** without crossing a stop criterion —
+  7,125 hands/minute, 1,491 actions/second, action p50 2.6 ms / p95 7.7 ms / p99 14.0 ms, and
+  **zero 5xx**: every REST response in the run was 200 or 201. The 0.54% error rate is protocol
+  refusals the server issues correctly, because the harness uses zero think time and thirty players
+  race each other for the turn.
+
+  Read the harness's own caveats before quoting any of that, and two in particular. It is ONE
+  process on a laptop over loopback, with the load generator competing for the same CPU, no TLS
+  terminator and no production-sized database. And two server signals fired at that level even
+  though no client-observable threshold did: **CPU at 3.69 cores against a 0.9 threshold**, and 12
+  tasks queued on the worker pool. So thirty players is demonstrated, not a ceiling found — the
+  saturation point was not reached, and CPU is the resource that will reach it first.
+
+  The rate limits had to be raised for the run, which is itself the finding worth carrying:
+  `RATE_LIMIT_GUEST_MAX` defaults to 10 and refused the eleventh of thirty guest sessions. That is
+  correct behaviour for a public address and exactly what `COHORT_SIZE` exists to catch — see 6.5.
 - **Nothing here takes money.** There is no processor, no checkout and no column that could hold an
   amount. Enrolment records who holds a place and on whose authority; whatever took the payment is
   somebody else's system, and the `reference` column is the only link back to it.
