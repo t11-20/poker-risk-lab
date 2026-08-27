@@ -737,6 +737,41 @@ describe('users — against Postgres', dbOptions, () => {
     });
   });
 
+  it('renames an account, and reports null for one that is not there', async () => {
+    // `rename` was exported, documented and never once executed. Nothing calls it: no route, no
+    // script, and no test — the only other reference in the repository is the generated `.d.ts`.
+    // The test directly above asserts that "the identity provider does not get to undo a learner's
+    // own rename", which is a claim ABOUT this function made in a path that never reaches it.
+    //
+    // It is kept rather than deleted because the grant matrix in `db/migrations/0001_initial.sql`
+    // names this exact capability as the reason `users` holds UPDATE — "sign-up, rename, guest
+    // sweep" — and a migration is immutable, so deleting the implementation would leave the
+    // schema's own documentation pointing at nothing. What it lacked was a caller and a check; it
+    // now has the check. NO HTTP ROUTE EXPOSES IT, so no learner can rename an account today.
+    await inRollback(async (tx) => {
+      const guest = await users.createGuest(tx, { displayName: 'Alice' });
+
+      const renamed = await users.rename(tx, guest.id, 'Alicia');
+      assert.equal(renamed?.id, guest.id, 'the updated row comes back');
+      assert.equal(renamed?.display_name, 'Alicia');
+      assert.equal(renamed?.kind, 'guest', 'a rename must not change what kind of account it is');
+
+      const readBack = await users.byId(tx, guest.id);
+      assert.equal(readBack?.display_name, 'Alicia', 'the change is durable, not just in the return');
+
+      // Normalisation is the same one `createGuest` uses, so a name that would fail the column's
+      // own CHECK is refused here rather than reaching it.
+      assert.equal((await users.rename(tx, guest.id, '  Padded  '))?.display_name, 'Padded');
+      await assert.rejects(
+        () => users.rename(tx, guest.id, 'x'.repeat(25)),
+        (error: unknown) => error instanceof AppError && error.code === 'invalid_request',
+      );
+
+      // A missing user is null, not a throw: the caller decides whether that is a 404.
+      assert.equal(await users.rename(tx, generateId('user'), 'Nobody'), null);
+    });
+  });
+
   it('derives units from live seats and falls back to the standing allowance', async () => {
     await inRollback(async (tx) => {
       const ownerId = await makeGuest(tx, 'Owner');
