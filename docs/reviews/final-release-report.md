@@ -1,6 +1,20 @@
 # Final release report — the release decision
 
-**Status: DO NOT SHIP.**
+> ## HISTORICAL — this is the decision of 2026-08-18, and it was later reversed
+>
+> The verdict below is **DO NOT SHIP**, and it was correct on the evidence it had. It is **114
+> commits behind** the current head. Everything it names as blocking has since been closed or
+> re-decided, and the release gate it could not get green — `pnpm run verify` — now passes 16 of 16.
+>
+> **For the current position read [`../production/final-readiness-report.md`](../production/final-readiness-report.md)**;
+> to review the branch, start at [`../HANDOVER.md`](../HANDOVER.md).
+>
+> Kept, not deleted: a reversed decision is evidence of how the decision was made, and this
+> repository does not delete the record of a failure and keep only the record of the fix. But a
+> document whose first line reads "DO NOT SHIP", in a directory with no index, sharing a filename
+> with a different file in `docs/audit/`, is a trap for anyone browsing — hence this banner.
+
+**Status at the time: DO NOT SHIP.**
 **Last updated:** 2026-08-18.
 
 This is the document `REPORT.md` §8 points at. It exists to answer one question — *should this be
