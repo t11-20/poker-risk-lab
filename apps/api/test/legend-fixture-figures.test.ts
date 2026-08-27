@@ -43,7 +43,13 @@ import type {
   LegendProfileCardDto,
 } from '@prl/contracts';
 import { MAX_COMPARE_TRIALS } from '@prl/contracts';
-import { bandForShortfall, outcomeVersusQualityNote, PROFILES } from '@prl/poker-ai';
+import {
+  bandForShortfall,
+  outcomeVersusQualityNote,
+  PROFILES,
+  TRAIT_DESCRIPTIONS,
+  TRAIT_LABELS,
+} from '@prl/poker-ai';
 import { evOfBet, evOfCall, evOfRaise } from '@prl/poker-math';
 
 const FIXTURE = resolve(
@@ -234,6 +240,59 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
       PROFILES.map((profile) => profile.naming.id),
       'the offline roster and the served roster are the same set, in the same order',
     );
+  });
+
+  it('carries the same axis PROSE the served profiles do (REGRESSION)', () => {
+    // The numbers were joined; the words beside them were not. Measured 2026-08-27: 25 mismatches,
+    // and all of them were strings this package had already CORRECTED, so the fixture was serving
+    // the wording each fix had removed.
+    //
+    //   aggressionFrequency  fixture: "How often it bets and raises."
+    //                        source:  "...on a hand it reads as neither strong nor hopeless. With
+    //                                  nothing it bets less often than this..."
+    //   threeBetTendency     fixture: "How often it re-raises someone who opened."
+    //                        source:  "How much of the range it would have called an opening raise
+    //                                  with it re-raises instead..."
+    //
+    // The first is the unconditional reading that `declared-versus-observed.test.ts` proves is
+    // arithmetically unsatisfiable for four profiles, and the second is the reading `traits.ts`
+    // says "cannot be read as" a 3-bet frequency — printed on a card that shows `vpip 0.15` beside
+    // `threeBetTendency 0.44`. This is the offline path, which is what a reader sees whenever the
+    // API is unreachable.
+    const labels = TRAIT_LABELS as Readonly<Record<string, string>>;
+    const descriptions = TRAIT_DESCRIPTIONS as Readonly<Record<string, string>>;
+    let compared = 0;
+    for (const card of PROFILE_CARDS) {
+      for (const axis of card.axes) {
+        assert.equal(axis.label, labels[axis.key], `${card.id}.${axis.key}: the fixture's label is stale`);
+        assert.equal(
+          axis.description,
+          descriptions[axis.key],
+          `${card.id}.${axis.key}: the fixture's description is stale`,
+        );
+        compared += 2;
+      }
+    }
+    assert.ok(compared >= 100, `only ${compared} string(s) compared; a sweep of nothing is not a pass`);
+  });
+
+  it('carries the same style notes the served profiles do (REGRESSION)', () => {
+    // `volume-grinder` said "Re-raises preflop more than any other profile here." `profiles.ts`
+    // documents that exact sentence as false and replaced it with one about SHARE of openings
+    // played back at — measured, its unconditional 3-bet frequency is third, not first.
+    const byId = new Map(PROFILES.map((profile) => [profile.naming.id, profile]));
+    let compared = 0;
+    for (const card of PROFILE_CARDS) {
+      const profile = byId.get(card.id);
+      assert.ok(profile !== undefined, `${card.id} is in the fixture and not in the served set`);
+      assert.deepEqual(
+        card.styleNotes,
+        profile.styleNotes,
+        `${card.id}: the fixture's style notes are stale`,
+      );
+      compared += 1;
+    }
+    assert.ok(compared >= 10, `only ${compared} profile(s) compared; a sweep of nothing is not a pass`);
   });
 
   it('carries the SAME trait numbers the served profiles do (REGRESSION)', () => {

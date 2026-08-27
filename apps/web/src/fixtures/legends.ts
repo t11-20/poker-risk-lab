@@ -120,8 +120,10 @@ const TRAIT_DESCRIPTIONS: Readonly<Record<LegendTraitKey, string>> = {
     'When it plays a hand, how often it raises rather than calls. Raising takes the initiative but ' +
     'commits more chips.',
   aggressionFrequency:
-    'How often it bets and raises. Aggression wins pots nobody contests, and loses more when it runs ' +
-    'into a real hand.',
+    'How often it bets and raises on a hand it reads as neither strong nor hopeless. With nothing it ' +
+    'bets less often than this, and with a real hand more, so its overall bet-and-raise rate sits ' +
+    'below this number. Aggression wins pots nobody contests, and loses more when it runs into a ' +
+    'real hand.',
   bluffFrequency:
     'How often it bets with a hand that cannot win at showdown. Bluffing too little is readable; too ' +
     'much is expensive.',
@@ -129,8 +131,10 @@ const TRAIT_DESCRIPTIONS: Readonly<Record<LegendTraitKey, string>> = {
     'How much it cares about acting last. Acting last is a genuine edge, and ignoring it is one of the ' +
     'most common leaks.',
   threeBetTendency:
-    'How often it re-raises someone who opened. Re-raising isolates and takes control, at the cost of a ' +
-    'bigger pot with less information.',
+    'How much of the range it would have called an opening raise with it re-raises instead. It only ' +
+    'applies to the hands it plays at all, so a tight profile still re-raises rarely however high ' +
+    'this reads. Re-raising isolates and takes control, at the cost of a bigger pot with less ' +
+    'information.',
   betSizingPreference:
     'How big it likes to bet. Bigger bets charge draws more but risk more to win the same pot.',
   sizingVariance:
@@ -647,7 +651,9 @@ export const LEGEND_PROFILE_FIXTURES: readonly LegendProfileCardDto[] = [
       'How often re-raising preflop is available, and how much pressure that puts on someone who only raises with strong hands.',
     ],
     styleNotes: [
-      'Re-raises preflop more than any other profile here.',
+      'Re-raises a larger share of the openings it plays back at than any other profile here — ' +
+        'which is not the same as making the most 3-bets, since looser profiles get more openings ' +
+        'to answer.',
       'Takes marginal all-in spots that other profiles decline.',
       'Its short-run results swing hard in both directions.',
     ],
