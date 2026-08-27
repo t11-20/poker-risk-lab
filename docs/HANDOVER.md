@@ -302,8 +302,19 @@ have formed their own view than before.
 > One defect of this kind was found and it was found by reading, not by a gate: the Coach taught a
 > break-even threshold of −10.2%, a number that does not exist. Every gate was green.
 >
-> So read `packages/content` and the Lab and Coach components as a poker player and a teacher, not
-> as an engineer. Check the arithmetic. Check that a claimed probability matches what
-> `packages/poker-math` computes. Check that an explanation of variance is not merely fluent. This
-> is the part of the application a fee is being charged for, and it has had the least adversarial
-> attention of anything here.
+> Know what is already covered before you start, or you will re-run a gate by hand.
+> `packages/content/test/taught-figures.test.ts` carries a 28-quote registry that RECOMPUTES every
+> numeric claim the teaching prose makes, from `@prl/poker-engine` and `@prl/poker-math`, and
+> refuses any entry whose expected value is a literal copied from the content. A second sweep walks
+> all 61 live calculations and checks the numbers in a prompt against the inputs the learner is
+> actually graded on. `scenario-coherence.test.ts` checks a scenario's narrated bets, all-ins and
+> stated stack depths against its own chip counts — that one was written after a scenario titled
+> "Nine big blinds" was found giving hero 13.5 of them.
+>
+> **The gap is what those cannot reach.** A registry only covers what somebody thought to add, and
+> the coherence checks are on `scenario.*` fields only. Nothing computes a *definition*, a
+> *strategic* claim, or a rule of thumb's unstated preconditions — the classic failure in poker
+> teaching being a heuristic that holds heads-up or at one stack depth, presented flatly as
+> general. That is the ungated surface. So read `packages/content/data/` and the Lab and Coach as a
+> poker player and a teacher rather than as an engineer: check that an explanation of variance is
+> correct and not merely fluent, and that a claim stated without qualification deserves to be.
