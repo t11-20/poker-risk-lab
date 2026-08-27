@@ -683,3 +683,32 @@ test('M rejects inputs that would make it meaningless', () => {
   // thing to be able to say.
   assert.equal(mRatio({ stack: 0, smallBlind: 25, bigBlind: 50 }).m, 0);
 });
+
+test('an all-in opponent does not make the Coach say nothing can change hands (REGRESSION)', () => {
+  // With every opponent all in, `deepest` is 0 and the general sentence rendered "at most 0 can
+  // change hands even though you have 260. The 260 above that is not in play this hand — nobody
+  // can pay you for it and nobody can take it." The Coach printed that while pricing a call of 170
+  // out of that same 260, and on one Lab scenario where the call was hero's whole stack. What is
+  // finished is the betting, not the movement of chips, and those are different claims.
+  const { effective, explanation } = effectiveStack(260, [0]);
+
+  // The NUMBER is still zero and deliberately so: there is no future street to size against, and
+  // SPR is computed from it. Only the sentence was wrong.
+  assert.equal(effective, 0);
+
+  assert.ok(
+    !/can change hands/u.test(explanation),
+    `the all-in case still claims chips cannot change hands: "${explanation}"`,
+  );
+  assert.ok(
+    !/not in play this hand/u.test(explanation),
+    `the all-in case still calls hero's callable chips out of play: "${explanation}"`,
+  );
+  assert.match(explanation, /no more betting/u);
+
+  // And the ordinary shallow-opponent case must keep its sentence, so the branch above has not
+  // swallowed the one it sits in front of.
+  const shallow = effectiveStack(260, [90]);
+  assert.equal(shallow.effective, 90);
+  assert.match(shallow.explanation, /at most .* can change hands/u);
+});

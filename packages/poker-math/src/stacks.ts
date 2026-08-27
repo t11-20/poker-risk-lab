@@ -129,10 +129,22 @@ export function effectiveStack(
   }
   const effective = Math.min(heroStack, deepest);
 
+  // The all-in case is its own sentence, because the general one is FALSE here.
+  //
+  // With every opponent already all in, `deepest` is 0 and the second branch below rendered "at
+  // most 0 can change hands even though you have 260. The 260 above that is not in play this hand
+  // — nobody can pay you for it and nobody can take it." The Coach printed that on spots where it
+  // was simultaneously pricing a call of 170 out of that same 260, and on
+  // `rk-an-all-in-that-is-nearly-even` where the call was hero's entire remaining stack. The chips
+  // in front of hero are emphatically in play; what is finished is the BETTING, and those are
+  // different claims. Zero is still the right number for SPR — there is no future street to size
+  // against — so only the sentence changes.
   const core =
-    heroStack <= deepest
-      ? `Yours is the shorter stack: you have ${chips(heroStack)} and the deepest opponent has ${chips(deepest)}, so at most ${chips(effective)} can change hands. You can neither win nor lose more than you brought to the hand.`
-      : `The deepest opponent has only ${chips(deepest)}, so at most ${chips(deepest)} can change hands even though you have ${chips(heroStack)}. The ${chips(heroStack - deepest)} above that is not in play this hand — nobody can pay you for it and nobody can take it.`;
+    deepest === 0
+      ? `Every opponent is already all in, so there is no more betting: the only chips that can still move are the ones in front of you now. Your remaining ${chips(heroStack)} is not a betting stack this hand, it is what you would call from.`
+      : heroStack <= deepest
+        ? `Yours is the shorter stack: you have ${chips(heroStack)} and the deepest opponent has ${chips(deepest)}, so at most ${chips(effective)} can change hands. You can neither win nor lose more than you brought to the hand.`
+        : `The deepest opponent has only ${chips(deepest)}, so at most ${chips(deepest)} can change hands even though you have ${chips(heroStack)}. The ${chips(heroStack - deepest)} above that is not in play this hand — nobody can pay you for it and nobody can take it.`;
   const multiway =
     opponentStacks.length > 1
       ? ` With ${opponentStacks.length} opponents each one has its own effective stack, the smaller of yours and theirs. ${chips(effective)} is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them.`
