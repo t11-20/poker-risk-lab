@@ -3035,6 +3035,424 @@ const REPLAY_CHECKS = [
 ];
 
 // ---------------------------------------------------------------------------
+// Journey 6.7 — the deck proof that does NOT check out
+//
+// 6.7 has two halves and only one of them was reachable. "Its result announces as a sentence" is on
+// screen for every hand; "a verification failure announces as an alert" needs a reveal whose proofs
+// do not reach its own hand's published root, and the certification document refused three routes to
+// one on their merits: the browser cannot be made to receive a corrupted reveal (the review page is
+// a server component, so the fetch that matters is the WEB SERVER's), the product must not contain a
+// switch that lies about a deal (that is the single thing `CommitmentVerifier` exists to detect), and
+// a hand-built `HandReviewResponse` would be a check of the gate's own fixture that goes stale
+// against `packages/contracts` the moment either side moves.
+//
+// The fourth route was written down in §5 and not taken: a third web app off the same build whose
+// `PRL_API_ORIGIN` points at a pass-through proxy. `scripts/review-proxy.mjs` forwards the REAL
+// API's REAL review response with one hex digit of one salt flipped — a splice into the response
+// TEXT, so every other byte is the API's — and that reaches `mismatch` honestly. It never authors a
+// payload, so there is nothing here to go stale.
+//
+// The failure this route is built against is the fixture's, not the application's: a proxy that
+// silently forwarded the bytes unchanged would render a perfectly good proof, and a screen with no
+// alert on it cannot tell that apart from a defect. So the proxy records every response it corrupted
+// and every one it refused, with reasons, and the check below will not read anything off the screen
+// until that log names the hand that is on it. A hand everybody folded out of proves no deck
+// position, which is the CORRECT outcome for such a hand and exactly the payload with no byte to
+// flip — it is the common case, not a corner one.
+// ---------------------------------------------------------------------------
+
+/** `verifyDeckReveal`'s own words when a leaf hash no longer walks to the published root. */
+const PROOF_FAILED_REASON = /position \d+ does not prove against the published root/u;
+
+/** The sentence the verifier renders while the check has not run yet. Only ever server-side. */
+const VERIFIER_PENDING = 'Recomputing the deck proof in your browser.';
+
+/**
+ * The verifier as a reader gets it: the chip, the outcome block, and the published facts.
+ *
+ * `spoken` strips every `aria-hidden` decoration before reading the text, which is the standard 8.2
+ * already holds its notice to: a result carried by a glyph and a tone colour is a visual-only badge
+ * however loud it looks, and 6.7 asks for a sentence.
+ */
+const VERIFIER_PROBE = `(() => {
+  const tidy = (value) => (value ?? '').replace(/\\s+/gu, ' ').trim();
+  const spoken = (el) => {
+    const copy = el.cloneNode(true);
+    for (const decoration of copy.querySelectorAll('[aria-hidden="true"]')) decoration.remove();
+    return tidy(copy.textContent);
+  };
+  const section = document.querySelector('.prl-verifier');
+  if (section === null) return null;
+  const chip = section.querySelector('.prl-chip');
+  const alert = section.querySelector('[role="alert"]');
+  // The outcome callout. The disclosure below it uses class \`prl-note\`, not \`role="note"\`, so this
+  // cannot pick up "what this proves and what it does not" by mistake.
+  const note = section.querySelector('[role="note"]');
+  if (alert !== null) alert.setAttribute('data-prl-ax-verdict', 'alert');
+  if (note !== null) note.setAttribute('data-prl-ax-verdict', 'note');
+  const terms = [...section.querySelectorAll('.prl-verifier__facts dt')];
+  const values = [...section.querySelectorAll('.prl-verifier__facts dd')];
+  return {
+    chip: chip === null ? null : spoken(chip),
+    alert: alert === null ? null : { spoken: spoken(alert), markup: alert.getAttribute('aria-live') },
+    note:
+      note === null
+        ? null
+        : { spoken: spoken(note), title: tidy(note.querySelector('.prl-callout__title')?.textContent) },
+    facts: terms.map((term, at) => ({ label: tidy(term.textContent), value: tidy(values[at]?.textContent) })),
+    inMain: section.closest('main') !== null,
+  };
+})()`;
+
+/** One reading of the verifier, from the DOM and from the computed tree at the same moment. */
+async function readVerifier(page) {
+  const shape = await page.evaluate(VERIFIER_PROBE);
+  if (shape === null) return { present: false };
+  const alertAx = (await axFor(page, '[data-prl-ax-verdict="alert"]'))[0] ?? null;
+  const noteAx = (await axFor(page, '[data-prl-ax-verdict="note"]'))[0] ?? null;
+  const nodes = await axNodes(page);
+  await page.evaluate(
+    `document.querySelectorAll('[data-prl-ax-verdict]').forEach((el) => el.removeAttribute('data-prl-ax-verdict'))`,
+  );
+  return {
+    present: true,
+    ...shape,
+    alertAx,
+    noteAx,
+    // Decided against the TREE rather than against `textContent`, for the reason 8.2 gives: a
+    // sentence that is on screen and not in the tree is unreadable to the thing that reads screens.
+    treeText: nodes.map((node) => node.name).filter((name) => name.length > 0),
+  };
+}
+
+/**
+ * Render a page SERVER-SIDE and answer three questions about the HTML, without navigating to it.
+ *
+ * Two jobs in one request. It is the candidate probe — the web server's own fetch goes through the
+ * proxy, so this is what makes the proxy see a review at all — and it is the evidence that the
+ * verdict is computed in the BROWSER. `CommitmentVerifier` runs `checkDeckProof` in an effect and
+ * says why where it does it: an initialiser would also run during the server render, and then
+ * "checked in your browser" would be a claim the component could not support. An alert that arrived
+ * inside the document would also be an alert nothing announces — the 3.3 defect, in the one branch
+ * on this screen that is allowed to interrupt.
+ */
+const renderedHtml = (page, path) =>
+  page.evaluate(
+    `fetch(${JSON.stringify(path)}, { headers: { accept: 'text/html' } })
+       .then((response) => response.text())
+       .then((html) => {
+         // From the verifier onwards, not the whole document: the row is about THIS section's
+         // alert, and a site-wide banner somewhere in the shell would otherwise fail it for
+         // something that has nothing to do with a deck proof.
+         const at = html.indexOf('prl-verifier');
+         const section = at === -1 ? '' : html.slice(at);
+         return {
+           reached: true,
+           length: html.length,
+           carriesVerifier: at !== -1,
+           pending: section.includes(${JSON.stringify(VERIFIER_PENDING)}),
+           carriesReason: /position \\d+ does not prove against the published root/u.test(section),
+           carriesAlert: /role="alert"/u.test(section),
+         };
+       })
+       .catch((error) => ({ reached: false, why: String(error) }))`,
+  );
+
+/** Every hand this session can see, newest first, with how many board cards it dealt. */
+const listHandSummaries = (page) =>
+  page
+    .evaluate(
+      `fetch('/api/v1/hands?limit=10', { headers: { accept: 'application/json' } })
+         .then((r) => (r.ok ? r.json() : { hands: [] }))
+         .then((body) => (body.hands ?? []).map((hand) => ({ id: hand.id, board: (hand.board ?? []).length })))
+         .catch(() => [])`,
+    )
+    .then((hands) => hands ?? []);
+
+/**
+ * Act until the hand is over, and never fold. The fixture that puts a byte in the reveal.
+ *
+ * ## The flake this exists to end, with the measurement
+ *
+ * A reveal proves the board cards that were dealt plus the hole cards of anybody who showed
+ * (`publicPositions` in `packages/poker-engine/src/machine.ts`). So a hand that ends before the
+ * flop proves NOTHING — correctly, and that is the whole point of a per-card Merkle tree — and has
+ * no byte to flip. The first version of this route reused whatever hands the session had, all of
+ * them played by `foldOnce`: the hero folds immediately and whether a board is ever dealt is then a
+ * fact about five bots. Measured over seven consecutive `test:ax` runs, one of them failed — three
+ * hands in a row ended preflop and the row refused, correctly and uselessly. A gate that goes red
+ * once in seven for a reason that is not a defect teaches people to re-run it, which costs more
+ * than the row is worth.
+ *
+ * A hero who never folds ends the hand preflop only by winning it uncontested from the big blind:
+ * a call cannot be folded out, and the big blind behind a call can always check, which deals a
+ * flop. So this is the same fixture family as `foldOnce` and `foldTwiceInOneTask` — the product's
+ * own controls, real Enter keys — chosen so that the state 6.7 needs is reached by the rules rather
+ * than by luck.
+ *
+ * Check before call, because a check is free and a call is not: the hero has 1,000 units and a bot
+ * may shove, and calling a shove is fine (it goes to showdown, which reveals more, not less) but
+ * checking is what a hand mostly offers.
+ */
+async function stayInTheHand(page, evidence) {
+  let first = null;
+  const over = '/The hand is complete/u.test(document.body.innerText)';
+  for (let decision = 0; decision < 12; decision += 1) {
+    const acted = (await pressControl(page, /^check\b/iu)) ?? (await pressControl(page, /^call\b/iu));
+    if (acted === null) break;
+    first ??= acted;
+    // Wait for the controls to go down before waiting for them to come back. Without this the next
+    // poll can still see the PREVIOUS turn's enabled buttons — `disabled` arrives from React state,
+    // which is exactly the window 3.19 uses on purpose to get a decision refused.
+    await waitInPage(page, `!(${ENABLED_ACTION})`, 10);
+    if (!(await waitInPage(page, `${ENABLED_ACTION} || ${over}`, 60))) break;
+    if ((await page.evaluate(over)) === true) break;
+  }
+  evidence.stayedIn = first;
+  return first;
+}
+
+/**
+ * A hand whose reveal has a byte to flip, played if this session has none.
+ *
+ * Bounded at three attempts for the reason `handForReplay` gives: a fixture that plays hands until
+ * it likes one is a gate that can run forever. Every candidate is recorded with what the proxy made
+ * of it, so a run that finds nothing says which hands it looked at and why each was refused.
+ */
+async function findCorruptibleHand(page, proxiedBase, honestBase, proxy) {
+  const tried = [];
+  let seen = 0;
+  let noBoard = 0;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await page.goto(`${proxiedBase}/review`);
+    const hands = await listHandSummaries(page);
+    seen = Math.max(seen, hands.length);
+    for (const hand of hands) {
+      if (tried.some((entry) => entry.id === hand.id)) continue;
+      // Read off the list, so a hand that cannot possibly work costs nothing. A hand that dealt no
+      // board card and had no showdown proves no deck position — see `stayInTheHand` for the whole
+      // arithmetic — and rendering it would only produce a refusal this already knows about.
+      if (hand.board === 0) {
+        noBoard += 1;
+        continue;
+      }
+      const html = await renderedHtml(page, `/review/${hand.id}`);
+      const record = proxy.log.mutated.find((entry) => entry.handId === hand.id) ?? null;
+      // Matched on the PATH, not by taking the last entry: a refusal recorded for some other hand
+      // would otherwise be reported as this hand's reason, which is a lie in a failure message and
+      // the failure message is the whole value of a refusal.
+      const refused = proxy.log.refused.findLast((e) => e.path.endsWith(`/${hand.id}`))?.why ?? null;
+      tried.push({ id: hand.id, mutated: record !== null, why: record === null ? refused : null });
+      if (record !== null) return { id: hand.id, html, record, tried, seen, noBoard };
+    }
+    // Nothing in this session's history reached a flop. Play one that will: the hero stays in the
+    // hand rather than folding, which is what makes the board — and therefore the reveal — exist.
+    if (attempt < 2) await driveLiveHand(page, honestBase, { decide: stayInTheHand });
+  }
+  return { id: null, html: null, record: null, tried, seen, noBoard };
+}
+
+/**
+ * Load a replay and wait for the verifier to stop saying "checking".
+ *
+ * A fixed `settle` would be a race against hydration on a machine under load, and the thing being
+ * waited for is exactly the thing this row is about: the verdict is computed in an effect, so it
+ * does not exist until the browser has run one. Returns whether it settled; a run that timed out
+ * says so rather than reporting whatever the pending screen looked like.
+ */
+async function verifierSettled(page, url) {
+  await page.goto(url);
+  return waitInPage(
+    page,
+    `(() => {
+      const chip = document.querySelector('.prl-verifier .prl-chip');
+      return chip !== null && !/checking/iu.test(chip.textContent ?? '');
+    })()`,
+    20,
+  );
+}
+
+async function gatherDeckProofAlert(page, proxiedBase, context) {
+  const honestBase = context?.origins?.default ?? null;
+  const proxy = context?.proxy ?? null;
+  const evidence = { hand: null, tried: [], proxy: null, honest: null, corrupted: null, html: null };
+  if (honestBase === null || proxy === null) {
+    evidence.wiring = 'the corrupting proxy was not wired into this run';
+    return evidence;
+  }
+
+  const found = await findCorruptibleHand(page, proxiedBase, honestBase, proxy);
+  evidence.tried = found.tried;
+  evidence.seen = found.seen;
+  evidence.noBoard = found.noBoard;
+  evidence.proxy = { reviews: proxy.log.reviews, refused: proxy.log.refused.slice(-3) };
+  if (found.id === null) return evidence;
+  evidence.hand = found.id;
+  evidence.record = found.record;
+  evidence.html = found.html;
+
+  // The corrupted screen first, then the honest one. Both halves of 6.7 are about the SAME hand, so
+  // a run where they disagreed about which hand they were reading would be two measurements rather
+  // than one row.
+  evidence.corruptedSettled = await verifierSettled(page, `${proxiedBase}/review/${found.id}`);
+  evidence.corrupted = await readVerifier(page);
+
+  evidence.honestSettled = await verifierSettled(page, `${honestBase}/review/${found.id}`);
+  evidence.honest = await readVerifier(page);
+  return evidence;
+}
+
+const DECK_PROOF_CHECKS = [
+  {
+    id: 'J6.7',
+    what: 'the verifier states its result as a sentence, and a proof that fails says so as an alert',
+    decide: (e) => {
+      if (e.wiring !== undefined) return fail(e.wiring);
+      if (e.hand === null || e.hand === undefined) {
+        // The fixture failing, said as the fixture failing. A screen with no alert on it cannot
+        // tell "the application stopped announcing" from "the proxy served nothing corrupted", and
+        // guessing between those two is how a green check over nothing happens.
+        return fail(
+          `the proxy corrupted no reveal, so nothing was checked. Of ${e.seen ?? 0} hand(s) in this ` +
+            `session ${e.noBoard ?? 0} dealt no board card and could not carry one; the proxy saw ` +
+            `${e.proxy?.reviews ?? 0} review response(s) across the rest — ${JSON.stringify(
+              (e.tried ?? []).map((entry) => `${entry.id}: ${entry.why ?? 'no record'}`),
+            )}. A hand that ended before the flop proves no deck position and has no byte to flip`,
+        );
+      }
+      if (e.record.serverOk !== true || !(e.record.serverPositions > 0)) {
+        return fail(
+          `the API's own verdict on the UNCORRUPTED payload was ${JSON.stringify(e.record.serverOk)} ` +
+            `over ${e.record.serverPositions} position(s). This run would be measuring a broken API ` +
+            'rather than a corrupted reveal',
+        );
+      }
+
+      // ----- the half that is on screen for every hand: the result is a sentence
+      if (e.honestSettled !== true || e.corruptedSettled !== true) {
+        return fail(
+          `the verifier was still reading "checking" after 20s (honest ${String(e.honestSettled)}, ` +
+            `corrupted ${String(e.corruptedSettled)}). Whatever this run then read is a pending screen`,
+        );
+      }
+      if (e.honest?.present !== true) return fail('no commitment verifier on the honest replay page');
+      if (e.honest.chip !== 'proof holds') {
+        return fail(
+          `the honest replay of this hand reads "${e.honest.chip}", not "proof holds". The corrupted ` +
+            'half below would then be comparing two different states rather than one hand seen twice',
+        );
+      }
+      if (e.honest.alert !== null) {
+        return fail(
+          `a proof that HOLDS raised an alert saying "${e.honest.alert.spoken.slice(0, 60)}". The one ` +
+            'result on this screen that interrupts must be the one that should not happen',
+        );
+      }
+      if (e.honest.note === null || e.honest.noteAx?.ignored === true) {
+        return fail(
+          'the honest result is not stated in any block a reader reaches; the chip is all there is',
+        );
+      }
+      if (e.honest.note.spoken.length < 80 || e.honest.note.title.length === 0) {
+        return fail(
+          `with every decorative glyph removed the honest result reads "${e.honest.note.spoken}", which ` +
+            'is a badge rather than a sentence',
+        );
+      }
+      if (!e.honest.treeText.some((text) => text.includes(e.honest.note.title))) {
+        return fail(
+          `"${e.honest.note.title}" is on screen and is not in the accessibility tree, so it is ` +
+            'unreadable to the thing that reads screens',
+        );
+      }
+      const server = e.honest.facts.find((fact) => /^The server said/iu.test(fact.label));
+      if (server === undefined || !/^verified/u.test(server.value)) {
+        return fail(
+          'the honest page does not state the SERVER’s verdict beside the browser’s. The two ' +
+            'answers standing side by side is the whole point of this section',
+        );
+      }
+
+      // ----- the half the proxy exists for: the failure announces as an alert
+      if (e.corrupted?.present !== true) return fail('no commitment verifier on the corrupted replay page');
+      if (e.corrupted.chip !== 'proof failed') {
+        return fail(
+          `one byte of the reveal was flipped and the verifier reads "${e.corrupted.chip}". ` +
+            '"different hand" would mean the fixture moved the binding and "no reveal" that it broke ' +
+            'the parse; either is a fixture defect, and neither is the mismatch this row is about',
+        );
+      }
+      if (e.corrupted.alert === null) {
+        return fail(
+          'the proof failed and nothing on the page carries role="alert". A reader is told the deal ' +
+            'cannot be shown to be on the record by a colour and a glyph',
+        );
+      }
+      const node = e.corrupted.alertAx;
+      if (node === null || node.ignored) {
+        return fail('the failure block is not in the accessibility tree, so only a sighted reader gets it');
+      }
+      if (node.role !== 'alert' || node.live !== 'assertive') {
+        return fail(
+          `the failure block computes as role "${node.role || 'none'}" with live politeness ` +
+            `"${node.live || 'none'}". A polite failure waits behind whatever the page is already saying`,
+        );
+      }
+      if (!PROOF_FAILED_REASON.test(e.corrupted.alert.spoken)) {
+        return fail(
+          `the alert reads "${e.corrupted.alert.spoken.slice(0, 90)}" and does not carry the reason ` +
+            'the engine gave. A reader is told something is wrong and nothing about what',
+        );
+      }
+      if (e.corrupted.alert.spoken.length < 80) {
+        return fail(
+          `with every decorative glyph removed the alert reads "${e.corrupted.alert.spoken}", which is ` +
+            'a badge rather than a sentence',
+        );
+      }
+      if (!e.corrupted.treeText.some((text) => PROOF_FAILED_REASON.test(text))) {
+        return fail('the reason is in the DOM and not in the accessibility tree');
+      }
+
+      // ----- the alert is INSERTED, which is what makes it an alert
+      if (e.html?.reached !== true || !e.html.carriesVerifier) {
+        return fail(`the server-rendered HTML could not be read: ${e.html?.why ?? 'no verifier in it'}`);
+      }
+      if (!e.html.pending || e.html.carriesReason || e.html.carriesAlert) {
+        return fail(
+          'the verdict is in the document the server sent (pending sentence ' +
+            `${String(e.html.pending)}, reason ${String(e.html.carriesReason)}, alert ` +
+            `${String(e.html.carriesAlert)}). An alert that arrives WITH its document announces ` +
+            'nothing — the platform is notified of a change to a region it already knows about — and ' +
+            'a verdict computed on the server is the server marking its own work',
+        );
+      }
+
+      // ----- the two answers on the page disagree, which is what the section is for
+      const corruptedServer = e.corrupted.facts.find((fact) => /^The server said/iu.test(fact.label));
+      if (corruptedServer === undefined || !/^verified/u.test(corruptedServer.value)) {
+        return fail(
+          `the corrupted page reports the server as "${corruptedServer?.value}". The proxy did not ` +
+            'touch that field, so this run is no longer reading the response the API sent',
+        );
+      }
+      const root = e.corrupted.facts.find((fact) => /^Merkle root/iu.test(fact.label));
+      if (root?.value !== e.record.root) {
+        return fail(
+          `the root on screen is "${root?.value}" and the proxy forwarded "${e.record.root}". The page ` +
+            'is not showing the bytes this fixture corrupted',
+        );
+      }
+      return pass(
+        `${e.hand}: honest, "${e.honest.note.title}"; then salt byte ${e.record.byteOffset} ` +
+          `"${e.record.before}"->"${e.record.after}" at deck position ${e.record.position} — assertive ` +
+          `"${e.corrupted.alert.spoken.slice(0, 56)}…" while the server still says ${corruptedServer.value}`,
+      );
+    },
+  },
+];
+
+// ---------------------------------------------------------------------------
 // Journey 4 — the Scenario Lab
 // ---------------------------------------------------------------------------
 
@@ -4295,6 +4713,23 @@ export const ASSERTION_ROUTES = [
     path: '/review',
     gather: gatherReplay,
     checks: REPLAY_CHECKS,
+  },
+  {
+    /*
+      6.7's corrupted reveal, and it sits here for the same session reason the replay does.
+
+      `origin: 'proxied'` is the second route that does not run against the app under test: a third
+      `next start` off the same build whose `PRL_API_ORIGIN` points at `scripts/review-proxy.mjs`,
+      which forwards the real API's real review response with one hex digit of one salt flipped. It
+      reads the hands THIS session already has, so it must come before `live-refusal` clears the
+      cookie jar — and it plays a hand of its own only when none of them proved a deck position.
+    */
+    key: 'deck-proof-alert',
+    title: 'J6 Hand review, with one byte of the reveal flipped',
+    origin: 'proxied',
+    path: '/review',
+    gather: gatherDeckProofAlert,
+    checks: DECK_PROOF_CHECKS,
   },
   /*
     3.19's hand, and it must come AFTER the replay.

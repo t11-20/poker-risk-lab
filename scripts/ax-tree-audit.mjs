@@ -52,8 +52,9 @@
  * The certification assertions that follow the sweep go further and sit down at a live table: see
  * `scripts/ax-assertions.mjs`, which plays a hand over a real socket and replays it at
  * `/review/<handId>`, recording every write into every live region with its politeness and its
- * order. Those are the eighteen rows the certification document could not automate until it had a
- * fixture for them.
+ * order — and then reads that same hand back through a proxy that has flipped one byte of its deck
+ * reveal, which is the only honest way to a proof that does not check out. Those are the eighteen
+ * rows the certification document could not automate until it had a fixture for them.
  *
  * ## What it does NOT prove
  *
@@ -85,6 +86,7 @@ import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { ANNOUNCER_PROBE, ASSERTION_ROUTES, CARD_VALUE_WORDS, SPEECH_PROBE } from './ax-assertions.mjs';
+import { startReviewProxy } from './review-proxy.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -208,6 +210,24 @@ const OFFLINE_WEB_ORIGIN = process.env.PRL_WEB_OFFLINE_ORIGIN ?? 'http://127.0.0
 const DEAD_API_ORIGIN = 'http://127.0.0.1:1';
 
 /**
+ * The THIRD web app, and the proxy behind it. Assertion 6.7's fixture.
+ *
+ * Same argument as 8.2 one step further along. 6.7's failing half needs a reveal whose proofs do not
+ * reach its own hand's published root, `/review/<handId>` is a server component so the browser can
+ * never be made to receive one, and the product must not contain a switch that produces one — that
+ * is the single thing `CommitmentVerifier` exists to detect. What is left is a web app whose
+ * `PRL_API_ORIGIN` points at `scripts/review-proxy.mjs`, which forwards the REAL API's REAL review
+ * response with one hex digit of one salt flipped. It authors no payload, so it cannot go stale
+ * against `packages/contracts`; see that module's header for the whole argument and the refusals.
+ *
+ * 3465 and 3467, because the rest of the map is taken: 3000/3001 are the app and the API, 3456 is
+ * this gate, 3457 is `test:csp`, 3458/3459 are the age gate and 8.2's offline app, 3462 is
+ * `design:contrast`, 3463 is `test:layout` and 3464 is `test:keyboard`.
+ */
+const PROXIED_WEB_ORIGIN = process.env.PRL_WEB_PROXIED_ORIGIN ?? 'http://127.0.0.1:3465';
+const REVIEW_PROXY_ORIGIN = process.env.PRL_REVIEW_PROXY_ORIGIN ?? 'http://127.0.0.1:3467';
+
+/**
  * Defaults mirror `.env.example` and the two existing audits: the web app on 3000, the API on 3001.
  * `PRL_WEB_ORIGIN` is the variable `scripts/keyboard-audit.mjs` already honours, so a developer who
  * has set it for one audit does not have to set a second name for this one.
@@ -216,6 +236,8 @@ const DEFAULTS = {
   baseUrl: process.env.PRL_WEB_ORIGIN ?? 'http://127.0.0.1:3000',
   apiUrl: process.env.PRL_API_ORIGIN ?? 'http://127.0.0.1:3001',
   offlineUrl: OFFLINE_WEB_ORIGIN,
+  proxiedUrl: PROXIED_WEB_ORIGIN,
+  proxyUrl: REVIEW_PROXY_ORIGIN,
   start: false,
   withApi: false,
   headful: false,
@@ -241,6 +263,9 @@ ${bold('pnpm run test:ax')} — accessibility-TREE audit, in real Chrome
     --api-url <url>       API origin                       (default ${DEFAULTS.apiUrl})
     --offline-url <url>   where the second web app, the one with no API behind it, is put
                           for assertion 8.2                (default ${DEFAULTS.offlineUrl})
+    --proxied-url <url>   where the third web app, the one behind the corrupting proxy, is put
+                          for assertion 6.7                (default ${DEFAULTS.proxiedUrl})
+    --proxy-url <url>     where that proxy listens          (default ${DEFAULTS.proxyUrl})
     --start               start the web app rather than using one already running
     --with-api            also start the API (only with --start)
     --ready-timeout <s>   how long to wait for a server    (default ${DEFAULTS.readyTimeoutSeconds})
@@ -296,6 +321,12 @@ function parseArgs(argv) {
         break;
       case '--offline-url':
         options.offlineUrl = need();
+        break;
+      case '--proxied-url':
+        options.proxiedUrl = need();
+        break;
+      case '--proxy-url':
+        options.proxyUrl = need();
         break;
       case '--json':
         options.json = need();
@@ -1438,7 +1469,8 @@ async function auditRoute(page, journey, route, baseUrl) {
  * point of the split is that these 65 rows are no longer in the human session; a page that quietly
  * audited nothing would take them out of BOTH.
  */
-async function runAssertions(page, origins, wanted) {
+async function runAssertions(page, context, wanted) {
+  const origins = context.origins;
   for (const route of wanted) {
     section(`${route.title}  ${dim(`${route.path}${route.viewport === undefined ? '' : ' · narrow'}`)}`);
     // A route may name a different origin than the app under test — 8.2's is the second web app,
@@ -1461,7 +1493,10 @@ async function runAssertions(page, origins, wanted) {
     try {
       await page.setViewport(route.viewport ?? null);
       await page.goto(`${baseUrl}${route.path}`);
-      evidence = await route.gather(page, baseUrl);
+      // `context` carries the OTHER origins and the corrupting proxy's log. 6.7 is one row about
+      // one hand seen twice — honestly on the app under test, and with one byte of its reveal
+      // flipped on the third web app — so its gather is the one that needs more than its own origin.
+      evidence = await route.gather(page, baseUrl, context);
     } catch (error) {
       gatherError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -1510,6 +1545,10 @@ async function main() {
   console.log(dim(`  ${options.baseUrl}\n`));
 
   const servers = [];
+  // Declared out here, not where it is started: `finally` below is the only thing that closes it,
+  // and a listening socket this process owns outlives a failing check exactly as a `next start`
+  // does. See `ManagedServer` — every exit path has to run the cleanup.
+  let reviewProxy = null;
   let exitCode = 0;
 
   try {
@@ -1532,10 +1571,18 @@ async function main() {
           // call this gate makes from `http://127.0.0.1:3456` was answered
           // `forbidden`. Measured: "Open the table" produced "You do not have
           // access to that. (forbidden)" and the socket never opened.
+          //
+          // Two origins, and the order is load-bearing: `config.webOrigins[0]` is what
+          // `auth/oidc.ts` redirects back to, so this gate's own origin stays first. The second is
+          // 6.7's third web app — its pages make the same browser-side calls every other page does,
+          // and an origin that is not on the allowlist would have them all answered `forbidden`
+          // while the assertion reported it as an accessibility failure.
           {
             PORT: portFromOrigin(options.apiUrl),
             HOST: '127.0.0.1',
-            PUBLIC_WEB_ORIGIN: new URL(options.baseUrl).origin,
+            PUBLIC_WEB_ORIGIN: [new URL(options.baseUrl).origin, new URL(options.proxiedUrl).origin].join(
+              ',',
+            ),
           },
         );
         servers.push(api);
@@ -1574,7 +1621,7 @@ async function main() {
     // The second web app, started only when something in this run actually needs it. See
     // `OFFLINE_WEB_ORIGIN`: it exists so that 8.2 can reach the bundled-copy path without taking
     // the API away from every other assertion in the run.
-    const origins = { default: options.baseUrl, offline: null };
+    const origins = { default: options.baseUrl, offline: null, proxied: null };
     if (!options.skipAssertions && wantedAssertions.some((route) => route.origin === 'offline')) {
       const offline = new ManagedServer(
         'web with no API behind it',
@@ -1599,6 +1646,49 @@ async function main() {
           'offline web app',
           `${error instanceof Error ? error.message : String(error)}. 8.2 cannot be checked without it`,
         );
+      }
+    }
+
+    // The third web app and the proxy behind it, on the same terms: started only when a route in
+    // this run asks for them, and a failure to start is recorded rather than allowed to abort the
+    // other hundred-odd checks. See `PROXIED_WEB_ORIGIN` and `scripts/review-proxy.mjs`.
+    if (!options.skipAssertions && wantedAssertions.some((route) => route.origin === 'proxied')) {
+      try {
+        reviewProxy = await startReviewProxy({
+          upstream: options.apiUrl,
+          host: new URL(options.proxyUrl).hostname,
+          port: Number(new URL(options.proxyUrl).port),
+        });
+        console.log(dim(`  starting a corrupting pass-through proxy at ${reviewProxy.origin}, for 6.7...`));
+      } catch (error) {
+        bad(
+          'review proxy',
+          `${error instanceof Error ? error.message : String(error)}. 6.7 cannot be checked without it`,
+        );
+      }
+      if (reviewProxy !== null) {
+        const proxied = new ManagedServer(
+          'web behind the corrupting proxy',
+          ['--filter', '@prl/web', 'start'],
+          options.proxiedUrl,
+          {
+            NODE_ENV: 'production',
+            PRL_API_ORIGIN: reviewProxy.origin,
+            PORT: portFromOrigin(options.proxiedUrl),
+          },
+        );
+        servers.push(proxied);
+        console.log(dim('  starting a third web app behind that proxy, for 6.7...'));
+        proxied.start();
+        try {
+          await proxied.waitUntilReady(options.readyTimeoutSeconds);
+          origins.proxied = options.proxiedUrl;
+        } catch (error) {
+          bad(
+            'proxied web app',
+            `${error instanceof Error ? error.message : String(error)}. 6.7 cannot be checked without it`,
+          );
+        }
       }
     }
 
@@ -1628,7 +1718,7 @@ async function main() {
               '  here is a regression in a fact one of its manual assertions rests on.',
           ),
         );
-        await runAssertions(page, origins, wantedAssertions);
+        await runAssertions(page, { origins, proxy: reviewProxy }, wantedAssertions);
       }
     });
 
@@ -1643,6 +1733,7 @@ async function main() {
     bad('audit', error instanceof Error ? error.message : String(error));
   } finally {
     for (const server of servers) server.stop();
+    if (reviewProxy !== null) reviewProxy.close();
   }
 
   if (options.json !== null) {

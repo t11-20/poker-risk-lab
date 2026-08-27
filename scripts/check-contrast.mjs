@@ -2267,8 +2267,9 @@ Passes 1 and 2 read the stylesheets and need nothing. PASS 3 needs the web app B
 function parsePaintedOptions(argv) {
   const options = {
     // 3462, because the rest of the map is taken: 3000/3001 are the app and the API, 3456 is
-    // `test:ax`, 3457 is `test:csp`, 3458/3459 are the age-gate audit. Two gates on one port is
-    // one gate measuring the other's server.
+    // `test:ax`, 3457 is `test:csp`, 3458/3459 are the age-gate audit, 3463 is `test:layout`,
+    // 3464 is `test:keyboard` and 3465/3467 are `test:ax`'s third web app and the corrupting proxy
+    // behind it. Two gates on one port is one gate measuring the other's server.
     baseUrl: process.env.PRL_CONTRAST_ORIGIN ?? 'http://127.0.0.1:3462',
     start: true,
     headful: false,

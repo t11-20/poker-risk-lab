@@ -1776,6 +1776,183 @@ describe('NEGATIVE CONTROL — 8.2, a fallback notice a reader cannot hear', () 
   });
 });
 
+describe('NEGATIVE CONTROL — 6.7, a failing deck proof nobody is interrupted for', () => {
+  const check = checkFor('J6.7');
+
+  /**
+   * One hand seen twice: honestly, and again through the corrupting proxy.
+   *
+   * Modelled on a real run — hand `hand_ebv…`, nine proved positions, salt byte 703 `6`->`7` at
+   * deck position 1 — because the shape of this evidence is the shape of the fixture, and a
+   * synthetic that drifted from it would be testing a `decide` nothing produces.
+   */
+  const SEEN_TWICE = () => ({
+    hand: 'hand_ebvsgm6k5snqqbwofbus52xjgn',
+    tried: [{ id: 'hand_ebvsgm6k5snqqbwofbus52xjgn', mutated: true, why: null }],
+    proxy: { reviews: 1, refused: [] },
+    honestSettled: true,
+    corruptedSettled: true,
+    record: {
+      handId: 'hand_ebvsgm6k5snqqbwofbus52xjgn',
+      byteOffset: 703,
+      before: '6',
+      after: '7',
+      position: 1,
+      positions: 9,
+      root: 'f'.repeat(64),
+      context: 'room:7:hand_ebvsgm6k5snqqbwofbus52xjgn',
+      serverOk: true,
+      serverPositions: 9,
+    },
+    html: {
+      reached: true,
+      length: 90_000,
+      carriesVerifier: true,
+      pending: true,
+      carriesReason: false,
+      carriesAlert: false,
+    },
+    honest: {
+      present: true,
+      chip: 'proof holds',
+      alert: null,
+      note: {
+        title: '9 positions proved against the published root',
+        spoken:
+          'Your browser first checked that the reveal names the same Merkle root and the same hand ' +
+          'context as the ones published above, and refused to go any further unless they matched.',
+      },
+      noteAx: { role: 'note', ignored: false },
+      facts: [
+        { label: 'Merkle root', value: 'f'.repeat(64) },
+        { label: 'The server said', value: 'verified, 9 positions' },
+      ],
+      treeText: ['9 positions proved against the published root', 'Check the deal yourself'],
+    },
+    corrupted: {
+      present: true,
+      chip: 'proof failed',
+      alert: {
+        spoken:
+          'Error — the proof did not check outposition 1 does not prove against the published ' +
+          'rootThis is the one result on this screen that should not happen.',
+        markup: null,
+      },
+      alertAx: { role: 'alert', live: 'assertive', ignored: false },
+      note: null,
+      noteAx: null,
+      facts: [
+        { label: 'Merkle root', value: 'f'.repeat(64) },
+        { label: 'The server said', value: 'verified, 9 positions' },
+      ],
+      treeText: ['position 1 does not prove against the published root'],
+    },
+  });
+
+  it('passes the two screens the fixture actually produces', () => {
+    assert.equal(check.decide(SEEN_TWICE()).ok, true);
+  });
+
+  it("fires when the failure is not an alert — the row's own subject", () => {
+    // Demonstrated for real: `role="alert"` deleted from `CommitmentVerifier`'s `mismatch` branch
+    // and the web app rebuilt failed exactly this, and nothing else.
+    const evidence = SEEN_TWICE();
+    evidence.corrupted.alert = null;
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the alert is only polite, so it waits behind whatever is already being said', () => {
+    const evidence = SEEN_TWICE();
+    evidence.corrupted.alertAx = { role: 'status', live: 'polite', ignored: false };
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the alert is out of the accessibility tree', () => {
+    const evidence = SEEN_TWICE();
+    evidence.corrupted.alertAx.ignored = true;
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the alert carries no reason, so a reader is told nothing about what', () => {
+    const evidence = SEEN_TWICE();
+    evidence.corrupted.alert.spoken = 'Error — the proof did not check out';
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the reason is on screen and not in the tree', () => {
+    const evidence = SEEN_TWICE();
+    evidence.corrupted.treeText = [];
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the PROXY corrupted nothing — the fixture failing, not the app (REGRESSION)', () => {
+    // The one that matters most. A proxy that silently forwards the bytes unchanged renders a
+    // perfectly good proof, and a screen with no alert on it cannot be told apart from a defect.
+    // Demonstrated for real by stubbing the corruption out: 0 reviews across 4 hands, named.
+    const evidence = SEEN_TWICE();
+    evidence.hand = null;
+    evidence.record = null;
+    evidence.proxy = { reviews: 0, refused: [] };
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the fixture is not wired into the run at all', () => {
+    const evidence = SEEN_TWICE();
+    evidence.wiring = 'the corrupting proxy was not wired into this run';
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the API itself failed the payload, so the run measured a broken API', () => {
+    const evidence = SEEN_TWICE();
+    evidence.record.serverOk = false;
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the corruption moved the BINDING rather than the hash', () => {
+    // `other-hand` says "this proof is for a different hand", which is a different sentence about a
+    // different situation. A fixture that reached it would be checking the wrong branch.
+    const evidence = SEEN_TWICE();
+    evidence.corrupted.chip = 'different hand';
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the honest half is not a sentence, only a chip', () => {
+    const evidence = SEEN_TWICE();
+    evidence.honest.note = null;
+    evidence.honest.noteAx = null;
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when a proof that HOLDS interrupts', () => {
+    // The other direction, and it is a real defect rather than a fixture one: an alert on the
+    // ordinary page teaches a reader to turn the surface off before the one that matters arrives.
+    const evidence = SEEN_TWICE();
+    evidence.honest.alert = { spoken: 'Error — the proof did not check out', markup: null };
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the verdict was computed by the SERVER, so the alert arrives with its document', () => {
+    // An alert that is in the document the server sent announces nothing — the platform is notified
+    // of a change to a region it already knows about. That is the 3.3 defect, in the one branch on
+    // this screen that is allowed to interrupt.
+    const evidence = SEEN_TWICE();
+    evidence.html = { ...evidence.html, pending: false, carriesAlert: true, carriesReason: true };
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the verifier never got past "checking", so a pending screen was read', () => {
+    const evidence = SEEN_TWICE();
+    evidence.corruptedSettled = false;
+    assert.ok(refuses(check, evidence));
+  });
+
+  it('fires when the root on screen is not the root the proxy forwarded', () => {
+    const evidence = SEEN_TWICE();
+    evidence.corrupted.facts[0].value = 'a'.repeat(64);
+    assert.ok(refuses(check, evidence));
+  });
+});
+
 describe('figureDefect — a number a reader cannot place', () => {
   const counted = {
     label: 'Your equity',

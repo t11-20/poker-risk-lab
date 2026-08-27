@@ -912,9 +912,10 @@ export function formatFinding(finding) {
 
 const DEFAULTS = {
   // 3463, because the rest of the map is taken: 3000/3001 are the app and the API, 3456 is
-  // `test:ax`, 3457 is `test:csp`, 3458 and 3459 are the age gate's two scopes, and 3462 is the
-  // contrast sweep. A gate that binds a port another gate is holding fails for a reason that has
-  // nothing to do with what it measures.
+  // `test:ax`, 3457 is `test:csp`, 3458 and 3459 are the age gate's two scopes, 3462 is the
+  // contrast sweep, 3464 is `test:keyboard` and 3465/3467 are `test:ax`'s third web app and the
+  // corrupting proxy behind it. A gate that binds a port another gate is holding fails for a
+  // reason that has nothing to do with what it measures.
   baseUrl: process.env.PRL_LAYOUT_ORIGIN ?? 'http://127.0.0.1:3463',
   start: false,
   headful: false,

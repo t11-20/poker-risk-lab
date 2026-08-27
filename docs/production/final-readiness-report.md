@@ -136,16 +136,17 @@ Screen-reader certification remains **UNVERIFIED**: `osascript` answers `-1743` 
 grant this repository can make will change that. It needs a person with VoiceOver or NVDA. That is
 the one thing standing between this and a PASS string, and it is not a code defect.
 
-What has changed is its size. **70 of the certification's 72 assertions are now machine-verified on
+What has changed is its size. **71 of the certification's 72 assertions are now machine-verified on
 every run** of `pnpm run test:ax`, one check per assertion ID, against the rendered accessibility
 tree in real Chrome — so a regression in any of them fails `pnpm run verify` on the day it lands.
-Nineteen of those were with the person until the gate grew the three fixtures they needed: a **live
-table over a real socket**, a **hand it played, replayed at `/review/<handId>`**, and a **second web
-app with no API behind it**. Three more moved on 2026-08-26 — 2.4, 2.9 and 3.19 — each because the
-reason it had been left turned out to be answerable: see residual 1. **4 still require a person
-listening**, and three of the four are genuinely about the reader rather than about this repository;
-the fourth, 4.2, is a defect the certification is holding rather than a limit of it. The session is
-now roughly **five minutes per platform** rather than the better part of an afternoon. The blocker
+Twenty of those were with the person until the gate grew the four fixtures they needed: a **live
+table over a real socket**, a **hand it played, replayed at `/review/<handId>`**, a **second web
+app with no API behind it**, and a **third behind a proxy that flips one byte of that hand's real
+deck reveal** (2026-08-27, closing 6.7). Three more moved on 2026-08-26 — 2.4, 2.9 and 3.19 — each
+because the reason it had been left turned out to be answerable: see residual 1. **1 still requires
+a person listening**, and it is genuinely about the reader rather than about this repository: the
+root-layout boundary needs a deliberately broken build, and there is nothing to drive. The session
+is now roughly **two minutes per platform** rather than the better part of an afternoon. The blocker
 is not reduced; the work behind it is.
 
 Two of the rows that moved were not certification limits at all. **3.3** recorded that "A new hand
@@ -333,8 +334,8 @@ shell, node path and a Node version below the `engines` floor. The base is now
 | `alerts:preflight` | **REFUSES the staging configuration, exit 1**, and that is correct: staging's paging destinations are `alerts:verify`'s own throwaway `.invalid` sinks. The seven structural checks pass — 6 destinations parsed, both tiers distinct, TLS to every off-host destination, 35 rules over 3 severities all resolving to receivers that have somewhere to send. `staging promote` will not call a release promotable while this fails | — |
 | Proxy log leak, **live** | A sentinel request to `/api/v1/auth/oidc/callback?code=…&state=…` against the **running** staging proxy: **0** occurrences in the access log and **0** in the error log. What it logged instead: `"GET /api/v1/auth/oidc/callback?" 501 rt=0.031 up=172.20.0.3:3001 rid=ee14e2aa-…` — path without query, address truncated to `/24`, agent classed, the API's own request id joined | — |
 | `staging up` | **exit 0** — migrations applied, **71-check** strict smoke over TLS, both running containers confirmed to be the manifest digests, all four healthy | `staging-3.log` |
-| `test:ax`, certification assertions | **65 of 65** at this candidate SHA, **68 of 68** since 2.4, 2.9 and 3.19 moved on 2026-08-26, and **70 of 70** since 4.2 and 7.4 were fixed in the product on the same day (see residual 1) — the machine-checkable share of the 72 manual assertions, one check per assertion ID, in Chrome 151, now including a hand played over a real socket at `/play`, replayed at `/review/<handId>`, and a second web app with no API behind it. Demonstrated to refuse, three times over: seven components broken in an earlier pass (footer landmark name, route-announcer politeness, `<main tabIndex>`, action-button `aria-label`, face-down card naming, sheet focus return, quiz `aria-describedby` order) failed **10** checks by ID; five broken for the live-table and replay fixtures (the stack dropped from the turn sentence, the decision echo prefixed onto every announcement, `role="alert"` removed from the table-unavailable block, the replay's end-of-hand focus rescue deleted, a face-down card renamed "card") failed exactly **3.5, 3.17, 3.20, 6.5 and 6.6** and nothing else; and for the two rows that moved in this pass, restoring the deal-announcement defect failed **3.3** alone with the two writes it recorded quoted back, pointing the offline web app at the live API failed **8.2** as "the web server reached an API after all", and hiding the fallback notice's sentence behind `aria-hidden` failed **8.2** as a visual-only badge. For 4.2 and 7.4, a build with the count taken back out of the Lab's title and the `inert` sweep removed from `MobileNav` failed exactly **J4.2** ("a count that is not in the title is a count no reader is told") and **J7.4** ("90 of 188 elements behind the sheet are still non-ignored") and nothing else; a second build that re-dressed the summary as a live region and exempted the footer from the sweep failed the same two rows on their other clauses. All passed again on restore | see residual 1 |
-| Screen reader, the residual **7** at this SHA, **2** since | **UNVERIFIED** `-1743`. Needs a person listening; about five minutes per platform | — |
+| `test:ax`, certification assertions | **65 of 65** at this candidate SHA, **68 of 68** since 2.4, 2.9 and 3.19 moved on 2026-08-26, **70 of 70** since 4.2 and 7.4 were fixed in the product on the same day, and **71 of 71** since 6.7's corrupting proxy was built on 2026-08-27 (see residual 1) — the machine-checkable share of the 72 manual assertions, one check per assertion ID, in Chrome 151, now including a hand played over a real socket at `/play`, replayed at `/review/<handId>`, a second web app with no API behind it, and a third behind a pass-through proxy that flips one hex digit of that hand's real deck reveal. Demonstrated to refuse, three times over: seven components broken in an earlier pass (footer landmark name, route-announcer politeness, `<main tabIndex>`, action-button `aria-label`, face-down card naming, sheet focus return, quiz `aria-describedby` order) failed **10** checks by ID; five broken for the live-table and replay fixtures (the stack dropped from the turn sentence, the decision echo prefixed onto every announcement, `role="alert"` removed from the table-unavailable block, the replay's end-of-hand focus rescue deleted, a face-down card renamed "card") failed exactly **3.5, 3.17, 3.20, 6.5 and 6.6** and nothing else; and for the two rows that moved in this pass, restoring the deal-announcement defect failed **3.3** alone with the two writes it recorded quoted back, pointing the offline web app at the live API failed **8.2** as "the web server reached an API after all", and hiding the fallback notice's sentence behind `aria-hidden` failed **8.2** as a visual-only badge. For 4.2 and 7.4, a build with the count taken back out of the Lab's title and the `inert` sweep removed from `MobileNav` failed exactly **J4.2** ("a count that is not in the title is a count no reader is told") and **J7.4** ("90 of 188 elements behind the sheet are still non-ignored") and nothing else; a second build that re-dressed the summary as a live region and exempted the footer from the sweep failed the same two rows on their other clauses. For 6.7, a build with `role="alert"` deleted from `CommitmentVerifier`'s `mismatch` branch failed **J6.7** alone ("the proof failed and nothing on the page carries role=\"alert\""), and stubbing the proxy's corruption out so it forwarded the bytes unchanged failed **J6.7** as "the proxy corrupted no reveal, so nothing was checked. It saw 0 review response(s) across 4 hand(s)", naming each. All passed again on restore | see residual 1 |
+| Screen reader, the residual **7** at this SHA, **1** since | **UNVERIFIED** `-1743`. Needs a person listening; about two minutes per platform | — |
 
 **The three `alerts:*` rows above are a capture and are left as captured.** They read 26 checks, 28
 rules and 2 severities, which is what this candidate's run reported and what its logs hold. The dead
@@ -407,7 +408,7 @@ under a real network partition.
 
    **What is now automated.** Each of the 72 assertions in
    [`accessibility-certification.md`](accessibility-certification.md) carries a `Checked by` marker.
-   **70 are marked `auto`** and have a real check in `scripts/ax-assertions.mjs`, run by
+   **71 are marked `auto`** and have a real check in `scripts/ax-assertions.mjs`, run by
    `pnpm run test:ax` inside `pnpm run verify`, against the *rendered* accessibility tree in real
    Chrome — the computed name and role of every control, the theme radio group's selected state,
    the route announcer's politeness and that it writes the title exactly once and stays silent on a
@@ -425,10 +426,10 @@ under a real network partition.
    | J3 Table and Coach | 21 | 21 | 0 |
    | J4 Scenario Lab | 6 | 6 | 0 |
    | J5 AI Legends | 5 | 5 | 0 |
-   | J6 Hand review | 7 | 6 | 1 |
+   | J6 Hand review | 7 | 7 | 0 |
    | J7 Navigation sheet | 6 | 6 | 0 |
    | J8 Failure paths | 3 | 2 | 1 |
-   | **Total** | **72** | **70** | **2** |
+   | **Total** | **72** | **71** | **1** |
 
    Writing them found four real defects that had sat in the document as untested claims: **G3
    asserts a `contentinfo` landmark named "About Poker Risk Lab" and the footer's computed name was
@@ -459,13 +460,24 @@ under a real network partition.
    `It is not your turn to act. (not_your_turn). Nothing was applied.`, assertively, and it was the
    only interruption in the whole hand.
 
-   **What is still a person's job, and why.** The 2 `person` rows are two states no fixture reaches
-   honestly: a failing deck proof, which would need a server that lies about a deal (6.7), and a
-   build with a deliberate `throw` in the root layout, which would need an application build inside
-   `verify` or a shipped switch whose job is to break the app (8.3). Section 5 of the certification
-   lists both with one line each. The classification stays deliberately conservative: a row that
+   **What is still a person's job, and why.** The 1 `person` row is one state no fixture reaches
+   honestly: a build with a deliberate `throw` in the root layout, which would need an application
+   build inside `verify` or a shipped switch whose job is to break the app (8.3). Section 5 of the
+   certification gives it a line. The classification stays deliberately conservative: a row that
    mixes a checkable fact with a claim about speech stays with the person, because a row
    half-covered by a machine and dropped from the human session is a row nobody checks.
+
+   **6.7 was the other one, and it moved on 2026-08-27 without relaxing that rule.** Its two halves
+   are both structural and only one of them was reachable — which is why it had stood as the
+   counter-example to the carve-out — and it moved when a fixture made the other half reachable, so
+   that one check decides both against one hand. `scripts/review-proxy.mjs` is a pass-through proxy
+   in front of a **third** `next start`: it forwards the real API's real review response with one
+   hex digit of one salt flipped, as a one-character splice into the response text that it
+   self-checks at one byte, so it authors no payload and cannot go stale against
+   `packages/contracts`. Measured on a real hand: the browser announced *"position 1 does not prove
+   against the published root"* assertively while the same screen still read "The server said
+   verified, 9 positions". A fixture that stopped corrupting would fail the row rather than pass it
+   — the check refuses to score a screen the proxy's log does not name.
 
    **Two rows that used to be here were defects, not limits, and were fixed in the product on
    2026-08-26.** Both measurements were re-taken before anything was changed and both held.
@@ -482,14 +494,15 @@ under a real network partition.
    the sheet is now `inert` while it is open; re-measured after, 0 of 188 are reachable. Both
    checks were shown to fail against a build with the defect restored before either row moved.
 
-   `pnpm run certify:screen-reader` is now the way to spend the five minutes: it presents **the 2**,
+   `pnpm run certify:screen-reader` is now the way to spend the two minutes: it presents **the 1**,
    states up front how many are machine-covered and where those checks live, holds the reviewer's
    place across a resumable session, requires a quoted announcement for every `FAIL` and `SILENT`,
    refuses to call an incomplete run a pass, and stamps the result with the commit it was run
    against so `--check` calls it stale the moment `HEAD` moves. `--all` puts the machine-covered
    rows back for a reviewer who wants to hear them anyway. It does not certify anything — it
-   records what a person heard, which is the part a machine cannot do. **Expect 25–35 minutes per
-   platform**, both platforms required (§2 and §9); a single-platform run is PARTIAL, never PASS.
+   records what a person heard, which is the part a machine cannot do. **Expect a couple of minutes
+   per platform** for the one row, on top of the environment setup in §2 and §3; both platforms are
+   required (§2 and §9), and a single-platform run is PARTIAL, never PASS.
 2. **No provider is configured, and nobody is on call.** Narrower again since this report was
    first written, and the part that remains is now stated exactly.
 

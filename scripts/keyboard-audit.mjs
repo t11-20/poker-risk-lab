@@ -126,7 +126,8 @@
  *
  * The port is **3464**, and the whole rest of the map is taken: 3000/3001 are the dev app and the
  * dev API, 3456 is `test:ax`, 3457 is `test:csp`, 3458/3459 are the age gate's two scopes, 3462 is
- * `design:contrast` and 3463 is `test:layout`. Two gates sharing a port is a flake that only
+ * `design:contrast`, 3463 is `test:layout` and 3465/3467 are `test:ax`'s third web app and the
+ * corrupting proxy behind it. Two gates sharing a port is a flake that only
  * appears when somebody runs them at once, which is precisely what `verify` does.
  *
  * The API stays on **3001** and that is not a free choice: `apps/web/next.config.ts` freezes the

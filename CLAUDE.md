@@ -63,10 +63,10 @@ It exists because `.prl-play .prl-coach__section .prl-stat__pair` shipped as
 `grid-template-columns: minmax(0, 1fr) auto`. A bare `auto` track is floored at max-content, so a
 value that was a sentence took the whole row and the `1fr` label collapsed to nothing with the
 sentence painted across it. **Every gate was green** — `design:contrast` composites in real Chrome,
-`test:ax` made 111 computed-tree assertions (116 since 4.2 and 7.4 were closed on 2026-08-26), 3,555 unit tests passed — and it
-was found by looking at a screenshot. The first probe written for it missed it too, because it compared the two
-elements' **bounding boxes**: when a track collapses the boxes do not overlap, the *text* overflows
-the box. If you write a layout check, measure the glyphs.
+`test:ax` made 111 computed-tree assertions (117 since 6.7 was closed on 2026-08-27), 3,555 unit
+tests passed — and it was found by looking at a screenshot. The first probe written for it missed it
+too, because it compared the two elements' **bounding boxes**: when a track collapses the boxes do
+not overlap, the *text* overflows the box. If you write a layout check, measure the glyphs.
 
 Its negative controls run on every invocation: six stylesheets injected into real pages, one of
 them the `minmax(0, 1fr) auto` rule put back verbatim, each of which must be caught. A detector
@@ -84,6 +84,27 @@ nothing and `verify` did not list it, for one mechanical reason — it had no `-
 needs somebody to remember is not a gate. It now starts its own servers (web on **3464**, API on
 **3001** — the API port is not a free choice, see the script's header on the frozen `/api/*` rewrite)
 and reports 146 checks.
+
+`pnpm run test:ax` runs **three web apps** off one build, and the second and third are fixtures
+rather than duplication. 8.2 needs the WEB SERVER's own fetch to fail, so one runs on :3459 with
+`PRL_API_ORIGIN` pointing at `127.0.0.1:1` — a port nothing can bind without root. 6.7 needs a deck
+proof that does not check out, so one runs on :3465 behind an in-process pass-through proxy on :3467
+(`scripts/review-proxy.mjs`) that forwards the real API's real review response with **one hex digit
+of one salt flipped**. The edit is a splice into the response *text*, self-checked at exactly one
+differing byte, so the fixture authors no payload and cannot go stale against `packages/contracts` —
+and the product still contains no code path that can lie about a deal, which is the whole reason
+`CommitmentVerifier` exists. A proxy that silently forwarded the bytes unchanged would make the
+check pass while proving nothing, so it records every response it corrupted and every one it
+refused, and `J6.7` will not score a screen the log does not name.
+
+That row also carries the repository's clearest lesson about a fixture that is *nearly*
+deterministic. A reveal proves the board cards that were dealt, so a hand that ends before the flop
+has no byte in it to flip — and the first version reused hands played by a hero who folds
+immediately, which left "was a board ever dealt" to five bots. **Seven consecutive runs; one failed.**
+The fix was not a retry and not a longer timeout: the fixture now plays a hand in which the hero
+never folds, which reaches a flop by the rules of the game, and skips boardless hands by reading the
+board length off the hand list. Twelve consecutive runs then came back identical, which is the bar
+`test:keyboard` was held to and the reason this one is in `verify` rather than beside it.
 
 Gates outside `verify` because they need a deployment: `alerts:verify`, `alerts:preflight`,
 `alerts:ack`, `staging`, `backup`, `test:load`, `test:drills`, `release:artifacts`,

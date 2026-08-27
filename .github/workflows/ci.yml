@@ -935,9 +935,10 @@ jobs:
   # job drives.
   #
   # Ports are the script's, not this job's: the web app on 3456
-  # (`PRL_WEB_ORIGIN`, set by the `test:ax` script), the API on 3001, and a
+  # (`PRL_WEB_ORIGIN`, set by the `test:ax` script), the API on 3001, a
   # second web app on 3459 with a dead API behind it for certification assertion
-  # 8.2. Nothing else in this job binds any of them.
+  # 8.2, and a third on 3465 behind an in-process corrupting proxy on 3467 for
+  # assertion 6.7. Nothing else in this job binds any of them.
   #
   # ## The one thing that cannot be measured from here
   #

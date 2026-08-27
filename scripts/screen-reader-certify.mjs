@@ -22,17 +22,18 @@
  * the assertions out of the document, refuse an incomplete result, stamp it with the commit it was
  * run against — and leaves the one part a machine cannot do, which is listening, to the person.
  *
- * ## It asks for 2 of the 72, and says so
+ * ## It asks for 1 of the 72, and says so
  *
  * A large share of those 72 were never really about speech. "The theme control announces as a radio
  * group with three options, the current one selected" is a fact about the accessibility tree, and a
- * machine reads that tree better than a person listening to it can. **70 of the 72 are now checked
+ * machine reads that tree better than a person listening to it can. **71 of the 72 are now checked
  * on every run of `pnpm run test:ax`** (`scripts/ax-assertions.mjs`, one check per assertion ID),
- * and this session presents only the **2** that are left: two states no fixture reaches honestly.
- * Nineteen of those 70 were in this session until the gate grew three fixtures — a live table over
- * a real socket, a hand it played and replayed at `/review/<handId>`, and a second web app with no
- * API behind it — because "needs a live table" and "needs the API down" were statements about the
- * gate rather than about speech. Three more moved because they were application DEFECTS filed as
+ * and this session presents only the **1** that is left: one state no fixture reaches honestly.
+ * Twenty of those 71 were in this session until the gate grew four fixtures — a live table over
+ * a real socket, a hand it played and replayed at `/review/<handId>`, a second web app with no
+ * API behind it, and a third behind a proxy that flips one byte of that hand's real deck reveal —
+ * because "needs a live table", "needs the API down" and "needs a bad proof" were statements about
+ * the gate rather than about speech. Three more moved because they were application DEFECTS filed as
  * certification limits, and three more on 2026-08-26 because the reason each had been left was
  * answerable: a prompt read twice has exactly one cause inside the tree (2.4), "no score anywhere"
  * is decidable by running the quiz twice and requiring the two ends to read the same (2.9), and a
@@ -40,8 +41,11 @@
  * because they were product defects rather than certification limits and the document had already
  * said so: the Lab's filtered count is now in the document title, which is the one channel a full
  * page load announces (4.2), and the background behind the navigation sheet is now `inert` rather
- * than merely declared out of scope with `aria-modal` (7.4). Section 5 of the document names every
- * one of them.
+ * than merely declared out of scope with `aria-modal` (7.4). And 6.7 moved on 2026-08-27, when the
+ * pass-through proxy section 5 had costed was finally built: it forwards the real API's real review
+ * response with one hex digit of one salt flipped, so a failing deck proof is a state the gate can
+ * reach without the product containing a code path that can lie about a deal. Section 5 of the
+ * document names every one of them.
  *
  * Which set a row is in is decided by the document's own `Checked by` column, not by anything here,
  * so re-marking a row moves it with no code change — and `screen-reader-certify.test.mjs` asserts
@@ -50,12 +54,12 @@
  * automated set AND out of this session at once, leaving it covered by nobody. That is the failure
  * the mapping test exists to prevent.
  *
- * **This does not weaken the blocker.** The 2 still need a person, and until one has worked through
- * them the certification is UNVERIFIED. What changed is that it is now five minutes rather than an
- * afternoon, and that a regression in any of the other 70 fails `pnpm run verify` on the day it
- * lands instead of waiting for a session nobody has scheduled. Both of the 2 are limits of what a
- * fixture can honestly reach, not defects this session is holding: the two that WERE defects, 4.2
- * and 7.4, were fixed in the product rather than left here. See section 5 of the document.
+ * **This does not weaken the blocker.** The 1 still needs a person, and until somebody has worked
+ * through it the certification is UNVERIFIED. What changed is that it is now two minutes rather than
+ * an afternoon, and that a regression in any of the other 71 fails `pnpm run verify` on the day it
+ * lands instead of waiting for a session nobody has scheduled. The 1 is a limit of what a fixture
+ * can honestly reach, not a defect this session is holding: the two that WERE defects, 4.2 and 7.4,
+ * were fixed in the product rather than left here. See section 5 of the document.
  *
  * ## It reads the document; it does not restate it
  *

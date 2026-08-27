@@ -13,17 +13,18 @@ has ever heard this application read aloud, and no gate in it can. This document
 that would settle that, written so that a person who has never seen this app can execute it on
 another machine and produce a defensible verdict.
 
-**70 of the 72 assertions below are now machine-verified on every run** of `pnpm run test:ax`, one
+**71 of the 72 assertions below are now machine-verified on every run** of `pnpm run test:ax`, one
 check per assertion ID, against the rendered accessibility tree in real Chrome
 (`scripts/ax-assertions.mjs`). A regression in any of them fails `pnpm run verify`. The remaining
-**2** are marked `person` and still require somebody with a screen reader and headphones —
+**1** is marked `person` and still requires somebody with a screen reader and headphones —
 section 5 explains where the line is drawn and why it is drawn conservatively. That session is now
-about **five minutes** per platform rather than the better part of an afternoon.
+about **two minutes** per platform rather than the better part of an afternoon.
 
-Six of the ten that were left in that session have gone since, and **not one of them went because
+Seven of the ten that were left in that session have gone since, and **not one of them went because
 the standard was relaxed**. Two were application defects filed as certification limits, one asked
-for a control that has never existed, and three — added 2026-08-26, in the second list below — were
-left for a reason that turned out to be answerable when somebody checked it.
+for a control that has never existed, three — added 2026-08-26, in the second list below — were
+left for a reason that turned out to be answerable when somebody checked it, and one was left for a
+fixture this document had already costed and nobody had built.
 
 - **3.3** — "A new hand was dealt." was measurably never announced. That was read as a question for a
   person ("is hearing the blinds instead a PASS?") and it was a bug: the table's narration region did
@@ -36,6 +37,10 @@ left for a reason that turned out to be answerable when somebody checked it.
   build with no API behind it, so the row is a fixture the gate owns rather than a state it cannot
   reach.
 - **1.5** — retired. It asked a reviewer to check a disclosure `/learn` has never had. See section 5.
+- **6.7** — closed 2026-08-27 by building the fixture §5 had costed and left open: a third web app
+  off the same build whose `PRL_API_ORIGIN` points at a pass-through proxy that forwards the real
+  API's real review response with **one hex digit of one salt flipped**. It authors no payload, so
+  it cannot go stale against the contract, and it reaches `mismatch` honestly. See section 5.
 
 The three that moved on 2026-08-26. None of them was refused for a reason about speech; each was
 refused for a reason that does not survive being measured:
@@ -55,18 +60,19 @@ refused for a reason that does not survive being measured:
   was answered `It is not your turn to act. (not_your_turn). Nothing was applied.` — a real refusal
   of a real second decision, with nobody racing anybody.
 
-Nineteen of those 70 were `person` until the gate grew three fixtures rather than because they were
+Twenty of those 71 were `person` until the gate grew four fixtures rather than because they were
 about speech: **a live table over a real socket**, **a hand this run played, replayed at
-`/review/<handId>`**, and **a second web app with no API behind it**. All three are driven through
-the product's own screens — a guest session, a private room with five bots, a dealt hand, a
-decision, a page served with nothing behind it — so the connection status changing, the blinds
-arriving before the bots, a turn announced once across ten seconds of state frames, a decision echo
+`/review/<handId>`**, **a second web app with no API behind it**, and **a third behind a proxy that
+flips one byte of that hand's real deck reveal**. All four are driven through the product's own
+screens — a guest session, a private room with five bots, a dealt hand, a decision, a page served
+with nothing behind it, a proof that does not check out — so the connection status changing, the
+blinds arriving before the bots, a turn announced once across ten seconds of state frames, a decision echo
 that is not stapled to the events after it, a whole hand read back decision by decision, and the
 bundled-copy notice being a sentence rather than a badge are now facts a gate can lose. See
 section 5 for what each of them does *not* establish.
 
-Do not record a PASS here because `test:ax` or `test:keyboard` was green. **70 of 70 automated
-assertion checks passing is not a certification of anything**, including of those 70: it says the
+Do not record a PASS here because `test:ax` or `test:keyboard` was green. **71 of 71 automated
+assertion checks passing is not a certification of anything**, including of those 71: it says the
 tree is right, not that a reader heard it.
 
 ---
@@ -84,7 +90,7 @@ is sufficient:
 |---|---|---|
 | `pnpm run test:a11y` | Static rules over server-rendered HTML | Anything CSS, JS or a browser decides |
 | `pnpm run test:keyboard` | Real Tab/Enter/Escape/arrows in real Chrome, focus order, focus visibility, traps, a whole hand folded from the keyboard | What any of it is announced as |
-| `pnpm run test:ax` | The **computed accessibility tree** — role, computed name, live-region politeness, heading outline, landmark uniqueness, that no hidden card names a rank or suit, and that a real interaction changes an announcement region and leaves focus on a named node. Plus a **live table over a real socket**, a **hand it played, replayed**, and a **second web app with no API behind it** — every write into every live region, in order, with its politeness. **Plus 70 of the 72 assertions below, one check each** (see section 5) | Whether any assistive technology **speaks** any of it, in what order, at what verbosity, or comprehensibly. And 2 of the 72, which it does not attempt |
+| `pnpm run test:ax` | The **computed accessibility tree** — role, computed name, live-region politeness, heading outline, landmark uniqueness, that no hidden card names a rank or suit, and that a real interaction changes an announcement region and leaves focus on a named node. Plus a **live table over a real socket**, a **hand it played, replayed**, a **second web app with no API behind it**, and a **third behind a proxy that flips one byte of a real deck reveal** — every write into every live region, in order, with its politeness. **Plus 71 of the 72 assertions below, one check each** (see section 5) | Whether any assistive technology **speaks** any of it, in what order, at what verbosity, or comprehensibly. And 1 of the 72, which it does not attempt |
 
 A correct accessibility tree is what a screen reader consumes. It is not what a screen reader
 *says*. The gap between the two is verbosity settings, browse-vs-focus mode, live-region queueing,
@@ -143,8 +149,9 @@ pnpm --filter @prl/web start &
 
 Then confirm the automated gates are green **before** starting, so that a failure heard here is not
 one a machine could have caught. Run these with the two servers above **stopped**: all three start
-their own — `test:ax` on :3456 and `test:keyboard` on :3464, both with an API on :3001 — and a
-manual API already holding :3001 makes them fail at boot rather than measure anything:
+their own — `test:ax` on :3456 (plus :3459 for 8.2, and :3465 behind a proxy on :3467 for 6.7) and
+`test:keyboard` on :3464, both with an API on :3001 — and a manual API already holding :3001 makes
+them fail at boot rather than measure anything:
 
 ```sh
 pnpm run test:a11y
@@ -249,15 +256,15 @@ Exact wording is **not** required to pass. What is required is that the informat
 it arrives at the right moment, and that nothing louder talks over it. Where a phrase below is in
 quotation marks it is the string the app actually ships, so it is what you should expect to hear.
 
-### The "Checked by" column: 70 of these are now decided by a machine
+### The "Checked by" column: 71 of these are now decided by a machine
 
 Every assertion below carries a **Checked by** marker, and it decides whether
 `pnpm run certify:screen-reader` will put the row in front of you at all.
 
 | Marker | Means | Who decides it |
 |---|---|---|
-| `auto` | **70** rows. The fact this assertion rests on is asserted on every run of `pnpm run test:ax`, against the rendered accessibility tree in real Chrome — at a live table, on a replayed hand, and on a web app with no API behind it where the row needs one. A regression fails `pnpm run verify`. | `scripts/ax-assertions.mjs`, one check per assertion ID |
-| `person` | **2** rows. The state cannot be reached without a server that lies about a deal, or without a deliberately broken build. | You, with headphones |
+| `auto` | **71** rows. The fact this assertion rests on is asserted on every run of `pnpm run test:ax`, against the rendered accessibility tree in real Chrome — at a live table, on a replayed hand, on a web app with no API behind it, and on one behind a proxy that corrupts a real reveal, where the row needs one. A regression fails `pnpm run verify`. | `scripts/ax-assertions.mjs`, one check per assertion ID |
+| `person` | **1** row. The state cannot be reached without a deliberately broken build. | You, with headphones |
 
 The line between them is the one section 5 already draws. **"The information is there"** is a fact
 about the accessibility tree, and a machine can decide it: an accessible name, a role, an ARIA
@@ -268,11 +275,11 @@ a screen reader, and nothing in this repository can decide it.
 Three things this split does **not** mean:
 
 1. **It is not a partial certification.** A green `test:ax` still certifies nothing, for exactly the
-   reason section 1 gives. What the 70 buy is that a *regression* in one of them now fails a gate on
+   reason section 1 gives. What the 71 buy is that a *regression* in one of them now fails a gate on
    the same day rather than waiting for a manual session that may be months away — and that the
-   manual session is five minutes rather than an afternoon.
-2. **The residual 2 still require a person.** They are not deferred, waived or downgraded. Until
-   somebody sits down with VoiceOver or NVDA and works through them, this certification is
+   manual session is two minutes rather than an afternoon.
+2. **The residual 1 still requires a person.** It is not deferred, waived or downgraded. Until
+   somebody sits down with VoiceOver or NVDA and works through it, this certification is
    UNVERIFIED, and section 10 stays as it is.
 3. **The split is deliberately conservative.** Where a row mixes a checkable fact with a claim about
    speech — 3.16's focus landing *and* the sentence being heard — the whole row stays `person`
@@ -280,8 +287,11 @@ Three things this split does **not** mean:
    half-covered by a machine and dropped from the human session is a row nobody checks, which is
    worse than a smaller automated set. **2.4 is the only row that has ever been moved under that
    carve-out**, and it was moved because "the prompt is not read twice" has exactly one cause inside
-   the tree and the check asserts the absence of it. 6.7 is the counter-example that stays: its two
-   halves are both structural, one of them is unreachable, and half a row is not a covered row.
+   the tree and the check asserts the absence of it. 6.7 used to be listed here as the
+   counter-example that stays — two structural halves, one of them unreachable, and half a row is
+   not a covered row. That was the right rule and the wrong conclusion: the half was unreachable
+   only for want of a fixture, and the row moved when both halves became checkable **together**,
+   against one hand, in one check. It never moved half-covered.
 
 **Two of the four that were left have since been closed by changing the PRODUCT, not this document.**
 4.2 and 7.4 were not certification limits; they were defects with a checklist item wrapped round
@@ -345,16 +355,21 @@ literally the recipe the row gives:
   `isApiUnavailable` says so, and `/learn` renders the bundled curriculum with its notice. Blocking
   `/api/*` in Chrome the way 3.20 does cannot produce this state, because the fetch that fails is
   the server's and not the browser's.
+- **6.7** runs its two halves against **one hand, seen twice**: honestly on the app under test, and
+  again on a **third** web app whose `PRL_API_ORIGIN` points at `scripts/review-proxy.mjs`. That
+  proxy forwards the API's own review response with one hex digit of one salt flipped — a splice
+  into the response *text*, so every other byte is the API's. The check will not read anything off
+  the corrupted screen until the proxy's log names the hand on it; see "How 6.7 was closed" below.
 
-The three fixtures are what moved seventeen rows (this said "nineteen" until 2026-08-26; the three
-figures immediately below add to 10 + 6 + 1 = 17, and one of those, 3.3, moved because of a bug fix
-rather than a fixture). Journey 3 was **10 of 21** `auto` because
-`/play?state=decision` renders the table's component tree without a socket; it is now **21 of 21**,
-driven against `/play` itself, the last of them by the double-press fixture 3.19 needed. Journey 6
-was **0 of 7** because the scrubbable replay needs a hand in a database and
+The four fixtures are what moved eighteen rows (this said "nineteen" until 2026-08-26 and
+"seventeen" until 2026-08-27; the three figures immediately below add to 11 + 7 + 1 = 19, and one of
+those, 3.3, moved because of a bug fix rather than a fixture, which leaves 10 + 7 + 1 = 18).
+Journey 3 was **10 of 21** `auto` because `/play?state=decision` renders the table's component tree
+without a socket; it is now **21 of 21**, driven against `/play` itself, the last of them by the double-press fixture 3.19
+needed. Journey 6 was **0 of 7** because the scrubbable replay needs a hand in a database and
 `/legends/hand-review/demo` renders `PostHandComparison`, a different component with no face-down
-card and no timeline; it is now **6 of 7**. Journey 8 was **1 of 3** and is now **2 of 3**. Journey 2
-was **7 of 9** and is now **9 of 9**.
+card and no timeline; it is now **7 of 7**, the last of them by the corrupting proxy 6.7 needed.
+Journey 8 was **1 of 3** and is now **2 of 3**. Journey 2 was **7 of 9** and is now **9 of 9**.
 
 ### What 3.3 announces now, and why it does not double-announce
 
@@ -471,29 +486,10 @@ was making is asserted at **3.21**, against a control that exists. The row is th
 `1.5` is left unused rather than renumbering `1.6`: an assertion number is a reference, and silently
 moving one changes what an old report was talking about.
 
-The two that are left are left for a reason, one line each. (They are written as a list rather
-than a table on purpose: a table whose first cell is `6.7` is an assertion row to the harness's
-parser, and it would refuse this file for having a row whose `Checked by` cell says something else.)
+The one that is left is left for a reason. (It is written as a list rather than a table on purpose:
+a table whose first cell is `8.3` is an assertion row to the harness's parser, and it would refuse
+this file for having a row whose `Checked by` cell says something else.)
 
-- **6.7** — the failing half needs a server that lies about a deal, and there is no honest fixture
-  for it. `/review/<handId>` is a server component: the reveal reaches `CommitmentVerifier` as a
-  prop from the web server's own fetch, so the browser cannot be made to receive a corrupted one
-  the way 3.20 makes a fetch fail, and an honest API never serves a reveal that contradicts its own
-  commitment. The two remaining routes are both refused. A switch inside the product that produced
-  a bad proof would be a production code path that can lie about a deal, which is the single thing
-  this component exists to detect — its own header says a server that dealt dishonestly is exactly
-  the server whose self-assessment cannot be trusted. A harness serving a hand-built
-  `HandReviewResponse` would be checking the shape of its own fixture, and would go stale against
-  the contract the moment either side moved. `apps/web/test/deck-proof-binding.test.ts` drives the
-  branch at source level against real commitments, which is a different and weaker claim, and this
-  row stays where it is. **One route is not refused by the argument above and has not been taken:**
-  a third web app, off the same build, whose `PRL_API_ORIGIN` points at a pass-through proxy that
-  forwards the real API's real review response and flips one byte inside the reveal. That is neither
-  a production code path that can lie nor a hand-built payload — it stays bound to the contract
-  because it never authors one — and it would reach `mismatch` honestly, the way 8.2's second web
-  app reaches the bundled copy. It is a third `next start` and a proxy inside a release gate for one
-  row, and the row's other half is reachable and would then be checked alongside it. Not taken; not
-  refused either. Recorded here so the next person costs it rather than re-deriving it.
 - **8.3** — needs a build with a deliberate `throw` in the root layout, and no fixture reaches it.
   The boundary fires only when the ROOT layout fails to render, and that layout has exactly one
   runtime input — `(await headers()).get('x-nonce') ?? undefined` — so no request, cookie, header or
@@ -503,6 +499,89 @@ parser, and it would refuse this file for having a row whose `Checked by` cell s
   build-time switch whose job is to break the application, which is a production code path that can
   lie. The note under journey 8 tells a reviewer how to make that build by hand and revert it, and
   that is the right place for it.
+
+### How 6.7 was closed, and what its check does not establish
+
+6.7 stood here with an argument that was right about three routes and wrote down a fourth. It is worth keeping the refusals, because they are still the reasons no OTHER route may be
+taken:
+
+- **The browser cannot be made to receive a corrupted reveal.** `/review/<handId>` is a server
+  component and the reveal reaches `CommitmentVerifier` as a prop from the WEB SERVER's own fetch,
+  so `Network.setBlockedURLs` — how 3.20 makes a fetch fail — leaves the render untouched.
+- **The product may not contain a switch that produces one.** That would be a production code path
+  that can lie about a deal, which is the single thing this component exists to detect; its own
+  header says a server that dealt dishonestly is exactly the server whose self-assessment cannot be
+  trusted.
+- **A hand-built `HandReviewResponse` checks the shape of its own fixture** and goes stale against
+  `packages/contracts` the moment either side moves.
+
+The fourth route was costed here and left open: *a third web app, off the same build, whose
+`PRL_API_ORIGIN` points at a pass-through proxy that forwards the real API's real review response
+and flips one byte inside the reveal.* It was built on 2026-08-27 as `scripts/review-proxy.mjs`, and
+the properties that made it acceptable are the ones it is built to keep:
+
+- **It never authors a payload.** The parse is read-only — it is how the salt is *found* — and the
+  edit is a one-character splice into the response TEXT. `JSON.parse`/`JSON.stringify` would have
+  made key order, number formatting and string escaping this repository's choices rather than the
+  API's. The function asserts its own result before returning it: same length, exactly one differing
+  byte, at the offset it meant to change. Anything else is refused rather than forwarded.
+- **It reaches `mismatch` rather than its neighbours.** The flipped digit is one nibble of
+  `cards[0].saltHex`, so the salt is still 32 hex bytes and every shape check in `verifyDeckReveal`
+  still passes; the only thing that changes is the leaf hash. The commitment root and the hand
+  context are untouched, so the binding still holds and the outcome is not `other-hand`. Measured on
+  a real hand: `position 1 does not prove against the published root`, assertively, while the row
+  above it still reads "The server said verified, 9 positions" — which is the disagreement the whole
+  section exists to surface.
+- **A fixture that stops working fails the row rather than passing it.** The dangerous failure here
+  is a proxy that silently forwards the bytes unchanged: the page then renders a perfectly good
+  proof and a screen with no alert on it cannot be told apart from a defect. So the proxy records
+  every response it corrupted and every one it refused, with reasons, and `J6.7` will not read
+  anything off the screen until that log names the hand that is on it. A hand everybody folded out
+  of proves no deck position and has no byte to flip — the common case, not a corner one — and the
+  check plays another hand rather than scoring one it could not corrupt. Demonstrated: with the
+  proxy's corruption stubbed out it failed with *"the proxy corrupted no reveal, so nothing was
+  checked. It saw 0 review response(s) across 4 hand(s)"*, naming each hand.
+- **Both halves are checked, against ONE hand, in one check.** The pass half is read off the honest
+  replay of the same hand — chip "proof holds", the outcome stated as a sentence that survives
+  having every `aria-hidden` glyph stripped, and present in the tree — and the failing half off the
+  corrupted one. That is what makes it a covered row rather than half of one.
+- **The alert is INSERTED, which is what makes it an alert.** The check reads the server-rendered
+  HTML as well and requires it to carry the *pending* sentence and neither the reason nor a
+  `role="alert"`. `CommitmentVerifier` runs the check in an effect and says why where it does it: an
+  initialiser would also run during the server render. A verdict that arrived inside the document
+  would be the server marking its own work, and an alert that arrives with its document announces
+  nothing — the 3.3 defect, in the one branch on this screen that is allowed to interrupt.
+
+**It went into the gate only after a flake was found and fixed at its cause.** The first version of
+this route reused whatever hands the session already had, all of them played by a hero who folds the
+moment the decision arrives — and `publicPositions` in `packages/poker-engine/src/machine.ts` proves
+the board cards that were dealt plus the hole cards of anybody who showed, so a hand that ends
+before the flop proves nothing and has no byte in it to flip. Whether a board ever appeared was
+therefore a fact about five bots. Measured over seven consecutive `test:ax` runs, **one failed**:
+three hands in a row ended preflop and the row refused, correctly and uselessly. A gate that goes
+red once in seven for something that is not a defect teaches people to re-run it, which costs more
+than the row is worth.
+
+The fix is not a retry and not a longer timeout. The fixture now plays a hand in which **the hero
+never folds** — check where a check is offered, call otherwise — which reaches a flop by the rules
+rather than by luck: a call cannot be folded out, and the big blind behind a call can always check.
+It also skips a hand whose board is empty by reading the length off the hand list, which costs
+nothing and saves a render per hopeless candidate. Re-measured on the fixed fixture: **twelve
+consecutive runs, 117 checks, 0 failures**, each finding a hand with 3 to 11 proved positions. That
+is the bar `test:keyboard` was held to. Demonstrated from a session with no history at all — the
+cookie jar cleared before the search — the fallback produced a nine-position hand on its first
+attempt.
+
+**Demonstrated to refuse.** With `role="alert"` deleted from the `mismatch` branch and the web app
+rebuilt, `J6.7` failed alone with *"the proof failed and nothing on the page carries role="alert".
+A reader is told the deal cannot be shown to be on the record by a colour and a glyph"*. It passed
+again on restore.
+
+**What it does not establish**, and this is the same caveat every other `auto` row carries: it says
+the failure is an assertive region in the accessibility tree holding the engine's own words, and it
+says nothing about whether VoiceOver or NVDA interrupts with it. `apps/web/test/deck-proof-binding.test.ts`
+still drives the branch at source level against real commitments, which remains a different and
+weaker claim than either.
 
 ---
 
@@ -632,7 +711,7 @@ Set up: load `/play`, activate **"Open the table"**, wait for the connection, ac
 | 6.4 | auto | Press End, then Home | The first and last steps are announced. | |
 | 6.5 | auto | Tab to "Next decision" and press Enter until the last step | When the button disables itself at the end, the reading cursor moves to **"Previous decision"** and announces it. Being dumped to the document at the end of a hand is a FAIL. | |
 | 6.6 | auto | Read a step's cards | Cards that were shown down announce by rank and suit. Cards that were never shown announce as **"face-down card"** — see 3.8, and the same rule about stopping applies. | |
-| 6.7 | person | Read the commitment verifier | Its result announces as a sentence, and a verification failure announces as an alert. | |
+| 6.7 | auto | Read the commitment verifier | Its result announces as a sentence, and a verification failure announces as an alert. | |
 
 ### Journey 7 (cross-cutting) — the navigation sheet, at a narrow width
 
@@ -664,8 +743,8 @@ Resize to 390 x 844, or use a phone-sized window.
 
 ## 8. Running it
 
-`pnpm run certify:screen-reader` walks a reviewer through the **2 `person` assertions** in this
-document, in order, and writes the result to `accessibility-certification-result.json`. It states up
+`pnpm run certify:screen-reader` walks a reviewer through the **1 `person` assertion** in this
+document and writes the result to `accessibility-certification-result.json`. It states up
 front how many of the 72 are machine-covered and where those checks live, so the number it asks you
 for is never mistaken for the whole document.
 
@@ -686,7 +765,7 @@ things about that:
 ```
 pnpm run certify:screen-reader                 # start, or resume where you stopped
 pnpm run certify:screen-reader -- --preflight  # check the environment, answer nothing
-pnpm run certify:screen-reader -- --section J4 # one journey only (J4 has one `person` row)
+pnpm run certify:screen-reader -- --section J8 # one journey only (J8 has the `person` row)
 pnpm run certify:screen-reader -- --all        # every row, machine-covered ones included
 pnpm run certify:screen-reader -- --check      # is the recorded result current?
 ```
@@ -742,12 +821,12 @@ they sum to the `person` column, not to `Assertions`.
 | J3 Table and Coach | 21 | 21 | 0 | | | | | |
 | J4 Scenario Lab | 6 | 6 | 0 | | | | | |
 | J5 AI Legends | 5 | 5 | 0 | | | | | |
-| J6 Hand review | 7 | 6 | 1 | | | | | |
+| J6 Hand review | 7 | 7 | 0 | | | | | |
 | J7 Navigation sheet | 6 | 6 | 0 | | | | | |
 | J8 Failure paths | 3 | 2 | 1 | | | | | |
-| **Total** | **72** | **70** | **2** | | | | | |
+| **Total** | **72** | **71** | **1** | | | | | |
 
-**Automated coverage on this build:** `pnpm run test:ax` ☐ 70 of 70 assertion checks passed
+**Automated coverage on this build:** `pnpm run test:ax` ☐ 71 of 71 assertion checks passed
 ☐ some failed — *list them, and do not start the session until they are green; a manual pass over a
 build whose machine-checkable facts are broken is a certification of nothing.*
 
@@ -832,8 +911,9 @@ results are real:
 - **The `auto` assertions of this document, on this application, in Chrome 151 — all passed, 0
   failed.** They are the second half of that same gate run: 45 of them at the candidate SHA above,
   **65** since the gate grew a live table, a replayed hand and a web app with no API behind it,
-  **68** since 2.4, 2.9 and 3.19 moved on 2026-08-26, and **70** since 4.2 and 7.4 were fixed in the
-  product on the same day (section 5). Writing them has now found six real defects that had been
+  **68** since 2.4, 2.9 and 3.19 moved on 2026-08-26, **70** since 4.2 and 7.4 were fixed in the
+  product on the same day, and **71** since 6.7's corrupting proxy was built on 2026-08-27
+  (section 5). Writing them has now found six real defects that had been
   sitting in sections 6 and 7 as untested claims:
     - G3 asserts a `contentinfo` landmark named "About Poker Risk Lab", and the footer's
       visually-hidden `h2` did not name it — a heading INSIDE a landmark does not name the landmark,
@@ -868,14 +948,15 @@ results are real:
   `apps/web/test/route-announcer.test.ts` — the source-level contracts, each with a negative control.
 
 The honest summary is: **the accessibility tree is checked, the keyboard is checked, a real hand is
-now played, replayed and refused on every run, 70 of this document's own 72 assertions are checked,
-and no screen reader has ever been pointed at this application.** The 2 `person` rows are what
-changes that, and both need a person with headphones. Nothing about the 70 reduces that requirement
-— it reduces how long it takes and stops the other 70 rotting in the meantime. Two of the four rows
-that used to sit here were never certification limits at all: 4.2 and 7.4 were product defects with
-a checklist item wrapped round them, they were re-measured and confirmed, they were fixed in the
-application, and they moved only once a check had been shown to fail against the old build
-(section 5).
+now played, replayed, refused and served with a corrupted deck proof on every run, 71 of this
+document's own 72 assertions are checked, and no screen reader has ever been pointed at this
+application.** The 1 `person` row is what changes that, and it needs a person with headphones.
+Nothing about the 71 reduces that requirement — it reduces how long it takes and stops the other 71
+rotting in the meantime. Two of the four rows that used to sit here were never certification limits
+at all: 4.2 and 7.4 were product defects with a checklist item wrapped round them, they were
+re-measured and confirmed, they were fixed in the application, and they moved only once a check had
+been shown to fail against the old build. A third, 6.7, was a fixture this document had costed and
+nobody had built (section 5).
 
 ---
 

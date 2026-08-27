@@ -105,16 +105,32 @@ armed and attached to a phone is a fact about an account this repository does no
 
 | Step | Command | Pass looks like |
 | --- | --- | --- |
-| 5.1 | `pnpm run test:ax` | 116 checks, 0 failed — **70 of the 72** certification assertions |
-| 5.2 **PERSON** | `pnpm run certify:screen-reader` | the remaining **2**, with VoiceOver or NVDA, ~3 min |
+| 5.1 | `pnpm run test:ax` | 117 checks, 0 failed — **71 of the 72** certification assertions |
+| 5.2 **PERSON** | `pnpm run certify:screen-reader` | the remaining **1**, with VoiceOver or NVDA, ~2 min |
 
-**The 2 are both "no honest fixture reaches this state", not "a machine cannot judge it":** a
-failing deck proof, which would need a server that lies about a deal (6.7), and the root-layout
+**The 1 is "no honest fixture reaches this state", not "a machine cannot judge it":** the root-layout
 error boundary, which would need a deliberately broken build (8.3). SSR-rendering the fallback would
 check the fallback's tree without checking that the boundary is wired, which reads as covered twice
-and is covered zero times. 6.7 is reachable with a pass-through proxy that flips one byte inside a
-real reveal — costed in `accessibility-certification.md` §5, and not taken, because it puts a third
-server and a proxy inside a release gate for one row.
+and is covered zero times.
+
+**6.7 was the other one, and it was closed on 2026-08-27** by building the fixture
+`accessibility-certification.md` §5 had costed and left open: a **third** web app off the same build
+whose `PRL_API_ORIGIN` points at a pass-through proxy (`scripts/review-proxy.mjs`) that forwards the
+real API's real review response with one hex digit of one salt flipped. It authors no payload — the
+edit is a one-character splice into the response text, self-checked at one byte — so it cannot go
+stale against the contract, and it reaches `mismatch` honestly: measured on a real hand, the browser
+said *"position 1 does not prove against the published root"* assertively while the row above it
+still read "The server said verified, 9 positions". It cost one more `next start` and an in-process
+proxy.
+
+It went into the gate only after a flake was found and **fixed at its cause**. The first version
+reused whatever hands the session had, all played by a hero who folds immediately — and a reveal
+proves the board cards that were dealt, so a hand that ends before the flop has no byte in it to
+flip. Over seven consecutive runs one failed, correctly refusing three preflop hands in a row. The
+fix is not a retry: the fixture now plays a hand in which **the hero never folds**, which reaches a
+flop by the rules rather than by luck, and skips hands whose board is empty by reading the length off
+the hand list. Re-measured: **twelve consecutive runs, 117 checks, 0 failures, every one of them
+finding a hand with 3 to 11 proved positions.**
 
 **Two rows that used to be here were product defects, and were fixed rather than certified around**
 (2026-08-26). 4.2: the Scenario Lab's filter count was announced to nobody — the `GET` form replaces
@@ -125,7 +141,9 @@ reader, so reachability was the reader's behaviour; every non-sheet subtree is n
 188 content-bearing elements behind an open sheet remain in the computed tree.
 
 `test:ax` starts a **second** web app of its own on `:3459` with no API behind it, for assertion
-8.2. It is torn down with the rest; if that port is taken, pass `--offline-url`.
+8.2, and a **third** on `:3465` behind a corrupting proxy on `:3467`, for assertion 6.7. Both are
+torn down with the rest; if those ports are taken, pass `--offline-url`, `--proxied-url` and
+`--proxy-url`.
 
 ## 6. The cohort
 
