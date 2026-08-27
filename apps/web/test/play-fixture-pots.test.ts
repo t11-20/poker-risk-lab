@@ -48,8 +48,13 @@ const VIEW = (() => {
 /** Every `{...}` seat entry in the view, as its raw text. */
 function seatEntries(): readonly string[] {
   const seats = /seats:\s*\[([\s\S]*?)\n {2}\]/u.exec(VIEW);
-  assert.ok(seats !== null, 'the view no longer states a seats array this test can read');
-  return [...seats[1].matchAll(/\{[^{}]*\}/gu)].map((match) => match[0]);
+  const body = seats?.[1];
+  // Narrowed rather than asserted non-null: `apps/web`'s test script runs `tsc -p
+  // test/tsconfig.json` BEFORE the runner, and `assert.ok` on the match does not narrow the
+  // captured group for it. The file ran green under the runner and failed the typecheck in front
+  // of it.
+  assert.ok(body !== undefined, 'the view no longer states a seats array this test can read');
+  return [...body.matchAll(/\{[^{}]*\}/gu)].map((match) => match[0]);
 }
 
 function numberIn(field: string, text: string): number | null {
