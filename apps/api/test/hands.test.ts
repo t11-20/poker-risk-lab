@@ -18,6 +18,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import type { CoachReport, HandListResponse, HandReviewResponse } from '@prl/contracts';
+import { cardToString } from '@prl/poker-engine';
 import type { FastifyInstance } from 'fastify';
 import type { SessionAccount } from '../src/auth/session.ts';
 import { closeDatabase, configureDatabase, getSql } from '../src/db.ts';
@@ -470,14 +471,40 @@ describe('the reveal is verified, and an empty one is a pass', () => {
     assert.equal(review.verification.reason, undefined);
   });
 
-  it('proves only the cards that legitimately became public', () => {
+  it('proves only the cards that legitimately became public (REGRESSION)', () => {
+    // THIS ASSERTION USED TO BE UNFALSIFIABLE. It searched `JSON.stringify(review.reveal)` for the
+    // folder's cards in NOTATION — `"7c"` — while a reveal serialises each card as its deck index,
+    // `"card":51`. The needle could not appear in the haystack under any input, so the check passed
+    // over a reveal deliberately built to carry a folded seat's hole cards.
+    //
+    // It compares the deck indices now, and asserts the proved SET rather than a substring: the
+    // count alone is what the neighbouring test pins, and a count cannot tell a board card from a
+    // folder's hole card.
     const fixture = showdownHand();
     const review = reviewAs(fixture, ALICE, { maxAnalysedDecisions: 0 });
+    assert.ok(review.reveal !== null, 'a showdown hand has a reveal to check');
     const serialised = JSON.stringify(review.reveal);
     assert.ok(serialised.includes('"saltHex"'), 'a proof carries the salt for a card already public');
-    // The folder's cards are not among them, so their positions were never proved.
-    for (const card of holeCardsOf(fixture, 0)) {
-      assert.ok(!serialised.includes(`"${card}"`), `the reveal must not name ${card}`);
+
+    const proved = new Set((review.reveal?.cards ?? []).map((entry) => entry.card));
+    assert.ok(proved.size > 0, 'a sweep of nothing is not a pass');
+
+    const folderCards = fixture.state.seats.find((seat) => seat.seat === 0)?.holeCards ?? [];
+    assert.equal(folderCards.length, 2, 'the fixture must seat a folder holding cards to test this');
+    for (const card of folderCards) {
+      assert.ok(
+        !proved.has(card),
+        `the reveal proves ${cardToString(card)}, which belongs to a seat that folded`,
+      );
+    }
+
+    // And the positive half, so the guard cannot be satisfied by an empty or truncated reveal:
+    // every seat that showed down has both its cards proved.
+    for (const seat of fixture.state.seats) {
+      if (seat.seat === 0 || seat.holeCards === null || seat.holeCards === undefined) continue;
+      for (const card of seat.holeCards) {
+        assert.ok(proved.has(card), `${cardToString(card)} showed down and is not proved`);
+      }
     }
   });
 
