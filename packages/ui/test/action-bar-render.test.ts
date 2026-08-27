@@ -185,3 +185,36 @@ describe('where the invalid state comes from', () => {
     }
   });
 });
+
+describe('a call that takes the whole stack says so', () => {
+  /** Facing a bet of 62 with exactly 62 behind: calling is all in. */
+  const ALL_IN_CALL: readonly LegalAction[] = [
+    { type: 'fold' },
+    {
+      type: 'call',
+      minTo: 62,
+      costAtMin: 62,
+      allInAtMax: true,
+      note: 'Calling puts your whole remaining stack in.',
+    },
+  ];
+
+  it('speaks the all-in and prints the engine sentence (REGRESSION)', async () => {
+    // The engine decides this and writes the sentence; both were dropped here, so a learner
+    // pressing Call for their last chip saw "Call / 62 units" — identical to any other call.
+    // Measured over 3,000 hands: 3,569 of 15,137 call offers were all-in calls.
+    const markup = await render({ legalActions: ALL_IN_CALL, toCall: 62 });
+    assert.match(markup, /call 62 units, which is all in/u, 'the spoken label must say it is all in');
+    assert.match(markup, /Calling puts your whole remaining stack in\./u, "the engine's note must be shown");
+  });
+
+  it('says nothing of the sort on an ordinary call, so the wording is conditional', async () => {
+    // Without this, the guard above is satisfied by printing "all in" on every call.
+    const markup = await render();
+    assert.ok(!markup.includes('which is all in'), 'an ordinary call must not be announced as all in');
+    assert.ok(
+      !markup.includes('Calling puts your whole remaining stack in.'),
+      'an ordinary call must not carry the all-in note',
+    );
+  });
+});
