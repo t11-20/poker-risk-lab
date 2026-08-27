@@ -70,6 +70,22 @@ and fails outright if a keyless record is committed while it is null.
 | 3.2 | `pnpm run test:drills` | 16 of 16. **This does not test the deployment**, despite sitting in this section — see below |
 | 3.3 | `pnpm run backup create` then `backup verify --deep` | a real scratch restore, then dropped. **Needs `PRL_BACKUP_KEY` first** — see below |
 
+**3.3 was exercised end to end on 2026-08-27 and passes**, so what follows is a description of a
+drill that has been run rather than one that has only been written. Against the development database
+via `--container poker-risk-lab-postgres-1`, with a throwaway key: `create` produced a 172.9 MiB
+archive in 19.9 s (two encrypted payloads plus a manifest), and `verify --deep` cleared all four
+layers in 52.6 s — the ciphertext authenticated frame by frame, `pg_restore` parsed 181
+table-of-contents entries **including 19 ACL entries** (a dump with none of those restores a
+database `prl_app` has no rights in), a real restore into a scratch database compared 16 tables, and
+the scratch database was dropped with no plaintext copy left. The archive and the key were destroyed
+afterwards; a full dump carries the login roles' SCRAM verifiers, which is why it is encrypted and
+why a copy lying around is a credential.
+
+What that does NOT prove is on the tool's own footer and is worth repeating here: it proves the
+archive decrypts, parses and restores. It does not prove the application works against the restored
+data — that is the separate drill in `docs/production/backup-restore.md` — and with no WAL
+archiving the RPO is the schedule interval and nothing better.
+
 **3.3 fails as written until the archive key exists.** `pnpm run backup create` with nothing set
 answers `✗ no archive key: set PRL_BACKUP_KEY or pass --key-file` and exits 1 — correctly, because
 that key decrypts every archive ever taken with it and there is deliberately no `--key` flag to put
