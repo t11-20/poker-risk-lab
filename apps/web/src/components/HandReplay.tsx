@@ -51,7 +51,16 @@
  */
 
 import type { HandReviewResponse } from '@prl/contracts';
-import { Button, CoachPanel, formatUnits, Metric, Panel, PokerTable, pluralise } from '@prl/ui';
+import {
+  Button,
+  browserAbandonedFocus,
+  CoachPanel,
+  formatUnits,
+  Metric,
+  Panel,
+  PokerTable,
+  pluralise,
+} from '@prl/ui';
 import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
 import type { HandReplay as Replay, ReplayStep } from '../lib/hand-replay.ts';
 import { CommitmentVerifier } from './CommitmentVerifier.tsx';
@@ -222,8 +231,30 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
     if (which === null) return;
     // Only when the browser has actually dropped focus, which is what it does to a control that
     // becomes disabled. If the pressed button is still enabled it still has the caret.
-    if (document.activeElement !== document.body && document.activeElement !== null) return;
-    transportRef.current?.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus();
+    //
+    const row = transportRef.current;
+    if (row === null) return;
+    // Two ways the caret is lost, and this used to test only the first — which is the one that has
+    // not happened yet when this runs.
+    //
+    // Measured 2026-08-27 by instrumenting this effect and walking the transport to the end: on
+    // every press, including the last, `browserAbandonedFocus()` was **false**. Chrome had not
+    // moved focus yet. It blurs a control that becomes `disabled` AFTER React's effect, so at this
+    // instant `document.activeElement` is still the button the reader pressed, now disabled. A
+    // probe taken later in the same run found `BODY`. The old guard therefore returned early every
+    // single time and the rescue never ran once — a reader who had just stepped through fifteen
+    // decisions was returned to the top of the document, which is exactly what J6.5 says.
+    //
+    // `ActionBar`'s `browserAbandonedFocus` is still the right test for the state AFTER the blur
+    // (it learned that Chrome can land on `<html>` rather than `<body>`), so it is kept for that
+    // case. What is added is the case before: the caret is on a disabled control inside this row.
+    // Either way the reader cannot be told where they are, and either way the answer is the
+    // transport control that survived.
+    const active = document.activeElement;
+    const caretOnDisabledControl =
+      active instanceof HTMLButtonElement && active.disabled && row.contains(active);
+    if (!browserAbandonedFocus() && !caretOnDisabledControl) return;
+    row.querySelector<HTMLButtonElement>('button:not([disabled])')?.focus();
   }, [stepIndex]);
 
   const markers = buildMarkers(replay);

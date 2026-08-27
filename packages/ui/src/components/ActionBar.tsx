@@ -321,7 +321,7 @@ function BetSizer(props: BetSizerProps): ReactElement {
  * treated `body` as abandoned never ran. `<html>` and `null` are the same state: nothing the
  * reader can be told about has focus.
  */
-function browserAbandonedFocus(): boolean {
+export function browserAbandonedFocus(): boolean {
   const active = document.activeElement;
   return active === null || active === document.body || active === document.documentElement;
 }

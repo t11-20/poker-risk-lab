@@ -52,7 +52,14 @@ export {
   type SuitKey,
 } from './cards.ts';
 // -- Components --------------------------------------------------------------
-export { ActionBar, type ActionBarProps } from './components/ActionBar.tsx';
+export {
+  ActionBar,
+  type ActionBarProps,
+  // Exported for `apps/web`'s HandReplay, which had its own two-condition copy and drifted:
+  // Chrome does not always land on `document.body` when it blurs a control that just became
+  // disabled, and a rescue that does not also treat `<html>` as abandoned never runs.
+  browserAbandonedFocus,
+} from './components/ActionBar.tsx';
 export {
   AssumptionList,
   type AssumptionListProps,
