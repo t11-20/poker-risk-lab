@@ -290,7 +290,16 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
         profile.styleNotes,
         `${card.id}: the fixture's style notes are stale`,
       );
-      compared += 1;
+      // `learnFrom` and `counterStrategy` too. They were NOT covered when this join was written,
+      // and the omission surfaced the way these always do: `calling-station`'s teaching strings
+      // were corrected in `profiles.ts`, the fixture kept the old ones, and this test passed.
+      assert.deepEqual(card.learnFrom, profile.learnFrom, `${card.id}: the fixture's learnFrom is stale`);
+      assert.deepEqual(
+        card.counterStrategy,
+        profile.counterStrategy,
+        `${card.id}: the fixture's counterStrategy is stale`,
+      );
+      compared += 3;
     }
     assert.ok(compared >= 10, `only ${compared} profile(s) compared; a sweep of nothing is not a pass`);
   });

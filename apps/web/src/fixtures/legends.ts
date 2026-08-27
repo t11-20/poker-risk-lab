@@ -787,9 +787,9 @@ export const LEGEND_PROFILE_FIXTURES: readonly LegendProfileCardDto[] = [
     traits: CALLING_STATION_TRAITS,
     axes: axesFor(CALLING_STATION_TRAITS),
     learnFrom: [
-      'That the correct adjustment against someone who never folds is to value-bet relentlessly and stop bluffing entirely.',
+      'That the adjustment against a wide, passive caller is to value-bet thinner than usual, because far more of what calls you is worse.',
       'How to recognise a passive opponent from their actions within a handful of hands.',
-      'Why fold equity is worth naming as a separate concept: against this profile you have almost none, and every bluff calculation changes.',
+      'Why fold equity is worth naming as a separate concept: it is the half of a bluff that has nothing to do with your cards, and it is the half a wide, passive caller takes away from you most.',
     ],
     styleNotes: [
       'Calls with almost anything and rarely raises.',
@@ -798,7 +798,7 @@ export const LEGEND_PROFILE_FIXTURES: readonly LegendProfileCardDto[] = [
     ],
     counterStrategy: [
       'Bet your good hands, every street, and size up. It will pay.',
-      'Stop bluffing. With no fold equity, a bluff is a donation.',
+      'Bluff less, and stop bluffing into the hands it will not fold. Its calling range is wide enough that a bluff runs into a caller far more often than the board suggests.',
       'Believe its rare aggression.',
     ],
     modelBasis: ARCHETYPE_BASIS,

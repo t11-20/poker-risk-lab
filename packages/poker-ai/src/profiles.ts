@@ -689,10 +689,24 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
       foldToPressure: 0.14,
       barrelPersistence: 0.2,
     }),
+    // MEASURED 2026-08-27, before re-strengthening any of these. This profile is genuinely wide
+    // (`vpip` 0.52) and genuinely passive (it flat-calls the nut flush where others raise), and
+    // those are what the strings below now claim. What it is NOT is the profile that folds least:
+    // holding the spot and the hand fixed across all twelve, its fold rate ranks 8th, 11th, 3rd,
+    // 11th and 5th lowest on five controlled spots, and third-HIGHEST unconditionally over 6,000
+    // hands each. The earlier wording — "against this profile you have almost none [fold equity]"
+    // and "with no fold equity, a bluff is a donation" — is not what the model does.
+    //
+    // The cause is in `policy.ts` rather than here: fold weight is
+    // `(1 - continueAppetite) * (FOLD_BASE + FOLD_TRAIT_SPAN * foldToPressure) * ...`, so this
+    // trait's 2.5x span is scaled by a factor that collapses toward zero on a clear hand and then
+    // competes with priceSteepness, risk, survival and the observed adjustments. Raising
+    // `FOLD_TRAIT_SPAN` would make the old wording true and would move every profile's baselines
+    // and the differentiation suite with it. That is a real option; it is not a free one.
     learnFrom: [
-      'That the correct adjustment against someone who never folds is to value-bet relentlessly and stop bluffing entirely.',
+      'That the adjustment against a wide, passive caller is to value-bet thinner than usual, because far more of what calls you is worse.',
       'How to recognise a passive opponent from their actions within a handful of hands.',
-      'Why fold equity is worth naming as a separate concept: against this profile you have almost none, and every bluff calculation changes.',
+      'Why fold equity is worth naming as a separate concept: it is the half of a bluff that has nothing to do with your cards, and it is the half a wide, passive caller takes away from you most.',
     ],
     styleNotes: [
       'Calls with almost anything and rarely raises.',
@@ -701,7 +715,7 @@ const PROFILE_LIST: readonly StrategyProfile[] = [
     ],
     counterStrategy: [
       'Bet your good hands, every street, and size up. It will pay.',
-      'Stop bluffing. With no fold equity, a bluff is a donation.',
+      'Bluff less, and stop bluffing into the hands it will not fold. Its calling range is wide enough that a bluff runs into a caller far more often than the board suggests.',
       'Believe its rare aggression.',
     ],
     modelBasis: ARCHETYPE_BASIS,
