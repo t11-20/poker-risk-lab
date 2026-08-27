@@ -44,6 +44,13 @@
  * structure. Validating a Merkle proof's interior here would be a second implementation of the
  * engine's own definition, and the client has no use for the contents.
  *
+ * Shape is not the only question asked of a `state` frame, and it used to be. `narrowState` also
+ * holds the view to `redactFor`'s own hole-card rule — see `lib/hole-card-entitlement.ts`, which
+ * carries the whole argument for why that is an assertion about the server's published fields
+ * rather than a second redaction boundary. It is deliberately NOT inside `isPlayerView`: "is this
+ * the shape the contract describes" and "does the server's own promise hold in it" are different
+ * questions and it should stay obvious which one refused a frame.
+ *
  * ## Idempotency and sequencing are the caller's to supply, and this module will not invent them
  *
  * `sendAction` takes an `actionId` and an `expectedSequence` and sends exactly those. It does not
@@ -76,6 +83,7 @@ import {
   type WsWelcome,
 } from '@prl/contracts';
 import type { LegalAction, PlayerView, PotLayer, SeatView, TableAction } from '@prl/ui';
+import { checkHoleCardEntitlement, describeUnentitledSeats } from './hole-card-entitlement.ts';
 
 // ---------------------------------------------------------------------------
 // Where the socket goes
@@ -406,6 +414,10 @@ function hasViewScalars(value: JsonObject): boolean {
  * legal action is sensible. That is the server's job and it is the only authority. This asks one
  * question — "is this the shape the contract describes?" — so that a malformed or hostile frame
  * produces a refusal rather than `undefined` reaching a renderer.
+ *
+ * The hole-card entitlement check is the one thing about a view's CONTENT this client decides, and
+ * it is not here for that reason: it lives in `narrowState`, one level up, so that a rejection can
+ * say which of the two questions was answered no. See the module header.
  */
 export function isPlayerView(value: unknown): value is PlayerView {
   if (!isObject(value)) return false;
@@ -493,6 +505,12 @@ function narrowWelcome(value: JsonObject): WsWelcome | null {
 function narrowState(value: JsonObject): WsState | null {
   const view = value['view'];
   if (!(view === null || isPlayerView(view))) return null;
+  // The server's own hole-card rule, evaluated on the server's own published fields. A frame that
+  // breaks it is refused whole rather than quietly stripped: the cards have already reached this
+  // browser and cannot be recalled, so the only thing left to decide is whether the defect is
+  // visible. Refusing makes the table stop, which somebody reports. See
+  // `lib/hole-card-entitlement.ts` for why removing the cards instead would be the wrong call.
+  if (checkHoleCardEntitlement(view).unentitled.length > 0) return null;
   if (!isRoomSummary(value['room'])) return null;
   if (!(value['deadlineMs'] === null || isNumber(value['deadlineMs']))) return null;
   if (!isNumber(value['serverTimeMs']) || !isInteger(value['revision'])) return null;
@@ -635,6 +653,16 @@ export interface FrameRejection {
   readonly claimedType: string | null;
   /** Which member failed, in the contract's own vocabulary. Never a stack trace. */
   readonly reason: string;
+  /**
+   * Present, and non-empty, only for a `state` frame refused for carrying hole cards the recipient
+   * was not entitled to. The seat indices, so a caller can act on the fact rather than on a
+   * substring of `reason`.
+   *
+   * A field and not a code word inside the sentence, for the reason `noticeCode` exists beside
+   * `notice` in `use-live-table.ts`: prose written for a person is allowed to be improved, and a
+   * branch that reads a substring of it breaks the first time somebody does.
+   */
+  readonly unentitledSeats?: readonly number[];
 }
 
 export type FrameOutcome =
@@ -660,6 +688,12 @@ const NARROWERS: Readonly<Record<string, (value: JsonObject) => WsServerMessage 
  * The exception is a `coach` frame — an analysis is asked for once and answered once, so dropping it
  * silently leaves a panel that will never fill. Hence the reason string: the caller decides which
  * refusals are worth a sentence.
+ *
+ * There are now two exceptions, and the second one is louder than the first. A `state` frame
+ * refused for carrying unentitled hole cards is not corrected by the next frame — a server that
+ * leaked once will leak again in one second's time — so the table stops, and a table that has
+ * stopped without saying why is the silent failure this repository keeps writing guards against.
+ * `unentitledSeats` on the rejection is what lets the caller tell that apart from a drifted frame.
  */
 export function readServerMessage(raw: string): FrameOutcome {
   let parsed: unknown;
@@ -682,6 +716,19 @@ export function readServerMessage(raw: string): FrameOutcome {
   }
   const frame = narrow(parsed);
   if (frame !== null) return { ok: true, frame };
+  if (claimedType === 'state') {
+    // Asked before the generic sentence, because "did not match the shape the contract describes"
+    // is a false statement about this frame and the wrong thing to go looking for: the shape was
+    // right and the CONTENT was a hole-card leak. The check is re-run rather than threaded out of
+    // `narrowState` so that the narrowers stay uniform `(value) => T | null`.
+    const unentitledSeats = checkHoleCardEntitlement(parsed['view']).unentitled;
+    if (unentitledSeats.length > 0) {
+      return {
+        ok: false,
+        rejection: { claimedType, reason: describeUnentitledSeats(unentitledSeats), unentitledSeats },
+      };
+    }
+  }
   const reason =
     claimedType === 'coach'
       ? (checkCoachReport(parsed['report']) ?? 'the requestId was missing or not a string')

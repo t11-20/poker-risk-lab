@@ -235,6 +235,27 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
   const { closed, table, setupError } = live;
   return (
     <>
+      {/*
+        First, above every other notice, and with its own heading.
+
+        This is not the server refusing the reader something — it is this page refusing the SERVER
+        something, and it happens for exactly one reason: a `state` frame carried hole cards for a
+        seat that is neither the reader's own nor one that showed down. See
+        `lib/hole-card-entitlement.ts` for why the frame is refused whole rather than stripped of the
+        cards, and `use-live-table.ts` for the sentence.
+
+        `role="alert"` for the same reason the refusals below have one — an assertive region is right
+        when the reader has to stop what they are doing, and a table that has silently stopped
+        dealing is the case that most needs saying out loud. It sits above `closed` because a reader
+        who sees both should read this one first: the disconnection is a consequence of it.
+      */}
+      {table.dataRefusal === null ? null : (
+        <div role="alert">
+          <Callout tone="warning" title="This table stopped: the server sent cards it should not have">
+            {table.dataRefusal}
+          </Callout>
+        </div>
+      )}
       {setupError === null ? null : (
         <Callout tone="warning" title="The table could not be prepared">
           {setupError}

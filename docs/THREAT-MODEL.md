@@ -119,6 +119,19 @@ Severity is (likelihood × impact) **for this play-money product**.
 **Residual risk.** A logic error inside `redactFor` itself. Mitigated by the runtime
 tests, but this is the function to review most carefully in any change.
 
+Since 2026-08-27 the web client also *notices* one. `apps/web/src/lib/hole-card-entitlement.ts`
+holds every `state` frame to the invariant `redactFor`'s own header states about its output —
+`holeCards` non-null for exactly `isSelf || showed down`, with `viewerSeat`, `isSelf`, `street` and
+`result.showdowns` all published in the same view — and refuses the frame, raises a `console.error`
+and tells the reader when it does not hold. Note what that is and is not, because point 4 above is
+still true and this does not soften it: it is a **smoke detector, not a control**. The bytes have
+already reached the browser by the time it runs and it cannot recall them; the client deliberately
+does not filter the cards out, because filtering would hide a real leak from the honest reader
+while leaving it in the network panel for the dishonest one. What it buys is that the defect stops
+being silent. `apps/web/test/hole-card-entitlement.test.ts` is the gated evidence, with its negative
+control recorded in its header; `scripts/smoke-test.mjs` asks the same question of the API's own
+bytes against a deployment, and is unaffected by anything the client does.
+
 ### T2 — Post-hand verification leaking unshown hands · Severity: High → mitigated by redesign
 
 This one is recorded because it *happened*, and because the fix is the interesting part.

@@ -228,6 +228,20 @@ export interface TableState {
    * moment ago needs no explanation beyond the sentence.
    */
   readonly noticeCode: ErrorCode | null;
+  /**
+   * Set when this client refused a `state` frame because it carried hole cards the reader was not
+   * entitled to. Null in every other case, including every ordinary refusal.
+   *
+   * Separate from `notice`, which is *the server's own wording* for something it declined to do,
+   * and whose panel is headed "The server refused something". This is the opposite direction — the
+   * server did something it should not have and this page declined to draw it — and putting the two
+   * under one heading would tell a reader that their own request was rejected when it was not.
+   *
+   * It is deliberately sticky: nothing clears it but a `reset`. A server that leaked once will send
+   * the same view again a second later, so a field that cleared on the next good frame would flicker
+   * a warning about the most serious defect this system can have.
+   */
+  readonly dataRefusal: string | null;
 }
 
 export const EMPTY_TABLE_STATE: TableState = {
@@ -252,6 +266,7 @@ export const EMPTY_TABLE_STATE: TableState = {
   submission: null,
   notice: null,
   noticeCode: null,
+  dataRefusal: null,
 };
 
 export type TableEvent =
@@ -268,6 +283,13 @@ export type TableEvent =
   | { readonly kind: 'coachRequested'; readonly requestId: string; readonly key: string }
   | { readonly kind: 'coachFailed'; readonly reason: string }
   | { readonly kind: 'notice'; readonly message: string | null; readonly code?: ErrorCode | null }
+  /**
+   * A `state` frame was refused for carrying hole cards this reader was not entitled to.
+   *
+   * Carries the seats rather than a finished sentence so the reducer owns the wording, which is
+   * what lets `test/live-regions.test.ts`-style tests drive it without importing the socket module.
+   */
+  | { readonly kind: 'dataRefused'; readonly seats: readonly number[] }
   | { readonly kind: 'reset' };
 
 /** Identifies one decision: a hand, and the point in it the view was drawn at. */
@@ -389,6 +411,33 @@ export function spokenDecision(action: TableAction): string {
 export const COACH_READY_ANNOUNCEMENT =
   'The analysis of this decision is ready in the Coach panel, below the table on a narrow screen.';
 export const COACH_FAILED_ANNOUNCEMENT = 'The analysis could not be shown.';
+
+/**
+ * What the reader is told when this client refuses a frame for leaking hole cards.
+ *
+ * Exported and built here rather than written into the panel, for the reason above: a sentence a
+ * test carries its own copy of is a sentence a test keeps passing about after somebody deletes it.
+ *
+ * Three things it must say and one it must not. It must say the table has stopped, because it has;
+ * it must say nothing was staked, because the reader's first fear at a table that freezes is their
+ * stack; and it must say what happened plainly, because "an unexpected error occurred" about a
+ * hole-card leak is the product lying to the person it leaked to. What it must not do is claim the
+ * cards were kept from anybody: they arrived in this browser and this page declined to draw them,
+ * which is a smaller and truer statement. See `lib/hole-card-entitlement.ts`.
+ */
+export function dataRefusalSentence(seats: readonly number[]): string {
+  // 1-based, matching every other seat number this page prints to a reader.
+  const named = seats.map((seat) => (seat < 0 ? 'an unnumbered seat' : `seat ${String(seat + 1)}`));
+  const one = named.length === 1;
+  const list = one ? named[0] : `${named.slice(0, -1).join(', ')} and ${named[named.length - 1]}`;
+  return (
+    `The table stopped because the server sent this browser the hole cards of ${list} — cards ` +
+    `${one ? 'that seat had' : 'those seats had'} not shown and that are not yours. Nothing was ` +
+    'staked and no decision was sent. This page refused the frame rather than drawing those cards, ' +
+    'but it cannot unsend them, so the right thing to do is to report it: the hand this happened ' +
+    'in is not a fair hand for anybody at the table.'
+  );
+}
 
 /**
  * Why an analysis never left this browser, per refusal — and never "the server said no".
@@ -809,6 +858,11 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
       };
     case 'notice':
       return { ...state, notice: event.message, noticeCode: event.code ?? null };
+    case 'dataRefused':
+      // The view is left exactly as it was. The last frame this client accepted is the last frame
+      // it could vouch for, and blanking the table would take the record of the hand away from the
+      // one person in a position to report what happened.
+      return { ...state, dataRefusal: dataRefusalSentence(event.seats) };
     case 'reset':
       return EMPTY_TABLE_STATE;
     default:
@@ -1174,11 +1228,26 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
       onProblem: (message) => console.warn(`[table-socket] ${message}`),
       /**
        * A dropped frame is usually invisible on purpose — `state` arrives whole on every change, so
-       * the next one repairs whatever the last one lost. A `coach` frame is the exception: it is
-       * asked for once and answered once, so dropping it silently leaves a panel that will never
-       * fill and a reader with no idea why.
+       * the next one repairs whatever the last one lost. Two are not.
+       *
+       * A `coach` frame is asked for once and answered once, so dropping it silently leaves a panel
+       * that will never fill and a reader with no idea why.
+       *
+       * A `state` frame refused for carrying hole cards this recipient was not entitled to is the
+       * loud one, and it is the whole point of that check. `console.error` and not `console.warn`,
+       * and not fenced behind `NODE_ENV` the way `lib/api.ts` fences its 404 line: that one fires
+       * on every mistyped URL a reader visits, and this one fires when the server has contradicted
+       * the single promise this product cannot afford to break. It should be findable in a support
+       * screenshot. `dataRefusal` is the same fact for the person at the table, who is otherwise
+       * looking at a table that has simply stopped moving.
        */
       onRejected: (rejection) => {
+        const unentitled = rejection.unentitledSeats;
+        if (unentitled !== undefined && unentitled.length > 0) {
+          console.error(`[table-socket] refused a state frame: ${rejection.reason}`);
+          dispatch({ kind: 'dataRefused', seats: unentitled });
+          return;
+        }
         if (rejection.claimedType !== 'coach') return;
         dispatch({ kind: 'coachFailed', reason: rejection.reason });
       },

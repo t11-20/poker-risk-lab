@@ -226,6 +226,65 @@ test('a state frame whose view has a member of the wrong type is refused, not co
   assert.equal(readServerMessage(stateFrame({ street: 'fourth' })).ok, false);
 });
 
+test('a state frame carrying an opponent’s hole cards is refused, and the refusal is not silent', () => {
+  // The shape is impeccable — this is `stateFrame()` with one seat added — and the CONTENT is the
+  // worst defect this system can have. `test/hole-card-entitlement.test.ts` owns the rule and its
+  // negative control; what is asserted here is the wiring: the rejection reaches the caller with the
+  // seats on it, so `use-live-table.ts` can raise a `console.error` and tell the reader, rather than
+  // reading the fact back out of a substring of a sentence somebody is free to reword.
+  const leaking = stateFrame({
+    seats: [
+      {
+        seat: 0,
+        playerId: 'usr_a',
+        stack: 990,
+        committedThisStreet: 0,
+        committedTotal: 10,
+        status: 'active',
+        position: 'BTN',
+        holeCards: [51, 50],
+        isSelf: true,
+        isButton: true,
+        isToAct: true,
+      },
+      {
+        seat: 1,
+        playerId: 'usr_b',
+        stack: 990,
+        committedThisStreet: 0,
+        committedTotal: 10,
+        status: 'active',
+        position: 'BB',
+        holeCards: [4, 5],
+        isSelf: false,
+        isButton: false,
+        isToAct: false,
+      },
+    ],
+  });
+
+  const { rig, factory } = harness();
+  const rejections: { claimedType: string | null; seats: readonly number[] | undefined }[] = [];
+  const frames: string[] = [];
+  const handle = openTableSocket({
+    roomId: ROOM,
+    url: 'ws://x/api/v1/ws',
+    onFrame: (frame) => frames.push(frame.type),
+    onStatus: () => undefined,
+    onClose: () => undefined,
+    onRejected: (rejection) =>
+      rejections.push({ claimedType: rejection.claimedType, seats: rejection.unentitledSeats }),
+    socketFactory: factory,
+    scheduler: fakeScheduler(),
+  });
+  rig.handlers[0]?.onOpen();
+  rig.handlers[0]?.onMessage(leaking);
+
+  assert.deepEqual(frames, [], 'nothing reached the renderer');
+  assert.deepEqual(rejections, [{ claimedType: 'state', seats: [1] }]);
+  handle.dispose();
+});
+
 test('an ack distinguishes "applied" from "deduplicated" and omits what it was not sent', () => {
   const plain = readServerMessage('{"type":"ack","requestId":"req-1","appliedSequence":7}');
   assert.equal(plain.ok, true);
