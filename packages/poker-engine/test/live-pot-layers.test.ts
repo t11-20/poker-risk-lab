@@ -97,3 +97,41 @@ test('a real side pot is still layered, so the fix did not just flatten everythi
   const total = view.pots.reduce((sum, pot) => sum + pot.amount, 0);
   assert.equal(total, view.potTotal, 'the layers must still account for every chip in the middle');
 });
+
+test('a folded seat is shown no price to call (REGRESSION)', () => {
+  // `PlayerView.amountToCall` promises "0 when nothing is owed". `amountToCall` in `betting.ts`
+  // has no status check — right for the betting logic, which only asks about the seat to act, and
+  // wrong for a view built for every recipient on every frame. A folded seat keeps its stack and,
+  // once the street closes, has `committedThisStreet: 0`, so it reported the full bet level for the
+  // rest of the hand. `PokerTable` draws that in the caution tone: "400 units to call", beside an
+  // ActionBar correctly saying it is not their turn. 6,772 occurrences in an engine fuzz.
+  const { state } = deal({ stacks: [1000, 1000, 1000] });
+  const folder = state.toAct;
+  assert.ok(folder !== null);
+  let live = applyAction(state, folder, { type: 'fold' }).state;
+
+  // Drive on so the street closes and a fresh bet lands with the folder still at the table.
+  for (let step = 0; step < 4 && live.toAct !== null; step += 1) live = continueOnce(live);
+  const bettor = live.toAct;
+  if (bettor !== null) {
+    const kinds = new Set(legalActions(live, bettor).map((legal) => legal.type));
+    if (kinds.has('bet')) live = applyAction(live, bettor, { type: 'bet', to: 60 }).state;
+  }
+
+  const seatState = live.seats.find((seat) => seat.seat === folder);
+  assert.equal(seatState?.status, 'folded', 'the fixture must actually have a folded seat');
+  assert.ok(live.betLevel > 0, 'and a live bet level, or there is no wrong answer to give');
+
+  const view = redactFor(live, { viewerSeat: folder });
+  assert.equal(
+    view.amountToCall,
+    0,
+    `a folded seat was quoted ${view.amountToCall} to call at bet level ${live.betLevel}`,
+  );
+
+  // The seat still to act must still be quoted a price, so this did not zero the field for everyone.
+  if (live.toAct !== null) {
+    const active = redactFor(live, { viewerSeat: live.toAct });
+    assert.ok(active.amountToCall > 0, 'the seat to act must still be told what it costs');
+  }
+});

@@ -295,7 +295,22 @@ export function redactFor(state: HandState, options: RedactOptions): PlayerView 
     actions: [...state.actions],
     actionSequence: state.actionSequence,
     legalActions: viewer !== null && state.toAct === viewer.seat ? legalActions(state, viewer.seat) : [],
-    amountToCall: viewer === null ? 0 : amountToCall(state, viewer),
+    // A seat that is not `active` owes nothing, and the field's contract above already says so:
+    // "0 when nothing is owed". `amountToCall` in `betting.ts` is `max(0, min(betLevel -
+    // committedThisStreet, stack))` with no status check — correct for the betting logic, which
+    // only ever asks about the seat to act, and wrong for a VIEW, which is built for every
+    // recipient on every frame. A folded seat keeps its stack and, once the street closes, has
+    // `committedThisStreet: 0`, so it reported the full bet level for the rest of the hand.
+    //
+    // `PokerTable` renders that as a `prl-badge--caution` reading "400 units to call" — the alarm
+    // tone — beside an ActionBar correctly saying "Waiting for another player to act". Measured:
+    // 6,772 occurrences in an engine fuzz, 541 and 427 in two live-table runs. Not exploitable,
+    // since the bet level is public, but it is false information in the alarm colour on the screen
+    // where a learner is working out what "to call" means.
+    //
+    // `contestablePotFor` takes the same view of a folded hero and THROWS: "seat N is folded and
+    // can win nothing; there is no price".
+    amountToCall: viewer === null || viewer.status !== 'active' ? 0 : amountToCall(state, viewer),
     commitmentRoot: state.commitment.root,
     commitmentContext: state.commitment.context,
     // The result carries the revealed deck and salt — but only ever after the
