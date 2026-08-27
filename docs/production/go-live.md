@@ -185,7 +185,13 @@ land — nothing is lost, but the first morning of a course is the wrong time to
 
 ## 7. The parts no command can do
 
-- **PERSON — counsel.** `docs/production/legal-register.md` holds the decisions: what (if anything)
+- **PERSON — counsel.** Send [`counsel-pack.md`](counsel-pack.md): the eleven decisions written to be
+  answered in one sitting, ordered so the three that block taking money come first
+  (`enrolment-and-fees`, `refunds-and-cancellation`, `operator-identity`), each with the facts cited
+  to file and line and what changes in the product per answer. It is derived from, and does not
+  replace, `legal-review-requirements.md` — which stays the machine-checked register — or
+  `legal-register.md`, which carries the full reasoning behind each fact. The decisions themselves:
+  what (if anything)
   was sold and what must be disclosed before it; refunds and cooling-off; what deleting an account
   should do to a live entitlement, which today the `ON DELETE CASCADE` destroys. Every engineering
   dependency the register named is closed; none of the decisions are engineering's to make.

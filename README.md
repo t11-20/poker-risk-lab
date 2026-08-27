@@ -244,6 +244,7 @@ transpiler in the test path.
 | [`docs/VERIFICATION.md`](docs/VERIFICATION.md) | Every correctness claim and the evidence for it |
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Commands, configuration, troubleshooting |
 | [`docs/adr/`](docs/adr/) | Twelve decision records |
+| [`docs/production/counsel-pack.md`](docs/production/counsel-pack.md) | **For a lawyer, in one sitting**: the eleven open legal decisions ordered so the three that block taking money come first, each with the verified facts it turns on and what changes in the product per answer. Derived from, and does not replace, [`legal-review-requirements.md`](docs/production/legal-review-requirements.md) |
 | [`docs/REPORT.md`](docs/REPORT.md) | Final delivery report: what was built, tested, and left undone |
 | [`docs/HANDOVER.md`](docs/HANDOVER.md) | **Start here to review the hardening branch**: what changed across the branch, every measurement with its caveats, what is deliberately not done, and where to be sceptical |
 
