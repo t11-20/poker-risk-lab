@@ -110,7 +110,7 @@
       "Adding the flush outs to the straight outs without removing the cards that belong to both draws, then multiplying the inflated count by four.",
       "Using the four-times estimate when the bet does not put you all in. With units behind, you are buying one card at a time and paying separately for the second.",
       "Assuming any big draw is a favourite. Against a hand that shares your suit or blocks your straight card, the same shaped draw can be a clear underdog.",
-      "Treating the shortcut's answer as the answer. It is a table aid with a known direction of error, and the app will show you both figures side by side."
+      "Treating the shortcut's answer as the answer. It is a table aid with a known direction of error — and in this spot the app declines to print one at all, because the analysis makes this draw a favourite rather than a hand that needs to improve. The rule of 2 and 4 estimates how often you IMPROVE, which stops being the question the moment improving is not what you need."
     ],
     "glossaryTerms": [
       "rule-of-2-and-4",
