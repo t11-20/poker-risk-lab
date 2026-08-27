@@ -56,11 +56,61 @@ const fromRepo = (rel) => import(pathToFileURL(join(REPO, rel)).href);
 // tree that was perfectly built. Reading the source removes the question instead of policing it —
 // and `build-review.ts` below has always been imported this way, so nothing new is being asked of
 // the runtime.
-const { buildCoachReport, deriveContestablePot } = await fromRepo('packages/poker-math/src/index.ts');
+const { buildCoachReport, deriveContestablePot, exactRange } = await fromRepo(
+  'packages/poker-math/src/index.ts',
+);
+const { parseCards } = await fromRepo('packages/poker-engine/src/index.ts');
 const { readSituation, SCENARIO_ANALYSIS_SAMPLES, SCENARIO_ANALYSIS_SEED } = await fromRepo(
   'packages/content/src/index.ts',
 );
 const { buildHandReview } = await fromRepo('apps/api/src/review/build-review.ts');
+
+/**
+ * Refuse a `dist/` that disagrees with the `src/` beside it.
+ *
+ * Reading the engine from `src` above fixes only HALF of this script. `buildHandReview` is a
+ * module, and its own `import { buildCoachReport } from '@prl/poker-math'` resolves through
+ * `node_modules` to `packages/poker-math/dist/index.js` — verified with `createRequire(...).resolve`.
+ * So the two halves of one gate read two different artifacts: the Lab scenarios track `src`, and
+ * the hand-review fixtures track the last `tsc`. A Coach prose fix in `src/coach.ts` without a
+ * rebuild left `review.ts` carrying the old sentence while this script called the fixtures current
+ * — the exact incident the earlier commit said it had removed, still live in the other half.
+ *
+ * A CONTENT comparison, not an mtime one. The first attempt at this class of guard compared
+ * `dist` and `src` timestamps and had to be thrown away: `tsc` does not rewrite an output whose
+ * content has not changed, so `dist` legitimately stays older and the guard refused a correctly
+ * built tree. Running one deterministic report through both and comparing the result asks the
+ * question directly and cannot produce that false positive.
+ */
+// By path, like everything else here: this script sits at the repository root, which is not a
+// workspace project, so a bare `@prl/*` specifier does not resolve. The header says so; I tried it
+// anyway and got ERR_MODULE_NOT_FOUND.
+const distMath = await fromRepo('packages/poker-math/dist/index.js');
+const PROBE = {
+  heroCards: parseCards('Ah 6h'),
+  board: parseCards('Kh 9h 4s 2c'),
+  street: 'turn',
+  opponents: [{ label: 'the opponent', range: exactRange(parseCards('Kd 9c')) }],
+  pot: 220,
+  contestablePot: 220,
+  toCall: 80,
+  heroCommittedThisStreet: 0,
+  heroStack: 300,
+  opponentStacks: [300],
+  bigBlind: 10,
+};
+{
+  const fromSource = JSON.stringify(buildCoachReport(PROBE));
+  const fromBuild = JSON.stringify(distMath.buildCoachReport(PROBE));
+  if (fromSource !== fromBuild) {
+    console.error(
+      'packages/poker-math/dist disagrees with its src, and `buildHandReview` reads the built copy.\n' +
+        'The hand-review fixtures would be compared against a stale engine and called current.\n' +
+        'Run: pnpm --filter ./packages/poker-math build',
+    );
+    process.exit(78);
+  }
+}
 
 const load = (file) => import(pathToFileURL(join(FIXTURES, file)).href);
 
