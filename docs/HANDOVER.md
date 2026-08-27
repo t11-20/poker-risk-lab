@@ -153,6 +153,14 @@ reading in full. The two sharpest:
 
 Reviewing it the way it was written means distrusting green results. Specifically:
 
+- **Three sweeps have already been run for "documentation that lies", so start elsewhere.**
+  Markdown links: 324 relative links, **0 broken**. Source-comment file citations: 2,369 backticked
+  paths resolved against the citing file, its package root and the workspace roots — **1 wrong**
+  (fixed). Comments claiming coverage without naming a test: 67 candidates, all but four inside the
+  test that does the asserting; all four source-file claims verified against the test that backs
+  them. The one that was unbacked — `audit.ts` promising a pairing test that did not exist — was
+  found and closed on 2026-08-27. **The rot was in the review archive, not the code**: see the
+  indexes now in `docs/audit/` and `docs/reviews/`.
 - **Every new guard has a negative control**, and each commit message states the measurement. If a
   control is not demonstrated by *running* it, treat the guard as decoration — that is this
   repository's own rule and it caught several of these.
