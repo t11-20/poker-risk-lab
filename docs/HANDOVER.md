@@ -1,4 +1,4 @@
-# Branch handover — `production-hardening`
+# Branch handover — `production-hardening-2`
 
 **State:** the branch is many commits ahead of `main`; run the two commands below rather than
 trusting a number here.
