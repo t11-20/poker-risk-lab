@@ -202,7 +202,12 @@ land — nothing is lost, but the first morning of a course is the wrong time to
   the authority, the external reference and whether the place was still live. So the question is no
   longer "can a destroyed entitlement be evidenced at all" — it can, on both sides — but what the
   operator owes the holder of a live place who erases themselves.
-- **PERSON — a git remote, which is what turns `KEY` into `KEYLESS`.** This repository has none, so
+- **PERSON — a git remote, which is what turns `KEY` into `KEYLESS`.** **Owner-handled, and
+  expected to arrive with open-sourcing** (stated 2026-08-28): the plan is to publish this
+  repository, and the remote comes with that rather than needing separate work. Nothing else here
+  waits on it. When it exists, the sequence is one push of this branch and one `v*` tag; the
+  workflow does the rest and `security:image-provenance` flips from `KEY` to `KEYLESS` on its own.
+  This repository has none today, so
   every release is signed with the long-lived key on the release machine. That proves possession of
   a key and **not** the identity of a builder: `security:image-provenance` says `KEY` and
   `deploy/signing/README.md` says what that is worth. Push to a remote and let

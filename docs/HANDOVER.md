@@ -34,7 +34,8 @@ produce identical rows.
 
 So what is left before this opens to the public is **not code**, and §6 has the detail: counsel
 answering the eleven decisions in `docs/production/counsel-pack.md`, a paging account, a git remote
-(which turns signing from `KEY` to `KEYLESS`), and one short screen-reader session. Every gate the
+(which turns signing from `KEY` to `KEYLESS`, and which the owner expects to arrive with
+open-sourcing rather than as separate work), and one short screen-reader session. Every gate the
 repository defines is green; none of those four is a gate.
 
 ---
