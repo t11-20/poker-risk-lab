@@ -87,7 +87,7 @@ nodeLinker: isolated
 # -f Dockerfile.api .` all fail from a clean checkout.
 #
 # `packageExtensions` states the peer relationship upstream omitted, so pnpm
-# links the workspace's single `fastify` 5.11.3 into each plugin. Why this and
+# links the workspace's single `fastify` 5.12.5 into each plugin. Why this and
 # not the alternatives:
 #
 #   - It records the edges in pnpm-lock.yaml, so the result is reproducible from

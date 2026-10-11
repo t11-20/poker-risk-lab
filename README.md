@@ -223,8 +223,8 @@ Full list with severity and what would close each:
 ## Stack
 
 Node 24.18.0 · pnpm 11.10.0 · TypeScript 7.0.2 (strict, plus `exactOptionalPropertyTypes`,
-`noUncheckedIndexedAccess`, `erasableSyntaxOnly`) · Next.js 16.3.0 · React 19.2.8 ·
-Fastify 5.11.3 · PostgreSQL 16 · Biome 2.5.7 · native CSS · `node --test`
+`noUncheckedIndexedAccess`, `erasableSyntaxOnly`) · Next.js 16.3.8 · React 19.2.8 ·
+Fastify 5.12.5 · PostgreSQL 16 · Biome 2.5.7 · native CSS · `node --test`
 
 Every version is pinned exact and chosen to satisfy a 7-day release-age cooldown. Tests run
 on Node's built-in runner against TypeScript directly, so there is no test framework and no
