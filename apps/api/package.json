@@ -16,9 +16,9 @@
   "dependencies": {
     "@fastify/cookie": "11.1.2",
     "@fastify/csrf-protection": "8.0.1",
-    "@fastify/helmet": "13.1.0",
+    "@fastify/helmet": "13.1.1",
     "@fastify/rate-limit": "11.2.0",
-    "@fastify/websocket": "11.3.0",
+    "@fastify/websocket": "11.3.3",
     "@prl/content": "workspace:*",
     "@prl/contracts": "workspace:*",
     "@prl/poker-ai": "workspace:*",
@@ -28,7 +28,7 @@
     "postgres": "3.4.9"
   },
   "devDependencies": {
-    "@types/ws": "8.18.1",
-    "ws": "8.21.3"
+    "@types/ws": "8.18.2",
+    "ws": "8.22.0"
   }
 }

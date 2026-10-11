@@ -81,7 +81,7 @@
     "certify:screen-reader": "node scripts/screen-reader-certify.mjs"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.7",
+    "@biomejs/biome": "2.5.15",
     "@types/node": "24.13.3",
     "axe-core": "4.13.0",
     "typescript": "7.0.2"
