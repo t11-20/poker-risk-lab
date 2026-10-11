@@ -32,7 +32,7 @@ since made them sixteen and fifteen. Read each count off its own list anyway; th
 again.
 
 The newest of the fifteen is `action-advisories.mjs`, and it exists because **pinning is not
-safety**. `ci-pinning.mjs` proves all 63 action references are full commit SHAs, which stops a tag
+safety**. `ci-pinning.mjs` proves all 60 action references are full commit SHAs, which stops a tag
 being repointed — and does nothing at all about a pinned SHA of a version an advisory was later
 published against, which stays pinned and stays vulnerable for ever. It resolves each pin to a
 version by asking GitHub which tags point at that commit (`git ls-remote --tags`, peeled `^{}` line
@@ -46,8 +46,10 @@ matched nothing for ever behind a green tick; and OSV's name query is case-sensi
 The gate therefore downloads the whole published corpus and indexes it case-insensitively — which
 also lets it refuse a corpus that arrives empty. It went into the `GATES` array in `audit.mjs`, not
 into `verify`'s loop, so it touched neither workflow — the three-file rule below is about `verify`.
-And because `.github/workflows/supply-chain.yml` runs `security:audit` daily against the unchanged
-repository, an advisory published against a pin nobody has touched turns that run red on its own.
+There is no longer a scheduled run of `security:audit`: `.github/workflows/supply-chain.yml` was
+removed on 2026-10-11 at the owner's request. An advisory against a pin nobody has touched is caught
+at the next push, or earlier by Dependabot (`.github/dependabot.yml`), which matches advisories on
+GitHub's side and opens the upgrade PR.
 
 `scripts/release-gate-coverage.mjs` reads the `for gate in ...` clause of `verify` against the job
 graphs of both workflows and fails when they disagree, so **adding a gate is a three-file change by

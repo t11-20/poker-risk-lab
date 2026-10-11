@@ -130,7 +130,7 @@ describe('workflow inventory', () => {
   it('FAILS when a declared workflow disappears', () => {
     const gate = new Gate('t');
     checkWorkflowInventory(gate, ['ci.yml']);
-    assert.match(failureText(gate), /declared workflow is missing: \.github\/workflows\/supply-chain\.yml/);
+    assert.match(failureText(gate), /declared workflow is missing: \.github\/workflows\/release\.yml/);
   });
 
   it('FAILS when there are no workflows at all', () => {

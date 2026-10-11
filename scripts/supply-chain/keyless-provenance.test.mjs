@@ -154,7 +154,7 @@ describe('exactly one workflow may mint an OIDC token', () => {
       name,
       text: readFileSync(join(REPO_ROOT, '.github', 'workflows', name), 'utf8'),
     }));
-    assert.ok(files.length >= 4, 'the sweep must actually read the workflows');
+    assert.ok(files.length >= 3, 'the sweep must actually read the workflows');
     const minting = workflowsThatCanMintTokens(files);
     assert.deepEqual(minting, [{ name: 'release-sign.yml', scope: 'job', job: 'sign' }]);
   });

@@ -26,6 +26,7 @@
  *                                        | ✗ the advisory corpus could not be read, exit 1 |
  *   | `git` alone sent to a dead proxy    | ✗ could not read the tags of …, exit 1 |
  *   | the reference floor raised to 64    | ✗ found 63 … refuses to run below 64, exit 1 |
+ *     (measured when there were 63; since 2026-10-11 there are 60 and the floor is 60)
  *   | the corpus floor raised to 999      | ✗ holds 55 record(s) … refuses fewer than 999, exit 1 |
  *   | `actions/upload-artifact` pinned to a real SHA belonging to `actions/checkout`
  *                                        | ✗ no tag of actions/upload-artifact points at it, exit 1 |
@@ -100,7 +101,7 @@ describe('the reference set this gate scans', () => {
     // collector against the gate's own counter over the real workflows, so a
     // collector that stopped matching cannot agree with it by also being empty.
     const collected = collectActionReferences(REPO_ROOT);
-    assert.ok(collected.length >= 63, `only ${collected.length} action references collected`);
+    assert.ok(collected.length >= 60, `only ${collected.length} action references collected`);
 
     let judged = 0;
     const gate = new Gate('counting');

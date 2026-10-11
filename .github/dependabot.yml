@@ -1,24 +1,23 @@
 # ---------------------------------------------------------------------------
-# Dependabot: turns a red scheduled audit into a pull request.
+# Dependabot: proposes the upgrade when an advisory lands on a pinned version.
 #
 # ## Why this exists
 #
-# .github/workflows/supply-chain.yml re-runs `security:audit` every day against
-# the unchanged lockfile, so an advisory published against a version that is
-# already pinned turns that run red within 24 hours. That part worked. What did
-# not: the red run was the ONLY signal, and a signal is not a fix. It went red
-# on 2026-09-03 and stayed red for 38 consecutive days on the same commit,
-# accumulating findings as advisories landed — 35 by 2026-10-10, across next
+# .github/workflows/supply-chain.yml used to re-run `security:audit` every day
+# against the unchanged lockfile (removed 2026-10-11 at the owner's request), so
+# an advisory against an already-pinned version turned that run red within 24
+# hours. What it lacked: the red run was the ONLY signal, and a signal is not a
+# fix. It went red on 2026-09-03 and stayed red for 38 consecutive days on the
+# same commit, accumulating findings as advisories landed — 35 by 2026-10-10, across next
 # 16.3.0, fastify 5.11.3, fast-uri 3.1.5/4.1.2, ip-address 10.5.0, sharp 0.35.3
 # and source-map-js 1.2.1, three of them CRITICAL RCEs in Next.js — while the
 # fixed versions sat on the registry past the 7-day cooldown. Nothing in the
 # repo proposed the bump, so nothing happened until a person read the logs.
 #
-# This does not make the scheduled audit go green on its own and is not meant
-# to. The gate stays the authority; this only means that when it goes red, the
-# upgrade is usually already waiting as a PR, and that PR runs ci.yml — the
-# same fifteen supply-chain gates plus the rest of `verify` — before anyone
-# merges it. A Dependabot PR gets no exemption from any of them.
+# With the scheduled run gone, this is now the only thing that notices such an
+# advisory between pushes. The gate stays the authority: Dependabot's PR runs
+# ci.yml — the same fifteen supply-chain gates plus the rest of `verify` —
+# before anyone merges it. A Dependabot PR gets no exemption from any of them.
 #
 # ## Cooldown matches the registry policy
 #

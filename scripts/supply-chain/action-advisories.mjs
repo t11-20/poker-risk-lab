@@ -20,12 +20,11 @@
  * words that an advisory against a pinned action "still reaches this repository
  * only through a person". This is the gate that changes that sentence.
  *
- * And the part that makes it a control rather than a checklist item:
- * `.github/workflows/supply-chain.yml` runs `security:audit` at 06:17 UTC every
- * day, on the unchanged repository. An advisory published tomorrow against a pin
- * that has not moved since March therefore turns that run red by itself, with
- * nobody reading a feed. A gate that only ran on a commit could not do that — the
- * whole failure mode here is a reference nobody is touching.
+ * It runs inside `security:audit`, so on every push (ci.yml) and every release.
+ * Until 2026-10-11 `.github/workflows/supply-chain.yml` also ran it daily against
+ * the unchanged repository; the owner removed that workflow. An advisory published
+ * against a pin nobody touches is now caught at the next push, or sooner by
+ * Dependabot's own advisory matching (.github/dependabot.yml) — not by this gate.
  *
  * ## Resolving a pinned SHA to a version, without trusting the comment
  *
@@ -162,9 +161,12 @@ const REPORT_PATH = join(REPO_ROOT, 'docs', 'sbom', 'action-advisory-report.json
  * same discovery, so a parse that stops matching — a YAML style change, a renamed
  * workflow directory, a `collectActionReferences` that returns `[]` — produces a
  * green tick over zero actions. Zero is caught by any non-empty assertion; a
- * partial collapse from 63 to 4 is not, and is the likelier accident.
+ * partial collapse from 60 to 4 is not, and is the likelier accident.
+ *
+ * It was 63 until 2026-10-11, when removing supply-chain.yml took its three
+ * references with it; lowered in that same diff, as the refusal below asks.
  */
-const MINIMUM_ACTION_REFERENCES = 63;
+const MINIMUM_ACTION_REFERENCES = 60;
 
 /**
  * Measured at 55 on 2026-08-27. A published ecosystem does not shrink by a third;
@@ -676,10 +678,10 @@ function runActionAdvisoryGate() {
     if (references.length < MINIMUM_ACTION_REFERENCES) {
       gate.fail(
         `found ${references.length} action reference(s); this gate refuses to run below ${MINIMUM_ACTION_REFERENCES}`,
-        'ci-pinning.mjs reported 63 across 4 workflows when this floor was written, and both gates read ' +
+        'ci-pinning.mjs reported 60 across 3 workflows when this floor was last set, and both gates read ' +
           'them with the same `uses:` regex through the same discovery. A smaller number means the parse ' +
           'stopped matching, not that the repository stopped using actions — and a sweep of nothing, or ' +
-          'of four things out of sixty-three, reports the same green as a sweep that found everything. ' +
+          'of four things out of sixty, reports the same green as a sweep that found everything. ' +
           'If the repository legitimately uses fewer actions now, lower the floor in the same diff.',
       );
       return;

@@ -751,9 +751,10 @@ deciding, so the action was rejected rather than applied to a spot they never sa
   > ignores the close frame entirely, a keep-alive request in flight, and a worker-thread
   > calculation in flight. The suite also asserts the drain finishes inside a *third* of the grace,
   > so "inside the deadline" cannot pass for "prompt".
-* **Scheduled audit**: `.github/workflows/supply-chain.yml` runs the full audit daily
-  against the committed lockfile, so an advisory disclosed against an already-pinned
-  dependency surfaces without waiting for a push.
+* **No scheduled audit**: `.github/workflows/supply-chain.yml` was removed on 2026-10-11.
+  The full audit runs on every push and release; between pushes, an advisory against an
+  already-pinned dependency surfaces only through Dependabot (`.github/dependabot.yml`),
+  which needs Dependabot alerts and security updates enabled in the repository settings.
 
 ## 11. Deploying it
 
