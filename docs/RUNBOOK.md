@@ -753,8 +753,9 @@ deciding, so the action was rejected rather than applied to a spot they never sa
   > so "inside the deadline" cannot pass for "prompt".
 * **No scheduled audit**: `.github/workflows/supply-chain.yml` was removed on 2026-10-11.
   The full audit runs on every push and release; between pushes, an advisory against an
-  already-pinned dependency surfaces only through Dependabot (`.github/dependabot.yml`),
-  which needs Dependabot alerts and security updates enabled in the repository settings.
+  already-pinned dependency surfaces only through Dependabot security updates, which are
+  a repository setting (Settings → Code security), not a file. There is no
+  `.github/dependabot.yml` and so no scheduled version-update run.
 
 ## 11. Deploying it
 
