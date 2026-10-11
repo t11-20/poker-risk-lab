@@ -107,7 +107,7 @@ export const IOC_PATHS = [
  * block stops matching `deploy/signing/keyless-policy.json`, and refuses an
  * `id-token: write` grant found in ANY other workflow.
  */
-export const EXPECTED_WORKFLOWS = new Set(['ci.yml', 'release.yml', 'release-sign.yml', 'supply-chain.yml']);
+export const EXPECTED_WORKFLOWS = new Set(['ci.yml', 'release.yml', 'release-sign.yml']);
 
 /** Byte-level markers. Any hit is treated as a confirmed compromise, not a warning. */
 export const IOC_STRINGS = [

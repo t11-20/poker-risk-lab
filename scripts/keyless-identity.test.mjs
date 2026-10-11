@@ -62,7 +62,7 @@ import {
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const POLICY = JSON.parse(readFileSync(join(REPO_ROOT, 'deploy/signing/keyless-policy.json'), 'utf8'));
 const WORKFLOW_TEXT = readFileSync(join(REPO_ROOT, '.github/workflows/release-sign.yml'), 'utf8');
-const DECLARED = ['ci.yml', 'release.yml', 'release-sign.yml', 'supply-chain.yml'];
+const DECLARED = ['ci.yml', 'release.yml', 'release-sign.yml'];
 
 const goodPolicy = () => JSON.parse(JSON.stringify(POLICY));
 const parsed = () => {
