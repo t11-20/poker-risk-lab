@@ -46,7 +46,7 @@ What is *not* at stake removes whole categories of threat, and the absence is de
 | An ignore rule exists for every path an operator is told to write a secret to | `security:secrets` |
 | No credential in git history | `security:secrets --history` (opt-in; see below) |
 
-`pnpm run security:audit` chains the gates and is release-blocking. Nothing re-runs them on a schedule any more (`supply-chain.yml` was removed on 2026-10-11); a package that becomes bad after it was vetted is caught at the next push, or earlier by Dependabot's advisory-matched PRs (`.github/dependabot.yml`).
+`pnpm run security:audit` chains the gates and is release-blocking. Nothing re-runs them on a schedule any more (`supply-chain.yml` was removed on 2026-10-11); a package that becomes bad after it was vetted is caught at the next push, or earlier by Dependabot security updates if they are enabled in the repository settings.
 
 **The signature gate is not in CI, and cannot be as things stand.** Signing needs a private key and there is no CI signing identity, so `security:audit` in CI runs at a point where no release image exists and reports the gate *not applicable*, saying so loudly rather than passing over it. It is a release-machine step: `pnpm run release:sign` then `pnpm run security:image-provenance`. What a locally-held key does and does not establish — possession of a key, not the identity of a builder, and no transparency log — is [`deploy/signing/README.md`](../../deploy/signing/README.md).
 

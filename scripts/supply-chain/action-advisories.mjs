@@ -24,7 +24,7 @@
  * Until 2026-10-11 `.github/workflows/supply-chain.yml` also ran it daily against
  * the unchanged repository; the owner removed that workflow. An advisory published
  * against a pin nobody touches is now caught at the next push, or sooner by
- * Dependabot's own advisory matching (.github/dependabot.yml) — not by this gate.
+ * Dependabot security updates, if enabled in the repository settings — not by this gate.
  *
  * ## Resolving a pinned SHA to a version, without trusting the comment
  *

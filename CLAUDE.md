@@ -48,8 +48,9 @@ also lets it refuse a corpus that arrives empty. It went into the `GATES` array 
 into `verify`'s loop, so it touched neither workflow — the three-file rule below is about `verify`.
 There is no longer a scheduled run of `security:audit`: `.github/workflows/supply-chain.yml` was
 removed on 2026-10-11 at the owner's request. An advisory against a pin nobody has touched is caught
-at the next push, or earlier by Dependabot (`.github/dependabot.yml`), which matches advisories on
-GitHub's side and opens the upgrade PR.
+at the next push, or earlier by Dependabot security updates if they are enabled in the repository
+settings. There is deliberately no `.github/dependabot.yml`: its weekly version-update run was a
+scheduled job too, and was removed with the workflow.
 
 `scripts/release-gate-coverage.mjs` reads the `for gate in ...` clause of `verify` against the job
 graphs of both workflows and fails when they disagree, so **adding a gate is a three-file change by
