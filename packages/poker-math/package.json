@@ -23,6 +23,6 @@
     "@prl/poker-engine": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "24.13.3"
+    "@types/node": "26.6.4"
   }
 }

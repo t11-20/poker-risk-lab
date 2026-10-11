@@ -20,6 +20,6 @@
     "test:exhaustive": "node --test --test-timeout=1800000 'test/exhaustive/**/*.test.ts'"
   },
   "devDependencies": {
-    "@types/node": "24.13.3"
+    "@types/node": "26.6.4"
   }
 }
