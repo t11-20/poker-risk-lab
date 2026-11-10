@@ -71,6 +71,9 @@ importers:
 
   apps/bot:
     dependencies:
+      '@prl/content':
+        specifier: workspace:*
+        version: link:../../packages/content
       '@prl/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

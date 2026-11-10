@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Chat-native client: a hand against five bots with the Coach, played with messages and buttons. Telegram and a terminal adapter over one transport-agnostic core.",
+  "description": "Chat-native client: a hand against five bots with the Coach, quizzes and the glossary, played with messages and buttons. Telegram and a terminal adapter over one transport-agnostic core.",
   "scripts": {
     "start": "node --env-file-if-exists=../../.env src/main.ts",
     "play": "node src/play.ts",
@@ -12,6 +12,7 @@
     "test": "node --test 'test/**/*.test.ts'"
   },
   "dependencies": {
+    "@prl/content": "workspace:*",
     "@prl/contracts": "workspace:*",
     "@prl/poker-ai": "workspace:*",
     "@prl/poker-engine": "workspace:*",

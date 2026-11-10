@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { STALE } from '../src/step.ts';
+import { eventOfText, STALE } from '../src/step.ts';
 import {
   type Chats,
-  eventOfText,
   handleUpdate,
   MESSAGE_LIMIT,
   newChats,
@@ -101,7 +100,7 @@ describe('requests', () => {
       keyboardOf(calls[0])
         .flat()
         .map((button) => button.text),
-      ['Play a hand', 'About', 'Reset units'],
+      ['Play a hand', 'Practise a quiz', 'Glossary', 'About', 'Reset units'],
     );
   });
 
@@ -171,6 +170,28 @@ describe('requests', () => {
     }
     const texts = calls.flatMap((call) => (typeof call.body['text'] === 'string' ? [call.body['text']] : []));
     for (const body of texts) assert.ok(body.length <= MESSAGE_LIMIT, `a ${body.length}-character message`);
+  });
+
+  test('/define and a quiz answer reach Telegram as a message with buttons and an edit', async () => {
+    const chats: Chats = newChats();
+    const deps = testDeps(5);
+    const { api, calls } = fakeApi();
+    await handleUpdate(text(1, '/define@prl_bot pot odds'), chats, api, deps);
+    assert.equal(calls[0]?.method, 'sendMessage');
+    assert.match(String(calls[0]?.body['text']), /^Pot odds\n/);
+    assert.ok(keyboardOf(calls[0]).flat().length > 0, 'see-also terms are buttons');
+    const lastSent = (): Call | undefined => calls.filter((call) => call.method === 'sendMessage').at(-1);
+    await handleUpdate(text(2, '/quiz'), chats, api, deps);
+    await handleUpdate(tap(3, dataFor(lastSent(), /^Rules and flow$/), 102), chats, api, deps);
+    await handleUpdate(tap(4, dataFor(lastSent(), /^How a hand unfolds/), 103), chats, api, deps);
+    const before = calls.length;
+    await handleUpdate(tap(5, dataFor(lastSent(), /^A$/), 104), chats, api, deps);
+    assert.deepEqual(
+      calls.slice(before).map((call) => call.method),
+      ['answerCallbackQuery', 'editMessageText'],
+    );
+    assert.equal(calls.at(-1)?.body['message_id'], 104);
+    assert.match(String(calls.at(-1)?.body['text']), /this lesson gives/);
   });
 
   test('a long send is split at line breaks, buttons on the last part, nothing lost', () => {
@@ -244,8 +265,13 @@ describe('who the bot answers', () => {
   });
 
   test('commands are read with or without the bot name; other text is text', () => {
-    assert.deepEqual(eventOfText('/start'), { kind: 'command', name: 'start' });
-    assert.deepEqual(eventOfText('/About@prl_bot'), { kind: 'command', name: 'about' });
+    assert.deepEqual(eventOfText('/start'), { kind: 'command', name: 'start', args: '' });
+    assert.deepEqual(eventOfText('/About@prl_bot'), { kind: 'command', name: 'about', args: '' });
+    assert.deepEqual(eventOfText('/define@prl_bot  Pot odds '), {
+      kind: 'command',
+      name: 'define',
+      args: 'Pot odds',
+    });
     assert.deepEqual(eventOfText('hello'), { kind: 'text', text: 'hello' });
   });
 });

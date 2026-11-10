@@ -21,8 +21,8 @@ function playWithCoach(): { readings: CoachReading[]; texts: string[] } {
   const deps = testDeps(21, realCoach);
   const readings: CoachReading[] = [];
   const texts: string[] = [];
-  const menu = step(NEW_SESSION, { kind: 'command', name: 'start' }, deps);
-  const about = step(menu.session, { kind: 'command', name: 'about' }, deps);
+  const menu = step(NEW_SESSION, { kind: 'command', name: 'start', args: '' }, deps);
+  const about = step(menu.session, { kind: 'command', name: 'about', args: '' }, deps);
   texts.push(message(menu).text, message(about).text);
   let current: StepResult = press(menu.session, find(buttonsOf(menu), /^Play a hand$/), deps);
   for (let hand = 0; hand < 4; hand += 1) {

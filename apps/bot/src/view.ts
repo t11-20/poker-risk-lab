@@ -23,6 +23,7 @@
 import type { Action, LegalAction, PlayerView, SeatIndex, SeatView } from '@prl/poker-engine';
 import { rankIndexOf, suitIndexOf } from '@prl/poker-engine';
 import { type CoachReading, coachLine, units } from './coach.ts';
+import type { DecisionAction } from './learn.ts';
 import { nameOf, READER_SEAT, type Table } from './table.ts';
 
 export interface Button {
@@ -38,7 +39,31 @@ export type Press =
   | { readonly kind: 'reset' }
   | { readonly kind: 'act'; readonly handId: string; readonly sequence: number; readonly action: Action }
   | { readonly kind: 'why'; readonly handId: string; readonly sequence: number }
-  | { readonly kind: 'next'; readonly handId: string };
+  | { readonly kind: 'next'; readonly handId: string }
+  /** The topic list. */
+  | { readonly kind: 'quizzes' }
+  | { readonly kind: 'topic'; readonly topic: string }
+  /** Starts a run of the quiz with this id. Ids rather than positions: see `wireOf`. */
+  | { readonly kind: 'quiz'; readonly quizId: string }
+  /** A multiple-choice option, by index into `options`. */
+  | { readonly kind: 'choose'; readonly at: QuizMoment; readonly option: number }
+  | { readonly kind: 'decide'; readonly at: QuizMoment; readonly action: DecisionAction }
+  /** Shows a numeric question's computed figure without an answer. */
+  | { readonly kind: 'reveal'; readonly at: QuizMoment }
+  | { readonly kind: 'onward'; readonly at: QuizMoment }
+  /** How to use `/define`. */
+  | { readonly kind: 'glossary' }
+  | { readonly kind: 'term'; readonly id: string };
+
+/**
+ * The question a quiz button was drawn for: the run and the position in it. A run is a fresh tag
+ * from `Deps.newTag`, so a button from an earlier run of the same quiz, or from before a restart,
+ * names a run the session is not in.
+ */
+export interface QuizMoment {
+  readonly run: string;
+  readonly position: number;
+}
 
 export const CALLBACK_DATA_MAX_BYTES = 64;
 
@@ -67,7 +92,32 @@ function wireOf(press: Press): string {
       return `w:${press.handId}:${press.sequence}`;
     case 'next':
       return `n:${press.handId}`;
+    case 'quizzes':
+      return 'q';
+    // Content ids on the presses that start something, because those carry no run tag: an index
+    // would silently name a different quiz or term after a deploy that reordered the content.
+    // In-run presses use positions, which the run tag scopes. The longest id ships at 33 bytes.
+    case 'topic':
+      return `qt:${press.topic}`;
+    case 'quiz':
+      return `qs:${press.quizId}`;
+    case 'choose':
+      return `qa:${momentCode(press.at)}:${press.option}`;
+    case 'decide':
+      return `qd:${momentCode(press.at)}:${press.action === 'fold' ? 'f' : 'c'}`;
+    case 'reveal':
+      return `qr:${momentCode(press.at)}`;
+    case 'onward':
+      return `qn:${momentCode(press.at)}`;
+    case 'glossary':
+      return 'd';
+    case 'term':
+      return `g:${press.id}`;
   }
+}
+
+function momentCode(at: QuizMoment): string {
+  return `${at.run}:${at.position}`;
 }
 
 function actionCode(action: Action): string {
@@ -86,11 +136,23 @@ function actionCode(action: Action): string {
 }
 
 const HAND_ID = '[A-Za-z0-9_-]{1,24}-\\d{1,6}';
+const MOMENT = '([A-Za-z0-9_-]{1,24}):(\\d{1,3})';
 const PATTERNS = {
   act: new RegExp(`^a:(${HAND_ID}):(\\d{1,6}):(f|k|c|b\\d{1,9}|r\\d{1,9})$`),
   why: new RegExp(`^w:(${HAND_ID}):(\\d{1,6})$`),
   next: new RegExp(`^n:(${HAND_ID})$`),
+  topic: /^qt:([a-z0-9-]{1,60})$/,
+  quiz: /^qs:([a-z0-9-]{1,60})$/,
+  choose: new RegExp(`^qa:${MOMENT}:(\\d)$`),
+  decide: new RegExp(`^qd:${MOMENT}:(f|c)$`),
+  reveal: new RegExp(`^qr:${MOMENT}$`),
+  onward: new RegExp(`^qn:${MOMENT}$`),
+  term: /^g:([a-z0-9-]{1,60})$/,
 };
+
+function momentOf(match: RegExpExecArray): QuizMoment {
+  return { run: match[1] ?? '', position: Number(match[2]) };
+}
 
 /**
  * Parses callback data, or returns null for anything this process did not write.
@@ -112,6 +174,23 @@ export function decodePress(data: string): Press | null {
   if (why !== null) return { kind: 'why', handId: why[1] ?? '', sequence: Number(why[2]) };
   const next = PATTERNS.next.exec(data);
   if (next !== null) return { kind: 'next', handId: next[1] ?? '' };
+  if (data === 'q') return { kind: 'quizzes' };
+  if (data === 'd') return { kind: 'glossary' };
+  const topic = PATTERNS.topic.exec(data);
+  if (topic !== null) return { kind: 'topic', topic: topic[1] ?? '' };
+  const quiz = PATTERNS.quiz.exec(data);
+  if (quiz !== null) return { kind: 'quiz', quizId: quiz[1] ?? '' };
+  const choose = PATTERNS.choose.exec(data);
+  if (choose !== null) return { kind: 'choose', at: momentOf(choose), option: Number(choose[3]) };
+  const decide = PATTERNS.decide.exec(data);
+  if (decide !== null)
+    return { kind: 'decide', at: momentOf(decide), action: decide[3] === 'f' ? 'fold' : 'call' };
+  const reveal = PATTERNS.reveal.exec(data);
+  if (reveal !== null) return { kind: 'reveal', at: momentOf(reveal) };
+  const onward = PATTERNS.onward.exec(data);
+  if (onward !== null) return { kind: 'onward', at: momentOf(onward) };
+  const term = PATTERNS.term.exec(data);
+  if (term !== null) return { kind: 'term', id: term[1] ?? '' };
   return null;
 }
 

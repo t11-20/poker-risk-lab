@@ -26,9 +26,12 @@
  * reader's text to anybody else (ADR 0010).
  */
 
+import type { GlossaryEntry } from '@prl/contracts';
 import { UNIVERSAL_DISCLAIMER } from '@prl/poker-ai';
 import { BettingRuleError, type HandState, validateAction } from '@prl/poker-engine';
 import { type CoachFn, type CoachReading, coachWhy, readCoach } from './coach.ts';
+import { entryById, entryText, lookup, normalise, seeAlsoOf } from './define.ts';
+import { GONE, onQuizPress, onQuizText, onQuizzes, onTopic, startQuiz } from './quiz.ts';
 import {
   canDeal,
   type Dealer,
@@ -53,7 +56,8 @@ import {
 } from './view.ts';
 
 export type Event =
-  | { readonly kind: 'command'; readonly name: string }
+  /** `/define pot odds` is `{ name: 'define', args: 'pot odds' }`. */
+  | { readonly kind: 'command'; readonly name: string; readonly args: string }
   | { readonly kind: 'button'; readonly data: string }
   | { readonly kind: 'text'; readonly text: string };
 
@@ -71,7 +75,18 @@ export type Outgoing =
 export type Phase =
   | { readonly kind: 'idle' }
   | { readonly kind: 'deciding'; readonly state: HandState; readonly coach: CoachReading }
-  | { readonly kind: 'over'; readonly state: HandState };
+  | { readonly kind: 'over'; readonly state: HandState }
+  /**
+   * A question of a quiz run, being asked or answered. `quiz` and `position` index the content,
+   * which does not change while the process runs; `run` is a fresh tag per run (see `quiz.ts`).
+   */
+  | {
+      readonly kind: 'quiz';
+      readonly run: string;
+      readonly quiz: number;
+      readonly position: number;
+      readonly stage: 'asking' | 'answered';
+    };
 
 export interface Session {
   /** Lazily created on the first hand, so `/start` costs nothing but a menu. */
@@ -98,7 +113,8 @@ export const STALE = 'That button is from an earlier moment in the hand.';
 
 const MENU_TEXT =
   'Poker Risk Lab: a play-money No-Limit Hold’em table for learning probability, risk and expected ' +
-  'value. Six-handed, you against five bots, with the Coach beside every decision.\n\n' +
+  'value. Six-handed, you against five bots, with the Coach beside every decision. Between hands, ' +
+  'practise a quiz, or look a term up with /define.\n\n' +
   'Units are free and have no value anywhere. The opponents are modelled styles, not real people: ' +
   'see About.';
 
@@ -117,6 +133,9 @@ const ABOUT_TEXT = [
   'The Coach line under the table is a computed estimate with its method and interval. Why? shows ' +
     'one reading of the spot, the assumptions it rests on, and what would change it.',
   '',
+  'Quizzes and the glossary are the same material as the web app’s lessons. A quiz is not scored: ' +
+    'each answer opens the reasoning, and nothing you answer is kept.',
+  '',
   'This bot only answers you: it never messages first and sends no reminders. It plays one-on-one ' +
     'only and ignores group chats. Your table lives in memory, so a restart of the bot ends it and ' +
     'starts you fresh.',
@@ -124,22 +143,47 @@ const ABOUT_TEXT = [
 
 const UNKNOWN = 'Use the buttons, or send /start for the menu.';
 
+const GLOSSARY_TEXT =
+  'Send /define and a term to read its glossary entry, for example /define pot odds. Capitals and ' +
+  'punctuation do not matter. If no entry has that name, the nearest names are offered instead.';
+
+/** Starting points for a reader on a phone, who would rather press than type. */
+const GLOSSARY_EXAMPLES = ['pot-odds', 'equity', 'expected-value', 'outs', 'variance'] as const;
+
 function menuButtons(): Button[][] {
   return [
     [
       { label: 'Play a hand', data: encodePress({ kind: 'play' }) },
+      { label: 'Practise a quiz', data: encodePress({ kind: 'quizzes' }) },
+    ],
+    [
+      { label: 'Glossary', data: encodePress({ kind: 'glossary' }) },
       { label: 'About', data: encodePress({ kind: 'about' }) },
     ],
     [{ label: 'Reset units', data: encodePress({ kind: 'reset' }) }],
   ];
 }
 
+/**
+ * What a person typed, as an event. A command is `/word`, with an optional `@botname` that
+ * Telegram adds in some clients, and everything after it is the command's argument.
+ */
+export function eventOfText(text: string): Event {
+  const command = /^\/([A-Za-z]+)(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(text.trim());
+  if (command !== null) {
+    return { kind: 'command', name: (command[1] ?? '').toLowerCase(), args: (command[2] ?? '').trim() };
+  }
+  return { kind: 'text', text };
+}
+
 export function step(session: Session, event: Event, deps: Deps): StepResult {
   switch (event.kind) {
     case 'command':
-      return onCommand(session, event.name);
+      return onCommand(session, event.name, event.args);
     case 'text':
-      return { session, out: [{ kind: 'send', text: UNKNOWN, buttons: [] }] };
+      return (
+        onQuizText(session, event.text) ?? { session, out: [{ kind: 'send', text: UNKNOWN, buttons: [] }] }
+      );
     case 'button': {
       const press = decodePress(event.data);
       if (press === null) return { session, out: [{ kind: 'toast', text: STALE }] };
@@ -148,13 +192,58 @@ export function step(session: Session, event: Event, deps: Deps): StepResult {
   }
 }
 
-function onCommand(session: Session, name: string): StepResult {
+function onCommand(session: Session, name: string, args: string): StepResult {
   if (name === 'about' || name === 'help')
     return { session, out: [{ kind: 'send', text: ABOUT_TEXT, buttons: [] }] };
   if (name === 'start' || name === 'menu') {
     return { session, out: [{ kind: 'send', text: MENU_TEXT, buttons: menuButtons() }] };
   }
+  if (name === 'define') return { session, out: [args === '' ? glossaryHelp() : defineMessage(args)] };
+  if (name === 'quiz') return onQuizzes(session);
   return { session, out: [{ kind: 'send', text: UNKNOWN, buttons: [] }] };
+}
+
+function termButton(entry: GlossaryEntry): Button {
+  return { label: entry.term, data: encodePress({ kind: 'term', id: entry.id }) };
+}
+
+/** Two to a row: a term can be thirty characters, and a phone shows about two of those across. */
+function inPairs(buttons: readonly Button[]): Button[][] {
+  const rows: Button[][] = [];
+  for (let index = 0; index < buttons.length; index += 2) rows.push(buttons.slice(index, index + 2));
+  return rows;
+}
+
+function glossaryHelp(): Outgoing {
+  const examples = GLOSSARY_EXAMPLES.flatMap((id) => {
+    const entry = entryById(id);
+    return entry === null ? [] : [termButton(entry)];
+  });
+  return { kind: 'send', text: GLOSSARY_TEXT, buttons: inPairs(examples) };
+}
+
+function entryMessage(entry: GlossaryEntry): Outgoing {
+  return { kind: 'send', text: entryText(entry), buttons: inPairs(seeAlsoOf(entry).map(termButton)) };
+}
+
+function defineMessage(query: string): Outgoing {
+  const found = lookup(query);
+  if (found.kind === 'found') return entryMessage(found.entry);
+  // The reader's text is quoted back only after normalising, so it cannot carry anything the
+  // glossary's own names could not: letters, digits and spaces, and no more than a term's length.
+  const asked = normalise(query).slice(0, 60);
+  if (found.suggestions.length === 0) {
+    return {
+      kind: 'send',
+      text: `There is no glossary entry called "${asked}", and none with a name close to it. ${GLOSSARY_TEXT}`,
+      buttons: [],
+    };
+  }
+  return {
+    kind: 'send',
+    text: `There is no glossary entry called "${asked}". The closest names are below.`,
+    buttons: found.suggestions.map((entry) => [termButton(entry)]),
+  };
 }
 
 function onPress(session: Session, press: Press, deps: Deps): StepResult {
@@ -184,6 +273,24 @@ function onPress(session: Session, press: Press, deps: Deps): StepResult {
       return { session, out: [{ kind: 'send', text: coachWhy(phase.coach), buttons: [] }] };
     case 'act':
       return onAct(session, press, deps);
+    case 'quizzes':
+      return onQuizzes(session);
+    case 'topic':
+      return onTopic(session, press.topic, deps);
+    case 'quiz':
+      return startQuiz(session, press.quizId, deps);
+    case 'choose':
+    case 'decide':
+    case 'reveal':
+    case 'onward':
+      return onQuizPress(session, press);
+    case 'glossary':
+      return { session, out: [glossaryHelp()] };
+    case 'term': {
+      const entry = entryById(press.id);
+      if (entry === null) return { session, out: [{ kind: 'toast', text: GONE }] };
+      return { session, out: [entryMessage(entry)] };
+    }
   }
 }
 
