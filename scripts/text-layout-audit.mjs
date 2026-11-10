@@ -158,12 +158,17 @@ const yellow = (s) => paint('33', s);
  * component tree with the same Coach rail and needs no socket and no database row, so this gate
  * fails on a layout defect and never on Postgres being down. The Coach defect this file exists for
  * is on `?state=decision`.
+ *
+ * Bare `/play` as well, for the one state no fixture renders: the live table before "Deal me in" is
+ * pressed. It fetches nothing until then, so it needs no API either, and its empty state and the
+ * "Play with somebody you know" disclosure were otherwise only ever seen in screenshots.
  */
 const ROUTES = [
   '/',
   '/learn',
   '/learn/pot-odds',
   '/learn/glossary',
+  '/play',
   '/play?state=decision',
   '/play?state=complete',
   '/lab',

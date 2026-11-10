@@ -1502,8 +1502,10 @@ async function auditStickyBarOcclusion(page) {
  * is one of the things the audit specifically asked for, and the second half of it needs a table
  * that is really dealing.
  *
- * So this walks the product's own path with the keyboard only: open the table, take the seat, deal,
- * and then act — each step by tabbing to a control and pressing Enter, never by clicking. If any
+ * So this walks the product's own path with the keyboard only: "Deal me in", which opens the table,
+ * takes the seat and deals by itself, and then act — each press by tabbing to a control and pressing
+ * Enter, never by clicking. Then the manual controls that "Deal me in" no longer needs for the first
+ * hand, because every later hand still does: stand up, take the seat back, deal the next hand. If any
  * step does not arrive, the journey reports that it could not be completed rather than passing.
  *
  * ## What it needs
@@ -1541,12 +1543,12 @@ async function playOneHandByKeyboard(page) {
     return false;
   };
 
-  const opened = await activateByLabel(/^open the table$/i);
+  const opened = await activateByLabel(/^deal me in$/i);
   if (!opened.activated) {
-    unproven('Private table', 'could not reach "Open the table" by keyboard; is the API running?');
+    unproven('Private table', 'could not reach "Deal me in" by keyboard; is the API running?');
     return;
   }
-  ok('Private table: "Open the table" reached and activated by keyboard');
+  ok('Private table: "Deal me in" reached and activated by keyboard');
 
   const liveSocket = await waitFor(
     '/Take seat|Deal the next hand|Stand up/.test(document.body.innerText)',
@@ -1557,18 +1559,6 @@ async function playOneHandByKeyboard(page) {
     return;
   }
   ok('Private table: the socket went live');
-
-  const seated = await activateByLabel(/take seat/i);
-  if (seated.activated) ok(`Private table: "${seated.name.trim()}" reached and activated by keyboard`);
-  else unproven('Private table', 'no free seat to take by keyboard');
-
-  await waitFor('/Deal the next hand/.test(document.body.innerText)', 20);
-  const dealt = await activateByLabel(/deal the next hand/i);
-  if (!dealt.activated) {
-    unproven('Private table', 'could not reach "Deal the next hand" by keyboard');
-    return;
-  }
-  ok('Private table: "Deal the next hand" reached and activated by keyboard');
 
   // The same two matchers the per-route check uses, for the same reason: a hand-rolled regex in a
   // template literal here is where the `\b`-as-BACKSPACE half of the original defect lived, and a
@@ -1686,6 +1676,59 @@ async function playOneHandByKeyboard(page) {
   );
   if (!survived.isBody) ok('Private table: focus survived the table update the action caused');
   else warn('Private table', 'acting dropped focus to <body>; a keyboard user restarts from the top');
+
+  await playManualStepsByKeyboard(activateByLabel, waitFor);
+}
+
+/**
+ * Stand up, take the seat back and deal the next hand — by keyboard, between hands.
+ *
+ * These three used to be proven on the way IN, because a first hand needed all of them. "Deal me in"
+ * now sends the seat and the deal itself, so without this they would be proven nowhere — and they
+ * are the only way to every hand after the first, and to any hand at a table reached by invite code.
+ *
+ * Done after the fold so the table is between hands, which is the one state where all three are
+ * offered. The hand it deals is left to the server's turn timer: every run of this journey opens a
+ * fresh Legends match (`openPracticeRoom` never reuses one), so no later run sits down at it.
+ */
+async function playManualStepsByKeyboard(activateByLabel, waitFor) {
+  const between = await waitFor(
+    `[...document.querySelectorAll('button')].some((b) => /^Deal the next hand$/.test(b.textContent.trim()) && !b.disabled)`,
+    90,
+  );
+  if (!between) {
+    unproven(
+      'Private table',
+      'the folded hand never finished, so the between-hands controls were not reached',
+    );
+    return;
+  }
+
+  const stood = await activateByLabel(/^stand up$/i);
+  if (!stood.activated) {
+    bad('Private table: manual steps', 'could not reach and activate "Stand up" by keyboard');
+    return;
+  }
+  ok('Private table: "Stand up" reached and activated by keyboard');
+
+  await waitFor('/Take seat \\d+/.test(document.body.innerText)', 20);
+  const seated = await activateByLabel(/^take seat \d+$/i);
+  if (!seated.activated) {
+    bad('Private table: manual steps', 'could not reach and activate "Take seat" by keyboard');
+    return;
+  }
+  ok(`Private table: "${seated.name.trim()}" reached and activated by keyboard`);
+
+  await waitFor('/Deal the next hand/.test(document.body.innerText)', 20);
+  const dealt = await activateByLabel(/^deal the next hand$/i);
+  if (!dealt.activated) {
+    bad('Private table: manual steps', 'could not reach and activate "Deal the next hand" by keyboard');
+    return;
+  }
+  const started = await waitFor('/A hand is in progress/.test(document.body.innerText)', 20);
+  if (started) ok('Private table: "Deal the next hand", pressed with Enter, dealt a hand');
+  else
+    bad('Private table: manual steps', '"Deal the next hand" was activated by keyboard and no hand started');
 }
 
 // ---------------------------------------------------------------------------
@@ -1720,7 +1763,7 @@ export const ROUTES = [
     extra: checkPokerActions,
     actionControls: 'required',
   },
-  // The live table before anybody sits down: "Open the table", and nothing to decide. Declared
+  // The live table before anybody sits down: "Deal me in", and nothing to decide. Declared
   // `until-seated` so that finding no actions is recorded as not-applicable instead of passing
   // quietly — and so that it can never stand in for the seated case, which `playOneHandByKeyboard`
   // is the only thing here that reaches.

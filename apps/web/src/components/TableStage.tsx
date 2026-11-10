@@ -137,7 +137,11 @@ import { spokenDecision } from '@/lib/use-live-table.ts';
 const SWIPE_SLOP_PX = 6;
 const SWIPE_COMMIT_PX = 28;
 
-export type TableStageStatus = 'loading' | 'ready' | 'error' | 'complete';
+/**
+ * `idle` is "nothing has been asked for", and it is not `loading`. See `IdleTable` for why the two
+ * must never share a rendering.
+ */
+export type TableStageStatus = 'idle' | 'loading' | 'ready' | 'error' | 'complete';
 
 /**
  * A decision the caller has sent to a server, and what became of it.
@@ -197,6 +201,11 @@ export interface TableStageProps {
   readonly summary?: readonly string[];
   readonly errorMessage?: string;
   /**
+   * What the empty table says in the `idle` status: what the reader's first press will do. The
+   * caller knows which button that is and what it builds; this component does not.
+   */
+  readonly idleMessage?: string;
+  /**
    * Sends a decision. Omit it and the stage runs from a fixture: acting disables the controls and
    * says so rather than pretending to apply the action.
    */
@@ -225,6 +234,27 @@ function StageSkeleton(): ReactElement {
       <span className="prl-skeleton prl-play__skeleton--header" />
       <span className="prl-skeleton prl-play__skeleton--field" />
       <p className="prl-play__skeleton-note">Loading the table.</p>
+    </div>
+  );
+}
+
+/**
+ * The table before anybody has asked for one. An empty state, never a skeleton.
+ *
+ * `/play` used to open on two large skeleton blocks captioned "Loading the table." and "Waiting for
+ * the table." before the visitor had pressed anything. A skeleton promises content on its way, and
+ * here nothing was on its way: no session, no room, no socket, and nothing would start until the
+ * reader acted. So the first screen of the product's main feature was a loading state that never
+ * resolved by itself. This says what is actually true — no table yet — and what the press does.
+ */
+function IdleTable({ message }: { readonly message: string | undefined }): ReactElement {
+  return (
+    <div className="prl-empty prl-play__idle">
+      <p className="prl-label">No table yet</p>
+      <p>
+        {message ??
+          'Nothing has been dealt and nothing is loading. The table is drawn here once there is one.'}
+      </p>
     </div>
   );
 }
@@ -304,12 +334,13 @@ interface TableRegionProps {
   readonly announcement: string;
   readonly summary: readonly string[] | undefined;
   readonly errorMessage: string | undefined;
+  readonly idleMessage: string | undefined;
 }
 
-/** The table, or the skeleton or the error that stands in for it. Exactly one of the three. */
+/** The table, or the empty state, the skeleton or the error that stands in for it. Exactly one. */
 function TableRegion(props: TableRegionProps): ReactElement {
   const { status, view, turn, seatNames, highlightedCards, highlightLabel } = props;
-  const { announcement, summary, errorMessage } = props;
+  const { announcement, summary, errorMessage, idleMessage } = props;
   const hasSummary = status === 'complete' && summary !== undefined && summary.length > 0;
 
   return (
@@ -340,6 +371,7 @@ function TableRegion(props: TableRegionProps): ReactElement {
         {announcement}
       </div>
 
+      {status === 'idle' ? <IdleTable message={idleMessage} /> : null}
       {status === 'loading' ? <StageSkeleton /> : null}
 
       {/*
@@ -377,7 +409,7 @@ function TableRegion(props: TableRegionProps): ReactElement {
         </div>
       ) : null}
 
-      {view === null || status === 'loading' ? null : (
+      {view === null || status === 'loading' || status === 'idle' ? null : (
         <PokerTable
           view={view}
           {...(seatNames === undefined ? {} : { seatNames })}
@@ -403,6 +435,13 @@ function TableRegion(props: TableRegionProps): ReactElement {
     </div>
   );
 }
+
+/** What the decision band says when there is no view to draw controls from. */
+const NO_VIEW_LINE: Readonly<Record<'error' | 'idle' | 'waiting', string>> = {
+  error: 'No controls while the table is unreachable.',
+  idle: 'Nothing to decide until you are dealt in.',
+  waiting: 'Waiting for the table.',
+};
 
 interface DecisionBandProps {
   readonly status: TableStageStatus;
@@ -528,7 +567,7 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
 
       {view === null ? (
         <p className="prl-play__decision-idle">
-          {status === 'error' ? 'No controls while the table is unreachable.' : 'Waiting for the table.'}
+          {NO_VIEW_LINE[status === 'error' || status === 'idle' ? status : 'waiting']}
         </p>
       ) : (
         <ActionBar
@@ -737,6 +776,7 @@ export function TableStage(props: TableStageProps): ReactElement {
     highlightedCards,
     summary,
     errorMessage,
+    idleMessage,
     onAct,
   } = props;
   const highlightLabel = props.highlightLabel;
@@ -796,6 +836,7 @@ export function TableStage(props: TableStageProps): ReactElement {
           announcement={spoken}
           summary={summary}
           errorMessage={errorMessage}
+          idleMessage={idleMessage}
         />
         <DecisionBand
           status={status}

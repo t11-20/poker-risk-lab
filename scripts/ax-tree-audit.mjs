@@ -883,8 +883,8 @@ class Page {
    *
    * The live-table journey needs a reader who has never been here: Chrome keeps its profile in
    * `/tmp/prl-ax-tree-audit-profile` across runs, so without this the second run reuses the guest
-   * session — and therefore the room — that the first run left the reader SEATED in. "Take seat 1"
-   * is then never offered and assertion 3.2 would be checking a control that is not on the page.
+   * session — and therefore the room — that the first run left the reader SEATED in. "Deal me in"
+   * then has no seat to take, and assertion 3.2 would be checking steps that never happen.
    */
   async clearCookies() {
     await this.send('Network.clearBrowserCookies');

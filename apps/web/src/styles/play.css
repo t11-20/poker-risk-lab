@@ -181,6 +181,20 @@
   }
 }
 
+/* The primary row and the "Play with somebody you know" disclosure are one focus-rescue region in
+   `ConnectionControls`, so they share a wrapper; this puts back the gap the panel body gave them
+   when they were its direct children. */
+.prl-play__controls {
+  display: grid;
+  gap: var(--prl-space-6);
+}
+
+/* The empty table before "Deal me in": an empty state at reading width, not a skeleton at the
+   table's size. Its job is one sentence about what the press does, not to hold the space. */
+.prl-play__idle {
+  max-width: calc(var(--prl-measure) + 2 * var(--prl-space-9));
+}
+
 /* ==========================================================================================
    1.2  THE INVITE CODE, AND THE FIELD FOR SOMEBODY ELSE'S
    ==========================================================================================
@@ -1264,6 +1278,20 @@
  */
 .prl-play .prl-table__board .prl-card {
   --prl-card-w: var(--prl-space-12);
+}
+
+/**
+ * In the stacked layout the board shares the field's width with nothing, so it is sized to fit five
+ * cards on one line. At 4rem a river board is 336px of cards and gaps, and at 390px wide the centre
+ * block had less than that, so the fifth card dropped to a second row on its own: a board read as
+ * four cards and then a stray one. `100cqi` is the field's content width (`.prl-table__field` is an
+ * inline-size container); `--prl-space-11` pays for the centre block's inline padding and border and
+ * the row's four gaps, which come to 2.6rem. Never larger than the 4rem above.
+ */
+@container prl-table (width < 46rem) {
+  .prl-play .prl-table__board .prl-card {
+    --prl-card-w: min(var(--prl-space-12), calc((100cqi - var(--prl-space-11)) / 5));
+  }
 }
 
 .prl-play .prl-card__face {

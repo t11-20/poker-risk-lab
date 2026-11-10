@@ -575,3 +575,43 @@ test('a withheld shortcut is explained rather than silently dropped', async () =
   );
   assert.ok(markup.includes('clean outs'), 'and say what the shortcut needs in order to apply');
 });
+
+test('the reading of the spot comes after the price and before the detail', async () => {
+  // At a live table the Coach is a scroll pane beside the decision. The suggestion was its LAST
+  // always-visible block, below outs and stack context, several screens down the rail. Equity and
+  // the price stay first, because the reading says it follows from them.
+  const markup = await render(NINE_OUT_DRAW);
+  const at = (text: string): number => {
+    const index = markup.indexOf(text);
+    assert.ok(index !== -1, `"${text}" is rendered`);
+    return index;
+  };
+  const reading = at('One reading of this spot');
+  assert.ok(at('>Equity<') < reading, 'the equity figure is read before the suggestion');
+  assert.ok(at('>The price<') < reading, 'and so is the price');
+  assert.ok(reading < at('Outs — 9 cards in total'), 'the suggestion is read before the outs detail');
+  assert.ok(reading < at('>Stack context<'), 'and before the stack context');
+  assert.ok(
+    at('not a claim about the best play') < at('Outs — 9 cards in total'),
+    'its disclaimer travels with it, never left behind at the bottom',
+  );
+});
+
+test('explanatory prose under outs and stack is behind a disclosure, and the figures are not', async () => {
+  const markup = await render(NINE_OUT_DRAW);
+  const inDisclosure = (text: string): boolean => {
+    const at = markup.indexOf(text);
+    if (at === -1) return false;
+    const open = markup.lastIndexOf('<details', at);
+    return open !== -1 && markup.lastIndexOf('</details>', at) < open;
+  };
+
+  assert.ok(inDisclosure('Nine hearts complete the flush'), 'the outs prose is collapsible');
+  assert.ok(inDisclosure('The effective stack is 400 against a pot of 100.'), 'and so is the stack prose');
+
+  // The boundary in the module comment: counts, figures and the price are never collapsed.
+  assert.ok(!inDisclosure('Outs — 9 cards in total'), 'the outs count stays visible');
+  assert.ok(!inDisclosure('Effective stack'), 'the stack figure stays visible');
+  assert.ok(!inDisclosure('Risking 50 to win 100'), 'the price explanation stays visible');
+  assert.ok(!inDisclosure('One reading of this spot'), 'and so does the suggestion');
+});

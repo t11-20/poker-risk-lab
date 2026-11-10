@@ -135,6 +135,7 @@
 
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1263,6 +1264,34 @@ function portFromOrigin(origin, fallback) {
 }
 
 /**
+ * Refuses to start a server on a port something else already holds.
+ *
+ * `waitUntilReady` accepts the first 200 from its URL, and it cannot tell its own child's answer
+ * from a stranger's. With another process on the port, `next start` fails to bind and the audit
+ * scores whatever IS there. Reproduced: a twelve-line `node:http` server on 127.0.0.1:3472, then
+ * `node scripts/a11y-audit.mjs --base-url http://127.0.0.1:3472` printed "starting the web app...",
+ * "ready at http://127.0.0.1:3472", audited one route of the stranger's page and exited 0 with
+ * "PASS". A delegate's log on this machine shows the same sequence on :3000 while another
+ * project's container held that port, and its PASS was reported as this gate's. The same check as
+ * `refuseOccupiedPort` in `scripts/age-gate-audit.mjs`.
+ */
+async function refuseOccupiedPort(port) {
+  const free = await new Promise((done) => {
+    const probe = createServer();
+    probe.once('error', () => done(false));
+    probe.once('listening', () => probe.close(() => done(true)));
+    probe.listen(Number(port), '127.0.0.1');
+  });
+  if (!free) {
+    throw new Error(
+      `something is already listening on 127.0.0.1:${port}. --start audits a server this run ` +
+        'started, so it will not score one it did not. Stop it, pass another --base-url/--api-url, ' +
+        'or pass --no-start to audit that server on purpose.',
+    );
+  }
+}
+
+/**
  * A child server this script owns and must clean up.
  *
  * Detached, and signalled by process group, for the same reason as
@@ -1454,6 +1483,7 @@ try {
         },
       );
       servers.push(api);
+      await refuseOccupiedPort(portFromOrigin(options.apiUrl, '3001'));
       console.log(dim('  starting the API...'));
       api.start();
       await api.waitUntilReady(options.readyTimeoutSeconds);
@@ -1466,6 +1496,7 @@ try {
       PORT: portFromOrigin(options.baseUrl, '3000'),
     });
     servers.push(web);
+    await refuseOccupiedPort(portFromOrigin(options.baseUrl, '3000'));
     console.log(dim('  starting the web app...'));
     web.start();
     await web.waitUntilReady(options.readyTimeoutSeconds);
