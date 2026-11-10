@@ -1,6 +1,6 @@
 /**
- * The learning half's figures: what a numeric answer is checked against, how close it has to be,
- * and what a decision question's spot computes to.
+ * The learning half's figures: what a lesson's live calculation shows, what a numeric answer is
+ * checked against, how close it has to be, and what a decision question's spot computes to.
  *
  * Content comes only from `@prl/content`, which validates it at load. Every number here is
  * computed from the situation a question stores (ADR 0006); nothing in this file or in the content
@@ -20,7 +20,9 @@
  *     source: it imports runtime values from `@prl/ui`, which is React.
  *   - the equity spec for a calculation: `equitySpec` in `apps/web/src/lib/learn-calculations.ts`,
  *     every opponent an exact holding. All three equity questions name a flop and exact cards, so
- *     `equity()` enumerates exactly and needs no sampling or worker.
+ *     `equity()` enumerates exactly and needs no sampling or worker. Every lesson's opponents are
+ *     exact holdings too; three are preflop, and enumerate 1.4 to 1.7 million run-outs exactly,
+ *     measured at 285 to 334 ms each on first use, once per process (`calculate` caches).
  *   - the unit words and the decimals: `apps/web/src/lib/quiz-tolerance.ts`.
  */
 
@@ -42,6 +44,7 @@ import {
   exactRange,
   icmEquity,
   potOdds,
+  probabilityOfHitting,
   projectResults,
   riskOfRuin,
   ruleOf24,
@@ -89,21 +92,48 @@ export function isTopic(value: string): value is Topic {
 }
 
 // ---------------------------------------------------------------------------
-// Numeric answers
+// Calculations: one computation for a lesson's figures and a quiz's target
 // ---------------------------------------------------------------------------
+
+export interface Figure {
+  readonly label: string;
+  readonly value: number;
+  /** The unit a numeric question asking for this field must declare. Grading only. */
+  readonly unit: QuizUnit;
+  /**
+   * What follows the number when a reader is shown it, where the grading unit's own word would be
+   * false: an expected result in big blinds is graded as `chips` and would print as "units", a
+   * multiplier is a `count` and would print as "4 cards". Empty for a bare number.
+   */
+  readonly words?: string;
+  /** A parameter the content stated rather than a result. The caption already says it. */
+  readonly input?: true;
+}
+
+/**
+ * A calculation's figures, how they were obtained, and the arithmetic in words.
+ *
+ * The web computes a lesson's figure and a quiz's target with one function so that a quiz cannot
+ * mark a reader wrong for following the lesson (`learn-calculations.ts`, "That is not
+ * code-sharing for tidiness"). This is that function here. A quiz field reads one figure; a lesson
+ * shows all of them, which is why some kinds carry figures the API's table does not have (every
+ * player's equity, the exact figure beside the rule of 2 and 4, the bounds of the 95% interval):
+ * the captions ask the reader to look at those numbers.
+ */
+export interface Calculation {
+  /** One sentence: exact or approximate, and how much work it took. A sampled figure's interval. */
+  readonly method: string;
+  readonly working: string;
+  readonly figures: Readonly<Record<string, Figure>>;
+}
 
 export interface Expected {
   /** The target, in the question's own unit. */
   readonly value: number;
   readonly unit: QuizUnit;
   readonly tolerance: number;
-  /** The arithmetic in words, from the maths package. */
+  /** The arithmetic in words, from the maths package, and the method. */
   readonly working: string;
-}
-
-interface FieldTable {
-  readonly working: string;
-  readonly fields: Readonly<Record<string, { readonly value: number; readonly unit: QuizUnit }>>;
 }
 
 /** A fraction in 0..1 as percentage POINTS, which is how a learner answers. */
@@ -115,38 +145,73 @@ function exactCards(text: string): ReturnType<typeof exactRange> {
   return exactRange(parseCards(text));
 }
 
-function fieldTable(calculation: LiveCalculation): FieldTable {
+const ARITHMETIC = 'Exact arithmetic: nothing is sampled or estimated.';
+const CLOSED_FORM = 'Closed form: exact given the inputs, and the inputs are assumptions.';
+
+/** One card to come is the turn, with 46 cards unseen; two is the flop, with 47. */
+const UNSEEN_BY_CARDS_TO_COME = { 1: 46, 2: 47 } as const;
+
+function compute(calculation: LiveCalculation): Calculation {
   switch (calculation.kind) {
     case 'potOdds': {
       const odds = potOdds(calculation.pot, calculation.toCall);
       return {
+        method: ARITHMETIC,
         working: odds.explanation,
-        fields: {
-          breakEvenEquity: { value: asPercent(odds.breakEvenEquity), unit: 'percent' },
+        figures: {
+          breakEvenEquity: {
+            label: 'Break-even equity',
+            value: asPercent(odds.breakEvenEquity),
+            unit: 'percent',
+          },
           // No "X to 1" exists for a free call, so the field is absent and a question asking for
           // it fails at `expectedAnswer`, not by grading a reader against a 0.
           ...(odds.oddsRatio === null
             ? {}
-            : { oddsRatio: { value: odds.oddsRatio, unit: 'ratio' as const } }),
-          pot: { value: odds.pot, unit: 'chips' },
-          toCall: { value: odds.toCall, unit: 'chips' },
+            : { oddsRatio: { label: 'Price offered', value: odds.oddsRatio, unit: 'ratio' as const } }),
+          pot: { label: 'Pot before the call', value: odds.pot, unit: 'chips', input: true },
+          toCall: { label: 'Cost to call', value: odds.toCall, unit: 'chips', input: true },
         },
       };
     }
     case 'ruleOf24': {
       const estimate = ruleOf24(calculation.outs, calculation.cardsToCome);
+      const unseen = UNSEEN_BY_CARDS_TO_COME[calculation.cardsToCome];
+      const hit = probabilityOfHitting(calculation.outs, unseen, calculation.cardsToCome);
       return {
-        working: `${estimate.explanation} ${estimate.caveat}`,
-        fields: {
+        method:
+          'The estimate is a mental shortcut, multiplication rather than probability. The exact ' +
+          `figure beside it is counted from the ${unseen} unseen cards.`,
+        working: `${estimate.explanation} ${estimate.caveat} ${hit.derivation}`,
+        figures: {
           // Already in percentage points: scaling it again would turn 36% into 3,600%.
-          estimatePercent: { value: estimate.estimatePercent, unit: 'percent' },
-          multiplier: { value: estimate.multiplier, unit: 'count' },
+          estimatePercent: {
+            label: 'Rule-of-thumb estimate',
+            value: estimate.estimatePercent,
+            unit: 'percent',
+          },
+          exactPercent: {
+            label: `Exact chance of hitting, from ${unseen} unseen cards`,
+            value: asPercent(hit.probability),
+            unit: 'percent',
+          },
+          multiplier: {
+            label: 'Multiplier per out',
+            value: estimate.multiplier,
+            unit: 'count',
+            words: '',
+            input: true,
+          },
         },
       };
     }
     case 'callEv': {
       const call = evOfCall({ pot: calculation.pot, toCall: calculation.toCall, equity: calculation.equity });
-      return { working: call.derivation, fields: { ev: { value: call.ev, unit: 'chips' } } };
+      return {
+        method: 'Exact arithmetic on an equity that is assumed, not measured.',
+        working: call.derivation,
+        figures: { ev: { label: 'EV of calling, against 0 for folding', value: call.ev, unit: 'chips' } },
+      };
     }
     case 'foldEquity': {
       const bet = evOfSemiBluff({
@@ -156,30 +221,58 @@ function fieldTable(calculation: LiveCalculation): FieldTable {
         equityWhenCalled: calculation.equityWhenCalled,
       });
       return {
+        method: 'Exact arithmetic on two probabilities that are forecasts about a person.',
         working: bet.derivation,
-        fields: {
-          ev: { value: bet.ev, unit: 'chips' },
-          foldEquityShare: { value: bet.foldEquityShare, unit: 'chips' },
-          showdownShare: { value: bet.showdownShare, unit: 'chips' },
+        figures: {
+          ev: { label: 'EV of betting', value: bet.ev, unit: 'chips' },
+          foldEquityShare: {
+            label: 'Of which, from them folding',
+            value: bet.foldEquityShare,
+            unit: 'chips',
+          },
+          showdownShare: { label: 'Of which, from showdowns', value: bet.showdownShare, unit: 'chips' },
         },
       };
     }
     case 'icm': {
       const result = icmEquity(calculation.stacks, calculation.payouts);
       const pool = result.totalPrizePool;
-      const share = pool === 0 ? 0 : (result.equities[0] ?? 0) / pool;
+      const shareOf = (index: number): number =>
+        pool === 0 ? 0 : asPercent((result.equities[index] ?? 0) / pool);
+      const label = (index: number): string =>
+        `Prize share of the stack of ${(calculation.stacks[index] ?? 0).toLocaleString('en-US')}`;
+      const others = Object.fromEntries(
+        result.equities
+          .slice(1)
+          .map((_, offset) => [
+            `prizeShare${offset + 1}`,
+            { label: label(offset + 1), value: shareOf(offset + 1), unit: 'percent' as const },
+          ]),
+      );
       return {
+        method: `${CLOSED_FORM} Malmuth–Harville.`,
         working: result.explanation,
-        fields: { chipLeaderShare: { value: asPercent(share), unit: 'percent' } },
+        figures: {
+          // The API's name for the first stack's share, which in every shipped situation is the
+          // largest. A quiz question reads it by this name.
+          chipLeaderShare: { label: label(0), value: shareOf(0), unit: 'percent' },
+          ...others,
+        },
       };
     }
     case 'spr': {
       const spr = stackToPotRatio(calculation.effectiveStack, calculation.pot);
       return {
+        method: ARITHMETIC,
         working: `${spr.explanation} ${spr.implication}`,
-        fields: {
-          spr: { value: spr.spr, unit: 'ratio' },
-          effectiveStack: { value: spr.effectiveStack, unit: 'chips' },
+        figures: {
+          spr: {
+            label: `Stack-to-pot ratio (${spr.band.replace('-', ' ')})`,
+            value: spr.spr,
+            unit: 'ratio',
+            words: '',
+          },
+          effectiveStack: { label: 'Effective stack', value: spr.effectiveStack, unit: 'chips', input: true },
         },
       };
     }
@@ -189,12 +282,35 @@ function fieldTable(calculation: LiveCalculation): FieldTable {
         winRateBbPer100: calculation.winRateBbPer100,
         standardDeviationBbPer100: calculation.standardDeviationBbPer100,
       });
+      const bb = 'big blinds';
       return {
+        method: 'Normal approximation: a sum of many independent hands is close to normally distributed.',
         working: projection.explanation,
-        fields: {
-          probabilityOfLoss: { value: asPercent(projection.probabilityOfLoss), unit: 'percent' },
-          standardDeviationBb: { value: projection.standardDeviationBb, unit: 'chips' },
-          expectedBb: { value: projection.expectedBb, unit: 'chips' },
+        figures: {
+          probabilityOfLoss: {
+            label: 'Chance of being down after all of them',
+            value: asPercent(projection.probabilityOfLoss),
+            unit: 'percent',
+          },
+          expectedBb: { label: 'Expected result', value: projection.expectedBb, unit: 'chips', words: bb },
+          standardDeviationBb: {
+            label: 'Standard deviation over the sample',
+            value: projection.standardDeviationBb,
+            unit: 'chips',
+            words: bb,
+          },
+          lowerBb: {
+            label: 'Middle 95% of outcomes, low end',
+            value: projection.interval95.lowerBb,
+            unit: 'chips',
+            words: bb,
+          },
+          upperBb: {
+            label: 'Middle 95% of outcomes, high end',
+            value: projection.interval95.upperBb,
+            unit: 'chips',
+            words: bb,
+          },
         },
       };
     }
@@ -205,8 +321,11 @@ function fieldTable(calculation: LiveCalculation): FieldTable {
         standardDeviationBbPer100: calculation.standardDeviationBbPer100,
       });
       return {
+        method: CLOSED_FORM,
         working: `${ruin.formula} ${ruin.explanation}`,
-        fields: { probability: { value: asPercent(ruin.probability), unit: 'percent' } },
+        figures: {
+          probability: { label: 'Risk of ruin', value: asPercent(ruin.probability), unit: 'percent' },
+        },
       };
     }
     case 'outs': {
@@ -221,12 +340,13 @@ function fieldTable(calculation: LiveCalculation): FieldTable {
         opponent: exactCards(calculation.opponentCards),
       });
       return {
+        method: `Exact, card by card: each of the ${outs.cardsConsidered} unseen cards was dealt in turn.`,
         working: `${outs.explanation} ${outs.assumptions.join(' ')}`,
-        fields: {
-          cleanCount: { value: outs.cleanCount, unit: 'count' },
-          dirtyCount: { value: outs.dirtyCount, unit: 'count' },
-          totalOuts: { value: outs.totalOuts, unit: 'count' },
-          equityNow: { value: asPercent(outs.equityNow), unit: 'percent' },
+        figures: {
+          cleanCount: { label: 'Clean outs', value: outs.cleanCount, unit: 'count' },
+          dirtyCount: { label: 'Dirty outs', value: outs.dirtyCount, unit: 'count' },
+          totalOuts: { label: 'Cards counted', value: outs.totalOuts, unit: 'count' },
+          equityNow: { label: 'Equity as things stand', value: asPercent(outs.equityNow), unit: 'percent' },
         },
       };
     }
@@ -241,15 +361,35 @@ function fieldTable(calculation: LiveCalculation): FieldTable {
         ],
         board: calculation.board === undefined ? [] : parseCards(calculation.board),
       });
-      const hero = result.players[0];
+      const [hero, ...opponents] = result.players;
       if (hero === undefined) throw new Error('an equity result with no players');
+      // A sampled figure always carries its interval, `equity.ts`'s own rule: the
+      // bare percentage reads as exact, and at 100,000 run-outs it is not.
       const method =
         result.method === 'exact-enumeration'
           ? `Exact: every one of ${result.trials.toLocaleString('en-US')} run-outs was played out.`
-          : `Sampled: ${result.trials.toLocaleString('en-US')} random run-outs from a fixed seed.`;
+          : `Sampled: ${result.trials.toLocaleString('en-US')} random run-outs from a fixed seed` +
+            (result.confidence === null
+              ? '.'
+              : `, ±${result.confidence.halfWidthPoints.toFixed(1)} points on your equity at 95%.`);
       return {
-        working: `${result.assumptions.join(' ')} ${method}`,
-        fields: { heroEquity: { value: asPercent(hero.equity), unit: 'percent' } },
+        method,
+        working: result.assumptions.join(' '),
+        figures: {
+          heroEquity: { label: 'Your equity', value: asPercent(hero.equity), unit: 'percent' },
+          heroWin: { label: 'You win outright', value: asPercent(hero.win), unit: 'percent' },
+          heroTie: { label: 'You split the pot', value: asPercent(hero.tie), unit: 'percent' },
+          ...Object.fromEntries(
+            opponents.map((player, index) => [
+              `opponentEquity${index + 1}`,
+              {
+                label: `Equity of ${calculation.opponents[index] ?? player.label}`,
+                value: asPercent(player.equity),
+                unit: 'percent' as const,
+              },
+            ]),
+          ),
+        },
       };
     }
     default: {
@@ -259,7 +399,20 @@ function fieldTable(calculation: LiveCalculation): FieldTable {
   }
 }
 
-const expectedCache = new Map<string, Expected>();
+const calculationCache = new Map<string, Calculation>();
+
+/**
+ * The calculation's figures, computed once per process: the content does not change while it
+ * runs, and a preflop equity enumerates 1.7 million run-outs.
+ */
+export function calculate(calculation: LiveCalculation): Calculation {
+  const key = JSON.stringify(calculation);
+  const cached = calculationCache.get(key);
+  if (cached !== undefined) return cached;
+  const computed = compute(calculation);
+  calculationCache.set(key, computed);
+  return computed;
+}
 
 /**
  * The figure a numeric answer is checked against, computed from the question's calculation.
@@ -269,14 +422,12 @@ const expectedCache = new Map<string, Expected>();
  * wrong: a `percent` question over a fraction accepts 0.333 and refuses 33.3.
  */
 export function expectedAnswer(question: NumericQuestion): Expected {
-  const cached = expectedCache.get(question.id);
-  if (cached !== undefined) return cached;
-  const table = fieldTable(question.calculation);
-  const field = table.fields[question.field];
+  const computed = calculate(question.calculation);
+  const field = computed.figures[question.field];
   if (field === undefined) {
     throw new Error(
       `quiz question ${question.id} asks for "${question.field}" of a ${question.calculation.kind} ` +
-        `calculation, which produces: ${Object.keys(table.fields).join(', ')}`,
+        `calculation, which produces: ${Object.keys(computed.figures).join(', ')}`,
     );
   }
   if (field.unit !== question.unit) {
@@ -284,14 +435,22 @@ export function expectedAnswer(question: NumericQuestion): Expected {
       `quiz question ${question.id} declares unit "${question.unit}" but "${question.field}" is in "${field.unit}"`,
     );
   }
-  const expected = {
+  return {
     value: field.value,
     unit: question.unit,
     tolerance: question.tolerance,
-    working: table.working,
+    working: `${computed.working} ${computed.method}`,
   };
-  expectedCache.set(question.id, expected);
-  return expected;
+}
+
+/** A figure as a lesson shows it: `Break-even equity: 33.3%`, `Expected result: 500.0 big blinds`. */
+export function figureLine(figure: Figure): string {
+  if (figure.words === undefined) return `${figure.label}: ${figureText(figure.value, figure.unit)}`;
+  const number = figure.value.toLocaleString('en-US', {
+    minimumFractionDigits: UNIT_DECIMALS[figure.unit],
+    maximumFractionDigits: UNIT_DECIMALS[figure.unit],
+  });
+  return `${figure.label}: ${figure.words === '' ? number : `${number} ${figure.words}`}`;
 }
 
 /** `QUIZ_UNIT_WORDS` in `apps/web/src/lib/quiz-tolerance.ts`. */
