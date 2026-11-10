@@ -165,6 +165,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -1779,6 +1780,56 @@ export const ROUTES = [
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+/**
+ * Refuses to go on when something already answers where a server this run starts will be polled.
+ *
+ * `waitUntilReady` accepts the first 200 from its URL and cannot tell its own child's answer from a
+ * stranger's. The `prl-app` marker check below catches a stranger that is not this app, and that is
+ * all it can catch: a sibling checkout's `next start` carries the same shell class. Measured on
+ * 2026-11-10 with a production `next start` from this checkout started by hand on :3521 and a
+ * `node:http` page answering 200 on :3529: `--start --with-api --web http://127.0.0.1:3521 --api
+ * http://127.0.0.1:3529` printed "starting the API on http://127.0.0.1:3529..." and "starting the web
+ * app on http://127.0.0.1:3521...", passed 133 checks against servers it did not start, and failed one
+ * with "this run started the API itself, so there is nothing else to blame" while the API it blamed
+ * was the `node:http` page.
+ *
+ * It CONNECTS to where the poll will go, rather than binding 127.0.0.1 as `scripts/a11y-audit.mjs`
+ * first did. Measured on macOS with Node 24.18: a bind of 127.0.0.1 succeeds beside a listener on
+ * the wildcard address, so it called a `node:http` server free on its default address, on `0.0.0.0`
+ * and on `::` (`lsof`: `TCP *:3533`), and refused only one bound to 127.0.0.1; a connect to
+ * 127.0.0.1 reached all four. `next start` listens on the wildcard (`TCP *:3521`). A second `next
+ * start` there exits `EADDRINUSE :::3521`; beside a stranger on 127.0.0.1 alone it binds `*:3522` and
+ * stays up while the poll reaches the stranger. Only ECONNREFUSED counts as free, so a probe that
+ * cannot decide refuses.
+ */
+async function refuseOccupiedPort(url) {
+  const { hostname, port, protocol } = new URL(url);
+  const host = hostname.replace(/^\[(.*)\]$/, '$1');
+  const target = { host, port: Number(port || (protocol === 'https:' ? 443 : 80)) };
+  const outcome = await new Promise((done) => {
+    const socket = connect(target);
+    socket.setTimeout(2000);
+    socket.once('connect', () => {
+      socket.destroy();
+      done('accepted');
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      done('was neither accepted nor refused within 2s');
+    });
+    socket.once('error', (error) =>
+      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
+    );
+  });
+  if (outcome === 'refused') return;
+  const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
+  throw new Error(
+    `${seen} on ${host}:${String(target.port)}. --start drives a server this run started, so it ` +
+      'will not score one it did not. Stop it, pass another --web/--api, or leave out --start to ' +
+      'drive that server on purpose.',
+  );
+}
+
 /** The port `next start` should bind, taken from the origin this audit will drive. */
 function portFromOrigin(origin) {
   const port = new URL(origin).port;
@@ -2000,6 +2051,7 @@ async function main() {
 
   try {
     if (START) {
+      for (const url of WITH_API ? [WEB_ORIGIN, API_ORIGIN] : [WEB_ORIGIN]) await refuseOccupiedPort(url);
       if (WITH_API) {
         // Inherit `DATABASE_URL` and the rest from the parent, exactly as `ax-tree-audit.mjs`
         // does, and do NOT force `NODE_ENV=production`: that refuses the development secrets in

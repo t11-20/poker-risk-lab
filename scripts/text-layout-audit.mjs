@@ -133,6 +133,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
+import { connect } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -1266,6 +1267,54 @@ async function withChrome(headful, run) {
 // Servers
 // ===========================================================================
 
+/**
+ * Refuses to go on when something already answers where this run's web app will be polled.
+ *
+ * `waitUntilReady` accepts the first 200 from its URL and cannot tell its own child's answer from a
+ * stranger's, so with the port taken the sweep measures whatever IS there. Measured on 2026-11-10
+ * with a production `next start` from this checkout started by hand on :3521: `--base-url
+ * http://127.0.0.1:3521 --start` printed "starting the built web app on http://127.0.0.1:3521 ...",
+ * then "PASS — 34646 painted text elements over 160 measurements" and exited 0, about a server this
+ * run did not start. A `node:http` page on the port exited 1 only because its one `<h1>` is under
+ * every coverage floor; the floors noticed, the lifecycle did not.
+ *
+ * It CONNECTS to where the poll will go, rather than binding 127.0.0.1 as `scripts/a11y-audit.mjs`
+ * first did. Measured on macOS with Node 24.18: a bind of 127.0.0.1 succeeds beside a listener on
+ * the wildcard address, so it called a `node:http` server free on its default address, on `0.0.0.0`
+ * and on `::` (`lsof`: `TCP *:3533`), and refused only one bound to 127.0.0.1; a connect to
+ * 127.0.0.1 reached all four. `next start` listens on the wildcard (`TCP *:3521`). A second `next
+ * start` there exits `EADDRINUSE :::3521`; beside a stranger on 127.0.0.1 alone it binds `*:3522` and
+ * stays up while the poll reaches the stranger. Only ECONNREFUSED counts as free, so a probe that
+ * cannot decide refuses.
+ */
+async function refuseOccupiedPort(url) {
+  const { hostname, port, protocol } = new URL(url);
+  const host = hostname.replace(/^\[(.*)\]$/, '$1');
+  const target = { host, port: Number(port || (protocol === 'https:' ? 443 : 80)) };
+  const outcome = await new Promise((done) => {
+    const socket = connect(target);
+    socket.setTimeout(2000);
+    socket.once('connect', () => {
+      socket.destroy();
+      done('accepted');
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      done('was neither accepted nor refused within 2s');
+    });
+    socket.once('error', (error) =>
+      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
+    );
+  });
+  if (outcome === 'refused') return;
+  const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
+  throw new Error(
+    `${seen} on ${host}:${String(target.port)}. --start measures a web app this run started, so it ` +
+      'will not score one it did not. Stop it, pass another --base-url, or leave out --start to ' +
+      'measure that server on purpose.',
+  );
+}
+
 class ManagedServer {
   constructor(label, args, readyUrl, env) {
     this.label = label;
@@ -1455,6 +1504,7 @@ async function main() {
 
   try {
     if (options.start) {
+      await refuseOccupiedPort(options.baseUrl);
       const web = new ManagedServer('web', ['--filter', '@prl/web', 'start'], options.baseUrl, {
         NODE_ENV: 'production',
         PORT: new URL(options.baseUrl).port === '' ? '3000' : new URL(options.baseUrl).port,

@@ -82,6 +82,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
+import { connect } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -1051,6 +1052,61 @@ async function withChrome(headful, run) {
 // ===========================================================================
 
 /**
+ * Refuses to go on when something already answers where a server this run starts will be polled.
+ *
+ * `waitUntilReady` accepts the first 200 from its URL and cannot tell its own child's answer from a
+ * stranger's, so with the port taken the audit scores whatever IS there. Measured on 2026-11-10 with
+ * a production `next start` from this checkout started by hand on :3521: `--start --base-url
+ * http://127.0.0.1:3521 --journeys learn,practice --no-assertions` printed "starting the web
+ * app...", then "PASS — the computed accessibility tree satisfied every check above." and exited 0.
+ * With a `node:http` page on all five ports in 3523-3527 and `--start --with-api` pointed at them,
+ * the API, all three web apps and the proxy were reported as starting, none as exited, and 81 checks
+ * ran against the stranger; it exited 1 only because the stranger's page is not this app's.
+ *
+ * Every port is checked before the first child is spawned, the fixtures' ports on the same terms as
+ * the main one. `bad()`-and-carry-on is right for a fixture that failed to START, but a stranger on
+ * its port is a precondition of the whole run, and the run refuses before anything has started
+ * rather than losing 8.2 or 6.7 part-way through. The proxy's port is checked too: it "started" at
+ * :3527 above because a bind of 127.0.0.1 succeeds beside the stranger's wildcard listener.
+ *
+ * It CONNECTS to where the poll will go, rather than binding 127.0.0.1 as `scripts/a11y-audit.mjs`
+ * first did. Measured on macOS with Node 24.18: a bind of 127.0.0.1 succeeds beside a listener on
+ * the wildcard address, so it called a `node:http` server free on its default address, on `0.0.0.0`
+ * and on `::` (`lsof`: `TCP *:3533`), and refused only one bound to 127.0.0.1; a connect to
+ * 127.0.0.1 reached all four. `next start` listens on the wildcard (`TCP *:3521`). A second `next
+ * start` there exits `EADDRINUSE :::3521`; beside a stranger on 127.0.0.1 alone it binds `*:3522` and
+ * stays up while the poll reaches the stranger. Only ECONNREFUSED counts as free, so a probe that
+ * cannot decide refuses.
+ */
+async function refuseOccupiedPort(url) {
+  const { hostname, port, protocol } = new URL(url);
+  const host = hostname.replace(/^\[(.*)\]$/, '$1');
+  const target = { host, port: Number(port || (protocol === 'https:' ? 443 : 80)) };
+  const outcome = await new Promise((done) => {
+    const socket = connect(target);
+    socket.setTimeout(2000);
+    socket.once('connect', () => {
+      socket.destroy();
+      done('accepted');
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      done('was neither accepted nor refused within 2s');
+    });
+    socket.once('error', (error) =>
+      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
+    );
+  });
+  if (outcome === 'refused') return;
+  const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
+  throw new Error(
+    `${seen} on ${host}:${String(target.port)}. This run starts the server it audits there, so it ` +
+      'will not score one it did not. Stop it, or pass another --base-url, --api-url, ' +
+      '--offline-url, --proxied-url or --proxy-url.',
+  );
+}
+
+/**
  * A child server this script owns and must clean up.
  *
  * The same class, for the same reason, as `scripts/a11y-audit.mjs`: `pnpm --filter ... start` is a
@@ -1551,7 +1607,29 @@ async function main() {
   let reviewProxy = null;
   let exitCode = 0;
 
+  const wanted =
+    options.journeys.length === 0
+      ? JOURNEYS
+      : JOURNEYS.filter((journey) => options.journeys.includes(journey.key));
+
+  const wantedAssertions =
+    options.assertions.length === 0
+      ? ASSERTION_ROUTES
+      : ASSERTION_ROUTES.filter((route) => options.assertions.includes(route.key));
+
+  const needsOffline =
+    !options.skipAssertions && wantedAssertions.some((route) => route.origin === 'offline');
+  const needsProxied =
+    !options.skipAssertions && wantedAssertions.some((route) => route.origin === 'proxied');
+
   try {
+    const ours = [
+      ...(options.start ? [options.baseUrl] : []),
+      ...(options.start && options.withApi ? [options.apiUrl] : []),
+      ...(needsOffline ? [options.offlineUrl] : []),
+      ...(needsProxied ? [options.proxyUrl, options.proxiedUrl] : []),
+    ];
+    for (const url of ours) await refuseOccupiedPort(url);
     if (options.start) {
       if (options.withApi) {
         const api = new ManagedServer(
@@ -1608,21 +1686,11 @@ async function main() {
       }
     }
 
-    const wanted =
-      options.journeys.length === 0
-        ? JOURNEYS
-        : JOURNEYS.filter((journey) => options.journeys.includes(journey.key));
-
-    const wantedAssertions =
-      options.assertions.length === 0
-        ? ASSERTION_ROUTES
-        : ASSERTION_ROUTES.filter((route) => options.assertions.includes(route.key));
-
     // The second web app, started only when something in this run actually needs it. See
     // `OFFLINE_WEB_ORIGIN`: it exists so that 8.2 can reach the bundled-copy path without taking
     // the API away from every other assertion in the run.
     const origins = { default: options.baseUrl, offline: null, proxied: null };
-    if (!options.skipAssertions && wantedAssertions.some((route) => route.origin === 'offline')) {
+    if (needsOffline) {
       const offline = new ManagedServer(
         'web with no API behind it',
         ['--filter', '@prl/web', 'start'],
@@ -1652,7 +1720,7 @@ async function main() {
     // The third web app and the proxy behind it, on the same terms: started only when a route in
     // this run asks for them, and a failure to start is recorded rather than allowed to abort the
     // other hundred-odd checks. See `PROXIED_WEB_ORIGIN` and `scripts/review-proxy.mjs`.
-    if (!options.skipAssertions && wantedAssertions.some((route) => route.origin === 'proxied')) {
+    if (needsProxied) {
       try {
         reviewProxy = await startReviewProxy({
           upstream: options.apiUrl,
