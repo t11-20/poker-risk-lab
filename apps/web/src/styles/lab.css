@@ -405,17 +405,6 @@
   margin-block: var(--prl-space-9);
 }
 
-.prl-stage__question {
-  margin: 0;
-  max-width: var(--prl-measure);
-  color: var(--prl-text);
-  font-size: var(--prl-type-display-3);
-  font-weight: var(--prl-weight-semibold);
-  letter-spacing: var(--prl-tracking-display-3);
-  line-height: var(--prl-leading-snug);
-  text-wrap: balance;
-}
-
 /**
  * "You chose ..." — the reader's own commitment, restated before the analysis argues with it.
  *
