@@ -137,6 +137,7 @@ import { connect } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { waitForDevtools } from './chrome-devtools.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -1230,14 +1231,7 @@ async function withChrome(headful, run) {
   );
 
   try {
-    let version = null;
-    for (let attempt = 0; attempt < 60 && version === null; attempt += 1) {
-      await delay(150);
-      version = await fetch(`http://127.0.0.1:${port}/json/version`)
-        .then((r) => r.json())
-        .catch(() => null);
-    }
-    if (version === null) throw new Error(`Chrome did not open a debugging port on ${port}`);
+    const version = await waitForDevtools(child, port);
     console.log(dim(`  ${version.Browser} — ${headful ? 'headful' : 'headless'}`));
 
     const target = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' }).then((r) =>
