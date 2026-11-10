@@ -1076,11 +1076,11 @@ function withReviewAssumption(report: CoachReport, opponentCount: number): Coach
 /**
  * Runs one decision's analysis on the calling thread.
  *
- * Kept, and kept honest, for the same reason `coachForView` is in `ws/router.ts`: it is the
- * reference implementation. `buildHandReview` — the entry point `scripts/regenerate-web-fixtures.mjs`
- * and five test files use — runs it directly, and `test/event-loop-budget.test.ts` asserts that a
- * review built through a real worker pool is deep-equal to one built through this function. So the
- * two constructions cannot drift without a test saying so.
+ * Kept, and kept honest, because it is the reference implementation. `buildHandReview` — the
+ * entry point `scripts/regenerate-web-fixtures.mjs` and five test files use — runs it directly,
+ * and `test/event-loop-budget.test.ts` asserts that a review built through a real worker pool is
+ * deep-equal to one built through this function. So the two constructions cannot drift without a
+ * test saying so.
  *
  * It is deliberately NOT what `GET /hands/:handId` calls. A flop analysis here measured 133 ms on
  * the reference machine, and eight of them is the event loop stopped for most of a second.

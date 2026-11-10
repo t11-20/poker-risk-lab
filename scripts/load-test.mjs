@@ -307,7 +307,7 @@ const DEFAULTS = {
    * signal under a one-off. So it is measured deliberately, reported as its own cold-start
    * figure, and kept out of the levels. `--skip-warmup` measures the cold process instead.
    *
-   * It used to block the EVENT LOOP for the whole of that, because `coachForView` ran the Monte
+   * It used to block the EVENT LOOP for the whole of that, because the socket ran the Monte
    * Carlo synchronously on the main thread. It now goes to the worker pool, so the cost is paid
    * by the requester and by nobody else — measured across the same window, event-loop p99 fell
    * from 3028.8 ms to 2.1 ms. One thread warms per level as the pool spins up, so a cold-thread

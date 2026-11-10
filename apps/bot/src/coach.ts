@@ -3,12 +3,9 @@
  *
  * ## Where the input comes from
  *
- * `coachReportFor` is `readCoachSituation` + `coachForView` from `apps/api/src/ws/router.ts`, and
- * `assumedRange` from `apps/api/src/rooms/bots.ts`, duplicated because an app may not import an
- * app. Every number is read off the reader's redacted view, the legal set is the engine's own, and
- * the contestable pot is asked of the engine's layering (`contestablePotFor`) rather than assumed
- * equal to the pot. Seed 1, 2,000 samples and a `top:40` range are the web's live-Coach values, so
- * the same spot gets the same figure in both clients.
+ * `coachSpotForView` in `@prl/poker-math`, under `LIVE_COACH_POLICY`: the same function and the
+ * same seed, sample count and `top:40` range the web's live Coach is read with, so the same spot
+ * gets the same figure in both clients. Only the words for a refusal are this client's.
  *
  * It runs on the calling thread. The API moved this off its event loop after measuring 3,034 ms
  * for the first analysis in a process (the preflop strength table `top:NN` needs) and 56-84 ms
@@ -30,12 +27,14 @@
  */
 
 import type { CoachReport } from '@prl/contracts';
-import { type Card, contestablePotFor, type PlayerView } from '@prl/poker-engine';
-import { buildCoachReport, type ParsedRange, parseRange, topPercentRange } from '@prl/poker-math';
-
-const ASSUMED_RANGE_PERCENT = 40;
-const COACH_SAMPLES = 2_000;
-const COACH_SEED = 1;
+import type { PlayerView } from '@prl/poker-engine';
+import {
+  buildCoachReport,
+  type CoachRefusal,
+  coachInputFor,
+  coachSpotForView,
+  LIVE_COACH_POLICY,
+} from '@prl/poker-math';
 
 /** One reading of one decision. `at` names the decision so a stale "Why?" is recognisable. */
 export type CoachReading =
@@ -59,48 +58,23 @@ export function readCoach(view: PlayerView, at: string, coach: CoachFn): CoachRe
 }
 
 export function coachReportFor(view: PlayerView): CoachReport {
-  const own = view.seats.find((seat) => seat.isSelf);
-  const heroCards = own?.holeCards ?? null;
-  if (own === undefined || heroCards === null) throw new Error('the reader holds no cards');
-  const street = view.street;
-  if (street === 'showdown' || street === 'complete') throw new Error(`no decision during ${street}`);
-  const opponents = view.seats.filter(
-    (seat) => !seat.isSelf && (seat.status === 'active' || seat.status === 'allIn'),
-  );
-  if (opponents.length === 0) throw new Error('no live opponent to analyse against');
-  const legalActions = view.legalActions.map((entry) => entry.type);
-  if (legalActions.length === 0) throw new Error('it is not the reader’s turn');
-  const { contestable } = contestablePotFor({
-    seats: view.seats,
-    heroSeat: own.seat,
-    callAmount: view.amountToCall,
-    potTotal: view.potTotal,
-  });
-  const dead = [...heroCards, ...view.board];
-  return buildCoachReport({
-    heroCards,
-    board: view.board,
-    street,
-    // Five is `buildCoachReport`'s ceiling; a six-handed table cannot exceed it.
-    opponents: opponents
-      .slice(0, 5)
-      .map((seat) => ({ label: `seat ${seat.seat + 1}`, range: assumedRange(dead) })),
-    pot: view.potTotal,
-    contestablePot: contestable,
-    toCall: view.amountToCall,
-    heroCommittedThisStreet: own.committedThisStreet,
-    heroStack: own.stack,
-    opponentStacks: opponents.map((seat) => seat.stack),
-    bigBlind: view.config.bigBlind,
-    minimumRaiseTo: view.minimumRaiseTo,
-    legalActions,
-    samples: COACH_SAMPLES,
-    seed: COACH_SEED,
-  });
+  const reading = coachSpotForView(view, LIVE_COACH_POLICY);
+  if (reading.kind === 'refused') throw new Error(refusalWords(reading.refusal));
+  return buildCoachReport(coachInputFor(reading.spot));
 }
 
-function assumedRange(dead: readonly Card[]): ParsedRange {
-  return parseRange(topPercentRange(ASSUMED_RANGE_PERCENT).notation, dead);
+function refusalWords(refusal: CoachRefusal): string {
+  switch (refusal.kind) {
+    case 'not-seated':
+      return 'the reader holds no cards';
+    case 'hand-over':
+      return `no decision during ${refusal.street}`;
+    case 'no-opponent':
+      return 'no live opponent to analyse against';
+    case 'betting-closed':
+    case 'not-to-act':
+      return 'it is not the reader’s turn';
+  }
 }
 
 /** A probability as a percentage, or a refusal that says why. See rule 4 in the file comment. */
@@ -139,7 +113,7 @@ function priceText(report: CoachReport): string {
   return sidePot > 0 ? `${price} (the other ${units(sidePot)} are a side pot you cannot win)` : price;
 }
 
-const RANGE_WORDS = `an assumed top-${ASSUMED_RANGE_PERCENT}% range for each opponent`;
+const RANGE_WORDS = `an assumed top-${LIVE_COACH_POLICY.range.percent}% range for each opponent`;
 
 /** The line under the table. Figures only: the suggestion lives behind "Why?" with its caveats. */
 export function coachLine(reading: CoachReading): string {

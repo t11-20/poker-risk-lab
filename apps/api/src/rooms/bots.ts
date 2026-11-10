@@ -88,12 +88,13 @@ import type {
 } from '@prl/poker-engine';
 import { commitToKnownDeck, createSecureRandom, orderedDeck, redactFor } from '@prl/poker-engine';
 import {
+  type AssumedRange,
   buildCoachReport,
   deriveContestablePot,
   deriveLegalActions,
+  expandAssumedRange,
+  LIVE_COACH_POLICY,
   type ParsedRange,
-  parseRange,
-  topPercentRange,
 } from '@prl/poker-math';
 import { AppError } from '../errors.ts';
 import type { ProblemHook } from '../observability/telemetry.ts';
@@ -923,35 +924,30 @@ function coachReportFor(request: CompareRequest): CoachReport {
 }
 
 /**
- * The default assumption when nobody names a range: the top 40% of hands.
- *
- * Stated as a number here and reported in words by the Coach, because an assumed range is an
- * input and not a measurement — the whole product turns on the difference.
- */
-export const DEFAULT_ASSUMED_RANGE_PERCENT = 40;
-
-/**
- * Parses a range in either of the two forms the contract's `RANGE_PATTERN` accepts.
+ * A range a caller named, in either form the contract's `RANGE_PATTERN` accepts, or a `400`.
  *
  * `top:NN` is not range notation and `parseRange` rightly refuses it: it is a *percentage of the
- * computed strength ordering*, so it has to go through `topPercentRange` first, which builds the
- * notation from that ordering and hands it to the same parser. One path, one parser, and the
- * percentage form cannot silently mean something different from the notation form.
+ * computed strength ordering*, which `expandAssumedRange` turns into notation for the same parser.
+ * Only its bounds are checked here, because expanding it builds the preflop strength table.
  */
-export function assumedRange(notation: string, dead: readonly Card[]): ParsedRange {
-  const percent = /^top:(\d{1,3})$/.exec(notation.trim());
-  if (percent !== null) {
-    const value = Number(percent[1]);
-    if (!Number.isInteger(value) || value < 1 || value > 100) {
-      throw new AppError('invalid_request', {
-        fields: { opponentRange: 'a top percentage must be between 1 and 100' },
-        logDetail: `rejected range "${notation}"`,
-      });
-    }
-    return parseRange(topPercentRange(value).notation, dead);
+export function opponentRangeOption(text: string): AssumedRange {
+  const percent = /^top:(\d{1,3})$/.exec(text.trim());
+  if (percent === null) return { kind: 'notation', notation: text };
+  const value = Number(percent[1]);
+  if (!Number.isInteger(value) || value < 1 || value > 100) {
+    throw new AppError('invalid_request', {
+      fields: { opponentRange: 'a top percentage must be between 1 and 100' },
+      logDetail: `rejected range "${text}"`,
+    });
   }
+  return { kind: 'topPercent', percent: value };
+}
+
+/** Expands an assumed range, with notation the parser refuses answered as a `400` naming the field. */
+export function assumedRange(range: AssumedRange, dead: readonly Card[]): ParsedRange {
+  if (range.kind === 'topPercent') return expandAssumedRange(range, dead);
   try {
-    return parseRange(notation, dead);
+    return expandAssumedRange(range, dead);
   } catch (error) {
     throw new AppError('invalid_request', {
       fields: { opponentRange: 'is not a range this server can read' },
@@ -961,9 +957,11 @@ export function assumedRange(notation: string, dead: readonly Card[]): ParsedRan
   }
 }
 
+/** The range a comparison assumes: the caller's, or the live Coach's top 40% when none is named. */
 function opponentRangeFor(request: CompareRequest): ParsedRange {
   const dead = [...request.spot.heroCards, ...request.spot.board];
-  return assumedRange(request.opponentRange ?? `top:${DEFAULT_ASSUMED_RANGE_PERCENT}`, dead);
+  const named = request.opponentRange;
+  return assumedRange(named === undefined ? LIVE_COACH_POLICY.range : opponentRangeOption(named), dead);
 }
 
 function median(values: readonly number[]): number | null {

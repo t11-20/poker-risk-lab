@@ -50,7 +50,7 @@
  *
  * ## The Coach analysis happens on a thread, and that is not an optimisation
  *
- * `requestCoach` used to call `coachForView` — a 2,000-sample Monte Carlo, plus the preflop
+ * `requestCoach` used to run the analysis — a 2,000-sample Monte Carlo, plus the preflop
  * strength table the default `top:NN` range needs — inline, on the event loop. Measured on this
  * machine before the change: 3,034 ms for the first analysis in a fresh process (the strength
  * table), 56-84 ms warm, and the event loop's own p99 for that window was 3,029 ms. Every socket,
@@ -82,20 +82,19 @@ import type {
   WsServerMessage,
 } from '@prl/contracts';
 import { ERROR_MESSAGES, WS_CLOSE, WS_LIMITS, WS_PROTOCOL_VERSION, wsCloseForError } from '@prl/contracts';
-import type { Card, PlayerView, SeatView } from '@prl/poker-engine';
-import { contestablePotFor } from '@prl/poker-engine';
-import { type Street as BettingStreetName, buildCoachReport, type CoachAction } from '@prl/poker-math';
+import type { PlayerView } from '@prl/poker-engine';
+import { type CoachRefusal, coachSpotForView, LIVE_COACH_POLICY } from '@prl/poker-math';
 import { STRENGTH_TABLE_ALLOWANCE_MS } from '../calc/parse.ts';
 import type { AppConfig } from '../config.ts';
 import { AppError, isAppError } from '../errors.ts';
 import { type AppMetrics, appMetrics } from '../observability/metrics.ts';
 import { observeAnalysis, type ProblemHook } from '../observability/telemetry.ts';
-import { assumedRange, DEFAULT_ASSUMED_RANGE_PERCENT } from '../rooms/bots.ts';
+import { assumedRange, opponentRangeOption } from '../rooms/bots.ts';
 import type { LiveRoom, RoomRegistry } from '../rooms/registry.ts';
 import { toRoomSummary } from '../rooms/registry.ts';
 import type { TableNotice } from '../rooms/table.ts';
 import type { Clock, ScheduledTask } from '../rooms/timers.ts';
-import type { CoachTask, WireRange } from '../workers/equity-worker.ts';
+import type { CoachTask } from '../workers/equity-worker.ts';
 import { getSharedPool } from '../workers/pool.ts';
 
 /** The two things this module needs from a socket. */
@@ -243,13 +242,6 @@ function pooledCoachAnalyser(config: AppConfig): CoachAnalyser {
   };
 }
 
-/**
- * The assumed range when a client does not name one, as the two forms the contract accepts.
- *
- * Parsed through `assumedRange`, which is the one place `top:NN` becomes notation — see `bots.ts`.
- */
-const DEFAULT_COACH_RANGE = `top:${DEFAULT_ASSUMED_RANGE_PERCENT}`;
-const DEFAULT_COACH_SAMPLES = 2_000;
 /** One minute, for the Coach limiter's window. */
 const COACH_WINDOW_MS = 60_000;
 
@@ -309,7 +301,7 @@ export class WsRouter {
     this.nextRequestId = options.nextRequestId ?? ((): string => `ws-${this.nextCount()}`);
     this.onProblem = options.onProblem ?? ((): void => undefined);
     this.metrics = options.metrics ?? appMetrics();
-    this.coachSamples = options.coachSamples ?? DEFAULT_COACH_SAMPLES;
+    this.coachSamples = options.coachSamples ?? LIVE_COACH_POLICY.samples;
     this.analyseCoach = options.analyseCoach ?? pooledCoachAnalyser(options.config);
   }
 
@@ -1104,227 +1096,79 @@ export interface CoachForViewOptions {
 }
 
 /**
- * The seed every live Coach analysis runs under.
- *
- * `1` is not arbitrary: it is the seed `monteCarloEquity` falls back to when no caller names one,
- * which is what this path has always used because `coachForView` never passed one. `CoachTask`
- * requires the field — a task is a complete description of a reproducible computation — so it is
- * written down here rather than defaulted somewhere invisible. Changing this number changes every
- * live Coach figure in the product, which is the reason it is a named constant and not a literal.
- */
-const COACH_SEED = 1;
-
-/**
- * Everything a Coach answer needs from one redacted view, with every refusal already made.
- *
- * Extracted so that the two things built from a view — the task the thread runs, and the report
- * `coachForView` computes here — cannot disagree about WHO may ask, WHAT is refused, or WHICH
- * numbers are read off the view. Only the range differs between them, and it differs in exactly
- * one way: a task carries a range descriptor for the thread to expand, where the in-process path
- * expands it itself.
- */
-interface CoachSituation {
-  readonly own: SeatView;
-  readonly heroCards: readonly Card[];
-  readonly street: BettingStreetName;
-  readonly opponents: readonly SeatView[];
-  readonly legalActions: readonly CoachAction[];
-  /**
-   * The part of `view.potTotal` hero could actually win, from the engine's own layering.
-   *
-   * Read once, here, for the same reason `legalActions` is: the task a thread runs and the report
-   * `coachForView` computes must not be able to disagree about it. It is the whole middle in every
-   * ordinary spot and less than it exactly when hero is all-in for less than the bet — the case
-   * that used to price a call against a side pot hero is not in.
-   */
-  readonly contestablePot: number;
-  /** Hero's cards and the board: what no opponent can be holding. */
-  readonly dead: readonly Card[];
-  /** The range the caller named, or the default. Still a string: `top:NN` must not expand here. */
-  readonly notation: string;
-}
-
-/**
- * Reads one view, or refuses it.
- *
- * Deliberately a function of the view: the caller's own cards are in it, nobody else's are, and
- * therefore there is no way to ask this for an analysis of an opponent's decision.
- *
- * ## The view's own `legalActions` is passed straight through
- *
- * `PlayerView.legalActions` is `legalActions(state, seat)` — the engine's single definition of
- * legality — and it is populated only when it is the recipient's turn. Handing it to the Coach is
- * what closes the last hole in "never recommend an action the server would reject": sizes were
- * already checked against the engine's minimum, but the *availability* of a bet or raise is a
- * different question and one the Coach cannot answer from the pot and the stacks. Measured, before
- * this: a three-handed preflop spot with one opponent folded and the other all-in, the engine
- * offering `fold, call`, and the Coach's headline suggestion "raise to 80-100".
- *
- * An empty list means there is no decision — betting is closed for the hand, or the seat is not to
- * act — and that is refused here rather than answered with a report whose every candidate the
- * table would reject.
- */
-function readCoachSituation(view: PlayerView, options: CoachForViewOptions): CoachSituation {
-  const own = view.seats.find((seat) => seat.isSelf);
-  const heroCards = own?.holeCards ?? null;
-  if (own === undefined || heroCards === null) {
-    throw new AppError('not_seated', { logDetail: 'a Coach request needs a seat holding cards' });
-  }
-  const street = view.street;
-  if (street === 'showdown' || street === 'complete') {
-    throw new AppError('hand_not_active', { logDetail: `no decision to analyse during ${street}` });
-  }
-  const opponents = view.seats.filter(
-    (seat) => !seat.isSelf && (seat.status === 'active' || seat.status === 'allIn'),
-  );
-  if (opponents.length === 0) {
-    throw new AppError('hand_not_active', { logDetail: 'no live opponent to analyse against' });
-  }
-  // `redactFor` only fills this in for the seat that is to act, so the guard covers both "not
-  // your turn" and "betting is closed for the hand" — the two states in which every action,
-  // including folding, would be rejected.
-  const legalActions: readonly CoachAction[] = view.legalActions.map((entry) => entry.type);
-  if (legalActions.length === 0) {
-    throw new AppError('hand_not_active', {
-      logDetail:
-        view.toAct === own.seat
-          ? 'betting is closed for the hand, so there is no decision to analyse'
-          : `a Coach request arrived for seat ${own.seat} while seat ${String(view.toAct)} is to act`,
-    });
-  }
-  // Asked of the engine rather than derived from the view's numbers. `view.seats` carries every
-  // seat's street commitment and status, which is exactly what the layering rule reads, and
-  // `view.amountToCall` is already capped at hero's stack — so this is the same question the
-  // dealer answers when the hand is settled, asked one call early. Every seat is passed, folded
-  // ones included: their chips are in the middle and hero can win them.
-  const { contestable } = contestablePotFor({
-    seats: view.seats,
-    heroSeat: own.seat,
-    callAmount: view.amountToCall,
-    potTotal: view.potTotal,
-  });
-
-  return {
-    own,
-    heroCards,
-    street,
-    opponents,
-    legalActions,
-    contestablePot: contestable,
-    dead: [...heroCards, ...view.board],
-    notation: options.opponentRange ?? DEFAULT_COACH_RANGE,
-  };
-}
-
-/**
- * The assumed range as a DESCRIPTOR for a calculator thread, having been checked here.
- *
- * The check and the expansion are separated on purpose, and the split is the whole point of this
- * function. A `top:NN` range can only be expanded by building the preflop strength ordering —
- * about three seconds, memoised per thread — so expanding it on this thread is the stall that
- * made the live Coach a defect in the first place. The percentage is therefore validated
- * (`1..100`, which is what `assumedRange` checks before it expands) and sent as a number.
- *
- * Notation is different: `parseRange` is microseconds, and running it here is what turns a range
- * this server cannot read into a `400` with a named field instead of a thread that dies of a
- * `RangeParseError` and a caller told `internal_error`. The expansion it produces is discarded —
- * the thread parses the same string again against the same blockers and must, because the
- * expansion is not a thing the wire protocol carries — so the cost of the check is one parse of a
- * few hundred combinations and the benefit is an honest refusal.
- */
-function coachRangeFor(situation: CoachSituation, label: string): WireRange {
-  const percent = /^top:(\d{1,3})$/.exec(situation.notation.trim());
-  if (percent !== null) {
-    const value = Number(percent[1]);
-    if (!Number.isInteger(value) || value < 1 || value > 100) {
-      throw new AppError('invalid_request', {
-        fields: { opponentRange: 'a top percentage must be between 1 and 100' },
-        logDetail: `rejected range "${situation.notation}"`,
-      });
-    }
-    return { kind: 'topPercent', label, percent: value };
-  }
-  assumedRange(situation.notation, situation.dead);
-  return { kind: 'notation', label, notation: situation.notation };
-}
-
-/**
  * One redacted view, as the task a calculator thread runs.
  *
  * This is what `requestCoach` sends to the pool. Everything expensive is described rather than
- * computed: the range is a descriptor (see `coachRangeFor`), and the arithmetic is the thread's.
- * Everything cheap — the refusals, the redaction rule, the numbers read off the view — has
- * already happened by the time this returns.
+ * computed: the range is an `AssumedRange` the thread expands, and the arithmetic is the thread's.
+ * Everything cheap has already happened by the time this returns: the refusals, and the numbers
+ * read off the view, both by `coachSpotForView` in `@prl/poker-math`, which is also what the chat
+ * bot reads its Coach input with.
+ *
+ * A named notation range is parsed here once against hero's cards and the board, and the
+ * expansion discarded. `parseRange` is microseconds, and running it here is what turns a range
+ * this server cannot read into a `400` with a named field instead of a thread that dies of a
+ * `RangeParseError` and a caller told `internal_error`. A `top:NN` range is only bounds-checked,
+ * by `opponentRangeOption`: expanding it is the three-second stall this path exists to avoid.
  */
 export function coachTaskForView(view: PlayerView, options: CoachForViewOptions): CoachTask {
-  const situation = readCoachSituation(view, options);
+  const range =
+    options.opponentRange === undefined
+      ? LIVE_COACH_POLICY.range
+      : opponentRangeOption(options.opponentRange);
+  const reading = coachSpotForView(view, { ...LIVE_COACH_POLICY, range, samples: options.samples });
+  if (reading.kind === 'refused') throw refusalError(reading.refusal);
+  const { spot } = reading;
+  if (range.kind === 'notation') assumedRange(range, [...spot.heroCards, ...spot.board]);
   return {
     kind: 'coach',
     spec: {
       heroLabel: 'you',
-      heroCards: situation.heroCards,
-      board: view.board,
-      // The same assumed range for each opponent. A per-seat range would need a read this
-      // endpoint does not have, and pretending otherwise would put false precision in front of a
-      // learner. Five is `buildCoachReport`'s own ceiling; a six-max table cannot exceed it.
-      opponents: situation.opponents.slice(0, 5).map((seat) => coachRangeFor(situation, `seat ${seat.seat}`)),
+      heroCards: spot.heroCards,
+      board: spot.board,
+      opponents: spot.opponents.map(({ label, range: assumed }) =>
+        assumed.kind === 'topPercent'
+          ? { kind: 'topPercent', label, percent: assumed.percent }
+          : { kind: 'notation', label, notation: assumed.notation },
+      ),
     },
-    street: situation.street,
-    pot: view.potTotal,
-    contestablePot: situation.contestablePot,
-    toCall: view.amountToCall,
-    // Both taken from the view rather than derived: `to` is a total street commitment,
-    // and the minimum is the engine's own, so no size the Coach publishes here can be
-    // one this table would refuse.
-    heroCommittedThisStreet: situation.own.committedThisStreet,
-    heroStack: situation.own.stack,
-    opponentStacks: situation.opponents.map((seat) => seat.stack),
-    bigBlind: view.config.bigBlind,
-    minimumRaiseTo: view.minimumRaiseTo,
-    legalActions: situation.legalActions,
-    samples: options.samples,
-    seed: COACH_SEED,
+    street: spot.street,
+    pot: spot.pot,
+    contestablePot: spot.contestablePot,
+    toCall: spot.toCall,
+    heroCommittedThisStreet: spot.heroCommittedThisStreet,
+    heroStack: spot.heroStack,
+    opponentStacks: spot.opponentStacks,
+    bigBlind: spot.bigBlind,
+    minimumRaiseTo: spot.minimumRaiseTo,
+    legalActions: spot.legalActions,
+    samples: spot.samples,
+    seed: spot.seed,
   };
 }
 
 /**
- * The same analysis, computed on the calling thread.
+ * A view with no decision in it, as the error frame the socket sends.
  *
- * ## Why this still exists now that the socket uses a thread
- *
- * It is the reference implementation, and it is load-bearing as one. `coachTaskForView` describes
- * a computation that happens somewhere else, in a process this file cannot see; the only way to
- * know that the description still means what it used to mean is to run the analysis both ways and
- * compare the reports. `test/event-loop-budget.test.ts` does exactly that — same view, same
- * samples, same seed, one report from here and one from a real worker thread, asserted equal — so
- * a future edit to either side that changes a figure fails a test instead of quietly changing what
- * a learner is told. `test/ws-router.test.ts` uses it for the same reason: it is the definition of
- * the analysis, with no pool to arrange.
- *
- * The range is expanded here, which means a `top:NN` range builds the preflop strength table on
- * THIS thread. That is the cost this function is not allowed to pay in production and is why no
- * production path calls it any more.
+ * `redactFor` fills in `legalActions` only for the seat that is to act, so `betting-closed` and
+ * `not-to-act` are the two states in which every action, folding included, would be rejected.
  */
-export function coachForView(view: PlayerView, options: CoachForViewOptions): CoachReport {
-  const situation = readCoachSituation(view, options);
-  return buildCoachReport({
-    heroCards: situation.heroCards,
-    board: view.board,
-    street: situation.street,
-    opponents: situation.opponents.slice(0, 5).map((seat) => ({
-      label: `seat ${seat.seat}`,
-      range: assumedRange(situation.notation, situation.dead),
-    })),
-    pot: view.potTotal,
-    contestablePot: situation.contestablePot,
-    toCall: view.amountToCall,
-    heroCommittedThisStreet: situation.own.committedThisStreet,
-    heroStack: situation.own.stack,
-    opponentStacks: situation.opponents.map((seat) => seat.stack),
-    bigBlind: view.config.bigBlind,
-    minimumRaiseTo: view.minimumRaiseTo,
-    legalActions: situation.legalActions,
-    samples: options.samples,
-    seed: COACH_SEED,
-  });
+function refusalError(refusal: CoachRefusal): AppError {
+  switch (refusal.kind) {
+    case 'not-seated':
+      return new AppError('not_seated', { logDetail: 'a Coach request needs a seat holding cards' });
+    case 'hand-over':
+      return new AppError('hand_not_active', {
+        logDetail: `no decision to analyse during ${refusal.street}`,
+      });
+    case 'no-opponent':
+      return new AppError('hand_not_active', { logDetail: 'no live opponent to analyse against' });
+    case 'betting-closed':
+      return new AppError('hand_not_active', {
+        logDetail: 'betting is closed for the hand, so there is no decision to analyse',
+      });
+    case 'not-to-act':
+      return new AppError('hand_not_active', {
+        logDetail: `a Coach request arrived for seat ${refusal.seat} while seat ${String(refusal.toAct)} is to act`,
+      });
+  }
 }

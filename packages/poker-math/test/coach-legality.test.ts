@@ -38,7 +38,7 @@
  *    circular — that package depends on this one — so the JSON is parsed here, strictly,
  *    and a shape this file does not recognise fails the test rather than being skipped.
  *    The engine's own `legalActions` for that reconstructed state is handed to the Coach,
- *    which is exactly what `coachForView` does with a live view.
+ *    which is exactly what `coachSpotForView` does with a live view.
  * 2. **Hands actually played.** Blinds posted and actions applied through `applyAction`,
  *    then the Coach is built from `redactFor(state, seat)` exactly as the live WebSocket
  *    caller builds it. This is the half that would catch a mistake in the reconstruction
@@ -313,7 +313,7 @@ function coachInputFor(spot: ScenarioSpot, state: HandState): CoachInput {
     heroStack: spot.heroStack,
     opponentStacks: spot.opponentStacks,
     bigBlind: spot.bigBlind,
-    // The engine's own ruling, exactly as `coachForView` passes it from a live view.
+    // The engine's own ruling, exactly as `coachSpotForView` passes it from a live view.
     legalActions: legalActions(state, 0).map((entry) => entry.type),
     samples: SAMPLES,
     seed: SEED,
@@ -516,7 +516,7 @@ function playedHands(): readonly PlayedHand[] {
 
 /**
  * The Coach input for a played hand, built from the redacted view exactly as
- * `coachForView` in `apps/api/src/ws/router.ts` builds it — which is the point: if the
+ * `coachSpotForView` in `src/coach-view.ts` builds it — which is the point: if the
  * live caller can construct an illegal size, so can this.
  *
  * `tellTheMinimum` is the one variation. With it, the engine's own `minimumRaiseTo` is
@@ -549,7 +549,7 @@ function inputForPlayedHand(hand: PlayedHand, tellTheMinimum: boolean, tellTheAc
       range: parseRange('22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo', [...heroCards, ...view.board]),
     })),
     pot: view.potTotal,
-    // From the engine's own layering, exactly as `coachForView` does it. These are real played
+    // From the engine's own layering, exactly as `coachSpotForView` does it. These are real played
     // hands and several of them leave hero all-in for less than the bet in front of them.
     contestablePot: contestablePotFor({
       seats: view.seats,
@@ -564,7 +564,7 @@ function inputForPlayedHand(hand: PlayedHand, tellTheMinimum: boolean, tellTheAc
     bigBlind: view.config.bigBlind,
     ...(tellTheMinimum ? { minimumRaiseTo: view.minimumRaiseTo } : {}),
     // The view's own list, which is `legalActions(state, seat)` — populated by `redactFor`
-    // only for the seat that is to act. This is the line `coachForView` has too.
+    // only for the seat that is to act. This is the line `coachSpotForView` has too.
     //
     // `tellTheActions: false` is the other real code path, not a hypothetical: it is what a
     // caller with no `HandState` produces, and what the Coach then has to answer for itself.

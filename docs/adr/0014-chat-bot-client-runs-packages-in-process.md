@@ -32,12 +32,12 @@ and each reason is deliberate.
 
 **The bot imports `@prl/poker-engine`, `@prl/poker-ai`, `@prl/poker-math` and `@prl/contracts` and
 deals, plays and coaches in its own process.** It does not call the API and does not depend on
-`apps/api`. Where logic lived only in an app, the minimum is duplicated with a comment naming the
-original:
+`apps/api`. The Coach input is not duplicated: it was, and the copies already disagreed on how
+opponents are labelled in the assumptions list, so it moved into `@prl/poker-math` as
+`coachSpotForView(view, LIVE_COACH_POLICY)`, which both apps call. `LIVE_COACH_POLICY` holds the
+live values (seed 1, 2,000 samples, `top:40`). Where other logic lived only in an app, the minimum is
+duplicated with a comment naming the original:
 
-* the Coach input built from a redacted view (`readCoachSituation` and `coachForView`,
-  `apps/api/src/ws/router.ts`) and the `top:NN` range expansion (`assumedRange`,
-  `apps/api/src/rooms/bots.ts`), with the web's live values: seed 1, 2,000 samples, `top:40`;
 * the bot lineup and table settings (`BOT_TABLE_REQUEST`, `apps/web/src/lib/table-rooms.ts`) and
   the bots' `realistic` difficulty;
 * the probability range check (`formatProbability`, `packages/ui/src/probability.ts`), because
@@ -77,9 +77,9 @@ like this: `simulate.ts` drives the same engine and the same policies with no se
   (about 3 s). Measured over 320 readings on this branch: 28 ms median, but 1.2 to 1.5 s against
   three or more opponents, and the poll loop handles one update at a time, so every chat waits
   behind such a reading. A worker, or a per-chat queue, is the fix when the audience needs it.
-* **The duplicated pieces can drift from the web's.** The Coach input assembly is the one that
-  matters, because a learner could see two figures for one spot. It is a candidate to move into
-  `@prl/poker-math` as a function of a `PlayerView`, so both apps call one definition.
+* **The duplicated pieces can drift from the web's.** The lineup, the difficulty and the
+  probability range check are what is left. None of them computes a Coach figure; the range check
+  only decides whether one is printed.
 
 What this does **not** change:
 
