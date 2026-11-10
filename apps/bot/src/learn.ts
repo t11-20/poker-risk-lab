@@ -9,7 +9,9 @@
  * ## What is duplicated, and from where
  *
  * An app must not depend on an app (ADR 0014), so three pieces are copied with their originals
- * named beside them:
+ * named beside them. The grading rule is not one of them: `withinTolerance` is `@prl/contracts`'s,
+ * the same function the API grades a web reader's answer with.
+ *
  *
  *   - the field table a numeric question's `field` is read from: `potOddsFields` through
  *     `outsFields`, `closedFormTable` and `expectedValueFor` in `apps/api/src/routes/content.ts`.
@@ -19,10 +21,7 @@
  *   - the equity spec for a calculation: `equitySpec` in `apps/web/src/lib/learn-calculations.ts`,
  *     every opponent an exact holding. All three equity questions name a flop and exact cards, so
  *     `equity()` enumerates exactly and needs no sampling or worker.
- *   - the tolerance rule, the unit words and the decimals: `apps/web/src/lib/quiz-tolerance.ts`.
- *     The web's rule rather than the API's: the API compares `Math.abs(answer - value) <= tolerance`,
- *     which that file documents as refusing an answer at exactly the stated tolerance for some
- *     magnitudes (`|3.2 − 3.0| = 0.20000000000000018`).
+ *   - the unit words and the decimals: `apps/web/src/lib/quiz-tolerance.ts`.
  */
 
 import { analyseScenario, quizzes, type ScenarioAnalysis, scenarioById } from '@prl/content';
@@ -336,20 +335,6 @@ export function figureText(value: number, unit: QuizUnit, decimals = UNIT_DECIMA
  */
 export function toleranceText(tolerance: number, unit: QuizUnit): string {
   return figureText(tolerance, unit, toleranceDecimals(tolerance, UNIT_DECIMALS[unit]));
-}
-
-/**
- * Whether an answer falls inside the stated tolerance, inclusive. `withinTolerance` in
- * `apps/web/src/lib/quiz-tolerance.ts`: the band is widened by eight ulps at the numbers' scale, the
- * size of the arithmetic error and nothing more, so the accepted band is the stated band.
- */
-export function withinTolerance(answer: number, expected: Expected): boolean {
-  if (!Number.isFinite(answer)) return false;
-  const tolerance = Math.abs(expected.tolerance);
-  const difference = Math.abs(answer - expected.value);
-  if (difference <= tolerance) return true;
-  const scale = Math.max(1, Math.abs(answer), Math.abs(expected.value), tolerance);
-  return difference <= tolerance + 8 * Number.EPSILON * scale;
 }
 
 /**

@@ -25,7 +25,7 @@
  */
 
 import { quizById, quizzes } from '@prl/content';
-import type { Quiz, QuizQuestion, Topic } from '@prl/contracts';
+import { type Quiz, type QuizQuestion, type Topic, withinTolerance } from '@prl/contracts';
 import {
   DECISION_ACTIONS,
   type DecisionAction,
@@ -40,7 +40,6 @@ import {
   quizzesIn,
   toleranceText,
   topicLabel,
-  withinTolerance,
 } from './learn.ts';
 import type { Deps, Outgoing, Phase, Session, StepResult } from './step.ts';
 import { type Button, cardsText, encodePress, type Press, type QuizMoment } from './view.ts';

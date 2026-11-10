@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { quizzes } from '@prl/content';
-import type { Quiz, QuizQuestion } from '@prl/contracts';
+import { type Quiz, type QuizQuestion, withinTolerance } from '@prl/contracts';
 import {
   decisionSpot,
   expectedAnswer,
@@ -9,7 +9,6 @@ import {
   parseNumber,
   quizTopics,
   topicLabel,
-  withinTolerance,
 } from '../src/learn.ts';
 import { FINISH_HAND_FIRST, QUIZ_STALE } from '../src/quiz.ts';
 import { type Deps, NEW_SESSION, type Session, type StepResult, step } from '../src/step.ts';
@@ -228,8 +227,8 @@ describe('numeric tolerance', () => {
       [4.2, 4.0],
     ] as const) {
       assert.ok(Math.abs(answer - value) > 0.2, `${answer} − ${value} overshoots 0.2 in binary`);
-      assert.ok(withinTolerance(answer, { value, tolerance: 0.2, unit: 'ratio', working: '' }));
-      assert.ok(!withinTolerance(answer + 1e-9, { value, tolerance: 0.2, unit: 'ratio', working: '' }));
+      assert.ok(withinTolerance(answer, { value, tolerance: 0.2 }));
+      assert.ok(!withinTolerance(answer + 1e-9, { value, tolerance: 0.2 }));
     }
   });
 

@@ -66,11 +66,12 @@ export const STARTING_STACK = 1_000;
 /**
  * The web's `BOT_TABLE`, already mapped through `LEGACY_PROFILE_IDS` (`apps/api/src/rooms/bots.ts`):
  * two `tight-aggressive`, then `calling-station`, `loose-aggressive`, `nit`. The plates are what
- * `botDisplayName` makes of each id, so a reader sees the same names in both clients.
+ * `botDisplayNames` makes of the lineup, so a reader sees the same names in both clients: the two
+ * Patient Technicians are numbered there because a narrated line named a seat by its plate alone.
  */
 const LINEUP: readonly { readonly profileId: string; readonly plate: string }[] = [
-  { profileId: 'patient-technician', plate: 'Patient Technician' },
-  { profileId: 'patient-technician', plate: 'Patient Technician' },
+  { profileId: 'patient-technician', plate: 'Patient Technician 1' },
+  { profileId: 'patient-technician', plate: 'Patient Technician 2' },
   { profileId: 'calling-station', plate: 'Calling Station' },
   { profileId: 'reading-pressure-specialist', plate: 'Reading Pressure' },
   { profileId: 'disciplined-specialist', plate: 'Disciplined Specialist' },
