@@ -62,7 +62,9 @@ function menuButton(): Button {
 function calculationText(block: Extract<LessonBlock, { kind: 'liveCalculation' }>): string {
   const computed = calculate(block.calculation);
   return [
-    `Computed here: ${block.caption}`,
+    block.title === undefined
+      ? `Computed here: ${block.caption}`
+      : `Computed here, ${block.title.toLowerCase()}: ${block.caption}`,
     ...Object.values(computed.figures)
       .filter((figure) => figure.input !== true)
       .map((figure) => `• ${figureLine(figure)}`),

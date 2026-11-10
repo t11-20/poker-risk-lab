@@ -428,6 +428,9 @@ function validateLessonBlock(problems: Problems, path: string, raw: unknown): Le
         kind,
         calculation: validateLiveCalculation(problems, `${path}.calculation`, raw['calculation']),
         caption: requireString(problems, `${path}.caption`, raw['caption'], { max: 700 }),
+        ...(raw['title'] === undefined
+          ? {}
+          : { title: requireString(problems, `${path}.title`, raw['title'], { max: 80 }) }),
       };
     default:
       return {

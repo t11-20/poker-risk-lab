@@ -86,6 +86,8 @@ interface KeyedBlock {
   /** Position among `heading` blocks, 1-based. */
   readonly headingIndex: number;
   readonly blockIndex: number;
+  /** A `liveCalculation` whose kind an earlier block in this lesson already defined. */
+  readonly repeatsKind: boolean;
 }
 
 function keyBlocks(blocks: readonly LessonBlock[]): readonly KeyedBlock[] {
@@ -93,12 +95,18 @@ function keyBlocks(blocks: readonly LessonBlock[]): readonly KeyedBlock[] {
   const out: KeyedBlock[] = [];
   let calculations = 0;
   let headings = 0;
+  const definedKinds = new Set<string>();
 
   blocks.forEach((block, blockIndex) => {
     const digest = digestOf(block);
     const count = seen.get(digest) ?? 0;
     seen.set(digest, count + 1);
-    if (block.kind === 'liveCalculation') calculations += 1;
+    let repeatsKind = false;
+    if (block.kind === 'liveCalculation') {
+      calculations += 1;
+      repeatsKind = definedKinds.has(block.calculation.kind);
+      definedKinds.add(block.calculation.kind);
+    }
     if (block.kind === 'heading') headings += 1;
     out.push({
       key: `${digest}#${count}`,
@@ -106,6 +114,7 @@ function keyBlocks(blocks: readonly LessonBlock[]): readonly KeyedBlock[] {
       calculationIndex: calculations,
       headingIndex: headings,
       blockIndex,
+      repeatsKind,
     });
   });
 
@@ -278,6 +287,8 @@ export function LessonBlockRenderer(props: LessonBlockRendererProps): ReactEleme
               key={key}
               calculation={block.calculation}
               caption={block.caption}
+              {...(block.title === undefined ? {} : { title: block.title })}
+              showDefinition={!keyed.repeatsKind}
               index={keyed.calculationIndex}
               headingLevel={keyed.headingIndex === 0 ? 2 : 3}
             />

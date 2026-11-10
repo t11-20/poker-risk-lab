@@ -79,6 +79,8 @@ export type LessonBlock =
       readonly kind: 'liveCalculation';
       readonly calculation: LiveCalculation;
       readonly caption: string;
+      /** This instance's own heading, when a lesson shows one kind of calculation more than once. */
+      readonly title?: string;
     }
   | { readonly kind: 'scenarioLink'; readonly scenarioId: ContentId; readonly prompt: string };
 

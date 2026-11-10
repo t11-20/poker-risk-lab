@@ -92,6 +92,17 @@ export interface LiveCalculationProps {
   /** Position within the lesson, for the `01 02 03` motif. */
   readonly index?: number;
   readonly headingLevel?: HeadingLevel;
+  /**
+   * The lesson's own name for this instance. Without one the heading is the calculation kind's,
+   * and /learn/pot-odds showed three calculators in a row all called "The price of this call".
+   */
+  readonly title?: string;
+  /**
+   * False when an earlier calculation in the same lesson already showed this kind's definition.
+   * The three pot-odds calculators each repeated the same "How it is defined" box, part of about
+   * 3,160px at 390 before the paragraph that compares them.
+   */
+  readonly showDefinition?: boolean;
 }
 
 /**
@@ -332,7 +343,7 @@ function CalculationSkeleton(): ReactElement {
 }
 
 export function LiveCalculation(props: LiveCalculationProps): ReactElement {
-  const { calculation, caption, index, headingLevel = 3 } = props;
+  const { calculation, caption, index, headingLevel = 3, showDefinition = true } = props;
   const { outcome, pending } = useCalculationOutcome(calculation);
 
   const body = (): ReactElement => {
@@ -376,7 +387,7 @@ export function LiveCalculation(props: LiveCalculationProps): ReactElement {
           <Chip glyph={result.method.glyph}>{result.method.label}</Chip>
           <span className="prl-note">{result.method.note}</span>
         </p>
-        {result.formula === null ? null : (
+        {result.formula === null || !showDefinition ? null : (
           <Formula
             eyebrow="How it is defined"
             expression={result.formula.expression}
@@ -408,7 +419,7 @@ export function LiveCalculation(props: LiveCalculationProps): ReactElement {
     );
   };
 
-  const title = outcome?.ok === true ? outcome.result.title : 'Computed live';
+  const title = props.title ?? (outcome?.ok === true ? outcome.result.title : 'Computed live');
 
   return (
     /*
