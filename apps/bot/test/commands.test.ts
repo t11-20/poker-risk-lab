@@ -41,10 +41,11 @@ describe('the command table', () => {
     }
   });
 
-  test('refuses a name it only inherits, and keeps a hand in progress (REGRESSION)', () => {
-    // From review on #12: the table was a plain object, so `/constructor` found
-    // Object.prototype.constructor, `.run` threw, and the Telegram adapter treats any throw from
-    // `step` as a broken table and deletes the chat's session mid-hand.
+  test('refuses a name it only inherits, and keeps a hand in progress', () => {
+    // A guard, not a regression: the lookup before `Object.hasOwn` passes this too, because the
+    // inherited `ALIASES.constructor` is a function that then misses in `COMMANDS`. What it pins is
+    // the outcome that has to survive any rewrite of the lookup: a throw from `step` is how the
+    // Telegram adapter decides to close a chat's table. A direct `COMMANDS[name]` lookup fails it.
     const dealt = step(NEW_SESSION, { kind: 'button', data: encodePress({ kind: 'play' }) }, testDeps(1));
     assert.ok(dealt.session.table !== null, 'the fixture deals a hand');
     for (const name of ['constructor', 'tostring', 'valueof', 'hasownproperty']) {
