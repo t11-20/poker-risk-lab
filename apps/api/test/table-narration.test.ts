@@ -64,7 +64,10 @@ describe('the narration names who did it', () => {
   it('names a pot by what it is, not by its index (REGRESSION: "from pot 0")', () => {
     assert.equal(awardSentence(award(3, 0, 35), 1, nameOf), 'Nit bot wins 35 from the pot.');
     assert.equal(awardSentence(award(0, 0, 905), 2, nameOf), 'Ada wins 905 from the main pot.');
-    assert.equal(awardSentence(award(3, 1, 600, true), 2, nameOf), 'Nit bot wins 600 from side pot 1, split.');
+    assert.equal(
+      awardSentence(award(3, 1, 600, true), 2, nameOf),
+      'Nit bot wins 600 from side pot 1, split.',
+    );
   });
 
   it('names who showed down', () => {
