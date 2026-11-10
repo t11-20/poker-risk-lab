@@ -33,6 +33,24 @@ async function laterServer() {
   };
 }
 
+/** A port that accepts connections and never answers them. */
+async function stalledServer() {
+  const sockets = new Set();
+  const server = createServer(() => {});
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    port: server.address().port,
+    close: () => {
+      for (const socket of sockets) socket.destroy();
+      return new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
 describe('waitForDevtools', () => {
   it('returns /json/version once the port answers', async () => {
     const server = await laterServer();
@@ -81,6 +99,35 @@ describe('waitForDevtools', () => {
       );
     } finally {
       child.kill();
+    }
+  });
+
+  it('reports an exit while something on the port accepts and never answers', async () => {
+    // From review on #11: the poll's fetch had no timeout, so a stalled listener kept it pending
+    // past the deadline and past Chrome exiting.
+    const stalled = await stalledServer();
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(3), 500)'], {
+      stdio: 'ignore',
+    });
+    const started = Date.now();
+    try {
+      await assert.rejects(waitForDevtools(child, stalled.port), /Chrome exited \(code 3/);
+      assert.ok(Date.now() - started < 5_000, `took ${Date.now() - started}ms`);
+    } finally {
+      await stalled.close();
+    }
+  });
+
+  it('keeps its deadline while something on the port accepts and never answers', async () => {
+    const stalled = await stalledServer();
+    const child = liveChild();
+    const started = Date.now();
+    try {
+      await assert.rejects(waitForDevtools(child, stalled.port, 1_500), /within 1.5s/);
+      assert.ok(Date.now() - started < 4_000, `took ${Date.now() - started}ms`);
+    } finally {
+      child.kill();
+      await stalled.close();
     }
   });
 });

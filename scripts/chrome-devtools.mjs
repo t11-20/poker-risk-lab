@@ -18,6 +18,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 export const DEVTOOLS_STARTUP_TIMEOUT_MS = 30_000;
 const POLL_MS = 150;
+const POLL_TIMEOUT_MS = 1_000;
 
 /**
  * Resolves with Chrome's `/json/version` once `port` answers, or throws when `child` exits first or
@@ -39,7 +40,11 @@ export async function waitForDevtools(child, port, timeoutMs = DEVTOOLS_STARTUP_
             `debugging port on ${port}`,
         );
       }
-      const version = await fetch(`http://127.0.0.1:${port}/json/version`)
+      // Each poll gets at most a second, and never more than the budget has left: something that
+      // accepts the connection and never answers would otherwise hold `fetch` open past the
+      // deadline and past a Chrome exit, neither of which is checked until it returns.
+      const signal = AbortSignal.timeout(Math.max(1, Math.min(POLL_TIMEOUT_MS, deadline - Date.now())));
+      const version = await fetch(`http://127.0.0.1:${port}/json/version`, { signal })
         .then((response) => response.json())
         .catch(() => null);
       if (version !== null) return version;
