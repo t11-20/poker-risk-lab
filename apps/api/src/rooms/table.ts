@@ -174,6 +174,14 @@ import {
 import { DEFAULT_LEARNER_TURN_SECONDS } from '../config.ts';
 import { AppError } from '../errors.ts';
 import type { ProblemHook } from '../observability/telemetry.ts';
+import {
+  actionSentence,
+  awardSentence,
+  forcedBetsSentence,
+  NO_CHIPS_CHANGED_HANDS,
+  namesFrom,
+  showdownSentence,
+} from './narration.ts';
 import { type Clock, type TurnExpiry, TurnTimer } from './timers.ts';
 
 /** The wire event payload, without the envelope the hub adds. */
@@ -412,6 +420,8 @@ interface LiveHand {
    * archive wants the stacks each seat *started* with.
    */
   readonly deal: ArchivedDeal;
+  /** Each dealt-in seat's display name, as it was at the deal. See `narration.ts`. */
+  readonly names: ReadonlyMap<SeatIndex, string>;
 }
 
 /**
@@ -832,6 +842,7 @@ export class LiveTable {
         state: dealt.state,
         secret: dealt.secret,
         deal: dealRecordOf(dealt.state, playable),
+        names: new Map(playable.map((seat) => [seat.seat, seat.displayName])),
       };
       this.previousMemo = this.currentMemo;
       this.currentMemo = { handId, results: new Map() };
@@ -1355,23 +1366,21 @@ export class LiveTable {
   /** Turns the engine's events into wire events. Nothing hidden survives the mapping. */
   private wireEvents(events: readonly HandEvent[]): TableEvent[] {
     const out: TableEvent[] = [];
+    const nameOf = namesFrom(this.hand?.names ?? new Map());
     for (const event of events) {
       switch (event.type) {
         case 'handStarted':
           out.push({ kind: 'handStarted', handId: event.handId, commitmentRoot: event.commitment });
           break;
         case 'forcedBetsPosted': {
-          const detail = event.forcedBets
-            .map((bet) => `${bet.kind} ${bet.amount} from seat ${bet.seat}${bet.wasShort ? ' (short)' : ''}`)
-            .join(', ');
-          out.push({ kind: 'forcedBets', detail: detail === '' ? 'no forced bets' : detail });
+          out.push({ kind: 'forcedBets', detail: forcedBetsSentence(event.forcedBets, nameOf) });
           break;
         }
         case 'actionApplied':
           out.push({
             kind: 'action',
             seat: event.action.seat,
-            description: describeAction(event.action),
+            description: actionSentence(event.action, nameOf),
             wasAutomatic: event.action.wasAutomatic,
           });
           break;
@@ -1386,18 +1395,13 @@ export class LiveTable {
         case 'handComplete': {
           // Only seats that actually showed appear in `showdowns`, so a hand that ended in a fold
           // produces no card here at all.
-          const shown = event.result.showdowns.map(
-            (showdown) => `seat ${showdown.seat} shows ${showdown.description}`,
-          );
+          const shown = event.result.showdowns.map((showdown) => showdownSentence(showdown, nameOf));
           if (shown.length > 0) out.push({ kind: 'showdown', summaries: shown });
-          const awards = event.result.awards.map(
-            (award) =>
-              `seat ${award.seat} wins ${award.amount} from pot ${award.potIndex}` +
-              (award.wasSplit ? ' (split)' : ''),
-          );
+          const potCount = event.result.pots.length;
+          const awards = event.result.awards.map((award) => awardSentence(award, potCount, nameOf));
           out.push({
             kind: 'handComplete',
-            summaries: awards.length > 0 ? awards : ['no chips changed hands'],
+            summaries: awards.length > 0 ? awards : [NO_CHIPS_CHANGED_HANDS],
           });
           break;
         }
@@ -1451,23 +1455,4 @@ function dealRecordOf(state: HandState, seats: readonly TableSeat[]): ArchivedDe
 /** Total chips in the middle, including the current street. Local, so the state stays private. */
 function totalPotOf(state: HandState): number {
   return state.seats.reduce((sum, seat) => sum + seat.committedThisStreet, state.potFromPreviousStreets);
-}
-
-/** A public, card-free description of one action, for the action log. */
-function describeAction(logged: LoggedAction): string {
-  const action = logged.action;
-  switch (action.type) {
-    case 'fold':
-      return 'folds';
-    case 'check':
-      return 'checks';
-    case 'call':
-      return `calls ${logged.amountPaid}`;
-    case 'bet':
-      return `bets to ${action.to}`;
-    case 'raise':
-      return `raises to ${action.to}`;
-    default:
-      return 'acts';
-  }
 }
