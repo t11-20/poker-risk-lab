@@ -22,7 +22,7 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "test": "pnpm run build:packages && pnpm run test:unit && pnpm run test:integration && pnpm run test:scripts",
-    "test:unit": "pnpm -r --filter \"./packages/**\" --filter @prl/web test",
+    "test:unit": "pnpm -r --filter \"./packages/**\" --filter @prl/web --filter @prl/bot test",
     "test:integration": "pnpm --filter @prl/api test",
     "test:scripts": "node --test 'scripts/**/*.test.mjs' 'apps/api/scripts/*.test.mjs'",
     "test:no-database": "pnpm run build:packages && pnpm run test:unit && pnpm --filter @prl/api test:without-database && pnpm run test:scripts",

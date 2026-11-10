@@ -69,6 +69,25 @@ importers:
         specifier: 8.22.0
         version: 8.22.0
 
+  apps/bot:
+    dependencies:
+      '@prl/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@prl/poker-ai':
+        specifier: workspace:*
+        version: link:../../packages/poker-ai
+      '@prl/poker-engine':
+        specifier: workspace:*
+        version: link:../../packages/poker-engine
+      '@prl/poker-math':
+        specifier: workspace:*
+        version: link:../../packages/poker-math
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.3
+        version: 24.13.3
+
   apps/web:
     dependencies:
       '@prl/content':

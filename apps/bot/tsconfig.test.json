@@ -1,0 +1,14 @@
+{
+  // Typechecks the tests, which `tsconfig.json` cannot: it sets `rootDir: "src"` to emit `dist/`,
+  // and Node runs `test/` by stripping types, never checking them. Same shape and same reason as
+  // `apps/api/tsconfig.test.json`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
