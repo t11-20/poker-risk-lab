@@ -132,6 +132,19 @@
   box-shadow: var(--prl-elevation-1);
 }
 
+/* One step tighter on a phone, where the first scenario card sat 40px below an 844px fold at 390:
+   the first screen was the heading and three selects, and no scenario. */
+@media (width < 600px) {
+  .prl-lab-filters {
+    margin-block: var(--prl-space-7);
+  }
+
+  .prl-lab-filters__set {
+    gap: var(--prl-space-6);
+    padding: var(--prl-space-7);
+  }
+}
+
 .prl-lab-filters__legend {
   padding-inline: var(--prl-space-3);
   color: var(--prl-text);
