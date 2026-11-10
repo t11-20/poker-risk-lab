@@ -782,7 +782,7 @@ export const OBSERVABLE_AXES: readonly ObservableAxis[] = [
     observedFrom: (stats) => stats.foldToBetFrequency,
     quantity: 'the share of the turns facing a bet, on any street, that it folded',
     tolerance: 0.25,
-    why: 'the trait is about giving up a made hand; the observed rate includes every fold to a bet, most of which are hands that never had value',
+    why: 'the trait is about giving up a made hand; the observed rate includes every fold to a bet, most of which are hands that never had value. MEASURED 2026-08-27, so the reach of this row is not overstated: across the twelve profiles the declared values span 0.14-0.76 while the observed rate spans only 0.37-0.69, and the 0.25 tolerance is 78% of that observed range — so this row catches a profile that folds wildly unlike its card and very little else. Spearman rho between declared and observed is 0.601, against 1.000 for vpip and 0.937 for aggressionFrequency on the same runs. It is a bound, not a demonstration that the trait drives the behaviour, and it is listed beside two axes that do discriminate',
   },
   {
     key: 'betSizingPreference',

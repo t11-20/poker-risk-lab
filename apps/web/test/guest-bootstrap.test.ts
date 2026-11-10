@@ -38,6 +38,9 @@ import {
   GUEST_MINT_TIMEOUT_MS,
   hasSessionCookie,
   isDocumentNavigation,
+  isPrefetch,
+  isRouterNavigation,
+  isRouterPrefetch,
   mintGuestSession,
   pathNeedsGuest,
 } from '../src/lib/guest-bootstrap.ts';
@@ -91,10 +94,99 @@ describe('only a top-level document navigation mints', () => {
     // shape of "idempotent bootstrap" going wrong.
     assert.equal(isDocumentNavigation(headers({ rsc: '1' })), false);
     assert.equal(isDocumentNavigation(headers({ 'next-router-prefetch': '1' })), false);
-    assert.equal(isDocumentNavigation(headers({ purpose: 'prefetch' })), false);
     assert.equal(isDocumentNavigation(headers({ 'sec-fetch-dest': 'empty' })), false);
     assert.equal(isDocumentNavigation(headers({ 'sec-fetch-dest': 'script' })), false);
     assert.equal(isDocumentNavigation(headers({ 'sec-fetch-dest': 'image' })), false);
+  });
+
+  it('reports a purpose:prefetch document as the document Next will answer it with', () => {
+    // This used to be false, and the reason it changed is worth keeping: `purpose: prefetch`
+    // changes nothing about what the server renders — such a request for `/play` is answered with
+    // the complete document, table and all, while `next-router-prefetch` is answered with a routing
+    // stub. So it IS a document navigation, and the age gate and the CSP both have to treat it as
+    // one. Not minting for it is a separate rule and now lives at the call site in `src/proxy.ts`.
+    assert.equal(isDocumentNavigation(headers({ purpose: 'prefetch', 'sec-fetch-dest': 'document' })), true);
+    assert.equal(isPrefetch(headers({ purpose: 'prefetch' })), true);
+    assert.equal(isRouterPrefetch(headers({ purpose: 'prefetch' })), false);
+  });
+
+  it('separates "nobody asked for this" from "there is no page here"', () => {
+    // The two tests answer different questions and the whole `purpose: prefetch` hole was the
+    // result of one being used for the other's job.
+    assert.equal(isPrefetch(headers({ 'next-router-prefetch': '1' })), true);
+    assert.equal(isRouterPrefetch(headers({ 'next-router-prefetch': '1' })), true);
+    assert.equal(isPrefetch(headers({})), false);
+    assert.equal(isRouterPrefetch(headers({})), false);
+    // Only the literal value counts, so a stray `purpose: navigate` is not a prefetch.
+    assert.equal(isPrefetch(headers({ purpose: 'navigate' })), false);
+  });
+});
+
+/**
+ * `isRouterNavigation` is the age gate's half of the same question, and it exists because the
+ * obvious implementation of it was wrong in a way nothing here could see.
+ *
+ * The gate used to ask `headers.get('rsc') !== null`, which is the header the App Router really
+ * sends — and which Next deletes, along with the rest of its `FLIGHT_HEADERS`, before middleware
+ * runs. A test that builds a `Headers` by hand cannot reproduce that deletion, so the honest thing
+ * to state here is what these assertions are and are not: they pin the DECISION, and the proof
+ * that the decision is being handed the headers it thinks it is belongs to
+ * `scripts/age-gate-audit.mjs`, which clicks a real `<Link>` in a real Chrome against a real
+ * production build. Neither half is sufficient alone. That is the whole lesson of the defect.
+ *
+ * The case that matters most below is the `sec-fetch-dest: empty` one WITHOUT an `rsc` header: it
+ * is the shape a router navigation actually arrives in, and under the old test it was allowed
+ * straight through a gate that was switched on.
+ */
+describe('an in-app router navigation is a navigation for gating, and a prefetch is not', () => {
+  const headers = (entries: Record<string, string>): Headers => new Headers(entries);
+
+  it('accepts the shape a router navigation really arrives in', () => {
+    // No `rsc` header, because Next has already removed it. This is the regression.
+    assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'empty' }), 'GET'), true);
+    assert.equal(
+      isRouterNavigation(
+        headers({ 'sec-fetch-dest': 'empty', 'sec-fetch-mode': 'cors', 'sec-fetch-site': 'same-origin' }),
+        'GET',
+      ),
+      true,
+    );
+    // And still accepts an `rsc` header if some runtime ever stops stripping it.
+    assert.equal(isRouterNavigation(headers({ rsc: '1' }), 'GET'), true);
+  });
+
+  it('refuses a prefetch under either spelling', () => {
+    // Redirecting one of these would put the interstitial into the router cache for a page the
+    // reader never opened, which is a worse failure than not gating it: the prefetch itself
+    // renders nothing.
+    assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'empty', rsc: '1' }), 'GET'), true);
+    assert.equal(
+      isRouterNavigation(headers({ 'sec-fetch-dest': 'empty', 'next-router-prefetch': '1' }), 'GET'),
+      false,
+    );
+    assert.equal(isRouterNavigation(headers({ rsc: '1', 'next-router-prefetch': '1' }), 'GET'), false);
+    // And the other spelling is NOT excluded, because Next answers it with the page rather than
+    // with a stub. See `isRouterPrefetch` for the measurement behind that asymmetry.
+    assert.equal(
+      isRouterNavigation(headers({ 'sec-fetch-dest': 'empty', purpose: 'prefetch' }), 'GET'),
+      true,
+    );
+  });
+
+  it('refuses the requests that are not navigations at all', () => {
+    // A document is a navigation, but it is `isDocumentNavigation`'s to report, not this one's;
+    // the proxy asks both. Subresources are nobody's.
+    assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'document' }), 'GET'), false);
+    assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'image' }), 'GET'), false);
+    assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'script' }), 'GET'), false);
+    assert.equal(isRouterNavigation(headers({}), 'GET'), false);
+  });
+
+  it('refuses a POST, so a Server Action is never answered with a redirect', () => {
+    // A Server Action posts to the page's own URL with `sec-fetch-dest: empty`. Gating one would
+    // break it rather than gate it, and the page it was invoked from was gated already.
+    assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'empty' }), 'POST'), false);
+    assert.equal(isRouterNavigation(headers({ 'sec-fetch-dest': 'empty' }), 'HEAD'), true);
   });
 });
 

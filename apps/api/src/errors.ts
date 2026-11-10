@@ -416,6 +416,13 @@ export interface ErrorHandlerOptions {
    * `@fastify/rate-limit`'s `onRoute` hook never sees it and the global limit does NOT
    * apply. Without this, a caller can hammer nonexistent paths for free — which is
    * exactly what a path scanner does.
+   *
+   * It is a `preHandler` because `setNotFoundHandler` accepts only `preValidation` and
+   * `preHandler`, and that left half the hole open: the CSRF check is an instance
+   * `preValidation` hook, so a `POST` to an unknown path with a bad token was refused a whole
+   * stage before this ran and was never counted. `plugins/security.ts` closes that by counting
+   * from the CSRF hook itself; this stays because it is what counts every OTHER request to a
+   * path that does not exist, including every GET.
    */
   readonly notFoundPreHandler?: preHandlerAsyncHookHandler;
 }

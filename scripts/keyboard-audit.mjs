@@ -108,10 +108,54 @@
  *
  * ## Usage
  *
- *     node scripts/keyboard-audit.mjs [--web http://localhost:3000] [--headful] [--json <path>]
+ *     node scripts/keyboard-audit.mjs [--web http://127.0.0.1:3464] [--start] [--with-api]
+ *                                     [--api http://127.0.0.1:3001] [--headful] [--json <path>]
  *
  * Exits non-zero on any failure, so it is usable as a release gate. Run it against a PRODUCTION
  * build (`next start`): a development build ships extra dev-only overlays that are not what ships.
+ *
+ * ## `--start`, and why this gate ran nowhere until it had one
+ *
+ * For most of this file's life it had no server lifecycle: the RUNBOOK said it "needs a running
+ * production build on :3000 and a running API — it is not started for you", and the mechanical
+ * consequence was that `grep -rl 'test:keyboard' .github/workflows/` matched NOTHING and
+ * `pnpm run verify` did not list it. A gate that only runs when a person remembers is not a gate,
+ * and on a product about to onboard students, keyboard operability is not a thing to leave to
+ * memory. `--start`/`--with-api` are the same lifecycle `scripts/ax-tree-audit.mjs` has, for the
+ * same reason, so this can be one of `verify`'s gates rather than a paragraph in a runbook.
+ *
+ * The port is **3464**, and the whole rest of the map is taken: 3000/3001 are the dev app and the
+ * dev API, 3456 is `test:ax`, 3457 is `test:csp`, 3458/3459 are the age gate's two scopes, 3462 is
+ * `design:contrast`, 3463 is `test:layout` and 3465/3467 are `test:ax`'s third web app and the
+ * corrupting proxy behind it. Two gates sharing a port is a flake that only
+ * appears when somebody runs them at once, which is precisely what `verify` does.
+ *
+ * The API stays on **3001** and that is not a free choice: `apps/web/next.config.ts` freezes the
+ * `/api/*` rewrite destination into `.next/routes-manifest.json` at BUILD time, and a build made
+ * without `PRL_API_REWRITE_ORIGIN` points at `http://localhost:3001`. The browser calls its own
+ * origin, Next proxies to that frozen destination, so an API started anywhere else is an API the
+ * page cannot reach — the live-table journey would then fail with a socket that never opens and
+ * the report would blame the app. `test:ax` starts its API on 3001 for exactly this reason.
+ *
+ * ## Is it stable enough to BLOCK a release?
+ *
+ * Measured, because a flaky release gate is worse than an unwired one — it teaches people to re-run
+ * until green, and then a real failure gets one more `pnpm run verify` instead of a reader. On
+ * 2026-08-26, on this machine, against a production build with `--start --with-api`: **twelve
+ * consecutive runs, every one exit 0, every one exactly 146 checks passed, 1 not-applicable, 0
+ * warnings, 0 failures, 56-59s each.**
+ *
+ * The interesting half is WHY, because "a real hand at a real table" sounds like the definition of
+ * flaky. The cards are random and reach no assertion: the audit takes the first seat and acts first
+ * preflop, so the decision it is driven to is always the same shape — fold / call the blind / raise
+ * to the minimum — and all six of the private-table checks are structural (is it named, is it
+ * tabbable, does the slider move, did the server accept a Fold). Across those twelve runs the
+ * offered-action list and the slider range came back byte-identical every time. What varies is which
+ * two cards are on screen, and nothing here reads them.
+ *
+ * The one intermittency that HAS been seen was the audit's own and is fixed: reading focus on "no
+ * enabled action" caught the in-flight moment when the row is disabled and the browser has blurred
+ * it. It now waits for `.prl-action-bar__idle`. See the comment at that wait.
  *
  * The checkers that are pure — the two matchers, and the route declarations they are driven by —
  * are exported and covered by `scripts/keyboard-audit.test.mjs`, so the run block below is guarded
@@ -121,9 +165,11 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 // The gate's own constants, imported rather than re-typed. `age-gate.ts` is a leaf module with no
 // imports of its own precisely so that things outside the Next runtime can read it, and a second
 // copy of a cookie name here is the failure its header describes: a harness that seeds
@@ -148,6 +194,10 @@ const flag = (name, fallback) => {
 const WEB_ORIGIN = flag('--web', process.env['PRL_WEB_ORIGIN'] ?? 'http://localhost:3000');
 const HEADFUL = args.includes('--headful');
 const JSON_OUT = flag('--json', null);
+const START = args.includes('--start');
+const WITH_API = args.includes('--with-api');
+const API_ORIGIN = flag('--api', process.env['PRL_API_ORIGIN'] ?? 'http://127.0.0.1:3001');
+const READY_TIMEOUT_SECONDS = Number(flag('--ready-timeout', '120'));
 
 /** Chrome, wherever this platform keeps it. */
 const CHROME_CANDIDATES = [
@@ -201,6 +251,28 @@ const skip = (label, detail) => {
   console.log(`${DIM}  -${RESET} ${label} ${DIM}${detail}${RESET}`);
 };
 const section = (title) => console.log(`\n${BOLD}${title}${RESET}`);
+
+/**
+ * True when THIS process started the API, so "the table never came up" is a defect and not an
+ * environment.
+ *
+ * The live-table journey used to report every one of its abort points as a warning — "could not
+ * reach 'Open the table' by keyboard; is the API running?" — and a warning does not fail the run.
+ * That was right while this harness was pointed at somebody else's deployment: it cannot tell a
+ * broken keyboard from an API nobody started, and guessing in the failing direction makes a gate
+ * that cries wolf. Under `--start --with-api` there is nothing to guess. This process started the
+ * API, waited for `/api/v1/health`, and owns the port — so a table that never went live is the
+ * app's problem, and letting it pass as a warning would mean the ONLY journey here that touches a
+ * real socket could go dark without turning the gate red. That is the exact shape of the defect
+ * that made `checkPokerActions` decoration for two releases.
+ */
+const OWNS_API = START && WITH_API;
+
+/** A step of the live journey that did not happen: a failure when we own the stack, else a warning. */
+const unproven = (label, detail) => {
+  if (OWNS_API) bad(label, `${detail} (this run started the API itself, so there is nothing else to blame)`);
+  else warn(label, detail);
+};
 
 // ---------------------------------------------------------------------------
 // The age gate
@@ -1246,6 +1318,180 @@ async function auditNarrowViewport(page) {
 }
 
 /**
+ * A control the keyboard reached must not be delivered UNDERNEATH the sticky bar.
+ *
+ * ## The defect this exists for
+ *
+ * The bar is `position: sticky`, so `scroll-padding-block-start` on the root is the only thing
+ * that stops the browser scrolling a newly focused control to y=0 and leaving it behind the
+ * glass. `apps/web/src/styles/nav.css` derived that padding from `--prl-pillbar-h`, which
+ * described a ONE-ROW bar — and below 382px `.prl-shell__header-tools` wraps, so the bar is two
+ * rows and 129px tall while the padding was 92px. Every control the browser had to scroll up to
+ * arrived with its top edge at exactly 92px and 37px of it behind the bar; a 25px link arrived
+ * entirely behind it. Measured on `/review`, `/lab`, `/record` and `/learn/pot-odds`.
+ *
+ * ## Why 360x640 and not the 390x844 the section above uses
+ *
+ * Because at 390 the bar does not wrap. The narrow-viewport journey has always run nine pixels
+ * past the width where this is visible, which is why every keyboard gate in this repo passed over
+ * it. 360x640 is the most common Android portrait size and it is inside the wrapped range; the
+ * sheet journey above keeps 390 so the two are not testing the same width.
+ *
+ * ## Why backwards
+ *
+ * Forward tabbing from the top mostly walks INTO the page, and the browser only scrolls when it
+ * has to — a control already on screen is left where it is, and the padding is never consulted.
+ * Scrolling to the bottom and walking back up is what makes every stop a scroll-into-view, which
+ * is the path a reader takes when they Shift+Tab out of the footer. It is also the path that was
+ * broken.
+ *
+ * The skip link is excluded by ancestry rather than by name: it is `position: fixed` at
+ * `--prl-z-toast` (500) against the bar's 200, so it is painted OVER the bar and its geometry
+ * says "under" while a reader sees it perfectly well.
+ */
+async function auditStickyBarOcclusion(page) {
+  section(`Narrow viewport — nothing focusable lands under the bar  ${DIM}360x640${RESET}`);
+  await page.send('Emulation.setDeviceMetricsOverride', {
+    width: 360,
+    height: 640,
+    deviceScaleFactor: 2,
+    mobile: true,
+  });
+  const FOCUSABLE =
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+    'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+  try {
+    for (const path of ['/review', '/lab', '/record', '/learn/pot-odds']) {
+      await page.goto(`${WEB_ORIGIN}${path}`);
+
+      /**
+       * Scrolling is forced instant for the length of this walk.
+       *
+       * `reset.css` sets `scroll-behavior: smooth` on the root under `prefers-reduced-motion:
+       * no-preference`, so every Tab-driven scroll is asynchronous and a rectangle read straight
+       * after the key is a rectangle from mid-flight. The first version of this check measured
+       * mid-flight and produced both false passes and a false failure ("top=-22.9"). The property
+       * under test is `scroll-padding-block-start`, not the animation, and an instant scroll
+       * consults exactly the same padding.
+       *
+       * Then: to the bottom of the page, and onto the last control that is really on screen. The
+       * 4px floor is not fussiness — the last focusable in the document is a theme radio wearing
+       * `.prl-visually-hidden`, a 1px box, and focusing it took the page back to y=0, so the walk
+       * started at the top, never scrolled, and reported a confident pass.
+       */
+      const started = await page.evaluate(
+        `(() => {
+          const root = document.documentElement;
+          root.style.scrollBehavior = 'auto';
+          if (document.querySelector('.prl-shell__header') === null) {
+            return { ok: false, why: 'no sticky bar on this page' };
+          }
+          window.scrollTo(0, root.scrollHeight);
+          const visible = [...document.querySelectorAll(${JSON.stringify(FOCUSABLE)})].filter((element) => {
+            const box = element.getBoundingClientRect();
+            return box.width >= 4 && box.height >= 4;
+          });
+          const last = visible.at(-1);
+          if (last === undefined) return { ok: false, why: 'no visible focusable control' };
+          last.focus();
+          window.scrollTo(0, root.scrollHeight);
+          return { ok: true, scrollY: Math.round(window.scrollY), viewport: window.innerHeight };
+        })()`,
+      );
+      if (started.ok !== true) {
+        bad(`Sticky bar: ${path}`, `${started.why}, so nothing could be walked`);
+        continue;
+      }
+      // A walk that begins at the top of a long page never scrolls, so it never consults the
+      // padding. Refuse rather than report a pass over it.
+      if (started.scrollY < started.viewport) {
+        bad(
+          `Sticky bar: ${path}`,
+          `the page would not scroll to its end before the walk (scrollY ${started.scrollY}), so a ` +
+            'backwards walk from here proves nothing',
+        );
+        continue;
+      }
+
+      const offenders = [];
+      let stops = 0;
+      let barHeight = 0;
+      let padding = '';
+      for (let step = 0; step < 45; step += 1) {
+        await page.press('Tab', { shift: true });
+        const stop = await page.evaluate(
+          `(() => {
+            const element = document.activeElement;
+            const header = document.querySelector('.prl-shell__header');
+            if (element === null || header === null || element === document.body) return null;
+            if (header.contains(element)) return { skip: true };
+            const style = getComputedStyle(element);
+            // Painted OVER the bar rather than behind it — the skip link is \`position: fixed\` at
+            // z 500 against the bar's 200 — so its geometry says "under" while a reader sees it.
+            if (
+              style.position === 'fixed' &&
+              Number(style.zIndex) > Number(getComputedStyle(header).zIndex || 0)
+            ) {
+              return { skip: true };
+            }
+            const box = element.getBoundingClientRect();
+            if (box.width < 4 || box.height < 4) return { skip: true };
+            const bar = header.getBoundingClientRect();
+            return {
+              name: (element.textContent ?? element.getAttribute('aria-label') ?? '').trim().slice(0, 44),
+              top: Number(box.top.toFixed(1)),
+              bottom: Number(box.bottom.toFixed(1)),
+              height: Number(box.height.toFixed(1)),
+              barBottom: Number(bar.bottom.toFixed(1)),
+              barHeight: Number(bar.height.toFixed(1)),
+              padding: getComputedStyle(document.documentElement).scrollPaddingBlockStart,
+            };
+          })()`,
+        );
+        if (stop === null) break;
+        if (stop.skip === true) continue;
+        stops += 1;
+        barHeight = stop.barHeight;
+        padding = stop.padding;
+        // Off the bottom of the screen is a different question and not this check's business. A
+        // control whose top edge is above the bar's bottom edge, while any of it is on screen, is.
+        if (stop.top < stop.barBottom - 1 && stop.bottom > 0) {
+          offenders.push(stop);
+        }
+      }
+
+      // A walk that reached nothing is not a pass: a route that stopped offering controls, or a
+      // Shift+Tab that stopped moving focus, would otherwise report success over zero stops.
+      if (stops === 0) {
+        bad(`Sticky bar: ${path}`, 'Shift+Tab reached no control outside the bar, so nothing was checked');
+      } else if (offenders.length === 0) {
+        ok(
+          `Sticky bar: ${path} — ${stops} stop(s) walked backwards, none behind the bar`,
+          `bar ${barHeight}px, scroll-padding ${padding}`,
+        );
+      } else {
+        bad(
+          `Sticky bar: ${path}`,
+          `${offenders.length} of ${stops} stop(s) were scrolled to underneath the sticky bar. The ` +
+            `bar is ${barHeight}px here and the root's \`scroll-padding-block-start\` is ${padding} — ` +
+            'see apps/web/src/styles/nav.css. ' +
+            offenders
+              .slice(0, 3)
+              .map(
+                (o) =>
+                  `"${o.name}" top=${o.top}, bar ends at ${o.barBottom} ` +
+                  `(${(o.barBottom - o.top).toFixed(1)}px of a ${o.height}px control behind it)`,
+              )
+              .join('; '),
+        );
+      }
+    }
+  } finally {
+    await page.send('Emulation.clearDeviceMetricsOverride');
+  }
+}
+
+/**
  * The one journey that cannot be done with a fixture: sitting down and acting.
  *
  * ## Why it is here and not left to the fixture route
@@ -1257,8 +1503,10 @@ async function auditNarrowViewport(page) {
  * is one of the things the audit specifically asked for, and the second half of it needs a table
  * that is really dealing.
  *
- * So this walks the product's own path with the keyboard only: open the table, take the seat, deal,
- * and then act — each step by tabbing to a control and pressing Enter, never by clicking. If any
+ * So this walks the product's own path with the keyboard only: "Deal me in", which opens the table,
+ * takes the seat and deals by itself, and then act — each press by tabbing to a control and pressing
+ * Enter, never by clicking. Then the manual controls that "Deal me in" no longer needs for the first
+ * hand, because every later hand still does: stand up, take the seat back, deal the next hand. If any
  * step does not arrive, the journey reports that it could not be completed rather than passing.
  *
  * ## What it needs
@@ -1296,34 +1544,22 @@ async function playOneHandByKeyboard(page) {
     return false;
   };
 
-  const opened = await activateByLabel(/^open the table$/i);
+  const opened = await activateByLabel(/^deal me in$/i);
   if (!opened.activated) {
-    warn('Private table', 'could not reach "Open the table" by keyboard; is the API running?');
+    unproven('Private table', 'could not reach "Deal me in" by keyboard; is the API running?');
     return;
   }
-  ok('Private table: "Open the table" reached and activated by keyboard');
+  ok('Private table: "Deal me in" reached and activated by keyboard');
 
   const liveSocket = await waitFor(
     '/Take seat|Deal the next hand|Stand up/.test(document.body.innerText)',
     25,
   );
   if (!liveSocket) {
-    warn('Private table', 'the socket did not go live within 25s; the rest of this journey is unproven');
+    unproven('Private table', 'the socket did not go live within 25s; the rest of this journey is unproven');
     return;
   }
   ok('Private table: the socket went live');
-
-  const seated = await activateByLabel(/take seat/i);
-  if (seated.activated) ok(`Private table: "${seated.name.trim()}" reached and activated by keyboard`);
-  else warn('Private table', 'no free seat to take by keyboard');
-
-  await waitFor('/Deal the next hand/.test(document.body.innerText)', 20);
-  const dealt = await activateByLabel(/deal the next hand/i);
-  if (!dealt.activated) {
-    warn('Private table', 'could not reach "Deal the next hand" by keyboard');
-    return;
-  }
-  ok('Private table: "Deal the next hand" reached and activated by keyboard');
 
   // The same two matchers the per-route check uses, for the same reason: a hand-rolled regex in a
   // template literal here is where the `\b`-as-BACKSPACE half of the original defect lived, and a
@@ -1343,7 +1579,7 @@ async function playOneHandByKeyboard(page) {
 
   const myTurn = await waitFor(ANY_ENABLED_ACTION, 45);
   if (!myTurn) {
-    warn('Private table', 'the hand never reached this seat within 45s');
+    unproven('Private table', 'the hand never reached this seat within 45s');
     return;
   }
   ok('Private table: the hand reached this seat');
@@ -1441,6 +1677,59 @@ async function playOneHandByKeyboard(page) {
   );
   if (!survived.isBody) ok('Private table: focus survived the table update the action caused');
   else warn('Private table', 'acting dropped focus to <body>; a keyboard user restarts from the top');
+
+  await playManualStepsByKeyboard(activateByLabel, waitFor);
+}
+
+/**
+ * Stand up, take the seat back and deal the next hand — by keyboard, between hands.
+ *
+ * These three used to be proven on the way IN, because a first hand needed all of them. "Deal me in"
+ * now sends the seat and the deal itself, so without this they would be proven nowhere — and they
+ * are the only way to every hand after the first, and to any hand at a table reached by invite code.
+ *
+ * Done after the fold so the table is between hands, which is the one state where all three are
+ * offered. The hand it deals is left to the server's turn timer: every run of this journey opens a
+ * fresh Legends match (`openPracticeRoom` never reuses one), so no later run sits down at it.
+ */
+async function playManualStepsByKeyboard(activateByLabel, waitFor) {
+  const between = await waitFor(
+    `[...document.querySelectorAll('button')].some((b) => /^Deal the next hand$/.test(b.textContent.trim()) && !b.disabled)`,
+    90,
+  );
+  if (!between) {
+    unproven(
+      'Private table',
+      'the folded hand never finished, so the between-hands controls were not reached',
+    );
+    return;
+  }
+
+  const stood = await activateByLabel(/^stand up$/i);
+  if (!stood.activated) {
+    bad('Private table: manual steps', 'could not reach and activate "Stand up" by keyboard');
+    return;
+  }
+  ok('Private table: "Stand up" reached and activated by keyboard');
+
+  await waitFor('/Take seat \\d+/.test(document.body.innerText)', 20);
+  const seated = await activateByLabel(/^take seat \d+$/i);
+  if (!seated.activated) {
+    bad('Private table: manual steps', 'could not reach and activate "Take seat" by keyboard');
+    return;
+  }
+  ok(`Private table: "${seated.name.trim()}" reached and activated by keyboard`);
+
+  await waitFor('/Deal the next hand/.test(document.body.innerText)', 20);
+  const dealt = await activateByLabel(/^deal the next hand$/i);
+  if (!dealt.activated) {
+    bad('Private table: manual steps', 'could not reach and activate "Deal the next hand" by keyboard');
+    return;
+  }
+  const started = await waitFor('/A hand is in progress/.test(document.body.innerText)', 20);
+  if (started) ok('Private table: "Deal the next hand", pressed with Enter, dealt a hand');
+  else
+    bad('Private table: manual steps', '"Deal the next hand" was activated by keyboard and no hand started');
 }
 
 // ---------------------------------------------------------------------------
@@ -1475,7 +1764,7 @@ export const ROUTES = [
     extra: checkPokerActions,
     actionControls: 'required',
   },
-  // The live table before anybody sits down: "Open the table", and nothing to decide. Declared
+  // The live table before anybody sits down: "Deal me in", and nothing to decide. Declared
   // `until-seated` so that finding no actions is recorded as not-applicable instead of passing
   // quietly — and so that it can never stand in for the seated case, which `playOneHandByKeyboard`
   // is the only thing here that reaches.
@@ -1484,6 +1773,150 @@ export const ROUTES = [
   { title: 'Hand review', path: '/review', extra: checkDisclosures },
   { title: 'Your record', path: '/record' },
 ];
+
+// ---------------------------------------------------------------------------
+// Servers
+// ---------------------------------------------------------------------------
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * Refuses to go on when something already answers where a server this run starts will be polled.
+ *
+ * `waitUntilReady` accepts the first 200 from its URL and cannot tell its own child's answer from a
+ * stranger's. The `prl-app` marker check below catches a stranger that is not this app, and that is
+ * all it can catch: a sibling checkout's `next start` carries the same shell class. Measured on
+ * 2026-11-10 with a production `next start` from this checkout started by hand on :3521 and a
+ * `node:http` page answering 200 on :3529: `--start --with-api --web http://127.0.0.1:3521 --api
+ * http://127.0.0.1:3529` printed "starting the API on http://127.0.0.1:3529..." and "starting the web
+ * app on http://127.0.0.1:3521...", passed 133 checks against servers it did not start, and failed one
+ * with "this run started the API itself, so there is nothing else to blame" while the API it blamed
+ * was the `node:http` page.
+ *
+ * It CONNECTS to where the poll will go, rather than binding 127.0.0.1 as `scripts/a11y-audit.mjs`
+ * first did. Measured on macOS with Node 24.18: a bind of 127.0.0.1 succeeds beside a listener on
+ * the wildcard address, so it called a `node:http` server free on its default address, on `0.0.0.0`
+ * and on `::` (`lsof`: `TCP *:3533`), and refused only one bound to 127.0.0.1; a connect to
+ * 127.0.0.1 reached all four. `next start` listens on the wildcard (`TCP *:3521`). A second `next
+ * start` there exits `EADDRINUSE :::3521`; beside a stranger on 127.0.0.1 alone it binds `*:3522` and
+ * stays up while the poll reaches the stranger. Only ECONNREFUSED counts as free, so a probe that
+ * cannot decide refuses.
+ */
+async function refuseOccupiedPort(url) {
+  const { hostname, port, protocol } = new URL(url);
+  const host = hostname.replace(/^\[(.*)\]$/, '$1');
+  const target = { host, port: Number(port || (protocol === 'https:' ? 443 : 80)) };
+  const outcome = await new Promise((done) => {
+    const socket = connect(target);
+    socket.setTimeout(2000);
+    socket.once('connect', () => {
+      socket.destroy();
+      done('accepted');
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      done('was neither accepted nor refused within 2s');
+    });
+    socket.once('error', (error) =>
+      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
+    );
+  });
+  if (outcome === 'refused') return;
+  const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
+  throw new Error(
+    `${seen} on ${host}:${String(target.port)}. --start drives a server this run started, so it ` +
+      'will not score one it did not. Stop it, pass another --web/--api, or leave out --start to ' +
+      'drive that server on purpose.',
+  );
+}
+
+/** The port `next start` should bind, taken from the origin this audit will drive. */
+function portFromOrigin(origin) {
+  const port = new URL(origin).port;
+  return port === '' ? '3000' : port;
+}
+
+/**
+ * A child server this script owns and must clean up.
+ *
+ * The SIXTH copy of this class, and copied on purpose. `scripts/ax-tree-audit.mjs` carries the
+ * argument in full and the others cross-reference it: the alternative is a shared module that five
+ * release gates import, so that a mistake in it takes out contrast, markup, the accessibility tree,
+ * the age gate, the painted text and now the keyboard at once. Sixty lines of duplication buys six
+ * gates that fail independently, which is the property `verify` is built around.
+ *
+ * The behaviour that matters and is easy to get wrong: `pnpm --filter ... start` is a WRAPPER, so
+ * killing the wrapper leaves the real server holding the port, and the orphan then answers the next
+ * run — which audits a build nobody meant to test, from a checkout that may since have changed.
+ * Detached, so the child gets its own process group; signalled by NEGATIVE pid, so the group goes
+ * with it; ESRCH tolerated, because a server that already exited is the outcome asked for.
+ */
+class ManagedServer {
+  constructor(label, args, readyUrl, env) {
+    this.label = label;
+    this.args = args;
+    this.readyUrl = readyUrl;
+    this.env = env;
+    this.child = null;
+    this.output = [];
+    this.exited = null;
+  }
+
+  start() {
+    this.child = spawn('pnpm', this.args, {
+      cwd: REPO_ROOT,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+      env: { ...process.env, ...this.env },
+    });
+    const keep = (chunk) => {
+      // Kept, not printed: a healthy Next boot is twenty lines of noise, and it is only wanted when
+      // the server fails to come up.
+      this.output.push(chunk.toString());
+      if (this.output.length > 200) this.output.shift();
+    };
+    this.child.stdout.on('data', keep);
+    this.child.stderr.on('data', keep);
+    this.child.on('exit', (code, signal) => {
+      this.exited = signal ?? code;
+    });
+  }
+
+  async waitUntilReady(timeoutSeconds) {
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    for (;;) {
+      if (this.exited !== null) {
+        throw new Error(
+          `${this.label} exited (${this.exited}) before it was ready:\n${this.output.join('')}`,
+        );
+      }
+      try {
+        const response = await fetch(this.readyUrl, { signal: AbortSignal.timeout(2000) });
+        // Any HTTP answer means it is listening; a 404 on the ready URL is still a live server.
+        if (response.status > 0) return;
+      } catch {
+        // Not up yet.
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `${this.label} was not ready at ${this.readyUrl} within ${timeoutSeconds}s:\n${this.output.join('')}`,
+        );
+      }
+      await delay(300);
+    }
+  }
+
+  stop() {
+    if (this.child === null || this.child.pid === undefined) return;
+    try {
+      process.kill(-this.child.pid, 'SIGTERM');
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) {
+        console.log(`${DIM}  could not stop ${this.label}: ${error.message}${RESET}`);
+      }
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Run
@@ -1599,12 +2032,101 @@ async function main() {
     `${DIM}  Real Chrome, real Input.dispatchKeyEvent. This is the check scripts/a11y-audit.mjs says it cannot do.${RESET}`,
   );
 
+  // `--with-api` alone is a caller who believes they asked for an API and did not get one. Refusing
+  // beats the alternative this repository keeps finding: a flag that quietly does nothing, and a
+  // green run over a live-table journey that never had a server behind it.
+  if (WITH_API && !START) {
+    console.error(
+      `\n${RED}--with-api only means anything with --start; without it there is no API to start.${RESET}\n`,
+    );
+    process.exit(1);
+  }
+  if (!Number.isFinite(READY_TIMEOUT_SECONDS) || READY_TIMEOUT_SECONDS <= 0) {
+    console.error(`\n${RED}--ready-timeout must be a positive number of seconds.${RESET}\n`);
+    process.exit(1);
+  }
+
+  const servers = [];
+  let exitCode = 0;
+
   try {
+    if (START) {
+      for (const url of WITH_API ? [WEB_ORIGIN, API_ORIGIN] : [WEB_ORIGIN]) await refuseOccupiedPort(url);
+      if (WITH_API) {
+        // Inherit `DATABASE_URL` and the rest from the parent, exactly as `ax-tree-audit.mjs`
+        // does, and do NOT force `NODE_ENV=production`: that refuses the development secrets in
+        // `.env`, the API then serves an error page, and the live-table journey below scores it.
+        //
+        // `PUBLIC_WEB_ORIGIN` must be THIS audit's origin. It is one allowlist for CORS and for the
+        // WebSocket `Origin` check, and `.env` holds a developer's `http://localhost:3000`; with it
+        // inherited, the upgrade from `http://127.0.0.1:3464` is answered `forbidden` and the
+        // socket never opens. Measured on `ax-tree-audit.mjs` first, where the table simply said
+        // "You do not have access to that. (forbidden)".
+        const api = new ManagedServer(
+          'api',
+          ['--filter', '@prl/api', 'start'],
+          new URL('/api/v1/health', API_ORIGIN).toString(),
+          {
+            PORT: portFromOrigin(API_ORIGIN),
+            HOST: '127.0.0.1',
+            PUBLIC_WEB_ORIGIN: new URL(WEB_ORIGIN).origin,
+          },
+        );
+        servers.push(api);
+        console.log(`${DIM}  starting the API on ${API_ORIGIN}...${RESET}`);
+        api.start();
+        await api.waitUntilReady(READY_TIMEOUT_SECONDS);
+      }
+      const web = new ManagedServer('web', ['--filter', '@prl/web', 'start'], WEB_ORIGIN, {
+        NODE_ENV: 'production',
+        PRL_API_ORIGIN: API_ORIGIN,
+        PORT: portFromOrigin(WEB_ORIGIN),
+      });
+      servers.push(web);
+      console.log(`${DIM}  starting the web app on ${WEB_ORIGIN}...${RESET}`);
+      web.start();
+      await web.waitUntilReady(READY_TIMEOUT_SECONDS);
+    }
+
     const probe = await fetch(WEB_ORIGIN, { headers: { accept: 'text/html' } }).catch(() => null);
     if (probe === null || !probe.ok) {
-      console.error(`\n${RED}${WEB_ORIGIN} is not serving. Start it first:${RESET}`);
+      console.error(`\n${RED}${WEB_ORIGIN} is not serving. Start it first, or pass --start:${RESET}`);
       console.error(`${DIM}  pnpm --filter @prl/web build && pnpm --filter @prl/web start${RESET}\n`);
-      process.exit(1);
+      throw new Error(`${WEB_ORIGIN} is not serving`);
+    }
+
+    // Is this even our app? Asked before a single key is pressed.
+    //
+    // This harness does not start the server it measures, and the default origin is
+    // `localhost:3000` — the most contended port on any developer's machine. An adversarial review
+    // ran this exactly as documented, attached to an unrelated process holding that port, and got
+    // thirty specific, product-shaped failures out of it: "42 focusable elements never reached",
+    // "no visible menu trigger at 390px". Every one was true of somebody else's application, and
+    // nothing in the output said so.
+    //
+    // The failing direction is survivable — somebody investigates and finds the port. The PASSING
+    // direction is the dangerous one: a green keyboard audit against a page that happens to have a
+    // reachable tab order is a gate reporting on nothing at all, which is the shape this repository
+    // spends most of its guards refusing.
+    //
+    // The marker is the shell class the root layout always emits. It is not a version and does not
+    // need to be: the question is "is this the app", not "is this the build". `age-gate-audit.mjs`
+    // answers the build question separately, from `.next/BUILD_ID`, and refuses `next dev`.
+    //
+    // `--start` does not retire this check, it sharpens it. `next start` binds the port it is given
+    // or exits, so a foreign process already on 3464 makes THIS run's web server die and the audit
+    // then measures the squatter — which is the same failure with a different first step. Measured
+    // on 2026-08-26 against an unrelated Vite app holding :3000 on this machine: exit 1, "No
+    // 'prl-app' or 'prl-shell' in the landing HTML (828 bytes)", zero keys pressed.
+    const landing = await probe.text();
+    if (!landing.includes('prl-app') && !landing.includes('prl-shell')) {
+      console.error(`\n${RED}${WEB_ORIGIN} is serving, but it is not Poker Risk Lab.${RESET}`);
+      console.error(
+        `${DIM}  No 'prl-app' or 'prl-shell' in the landing HTML (${landing.length} bytes). ` +
+          `Something else is on that port.${RESET}`,
+      );
+      console.error(`${DIM}  Pass --web <origin>, or set PRL_WEB_ORIGIN.${RESET}\n`);
+      throw new Error(`${WEB_ORIGIN} is serving something that is not Poker Risk Lab`);
     }
 
     // Said before anything else, and said in colour: a run whose routes were all reached past a
@@ -1624,18 +2146,33 @@ async function main() {
       );
     }
 
+    // A sweep of nothing is not a pass, and this is the cheap half of saying so: an empty `ROUTES`
+    // — a merge that lost the array, an edit that left it behind a filter — would otherwise walk no
+    // page, press no key, and print a summary of zero failures.
+    if (ROUTES.length === 0) {
+      throw new Error('the route list is empty, so this run would audit no page at all');
+    }
+
+    let journeys = 0;
     await withChrome(async (page) => {
       for (const route of ROUTES) {
+        journeys += 1;
         try {
           await auditRoute(page, route);
         } catch (error) {
           bad(`${route.title}: audit`, error instanceof Error ? error.message : String(error));
         }
       }
+      journeys += 3;
       try {
         await auditNarrowViewport(page);
       } catch (error) {
         bad('Narrow viewport: audit', error instanceof Error ? error.message : String(error));
+      }
+      try {
+        await auditStickyBarOcclusion(page);
+      } catch (error) {
+        bad('Sticky bar: audit', error instanceof Error ? error.message : String(error));
       }
       try {
         await playOneHandByKeyboard(page);
@@ -1643,10 +2180,19 @@ async function main() {
         bad('Private table: audit', error instanceof Error ? error.message : String(error));
       }
     });
+    // The expensive half. `withChrome` swallowing its callback would leave `journeys` at zero, and
+    // so would a browser that opened and closed without driving anything.
+    if (journeys === 0) bad('scope', 'no journey ran, so nothing was audited');
   } catch (error) {
     console.error(`\n${RED}${error instanceof Error ? error.message : String(error)}${RESET}\n`);
-    process.exit(1);
+    exitCode = 1;
+  } finally {
+    // Before any `process.exit`, because `process.exit` does not run a `finally`. That is the
+    // difference between this and an orphaned `next start` holding 3464 until somebody reboots.
+    for (const server of servers) server.stop();
   }
+
+  if (exitCode !== 0) process.exit(exitCode);
 
   if (JSON_OUT !== null) {
     await writeFile(JSON_OUT, `${JSON.stringify({ origin: WEB_ORIGIN, record }, null, 2)}\n`);
@@ -1667,6 +2213,13 @@ async function main() {
     console.log(`  ${RED}${failures.length} failure(s)${RESET}`);
     for (const failure of failures) console.log(`${RED}    - ${failure}${RESET}`);
     console.log('');
+    process.exit(1);
+  }
+  // Zero failures over zero checks reads exactly like a clean run, and is the report this file has
+  // already produced once from a matcher that could not fire. The route list being non-empty is not
+  // the same claim: every route can load and every check can still decline to examine anything.
+  if (passed === 0) {
+    console.log(`\n${RED}${BOLD}FAIL — no check ran at all, so nothing was proven.${RESET}\n`);
     process.exit(1);
   }
   console.log(`${GREEN}${BOLD}\nKeyboard audit passed.${RESET}\n`);

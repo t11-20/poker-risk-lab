@@ -30,13 +30,51 @@
  *
  * ## `promote` is a verifier, not a deployer
  *
- * There is no container registry and no deployment target in this project today.
- * `promote` therefore checks the one thing that can be checked here — that the
- * digest about to go to production is byte-for-byte the digest staging tested,
- * and that staging's verification actually passed — and then says so and stops.
- * It does not push, it does not deploy, and it does not pretend to. When a
- * registry and a target exist, the deploy step goes AFTER this check and consumes
- * its output; the check itself does not change.
+ * There is no deployment target in this project today. `promote` therefore checks
+ * what can be checked here — that the digest about to go to production is
+ * byte-for-byte the digest staging tested, that staging's verification actually
+ * passed, and, when the artefacts were pushed, that the registry still serves
+ * those exact bytes under those exact digests — and then says so and stops. It
+ * does not deploy and it does not pretend to. When a target exists, the deploy
+ * step goes AFTER this check and consumes its output; the check itself does not
+ * change.
+ *
+ * ## And a second question, which is not about the bytes at all
+ *
+ * `promote` also runs `scripts/alert-preflight.mjs`. Everything else here asks "are
+ * these the bytes staging tested"; that one asks "if these bytes misbehave, does
+ * anybody find out". They are separate questions and only the second one can be
+ * answered wrongly in a way that looks completely healthy: a deployment whose
+ * `PRL_ALERT_*` variables still hold the rehearsal defaults passes `alerts:verify`
+ * (which renders and asserts against those same defaults), starts an Alertmanager
+ * that routes by severity exactly as designed, and posts every page to a sink that
+ * ceased to exist when the verification run ended. Nothing in band can report that,
+ * because the channel that would carry the report is the channel that is broken.
+ *
+ * ## The registry, and being precise about what it bought
+ *
+ * `pnpm run release:artifacts --push` publishes both artefacts to a registry
+ * (`deploy/registry/docker-compose.registry.yml` runs one on loopback) and
+ * records the digest the registry returned beside the local BuildKit one. Where a
+ * manifest carries those references, this script deploys THEM — `pull_policy`
+ * becomes `always`, because a digest pull cannot return different bytes — and
+ * verifies before doing so that the registry really serves each digest, by
+ * fetching the manifest and re-hashing it here.
+ *
+ * That closes "cannot be promoted across machines": the artefact now has a
+ * reference another machine can resolve, and resolving it can only produce these
+ * bytes or an error. It does NOT by itself make the artefact attested. A local
+ * registry is content-addressed storage, not a notary: it can prove two parties
+ * hold the same bytes and it cannot say where they came from.
+ *
+ * Since 2026-08-25 the digests ARE signed — `pnpm run release:sign` signs each one
+ * with cosign and attests a CycloneDX SBOM to it, and
+ * `pnpm run security:image-provenance` verifies both against the committed public
+ * key. That is a separate command and a separate record
+ * (`deploy/staging/release-signatures.json`); nothing in THIS file signs, verifies
+ * or consults a signature, so `promote` still prints the split rather than letting
+ * a green tick imply the larger claim. What the signature adds and what it still
+ * does not is `deploy/signing/README.md`.
  *
  * ## What this does NOT prove
  *
@@ -79,6 +117,7 @@ import { request as httpsRequest } from 'node:https';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DIGEST, REGISTRY_DIGEST_REFERENCE, verifyRegistryDigest } from './registry-digest.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -118,6 +157,9 @@ const ATTESTATION_SCHEMA = 'prl.staging-verified.v1';
 /** A deployable image reference: a name with a content digest and no tag doing the work. */
 const DIGEST_REFERENCE = /^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$/;
 
+/** The services this stack deploys from the manifest, in the order they are reported. */
+const RELEASE_SERVICES = ['api', 'web'];
+
 /**
  * How long the local CA and its leaf are good for.
  *
@@ -137,7 +179,8 @@ ${bold('pnpm run staging')} — the production-shaped rehearsal stack
     smoke      run the smoke test against the running stack
     logs       tail the stack's logs
     down       stop the stack
-    promote    verify a digest is the one staging tested (does NOT deploy)
+    promote    verify a digest is the one staging tested, and that this deployment
+               has a real paging destination (does NOT deploy)
 
   Options:
     --manifest <path>  release manifest to read   (default ${DEFAULTS.manifest})
@@ -159,6 +202,20 @@ ${bold('pnpm run staging')} — the production-shaped rehearsal stack
   Secrets live in deploy/staging/.env.staging and certificate material in
   deploy/staging/tls/. Both are gitignored and dockerignored; neither is ever
   baked into an image.
+
+  If the manifest carries registry references — \`pnpm run release:artifacts --push\`
+  writes them — \`up\` verifies each digest against the registry and then deploys
+  the registry reference with \`pull_policy: always\`, and \`promote\` reports the
+  artefacts as promotable across machines. With no registry references, or with a
+  registry that does not answer, everything falls back to the local digests and
+  \`pull_policy: never\`, which is the behaviour this stack has always had.
+
+  \`promote\` also runs \`pnpm run alerts:preflight\`, which refuses a paging
+  destination that is a placeholder, malformed, missing a credential or routed to a
+  receiver with nothing in it. Run it on its own first — it needs no stack:
+
+      pnpm run alerts:preflight
+      pnpm run alerts:preflight -- --handshake   # also prove the relay accepts the credentials
 
   Exit codes: 0 success, 1 failure or a refused promotion.
 `;
@@ -318,6 +375,55 @@ function compose(args, options = {}) {
 }
 
 /**
+ * The HSTS policy `deploy/staging/nginx.conf` sets, and the path it is probed on.
+ *
+ * These two constants are a pair and they exist because of a real defect. The
+ * check used to probe `/api/v1/health`, read `res.headers`, and tick as soon as
+ * *something* came back. Two things were wrong with that:
+ *
+ *   * `/api/v1/health` is an API route, and the API sets its own HSTS through
+ *     helmet whenever `NODE_ENV=production` — which staging is. nginx's
+ *     `add_header` APPENDS, so every `/api/*` response carried two headers and a
+ *     browser obeyed only the first (RFC 6797 §8.1), which was the API's
+ *     `includeSubDomains` variant. The proxy's deliberate no-`includeSubDomains`
+ *     policy was in force on the page path and silently overridden on the API
+ *     path.
+ *   * Because the API was answering, the check would have ticked green with the
+ *     `add_header` line deleted from nginx.conf entirely. It was not testing the
+ *     proxy at all. Its own failure message — "the app cannot set it; only the
+ *     TLS terminator knows" — was the false claim that hid the defect.
+ *
+ * So: probe a path the API does not serve, and assert EXACTLY ONE header with
+ * EXACTLY the expected value. `/` is the page server (nginx's `location /`), and
+ * `nginx.conf` now carries `proxy_hide_header Strict-Transport-Security` so the
+ * terminator really is the single source on every path.
+ *
+ * HSTS_EXPECTED must stay in step with the `add_header` line in
+ * `deploy/staging/nginx.conf`. If you change one, this check fails until you
+ * change the other, which is the intended coupling.
+ */
+export const HSTS_PROBE_PATH = '/';
+export const HSTS_EXPECTED = 'max-age=31536000';
+
+/**
+ * Every `Strict-Transport-Security` value in a raw header list, in wire order.
+ *
+ * `res.rawHeaders` is a flat [name, value, name, value, …] array that preserves
+ * duplicates; `res.headers` folds them into one comma-joined string, which is
+ * exactly the information this check needs and cannot get there. Exported so the
+ * test can drive the duplicate case without a running proxy.
+ */
+export function hstsFromRawHeaders(rawHeaders) {
+  const values = [];
+  const list = Array.isArray(rawHeaders) ? rawHeaders : [];
+  for (let i = 0; i + 1 < list.length; i += 2) {
+    if (String(list[i]).toLowerCase() === 'strict-transport-security')
+      values.push(String(list[i + 1]).trim());
+  }
+  return values;
+}
+
+/**
  * Compose argv that restarts nginx so it re-reads the bind-mounted certificate.
  *
  * `staging init` can renew the leaf while this stack is already up. The cert
@@ -378,12 +484,15 @@ function writeEnvFile(entries) {
     '# of every image layer by .dockerignore.',
     '#',
     '# Every variable in docker-compose.staging.yml is required and none has a',
-    '# default, so this file has to exist before any compose command against that',
+    '# default — bar PRL_PULL_POLICY, which is not a secret and whose default is the',
+    '# safe value — so this file has to exist before any compose command against that',
     '# file will run. That is deliberate: a defaulted secret is a secret in a public',
     '# repository that works.',
     '#',
-    '# PRL_API_IMAGE and PRL_WEB_IMAGE are rewritten from the release manifest on',
-    '# every `staging up`. Editing them by hand defeats the point of the manifest.',
+    '# PRL_API_IMAGE, PRL_WEB_IMAGE and PRL_PULL_POLICY are rewritten from the release',
+    '# manifest on every `staging up`: the images are the local digests, or the registry',
+    '# ones with pull_policy `always` where the manifest carries verified registry',
+    '# references. Editing them by hand defeats the point of the manifest.',
     '',
   ].join('\n');
   const body = [...entries].map(([key, value]) => `${key}=${value}`).join('\n');
@@ -577,6 +686,13 @@ function certificateDaysRemaining() {
  * this process starts before the CA exists on a first run. Trusting exactly the
  * generated CA — rather than disabling verification — is what makes the TLS check
  * a check.
+ *
+ * `rawHeaders` is returned alongside `headers` because `headers` cannot answer
+ * "how many of these were there?". Node folds repeated headers into one
+ * comma-joined string for every field except a short special-cased list, and
+ * `strict-transport-security` is not on it — so two HSTS headers and one
+ * malformed one are indistinguishable there. Counting duplicates is the whole
+ * point of the check at `hstsFromRawHeaders`, so it needs the unfolded list.
  */
 function httpsCall(origin, path, { method = 'GET', headers = {}, body } = {}) {
   const url = new URL(path, origin.origin);
@@ -605,12 +721,21 @@ function httpsCall(origin, path, { method = 'GET', headers = {}, body } = {}) {
           } catch {
             json = null;
           }
-          resolveCall({ status: res.statusCode ?? 0, headers: res.headers, text, json, error: null });
+          resolveCall({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            rawHeaders: res.rawHeaders,
+            text,
+            json,
+            error: null,
+          });
         });
       },
     );
     req.on('timeout', () => req.destroy(new Error('timed out')));
-    req.on('error', (err) => resolveCall({ status: 0, headers: {}, text: '', json: null, error: err }));
+    req.on('error', (err) =>
+      resolveCall({ status: 0, headers: {}, rawHeaders: [], text: '', json: null, error: err }),
+    );
     if (body !== undefined) req.write(body);
     req.end();
   });
@@ -687,7 +812,7 @@ function readManifest(path) {
   if (manifest?.schema !== MANIFEST_SCHEMA) {
     return { problem: `${path} is not a ${MANIFEST_SCHEMA} manifest (got ${String(manifest?.schema)})` };
   }
-  for (const service of ['api', 'web']) {
+  for (const service of RELEASE_SERVICES) {
     const reference = manifest?.images?.[service]?.reference;
     if (typeof reference !== 'string' || !DIGEST_REFERENCE.test(reference)) {
       return {
@@ -697,8 +822,125 @@ function readManifest(path) {
           'build-once-promote-the-same-bytes chain depends on this being content-addressed.',
       };
     }
+    const registry = manifest?.images?.[service]?.registry;
+    if (registry === undefined || registry === null) continue;
+    // A registry block is optional — the default release path does not push — but
+    // a MALFORMED one is refused rather than ignored. Ignoring it would mean
+    // quietly deploying the local digest while the manifest, and anybody reading
+    // it, believed the artefact was fetchable.
+    if (
+      typeof registry.reference !== 'string' ||
+      !REGISTRY_DIGEST_REFERENCE.test(registry.reference) ||
+      typeof registry.digest !== 'string' ||
+      !DIGEST.test(registry.digest) ||
+      typeof registry.host !== 'string' ||
+      typeof registry.repository !== 'string'
+    ) {
+      return {
+        problem:
+          `${path} gives service "${service}" a registry block this script cannot read: ` +
+          `${JSON.stringify(registry)}. It must carry host, repository, digest and a ` +
+          '`host[:port]/repository@sha256:<64 hex>` reference, all of which ' +
+          '`pnpm run release:artifacts --push` writes together.',
+      };
+    }
   }
   return { manifest };
+}
+
+/**
+ * Which reference each service is deployed by, and the resulting `pull_policy`.
+ *
+ * ## Why `pull_policy` is a decision and not a constant
+ *
+ * `docker-compose.staging.yml` used to hard-code `pull_policy: never`, with a
+ * comment saying why: there was no registry, the image existed only because it
+ * was built on this machine, and a pull would have gone to Docker Hub for a
+ * repository called `prl-api` that belongs to somebody else. That comment also
+ * predicted this function — "with a registry in play this becomes `always` and
+ * the digest still guarantees identity".
+ *
+ * Both halves are now reachable, so the file interpolates the policy and this
+ * decides it:
+ *
+ *   * **No registry block** (the default, and the common case — a developer who
+ *     never started a registry): the local digest, `never`. Byte-identical
+ *     behaviour to before, which is a requirement rather than a nicety: that path
+ *     must not regress.
+ *   * **Registry block that VERIFIES**: the registry reference, `always`. Pulling
+ *     is then not a risk but the point — the reference is a content address, so
+ *     the pull either produces those exact bytes or fails.
+ *   * **Registry block that does not verify** (the registry is down, or no longer
+ *     holds the digest): the local digest, `never`, and the caller says so. Not a
+ *     hard failure, because the artefact is right here and the stack should come
+ *     up; not a silent switch either, because the manifest claimed something that
+ *     is not currently true.
+ *
+ * Both services move together. A mixed deployment — one service by registry
+ * reference and one by local digest — would need two pull policies to describe
+ * it, and `pnpm run release:artifacts --push` writes both blocks or neither, so
+ * the mixed state means a hand-edited manifest and is not worth honouring.
+ *
+ * @param {Record<string, unknown>} manifest
+ * @param {Record<string, boolean|null>} verified per service: true, false, or null for "not attempted"
+ */
+export function deploymentPlan(manifest, verified) {
+  const images = manifest?.images ?? {};
+  const declared = RELEASE_SERVICES.filter((service) => images[service]?.registry != null);
+  const usable = RELEASE_SERVICES.filter((service) => verified[service] === true);
+  const registryBacked = declared.length === RELEASE_SERVICES.length && usable.length === declared.length;
+  const references = {};
+  for (const service of RELEASE_SERVICES) {
+    references[service] = registryBacked ? images[service].registry.reference : images[service].reference;
+  }
+  return {
+    references,
+    pullPolicy: registryBacked ? 'always' : 'never',
+    registryBacked,
+    // What the caller reports. `declared > 0 && !registryBacked` is the case that
+    // must never pass silently: the manifest says fetchable, the registry says
+    // otherwise, and the operator is about to deploy the local copy instead.
+    degraded: declared.length > 0 && !registryBacked,
+  };
+}
+
+/**
+ * Asks the registry whether it still serves each artefact, and re-hashes what it
+ * answers with.
+ *
+ * "Still" is the load-bearing word, exactly as it is in
+ * `release-artifacts.mjs`'s `existingManifestFor`. A registry reference recorded
+ * three days ago describes a registry somebody may since have wiped, restarted
+ * without its volume, or garbage-collected. Deploying `pull_policy: always`
+ * against a digest the registry no longer holds turns a working stack into a
+ * failed pull, and promising a cross-machine promotion nobody can perform is
+ * worse than promising nothing.
+ *
+ * The manifest bytes are hashed HERE (see `verifyRegistryDigest`), so what this
+ * establishes is not "the registry said yes" but "the bytes the registry serves
+ * under this digest hash to this digest and tie to the artefact the manifest
+ * describes".
+ *
+ * @returns {Promise<Record<string, boolean|null>>} null where no registry reference was declared
+ */
+async function verifyRegistryCopies(manifest, report) {
+  const verified = {};
+  for (const service of RELEASE_SERVICES) {
+    const registry = manifest.images?.[service]?.registry ?? null;
+    if (registry === null) {
+      verified[service] = null;
+      continue;
+    }
+    const result = await verifyRegistryDigest({
+      host: registry.host,
+      repository: registry.repository,
+      digest: registry.digest,
+      localDigest: manifest.images[service].digest,
+    });
+    verified[service] = result.ok === true;
+    report(service, registry, result);
+  }
+  return verified;
 }
 
 // --- commands -------------------------------------------------------------
@@ -952,16 +1194,42 @@ async function commandUp(options) {
     return;
   }
   const manifest = read.manifest;
+
+  const registryVerified = await verifyRegistryCopies(manifest, (service, registry, result) => {
+    if (result.ok === true) {
+      tick(
+        `${service}: ${registry.host} serves ${registry.repository}@${registry.digest.slice(0, 19)}…`,
+        'its manifest was fetched and re-hashed here, and it ties to the artefact this manifest ' +
+          `describes (${result.tie})`,
+      );
+      return;
+    }
+    bang(`${service}: the registry copy could not be verified`, result.problem);
+  });
+  const plan = deploymentPlan(manifest, registryVerified);
+
   const entries = readEnvFile();
-  entries.set('PRL_API_IMAGE', manifest.images.api.reference);
-  entries.set('PRL_WEB_IMAGE', manifest.images.web.reference);
+  entries.set('PRL_API_IMAGE', plan.references.api);
+  entries.set('PRL_WEB_IMAGE', plan.references.web);
+  // See `deploymentPlan`, and the pull_policy comment in docker-compose.staging.yml.
+  entries.set('PRL_PULL_POLICY', plan.pullPolicy);
   writeEnvFile(entries);
   tick(
-    'deploying the manifest digests',
-    `api ${manifest.images.api.digest}\n      web ${manifest.images.web.digest}\n      built ` +
-      `${manifest.builtAt} from ${manifest.commit?.sha ?? 'an unknown commit'}` +
+    plan.registryBacked ? 'deploying the registry digests' : 'deploying the manifest digests',
+    `api ${plan.references.api}\n      web ${plan.references.web}\n      pull_policy ` +
+      `${plan.pullPolicy}\n      built ${manifest.builtAt} from ` +
+      `${manifest.commit?.sha ?? 'an unknown commit'}` +
       `${manifest.commit?.dirty === true ? ' (DIRTY WORKING TREE)' : ''}`,
   );
+  if (plan.degraded) {
+    bang(
+      'the manifest carries registry references but the stack is deploying the local digests',
+      'the bytes are identical — these are the same content addresses — so the rehearsal is still ' +
+        'valid, but nothing here has demonstrated that another machine could fetch them. Start the ' +
+        'registry (`docker compose -f deploy/registry/docker-compose.registry.yml up -d`) and re-run ' +
+        'this, or re-push with `pnpm run release:artifacts -- --push`.',
+    );
+  }
 
   const origin = parseHttpsOrigin(entries.get('PRL_STAGING_PUBLIC_ORIGIN') ?? DEFAULTS.origin);
   if ('problem' in origin) {
@@ -1047,8 +1315,14 @@ async function commandUp(options) {
 
   // The identity check. Everything above could be true of a stack running some
   // other build; this is the line that says it is running THIS one.
+  //
+  // The expected value is the manifest's LOCAL digest even when the containers
+  // were pulled from the registry, and that is correct rather than an oversight:
+  // `--push` refuses to record a registry block unless pulling that digest back
+  // produced an image whose id is exactly this value, so a registry pull cannot
+  // land on anything else. If it ever did, this comparison is what would say so.
   let digestsMatch = true;
-  for (const service of ['api', 'web']) {
+  for (const service of RELEASE_SERVICES) {
     const state = serviceState(service);
     const expected = manifest.images[service].digest;
     if (state.image !== expected) {
@@ -1060,7 +1334,13 @@ async function commandUp(options) {
     }
   }
   if (digestsMatch) {
-    tick('both running containers are the manifest digests', 'verified from docker inspect, not from a tag');
+    tick(
+      'both running containers are the manifest digests',
+      plan.registryBacked
+        ? 'verified from docker inspect, not from a tag — and these containers were PULLED from ' +
+            `${manifest.images.api.registry.host} by digest, so the identity survived a push/pull boundary`
+        : 'verified from docker inspect, not from a tag',
+    );
   }
 
   // Readiness through the proxy, over TLS, verified against the local CA.
@@ -1078,25 +1358,70 @@ async function commandUp(options) {
     cross(`${origin.origin}/api/v1/ready did not answer 200`, `last status ${readyStatus}`);
   }
 
-  const hsts = (await httpsCall(origin, '/api/v1/health')).headers['strict-transport-security'];
-  if (typeof hsts === 'string') tick('the proxy sets Strict-Transport-Security', hsts);
-  else cross('no Strict-Transport-Security header', 'the app cannot set it; only the TLS terminator knows');
+  // See HSTS_PROBE_PATH: a path the API does not serve, so the only header that
+  // can come back is the proxy's, and exactly one of them.
+  const hstsValues = hstsFromRawHeaders((await httpsCall(origin, HSTS_PROBE_PATH)).rawHeaders);
+  if (hstsValues.length === 1 && hstsValues[0] === HSTS_EXPECTED) {
+    tick(
+      `the proxy is the only source of Strict-Transport-Security on ${HSTS_PROBE_PATH}`,
+      `exactly one header, ${HSTS_EXPECTED}`,
+    );
+  } else if (hstsValues.length === 0) {
+    cross(
+      `no Strict-Transport-Security header on ${HSTS_PROBE_PATH}`,
+      'only the TLS terminator knows there is TLS, so nginx.conf is the only place this can come from',
+    );
+  } else if (hstsValues.length > 1) {
+    cross(
+      `${hstsValues.length} Strict-Transport-Security headers on ${HSTS_PROBE_PATH}`,
+      `a UA obeys only the first (RFC 6797 §8.1): ${hstsValues.join(' | ')}\n` +
+        '      nginx add_header appends; proxy_hide_header must drop the upstream copy',
+    );
+  } else {
+    cross(
+      `Strict-Transport-Security on ${HSTS_PROBE_PATH} is not the configured policy`,
+      `expected ${HSTS_EXPECTED}, got ${hstsValues[0]}`,
+    );
+  }
 
   let smokePassed = null;
   if (options.smoke) {
     section('smoke test (through the staging origin, over TLS)');
-    const smoke = run(process.execPath, ['scripts/smoke-test.mjs', '--origin', origin.origin, '--strict'], {
-      stream: true,
-      env: {
-        ...process.env,
-        PRL_WEB_ORIGIN: origin.origin,
-        // Read once at process start, which is why the polls above use
-        // node:https with an explicit `ca` instead. The smoke test is a fresh
-        // process, so the variable works there and the whole run — including the
-        // wss:// upgrade — verifies the chain properly.
-        NODE_EXTRA_CA_CERTS: CA_CERT,
+    const smoke = run(
+      process.execPath,
+      [
+        'scripts/smoke-test.mjs',
+        '--origin',
+        origin.origin,
+        '--strict',
+        // This stack runs `PRL_ENROLMENT_REQUIRED=enforced` (docker-compose.staging.yml), so the
+        // smoke run must PROVE the seat guard rather than discover whichever posture it finds. With
+        // this, a run that sees an unenrolled learner seated fails the deploy — which is the whole
+        // point of staging carrying a switch whose shipped default is off. See `sectionEnrolment`.
+        '--expect-enrolment',
+        'enforced',
+      ],
+      {
+        stream: true,
+        env: {
+          ...process.env,
+          PRL_WEB_ORIGIN: origin.origin,
+          // The migrating identity, so the smoke run can WRITE the enrolment the enforced direction
+          // needs. It cannot get one any other way: migration 0006 grants prl_app — the role the API
+          // connects as — SELECT and nothing else on prl.cohorts and prl.enrolments, so no request
+          // to the running server can enrol anybody. The run drives
+          // `apps/api/scripts/enrolments.mjs` with this, exactly as an operator would, and revokes
+          // what it granted at the end. Same value as the migration step above; never on a command
+          // line, where `ps` would show it.
+          DATABASE_MIGRATION_URL: migrationUrl,
+          // Read once at process start, which is why the polls above use
+          // node:https with an explicit `ca` instead. The smoke test is a fresh
+          // process, so the variable works there and the whole run — including the
+          // wss:// upgrade — verifies the chain properly.
+          NODE_EXTRA_CA_CERTS: CA_CERT,
+        },
       },
-    });
+    );
     smokePassed = smoke.status === 0;
     if (smokePassed) tick('the smoke test passed against the staging origin');
     else cross('the smoke test failed against the staging origin', `exit ${smoke.status}`);
@@ -1118,14 +1443,29 @@ async function commandUp(options) {
       origin: origin.origin,
       commit: manifest.commit ?? null,
       images: {
-        api: { digest: manifest.images.api.digest, reference: manifest.images.api.reference },
-        web: { digest: manifest.images.web.digest, reference: manifest.images.web.reference },
+        api: {
+          digest: manifest.images.api.digest,
+          reference: manifest.images.api.reference,
+          // The registry reference this run actually deployed, or null. `promote`
+          // compares it: an attestation that says nothing about the registry is
+          // an attestation that cannot be used to justify a cross-machine
+          // promotion, and it should not be read as if it could.
+          registry: plan.registryBacked ? manifest.images.api.registry : null,
+        },
+        web: {
+          digest: manifest.images.web.digest,
+          reference: manifest.images.web.reference,
+          registry: plan.registryBacked ? manifest.images.web.registry : null,
+        },
       },
       checks: {
         runningDigestsMatchManifest: true,
         tlsChainVerified: true,
         forwardedForOverwritten: true,
         smokeTestStrict: true,
+        // Not "the registry was up": the digests were fetched back and re-hashed
+        // here, and the containers were started from those references.
+        deployedFromRegistryByDigest: plan.registryBacked,
       },
     };
     writeFileSync(ATTESTATION_FILE, `${JSON.stringify(attestation, null, 2)}\n`);
@@ -1164,12 +1504,22 @@ function commandStatus(options) {
     if (state.image !== null) console.log(dim(`      ${state.image}`));
   }
   if (manifest !== null) {
-    for (const service of ['api', 'web']) {
+    for (const service of RELEASE_SERVICES) {
       const running = states.find((s) => s.name === service)?.image ?? null;
       const expected = manifest.images[service].digest;
       if (running === null) continue;
-      if (running === expected) tick(`${service} matches the manifest`);
-      else cross(`${service} does NOT match the manifest`, `manifest ${expected}\n      running  ${running}`);
+      if (running === expected) {
+        // Whether the manifest carries a registry reference is reported without
+        // asking the registry anything: `status` is the command an operator runs
+        // when something is wrong, and it must not hang on a network call.
+        const registry = manifest.images[service].registry ?? null;
+        tick(
+          `${service} matches the manifest`,
+          registry === null ? undefined : `also published as ${registry.reference} (not re-checked here)`,
+        );
+      } else {
+        cross(`${service} does NOT match the manifest`, `manifest ${expected}\n      running  ${running}`);
+      }
     }
   }
   console.log(
@@ -1188,8 +1538,14 @@ function commandStatus(options) {
  * promotion is only meaningful when the two agree, so this compares them and
  * prints both digests whenever they do not — because "the digests differ" without
  * the digests is a message that sends somebody to the wrong file.
+ *
+ * Where the artefacts were pushed, it asks the registry a third question — does
+ * it still serve these exact bytes under these exact digests — because the value
+ * of a registry reference is entirely in somebody else being able to resolve it,
+ * and a reference that no longer resolves is a promise this command would
+ * otherwise be making on the registry's behalf.
  */
-function commandPromote(options) {
+async function commandPromote(options) {
   section('staging promote');
 
   const read = readManifest(options.manifest);
@@ -1221,7 +1577,7 @@ function commandPromote(options) {
   }
 
   let identical = true;
-  for (const service of ['api', 'web']) {
+  for (const service of RELEASE_SERVICES) {
     const candidate = manifest.images[service].digest;
     const tested = attestation.images?.[service]?.digest ?? null;
     if (candidate === tested) {
@@ -1232,6 +1588,72 @@ function commandPromote(options) {
     cross(
       `${service} is NOT the digest staging tested`,
       `about to promote  ${candidate}\n      staging tested    ${tested ?? '(nothing)'}`,
+    );
+  }
+
+  // The registry leg. Only meaningful where the artefacts were pushed, and where
+  // they were, a reference that has stopped resolving must not be promoted: the
+  // whole claim being made is that another machine can fetch it.
+  const registryVerified = await verifyRegistryCopies(manifest, (service, registry, result) => {
+    if (result.ok !== true) {
+      cross(`${service}: the registry no longer serves the digest this manifest promotes`, result.problem);
+      return;
+    }
+    const attested = attestation.images?.[service]?.registry?.digest ?? null;
+    if (attested !== null && attested !== registry.digest) {
+      cross(
+        `${service}: staging deployed a different registry digest`,
+        `about to promote  ${registry.digest}\n      staging deployed  ${attested}`,
+      );
+      return;
+    }
+    tick(
+      `${service} is fetchable: ${registry.reference}`,
+      'the registry answered for that digest and the manifest it returned was re-hashed here' +
+        (attested === null
+          ? '. The attestation records no registry reference, so the staging run that verified this ' +
+            'artefact deployed the local copy; the digests above are what tie the two together'
+          : ', and it is the reference the verified staging run deployed'),
+    );
+  });
+  const promotableAcrossMachines = RELEASE_SERVICES.every((service) => registryVerified[service] === true);
+
+  /**
+   * The paging destinations, checked before this command will call anything promotable.
+   *
+   * Everything above this line asks "are these the bytes staging tested". That is a
+   * complete answer to the question it asks and no answer at all to the one that
+   * decides whether the deployment can be operated: if these bytes go out and then
+   * misbehave, does anybody find out? A release whose `PRL_ALERT_*` variables still
+   * hold the rehearsal defaults answers no — `alerts:verify` will have passed, because
+   * it renders and asserts against those same defaults, and Alertmanager will start,
+   * route by severity exactly as designed, and post every page to a sink that stopped
+   * existing when the verification run ended.
+   *
+   * Run as a subprocess rather than imported, the same way the strict smoke test is
+   * run above: the preflight owns its own exit code and its own report, and a
+   * promotion should refuse on that exit code rather than on this file's reading of
+   * somebody else's checks. `--json --out` is deliberately not passed — the operator
+   * needs to see the reasons, and a promotion is not a place to hide them in a file.
+   */
+  section('the paging destinations');
+  const preflight = run(process.execPath, ['scripts/alert-preflight.mjs'], { stream: true });
+  if (preflight.status !== 0) {
+    cross(
+      'the alerting preflight refuses this configuration',
+      'the reasons are printed above. A release cannot be promoted with a paging destination ' +
+        'that is a placeholder, malformed, missing a credential, or routed to a receiver with ' +
+        'nothing in it — every one of those is an alert that fires, routes correctly and reaches ' +
+        'nobody, and nothing in band can report it. Set the PRL_ALERT_* variables and run ' +
+        '`pnpm run alerts:preflight` until it passes.',
+    );
+    identical = false;
+  } else {
+    tick(
+      'the alerting preflight accepts this configuration',
+      'every routed receiver has a real, well-formed, non-placeholder destination and both ' +
+        'severity tiers resolve. Whether the handshake against the relay was run is in the ' +
+        'preflight output above; a skipped handshake means the credentials are still unproven.',
     );
   }
 
@@ -1264,6 +1686,11 @@ function commandPromote(options) {
       JSON.stringify(
         {
           promotable: identical && failures.length === 0,
+          // Deliberately a separate field from `promotable`. A manifest with no
+          // registry reference is still promotable — the digest it names is the
+          // digest staging tested — but it is promotable HERE, on this machine.
+          // Collapsing the two would make a consumer read one as the other.
+          promotableAcrossMachines: promotableAcrossMachines && identical && failures.length === 0,
           verifiedAt: attestation.verifiedAt,
           images: manifest.images,
           tested: attestation.images,
@@ -1275,16 +1702,44 @@ function commandPromote(options) {
   }
 
   if (identical && failures.length === 0) {
+    const registryNote = promotableAcrossMachines
+      ? '\n  Cross-machine promotion is available for these artefacts. Each one has a registry\n' +
+        '  digest that was verified above by fetching the manifest and re-hashing it here, so\n' +
+        '  another machine can run\n\n' +
+        `      docker pull ${manifest.images.api.registry.reference}\n\n` +
+        '  and get these exact bytes. A digest pull cannot return different ones: the reference\n' +
+        '  IS the hash of the manifest, so bytes that differ resolve to a different reference\n' +
+        '  and the pull fails instead of succeeding with something else.\n' +
+        '\n  What that does NOT establish, precisely:\n' +
+        '    * PROVENANCE. Nothing records who built these images, on what machine, from which\n' +
+        '      source tree, or with which toolchain — beyond what this repository wrote into the\n' +
+        '      manifest itself, which is this repository vouching for this repository.\n' +
+        '    * A SIGNATURE — not from this command. THIS command does not verify one. The\n' +
+        '      digests are signed, by `pnpm run release:sign`, and checked by\n' +
+        '      `pnpm run security:image-provenance` against the committed public key. Run that\n' +
+        '      before promoting; a signature nobody checked is a file. And note what even a\n' +
+        '      passing check does not buy: the key is a long-lived file on this machine with no\n' +
+        '      transparency log behind it, so it proves possession of a key and not the identity\n' +
+        '      of a builder. That still needs keyless/OIDC signing in CI.\n' +
+        '    * A THIRD PARTY. The registry is a container on this host. It is content-addressed\n' +
+        '      storage and it is not a notary: it can prove two parties hold the same bytes, and\n' +
+        '      it cannot prove where those bytes came from.\n'
+      : '\n  Cross-machine promotion is NOT available for these artefacts: the manifest names only\n' +
+        '  local BuildKit image-store digests, which are content-addressed and stable but exist\n' +
+        '  on this machine alone. To make them fetchable:\n\n' +
+        '      docker compose -f deploy/registry/docker-compose.registry.yml up -d\n' +
+        '      pnpm run release:artifacts -- --push\n\n' +
+        '  That records a registry digest beside each local one and this command then verifies\n' +
+        '  it. Signing is a separate step again — `pnpm run release:sign`, then\n' +
+        '  `pnpm run security:image-provenance` to check it.\n';
     console.log(
       dim(
         `\n  Verified in staging at ${attestation.verifiedAt} against ${attestation.origin}.\n` +
-          '\n  This command VERIFIES; it does not deploy. There is no registry and no production\n' +
-          '  target in this repository, so there is nothing here that could push these bytes\n' +
-          '  anywhere. When there is, the deploy step goes after this check and consumes these\n' +
-          '  digests; this check does not change.\n' +
-          '\n  Note also what the digest is: a local BuildKit image-store digest. It is content-\n' +
-          '  addressed and cannot be two different images, but nothing signed it and no registry\n' +
-          '  vouches for it. Cross-machine promotion needs a registry digest as well.\n',
+          '\n  This command VERIFIES; it does not deploy. There is no production target in this\n' +
+          '  repository, so there is nothing here that could roll these bytes out anywhere. When\n' +
+          '  there is, the deploy step goes after this check and consumes these digests; this\n' +
+          '  check does not change.\n' +
+          registryNote,
       ),
     );
   }
@@ -1352,10 +1807,28 @@ async function main() {
         cross('PRL_STAGING_PUBLIC_ORIGIN is unusable', origin.problem);
         break;
       }
-      const smoke = run(process.execPath, ['scripts/smoke-test.mjs', '--origin', origin.origin, '--strict'], {
-        stream: true,
-        env: { ...process.env, PRL_WEB_ORIGIN: origin.origin, NODE_EXTRA_CA_CERTS: CA_CERT },
-      });
+      // The same two arguments `commandUp` passes, and for the same reasons: this stack runs
+      // `PRL_ENROLMENT_REQUIRED=enforced`, so the run must PROVE the seat guard rather than report
+      // whichever posture it finds, and it needs the migrating identity to write the enrolment the
+      // enforced direction depends on. A `staging smoke` that was weaker than the one inside
+      // `staging up` would be a second, quieter gate over the same stack.
+      const smokeMigrationUrl =
+        `postgres://${encodeURIComponent(entries.get('PRL_STAGING_DB_SUPERUSER') ?? '')}:` +
+        `${encodeURIComponent(entries.get('PRL_STAGING_DB_SUPERUSER_PASSWORD') ?? '')}` +
+        `@127.0.0.1:${entries.get('PRL_STAGING_DB_PORT')}/${entries.get('PRL_STAGING_DB_NAME')}`;
+      const smoke = run(
+        process.execPath,
+        ['scripts/smoke-test.mjs', '--origin', origin.origin, '--strict', '--expect-enrolment', 'enforced'],
+        {
+          stream: true,
+          env: {
+            ...process.env,
+            PRL_WEB_ORIGIN: origin.origin,
+            NODE_EXTRA_CA_CERTS: CA_CERT,
+            DATABASE_MIGRATION_URL: smokeMigrationUrl,
+          },
+        },
+      );
       if (smoke.status !== 0) cross('the smoke test failed', `exit ${smoke.status}`);
       else tick('the smoke test passed');
       break;
@@ -1387,7 +1860,7 @@ async function main() {
       break;
     }
     case 'promote':
-      commandPromote(options);
+      await commandPromote(options);
       break;
     default:
       // Unreachable: parseArgs rejects anything outside COMMANDS. Present so the

@@ -48,7 +48,7 @@ import {
 } from '@prl/poker-engine';
 import { type ParsedRange, topPercentRange } from '@prl/poker-math';
 import { findImpersonation } from '../src/labelling.ts';
-import { createOpponentModel } from '../src/opponent-model.ts';
+import { createOpponentModel, type OpponentModel } from '../src/opponent-model.ts';
 import {
   decide,
   type ObservedAdjustments,
@@ -777,6 +777,147 @@ test('an observed read moves the reasoning and the multipliers it reports', () =
   assert.match(note, /72\.0% of bets/);
   assert.match(note, /bluff multiplier/);
   assert.deepEqual(findImpersonation(note), []);
+});
+
+// ---------------------------------------------------------------------------
+// Adaptation: the read reaches a decision through exactly one gate
+// ---------------------------------------------------------------------------
+
+/**
+ * A real `OpponentModel` carrying 200 hands of one extreme style, fed the way `bots.ts` feeds
+ * one: `observeAction` per public action, then `observe` on the completed redacted view.
+ *
+ * Real hands rather than synthetic `PlayerView`s, because the claim under test is about what a
+ * model that has actually watched a table does with a decision. `station` calls everything and
+ * folds to nothing; `rock` folds every hand it is not given for free. Every seat gets the same
+ * treatment, so whichever seat the policy picks as its primary opponent carries the same read.
+ */
+function modelAfterWatching(kind: 'station' | 'rock', ownSeat: SeatIndex, hands = 200): OpponentModel {
+  const model = createOpponentModel(ownSeat);
+  for (let hand = 0; hand < hands; hand++) {
+    let state = dealHand({
+      stacks: [300, 300, 300],
+      buttonSeat: hand % 3,
+      seed: 5_000 + hand,
+      config: { maxSeats: 3 },
+    });
+    for (let step = 0; state.street !== 'complete' && step < 60; step++) {
+      const seat = state.toAct;
+      assert.ok(seat !== null, 'a live hand always has somebody to act');
+      const view = redactFor(state, { viewerSeat: seat });
+      const offered = new Set(view.legalActions.map((entry) => entry.type));
+      const action: Action =
+        kind === 'station'
+          ? offered.has('check')
+            ? { type: 'check' }
+            : { type: 'call' }
+          : offered.has('fold')
+            ? { type: 'fold' }
+            : { type: 'check' };
+      const before = state;
+      state = applyAction(state, seat, action, { actionId: `read-${hand}-${step}` }).state;
+      const logged = state.actions[state.actions.length - 1];
+      assert.ok(logged !== undefined);
+      model.observeAction({
+        handId: before.handId,
+        seat,
+        street: before.street as 'preflop' | 'flop' | 'turn' | 'river',
+        action: action.type,
+        toCall: view.amountToCall,
+        potBefore: view.potTotal,
+        amountPaid: logged.amountPaid,
+        facingPreflopRaise: before.street === 'preflop' && before.betLevel > before.config.bigBlind,
+        raiseWasAvailable: offered.has('bet') || offered.has('raise'),
+      });
+    }
+    model.observe(redactFor(state, { viewerSeat: ownSeat }));
+  }
+  return model;
+}
+
+/**
+ * The paired-decision measurement that proved defect 1, kept as the guard.
+ *
+ * Two `decide` calls per spot with byte-identical view, hole cards, traits, difficulty and
+ * seeded generator, varying ONLY the opponent model. At a difficulty whose card says
+ * "adaptation is off entirely" the two must agree on every single one, because there should be
+ * no channel through which a read reaches the decision at all.
+ *
+ * Before the fix: `adjustmentsFor` was gated on the adaptation weight and `rangeFor` was gated
+ * on nothing, so `assessPostflop` priced every decision against a range built from what the
+ * model had watched. Measured over 350 real postflop spots at `educational`, the sampled action
+ * differed in 209 of 1,050 paired decisions — `{bet, to: 166}` against a station read versus
+ * `{check}` against a folder read in the same spot. After: 0 of 1,050, and 0 here.
+ *
+ * The `expert` half is the negative control, and it is the half that would catch a "fix" that
+ * simply stopped reading the sample: adaptation is on there, so the two reads MUST diverge. A
+ * mute rather than a gate passes the educational assertion and fails this one.
+ */
+test('at a difficulty with adaptation off, the opponent read cannot move a decision', () => {
+  const spots = [
+    ...Array.from({ length: 25 }, (_unused, index) => threeHandedFlopSpot(index * 23 + 5)),
+    ...Array.from({ length: 25 }, (_unused, index) => threeHandedFlopBetFaced(index * 29 + 7)),
+  ];
+  const profiles = ['adaptive-exploiter', 'vocal-aggressor'];
+
+  // Built once. `ownSeat` is only used by the `opponents` getter, which no policy reads, and
+  // every seat was fed the same style anyway — so one model per style serves every spot.
+  const station = modelAfterWatching('station', 0, 200);
+  const rock = modelAfterWatching('rock', 0, 200);
+  for (const seat of [0, 1, 2]) {
+    assert.equal(
+      station.statsOrNeutralFor(seat).reliability,
+      'reasonable',
+      'the station read has to be one this model is willing to act on, or nothing is being tested',
+    );
+    assert.ok(station.statsOrNeutralFor(seat).foldToBetFrequency < 0.1, 'the station folds to nothing');
+    assert.ok(rock.statsOrNeutralFor(seat).foldToBetFrequency > 0.7, 'the rock folds to everything');
+  }
+
+  const describe = (action: Action): string =>
+    action.type === 'bet' || action.type === 'raise' ? `${action.type}:${action.to}` : action.type;
+
+  const disagreements = (difficulty: Difficulty): { differed: number; trials: number } => {
+    let differed = 0;
+    let trials = 0;
+    for (const profileId of profiles) {
+      const traits = traitsFor(profileId, difficulty);
+      for (const [index, spot] of spots.entries()) {
+        const seed = 41_000 + index;
+        const sampled = (observations: OpponentModel): string =>
+          describe(
+            decide(
+              inputFor({
+                state: spot.state,
+                seat: spot.seat,
+                traits,
+                difficulty: fastSettings(difficulty),
+                seed,
+                observations,
+              }),
+            ).action,
+          );
+        trials += 1;
+        if (sampled(station) !== sampled(rock)) differed += 1;
+      }
+    }
+    return { differed, trials };
+  };
+
+  const off = disagreements('educational');
+  assert.equal(
+    off.differed,
+    0,
+    'educational promises the learner that nothing they did in earlier hands moves this decision, ' +
+      `and the read moved it in ${off.differed} of ${off.trials} paired decisions`,
+  );
+
+  const on = disagreements('expert');
+  assert.ok(
+    on.differed > 0,
+    'expert adapts hard by design, so a 200-hand station read and a 200-hand rock read must not ' +
+      'produce identical decisions everywhere — 0 disagreements here means the gate became a mute',
+  );
 });
 
 test('the real opponent model satisfies the observation interface a policy asks for', () => {

@@ -75,6 +75,7 @@ import { AppError } from '../errors.ts';
 import { durableProfile } from '../rooms/bot-profile.ts';
 import {
   botDisplayName,
+  botDisplayNames,
   compareProfilesOnSpot,
   type HypotheticalSpot,
   MAX_COMPARE_TRIALS,
@@ -231,8 +232,13 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
     app.addHook('onClose', async () => {
       // Only the registry this module created. A registry passed in belongs to its owner, and
       // closing somebody else's tables on our way out would be a surprise.
-      if (ownsRegistry) registry.closeAll();
-      await Promise.resolve();
+      //
+      // `shutdown()` rather than `closeAll()`, and the difference is a whole deploy. Both close
+      // every table; only this one waits for the room LEASES to be given back. A process that exits
+      // without releasing leaves every room it was serving unopenable — by its own replacement —
+      // until each lease expires, which is `LEASE_TTL_MS` of "that table will not open" on every
+      // single deploy. It never rejects, so it cannot turn a shutdown into a hang.
+      if (ownsRegistry) await registry.shutdown();
     });
 
     /** The caller, as every room operation wants them. */
@@ -591,37 +597,37 @@ async function seatRequestedBots(
   room: LiveRoom,
   requested: readonly { readonly profile: string; readonly count: number }[],
 ): Promise<void> {
-  let seat = 1;
-  for (const entry of requested) {
-    for (let index = 0; index < entry.count; index += 1) {
-      if (seat >= room.record.config.maxSeats) {
-        throw new AppError('room_full', {
-          logDetail: `more bots requested than seats at ${room.record.id}`,
-        });
-      }
-      const profile = resolveProfile(entry.profile);
-      const displayName = botDisplayName(profile.naming.id);
-      const user = await registry.store.createBotUser(displayName);
-      // A table created through `POST /rooms` has no difficulty field, so its bots play the
-      // middle setting: the style as designed, with the sizing variation a real opponent shows.
-      const durable = {
-        profileId: durableProfile(profile.naming.id),
-        difficulty: 'realistic' as const,
-        seed: seedFor(room.record.id, seat, undefined),
-      };
-      // Persisted before the runner is told, and persisted in FULL: the durable row is what a
-      // restart reads, so a seat the row cannot describe is a seat the next process cannot put
-      // back. See `rooms/bot-profile.ts`.
-      await registry.store.addMember({
-        roomId: room.record.id,
-        userId: user.id,
-        isBot: true,
-        bot: durable,
+  const profiles = requested.flatMap((entry) =>
+    Array.from({ length: entry.count }, () => resolveProfile(entry.profile)),
+  );
+  const names = botDisplayNames(profiles.map((profile) => profile.naming.id));
+  for (const [index, profile] of profiles.entries()) {
+    const seat = index + 1;
+    if (seat >= room.record.config.maxSeats) {
+      throw new AppError('room_full', {
+        logDetail: `more bots requested than seats at ${room.record.id}`,
       });
-      await registry.store.seatMember(room.record.id, user.id, seat);
-      await registry.seatBot(room.record.id, { userId: user.id, displayName, seat, ...durable });
-      seat += 1;
     }
+    const displayName = names[index] ?? botDisplayName(profile.naming.id);
+    const user = await registry.store.createBotUser(displayName);
+    // A table created through `POST /rooms` has no difficulty field, so its bots play the
+    // middle setting: the style as designed, with the sizing variation a real opponent shows.
+    const durable = {
+      profileId: durableProfile(profile.naming.id),
+      difficulty: 'realistic' as const,
+      seed: seedFor(room.record.id, seat, undefined),
+    };
+    // Persisted before the runner is told, and persisted in FULL: the durable row is what a
+    // restart reads, so a seat the row cannot describe is a seat the next process cannot put
+    // back. See `rooms/bot-profile.ts`.
+    await registry.store.addMember({
+      roomId: room.record.id,
+      userId: user.id,
+      isBot: true,
+      bot: durable,
+    });
+    await registry.store.seatMember(room.record.id, user.id, seat);
+    await registry.seatBot(room.record.id, { userId: user.id, displayName, seat, ...durable });
   }
 }
 

@@ -152,7 +152,7 @@ curl -fsS "$API/api/v1/health" && curl -fsS "$API/api/v1/ready"
 
 Then the half nobody checks: **the rows are back, but for whom?** A restore is not finished until authorisation still holds on restored data. [`../backup-restore.md`](../backup-restore.md) §7.8 is the pattern — nine checks including a positive control, so that a refusal cannot be a broken endpoint wearing a 404. The requirement is that a brand-new guest cannot read a *restored* room that is not theirs, sees none of the restored rooms in `GET /rooms`, inherits none of the restored learners' progress, and sees none of the restored hand history.
 
-`verify-schema.mjs` check 6b now asserts that schema `prl` and every relation in it are owned by `prl_migrator`, so step 3 above is belt and braces rather than the only line of defence. `docs/RUNBOOK.md` §11.7 still carries a checklist item saying `db:verify` does not look at ownership; that bullet predates check 6b, and §11.4's own box records the fix. Run step 3 anyway — a database you cannot run the script against is exactly when you need the queries.
+`verify-schema.mjs` check 6b now asserts that schema `prl` and every relation in it are owned by `prl_migrator`, so step 3 above is belt and braces rather than the only line of defence. This paragraph used to warn that `docs/RUNBOOK.md` §11.7 still carried a checklist item saying `db:verify` does not look at ownership — it no longer does: that item now says check 6b covers ownership and keeps the hand queries as belt and braces, and §11.4's own box records the fix. Run step 3 anyway — a database you cannot run the script against is exactly when you need the queries.
 
 ## Escalation
 

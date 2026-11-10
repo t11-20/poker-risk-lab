@@ -43,7 +43,13 @@ import type {
   LegendProfileCardDto,
 } from '@prl/contracts';
 import { MAX_COMPARE_TRIALS } from '@prl/contracts';
-import { bandForShortfall, outcomeVersusQualityNote, PROFILES } from '@prl/poker-ai';
+import {
+  bandForShortfall,
+  outcomeVersusQualityNote,
+  PROFILES,
+  TRAIT_DESCRIPTIONS,
+  TRAIT_LABELS,
+} from '@prl/poker-ai';
 import { evOfBet, evOfCall, evOfRaise } from '@prl/poker-math';
 
 const FIXTURE = resolve(
@@ -233,6 +239,108 @@ describe('the Legends fixture is a fixture, not a measurement', () => {
       PROFILE_CARDS.map((card) => card.id),
       PROFILES.map((profile) => profile.naming.id),
       'the offline roster and the served roster are the same set, in the same order',
+    );
+  });
+
+  it('carries the same axis PROSE the served profiles do (REGRESSION)', () => {
+    // The numbers were joined; the words beside them were not. Measured 2026-08-27: 25 mismatches,
+    // and all of them were strings this package had already CORRECTED, so the fixture was serving
+    // the wording each fix had removed.
+    //
+    //   aggressionFrequency  fixture: "How often it bets and raises."
+    //                        source:  "...on a hand it reads as neither strong nor hopeless. With
+    //                                  nothing it bets less often than this..."
+    //   threeBetTendency     fixture: "How often it re-raises someone who opened."
+    //                        source:  "How much of the range it would have called an opening raise
+    //                                  with it re-raises instead..."
+    //
+    // The first is the unconditional reading that `declared-versus-observed.test.ts` proves is
+    // arithmetically unsatisfiable for four profiles, and the second is the reading `traits.ts`
+    // says "cannot be read as" a 3-bet frequency — printed on a card that shows `vpip 0.15` beside
+    // `threeBetTendency 0.44`. This is the offline path, which is what a reader sees whenever the
+    // API is unreachable.
+    const labels = TRAIT_LABELS as Readonly<Record<string, string>>;
+    const descriptions = TRAIT_DESCRIPTIONS as Readonly<Record<string, string>>;
+    let compared = 0;
+    for (const card of PROFILE_CARDS) {
+      for (const axis of card.axes) {
+        assert.equal(axis.label, labels[axis.key], `${card.id}.${axis.key}: the fixture's label is stale`);
+        assert.equal(
+          axis.description,
+          descriptions[axis.key],
+          `${card.id}.${axis.key}: the fixture's description is stale`,
+        );
+        compared += 2;
+      }
+    }
+    assert.ok(compared >= 100, `only ${compared} string(s) compared; a sweep of nothing is not a pass`);
+  });
+
+  it('carries the same style notes the served profiles do (REGRESSION)', () => {
+    // `volume-grinder` said "Re-raises preflop more than any other profile here." `profiles.ts`
+    // documents that exact sentence as false and replaced it with one about SHARE of openings
+    // played back at — measured, its unconditional 3-bet frequency is third, not first.
+    const byId = new Map(PROFILES.map((profile) => [profile.naming.id, profile]));
+    let compared = 0;
+    for (const card of PROFILE_CARDS) {
+      const profile = byId.get(card.id);
+      assert.ok(profile !== undefined, `${card.id} is in the fixture and not in the served set`);
+      assert.deepEqual(
+        card.styleNotes,
+        profile.styleNotes,
+        `${card.id}: the fixture's style notes are stale`,
+      );
+      // `learnFrom` and `counterStrategy` too. They were NOT covered when this join was written,
+      // and the omission surfaced the way these always do: `calling-station`'s teaching strings
+      // were corrected in `profiles.ts`, the fixture kept the old ones, and this test passed.
+      assert.deepEqual(card.learnFrom, profile.learnFrom, `${card.id}: the fixture's learnFrom is stale`);
+      assert.deepEqual(
+        card.counterStrategy,
+        profile.counterStrategy,
+        `${card.id}: the fixture's counterStrategy is stale`,
+      );
+      compared += 3;
+    }
+    assert.ok(compared >= 10, `only ${compared} profile(s) compared; a sweep of nothing is not a pass`);
+  });
+
+  it('carries the SAME trait numbers the served profiles do (REGRESSION)', () => {
+    // The fixture does not derive these — it copies them. `OLD_SCHOOL_PRESSURE_TRAITS` in
+    // `apps/web/src/fixtures/legends.ts` is `old-school-pressure`'s trait block from
+    // `packages/poker-ai/src/profiles.ts`, digit for digit, and eleven more like it: measured
+    // 2026-08-27, 110 twelve-line blocks are byte-identical between the two files.
+    //
+    // Nothing joined the numbers. The check above pairs the two rosters by `id` and stops there, so
+    // tuning a profile — raising `pressureTendency` from 0.8, widening a `vpip` — left `/legends`
+    // describing the old one. A learner would read a radar chart and a trait description for a
+    // style the bot no longer plays, which is the same defect as the Coach sentence that priced a
+    // threshold that did not exist: the page teaches something the product does not do.
+    //
+    // Compared over the keys the FIXTURE declares rather than the profile's full set: `makeTraits`
+    // fills unspecified axes from `DEFAULT_TRAITS`, so a profile always has every key and the
+    // fixture is the side that can silently omit one. The count is asserted so that a fixture which
+    // stopped declaring traits could not pass this by comparing nothing.
+    let compared = 0;
+    for (const card of PROFILE_CARDS) {
+      const profile = PROFILES.find((candidate) => candidate.naming.id === card.id);
+      assert.ok(profile !== undefined, `${card.id} is in the fixture and not in PROFILES`);
+      const keys = Object.keys(card.traits) as (keyof typeof profile.traits)[];
+      assert.ok(keys.length >= 12, `${card.id} declares only ${keys.length} traits in the fixture`);
+      for (const key of keys) {
+        assert.equal(
+          card.traits[key as keyof typeof card.traits],
+          profile.traits[key],
+          `${card.id}.${String(key)}: the fixture says ` +
+            `${String(card.traits[key as keyof typeof card.traits])} and @prl/poker-ai says ` +
+            `${String(profile.traits[key])}`,
+        );
+        compared += 1;
+      }
+    }
+    assert.ok(
+      compared >= 150,
+      `only ${compared} trait value(s) were compared across ${PROFILE_CARDS.length} profile(s); ` +
+        'a pass over an empty comparison is the failure this assertion rules out',
     );
   });
 

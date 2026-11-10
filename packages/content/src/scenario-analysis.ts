@@ -33,6 +33,7 @@ import type { Scenario, ScenarioClaim } from '@prl/contracts';
 import { type Card, parseCards } from '@prl/poker-engine';
 import {
   computeOuts,
+  deriveContestablePot,
   type EquityResult,
   effectiveStack,
   equity,
@@ -73,6 +74,25 @@ export interface ScenarioSituation {
  * hero's pending call — chips carried from earlier streets, plus everything committed
  * on this street by anyone, hero included. `toCall` is then what hero must add on top.
  */
+/**
+ * The sampling this analysis is defined by, owned here because four places need the same pair.
+ *
+ * `analyseScenario` is what VALIDATES a scenario's claims; `routes/content.ts` is what serves the
+ * numbers a student reads; `scripts/regenerate-web-fixtures.mjs` bakes them into the offline
+ * fixture; and `apps/api/test/web-fixture-figures.test.ts` checks that fixture. All four have to
+ * sample identically or the figure the build verifies is not the figure the page prints.
+ *
+ * They agreed by coincidence and by four separate literals. The test carried the comment "the
+ * sample count and seed the fixture header names, and the API's own CONTENT_SAMPLES/CONTENT_SEED"
+ * above its own copy, imported neither, and could not have: they were not exported. That is this
+ * branch's most common defect exactly — a copy with a comment asserting an agreement nothing
+ * enforces — and it was found by measuring the two analyses against each other across all 36
+ * scenarios, which came back identical to the last digit (0.2836375 both, on
+ * `fl-same-cards-under-the-gun`). Identical today; joined now.
+ */
+export const SCENARIO_ANALYSIS_SAMPLES = 40_000;
+export const SCENARIO_ANALYSIS_SEED = 20_260_817;
+
 export function readSituation(scenario: Scenario): ScenarioSituation {
   const hero = scenario.seats.find((seat) => seat.isHero === true);
   if (hero === undefined) throw new ScenarioAnalysisError(`scenario "${scenario.id}" has no hero seat`);
@@ -157,19 +177,37 @@ export function analyseScenario(scenario: Scenario, options: AnalyseOptions = {}
       board: situation.board,
     },
     {
-      samples: options.samples ?? 40_000,
-      seed: options.seed ?? 20260817,
+      samples: options.samples ?? SCENARIO_ANALYSIS_SAMPLES,
+      seed: options.seed ?? SCENARIO_ANALYSIS_SEED,
     },
   );
   const hero = result.players[0];
   if (hero === undefined) throw new ScenarioAnalysisError(`equity for "${scenario.id}" produced no hero`);
 
-  const odds = potOdds(situation.pot, situation.toCall);
+  // The pot hero could actually WIN, which is `situation.pot` in every ordinary spot and less
+  // than it when hero is all-in for less than the bet in front of them: the excess of that bet is
+  // a side pot hero is not eligible for. Capping `toCall` at the stack — which the call below has
+  // always done — fixes the price hero pays and says nothing about the pot they are paying it
+  // into, and pricing the call against the whole middle is what let the Coach tell a learner they
+  // needed 8.6% where they needed 37.5%. This module is the second producer of that figure (it
+  // verifies a scenario's stated claims), so it has to answer the same way `buildCoachReport`
+  // does or a bundled claim could be checked against a price no learner is ever shown.
+  //
+  // Derived rather than layered: a scenario is a described spot with no complete per-seat record
+  // of the street — see the note in `apps/api/src/routes/content.ts`.
+  const contestablePot = deriveContestablePot({
+    pot: situation.pot,
+    toCall: situation.toCall,
+    heroCommittedThisStreet: 0,
+    heroStack: situation.heroStack,
+    opponentStacks: situation.opponentStacks,
+  });
+  const odds = potOdds(contestablePot, situation.toCall);
   const callEv =
     situation.toCall === 0
       ? 0
       : evOfCall({
-          pot: situation.pot,
+          pot: contestablePot,
           toCall: Math.min(situation.toCall, situation.heroStack),
           equity: hero.equity,
         }).ev;

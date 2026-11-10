@@ -1,0 +1,178 @@
+# ---------------------------------------------------------------------------
+# The `telemetry` group — the two alerts about the telemetry itself:
+# `MetricsCardinalityOverflow` and `ReadinessFlapping`. Both tickets, both with
+# no `for:`, and neither had a unit test until the mutation audit named them.
+#
+# ## Why an alert about the metrics is not self-referential nonsense
+#
+# `MetricsCardinalityOverflow` is the only signal that says a metric has stopped
+# being precise. The registry caps series per metric and folds everything past
+# the cap into one overflow series (`observability/registry.ts`), and that cap is
+# a NET rather than the design — every label in this repository is meant to come
+# from a closed set. If it engages, some caller is passing an unbounded value and
+# a dashboard built on that metric is now quietly wrong while continuing to draw.
+# Nothing else in this file can see that, because every rule reading the affected
+# metric goes on evaluating happily against a folded series.
+#
+# ## The gauge is 0 or 1 and the rule says `== 1`
+#
+# Which is worth an assertion rather than an assumption: `== 1` and not `> 0`,
+# and `registry.ts` sets exactly those two values. The third case below is the
+# one that would catch a future third value being introduced without this rule
+# being told, because it evaluates the raw gauge alongside the alert.
+#
+# ## ReadinessFlapping and the page next to it
+#
+# `changes(prl_readiness_state[30m]) > 6` is the ticket for a database that is
+# marginal rather than down. It is the other half of a division with `ApiNotReady`
+# — see `availability.test.yml`, where the page's expression was changed to a
+# bare comparison precisely so that flapping accumulates HERE, at ticket
+# severity, instead of paging somebody about a condition that keeps healing.
+# The last two cases below are both sides of that division.
+# ---------------------------------------------------------------------------
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    name: a metric folding into its overflow series raises a ticket immediately
+    input_series:
+      # Some caller started passing an unbounded value into a label — a raw id,
+      # a URL, an error string. The cap engaged and the gauge went to 1, where
+      # it stays until the process restarts.
+      - series: 'prl_metrics_cardinality_overflow'
+        values: '0+0x40 1+0x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="MetricsCardinalityOverflow"}'
+        eval_time: 10m
+        exp_samples: []
+      # No `for:`: the cap engaging once is the whole event, and it does not
+      # un-engage.
+      - expr: 'ALERTS{alertname="MetricsCardinalityOverflow", alertstate="firing"}'
+        eval_time: 10m15s
+        exp_samples:
+          - labels: 'ALERTS{alertname="MetricsCardinalityOverflow", alertstate="firing", severity="ticket"}'
+            value: 1
+      - expr: 'ALERTS{alertname="MetricsCardinalityOverflow", alertstate="firing"}'
+        eval_time: 60m
+        exp_samples:
+          - labels: 'ALERTS{alertname="MetricsCardinalityOverflow", alertstate="firing", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: a registry that has never capped anything raises nothing
+    input_series:
+      # The normal state, and the one the deployment is in for its whole life if
+      # every label really does come from a closed set.
+      - series: 'prl_metrics_cardinality_overflow'
+        values: '0+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="MetricsCardinalityOverflow"}'
+        eval_time: 30m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="MetricsCardinalityOverflow"}'
+        eval_time: 90m
+        exp_samples: []
+
+  - interval: 15s
+    name: the series count rising towards the cap without reaching it raises nothing
+    input_series:
+      # `prl_metrics_series` climbing is a deployment being used, not a defect,
+      # and the rule deliberately does not read it — a threshold on the count
+      # would be a number nobody could derive. Only the overflow flag speaks.
+      - series: 'prl_metrics_series'
+        values: '200+2x400'
+      - series: 'prl_metrics_cardinality_overflow'
+        values: '0+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="MetricsCardinalityOverflow"}'
+        eval_time: 60m
+        exp_samples: []
+      # The gauge holds only 0 and 1, which is what makes `== 1` an equality
+      # rather than a threshold. If a third value is ever introduced this
+      # assertion is where it is noticed.
+      - expr: 'count(prl_metrics_cardinality_overflow == 0)'
+        eval_time: 60m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  - interval: 15s
+    name: readiness in and out of the load balancer eight times raises a ticket
+    input_series:
+      # A marginal database: `/ready` reports degraded, recovers, and does it
+      # again, every ninety seconds. Nothing is down long enough to page, and
+      # taking an instance in and out repeatedly is worse for learners than
+      # being cleanly out — which is the whole argument for this rule.
+      - series: 'prl_readiness_state'
+        values: '1+0x5 0+0x5 1+0x5 0+0x5 1+0x5 0+0x5 1+0x5 0+0x5 1+0x300'
+    promql_expr_test:
+      # Six changes is not yet more than six. The rule is `> 6`, and this is the
+      # only case in the suite that can tell that from `>= 6`.
+      - expr: 'changes(prl_readiness_state[30m])'
+        eval_time: 9m30s
+        exp_samples:
+          - labels: '{}'
+            value: 6
+      - expr: 'ALERTS{alertname="ReadinessFlapping"}'
+        eval_time: 9m30s
+        exp_samples: []
+      # The seventh transition lands at t=10m30s and the very next evaluation
+      # raises the ticket, there being no `for:`.
+      - expr: 'ALERTS{alertname="ReadinessFlapping", alertstate="firing"}'
+        eval_time: 11m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ReadinessFlapping", alertstate="firing", severity="ticket"}'
+            value: 1
+      - expr: 'ALERTS{alertname="ReadinessFlapping", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ReadinessFlapping", alertstate="firing", severity="ticket"}'
+            value: 1
+      # And the page stays silent: nothing was degraded for five continuous
+      # minutes. One event, one tier, one notification.
+      - expr: 'ALERTS{alertname="ApiNotReady"}'
+        eval_time: 20m
+        exp_samples: []
+
+  - interval: 15s
+    name: one clean transition out of the load balancer is not flapping
+    input_series:
+      # A database that went away and stayed away. One change in thirty minutes,
+      # and the rule that should speak is the page, not this ticket — otherwise
+      # a real outage arrives as two notifications at two tiers.
+      - series: 'prl_readiness_state'
+        values: '1+0x40 0+0x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ReadinessFlapping"}'
+        eval_time: 20m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ReadinessFlapping"}'
+        eval_time: 60m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ApiNotReady", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ApiNotReady", alertstate="firing", severity="page"}'
+            value: 1
+
+  - interval: 15s
+    name: a deploy is one transition each way and raises neither
+    input_series:
+      # Out of the load balancer while the container is replaced and back in
+      # afterwards: two changes, which is what every deploy in this repository
+      # produces and what a threshold of 6 exists to sit above.
+      - series: 'prl_readiness_state'
+        values: '1+0x40 0+0x7 1+0x300'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="ReadinessFlapping"}'
+        eval_time: 20m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ReadinessFlapping"}'
+        eval_time: 60m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="ApiNotReady"}'
+        eval_time: 60m
+        exp_samples: []

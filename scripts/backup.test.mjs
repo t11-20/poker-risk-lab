@@ -45,7 +45,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   archiveHeader,
@@ -56,14 +56,20 @@ import {
   compareCensus,
   decodeKeyMaterial,
   decryptFrames,
+  deepVerifyResults,
   encryptFrames,
+  isPlainArchiveFileName,
   isSafeDatabaseName,
   manifestSignature,
   manifestSignatureValid,
+  neutraliseGrantedBy,
   parseArgs,
   readInventory,
   resolveDirectory,
   selectForRetention,
+  sourceDatabaseOf,
+  sourceDatabases,
+  unsafeArchiveFileNames,
   weekBucket,
 } from './backup.mjs';
 
@@ -110,13 +116,13 @@ const frameRegionStart = (header) => 8 + 4 + Buffer.byteLength(canonicalJson(hea
  *
  * `good` defaults to true; the retention tests turn it off to build the corrupt-newest case.
  */
-function backupAt(iso, { good = true, id = null } = {}) {
+function backupAt(iso, { good = true, id = null, source = null } = {}) {
   return {
-    id: id ?? `prl-test-${iso.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}`,
+    id: id ?? `prl-${source ?? 'test'}-${iso.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z')}`,
     createdAt: iso,
     createdAtMs: Date.parse(iso),
     manifestPath: `/nowhere/${iso}.manifest.json`,
-    manifest: { files: [] },
+    manifest: source === null ? { files: [] } : { files: [], source: { database: source } },
     bytes: 1024,
     signatureOk: good,
     problems: good ? [] : ['manifest signature does not verify'],
@@ -134,6 +140,59 @@ function dailySeries(days, endIso = '2026-08-22T02:00:00.000Z') {
 
 const POLICY = { daily: 7, weekly: 4, monthly: 6 };
 const idsOf = (list) => list.map((entry) => entry.id);
+
+// ---------------------------------------------------------------------------
+// The globals payload
+// ---------------------------------------------------------------------------
+
+describe('applying cluster globals', () => {
+  // The exact tail of this cluster's `pg_dumpall --globals-only`, decrypted from a real archive.
+  const GLOBALS = [
+    'CREATE ROLE prl_app;',
+    "ALTER ROLE prl_api WITH LOGIN PASSWORD 'SCRAM-SHA-256$4096:notarealverifier';",
+    'GRANT prl_app TO prl_api WITH INHERIT TRUE GRANTED BY poker;',
+    'GRANT prl_migrator TO prl_deployer WITH INHERIT TRUE GRANTED BY poker;',
+  ].join('\n');
+
+  it('NEGATIVE CONTROL: the GRANTED BY clause PostgreSQL 16 refuses is removed', () => {
+    // Measured against a virgin postgres:16-bookworm, running the shipped command from
+    // docs/production/disaster-recovery.md §5.4 for "a genuinely fresh cluster":
+    //
+    //   ✗ psql exited 3
+    //       ERROR:  permission denied to grant privileges as role "poker"
+    //       DETAIL:  The grantor must have the ADMIN option on role "prl_app".
+    //
+    // It fails as the new cluster's superuser and it fails again after `SET ROLE poker`. The
+    // cluster was left with five roles and zero memberships, and the restore never ran.
+    const { sql, stripped } = neutraliseGrantedBy(GLOBALS);
+    assert.equal(stripped, 2, 'both membership grants must be rewritten');
+    assert.doesNotMatch(sql, /GRANTED BY/i, 'no clause may survive; one is enough to fail the restore');
+    assert.match(sql, /GRANT prl_app TO prl_api WITH INHERIT TRUE;/, 'the membership itself is kept');
+    assert.match(sql, /GRANT prl_migrator TO prl_deployer WITH INHERIT TRUE;/);
+  });
+
+  it('leaves everything that is not a GRANT alone, including a password', () => {
+    // The verifier is the reason this payload is encrypted. A rewrite that touched it would be
+    // the worst possible bug in this function: the roles would restore and nobody could log in.
+    const { sql } = neutraliseGrantedBy(GLOBALS);
+    assert.match(sql, /ALTER ROLE prl_api WITH LOGIN PASSWORD 'SCRAM-SHA-256\$4096:notarealverifier';/);
+    assert.match(sql, /^CREATE ROLE prl_app;$/m);
+  });
+
+  it('does not rewrite a line that merely mentions the words', () => {
+    const text = "SELECT 'granted by poker';\nCOMMENT ON ROLE prl_app IS 'granted by poker';";
+    const { sql, stripped } = neutraliseGrantedBy(text);
+    assert.equal(stripped, 0);
+    assert.equal(sql, text);
+  });
+
+  it('is a no-op on a globals dump that has no grantor recorded', () => {
+    const text = 'CREATE ROLE prl_app;\nGRANT prl_app TO prl_api;';
+    const { sql, stripped } = neutraliseGrantedBy(text);
+    assert.equal(stripped, 0);
+    assert.equal(sql, text);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Retention
@@ -230,6 +289,63 @@ describe('retention selection', () => {
     const removed = plan.delete.find((entry) => entry.id === broken.id);
     assert.ok(removed !== undefined, 'it must not silently be kept');
     assert.match(removed.reason, /createdAt/);
+  });
+
+  it('NEGATIVE CONTROL: one directory, two source databases — each keeps its own newest good', () => {
+    // Reproduced against the pre-fix code, with two real archives in one directory and the
+    // shipped 7/4/6 policy: a 149.8 MiB archive of `poker_risk_lab` (944,297 rows) taken at
+    // 18:28 was planned for deletion, and a 77.6 KiB archive of an empty
+    // `poker_risk_lab_restored` taken ten minutes later was kept as "newest good backup (never
+    // deleted)". Both are the ONLY copy of their database. Consolidating archives off the
+    // backed-up host is what docs/production/disaster-recovery.md §5.5 asks for, so a shared
+    // directory is the recommended posture and not an abuse.
+    const big = backupAt('2026-08-25T18:28:44.000Z', { source: 'poker_risk_lab' });
+    const small = backupAt('2026-08-25T18:38:52.000Z', { source: 'poker_risk_lab_restored' });
+    const plan = selectForRetention([small, big], POLICY);
+    assert.deepEqual(idsOf(plan.delete), [], 'neither database may lose its only backup');
+    assert.equal(plan.keep.length, 2);
+    for (const kept of plan.keep) {
+      assert.ok(
+        kept.reasons.includes('newest good backup (never deleted)'),
+        `${kept.id} must be protected in its own group, got ${kept.reasons.join(', ')}`,
+      );
+    }
+  });
+
+  it('NEGATIVE CONTROL: a zero policy keeps one survivor PER source database, not one overall', () => {
+    // The sharpest form: `--daily 0 --weekly 0 --monthly 0` with two sources. Grouping by
+    // directory leaves exactly one archive alive and the other database with none at all.
+    const plan = selectForRetention(
+      [
+        ...dailySeries(5).map((entry) => ({
+          ...entry,
+          id: `${entry.id}-a`,
+          manifest: { files: [], source: { database: 'alpha' } },
+        })),
+        ...dailySeries(5).map((entry) => ({
+          ...entry,
+          id: `${entry.id}-b`,
+          manifest: { files: [], source: { database: 'beta' } },
+        })),
+      ],
+      { daily: 0, weekly: 0, monthly: 0 },
+    );
+    assert.equal(plan.keep.length, 2, 'one survivor for alpha and one for beta');
+    assert.deepEqual(
+      plan.keep.map((entry) => sourceDatabaseOf(entry)).sort(),
+      ['alpha', 'beta'],
+      'the survivors must be one of each, not two of whichever is newest',
+    );
+  });
+
+  it('reports the distinct source databases in an inventory', () => {
+    const inventory = [
+      backupAt('2026-08-25T03:00:00.000Z', { source: 'beta' }),
+      backupAt('2026-08-25T02:00:00.000Z', { source: 'alpha' }),
+      backupAt('2026-08-24T02:00:00.000Z', { source: 'alpha' }),
+    ];
+    assert.deepEqual(sourceDatabases(inventory), ['beta', 'alpha']);
+    assert.deepEqual(sourceDatabases([backupAt('2026-08-25T02:00:00.000Z')]), [null]);
   });
 
   it('keeps everything when the policy is wider than the history', () => {
@@ -519,6 +635,227 @@ describe('reading an archive directory', () => {
       () => readInventory(join(tmpdir(), 'prl-backup-definitely-not-here'), MATERIAL),
       /no archive directory/,
     );
+  });
+
+  /**
+   * NEGATIVE CONTROL for the `prune --apply` path traversal.
+   *
+   * Confirmed to fail against the old code: with `readInventory` unchanged, this planted name
+   * produced `good: false` only because the file was reported missing (`../VICTIM.txt is
+   * missing`), never because the NAME was refused — and `prune --apply` then took the same name
+   * to `rm(join(directory, name))` and unlinked the file one level up. Reproduced by hand in a
+   * scratch directory: a manifest whose `files[0].name` was `../VICTIM.txt` deleted
+   * `<dir>/../VICTIM.txt` and the command exited 0 with `PASS prune applied`.
+   */
+  it('refuses a manifest whose payload name is a path rather than a file name', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'prl-backup-test-'));
+    try {
+      const salt = Buffer.alloc(32, 5);
+      const id = 'prl-evil-20260822T000000Z';
+      // The file the traversal aims at, and a decoy at the name the manifest ought to carry.
+      // If the guard ever regressed to "resolve and compare", the victim being present is what
+      // makes the stat succeed and the archive look good.
+      const victim = join(dir, '..', `prl-victim-${process.pid}.txt`);
+      await writeFile(victim, 'do not delete me');
+      const body = {
+        format: 'prl-backup/1',
+        id,
+        createdAt: '2026-08-22T00:00:00.000Z',
+        source: { database: 'poker_risk_lab' },
+        encryption: { salt: salt.toString('base64') },
+        files: [
+          {
+            name: `../prl-victim-${process.pid}.txt`,
+            payload: 'database',
+            cipherBytes: 16,
+            cipherSha256: 'a'.repeat(64),
+            plainBytes: 16,
+            plainSha256: 'b'.repeat(64),
+            frames: 1,
+          },
+        ],
+        rowCounts: {},
+      };
+      // Signed with the REAL key, so the refusal cannot be an accident of the signature check.
+      await writeFile(
+        join(dir, `${id}.manifest.json`),
+        JSON.stringify({ ...body, hmac: manifestSignature(MATERIAL, salt, body) }, null, 2),
+      );
+
+      const inventory = await readInventory(dir, MATERIAL);
+      assert.equal(inventory.length, 1);
+      assert.equal(inventory[0].signatureOk, true, 'the fixture must be a correctly signed manifest');
+      assert.equal(inventory[0].good, false, 'an archive naming a path outside the directory is not good');
+      assert.match(inventory[0].problems.join(' '), /not a plain file name/);
+
+      // And the gate `prune --apply` consults names it, so nothing is deleted.
+      const offences = unsafeArchiveFileNames(inventory);
+      assert.equal(offences.length, 1, 'the traversal must be reported, not skipped');
+      assert.equal(offences[0].id, id);
+      assert.match(offences[0].name, /\.\./);
+    } finally {
+      await rm(join(dir, '..', `prl-victim-${process.pid}.txt`), { force: true });
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Archive file-name containment
+// ---------------------------------------------------------------------------
+
+describe('archive payload names', () => {
+  it('accepts the two shapes this format actually writes', () => {
+    assert.equal(isPlainArchiveFileName('prl-x-20260822T000000Z.dump.enc'), true);
+    assert.equal(isPlainArchiveFileName('prl-x-20260822T000000Z.globals.sql.enc'), true);
+  });
+
+  /**
+   * The positive control above is what makes this list mean something: a predicate that
+   * returned false for everything would pass a block full of `assert.equal(..., false)`.
+   */
+  it('refuses every shape that escapes the archive directory', () => {
+    for (const name of ['../VICTIM.txt', '../../etc/passwd', '..', '../']) {
+      assert.equal(isPlainArchiveFileName(name), false, `${JSON.stringify(name)} must be refused`);
+      // The property the refusal exists for, stated independently of the predicate rather than
+      // taken on trust from it: `join(directory, name)` is a path OUTSIDE the archive
+      // directory, so the old `rm(join(directory, name), { force: true })` unlinked a file the
+      // operator never put there.
+      assert.equal(
+        join('/archives', name).startsWith('/archives/'),
+        false,
+        `${JSON.stringify(name)} would have been unlinked at ${join('/archives', name)}`,
+      );
+    }
+  });
+
+  /**
+   * These land inside the directory, so they are not traversals. They are refused anyway: this
+   * format writes exactly two names (see `archiveFileName`), so a manifest carrying a separator
+   * at all was not written by this tool, and a "resolve and compare" guard that accepted them
+   * would be one refactor away from accepting `..` again.
+   */
+  it('refuses contained names that this format nevertheless never writes', () => {
+    for (const name of ['sub/x.dump.enc', 'sub/../x.dump.enc', './x.dump.enc', '..\\VICTIM.txt', '.', '']) {
+      assert.equal(isPlainArchiveFileName(name), false, `${JSON.stringify(name)} must be refused`);
+    }
+  });
+
+  /**
+   * `join('/archives', '/etc/passwd')` is `/archives/etc/passwd`, so an absolute name is
+   * contained TODAY, purely because the call site uses `join` and not `resolve`. That is a
+   * property of one line somewhere else, not of the name, and `resolve` is the function most
+   * people reach for — so the name is refused here rather than relying on the caller.
+   */
+  it('refuses an absolute name even though `join` currently neutralises it', () => {
+    assert.equal(join('/archives', '/etc/passwd'), '/archives/etc/passwd', 'join, not resolve');
+    assert.equal(resolve('/archives', '/etc/passwd'), '/etc/passwd', 'which is what resolve would do');
+    assert.equal(isPlainArchiveFileName('/etc/passwd'), false);
+    assert.equal(isPlainArchiveFileName('/var/backups/x.dump.enc'), false);
+  });
+
+  it('refuses a name carrying a NUL, which is not the name the kernel would act on', () => {
+    assert.equal(isPlainArchiveFileName('x.dump.enc\0.txt'), false);
+  });
+
+  it('refuses a name that is not a string at all', () => {
+    for (const name of [undefined, null, 42, {}, ['x.dump.enc']]) {
+      assert.equal(isPlainArchiveFileName(name), false);
+    }
+  });
+
+  it('reports nothing for a delete set whose manifests are all well formed', () => {
+    const clean = [
+      { id: 'a', manifestPath: '/archives/a.manifest.json', manifest: { files: [{ name: 'a.dump.enc' }] } },
+      { id: 'b', manifestPath: '/archives/b.manifest.json', manifest: { files: [] } },
+      { id: 'c', manifestPath: '/archives/c.manifest.json', manifest: null },
+    ];
+    assert.deepEqual(unsafeArchiveFileNames(clean), []);
+  });
+
+  it('reports every offending name in the set, not just the first', () => {
+    const offences = unsafeArchiveFileNames([
+      { id: 'a', manifestPath: '/archives/a.manifest.json', manifest: { files: [{ name: '../one' }] } },
+      { id: 'b', manifestPath: '/archives/b.manifest.json', manifest: { files: [{ name: 'b.dump.enc' }] } },
+      {
+        id: 'c',
+        manifestPath: '/archives/c.manifest.json',
+        manifest: { files: [{ name: 'c.dump.enc' }, { name: '/etc/passwd' }] },
+      },
+    ]);
+    assert.deepEqual(
+      offences.map((offence) => `${offence.id}:${offence.name}`),
+      ['a:../one', 'c:/etc/passwd'],
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// verify --deep
+// ---------------------------------------------------------------------------
+
+describe('the verdict a --deep verification reports', () => {
+  const CENSUS_OK = { ok: true, summary: '3 tables compared' };
+
+  it('passes both claims when the restore matched and the scratch database went away', () => {
+    const results = deepVerifyResults({
+      comparison: CENSUS_OK,
+      dropFailure: null,
+      scratch: 'prl_verify_x',
+      elapsedMs: 1234,
+    });
+    assert.equal(
+      results.every((result) => result.ok),
+      true,
+    );
+    assert.match(results.map((result) => result.message).join(' | '), /dropped the scratch database/);
+  });
+
+  /**
+   * NEGATIVE CONTROL for the defect at `verifyArchive`'s `finally`.
+   *
+   * The old code called `cross(...)` on a failed drop. `cross` in backup.mjs is a pure printer —
+   * unlike the same-named helper in staging.mjs it feeds no verdict — so the failure reached
+   * stderr and NOTHING else: `commandVerify` computed `results.every(r => r.ok)` over a list
+   * that had never heard about the drop, printed `PASS verification`, and returned 0. Confirmed
+   * against the old code by calling `verifyArchive` with a `dropDatabase` stub that rejects:
+   * every result came back `ok: true` and the single layer-4 message read "restored into a
+   * scratch database and dropped it".
+   *
+   * Two assertions, because the defect had two halves — the verdict and the sentence.
+   */
+  it('fails, and does not claim a drop, when the scratch database could not be dropped', () => {
+    const results = deepVerifyResults({
+      comparison: CENSUS_OK,
+      dropFailure: 'psql: FATAL: database "prl_verify_x" is being accessed by other users',
+      scratch: 'prl_verify_x',
+      elapsedMs: 1234,
+    });
+    assert.equal(
+      results.some((result) => !result.ok),
+      true,
+      'a leftover plaintext copy of the database must fail the command',
+    );
+    const prose = results.map((result) => `${result.message} ${result.detail}`).join(' | ');
+    assert.equal(/dropped it/.test(prose), false, 'no line may claim a drop that did not happen');
+    assert.match(prose, /STILL ON THE CLUSTER/);
+    assert.match(prose, /DROP DATABASE prl_verify_x/, 'the operator must be told how to finish the job');
+  });
+
+  it('reports the census failure and the drop failure separately', () => {
+    const results = deepVerifyResults({
+      comparison: { ok: false, summary: 'EMPTY after restore: users' },
+      dropFailure: 'connection refused',
+      scratch: 'prl_verify_y',
+      elapsedMs: 10,
+    });
+    assert.equal(results.length, 2, 'two claims, two records');
+    assert.equal(
+      results.every((result) => !result.ok),
+      true,
+    );
+    assert.match(results[0].detail, /EMPTY after restore/);
+    assert.match(results[1].detail, /connection refused/);
   });
 });
 

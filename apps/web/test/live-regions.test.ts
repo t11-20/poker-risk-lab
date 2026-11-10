@@ -54,6 +54,7 @@ import type { PlayerView, SeatView } from '@prl/ui';
 import {
   COACH_FAILED_ANNOUNCEMENT,
   COACH_READY_ANNOUNCEMENT,
+  DEAL_ANNOUNCEMENT,
   EMPTY_TABLE_STATE,
   isViewersTurn,
   type PendingDecision,
@@ -63,6 +64,9 @@ import {
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const read = (...parts: readonly string[]): string => readFileSync(join(SRC, ...parts), 'utf8');
+/** `@prl/ui`'s source, for the one predicate three components in this app now share. */
+const UI_SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'packages', 'ui', 'src');
+const readUi = (...parts: readonly string[]): string => readFileSync(join(UI_SRC, ...parts), 'utf8');
 
 /**
  * Source with its comments removed.
@@ -176,8 +180,14 @@ describe('the Coach’s arrival is announced', () => {
     });
     assert.equal(refused.coachDuringHand, false);
     assert.equal(refused.coach, null);
-    assert.equal(refused.coachRequestId, null);
+    assert.equal(refused.coachRequest, null);
     assert.match(refused.announcement, /review afterwards/u);
+    // And it KEEPS the server's own wording, which is the only thing this client actually learns
+    // about why the analysis is off at this table. See the block at the bottom of this file.
+    assert.equal(
+      refused.coachRefusal,
+      'The Coach is available in review after the hand, not while it is being played at this difficulty.',
+    );
   });
 
   it('says nothing for an answer to a request nobody made', () => {
@@ -303,6 +313,85 @@ function eventFrame(description: string): WsServerMessage {
   } as unknown as WsServerMessage;
 }
 
+/** The two events one `startHand` produces, in the order the API writes them. */
+function handStartedFrame(): WsServerMessage {
+  return {
+    type: 'event',
+    event: { kind: 'handStarted', handId: 'hand-1', commitmentRoot: 'root' },
+    serverTimeMs: 0,
+  } as unknown as WsServerMessage;
+}
+
+function forcedBetsFrame(detail: string): WsServerMessage {
+  return {
+    type: 'event',
+    event: { kind: 'forcedBets', detail },
+    serverTimeMs: 0,
+  } as unknown as WsServerMessage;
+}
+
+describe('the deal is announced with the blinds, in one write', () => {
+  const BLINDS = 'smallBlind 5 from seat 3, bigBlind 10 from seat 4';
+
+  it('writes nothing of its own when the hand starts', () => {
+    // The defect: `handStarted` used to put "A new hand was dealt." straight into the region, and
+    // `forcedBets` — the very next event of the SAME table notice — replaced it microseconds later.
+    // Two writes into one atomic polite region for one notice are one announcement, and it is the
+    // second one, so the deal was never heard. Measured in Chrome 151 by scripts/ax-assertions.mjs.
+    const dealt = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: handStartedFrame() });
+    assert.equal(
+      dealt.announcement,
+      '',
+      'the deal must not take the region on its own; whatever it writes there is taken back by ' +
+        'the forced bets before any reader could hear it',
+    );
+    assert.equal(dealt.carried, DEAL_ANNOUNCEMENT, 'the sentence has to be kept for the next write');
+  });
+
+  it('carries the deal onto the front of the forced bets', () => {
+    const dealt = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: handStartedFrame() });
+    const posted = tableReducer(dealt, { kind: 'frame', frame: forcedBetsFrame(BLINDS) });
+    assert.equal(posted.announcement, `${DEAL_ANNOUNCEMENT} ${BLINDS}`);
+    assert.equal(posted.carried, '', 'a carried sentence is consumed once');
+  });
+
+  it('does not say it twice — the defect on the other side', () => {
+    // `role="status"` is atomic, so a sentence left in front of the table's later narration is read
+    // again on every event for the rest of the hand. That is the failure 3.17 exists to catch, and
+    // an implementation that wrote the deal and then APPENDED the blinds would produce it whenever
+    // the two frames landed in separate commits.
+    const dealt = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: handStartedFrame() });
+    const posted = tableReducer(dealt, { kind: 'frame', frame: forcedBetsFrame(BLINDS) });
+    const next = tableReducer(posted, { kind: 'frame', frame: eventFrame('Seat 3 called 50 units') });
+    assert.equal(next.announcement, 'Seat 3 called 50 units');
+    assert.doesNotMatch(next.announcement, /A new hand was dealt/u);
+  });
+
+  it('mounts the narration region outside the component that draws the table', () => {
+    // The other half of the same defect, and the one a reducer test cannot see. `PokerTable` is not
+    // rendered until a view arrives, and the frames that start a hand bring the first sentence and
+    // the first view in one commit — so the region used to be created already holding its text, and
+    // a live region that arrives with its text is announced by nothing.
+    const stage = withoutComments(read('components', 'TableStage.tsx'));
+    const table = stage.indexOf('<PokerTable');
+    const region = stage.indexOf('className="prl-live-region"');
+    assert.ok(region >= 0 && table >= 0, 'TableStage no longer owns the narration region');
+    assert.ok(
+      region < table,
+      'the narration region must be mounted unconditionally, before the conditional that renders ' +
+        'the table — otherwise the first hand of every session announces nothing',
+    );
+    assert.doesNotMatch(
+      readFileSync(
+        join(SRC, '..', '..', '..', 'packages', 'ui', 'src', 'components', 'PokerTable.tsx'),
+        'utf8',
+      ),
+      /className="prl-live-region"/u,
+      'putting the region back inside PokerTable puts it back inside a conditional',
+    );
+  });
+});
+
 const FOLD: PendingDecision = {
   action: { type: 'fold' },
   actionId: 'act-1',
@@ -381,7 +470,7 @@ describe('the table announces whose decision it is', () => {
 
 describe('the reader’s own decision is echoed once, not prefixed forever', () => {
   it('announces the decision as a state change', () => {
-    const sent = tableReducer(EMPTY_TABLE_STATE, { kind: 'submit', pending: FOLD });
+    const sent = tableReducer(EMPTY_TABLE_STATE, { kind: 'submit', pending: FOLD, delivery: 'sent' });
     assert.equal(sent.announcement, 'You chose to fold.');
     assert.equal(sent.submission?.status, 'pending');
   });
@@ -390,7 +479,7 @@ describe('the reader’s own decision is echoed once, not prefixed forever', () 
     // The defect: `TableStage` used to CONCATENATE this phrase onto every announcement, and
     // `role="status"` is atomic — so every subsequent event was read out as "You chose to fold.
     // Seat 3 called 50 units." for the rest of the street.
-    const sent = tableReducer(EMPTY_TABLE_STATE, { kind: 'submit', pending: FOLD });
+    const sent = tableReducer(EMPTY_TABLE_STATE, { kind: 'submit', pending: FOLD, delivery: 'sent' });
     const next = tableReducer(sent, { kind: 'frame', frame: eventFrame('Seat 3 called 50 units') });
     assert.equal(next.announcement, 'Seat 3 called 50 units');
     assert.doesNotMatch(next.announcement, /You chose/u);
@@ -398,7 +487,7 @@ describe('the reader’s own decision is echoed once, not prefixed forever', () 
 
   it('leaves the turn sentence alone, so a refused decision can still be re-announced', () => {
     const mine = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: stateFrame(DECISION_VIEW, 1) });
-    const sent = tableReducer(mine, { kind: 'submit', pending: FOLD });
+    const sent = tableReducer(mine, { kind: 'submit', pending: FOLD, delivery: 'sent' });
     assert.equal(
       sent.turnAnnouncement,
       mine.turnAnnouncement,
@@ -437,13 +526,35 @@ describe('a refusal interrupts, and everything else is polite', () => {
     );
   });
 
-  it('wraps the server’s other refusals in an alert too', () => {
-    const live = read('app', 'play', 'LiveTable.tsx');
+  it('wraps the server’s other refusals in an alert too, in EVERY branch', () => {
+    // `notice` is the server refusing something that was not a decision — a seat that had gone, a
+    // hand somebody else started, a rate limit — and it was once silent: a plain Callout with no
+    // live-region ancestor, so the reader pressed a button and nothing said anything.
+    //
+    // There are two branches now, because `enrolment_required` needs a heading and a next step of
+    // its own rather than "The server refused something". A split is exactly how one of them
+    // quietly becomes a silent Callout again, so both are checked AND the number of branches is
+    // asserted — a third one added without an alert must fail here rather than pass because the
+    // two named patterns still match.
+    const live = withoutComments(read('app', 'play', 'LiveTable.tsx'));
+    const branches = live.match(/\{table\.notice\s*(?:!==|===)\s*null/gu) ?? [];
+    assert.equal(
+      branches.length,
+      2,
+      `expected exactly two conditional renders of table.notice, found ${branches.length}. Every ` +
+        'one of them has to be inside a role="alert", and this count is what stops a new branch ' +
+        'from being added silently.',
+    );
     assert.match(
       live,
-      /\{table\.notice === null \? null : \(\s*<div role="alert">/u,
-      '`notice` is the server refusing something that was not a decision — a seat that had gone, a ' +
-        'hand somebody else started, a rate limit — and it was silent',
+      /\{table\.notice !== null && table\.noticeCode === 'enrolment_required' \? \(\s*<div role="alert">/u,
+      'the enrolment refusal is permanent until an operator acts, so it is the one the reader most ' +
+        'needs announced rather than merely drawn',
+    );
+    assert.match(
+      live,
+      /\{table\.notice !== null && table\.noticeCode !== 'enrolment_required' \? \(\s*<div role="alert">/u,
+      'every other refusal keeps the generic alert it has always had',
     );
   });
 
@@ -464,11 +575,31 @@ describe('a refusal interrupts, and everything else is polite', () => {
     // reader is in the Coach panel yanks them back to the controls; without the second, this steals
     // focus from whatever legitimately holds it.
     assert.match(stage, /if \(submission === null \|\| !hadFocus\.current\) return;/u);
+    // The second guard used to be spelled out here as three comparisons. It is now one call to
+    // `browserAbandonedFocus`, shared from `@prl/ui`, because three components carried a copy and
+    // one of them — `LiveTable` — was a version behind and would never have fired. So this asserts
+    // the call, and the three states are asserted where the predicate actually lives.
     assert.match(
       stage,
-      /if \(active !== null && active !== document\.body && active !== document\.documentElement\) return;/u,
-      'the rescue must also recognise Chrome’s <html> activeElement as abandoned focus',
+      /if \(!browserAbandonedFocus\(\)\) return;/u,
+      'the rescue must still stand down when something legitimately holds focus',
     );
+    const predicate = readUi('components', 'ActionBar.tsx');
+    assert.match(
+      predicate,
+      /export function browserAbandonedFocus\(\): boolean \{[\s\S]*?active === null[\s\S]*?\}/u,
+      'browserAbandonedFocus no longer treats a null activeElement as abandoned',
+    );
+    for (const state of ['document\\.body', 'document\\.documentElement']) {
+      assert.match(
+        predicate,
+        new RegExp(
+          `export function browserAbandonedFocus\\(\\): boolean \\{[\\s\\S]*?${state}[\\s\\S]*?\\}`,
+          'u',
+        ),
+        `browserAbandonedFocus must recognise ${state} as abandoned focus — Chrome uses both`,
+      );
+    }
   });
 
   it('gives the caret somewhere with a name to land on', () => {
@@ -532,5 +663,130 @@ describe('a field that cannot be used says so on the field', () => {
 
   it('marks the invite-code field invalid when the server refused the code', () => {
     assert.match(read('app', 'play', 'LiveTable.tsx'), /aria-invalid=\{refused \? true : undefined\}/u);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Why the Coach is off, and the difference between knowing and assuming
+// ---------------------------------------------------------------------------
+
+/**
+ * The panel used to state a cause it had never observed.
+ *
+ * ## What a reader saw
+ *
+ * Live Coach goes off in two unrelated ways, and the panel printed one sentence for both:
+ *
+ *     "The Coach is available afterwards in review, not during this hand.
+ *      Expert keeps the analysis off the table so the style is the thing you are reading."
+ *
+ * That sentence names a difficulty. This page knows the difficulty in exactly one of the two
+ * cases — when it opened an Expert Legends match itself, from its own `?difficulty=expert`. The
+ * other case is a `coach_not_available` refusal from the server: a fact about whichever table the
+ * reader happens to be at, carrying no difficulty the client can read. Its wording was discarded
+ * (`coachProblem` is set to null for this code) and the Expert sentence printed in its place.
+ *
+ * Measured in Chrome 151 against the built app, with the API up. Play a hand at
+ * `/play?profile=vocal-aggressor&difficulty=expert`, then open plain `/play`. `chooseRoom` reuses
+ * the room the reader already owns, so:
+ *
+ *     (a) /play?profile=…&difficulty=expert   heading "Heads-up against this style"
+ *     (b) plain /play                          heading "Six-handed table"
+ *
+ * printed the *identical* Expert sentence. On (b) the reader chose no difficulty, the page passed
+ * no `legendMatch`, and the only thing it had learned was that the server had said no.
+ *
+ * ## What is asserted
+ *
+ * The reducer half is driven for real. The mapping from "what was established" to "which sentence"
+ * lives in `app/play/LiveTable.tsx` and is read from source, with the sentence that must NOT be
+ * reachable from a refusal named explicitly.
+ */
+describe('the Coach panel says the reason that applies, not the one that reads best', () => {
+  const REFUSAL =
+    'The Coach is available in review after the hand, not while it is being played at this difficulty.';
+
+  const refusedState = (): ReturnType<typeof tableReducer> => {
+    const asked = tableReducer(EMPTY_TABLE_STATE, {
+      kind: 'coachRequested',
+      requestId: 'coach-1',
+      key: '',
+    });
+    return tableReducer(asked, {
+      kind: 'frame',
+      frame: {
+        type: 'error',
+        requestId: 'coach-1',
+        error: { code: 'coach_not_available', message: REFUSAL, requestId: 'coach-1' },
+      },
+    });
+  };
+
+  it('keeps the server’s own wording for a refusal, rather than throwing it away', () => {
+    assert.equal(EMPTY_TABLE_STATE.coachRefusal, null, 'nothing has been refused yet');
+    assert.equal(refusedState().coachRefusal, REFUSAL);
+  });
+
+  it('does not treat any other refusal as a statement about the difficulty', () => {
+    const asked = tableReducer(EMPTY_TABLE_STATE, {
+      kind: 'coachRequested',
+      requestId: 'coach-2',
+      key: '',
+    });
+    const rateLimited = tableReducer(asked, {
+      kind: 'frame',
+      frame: {
+        type: 'error',
+        requestId: 'coach-2',
+        error: {
+          code: 'rate_limited',
+          message: 'You are doing that too quickly. Give it a moment.',
+          requestId: 'coach-2',
+        },
+      },
+    });
+    assert.equal(rateLimited.coachRefusal, null);
+    assert.equal(rateLimited.coachDuringHand, true, 'a rate limit does not turn live Coach off');
+  });
+
+  it('resets with the table, so a fresh table does not inherit another table’s refusal', () => {
+    const reset = tableReducer(refusedState(), { kind: 'reset' });
+    assert.equal(reset.coachRefusal, null);
+    assert.equal(reset.coachDuringHand, true);
+  });
+
+  it('routes the two causes to two sentences, and only one of them names Expert', () => {
+    const hook = read('lib', 'use-live-table.ts');
+    const panel = read('app', 'play', 'LiveTable.tsx');
+
+    // The hook decides WHAT was established. Expert first, because that is the stronger claim:
+    // this page opened the match, so the difficulty is its own parameter.
+    assert.match(hook, /options\.legendMatch\?\.difficulty === 'expert'\s*\?\s*\{ kind: 'expertLegends' \}/u);
+    assert.match(hook, /kind: 'refusedByServer', serverReason: table\.coachRefusal/u);
+
+    // The panel turns that into copy, and the Expert sentence is reachable from exactly one arm.
+    assert.match(
+      withoutComments(panel),
+      /off\.kind === 'expertLegends' \? EXPERT_COACH_REASON : refusedCoachReason\(off\.serverReason\)/u,
+    );
+    // A refusal's sentence is the server's own words. It must not mention a difficulty this page
+    // never saw — the whole defect in one assertion.
+    assert.doesNotMatch(
+      withoutComments(panel).replace(/const EXPERT_COACH_REASON =[\s\S]*?';/u, ''),
+      /Expert keeps the analysis off the table/u,
+      'the Expert wording appears somewhere other than the one constant it belongs to',
+    );
+
+    // NEGATIVE CONTROL: the old mapping, fed to the same detector. One boolean, one sentence.
+    const old = 'if (!live.coachDuringHand) return { coachUnavailableReason: EXPERT_COACH_REASON };';
+    assert.doesNotMatch(
+      withoutComments(panel),
+      /if \(!live\.coachDuringHand\) return \{ coachUnavailableReason: EXPERT_COACH_REASON \};/u,
+    );
+    assert.match(
+      old,
+      /if \(!live\.coachDuringHand\) return \{ coachUnavailableReason: EXPERT_COACH_REASON \};/u,
+      'the detector does not fire on the line it exists to refuse',
+    );
   });
 });

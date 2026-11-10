@@ -27,6 +27,8 @@
  * **Collapsible**, in `<details>`/`<summary>`:
  *   - the per-action EV table
  *   - the card-by-card outs breakdown (the *counts* stay visible)
+ *   - the paragraphs explaining the outs counts and the stack context (the *figures* stay visible;
+ *     the price's own sentence does not collapse, because it is the pot odds in words)
  *   - the derivations — the formulas and the rule-of-2-and-4 comparison
  *   - the teaching notes
  *
@@ -362,18 +364,27 @@ function OutsSection({ outs, heroEquity }: OutsSectionProps): ReactElement {
       <h3 className="prl-coach__section-heading">
         {areOuts ? `Outs — ${pluralise(outs.total, 'card')} in total` : 'Outs — no outs count for this spot'}
       </h3>
-      {areOuts ? null : (
-        <p className="prl-coach__prose">
-          An out is a card that rescues a hand that is behind, and you are not behind — your equity is already
-          past the share a card would have to reach to count as one. So there is no outs count here. The two
-          figures below are real, and they are cards that keep you in front rather than the size of a draw.
-        </p>
-      )}
       <div className="prl-outs__buckets">
         <OutsBucket kind="clean" count={outs.clean} areOuts={areOuts} />
         <OutsBucket kind="dirty" count={outs.dirty} areOuts={areOuts} />
       </div>
-      <p className="prl-coach__prose">{outs.explanation}</p>
+      {/* The counts are the boundary; the paragraphs explaining them are detail. Open, the order
+          is the one these paragraphs always had relative to each other. */}
+      <Disclose summary={areOuts ? 'Which cards, and why' : 'Why there is no outs count'}>
+        {areOuts ? (
+          <p className="prl-coach__prose">{outs.explanation}</p>
+        ) : (
+          <>
+            <p className="prl-coach__prose">
+              An out is a card that rescues a hand that is behind, and you are not behind — your equity is
+              already past the share a card would have to reach to count as one. So there is no outs count
+              here. The two figures above are real, and they are cards that keep you in front rather than the
+              size of a draw.
+            </p>
+            <p className="prl-coach__prose">{outs.explanation}</p>
+          </>
+        )}
+      </Disclose>
     </section>
   );
 }
@@ -441,7 +452,27 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
   );
 }
 
-function PriceSection({ potOdds }: { readonly potOdds: PotOddsSummary }): ReactElement {
+/**
+ * The price, and the pot it is a price into.
+ *
+ * `potOdds.pot` is the pot hero can actually WIN, which is below `potTotal` exactly when hero is
+ * all-in for less than the bet in front of them: the excess of that bet is a side pot hero is not
+ * eligible for. `potTotal` is taken separately rather than subtracted out of a single figure,
+ * because a reader looking at 320 chips in the middle and a tile saying "50 in the middle" has been
+ * handed two numbers that cannot both be right and no way to tell which is.
+ *
+ * So the tile names both, and says which is which. The Coach's own prose underneath explains why
+ * the side pot is out of reach; this is the figure that stops the two contradicting each other on
+ * the face of the panel.
+ */
+function PriceSection({
+  potOdds,
+  potTotal,
+}: {
+  readonly potOdds: PotOddsSummary;
+  readonly potTotal: number;
+}): ReactElement {
+  const beyondReach = potTotal - potOdds.pot;
   return (
     <section className="prl-coach__section">
       <h3 className="prl-coach__section-heading">The price</h3>
@@ -491,7 +522,16 @@ function PriceSection({ potOdds }: { readonly potOdds: PotOddsSummary }): ReactE
 
       <StatTile
         label="Pot and price"
-        value={`${formatUnits(potOdds.pot)} in the middle, ${formatUnits(potOdds.toCall)} to call`}
+        value={
+          beyondReach > 0
+            ? `${formatUnits(potOdds.pot)} of the ${formatUnits(potTotal)} in the middle, ${formatUnits(potOdds.toCall)} to call`
+            : `${formatUnits(potOdds.pot)} in the middle, ${formatUnits(potOdds.toCall)} to call`
+        }
+        {...(beyondReach > 0
+          ? {
+              note: `You are all-in for less than the bet, so ${formatUnits(beyondReach)} is a side pot you are not in. Every figure on this panel is against the ${formatUnits(potOdds.pot)} you can win.`,
+            }
+          : {})}
       />
 
       <p className="prl-coach__prose">{potOdds.explanation}</p>
@@ -522,7 +562,9 @@ function StackSection({ stack }: { readonly stack: StackContext }): ReactElement
           note="The equity a caller would need if the next bet were the size of the pot."
         />
       )}
-      <p className="prl-coach__prose">{stack.explanation}</p>
+      <Disclose summary="What this depth means for the decision">
+        <p className="prl-coach__prose">{stack.explanation}</p>
+      </Disclose>
     </section>
   );
 }
@@ -822,14 +864,25 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
       ) : null}
 
       {/* ---- always visible ------------------------------------------------------------- */}
+      {/*
+        The two figures a decision turns on, then the reading of the spot, then the detail behind
+        them. The reading was the last always-visible block, below outs and stack context, at the
+        bottom of a rail that scrolls for several screens. It is not first either, and that was tried:
+        its reason and its "what would change this" list are about 1,100px on their own, and leading
+        with them pushed the equity figure to 1,480px down the rail - the reading above the very
+        numbers it says it follows from. Measured in Chrome against the built app.
+      */}
       <div className="prl-coach__grid">
         <EquitySection equity={equity} interval={intervalText} surplus={report.potOdds.equitySurplus} />
-        <PriceSection potOdds={report.potOdds} />
-        <OutsSection outs={outs} heroEquity={equity.heroEquity} />
-        <StackSection stack={report.stackContext} />
+        <PriceSection potOdds={report.potOdds} potTotal={report.potTotal} />
       </div>
 
       <SuggestionBlock suggestion={report.suggestion} candidate={suggested} />
+
+      <div className="prl-coach__grid">
+        <OutsSection outs={outs} heroEquity={equity.heroEquity} />
+        <StackSection stack={report.stackContext} />
+      </div>
 
       {/* ---- collapsible: detail, never caveats ----------------------------------------- */}
       <div className="prl-coach__disclosures">

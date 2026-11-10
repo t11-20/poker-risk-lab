@@ -928,3 +928,33 @@ test('outsSummaryFor gives the Coach the counts, the card lists and one sentence
   assert.notEqual(madeSummary.refusal, null, 'the flattened shape has to carry the refusal too');
   assert.equal(madeSummary.refusal?.kind, 'already-ahead');
 });
+
+test('the counts agree with their verbs and their nouns (REGRESSION)', () => {
+  // "Of the 44 cards that can come next, 1 are clean and 0 are dirty, which is 1 outs in total."
+  // That sentence reached learners on nine of the thirty-six Lab scenarios. `coach.ts` has used
+  // `count === 1 ? 'is' : 'are'` all along; this file did not.
+  //
+  // The fixture is chosen to MAKE a count of one rather than hope for it: hero's set needs the one
+  // remaining eight, because the opponent holds the other.
+  const single = computeOuts({
+    heroCards: parseCards('8h 8d'),
+    board: parseCards('Ah Kd Qc Js'),
+    opponent: exactRange(parseCards('Ac 8s')),
+  });
+  assert.equal(single.cleanCount, 1, 'the fixture must produce a count of one for this to test anything');
+  assert.match(single.explanation, /\b1 is clean\b/u);
+  assert.ok(
+    !/\b\d+ are clean and \d+ are dirty\b/u.test(single.explanation) || single.cleanCount !== 1,
+    `a count of one was given a plural verb: "${single.explanation}"`,
+  );
+
+  // And a plural count keeps the plural verb, so the fix is a rule rather than a special case.
+  const many = computeOuts({
+    heroCards: parseCards('Ah 6h'),
+    board: parseCards('Kh 9h 4s 2c'),
+    opponent: exactRange(parseCards('Kd 9c')),
+  });
+  assert.equal(many.cleanCount, 9);
+  assert.match(many.explanation, /\b9 are clean\b/u);
+  assert.match(many.explanation, /\b9 outs in total\b/u);
+});

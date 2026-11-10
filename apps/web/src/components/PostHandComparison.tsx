@@ -75,7 +75,7 @@ import {
   withKeys,
 } from '@prl/ui';
 import type { ReactElement } from 'react';
-import { ActionDistribution } from './ActionDistribution.tsx';
+import { ActionDistribution, mostLikelyAction } from './ActionDistribution.tsx';
 import { LegendSigil } from './LegendSigil.tsx';
 import { ProfileDisclaimers } from './ProfileDisclaimers.tsx';
 
@@ -217,10 +217,22 @@ function DecisionMaths({ report }: { readonly report: CoachReport }): ReactEleme
           }
           value={report.potOdds.breakEvenEquity}
         />
+        {/*
+          `potOdds.pot` is the pot hero could WIN, which is the whole middle except where hero was
+          all-in for less than the bet in front of them. The label says "could win" rather than
+          "pot" so that a review of such a decision does not put a figure below `report.potTotal`
+          under a label claiming to be it.
+        */}
         <Metric
           format="units"
-          label="Pot before the decision"
-          note={priced ? `${formatUnits(report.toCall)} to call.` : 'Nothing to call.'}
+          label="Pot the decision was for"
+          note={
+            report.potTotal > report.potOdds.pot
+              ? `${formatUnits(report.toCall)} to call, with ${formatUnits(report.potTotal - report.potOdds.pot)} of the ${formatUnits(report.potTotal)} in the middle a side pot this seat was not in.`
+              : priced
+                ? `${formatUnits(report.toCall)} to call.`
+                : 'Nothing to call.'
+          }
           value={report.potOdds.pot}
         />
       </div>
@@ -437,14 +449,25 @@ function DecisionBlock({ decision }: { readonly decision: ComparedDecision }): R
       )}
 
       {decision.modelReasoning === null ? null : (
+        /*
+          The marked row is chosen FROM the distribution, never described a second time.
+
+          This used to build the string here — `raise to 1,200`, with `@prl/ui`'s grouping
+          `formatChips` — and compare it against rows built by `@prl/poker-ai`'s `describeAction`,
+          which formats with a private `String(value)` and therefore writes `raise to 1200`. For
+          any sizing of a thousand or more the two could never be equal, so no row was ever marked
+          "— most likely" and nothing on the screen said a mark had been dropped. Starting stacks
+          are 1,000; a raise past that is an ordinary hand, not an edge case.
+
+          It also fixes what was marked. `modelAction` is the action the policy SAMPLED, and this
+          component already prints that on its own line ("This model's action"). The row this
+          component marks is labelled "most likely", which is a claim about the weights — and the
+          weights are exactly what `ActionDistribution` was given. `mostLikelyAction` is the same
+          rule the API uses for the compare page: `distribution[0].action`, out of the array it is
+          already sending.
+        */
         <ModelReasoningBlock
-          modalAction={
-            decision.modelAction === null
-              ? undefined
-              : decision.modelAction.to === null
-                ? decision.modelAction.action
-                : `${decision.modelAction.action}${decision.modelAction.action === 'raise' ? ' to' : ''} ${formatChips(decision.modelAction.to)}`
-          }
+          modalAction={mostLikelyAction(decision.modelReasoning.actionProbabilities)}
           reasoning={decision.modelReasoning}
         />
       )}

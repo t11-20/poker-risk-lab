@@ -1,0 +1,123 @@
+# ---------------------------------------------------------------------------
+# The promotion registry: a loopback OCI registry, opt-in, for the one property
+# a local BuildKit digest cannot give you — that a DIFFERENT machine can fetch
+# these exact bytes.
+#
+# ## The blocker this exists for
+#
+# `pnpm run release:artifacts` records the digest BuildKit's exporter assigned in
+# the local image store. That value is a content address and it is honest, but it
+# names bytes that exist on exactly one machine. `docs/production/final-readiness-
+# report.md` carried it as an open residual — "the release images are identified
+# only by a local BuildKit digest, so they cannot be promoted across machines" —
+# and `docker-compose.staging.yml` had `pull_policy: never` because a pull would
+# have gone to Docker Hub for a repository called `prl-api` that belongs to
+# somebody else.
+#
+# This file is the registry that makes the digest fetchable. It is deliberately
+# NOT part of `pnpm run staging up`: the default release path still works with
+# nothing running here, and a machine with no registry behaves exactly as it did
+# before. You opt in:
+#
+#     docker compose -f deploy/registry/docker-compose.registry.yml up -d
+#     pnpm run release:artifacts -- --push
+#     pnpm run staging up          # deploys the registry reference, pull_policy always
+#
+# and out:
+#
+#     docker compose -f deploy/registry/docker-compose.registry.yml down
+#     (add --volumes to destroy the pushed artefacts as well)
+#
+# See deploy/registry/README.md for what a push proves, what it does not, and the
+# exact commands that were run to demonstrate the round trip.
+#
+# ## Loopback only, and 5001 rather than 5000
+#
+# The published port is `127.0.0.1:5001`, never `0.0.0.0`. This registry has no
+# authentication, no TLS and no authorization: anything that can reach it can push
+# an image under any name, and an unauthenticated registry on a laptop's LAN
+# address is a machine that serves whatever the coffee shop pushed to it. Docker
+# treats `127.0.0.1` and `localhost` as insecure-by-default registries, which is
+# what makes plain HTTP work here without editing daemon.json — and that same rule
+# is why this must never be moved off loopback.
+#
+# 5001 and not the conventional 5000, measured rather than guessed:
+#
+#     $ lsof -nP -iTCP:5000 -sTCP:LISTEN
+#     ControlCe  1514 terence   11u  IPv4  TCP *:5000 (LISTEN)
+#
+# macOS's AirPlay Receiver (ControlCenter) holds 5000 on every recent version. A
+# registry published there appears to start and then answers with somebody else's
+# 403, which presents as an unintelligible push failure rather than as a port
+# clash. `scripts/release-artifacts.mjs` defaults `--registry` to 127.0.0.1:5001
+# to match this file; change one and you must change the other.
+# ---------------------------------------------------------------------------
+
+# Its own compose project, so nothing here can ever be swept up by a
+# `docker compose down` against the staging stack — and so `docker compose ls`
+# shows a reader that the registry is a separate, optional thing.
+name: prl-registry
+
+services:
+  registry:
+    # registry:2 (distribution 2.8.3), pinned to the multi-architecture INDEX
+    # digest rather than to a per-platform manifest, so this line resolves on an
+    # arm64 laptop and on an amd64 runner alike. Same rule as every other image
+    # in this repository; `scripts/supply-chain/ci-pinning.mjs` enforces it and
+    # would fail on a bare `registry:2`.
+    image: registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+    restart: unless-stopped
+    init: true
+    ports:
+      # host:5001 -> container:5000. Bound to the loopback interface explicitly:
+      # `- '5001:5000'` would publish on every interface, which is the mistake
+      # this comment exists to stop.
+      - '127.0.0.1:5001:5000'
+    environment:
+      # Lets `docker compose ... down --volumes` be the only cleanup anyone needs
+      # by making DELETE work; without it a mistakenly pushed artefact can only be
+      # removed by destroying the volume.
+      REGISTRY_STORAGE_DELETE_ENABLED: 'true'
+      # The registry logs one line per blob at info; this is a build tool, and the
+      # push output is already the evidence.
+      REGISTRY_LOG_LEVEL: warn
+    volumes:
+      # A named volume, so pushed artefacts survive a container restart. Destroyed
+      # by `down --volumes`, which is the intended way to forget everything that
+      # was ever pushed here.
+      - registry-data:/var/lib/registry
+    healthcheck:
+      # /v2/ is the API version endpoint; a 200 from it is the registry saying it
+      # can serve. wget is in the image (it is Alpine); curl is not.
+      test: ['CMD', 'wget', '--quiet', '--spider', 'http://127.0.0.1:5000/v2/']
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # NOT `user: 65532:65532`, and this is the one place this repository's
+    # everything-runs-non-root rule is knowingly not applied. Measured:
+    #
+    #     $ docker run -u 65532:65532 -v prl-regtest:/var/lib/registry registry:2
+    #     $ docker push 127.0.0.1:5099/probe:t1
+    #     8bbaad1488a8: Unavailable
+    #     error from registry: unknown error
+    #
+    # The registry starts, answers /v2/ with a 200, and then cannot write a blob:
+    # docker initialises a fresh named volume from the image's own
+    # /var/lib/registry, which upstream ships owned by root, so a non-root process
+    # gets a read-only store and a push failure that names neither permissions nor
+    # ownership. Fixing it properly means a root helper container to chown the
+    # volume before the registry starts — a second container running as root, to
+    # avoid one process running as root. The trade taken instead: root inside the
+    # container, `cap_drop: ALL`, `no-new-privileges`, a read-only root filesystem,
+    # and a port published only to loopback. This container is a build tool on an
+    # operator's machine and is not part of the deployment being rehearsed; the
+    # staging services, which ARE that rehearsal, remain non-root.
+
+volumes:
+  registry-data:

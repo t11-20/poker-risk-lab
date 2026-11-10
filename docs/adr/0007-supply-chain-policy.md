@@ -12,26 +12,43 @@ re-runs the payload. Full snapshot: `docs/security/shai-hulud-snapshot-2026-08-1
 
 ## Decision
 
-Nine gates, all release-blocking, all runnable with `pnpm run security:audit`:
+Eleven gates, all release-blocking, all runnable with `pnpm run security:audit`. This ADR was
+written when there were nine; gates 6 and 11 were added later, and the list is kept in the
+audit's own order so that it can be read against the `GATES` array in
+`scripts/supply-chain/audit.mjs`:
 
 1. **policy-in-effect** — asserts the policy is actually active
 2. **repo-hygiene** — source encoding and hidden characters
 3. **deny-list** — banned packages anywhere in the graph
 4. **dependency-shapes** — registry-only resolutions, no install scripts, exact versions
 5. **IOC sweep** — campaign artefacts in the tree *and* the installed store
-6. **CI + container pinning** — GitHub Actions by commit SHA, base images by digest
-7. **integrity + release age** — lockfile hashes cross-checked against the registry
-8. **OSV** — known vulnerabilities
-9. **SBOM** — CycloneDX 1.6 with per-artefact hashes
+6. **committed credentials** — a secret scan of the working tree; `--history` is opt-in and
+   is not run here, because a finding whose only remedy is a history rewrite would turn the
+   release audit permanently red
+7. **CI + container pinning** — GitHub Actions by commit SHA, base images by digest
+8. **integrity + release age** — lockfile hashes cross-checked against the registry
+9. **OSV** — known vulnerabilities
+10. **SBOM** — CycloneDX 1.6 with per-artefact hashes
+11. **container image CVEs** — trivy against the built release images
 
-The order is the audit's own: gates 1–6 need no network, 7–8 do, and 9 writes the artefact.
-`--offline` skips 7 and 8 — and then **exits 2**, because an audit that did not run its
+The order is the audit's own: gates 1–7 need no network, 8 and 9 do, 10 writes the artefact,
+and 11 needs both the network and a built image. `--offline` skips 8, 9 and 11 — the offline
+branch is evaluated before the artefact branch, so the container gate is reported as skipped
+rather than as not-applicable — and then **exits 2**, because an audit that did not run its
 gates has not passed. It used to exit 0, which made the skip indistinguishable from a clean
 release audit in any pipeline that only reads the exit code.
 
-## Amendment 2026-08-19 — gate 6, added after the release audit
+Gate 11 is the one gate whose scope is not the repository: it reads the images
+`pnpm run release:artifacts` builds, so on a checkout that has not built them it reports
+*not applicable* and the summary says in as many words that the audit did not cover container
+images. `.github/workflows/release.yml` therefore runs `pnpm run security:containers` as a
+named step of its own rather than relying on that inference.
 
-Gates 1–5 and 7–9 hold *this repository's dependencies* to "no mutable references". The
+## Amendment 2026-08-19 — CI + container pinning, added after the release audit
+
+The pinning gate was gate 6 when this amendment was written; the secret scan was inserted
+ahead of it and it is now gate 7. The other gates hold *this repository's dependencies* to
+"no mutable references". The
 **pipeline's** dependencies were held to the same standard by nothing but header comments.
 `uses: actions/cache@v4` added tomorrow would have passed all eight original gates, and
 `actions/cache@v4` is a pointer its owner can repoint at new code that then runs inside this
@@ -85,3 +102,48 @@ generator and the OSV client are hand-written rather than pulled from npm.
   credential exposure.
 * There is no flag that turns any gate off. The only escape hatch is an OSV allowlist
   entry, which requires a reason and an expiry date, and fails once it lapses.
+
+## Amendment 2026-08-26 — the count in the Decision section is stale, and this record is not edited
+
+**The Decision above says "Eleven gates". `scripts/supply-chain/audit.mjs` runs fourteen, and
+`security:audit` prints the number on its first line.** The record is left as written, because an
+accepted ADR is not edited — but its own sentence invites a reader to check the list against the
+`GATES` array, and doing that today produces a disagreement rather than a match. So the delta is
+recorded here instead:
+
+| # | Gate | In the numbered list above |
+| ---: | --- | --- |
+| 8 | **keyless signing identity** (`keyless-provenance.mjs`) | no — added 2026-08-25 |
+| 9 | **log policy** (`log-policy.mjs`) | no — added 2026-08-25 |
+| 14 | **release image signatures** (`image-provenance.mjs`) | no — added 2026-08-25 |
+
+The other eleven are unchanged in name and order. Nothing about the *decision* — every gate
+release-blocking, no flag that turns one off, the OSV allowlist as the only escape hatch — has
+changed; three gates were added under it. `docs/SECURITY.md` and `docs/VERIFICATION.md` both carry
+fourteen. Read the count off `audit.mjs`, never off a document.
+
+## Amendment 2026-08-27 — a fifteenth gate, and the half of the pinning argument that was missing
+
+**`scripts/supply-chain/audit.mjs` now runs fifteen.** The amendment above is left as written, for
+the same reason the Decision is: the count moves, the record does not. The delta since it:
+
+| # | Gate | In the numbered list above |
+| ---: | --- | --- |
+| 12 | **pinned action advisories** (`action-advisories.mjs`) | no — added 2026-08-27 |
+
+`release image signatures` is gate **15** from this date, not 14; nothing else moved.
+
+The decision that did need stating is the one this gate exposes. The Decision section treats
+"mutable references are how supply-chain attacks land" as the whole problem and pinning as the whole
+answer, and for the pipeline's own dependencies that is only half true: **a pinned SHA of a version
+later found vulnerable stays pinned and stays vulnerable.** Pinning makes the reference immutable; it
+does not make it safe, and immutability is precisely what stops it from ever being fixed by accident.
+That is not a change of policy — every gate is still release-blocking and there is still no flag that
+turns one off — it is a gap in the reasoning the policy was written from, and the new gate is the
+consequence.
+
+One thing the new gate does *not* inherit: it has **no allowlist**. The OSV allowlist exists because
+a transitive npm dependency can be affected with no fixed version available and nothing this
+repository can do about it. An action reference is one line in a workflow this repository owns, and
+repinning to a fixed release is always available. If that ever stops being true, add the allowlist —
+with a reason and an expiry, as the Decision requires — and not a flag.

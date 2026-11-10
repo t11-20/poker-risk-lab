@@ -16,11 +16,13 @@ import { describe, it } from 'node:test';
 import {
   type BetBounds,
   clampBetTo,
+  draftForBounds,
   isDraftMalformed,
   presetTotal,
   resolveDraft,
   resolveSizedAction,
   SIZING_PRESETS,
+  sameBounds,
 } from '../src/bet-sizing.ts';
 import type { LegalAction } from '../src/view-types.ts';
 
@@ -93,9 +95,85 @@ describe('resolveDraft', () => {
     assert.equal(resolveDraft('1', bounds(200, 840)), 200);
   });
 
-  it('takes the leading integer from partly numeric text, as an input element would', () => {
-    assert.equal(resolveDraft('600abc', bounds(200, 840)), 600);
-    assert.equal(resolveDraft('600.9', bounds(200, 840)), 600);
+  it('accepts a decimal and rounds it to a whole chip, which the readout then prints', () => {
+    // Rounding is not silent: `clampBetTo` rounds, and the sizer's readout and commit button both
+    // show the rounded total. A reader who types 600.9 is shown 601 before they press anything.
+    assert.equal(resolveDraft('600.9', bounds(200, 840)), 601);
+    assert.equal(resolveDraft('600.4', bounds(200, 840)), 600);
+    assert.equal(isDraftMalformed({ text: '600.9', badInput: false }), false);
+  });
+
+  /**
+   * The `1e3` defect.
+   *
+   * `Number.parseInt(text, 10)` was the parser, and `parseInt` stops at the first character it
+   * cannot use: `parseInt('1e3', 10)` is **1**, which clamps to the minimum. `validity.badInput`
+   * is false at the same moment, because a number input parses `1e3` perfectly well and keeps it
+   * in `value` — so both halves of the invalid state said the field was fine.
+   *
+   * Measured in Chrome 151 on the built app at `/play?state=decision`, raise bounds 70–970:
+   * typing `1e3` left `value === "1e3"`, `badInput === false`, no `aria-invalid`, no correction on
+   * screen, and the commit button reading "Raise to 70". `2e2` — an ordinary way to write 200 —
+   * behaved the same.
+   */
+  it('refuses shorthand rather than silently reading it as a different number', () => {
+    for (const draft of ['1e3', '2e2', '600abc', '0x20', '1_000', 'Infinity', '1,000']) {
+      assert.equal(resolveDraft(draft, bounds(200, 840)), 200, `draft "${draft}"`);
+      assert.equal(
+        isDraftMalformed({ text: draft, badInput: false }),
+        true,
+        `"${draft}" resolves to the minimum and is not marked invalid, which is the silent clamp`,
+      );
+    }
+  });
+});
+
+/**
+ * The property the two functions above exist to hold together, stated once.
+ *
+ * For every string a number input can hand this control: EITHER the field is marked invalid, OR
+ * the amount the sizer resolves is the amount the characters mean. "What the characters mean" is
+ * `Number(text)` — the platform's own reading of a numeric literal — clamped, because clamping is
+ * declared behaviour that the readout prints.
+ *
+ * A silent clamp is precisely the case where neither holds: the reader is shown a legal-looking
+ * field, and the button offers something else.
+ */
+function silentlyReinterpreted(text: string, range: BetBounds): boolean {
+  const meant = Number(text.trim());
+  if (!Number.isFinite(meant) || text.trim() === '') return false;
+  return clampBetTo(meant, range) !== clampBetTo(Number.parseInt(text, 10), range);
+}
+
+describe('no typed amount is silently re-read as a different one', () => {
+  const range = bounds(200, 840);
+  const TYPED = ['1e3', '2e2', '600', '9999', '1', '600.9', '600abc', '0x20', ' 300 ', '', '1e-3'];
+
+  it('marks every string it cannot read as the reader wrote it', () => {
+    for (const text of TYPED) {
+      const meant = Number(text.trim());
+      const agrees =
+        text.trim() === '' ||
+        (Number.isFinite(meant) && clampBetTo(meant, range) === resolveDraft(text, range));
+      assert.ok(
+        agrees || isDraftMalformed({ text, badInput: false }),
+        `"${text}" resolves to ${resolveDraft(text, range)} without being marked invalid`,
+      );
+    }
+  });
+
+  it('NEGATIVE CONTROL: the parser this replaced fails that property', () => {
+    // The old implementation, restated, run against the same strings. If this ever stops finding
+    // a violation the property above has stopped being about anything.
+    const offenders = TYPED.filter((text) => silentlyReinterpreted(text, range));
+    assert.ok(
+      offenders.length > 0,
+      'the old `parseInt` parser produced no disagreement on any of these, so the check above proves nothing',
+    );
+    // And name the headline one explicitly, so a future edit to `TYPED` cannot quietly empty it.
+    assert.ok(offenders.includes('1e3'), `expected 1e3 among the offenders, found ${String(offenders)}`);
+    assert.equal(clampBetTo(Number.parseInt('1e3', 10), range), 200, 'parseInt("1e3") is 1');
+    assert.equal(clampBetTo(Number('1e3'), range), 840, 'the characters mean 1000');
   });
 });
 
@@ -146,7 +224,7 @@ describe('isDraftMalformed', () => {
   it('is not malformed for any amount the sizer can use, in range or out of it', () => {
     // Out of range is NOT invalid: `resolveDraft` clamps it, and the readout says what will be
     // sent. Only text that is not an amount at all is invalid.
-    for (const text of ['0', '1', '600', '9999', '-40', '600.9', '600abc']) {
+    for (const text of ['0', '1', '600', '9999', '-40', '600.9', ' 300 ']) {
       assert.equal(isDraftMalformed({ text, badInput: false }), false, `text "${text}"`);
       // The pairing that makes the claim mean something: everything called well-formed here has
       // to be something `resolveDraft` can actually turn into a number.
@@ -175,7 +253,7 @@ describe('isDraftMalformed', () => {
     // Defence in depth for the second branch: `badInput` false, unparseable text present. No
     // current browser produces this on a number input, which is exactly why it would go unnoticed
     // if one ever did.
-    for (const text of ['abc', 'e5', '-', '.', '+', 'one third']) {
+    for (const text of ['abc', 'e5', '-', '.', '+', 'one third', '1e3', '600abc']) {
       assert.equal(isDraftMalformed({ text, badInput: false }), true, `text "${text}"`);
     }
   });
@@ -276,6 +354,68 @@ describe('resolveSizedAction', () => {
   it('returns null when there is nothing aggressive on offer', () => {
     assert.equal(resolveSizedAction([{ type: 'fold' }, { type: 'check', costAtMin: 0 }]), null);
     assert.equal(resolveSizedAction([]), null);
+  });
+});
+
+/**
+ * The draft belongs to the spot it was typed in.
+ *
+ * ## The defect these exist for
+ *
+ * `ActionBar`'s header claimed that "blur normalises the text back to" the clamped amount. It does
+ * — at the instant of blur, and not afterwards, because the bounds move at every street and the
+ * text does not. So the number field went on showing an amount belonging to a spot that no longer
+ * existed, while the slider, the readout and the commit button had all moved on. The clamp
+ * invariant still held, so nothing illegal could be sent; what the reader was looking at was
+ * simply not what the button would do.
+ *
+ * Measured in Chrome 151 at a live table on the built app. Preflop, raise bounds 20–1,000: type
+ * `999999`, blur — field, slider, readout and button all read 1,000. Call, call. On the flop the
+ * bounds are 10–980, and the field still reads `1000` while the slider reads 980, the readout
+ * reads "Total commitment this street: 980 units" and the button reads "Bet to 980".
+ */
+describe('draftForBounds: a draft is read only in the spot it was typed in', () => {
+  const typed = { text: '1000', badInput: false, bounds: bounds(20, 1_000) } as const;
+
+  it('keeps the draft while the bounds have not moved', () => {
+    assert.deepEqual(draftForBounds(typed, bounds(20, 1_000)), typed);
+  });
+
+  it('drops it when either bound moves', () => {
+    assert.equal(draftForBounds(typed, bounds(10, 980)), null, 'the maximum moved');
+    assert.equal(draftForBounds(typed, bounds(40, 1_000)), null, 'the minimum moved');
+    assert.equal(draftForBounds(typed, bounds(10, 980)), null);
+  });
+
+  it('has nothing to drop before anything is typed', () => {
+    assert.equal(draftForBounds(null, bounds(20, 1_000)), null);
+  });
+
+  it('makes the field agree with everything else in the sizer once the bounds move', () => {
+    // The property, stated as the four things the reader compares. `String(to)` is what the field
+    // falls back to when there is no draft for this spot, and `to` is what the slider, the readout
+    // and the commit button all show.
+    const moved = bounds(10, 980);
+    const live = draftForBounds(typed, moved);
+    const to = resolveDraft(live?.text ?? null, moved);
+    assert.equal(live, null);
+    assert.equal(String(to), '10');
+
+    // NEGATIVE CONTROL: without the stamp — which is what the component did — the field keeps the
+    // old text while `to` follows the new bounds, and the two disagree on screen.
+    const unstamped = resolveDraft(typed.text, moved);
+    assert.equal(unstamped, 980, 'the clamp still holds: nothing illegal can be sent');
+    assert.notEqual(
+      typed.text,
+      String(unstamped),
+      'the old behaviour showed the same number the button did, so this defect was never real',
+    );
+  });
+
+  it('is not fooled by a range that merely looks similar', () => {
+    assert.equal(sameBounds(bounds(20, 1_000), bounds(20, 1_000)), true);
+    assert.equal(sameBounds(bounds(20, 1_000), bounds(20, 1_001)), false);
+    assert.equal(sameBounds(bounds(20, 1_000), bounds(21, 1_000)), false);
   });
 });
 

@@ -88,6 +88,7 @@ import {
   Chip,
   CoachPanel,
   formatSignedUnits,
+  formatUnits,
   type LegalAction,
   Panel,
   type PlayerView,
@@ -180,20 +181,44 @@ function Verdict({
   const best =
     judgement.bestAction === null
       ? ''
-      : ` — ${ACTION_WORD[judgement.bestAction]}${judgement.bestTo === null ? '' : ` to ${judgement.bestTo}`}`;
+      : ` — ${ACTION_WORD[judgement.bestAction]}${judgement.bestTo === null ? '' : ` to ${formatUnits(judgement.bestTo)}`}`;
   // The server's answer wins when there is one: it is the verdict that was recorded, and showing
   // the reader a different one is the defect this component was fixed for.
   const consistent = server.state === 'live' ? server.consistent : judgement.consistent;
   return (
     <>
       <div className="prl-stage__verdict">
-        <Chip tone={consistent ? 'favourable' : 'caution'} glyph={consistent ? '=' : '≠'}>
-          {consistent ? 'consistent with the analysis' : 'not the line the analysis leans towards'}
-        </Chip>
+        {/*
+          Three states, not two.
+
+          `@prl/poker-math` states the hazard outright: "A caller that renders the boolean without
+          reading `pricing` will tell somebody their decision disagreed with an analysis that never
+          looked at it." This component did exactly that. The Coach prices discrete rungs while the
+          ActionBar exposes a continuous range, so a learner shown "Raise — 51 to 95 units" who
+          picks 70 was told their decision was not the line the analysis leans towards, when the
+          analysis had no opinion about 70 at all.
+
+          The unpriced case is `info`, deliberately, and not `caution`: nothing is wrong with the
+          decision. Chip.tsx notes there is no "danger" tone because nothing here escalates, and a
+          learner who sized outside the priced rungs has not made a mistake to be cautioned about.
+        */}
+        {judgement.pricing !== 'priced' ? (
+          <Chip tone="info" glyph="?">
+            {judgement.pricing === 'sizing-not-priced'
+              ? 'this analysis did not price that size'
+              : 'this analysis did not price that action'}
+          </Chip>
+        ) : (
+          <Chip tone={consistent ? 'favourable' : 'caution'} glyph={consistent ? '=' : '≠'}>
+            {consistent ? 'consistent with the analysis' : 'not the line the analysis leans towards'}
+          </Chip>
+        )}
         <span className="prl-note">
           {server.state === 'live'
             ? server.recorded
-              ? 'This is the server’s own verdict on your action — the same one it recorded.'
+              ? judgement.pricing !== 'priced'
+                ? 'The analysis covers particular sizes rather than every one, and yours is not among them. That is not a judgement on your decision — there is nothing here to compare it with.'
+                : 'This is the server’s own verdict on your action — the same one it recorded.'
               : 'This is the server’s own verdict on your action. Nothing was recorded, because there is no session to attach it to.'
             : server.state === 'pending'
               ? 'Asking the server for its verdict. The figures below are the shared rule applied here, and the two agree.'
@@ -216,9 +241,31 @@ function Verdict({
             {`${formatSignedUnits(judgement.bestEv, { decimals: 1 })}${best}`}
           </dd>
         </div>
+        {/*
+          The benchmark, and the distance from it.
+
+          Without these two rows the panel showed the chosen EV, the best row and the tolerance —
+          three numbers whose only natural reading is "consistent when the best row minus mine fits
+          inside the tolerance". That is not the rule. The rule asks whether the action beats
+          FOLDING, so a learner could see +20.6 against a best row of +51.4, a tolerance of 10, and
+          the words "consistent with the analysis", with no way to tell that the panel was right.
+          `@prl/poker-math` publishes `measuredBestEv` and `shortfallUnits` precisely so a caller
+          can show the reader the number the verdict used rather than a different one; this one
+          dropped both.
+        */}
         <div className="prl-stage__ev-row">
-          <dt className="prl-label">Called consistent within</dt>
-          <dd className="prl-stage__ev-value">{`${judgement.toleranceUnits} units`}</dd>
+          <dt className="prl-label">Judged against</dt>
+          <dd className="prl-stage__ev-value">
+            {judgement.benchmarkEv === 0
+              ? 'folding, worth 0'
+              : `${formatSignedUnits(judgement.benchmarkEv, { decimals: 1 })}, the best row that assumes no folds`}
+          </dd>
+        </div>
+        <div className="prl-stage__ev-row">
+          <dt className="prl-label">Shortfall against that</dt>
+          <dd className="prl-stage__ev-value">
+            {`${formatSignedUnits(-judgement.shortfallUnits, { decimals: 1 })}, against an allowance of ${formatUnits(judgement.toleranceUnits)}`}
+          </dd>
         </div>
       </dl>
     </>
@@ -331,12 +378,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
       <Panel title="The situation" eyebrow="Scenario" index={2} headingLevel={2}>
         <p className="prl-stage__question">{scenario.question}</p>
         <p className="prl-note">{scenario.facingAction}</p>
-        <PokerTable
-          view={view}
-          seatNames={seatNames}
-          title={`${scenario.title} — ${scenario.street}`}
-          announcement=""
-        />
+        <PokerTable view={view} seatNames={seatNames} title={`${scenario.title} — ${scenario.street}`} />
         <p className="prl-note">
           This table is read-only and the cards are fixed: a scenario is a stated situation, not a dealt hand,
           so there is no deck behind it and nothing to prove about one.
@@ -368,7 +410,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
               <span className="prl-label">You chose</span>
               <span className="prl-stage__chosen-action">
                 {ACTION_WORD[committed.action]}
-                {committed.to === null ? '' : ` to ${committed.to}`}
+                {committed.to === null ? '' : ` to ${formatUnits(committed.to)}`}
               </span>
             </p>
             <Button variant="secondary" size="sm" onClick={() => setCommitted(null)}>

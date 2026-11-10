@@ -51,6 +51,8 @@ function spot(toCall: number): CoachInput {
     street: 'flop',
     opponents: [{ label: 'the big blind', range: exactRange(parseCards('Qs Qd')) }],
     pot: 100,
+    // Hero covers the bet out of 400 behind, so nothing in the middle is beyond reach.
+    contestablePot: 100,
     toCall,
     heroCommittedThisStreet: 0,
     heroStack: 400,

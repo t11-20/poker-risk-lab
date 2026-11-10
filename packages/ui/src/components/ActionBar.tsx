@@ -29,9 +29,20 @@
  * are allowed to disagree while the field has focus — which is why the readout always shows the
  * number that will actually be sent, and why blur normalises the text back to it.
  *
+ * **And blur is not the whole of it, which this header used to imply.** Normalising on blur makes
+ * the field agree with the button at the instant the field is left, and the bounds move afterwards
+ * — every street, and again at every raise. A draft typed against one spot then sat in the field
+ * describing a spot that no longer existed: measured at a live table, preflop bounds 20–1,000 and
+ * `1000` in the field, the flop's 10–980 left the field reading `1000` while the slider, the
+ * readout and the button all read 980. So the draft is stamped with the bounds it was typed
+ * against and is read only while those still hold — see `StampedDraft` and `draftForBounds` in
+ * `../bet-sizing.ts`, which is where the rule lives and where it is tested.
+ *
  * It carries `badInput` alongside the text because on an `<input type="number">` the text is not
  * enough to know what is in the field: the browser sanitises anything it cannot parse to `''`, so
  * letters on screen and an empty field are indistinguishable from the value alone. See `BetDraft`.
+ * `badInput` is not enough on its own either — a number input parses `1e3` happily and reports
+ * nothing wrong with it, which is why `bet-sizing.ts` owns what counts as an amount at all.
  *
  * ## Every button prints its cost, and announces it
  *
@@ -89,12 +100,14 @@ import {
 import {
   type BetDraft,
   clampBetTo,
+  draftForBounds,
   isDraftMalformed,
   presetTotal,
   resolveDraft,
   resolveSizedAction,
   SIZING_PRESETS,
   type SizedAction,
+  type StampedDraft,
 } from '../bet-sizing.ts';
 import { cx } from '../cx.ts';
 import { formatChips, formatUnits } from '../format.ts';
@@ -308,7 +321,7 @@ function BetSizer(props: BetSizerProps): ReactElement {
  * treated `body` as abandoned never ran. `<html>` and `null` are the same state: nothing the
  * reader can be told about has focus.
  */
-function browserAbandonedFocus(): boolean {
+export function browserAbandonedFocus(): boolean {
   const active = document.activeElement;
   return active === null || active === document.body || active === document.documentElement;
 }
@@ -325,11 +338,12 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     className,
   } = props;
 
-  // One piece of state, not two: the text and whether the browser could parse it are set by the
-  // same event and must never be read from different renders. A separate `badInput` flag could
-  // outlive the text it described — a preset click clearing the value while the flag stayed true
-  // would leave a legal amount marked invalid.
-  const [draft, setDraft] = useState<BetDraft | null>(null);
+  // One piece of state, not three: the text, whether the browser could parse it, and the bounds it
+  // was typed against are all set by the same event and must never be read from different renders.
+  // A separate `badInput` flag could outlive the text it described — a preset click clearing the
+  // value while the flag stayed true would leave a legal amount marked invalid — and a separate
+  // record of the bounds could outlive the text in the other direction.
+  const [stamped, setStamped] = useState<StampedDraft | null>(null);
 
   /**
    * Where focus goes when the controls it was on are taken away, in the TWO ways that happens.
@@ -473,10 +487,16 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   const canCheck = legalActions.some((action) => action.type === 'check');
   const call = legalActions.find((action) => action.type === 'call');
 
-  // The single clamp every path goes through. `draft` is what the reader typed; `to` is what will
-  // be sent, and the two cannot disagree at submit time because the button reads `to`.
+  // The single clamp every path goes through. `draft` is what the reader typed FOR THIS SPOT; `to`
+  // is what will be sent, and the two cannot disagree at submit time because the button reads `to`.
+  //
+  // `draftForBounds` is what stops the text outliving the spot: a draft typed against a different
+  // range is not this spot's draft, so the field falls back to `String(to)` along with the slider,
+  // the readout and the button. See the module header and `../bet-sizing.ts`.
   const bounds = sized?.bounds ?? { min: 0, max: 0 };
+  const draft = draftForBounds(stamped, bounds);
   const to = resolveDraft(draft?.text ?? null, bounds);
+  const setDraft = (next: BetDraft): void => setStamped({ ...next, bounds });
   const sizedCost = to - committedThisStreet;
   const isAllIn = sized !== null && to >= bounds.max && bounds.max > bounds.min;
   const callCost = call?.costAtMin ?? toCall;
@@ -557,7 +577,11 @@ export function ActionBar(props: ActionBarProps): ReactElement {
           <ActionButton
             label="Fold"
             cost={formatUnits(0)}
-            spoken={`fold, costs ${formatUnits(0)}, gives up the hand and any claim on the pot`}
+            spoken={
+              canCheck
+                ? `fold, costs ${formatUnits(0)}, gives up the hand and any claim on the pot; checking also costs ${formatUnits(0)}`
+                : `fold, costs ${formatUnits(0)}, gives up the hand and any claim on the pot`
+            }
             disabled={disabled}
             onClick={() => actFromBar({ type: 'fold' })}
           />
@@ -577,7 +601,17 @@ export function ActionBar(props: ActionBarProps): ReactElement {
           <ActionButton
             label="Call"
             cost={formatUnits(callCost)}
-            spoken={`call ${formatUnits(callCost)}`}
+            // A call that takes the whole stack says so, in the label a screen reader speaks and in
+            // the note below. The engine already decides this and writes the sentence
+            // (`allInAtMax`, "Calling puts your whole remaining stack in.") and both were dropped
+            // here: a learner pressing Call for their last chip saw only "Call / 62 units", the
+            // same as any other call. Measured over 3,000 hands, 3,569 of 15,137 call offers were
+            // all-in calls, so this is the ordinary short-stack case rather than an edge one.
+            spoken={
+              call.allInAtMax
+                ? `call ${formatUnits(callCost)}, which is all in`
+                : `call ${formatUnits(callCost)}`
+            }
             disabled={disabled}
             onClick={() => actFromBar({ type: 'call' })}
           />
@@ -629,7 +663,14 @@ export function ActionBar(props: ActionBarProps): ReactElement {
       ) : null}
 
       <p className="prl-action-bar__note">
-        {'Folding costs nothing and gives up any claim on the pot. '}
+        {/* The engine offers Fold where Check is free, with the note "Legal, but checking costs
+            nothing.", and this line used to drop it: "Folding costs nothing" was the only sentence
+            beside a free check, which reads as no reason not to. Stated as the two prices, not as
+            advice. */}
+        {canCheck
+          ? 'Checking costs nothing here; folding gives up any claim on the pot for no saving. '
+          : 'Folding costs nothing and gives up any claim on the pot. '}
+        {call?.allInAtMax === true ? `${call.note} ` : ''}
         {sized?.note ?? ''}
       </p>
     </div>

@@ -386,12 +386,23 @@ export function installedPackageDirs() {
  * set is every Linux binary — precisely the set that IS installed in the release
  * container.
  *
+ * ## Why this takes a root
+ *
+ * `present` is the only part of the answer a test cannot fabricate honestly: it
+ * is a fact about a file on disk, and the failure text it drives is a *diagnosis*
+ * rather than a verdict. Handing it a root lets `dep-shapes.test.mjs` build the
+ * three real states — the file present and parsed, the file absent, the file
+ * present but carrying no `skipped:` key — and watch what each one makes the gate
+ * say, instead of asserting on a hand-written return value that agrees with
+ * whatever the function happens to do.
+ *
+ * @param {string} root  repository root; the real one unless a test says otherwise
  * @returns {{present: boolean, skipped: Set<string>}} `present:false` when the
  *   file is missing or unreadable, which is itself a reason not to trust a
  *   coverage claim.
  */
-export function platformSkippedVersions() {
-  const path = join(REPO_ROOT, 'node_modules', '.modules.yaml');
+export function platformSkippedVersions(root = REPO_ROOT) {
+  const path = join(root, 'node_modules', '.modules.yaml');
   if (!existsSync(path)) return { present: false, skipped: new Set() };
   let raw;
   try {
@@ -435,10 +446,12 @@ export function platformSkippedVersions() {
  *
  * @param {Map<string, unknown>} resolvedPackages  keyed `name@version`
  * @param {Map<string, unknown>} installed         keyed `name@version`
+ * @param {string} root  repository root; see `platformSkippedVersions` for why
+ *   this is an argument rather than a constant
  */
-export function storeCoverage(resolvedPackages, installed) {
-  const storePresent = existsSync(join(REPO_ROOT, 'node_modules', '.pnpm'));
-  const { present: manifestPresent, skipped } = platformSkippedVersions();
+export function storeCoverage(resolvedPackages, installed, root = REPO_ROOT) {
+  const storePresent = existsSync(join(root, 'node_modules', '.pnpm'));
+  const { present: manifestPresent, skipped } = platformSkippedVersions(root);
   const uninspected = [];
   const platformSkipped = [];
   for (const key of resolvedPackages.keys()) {
@@ -448,6 +461,24 @@ export function storeCoverage(resolvedPackages, installed) {
   }
   return {
     storePresent,
+    /**
+     * Whether `node_modules/.modules.yaml` could be read.
+     *
+     * Computed here and, for a while, read by nobody. That is the same shape as
+     * the gates that judged fewer things than they claimed, so it either had to
+     * become load-bearing or be deleted. It is load-bearing, but NOT as a
+     * verdict: when the file is unreadable `platformSkippedVersions()` returns an
+     * empty skipped set, so every version absent from disk lands in `uninspected`
+     * and the gate already fails there. Adding a second failure for the same
+     * condition would be decoration.
+     *
+     * What it decides is the DIAGNOSIS `requireStoreCoverage` prints, and that is
+     * worth its own control: the two states send an operator to two different
+     * places, and the wrong one sends them hunting a store/lockfile divergence
+     * that does not exist. `dep-shapes.test.mjs` builds all three real states on
+     * disk — file parsed, file absent, file present with no `skipped:` key — and
+     * asserts each produces its own text and NOT the other's.
+     */
     skippedManifestPresent: manifestPresent,
     resolvedCount: resolvedPackages.size,
     installedCount: installed.size,
@@ -489,12 +520,29 @@ export function requireStoreCoverage(gate, coverage, what) {
   }
   if (coverage.uninspected.length > 0) {
     const sample = coverage.uninspected.slice(0, 10).join(', ');
+    // Two different failures wear the same headline, and telling them apart is
+    // the whole job of `skippedManifestPresent`. If pnpm's record of what it
+    // skipped is readable and these versions are not in it, the store really has
+    // diverged from the lockfile. If that record could not be read at all, the
+    // store may be perfectly intact and only pnpm's account of it missing — and
+    // the list above is then every absent version rather than the unexplained
+    // ones. Printing the first diagnosis in the second situation sends the reader
+    // hunting a store/lockfile divergence that is not there, which is the same
+    // class of defect as a gate that reports a pass it did not establish.
+    const diagnosis = coverage.skippedManifestPresent
+      ? 'pnpm DOES record a platform-skipped set for this machine and these versions are not in it, ' +
+        'so the store and the lockfile genuinely disagree — reinstall with ' +
+        '`pnpm install --frozen-lockfile` rather than trusting a partial scan.'
+      : 'node_modules/.modules.yaml could not be read, so pnpm records NO platform-skipped set at ' +
+        'all and the list above is every version absent from disk, not the unexplained ones. Do NOT ' +
+        'read this as the store and the lockfile disagreeing: the store may be intact and only the ' +
+        'pnpm record of it missing, which on a machine whose optionals are mostly other-platform ' +
+        'binaries is the likelier reading. Restore the record with `pnpm install --frozen-lockfile` ' +
+        'and re-run; if the list empties, the store was never the problem.';
     gate.fail(
       `${what} could not inspect ${coverage.uninspected.length} resolved package version(s) that are not on disk`,
       `${sample}${coverage.uninspected.length > 10 ? ', …' : ''}\n      ` +
-        'These are in the resolved graph but absent from node_modules/.pnpm, and pnpm does not ' +
-        'record them as platform-skipped. The store and the lockfile disagree — reinstall with ' +
-        '`pnpm install --frozen-lockfile` rather than trusting a partial scan.',
+        `These are in the resolved graph and absent from node_modules/.pnpm. ${diagnosis}`,
     );
     return false;
   }

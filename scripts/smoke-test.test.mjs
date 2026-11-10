@@ -76,7 +76,11 @@ import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  auditReviewSeats,
   classifyGuestLimit,
+  classifyHostileRefusal,
+  listIsMissingOrEmpty,
+  liveHandTruth,
   originBucketNote,
   parseArgs,
   parseDeltaSeconds,
@@ -84,6 +88,8 @@ import {
   RATE_LIMIT_RESET_PATH,
   RECOVERY_PADDING_SECONDS,
   recoveryWaitSeconds,
+  sampledEquityMissesInterval,
+  unentitledHoleCardSeats,
 } from './smoke-test.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -473,5 +479,452 @@ describe('the harness does not hand harness-paths.test.ts a route that must not 
     const doctored = `const p = '${RATE_LIMIT_RESET_PATH}';`;
     const offenders = apiPathLiterals(doctored).filter((path) => path.startsWith('/api/v1/_test/'));
     assert.deepEqual(offenders, [RATE_LIMIT_RESET_PATH]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Assertions that must not evaporate when the field is absent
+// ---------------------------------------------------------------------------
+
+/**
+ * Section 5's checks on the coach report and the equity result were written so that a MISSING
+ * field produced neither a pass nor a failure. That is the worst of the three outcomes: an
+ * empty list is a coach that stated nothing, and an absent block is a coach that has stopped
+ * modelling the thing at all — and the run said neither.
+ *
+ * ## Would these fail against the old code?
+ *
+ * Yes, and it was checked that way rather than assumed. Each block below states the OLD
+ * expression as well as the new one and asserts they DISAGREE on the absent case, so the
+ * negative control is a property of this test rather than of the current implementation — a
+ * revert to `?.length === 0` or `=== null` fails here, not merely a rename.
+ */
+describe('assertions about absence', () => {
+  it('treats an empty list as missing, which is what it was already doing', () => {
+    assert.equal(listIsMissingOrEmpty([]), true);
+  });
+
+  it('treats an ABSENT list as missing, which is what the old expression could not see', () => {
+    const report = { suggestion: {} };
+    assert.equal(listIsMissingOrEmpty(report.uncertainty?.limitations), true);
+
+    // The old test, spelled out. It is false for `undefined`, and section 5 had no `else`, so
+    // the check produced nothing at all — neither `ok` nor `bad`.
+    const asItWasWritten = report.uncertainty?.limitations?.length === 0;
+    assert.equal(asItWasWritten, false, 'the fixture must actually reproduce the old blind spot');
+    assert.notEqual(listIsMissingOrEmpty(report.uncertainty?.limitations), asItWasWritten);
+  });
+
+  it('is false for a list that has something in it, so it cannot fire on every report', () => {
+    // The positive control. A predicate that returned true unconditionally would pass both
+    // assertions above.
+    assert.equal(listIsMissingOrEmpty(['sampling error is not modelled']), false);
+    assert.equal(listIsMissingOrEmpty([0]), false);
+  });
+
+  it('treats a non-array as missing rather than reading .length off it', () => {
+    assert.equal(listIsMissingOrEmpty('sampling error is not modelled'), true);
+    assert.equal(listIsMissingOrEmpty({ length: 3 }), true);
+    assert.equal(listIsMissingOrEmpty(null), true);
+  });
+});
+
+describe('the confidence-interval check on a sampled equity', () => {
+  it('passes a sampled result that carries its interval', () => {
+    // Positive control: a predicate that always fired would pass every other case here.
+    assert.equal(
+      sampledEquityMissesInterval({ method: 'monte-carlo', confidenceHalfWidthPoints: 0.4 }),
+      false,
+    );
+  });
+
+  it('ignores an exact result, which has no interval to carry', () => {
+    assert.equal(sampledEquityMissesInterval({ method: 'exhaustive' }), false);
+    assert.equal(sampledEquityMissesInterval(undefined), false);
+  });
+
+  it('fires on an explicit null, which is what the old expression caught', () => {
+    assert.equal(
+      sampledEquityMissesInterval({ method: 'monte-carlo', confidenceHalfWidthPoints: null }),
+      true,
+    );
+  });
+
+  it('fires on an ABSENT key, which is what the old `=== null` missed', () => {
+    const equity = { method: 'monte-carlo' };
+    assert.equal(sampledEquityMissesInterval(equity), true);
+
+    // The old test, spelled out, disagreeing on exactly this case. A serialiser that drops
+    // undefined fields — or a route that stopped computing the half-width — produces this
+    // shape, and the run then printed a Monte Carlo percentage that reads as exact.
+    const asItWasWritten = equity.confidenceHalfWidthPoints === null;
+    assert.equal(asItWasWritten, false, 'the fixture must actually reproduce the old blind spot');
+    assert.notEqual(sampledEquityMissesInterval(equity), asItWasWritten);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The hostile-input negative control
+// ---------------------------------------------------------------------------
+
+/**
+ * Section 5 sends six deliberately invalid bodies to `POST /math/equity` and reports "all 6
+ * hostile calculation inputs rejected". It used to accept ANY 4xx as a rejection.
+ *
+ * Section 12 exhausts the expensive-rate-limit budget on purpose, and that limiter answers
+ * before the request reaches a route. So a run in which the budget was already spent — a second
+ * run inside one window, a shared bucket, a deployment without the reset control — answered all
+ * six probes with 429 and printed the claim anyway, having reached no validator at all.
+ *
+ * ## Would these fail against the old code?
+ *
+ * The old rule is written out below as `oldRuleCountedItRejected` and asserted to DISAGREE with
+ * the classifier on the 429 case. Restoring `status >= 400 && status < 500` therefore fails
+ * here by construction rather than by coincidence.
+ */
+describe('classifyHostileRefusal', () => {
+  const response = (status, code) => ({
+    status,
+    json: code === undefined ? {} : { error: { code, message: 'x', requestId: 'r' } },
+  });
+
+  it('counts a closed-schema rejection', () => {
+    assert.equal(classifyHostileRefusal(response(400, 'invalid_request')).kind, 'rejected');
+  });
+
+  it('counts a calculator refusal, which is where the absurd sample count lands', () => {
+    assert.equal(classifyHostileRefusal(response(422, 'computation_rejected')).kind, 'rejected');
+    assert.equal(classifyHostileRefusal(response(413, 'payload_too_large')).kind, 'rejected');
+  });
+
+  it('calls a 429 UNTESTED rather than rejected, which is the whole defect', () => {
+    const limited = response(429, 'rate_limited');
+    const verdict = classifyHostileRefusal(limited);
+    assert.equal(verdict.kind, 'untested');
+    assert.match(verdict.why, /before any validator/);
+
+    // The old rule, spelled out. It counted this as a pass, which is how six 429s became
+    // "all 6 hostile calculation inputs rejected".
+    const oldRuleCountedItRejected = limited.status >= 400 && limited.status < 500;
+    assert.equal(oldRuleCountedItRejected, true, 'the fixture must reproduce what the old rule saw');
+    assert.notEqual(verdict.kind, 'rejected');
+  });
+
+  it('calls a 429 untested even when a proxy stripped the body', () => {
+    assert.equal(classifyHostileRefusal({ status: 429, json: null }).kind, 'untested');
+  });
+
+  it('does not count a 4xx that carries no validation code', () => {
+    // 401 and 403 are 4xx and are not validation: a session that expired mid-section would
+    // otherwise have read as six successful refusals.
+    assert.equal(classifyHostileRefusal(response(401, 'not_authenticated')).kind, 'wrong-refusal');
+    assert.equal(classifyHostileRefusal(response(403, 'csrf_failed')).kind, 'wrong-refusal');
+    assert.equal(classifyHostileRefusal(response(404, undefined)).kind, 'wrong-refusal');
+  });
+
+  it('calls a 200 accepted, which is the failure the section was written for', () => {
+    // The positive control for the other direction: a classifier that returned 'rejected' for
+    // everything would pass the three cases above, and a classifier that never did would pass
+    // this one.
+    assert.equal(classifyHostileRefusal(response(200)).kind, 'accepted');
+    assert.equal(classifyHostileRefusal(response(500, 'internal_error')).kind, 'accepted');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The confidentiality property, on the wire
+// ---------------------------------------------------------------------------
+
+/**
+ * Section 7's live scan used to read, in full:
+ *
+ *     if (frame.view.street === 'complete') return false;
+ *     return seats.some((seat) => seat.holeCards !== null && seat.seat !== view.viewerSeat);
+ *
+ * — every frame of a finished hand exempted, on the reasoning that a showdown makes cards
+ * public. A showdown does; a FOLD does not, and `HandResult.showdowns` is documented as "empty
+ * when the hand ended before showdown (everyone else folded)". The smoke run's own client checks
+ * or calls when it can and folds when it cannot, so a hand that ends without a showdown is the
+ * ORDINARY outcome here.
+ *
+ * Measured, before the fix, against a stub API that served the opponent's hole cards in the
+ * `street: 'complete'` frame of a hand nobody showed down: section 7 printed
+ * `✓ no live frame carried another seat's hole cards mid-hand`, section 8 printed
+ * `✓ an archived hand carries no opponent's unshown hole cards` (the archive was honest — only
+ * the wire was not), and the whole run reported no failure. The one claim this script exists to
+ * make, green over a live leak.
+ *
+ * ## Would these fail against the old code?
+ *
+ * The old expression is written out below as `oldScanExemptedIt` and asserted to DISAGREE on the
+ * fold-ended case, so restoring the `street === 'complete'` exemption fails here by construction
+ * rather than by coincidence.
+ */
+describe('unentitledHoleCardSeats', () => {
+  const frame = (street, { opponentCards = null, showdowns = null } = {}) => ({
+    type: 'state',
+    view: {
+      street,
+      viewerSeat: 0,
+      seats: [
+        { seat: 0, isSelf: true, holeCards: ['Ah', 'Kd'] },
+        { seat: 1, isSelf: false, holeCards: opponentCards },
+      ],
+      result: street === 'complete' ? { endedByFold: showdowns === null, showdowns: showdowns ?? [] } : null,
+    },
+  });
+
+  it('finds nothing in an honest mid-hand frame', () => {
+    assert.deepEqual(unentitledHoleCardSeats(frame('flop')), []);
+  });
+
+  it('finds a mid-hand leak, which is what the old scan already caught', () => {
+    assert.deepEqual(unentitledHoleCardSeats(frame('turn', { opponentCards: ['Qs', 'Qc'] })), [1]);
+  });
+
+  it('finds a leak in a COMPLETED hand that nobody showed down', () => {
+    const leaking = frame('complete', { opponentCards: ['Qs', 'Qc'] });
+    assert.deepEqual(unentitledHoleCardSeats(leaking), [1]);
+
+    // The old expression, spelled out. It returned early on every completed frame, so this leak
+    // produced neither a pass nor a failure — it produced a tick.
+    const oldScanExemptedIt = leaking.view.street === 'complete';
+    assert.equal(oldScanExemptedIt, true, 'the fixture must reproduce what the old scan skipped');
+    assert.notEqual(unentitledHoleCardSeats(leaking).length, 0);
+  });
+
+  it('exempts a seat that genuinely showed down, so the check is not just "never send cards"', () => {
+    // The positive control. A predicate that flagged every foreign holeCards would pass every
+    // assertion above and would fail every honest showdown this product is built to display.
+    const shown = frame('complete', { opponentCards: ['Qs', 'Qc'], showdowns: [{ seat: 0 }, { seat: 1 }] });
+    assert.deepEqual(unentitledHoleCardSeats(shown), []);
+  });
+
+  it('exempts nobody when a completed frame carries no result, so the check gets stricter', () => {
+    const noResult = frame('complete', { opponentCards: ['Qs', 'Qc'] });
+    noResult.view.result = null;
+    assert.deepEqual(unentitledHoleCardSeats(noResult), [1]);
+  });
+
+  it('treats an ABSENT holeCards key as absent rather than as a leak', () => {
+    // `!== null` reported a leak here — a serialiser that drops nulls would have failed the gate
+    // for emitting nothing at all. `!= null` is the idiom section 8 already used.
+    const dropped = frame('flop');
+    dropped.view.seats[1].holeCards = undefined;
+    assert.deepEqual(unentitledHoleCardSeats(dropped), []);
+  });
+
+  it('falls back to viewerSeat when isSelf is absent, so a rename narrows the exemption', () => {
+    const renamed = frame('flop');
+    renamed.view.seats[0].isSelf = undefined;
+    assert.deepEqual(unentitledHoleCardSeats(renamed), [], "the viewer's own seat is still exempt");
+
+    // …and the other way: with viewerSeat gone, isSelf still carries it.
+    const noViewerSeat = frame('flop');
+    noViewerSeat.view.viewerSeat = null;
+    assert.deepEqual(unentitledHoleCardSeats(noViewerSeat), []);
+  });
+
+  it('ignores frames that are not a view at all', () => {
+    assert.deepEqual(unentitledHoleCardSeats({ type: 'ack', requestId: 'r' }), []);
+    assert.deepEqual(unentitledHoleCardSeats({ type: 'state', view: null }), []);
+    assert.deepEqual(unentitledHoleCardSeats(undefined), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The archive's confidentiality check — the one that examined nothing
+// ---------------------------------------------------------------------------
+
+/**
+ * Section 8's card check, and the defect it replaced.
+ *
+ * ## What was there
+ *
+ *     const foreignCards = aliceRows.filter((hand) => {
+ *       const seats = Array.isArray(hand.seats) ? hand.seats : [];
+ *       return seats.some((seat) => seat.holeCards != null && seat.isSelf !== true && ...);
+ *     });
+ *
+ * `aliceRows` are the rows of `GET /api/v1/hands`, whose contract is `HandListResponse` — rows of
+ * `HandSummary`, which has no `seats` field, because `routes/hands.ts` deliberately never projects
+ * `hand_seats.hole_cards` into a summary. So `hand.seats` was `undefined` on every row, `[]` was
+ * substituted, `.some()` over `[]` is false, and section 8 printed
+ * `✓ an archived hand carries no opponent's unshown hole cards` having walked zero seats.
+ *
+ * Measured on 2026-08-27 against the real routes and a real database, with a two-seat fold-out
+ * hand archived: `row keys: ["id","roomId","handNumber","startedAt","completedAt","board",
+ * "heroNet","endedByFold","potTotal"]`, `row.seats is undefined`, `foreignCards=0, seats actually
+ * examined=0`. `GET /hands/:handId` — the one route in this API that ever serves a hole card — was
+ * never fetched by the script for a hand that exists.
+ *
+ * ## Would this fail against the old code?
+ *
+ * Measured, on the same real routes, with BOTH server-side redaction layers removed — the SQL
+ * `case` in `routes/hands.ts` and `toReviewSeat`'s `maySeeCards` in `build-review.ts` — so that
+ * the route genuinely served the opponent's cards on a hand nobody showed down:
+ *
+ *     served seats: [{"seat":0,…,"holeCards":["Ah","Ks"],"showedDown":false},
+ *                    {"seat":1,…,"holeCards":["7c","2d"],"showedDown":false}]
+ *     auditReviewSeats -> {"leaked":[1],"overclaimed":[],"examined":2,"ownCards":true}
+ *     the OLD check, same run: rows=1 foreignCards=0  -> a green tick
+ *
+ * `oldSectionEightSaidClean` below is that expression, spelled out, so restoring it fails here by
+ * construction rather than by coincidence.
+ */
+describe('auditReviewSeats', () => {
+  /** The old expression, verbatim, so the two can be compared on one payload. */
+  const oldSectionEightSaidClean = (listRows) =>
+    listRows.filter((hand) => {
+      const seats = Array.isArray(hand.seats) ? hand.seats : [];
+      return seats.some((seat) => seat.holeCards != null && seat.isSelf !== true && seat.showedDown !== true);
+    }).length === 0;
+
+  /** What `GET /api/v1/hands` really returns, measured against the live routes. */
+  const LIST_ROW = {
+    id: 'hand_realshapeaaaaaaaaaaa',
+    roomId: 'room_realshapeaaaaaaaaaaa',
+    handNumber: 1,
+    startedAt: '2026-08-27T00:00:00.000Z',
+    completedAt: '2026-08-27T00:00:01.000Z',
+    board: [],
+    heroNet: -1,
+    endedByFold: true,
+    potTotal: 2,
+  };
+
+  const truth = { handId: LIST_ROW.id, viewerSeat: 0, shownSeats: [], complete: true };
+  const seat = (index, cards, showedDown = false) => ({
+    seat: index,
+    displayName: `Seat ${index}`,
+    isBot: false,
+    startingStack: 200,
+    net: 0,
+    holeCards: cards,
+    showedDown,
+  });
+
+  it('passes an honest fold-out review: own cards, nobody else’s', () => {
+    const review = { seats: [seat(0, ['Ah', 'Ks']), seat(1, null)] };
+    assert.deepEqual(auditReviewSeats(review, truth), {
+      leaked: [],
+      overclaimed: [],
+      examined: 2,
+      ownCards: true,
+    });
+  });
+
+  it('finds the leak the old check could not see, on the payload the old check was given', () => {
+    // The server leaks; the review carries the opponent's cards on a hand nobody showed down.
+    const review = { seats: [seat(0, ['Ah', 'Ks']), seat(1, ['7c', '2d'])] };
+    assert.deepEqual(auditReviewSeats(review, truth).leaked, [1]);
+
+    // And the old check, handed the list response that accompanies exactly this leak, is clean.
+    // It is not that it disagrees — it never looked. `seats` is not a field of a hand summary.
+    assert.equal(LIST_ROW.seats, undefined, 'the fixture must reproduce the shape that has no seats');
+    assert.equal(oldSectionEightSaidClean([LIST_ROW]), true, 'the old expression printed a tick here');
+  });
+
+  it('exempts a seat that genuinely showed down, so the rule is not "never send cards"', () => {
+    // The positive control. A predicate that flagged every foreign holeCards would fail every
+    // honest showdown, which is the product working.
+    const shown = { seats: [seat(0, ['Ah', 'Ks']), seat(1, ['7c', '2d'], true)] };
+    const showdownTruth = { ...truth, shownSeats: [0, 1] };
+    assert.deepEqual(auditReviewSeats(shown, showdownTruth), {
+      leaked: [],
+      overclaimed: [],
+      examined: 2,
+      ownCards: true,
+    });
+  });
+
+  it('refuses to take showedDown on trust when the wire named no such showdown', () => {
+    // `showedDown` is the server's own assertion, and it is the flag that opens the column. A
+    // server that marked every seat as having shown would open every hand ever played and satisfy
+    // `leaked === []` while doing it. Held to `result.showdowns` from the live hand instead.
+    const overclaiming = { seats: [seat(0, ['Ah', 'Ks']), seat(1, ['7c', '2d'], true)] };
+    const audit = auditReviewSeats(overclaiming, truth);
+    assert.deepEqual(audit.leaked, [], 'the flag does exempt it from the card rule');
+    assert.deepEqual(audit.overclaimed, [1], 'and the flag itself is what fails');
+  });
+
+  it('reports a sweep of nothing as a sweep of nothing, rather than as clean', () => {
+    // The whole defect, in two shapes. Neither may read as a pass: `leaked` is empty for both.
+    const noSeats = auditReviewSeats({ seats: [] }, truth);
+    assert.deepEqual(noSeats.leaked, []);
+    assert.equal(noSeats.examined, 0, 'section 8 fails on this');
+
+    const noCards = auditReviewSeats({ seats: [seat(0, null), seat(1, null)] }, truth);
+    assert.deepEqual(noCards.leaked, []);
+    assert.equal(noCards.ownCards, false, 'and on this');
+
+    // And a response that is not a review at all.
+    assert.equal(auditReviewSeats(undefined, truth).examined, 0);
+    assert.equal(auditReviewSeats({ hands: [] }, truth).examined, 0);
+  });
+
+  it('treats an ABSENT holeCards key as absent rather than as a leak', () => {
+    const dropped = { seats: [seat(0, ['Ah', 'Ks']), { seat: 1, showedDown: false }] };
+    assert.deepEqual(auditReviewSeats(dropped, truth).leaked, []);
+  });
+
+  it('does not exempt anybody when the caller’s own seat is unknown', () => {
+    // `HandReviewSeat` has no `isSelf`, so the own seat comes from the wire. If it went missing the
+    // scan would call every seat foreign — stricter, and wrong, which is why section 8 refuses to
+    // run at all rather than reporting on it. Pinned here so the shape of that failure is known.
+    const review = { seats: [seat(0, ['Ah', 'Ks']), seat(1, null)] };
+    const audit = auditReviewSeats(review, { ...truth, viewerSeat: null });
+    assert.deepEqual(audit.leaked, [0]);
+    assert.equal(audit.ownCards, false);
+  });
+});
+
+describe('liveHandTruth', () => {
+  const stateFrame = (view) => ({ type: 'state', view });
+
+  it('reads the terminal frame, not the first', () => {
+    const truth = liveHandTruth([
+      stateFrame({ handId: 'hand_a', viewerSeat: 0, street: 'preflop', result: null }),
+      { type: 'event', event: { kind: 'street' } },
+      stateFrame({
+        handId: 'hand_a',
+        viewerSeat: 0,
+        street: 'complete',
+        result: { showdowns: [{ seat: 0 }, { seat: 1 }] },
+      }),
+    ]);
+    assert.deepEqual(truth, {
+      handId: 'hand_a',
+      viewerSeat: 0,
+      shownSeats: [0, 1],
+      complete: true,
+    });
+  });
+
+  it('returns null when no state frame arrived, so section 8 refuses rather than guesses', () => {
+    assert.equal(liveHandTruth([{ type: 'ack', requestId: 'r' }]), null);
+    assert.equal(liveHandTruth([]), null);
+    assert.equal(liveHandTruth(undefined), null);
+  });
+
+  it('reports a missing viewerSeat as null rather than letting undefined stand in for a seat', () => {
+    // `seat.seat === truth.viewerSeat` against `undefined` is false for every seat, which widens
+    // the scan to "no seat is your own" — stricter by accident and a broken check. Section 8 fails
+    // on a null instead.
+    const truth = liveHandTruth([stateFrame({ handId: 'h', street: 'complete', result: null })]);
+    assert.equal(truth.viewerSeat, null);
+    assert.deepEqual(truth.shownSeats, [], 'a null result exempts nobody');
+  });
+
+  it('drops a showdown entry that carries no seat index', () => {
+    const truth = liveHandTruth([
+      stateFrame({
+        handId: 'h',
+        viewerSeat: 1,
+        street: 'complete',
+        result: { showdowns: [{ seat: 1 }, { playerId: 'usr_x' }] },
+      }),
+    ]);
+    assert.deepEqual(truth.shownSeats, [1], 'an entry with no seat exempts nothing');
   });
 });

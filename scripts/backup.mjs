@@ -139,7 +139,7 @@ import {
 } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -1046,6 +1046,63 @@ const archiveFileName = (id, payload) => (payload === 'globals' ? `${id}.globals
 const manifestFileName = (id) => `${id}.manifest.json`;
 
 /**
+ * True only for a name that can name a file directly inside the archive directory.
+ *
+ * ## The defect this exists for
+ *
+ * `prune --apply` used to take every `manifest.files[].name` straight to
+ * `rm(join(directory, name))`. A manifest is a JSON file sitting in the archive directory
+ * beside the payloads, so anybody who can write there can write a name into it — and a name of
+ * `../VICTIM.txt` resolves through `join` to a file OUTSIDE the directory, which prune then
+ * unlinked and reported as a successful, exit-0 PASS. The archives whose signature does NOT
+ * verify are in the delete set by construction (that is what `prune` is for), so the manifest
+ * signature protects nothing here: the attacker's manifest is the one being acted on.
+ *
+ * The containment idiom is `scripts/clean.mjs` (`isInsideRepo`, `verifySafe`), and this is the
+ * same rule stated for a directory-relative name: a payload name is a BASENAME. There is no
+ * legitimate archive in this format whose payload lives in a subdirectory or above the archive
+ * directory — `archiveFileName` above only ever produces `<id>.dump.enc` or
+ * `<id>.globals.sql.enc` — so anything else is not a formatting quirk, it is tampering, and
+ * `unsafeArchiveFileNames` below makes it fail the command rather than skip the file.
+ *
+ * Checked explicitly rather than by comparing `resolve(join(dir, name))` against the directory:
+ * a resolve-and-compare accepts `sub/../file.enc` and `./file.enc`, which are contained but are
+ * still not names this format writes, and every extra shape accepted is a shape a future reader
+ * has to reason about.
+ */
+export function isPlainArchiveFileName(name) {
+  if (typeof name !== 'string' || name === '') return false;
+  // NUL truncates the path at the syscall boundary on some platforms, so a name carrying one is
+  // not the name that would be unlinked. `\` is rejected as well as `/`: this script is expected
+  // to run on Linux, but an archive directory can be read on a developer's machine, and on
+  // Windows `..\` is the same escape.
+  if (name.includes('\0') || name.includes('/') || name.includes('\\')) return false;
+  if (name === '.' || name === '..') return false;
+  if (isAbsolute(name)) return false;
+  // Belt and braces against a separator this platform recognises that the two above do not.
+  return basename(name) === name;
+}
+
+/**
+ * Every payload name in `backups` that is not a plain basename, with the archive it came from.
+ *
+ * Exported and pure so `prune` can check the WHOLE delete set before it unlinks anything: a
+ * tampered manifest discovered halfway through would otherwise leave a half-applied prune, and
+ * the operator would have to work out which archives had already gone.
+ */
+export function unsafeArchiveFileNames(backups) {
+  const offences = [];
+  for (const backup of backups) {
+    for (const file of backup.manifest?.files ?? []) {
+      if (!isPlainArchiveFileName(file?.name)) {
+        offences.push({ id: backup.id, name: String(file?.name), manifestPath: backup.manifestPath });
+      }
+    }
+  }
+  return offences;
+}
+
+/**
  * Reads every manifest in the directory and reports what is actually on disk beside it.
  *
  * A backup is "good" only when its manifest signature verifies AND every file it names is
@@ -1085,6 +1142,17 @@ export async function readInventory(directory, material) {
     let bytes = 0;
     if (manifest !== null && Array.isArray(manifest.files)) {
       for (const file of manifest.files) {
+        // Checked BEFORE the stat, not only before the unlink in `prune`: `join(directory,
+        // '../VICTIM.txt')` is a path outside the archive directory whichever syscall it is
+        // handed to, and a manifest that names one is tampered with. Recording it as a problem
+        // is what stops such an archive being "good", which is the definition `prune`'s
+        // never-delete-the-newest-good rule is built on.
+        if (!isPlainArchiveFileName(file?.name)) {
+          problems.push(
+            `${String(file?.name)} is not a plain file name — a manifest that names a path is tampered with`,
+          );
+          continue;
+        }
         try {
           const info = await stat(join(directory, file.name));
           bytes += info.size;
@@ -1119,6 +1187,47 @@ export async function readInventory(directory, material) {
   return backups;
 }
 
+/**
+ * Which database an archive was taken FROM, or null when the manifest does not say.
+ *
+ * Read from the manifest body rather than parsed out of the id. The id is
+ * `prl-<database>-<stamp>`, and a database name may itself contain a hyphen — no, it may not
+ * (`isSafeDatabaseName`), but the id is also the field an attacker who can write to the
+ * archive directory controls most cheaply, and `source.database` is under the HMAC.
+ */
+export const sourceDatabaseOf = (backup) => backup?.manifest?.source?.database ?? null;
+
+/** Every distinct source database in an inventory, in first-seen order. Null groups as `null`. */
+export function sourceDatabases(inventory) {
+  const seen = [];
+  for (const backup of inventory) {
+    const source = sourceDatabaseOf(backup);
+    if (!seen.includes(source)) seen.push(source);
+  }
+  return seen;
+}
+
+/**
+ * The archive a command should act on.
+ *
+ * ## The defect this exists for
+ *
+ * "The newest archive" is only a meaningful default while every archive in the directory came
+ * from the SAME database. docs/production/disaster-recovery.md §5.5 makes the opposite the
+ * required posture — "the archives and the key must not live only on the host being backed
+ * up" — and the cheapest way to satisfy that is one archive store fed by more than one host.
+ *
+ * Measured, with two source databases in one directory: a 149.8 MiB archive of
+ * `poker_risk_lab` (944,297 rows) taken at 18:28 and a 77.6 KiB archive of an empty
+ * `poker_risk_lab_restored` taken at 18:38. `restore --target …` with no `--id` chose the
+ * empty one, restored it, compared it against ITS OWN manifest's census, and printed PASS.
+ * Nothing in the output said the archive was of a different database — the id says so and
+ * nothing reads it.
+ *
+ * So an ambiguous directory is refused rather than resolved by timestamp. Naming the sources
+ * is the whole point of the message: an operator who did not know two hosts shared a directory
+ * finds out here rather than after the restore.
+ */
 function selectArchive(inventory, id) {
   if (id !== null && id !== undefined) {
     const found = inventory.find((backup) => backup.id === id);
@@ -1126,6 +1235,15 @@ function selectArchive(inventory, id) {
     return found;
   }
   if (inventory.length === 0) throw new BackupError('no archives in this directory');
+  const sources = sourceDatabases(inventory);
+  if (sources.length > 1) {
+    throw new BackupError(
+      `this directory holds archives of ${sources.length} different databases ` +
+        `(${sources.map((name) => name ?? '<unnamed>').join(', ')}), so "the newest archive" does not ` +
+        'name one thing',
+      'pass --id explicitly — `pnpm run backup list` shows every archive and its source',
+    );
+  }
   return inventory[0];
 }
 
@@ -1182,6 +1300,29 @@ export function weekBucket(date) {
  * archive must not be able to hold a slot and evict the intact one beneath it. Broken
  * backups are still deletable — they are what `--apply` is for once an operator has looked
  * at them — but they can never displace something that works.
+ *
+ * ## The policy is applied per source database, and the defect that is for
+ *
+ * Every rule above says "the newest", and until this existed "the newest" meant the newest
+ * file in the directory regardless of which database it was a copy of. Measured, with two
+ * source databases in one archive directory and the shipped 7/4/6 policy:
+ *
+ *     ✓ keep    prl-poker_risk_lab_restored-20260825T183852Z   77.6 KiB
+ *           newest good backup (never deleted), daily 2026-08-25, weekly 2026-W35, monthly 2026-08
+ *     · would delete prl-poker_risk_lab-20260825T182844Z      149.8 MiB
+ *           outside the 7/4/6 daily/weekly/monthly window
+ *
+ * The 149.8 MiB archive was the ONLY copy of a 944,297-row database, and the summary under
+ * that plan still read "The newest good backup is never in the delete set, whatever the policy
+ * says." It was true of the directory and false of every database in it. Two hosts writing to
+ * one archive store — which §5.5 of docs/production/disaster-recovery.md effectively requires,
+ * since the archives must not live only on the host being backed up — is enough, and a weekly
+ * `prune --apply` then destroys one host's entire backup set on its first run.
+ *
+ * So each source database gets its own buckets and its own never-deleted newest good archive.
+ * An archive whose manifest names no source groups under `null`, which is what a manifest this
+ * script wrote before `source.database` existed would do — grouping it with the named ones
+ * would be a guess, and the safe direction is a group of its own that keeps its own newest.
  */
 export function selectForRetention(backups, policy) {
   const usable = backups
@@ -1194,28 +1335,38 @@ export function selectForRetention(backups, policy) {
     else if (!existing.includes(reason)) existing.push(reason);
   };
 
-  const newestGood = usable.find((backup) => backup.good === true) ?? null;
-  if (newestGood !== null) note(newestGood, 'newest good backup (never deleted)');
+  const groups = new Map();
+  for (const backup of usable) {
+    const source = sourceDatabaseOf(backup);
+    const existing = groups.get(source);
+    if (existing === undefined) groups.set(source, [backup]);
+    else existing.push(backup);
+  }
 
   const tiers = [
     { bucket: dayBucket, limit: policy.daily, label: 'daily' },
     { bucket: weekBucket, limit: policy.weekly, label: 'weekly' },
     { bucket: monthBucket, limit: policy.monthly, label: 'monthly' },
   ];
-  for (const tier of tiers) {
-    const representatives = new Map();
-    for (const backup of usable) {
-      if (backup.good !== true) continue;
-      const key = tier.bucket(new Date(backup.createdAtMs));
-      if (!representatives.has(key)) representatives.set(key, backup);
-    }
-    // Buckets are inserted newest-first because `usable` is sorted that way, so the first
-    // `limit` entries are the most recent ones.
-    let kept = 0;
-    for (const [key, backup] of representatives) {
-      if (kept >= tier.limit) break;
-      note(backup, `${tier.label} ${key}`);
-      kept += 1;
+  for (const group of groups.values()) {
+    const newestGood = group.find((backup) => backup.good === true) ?? null;
+    if (newestGood !== null) note(newestGood, 'newest good backup (never deleted)');
+
+    for (const tier of tiers) {
+      const representatives = new Map();
+      for (const backup of group) {
+        if (backup.good !== true) continue;
+        const key = tier.bucket(new Date(backup.createdAtMs));
+        if (!representatives.has(key)) representatives.set(key, backup);
+      }
+      // Buckets are inserted newest-first because `usable` is sorted that way, so the first
+      // `limit` entries are the most recent ones.
+      let kept = 0;
+      for (const [key, backup] of representatives) {
+        if (kept >= tier.limit) break;
+        note(backup, `${tier.label} ${key}`);
+        kept += 1;
+      }
     }
   }
 
@@ -1677,6 +1828,8 @@ async function verifyArchive(backup, { ctx, material, directory, deep, target })
   }
   const startedAt = Date.now();
   let restored = null;
+  /** null when the scratch database is gone; the reason it is still there when it is not. */
+  let dropFailure = null;
   try {
     await createDatabase(ctx, scratch);
     await restoreInto(ctx, scratch, join(directory, dumpFile.name), material);
@@ -1684,20 +1837,63 @@ async function verifyArchive(backup, { ctx, material, directory, deep, target })
   } finally {
     // Always. A verification run that leaves a copy of the production database lying around
     // on the cluster has created the exact exposure the encryption exists to prevent.
+    //
+    // The failure is captured rather than printed here. `cross()` in THIS file is a pure
+    // printer (see the output helpers) — unlike the same-named helper in staging.mjs, it feeds
+    // no verdict — so the previous `.catch(cross)` wrote a red line to stderr and let the
+    // command go on to print PASS, exit 0, and claim in so many words that it had "restored
+    // into a scratch database and dropped it". A plaintext copy of the database surviving on
+    // the cluster is the one outcome this command exists to prevent, so it is a verdict, and
+    // the verdict is recorded through `record` below like every other layer-4 claim.
     await dropDatabase(ctx, scratch).catch((err) => {
-      cross(`could not drop the scratch database ${scratch}`, err.message);
+      dropFailure = err.message;
     });
   }
   const comparison = compareCensus(backup.manifest.rowCounts, restored);
-  record(
-    '4',
-    comparison.ok,
-    comparison.ok
-      ? `restored into a scratch database and dropped it  (${seconds(Date.now() - startedAt)})`
-      : 'the restored database does not carry the recorded rows',
-    comparison.summary,
-  );
+  for (const result of deepVerifyResults({
+    comparison,
+    dropFailure,
+    scratch,
+    elapsedMs: Date.now() - startedAt,
+  })) {
+    record(result.layer, result.ok, result.message, result.detail);
+  }
   return results;
+}
+
+/**
+ * The two claims a `--deep` verification makes, as data.
+ *
+ * Split into two records rather than folded into one line because they are two different
+ * statements — "the restore carried the rows" and "no plaintext copy is left on the cluster" —
+ * and an operator reading the output needs to know which of them failed. Pure and exported so
+ * `scripts/backup.test.mjs` can assert the property that actually regressed: that no message
+ * this function can produce claims a drop that did not happen, and that a failed drop is never
+ * `ok`.
+ */
+export function deepVerifyResults({ comparison, dropFailure, scratch, elapsedMs }) {
+  const dropped = dropFailure === null || dropFailure === undefined;
+  return [
+    {
+      layer: '4',
+      ok: comparison.ok,
+      message: comparison.ok
+        ? `restored into a scratch database  (${seconds(elapsedMs)})`
+        : 'the restored database does not carry the recorded rows',
+      detail: comparison.summary,
+    },
+    {
+      layer: '4',
+      ok: dropped,
+      message: dropped
+        ? `dropped the scratch database ${scratch}`
+        : `the scratch database ${scratch} is STILL ON THE CLUSTER`,
+      detail: dropped
+        ? 'no plaintext copy of the archive remains'
+        : `${dropFailure} — it holds a plaintext copy of every row in this archive. Drop it by ` +
+          `hand (\`DROP DATABASE ${scratch}\`) before treating this verification as done.`,
+    },
+  ];
 }
 
 /**
@@ -1825,9 +2021,87 @@ async function restoreInto(ctx, database, encryptedPath, material) {
   await feedTool(run, decryptFrames(createReadStream(encryptedPath), { material }));
 }
 
+/**
+ * Removes the `GRANTED BY <role>` clause from role-membership grants.
+ *
+ * ## The defect this exists for
+ *
+ * PostgreSQL 16 records a grantor for every role membership, and `pg_dumpall --globals-only`
+ * emits it. This cluster's globals dump ends with, verbatim:
+ *
+ *     GRANT prl_app TO prl_api WITH INHERIT TRUE GRANTED BY poker;
+ *     GRANT prl_migrator TO prl_deployer WITH INHERIT TRUE GRANTED BY poker;
+ *
+ * `poker` is the SOURCE cluster's bootstrap superuser, and on a fresh cluster the roles were
+ * created by the NEW cluster's superuser, so nobody holds the admin option as `poker`. Measured
+ * against a virgin `postgres:16-bookworm`, running the shipped `restore --with-globals`:
+ *
+ *     ✗ psql exited 3
+ *         ERROR:  permission denied to grant privileges as role "poker"
+ *         DETAIL:  The grantor must have the ADMIN option on role "prl_app".
+ *
+ * Being a superuser does not help: the same statement fails as `postgres`, and it fails again
+ * after `SET ROLE poker` even though the dump has just made `poker` a superuser too. So the
+ * one command docs/production/disaster-recovery.md §5.4 offers for "a genuinely fresh cluster"
+ * — the RTO-defining path in §5.5 — could not have worked anywhere, and it left the cluster
+ * with five roles and no memberships, which is `prl_api` able to log in and read nothing.
+ *
+ * Dropping the clause makes the restoring superuser the grantor. That is a real difference and
+ * it is the right one: the grantor is a fact about how the OLD cluster was administered, and
+ * `pg_auth_members.grantor` on the new cluster should name whoever actually rebuilt it. Every
+ * membership is restored; nothing is widened.
+ *
+ * Applied only to lines that begin a GRANT, so a password or a role name that happens to
+ * contain the words cannot be rewritten.
+ */
+export function neutraliseGrantedBy(sqlText) {
+  let stripped = 0;
+  const out = sqlText
+    .split('\n')
+    .map((line) => {
+      if (!/^\s*GRANT\s/i.test(line)) return line;
+      const rewritten = line.replace(/\s+GRANTED\s+BY\s+(?:"(?:[^"]|"")+"|[A-Za-z_][\w$]*)(?=\s*;)/i, '');
+      if (rewritten !== line) stripped += 1;
+      return rewritten;
+    })
+    .join('\n');
+  return { sql: out, stripped };
+}
+
+/** A globals dump is roles and nothing else; anything near this size is not one. */
+const MAX_GLOBALS_BYTES = 8 * 1024 * 1024;
+
 async function applyGlobals(ctx, encryptedPath, material) {
-  const run = startTool('psql', psqlArgs(ctx.maintenanceDatabase), ctx, { stdin: 'pipe' });
-  await feedTool(run, decryptFrames(createReadStream(encryptedPath), { material }));
+  // Buffered rather than streamed, unlike the database payload. A globals dump is kilobytes
+  // (1.9 KiB for this cluster), it has to be rewritten before psql sees it, and a rewrite that
+  // has to work across frame boundaries would be a second thing to get wrong.
+  const parts = [];
+  let bytes = 0;
+  for await (const chunk of decryptFrames(createReadStream(encryptedPath), { material })) {
+    bytes += chunk.length;
+    if (bytes > MAX_GLOBALS_BYTES) {
+      throw new BackupError(
+        `the globals payload is over ${humanBytes(MAX_GLOBALS_BYTES)}`,
+        'a `pg_dumpall --globals-only` of this cluster is kilobytes; this archive is not one',
+      );
+    }
+    parts.push(chunk);
+  }
+  const { sql, stripped } = neutraliseGrantedBy(Buffer.concat(parts).toString('utf8'));
+  if (stripped > 0) {
+    bang(
+      `rewrote ${stripped} role-membership grant(s) to drop GRANTED BY`,
+      'the grantor becomes the identity running this restore; PostgreSQL 16 refuses the recorded ' +
+        'one on any cluster that did not create the role — see `neutraliseGrantedBy`',
+    );
+  }
+  // --single-transaction, for the same reason `restoreInto` has it: without it a refusal partway
+  // through leaves the cluster with some of the roles, some of the memberships and no way to
+  // tell which. That was the observed state after the failure above.
+  const run = startTool('psql', psqlArgs(ctx.maintenanceDatabase, ['--single-transaction']), ctx, {
+    stdin: 'pipe',
+  });
+  await feedTool(run, [Buffer.from(sql, 'utf8')]);
 }
 
 async function commandRestore(options, ctx, material, directory) {
@@ -1926,7 +2200,11 @@ async function commandList(options, _ctx, material, directory) {
 
   for (const backup of inventory) {
     const reasons = keptIds.get(backup.id);
-    const label = `${backup.id}  ${humanBytes(backup.bytes)}`;
+    // The source database is printed on every line because retention and `restore`'s default
+    // are now per-database: a reader who cannot see the grouping cannot check the decision.
+    const label = `${backup.id}  ${humanBytes(backup.bytes)}  ${dim(
+      `of ${sourceDatabaseOf(backup) ?? '<unnamed>'}`,
+    )}`;
     if (!backup.good) bang(label, backup.problems.join('; '));
     else if (reasons === undefined) say(`  ${dim('·')} ${label}  ${dim('would be pruned')}`);
     else tick(label, reasons.join(', '));
@@ -1937,6 +2215,13 @@ async function commandList(options, _ctx, material, directory) {
   say(`    good        ${inventory.filter((backup) => backup.good).length}`);
   say(`    on disk     ${humanBytes(inventory.reduce((sum, backup) => sum + backup.bytes, 0))}`);
   say(`    policy      ${policy.daily} daily / ${policy.weekly} weekly / ${policy.monthly} monthly`);
+  say(
+    `    sources     ${
+      sourceDatabases(inventory)
+        .map((n) => n ?? '<unnamed>')
+        .join(', ') || '(none)'
+    }`,
+  );
   say(`\n  ${inventory.length > 0 ? green(bold('PASS')) : yellow(bold('EMPTY'))} inventory read`);
   say(
     dim(
@@ -1964,10 +2249,59 @@ async function commandPrune(options, _ctx, material, directory) {
   const plan = selectForRetention(inventory, policy);
 
   for (const backup of plan.keep) tick(`keep    ${backup.id}`, backup.reasons.join(', '));
+
+  // Every name in the WHOLE delete set is checked before a single file is unlinked. See
+  // `isPlainArchiveFileName`: a payload name that is not a basename escapes the archive
+  // directory through `join`, and `prune --apply` used to unlink whatever it landed on and
+  // still print PASS. Two properties matter and both are deliberate:
+  //
+  //   * it is a hard failure of the command, not a skipped file. The archives in the delete set
+  //     are exactly the ones whose signature did not have to verify, so a manifest that names a
+  //     path is evidence somebody wrote to the archive directory. That is an incident, and an
+  //     incident must not exit 0 with a tidy summary above it.
+  //   * it happens before any deletion, so the operator investigating is looking at the
+  //     directory as the attacker left it rather than at a directory this script half-pruned.
+  //
+  // Checked in plan mode too, and failing there as well. Plan mode deletes nothing, so it is not
+  // dangerous — but it is the run an operator does FIRST, and a compromised archive directory
+  // that exits 0 with a tidy plan is the worst possible moment to say nothing.
+  const offences = unsafeArchiveFileNames(plan.delete);
+  if (offences.length > 0) {
+    for (const offence of offences) {
+      cross(
+        `${offence.id} names a payload that is not a plain file name: ${offence.name}`,
+        `--apply would have deleted ${join(directory.path, offence.name)}; ` +
+          `${offence.manifestPath} has been tampered with`,
+      );
+    }
+    say(`\n  ${red(bold('FAIL'))} prune — nothing was deleted\n`);
+    say(
+      dim(
+        '  Do not run this with --apply. Somebody who can write to the archive directory wrote a\n' +
+          '  path traversal into a manifest; treat the whole directory as untrusted and look at\n' +
+          '  who has write access to it before anything else.\n',
+      ),
+    );
+    if (options.json) console.log(JSON.stringify({ policy, applied: false, offences }));
+    return 1;
+  }
+
   for (const backup of plan.delete) {
     if (options.apply) {
       const names = (backup.manifest?.files ?? []).map((file) => file.name);
-      for (const name of names) await rm(join(directory.path, name), { force: true });
+      for (const name of names) {
+        // Belt and braces to the gate above, and deliberately a throw rather than a skip: if
+        // that gate is ever removed or moved, this line must stop the deletion rather than
+        // quietly resume unlinking whatever `join` produces. `BackupError` is caught at the
+        // entry point and exits 1.
+        if (!isPlainArchiveFileName(name)) {
+          throw new BackupError(
+            `refusing to delete ${String(name)} named by ${backup.manifestPath}`,
+            'it is not a plain file name, so it does not name a file in the archive directory',
+          );
+        }
+        await rm(join(directory.path, name), { force: true });
+      }
       await rm(backup.manifestPath, { force: true });
       say(`  ${red('✗')} deleted ${backup.id}`);
     } else {
@@ -1989,7 +2323,18 @@ async function commandPrune(options, _ctx, material, directory) {
     return 1;
   }
   say(`\n  ${green(bold('PASS'))} ${options.apply ? 'prune applied' : 'prune plan (nothing deleted)'}`);
-  say(dim('\n  The newest good backup is never in the delete set, whatever the policy says.\n'));
+  // "of every source database" is the load-bearing half. Without it this line was true of the
+  // directory and false of each database in it — see `selectForRetention`.
+  say(
+    dim(
+      '\n  The newest good backup OF EVERY SOURCE DATABASE is never in the delete set, whatever\n' +
+        `  the policy says. Sources here: ${
+          sourceDatabases(inventory)
+            .map((n) => n ?? '<unnamed>')
+            .join(', ') || '(none)'
+        }\n`,
+    ),
+  );
   if (options.json) console.log(JSON.stringify({ policy, applied: options.apply, plan }));
   return 0;
 }

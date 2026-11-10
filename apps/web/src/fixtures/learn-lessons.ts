@@ -972,7 +972,7 @@ export const LEARN_LESSONS: readonly Lesson[] = [
         expression:
           'risk of ruin is approximately e^(-2 x win rate x bankroll / standard deviation^2), with the bankroll in big blinds and both rates per 100 hands',
         explanation:
-          'Three features matter more than the formula: risk falls exponentially as the bankroll grows, it falls exponentially as the edge grows, and it rises with the square of the standard deviation. Variance is the only one of the three that enters squared, which is why it dominates the answer.',
+          'Three features matter more than the formula: risk falls exponentially as the bankroll grows, it falls exponentially as the edge grows, and it rises with the standard deviation, which enters the exponent squared. That squaring is why the standard deviation has more leverage than the other two, though the risk itself does not scale as its square — it cannot, being a probability. Double the standard deviation in the calculator below and watch what the risk actually does.',
       },
       {
         kind: 'liveCalculation',
@@ -1044,7 +1044,7 @@ export const LEARN_LESSONS: readonly Lesson[] = [
       'Samples in the tens of thousands of hands usually leave an interval wide enough to contain both a winner and a loser, so the midpoint alone is not a result.',
       'Risk of ruin falls exponentially with bankroll and with edge, and rises with the square of the standard deviation, which makes variance the dominant term.',
       'Tripling the edge and tripling the bankroll reduce risk of ruin identically, so the buffer is the lever available to everyone.',
-      'The model assumes a fixed edge, normal results, unchanged stakes, no tilt and infinite play, and every one of those assumptions makes the real risk higher than the number shown.',
+      'The model assumes a fixed edge, normal results, unchanged stakes, no tilt and infinite play, and those assumptions do not all point the same way. Fat tails and tilt make the real risk higher than the number shown; moving down when the bankroll shrinks, and playing a finite stretch rather than for ever, both make it lower.',
     ],
     quizId: 'quiz-sample-size-and-risk-of-ruin',
     glossaryTerms: ['sample-size', 'risk-of-ruin', 'bankroll', 'standard-deviation', 'variance'],

@@ -48,6 +48,39 @@ export const ERROR_CODES = [
   'not_room_member',
   'not_your_turn',
   'not_seated',
+  /**
+   * The caller may see this table and may not take a seat at it, because this deployment serves a
+   * taught course and no cohort entitles them right now.
+   *
+   * ## Why it is not `forbidden`
+   *
+   * `forbidden` is the answer to "you do not have access to that", and a learner who reads it has
+   * nowhere to go: it does not say what would change the answer, and the thing that changes this
+   * answer is an operator writing a row somebody else has to ask for. So this carries its own code
+   * and its own sentence — one a student can act on — and the client can branch on it to say more
+   * than a generic refusal panel would. It is also not `not_room_member` (they may well be one)
+   * and not `insufficient_units` (their units are irrelevant and resetting them changes nothing).
+   *
+   * ## Why it is 403 and NOT 5xx, unlike `room_owned_elsewhere`
+   *
+   * `wsCloseForError` derives the socket close code from the status, and 4xx is the branch
+   * `describeClose` treats as PERMANENT while 5xx is the retry-with-backoff branch. A room held by
+   * another process is genuinely a "wait and try again"; this is not. Nothing the client can do —
+   * no backoff, no reconnect, no second tap on the seat — turns an absent enrolment into a present
+   * one, and a client looping against that would be a defect with a metric behind it. So: 4xx,
+   * hence 4403, hence `retryable: false`.
+   *
+   * 403 rather than 404 for the same reason `room_not_found_or_not_permitted` is a 404: the two
+   * codes exist to hide different things, and there is nothing to hide here. The caller has
+   * already been told the room exists (they are a member of it), so answering "no such thing"
+   * would be a lie that costs the reader the explanation and buys nothing.
+   *
+   * Deliberately says nothing about money, and there is nothing it could say: a scholarship
+   * enrolment and any other kind are identical rows (`db/migrations/0006_cohort_enrolments.sql`),
+   * this schema holds no amount and no currency, and this software cannot take money. The honest
+   * instruction is "ask whoever enrolled your class", which is what the message gives.
+   */
+  'enrolment_required',
 
   // --- rooms ---
   'room_not_found_or_not_permitted',
@@ -57,6 +90,26 @@ export const ERROR_CODES = [
   'invite_code_invalid',
   'already_seated',
   'insufficient_units',
+  /**
+   * Another API process is authoritative for this room, and this one refused to serve it.
+   *
+   * A room being played lives in ONE process's memory — the deck, the salts and the pot have no
+   * column and never will — so two processes serving one room deal two different hands and the
+   * second settlement to land destroys the chips the first paid out. `prl.room_ownership` makes
+   * that an enforced lease rather than a comment beside `deploy.replicas: 1`, and this is what a
+   * process answers when it is refused the lease.
+   *
+   * Its own code rather than `seat_taken` (which is an ordinary race between two learners and must
+   * never page anybody) and rather than `internal_error` (nothing broke — the guard worked, and a
+   * 500 would send the reader a bug report form for a configuration mistake).
+   *
+   * 503 rather than 409, and the reason is what the client then does: `wsCloseForError` maps 5xx to
+   * `serverShuttingDown`, which is the retry-with-backoff path, while 4xx maps to a permanent
+   * refusal that tells the reader the table is not theirs. It is not theirs to give up on — it is
+   * being served, somewhere — so the honest instruction to the client is "wait and try again",
+   * which is also what resolves it when a deploy's containers stop overlapping.
+   */
+  'room_owned_elsewhere',
 
   // --- gameplay ---
   'illegal_action',
@@ -139,6 +192,12 @@ export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
   not_room_member: 403,
   not_your_turn: 409,
   not_seated: 409,
+  // 403, and the choice is load-bearing rather than a default. See the code's own note: 4xx is the
+  // PERMANENT branch of `wsCloseForError`, and an absent enrolment is permanent until an operator
+  // acts. A 5xx here would map to 4503 and put an honest client into a reconnect loop against a
+  // refusal that will never lift on its own — the opposite of `room_owned_elsewhere`, which is
+  // 503 precisely because waiting IS the fix there.
+  enrolment_required: 403,
 
   // 404 on purpose, even when the room exists: a distinguishable "exists but you
   // may not see it" response would let anyone enumerate private rooms.
@@ -149,6 +208,9 @@ export const ERROR_STATUS: Readonly<Record<ErrorCode, number>> = {
   invite_code_invalid: 404,
   already_seated: 409,
   insufficient_units: 409,
+  // 503, not 409. See the code's own note: 5xx is the retryable branch of `wsCloseForError`, and
+  // a room held by another process is a "try again", not a "this is not yours".
+  room_owned_elsewhere: 503,
 
   illegal_action: 422,
   stale_action_sequence: 409,
@@ -187,6 +249,10 @@ export const ERROR_MESSAGES: Readonly<Record<ErrorCode, string>> = {
   not_room_member: 'You are not a member of that table.',
   not_your_turn: 'It is not your turn to act.',
   not_seated: 'You need to take a seat first.',
+  enrolment_required:
+    'Taking a seat at a table is part of a course, and this account is not enrolled in one that is ' +
+    'running right now. The lessons, the Lab and the glossary stay open to everybody. If you think ' +
+    'you should be enrolled, ask whoever enrols your class — nobody here can add you from this page.',
 
   room_not_found_or_not_permitted: 'No table was found for that link.',
   room_full: 'That table has no free seats.',
@@ -195,6 +261,8 @@ export const ERROR_MESSAGES: Readonly<Record<ErrorCode, string>> = {
   invite_code_invalid: 'That invite code is not valid.',
   already_seated: 'You are already seated at that table.',
   insufficient_units: 'You do not have enough units for that table. Reset your units and try again.',
+  room_owned_elsewhere:
+    'That table is being looked after by another server right now. Give it a moment and try again.',
 
   illegal_action: 'That is not a legal action in this spot.',
   stale_action_sequence: 'The hand moved on while you were deciding. Have another look.',

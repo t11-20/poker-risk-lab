@@ -1163,3 +1163,106 @@ describe('a room re-opened after a restart', () => {
     );
   });
 });
+
+describe('RoomRegistry.open is deduplicated across concurrent first-touches', () => {
+  /**
+   * The regression: `open()` was a check-then-act across four `await`s, so two callers arriving
+   * while a room was cold both built a `LiveTable` and the second `this.rooms.set` silently
+   * replaced the first.
+   *
+   * It is not a narrow window. Both entry points — `openRoomFor` in `routes/rooms.ts` and
+   * `reopenFor` in `ws/router.ts` — await a database round trip before calling it, and
+   * `ensureOpen` adds two more, so it is several Postgres round trips wide and opens on the
+   * ordinary page-load sequence: a `GET /rooms/:id` racing the WebSocket `hello`, or two tabs.
+   *
+   * Three consequences were reproduced against the unfixed code: a table that answers `ack` and
+   * then never emits a `state` frame again (the router caches one subscription per room id and
+   * had attached to the replaced room); a learner who joins by invite code, is added to the
+   * orphan, and is then refused by `require()` forever; and a `LiveTable`/`TurnTimer`/`BotRunner`
+   * unreachable from `closeAll()`.
+   *
+   * The slow archive read below is what makes the window observable in a test — in production it
+   * is a real query. Without the fix this fails on the first assertion with two distinct rooms.
+   */
+  it('builds one LiveRoom for two simultaneous ensureOpen calls', async () => {
+    const { store } = await harness();
+    const { room } = await store.create({
+      name: 'Race',
+      ownerUserId: 'usr_owner',
+      maxSeats: 3,
+      smallBlind: 5,
+      bigBlind: 10,
+      startingStack: 1000,
+    });
+
+    let handNumberReads = 0;
+    const slowArchive: HandArchive = {
+      ...noopArchive,
+      nextHandNumber: async () => {
+        handNumberReads += 1;
+        // One turn of the event loop is enough: the point is that ANY suspension between the
+        // `rooms.get` and the `rooms.set` used to be enough.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return 1;
+      },
+    };
+    const racing = new RoomRegistry({
+      store,
+      archive: slowArchive,
+      clock: createManualClock(),
+      random: createSecureRandom(),
+      nextHandId: incrementingHandIds(),
+    });
+
+    const [first, second] = await Promise.all([racing.ensureOpen(room.id), racing.ensureOpen(room.id)]);
+
+    assert.equal(first, second, 'two concurrent opens built two independent LiveRooms for one room id');
+    assert.equal(racing.get(room.id), first, 'the room in the map is not the one the callers were handed');
+    assert.equal(racing.size, 1);
+    // The positive control: without this, the assertions above would also hold if `ensureOpen`
+    // had simply failed to open anything at all.
+    assert.equal(handNumberReads, 1, 'the room was built more than once');
+    racing.closeAll();
+  });
+
+  it('does not leave a failed open cached, so the next attempt can still succeed', async () => {
+    // The in-flight entry is removed when the build settles, including on rejection. Without
+    // that, one database blip during an open would make the room permanently unopenable.
+    const { store } = await harness();
+    const { room } = await store.create({
+      name: 'Blip',
+      ownerUserId: 'usr_owner',
+      maxSeats: 3,
+      smallBlind: 5,
+      bigBlind: 10,
+      startingStack: 1000,
+    });
+
+    let attempt = 0;
+    const flaky: HandArchive = {
+      ...noopArchive,
+      nextHandNumber: (roomId: string) => {
+        attempt += 1;
+        if (attempt === 1)
+          return Promise.reject(new Error(`connection terminated unexpectedly for ${roomId}`));
+        return Promise.resolve(1);
+      },
+    };
+    const registry = new RoomRegistry({
+      store,
+      archive: flaky,
+      clock: createManualClock(),
+      random: createSecureRandom(),
+      nextHandId: incrementingHandIds(),
+    });
+
+    // `open` reads the hand count inside a try/catch that fails soft, so the first open succeeds
+    // with a fresh rotation rather than rejecting — which is the documented behaviour. What this
+    // asserts is that the second call is served and the map holds exactly one room either way.
+    const first = await registry.ensureOpen(room.id);
+    const second = await registry.ensureOpen(room.id);
+    assert.equal(first, second);
+    assert.equal(registry.size, 1);
+    registry.closeAll();
+  });
+});

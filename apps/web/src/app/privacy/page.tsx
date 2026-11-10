@@ -26,10 +26,74 @@
  * ## One thing on this page is a policy rather than an observation
  *
  * The retention paragraph. `deleteExpired` and `deleteExpiredLoginAttempts` exist in
- * `apps/api/src/repositories/sessions.ts` and, at the time this was drafted, had no caller anywhere
- * outside the test suite — so expired rows are removable but nothing removes them on a schedule.
- * The page says that in as many words rather than describing a sweep that does not run. If a
- * scheduled job is added, this paragraph changes with it.
+ * `apps/api/src/repositories/sessions.ts` and, when this page was first drafted, had no caller
+ * anywhere outside the test suite — so expired rows were removable and nothing removed them. The
+ * page said that in as many words rather than describing a sweep that did not run, and it said "if
+ * a scheduled job is added, this paragraph changes with it".
+ *
+ * It has been, so it did. `apps/api/src/maintenance/retention-sweep.ts` runs both sweeps every six
+ * hours in the API process. The paragraph below now describes what runs; what it still does not do
+ * is decide the PERIODS, which are entry 7 of the counsel register and are a policy question, not
+ * an observation about the code.
+ *
+ * ## The retention paragraph was also WRONG, in the direction that understates
+ *
+ * It said "a session lasts fourteen days from when it was issued". Fourteen days is the IDLE
+ * window: `extendExpiry` in `apps/api/src/repositories/sessions.ts` slides it forward on every
+ * visit past the halfway mark (`SESSION_REFRESH_AFTER`), bounded by `SESSION_ABSOLUTE_TTL_SECONDS`
+ * in `apps/api/src/auth/session.ts` — SIXTY days from `created_at`. A learner who visits weekly
+ * held one session row for four times as long as this page claimed. The ceiling is now stated, and
+ * `apps/web/test/legal-pages.test.ts` reads both constants out of the API source and fails if the
+ * page and the code disagree again. A retention period a document understates is worse than one it
+ * leaves vague: the vague one sends a reader to ask, and the wrong one does not.
+ *
+ * Two smaller corrections went with it. "Only for the ten minutes an in-progress sign-in lasts"
+ * described when a row stops WORKING, not when it stops EXISTING — the sweep is what removes it, so
+ * the row can outlive its ten minutes by up to a sweep interval. And section 6 said what deletion
+ * does without saying what it cannot reach: backups are sealed snapshots, and the shipped policy in
+ * `scripts/backup.mjs` keeps one for up to six months.
+ *
+ * ## The proxy paragraph in §4 described a leak that had been fixed
+ *
+ * It said the reverse proxy "writes a conventional access log: one line per request carrying your
+ * *raw* IP address, your *full* User-Agent string, the complete request line including anything in
+ * the query string, and the page you came from", and that a federated sign-in's parameters were in
+ * it too. That was true of `combined`, which is what both shipped configurations used when the
+ * paragraph was written. Both were rewritten in the same commit as the paragraph
+ * (`deploy/staging/nginx.conf:237-266`, `docker-compose.yml:591-626`): a `log_format prl_privacy`
+ * built on `$uri`, which has no query string in it; `$remote_addr` mapped to a /24 or a /48, and to
+ * the bare word `ip6` where it cannot be truncated confidently; the user agent reduced to one of
+ * four classes; no `$http_referer` at all; and `error_log crit` with `/dev/null` on the OIDC
+ * callback, because nginx stamps the request line onto its own error messages in a shape no
+ * `log_format` controls.
+ *
+ * So the page was overstating the exposure, which sounds harmless and is not: a policy that
+ * describes a worse system than the one running teaches its own readers that it is not written from
+ * the code, and the next inaccuracy in the other direction gets the same credence. §4 now describes
+ * `prl_privacy`, and says plainly that a network prefix is reduction and not anonymisation.
+ *
+ * ## §2, §5, §6 and §7 had to learn about enrolment
+ *
+ * `db/migrations/0006_cohort_enrolments.sql` added `prl.cohorts` and `prl.enrolments`, and the
+ * inventory test failed on both, which is what it is for. Everything the page now says about them is
+ * read out of that file: what the columns are (`:215-243`, `:262-322`), that there is no amount and
+ * no currency column in it or anywhere else (`:25-30`), that the `reference` is opaque and may be
+ * the literal word `scholarship` (`:32-37`, `:333-335`), that a withdrawal is an `UPDATE` and never
+ * a delete (`:339-342`), that the runtime role is granted `SELECT` and nothing else on either table
+ * (`:387-388`), and that deleting an account takes the enrolment with it by `ON DELETE CASCADE`
+ * (`:269-270`, argued at `:168-193`). Nothing sweeps either table — `retention-sweep.ts` removes
+ * expired sessions, expired sign-in attempts and abandoned guest accounts, and nothing else — so §5
+ * says so rather than leaving "everything else" to cover a category nobody thought about.
+ *
+ * The half of that worth reading twice is in §6, and it is not visible from the migration alone.
+ * Every grant, supersession and revocation writes an append-only `prl.audit_log` row in the SAME
+ * transaction as the change (`apps/api/src/repositories/enrolments.ts:504,516,570`), and a grant's
+ * `detail` carries the external `reference` (`:516-523`). `audit_log.user_id` is `ON DELETE SET
+ * NULL` (`0001_initial.sql:855-856`), so erasure removes the enrolment row and leaves a detached row
+ * saying that on a date, on somebody's authority, against that reference, a place was granted and
+ * later ended. That is a real and defensible design — a withdrawal an operator cannot evidence is
+ * worth nothing — and it is exactly the kind of thing a reader is entitled to be told rather than
+ * left to infer from a referential action, so §2 and §6 both say it.
  *
  * `robots` is not overridden here, for the reason written out on `/terms`.
  */
@@ -100,7 +164,9 @@ const INVENTORY: readonly InventoryEntry[] = [
       'One row per signed-in browser. A SHA-256 digest of the session token — never the token, so ' +
       'reading this table cannot sign anyone in — when it expires, when it was revoked, and ' +
       'optionally a keyed HMAC-SHA-256 of your IP address and of your browser’s User-Agent string. ' +
-      'The raw address and the raw user agent are never written anywhere. Be clear about what the ' +
+      'Neither the raw address nor the raw user agent is ever written to the database — but read ' +
+      'section 4 before concluding they are written nowhere, because the web server in front of ' +
+      'this application is a different matter. Be clear about what the ' +
       'keyed digest achieves: it is pseudonymisation, not anonymisation. Somebody holding the ' +
       'server’s secret can confirm a guessed address; what it prevents is a leaked backup handing ' +
       'out a list of addresses.',
@@ -108,8 +174,9 @@ const INVENTORY: readonly InventoryEntry[] = [
   {
     table: 'prl.oidc_login_attempts',
     what:
-      'Only if this deployment has an identity provider configured, and only for the ten minutes an ' +
-      'in-progress sign-in lasts. Digests of the three single-use secrets (state, nonce and the PKCE ' +
+      'Only if this deployment has an identity provider configured. A sign-in stops being completable ' +
+      'ten minutes after it starts; the row itself is removed by the sweep described in section 5, so ' +
+      'it can sit there for up to six hours longer. Digests of the three single-use secrets (state, nonce and the PKCE ' +
       'verifier) and, if you were going somewhere in particular, the local path to return you to. ' +
       'The secrets themselves are never stored, so a database read cannot complete somebody else’s ' +
       'sign-in. Each row can be consumed exactly once.',
@@ -123,6 +190,16 @@ const INVENTORY: readonly InventoryEntry[] = [
       'be recovered afterwards by anyone including the operator.',
   },
   {
+    table: 'prl.room_ownership',
+    what:
+      'Nothing about you, and it is listed here so that “nothing” is a stated fact rather than an ' +
+      'omission. One row per table that currently has a hand in flight, recording which of the ' +
+      'application’s own server processes is in charge of it and when that process last proved it ' +
+      'was alive. The identifier in it names a process, not a person; there is no account ' +
+      'identifier in the table and no column that could hold one. The row is deleted when the ' +
+      'process lets the table go.',
+  },
+  {
     table: 'prl.hands, prl.hand_seats and prl.hand_actions',
     what:
       'Your hand history, in full and permanently. For each hand: the board, the street it reached, ' +
@@ -132,6 +209,30 @@ const INVENTORY: readonly InventoryEntry[] = [
       'street, the seat, what was done, what it cost and the pot afterwards, in sequence. These ' +
       'three tables are append-only — the application’s database role holds no permission to delete ' +
       'from them at all.',
+  },
+  {
+    table: 'prl.cohorts',
+    what:
+      'Nothing about you. One row per identified class of learners: a short handle an operator types ' +
+      '(something like spring-2026-risk-lab), a display name, when the class starts and when it ends ' +
+      'if it has a scheduled end. There is no account identifier in this table and no column that ' +
+      'could hold one.',
+  },
+  {
+    table: 'prl.enrolments',
+    what:
+      'Only if this deployment enrols people. One row for each place you hold, or have held, in one ' +
+      'of the classes above: which class, when the place was granted, the name or process an operator ' +
+      'typed as the authority for granting it, one opaque reference to whatever arrangement was made ' +
+      'outside this system, when your access begins, when it expires if it does, and — if the place ' +
+      'is withdrawn — when, by whom and for what stated reason. A withdrawal is written into the row, ' +
+      'never removed, which is what keeps “was this withdrawn, when and why?” answerable. ' +
+      'There is no amount, no currency, no price and no receipt in it, here or anywhere else in this ' +
+      'schema, so this record cannot tell anybody whether your place was paid for: the reference may ' +
+      'be an order number in a finance system nobody here can read, or it may be the word ' +
+      'scholarship. The application itself may only read these two tables — it holds no permission to ' +
+      'create, change or remove a row in either, and an enrolment is granted by an operator running a ' +
+      'command, never through this website.',
   },
   {
     table: 'prl.lesson_progress',
@@ -158,7 +259,11 @@ const INVENTORY: readonly InventoryEntry[] = [
       'where the event is about an account, an event name, a timestamp and a small structured ' +
       'detail. The detail is pre-redacted, and a constraint in the database refuses a row whose ' +
       'detail names a token, a password, an IP address, a user agent, an invite code, the deck, a ' +
-      'commitment salt or hole cards.',
+      'commitment salt or hole cards. Granting, replacing or withdrawing a place in a class also ' +
+      'writes a row here, in the same operation as the change itself, carrying which class, who ' +
+      'authorised it, the reason for a withdrawal and — for a grant — the external reference. That ' +
+      'is what makes the record of a withdrawal outlive the row it was written against; see ' +
+      'section 6 for what deleting your account does and does not do to it.',
   },
 ];
 
@@ -240,7 +345,8 @@ export default function PrivacyPage(): ReactElement {
               <strong>Your session cookie</strong>, and the paired token that protects against cross-site
               request forgery. The session cookie is the one thing in this list that is sent to the server: it
               is what identifies your account. It is marked so that scripts cannot read it, and it lasts
-              fourteen days.
+              fourteen days from your last visit — each visit past the halfway point moves that fourteen days
+              forward, and no amount of visiting carries it past sixty days from when it was issued.
             </li>
             <li>
               <strong>Your theme choice</strong> (<code>prl-theme</code> in local storage) and whether the
@@ -284,22 +390,76 @@ export default function PrivacyPage(): ReactElement {
             and error codes, and the number of distinct label values is capped so that a caller cannot make
             one carry data.
           </p>
+          <p>
+            <strong>
+              The web server in front of the application writes a second log, and it is reduced rather than
+              redacted.
+            </strong>{' '}
+            Everything above describes the application’s own log. Requests reach the application through a
+            reverse proxy, which writes its own line per request: the time, your address{' '}
+            <em>truncated to its network</em> — the first three groups of an IPv4 address, the first three of
+            an IPv6 one, and an address that cannot be truncated confidently is logged as nothing but the word{' '}
+            <code>ip6</code> — a <em>class</em> of user agent rather than the string itself (browser, tool,
+            bot or none), the method, the path <em>without</em> its query string, the status, the size and
+            timings. The page you came from is not logged, your cookies are not logged, and nothing that
+            follows a <code>?</code> in a URL is logged, which is what keeps the single-use parameters of a
+            federated sign-in off disk.
+          </p>
+          <p>
+            Be clear about what that is and is not. A network prefix is <em>reduction</em>, not anonymisation
+            — it is a weaker property than the keyed digest the application stores, because it identifies a
+            neighbourhood rather than nobody, and it is the strongest thing a web server of this kind can do.
+            It is kept rather than dropped because when the application is the thing that is broken, this is
+            the only log that can tell an operator whether one caller is failing or a thousand. Where those
+            lines are sent, who can read them and how long they are kept are decisions of whoever operates
+            this deployment: the shipped configuration bounds how much is kept on disk and nothing in this
+            software bounds how long.
+          </p>
         </section>
 
         <section className="prl-legal__section">
           <h2>5. How long things are kept</h2>
           <p>
-            A session lasts fourteen days from when it was issued; a revoked one is meant to be removed a day
-            after revocation, and an unfinished sign-in expires after ten minutes. Everything else — your
-            account row, your progress, your answers and your hand history — is kept until you delete your
-            account.
+            A session lasts fourteen days <em>from when it was last used</em>, not from when it was issued.
+            Each visit past the halfway point of that window slides the expiry forward, so a session you keep
+            using does not stop working after a fortnight. What stops it sliding is a hard ceiling of{' '}
+            <strong>sixty days from creation</strong>: a learner who visits at least once a week keeps one
+            session row for up to sixty days, and then has to sign in again. A revoked session becomes
+            removable a day after revocation, and an unfinished sign-in stops being usable after ten minutes.
+            Everything else — your account row, your progress, your answers, your hand history and any place
+            you hold in a class — is kept until you delete your account, with one exception described next.
+          </p>
+          <p>
+            <strong>An enrolment is not swept, and expiring is not the same as being deleted.</strong> When a
+            place in a class expires or is withdrawn it stops entitling you to anything, and the row stays
+            exactly where it was — that is the point of it: an operator has to be able to answer “was this
+            person’s access withdrawn, when, and why?” long afterwards, and a deleted row answers nothing.
+            Nothing in this software ever removes an enrolment row on a schedule. Deleting your account
+            removes them, as section 6 says. How long a record of who was in a class may be kept is one of the
+            questions marked below.
+          </p>
+          <p>
+            <strong>Guest accounts you stop using are removed for you.</strong> A guest account has no email
+            address and no password — no such columns exist — so the only thing that can ever reach it again
+            is the cookie in the browser that created it, and that cookie cannot outlive the sixty-day ceiling
+            above. Sixty days after a guest account was last seen it is therefore unreachable by anybody, and
+            it is erased on the same schedule as the sweeps below. An account is only ever taken when it is
+            genuinely finished with: never while a session is still live, never while it still holds a seat at
+            a table, a place in a room, or a room of its own, and never while it holds a place in a class — at
+            any age. The erasure is the same operation as section 6, with the same guarantees; nothing about
+            it is a shortcut.
           </p>
           <p>
             <strong>An honest note about the sweeps.</strong> The code that removes expired sessions and
-            expired sign-in attempts exists and is tested, and at the time this page was written nothing
-            called it on a schedule. So an expired session is unusable but its row may still be present.
-            Whoever runs this deployment is the one who can say whether a job now runs; if none does, the
-            retention above is a policy rather than an observation.
+            expired sign-in attempts runs on a schedule — every six hours, inside the server, in bounded
+            batches. This paragraph used to say the opposite, because until that schedule existed nothing
+            called that code at all. Being <em>unusable</em> and being <em>gone</em> are still two different
+            moments, and the gap between them is up to six hours: a sign-in attempt stops working after ten
+            minutes and its row is removed at the next sweep, which is why the row can outlive the ten minutes
+            by several hours. The first sweep of a freshly started server runs a minute after it starts, and
+            every six hours after that. It used to wait a full six hours, which meant a server redeployed more
+            often than that never swept <em>anything</em> — the promises above were being kept by nobody. The
+            periods above are a policy; the sweep only enforces what the code already implements.
           </p>
           <CounselFlag clause={COUNSEL_CLAUSES['retention-and-deletion']} />
         </section>
@@ -308,18 +468,28 @@ export default function PrivacyPage(): ReactElement {
           <h2>6. Deleting your account</h2>
           <p>
             Deletion is a single operation, and this is exactly what it does — taken from the database
-            migration that implements it rather than from a promise:
+            migration that implements it rather than from a promise. It runs when you ask for it, and it is
+            also what removes an abandoned guest account sixty days after it was last seen (section 5); the
+            two paths are the same code, so the list below is true of both:
           </p>
           <ul>
             <li>
               <strong>Removed.</strong> Your account row, every session, every lesson you had marked as read,
-              every quiz answer, every scenario attempt, and your seat at every table you have ever joined.
+              every quiz answer, every scenario attempt, your seat at every table you have ever joined, and
+              every place you hold or have held in a class — including revoked and expired ones. An enrolment
+              names one person and nobody else, and one naming an account that no longer exists entitles
+              nobody, so it goes with the account rather than being detached from it. The class itself
+              remains: it never named you.
             </li>
             <li>
               <strong>Detached from you.</strong> Your seats in hands that have been played, your rows in the
               audit log, and any private table you created. The rows survive; they stop naming anybody. Tables
               you owned are closed first, because a table whose owner has gone can never be closed by anyone
-              afterwards.
+              afterwards. Read this one carefully if you have been enrolled in a class: the enrolment row
+              itself is removed, but the audit-log rows written when it was granted and withdrawn are detached
+              rather than deleted, so an operator can still see that on a date, on somebody’s authority,
+              against a particular external reference, a place in a class was granted and later ended — with
+              you no longer named in it.
             </li>
             <li>
               <strong>Kept, in full.</strong> Every hand — its actions, its board, its deck commitment and its
@@ -333,6 +503,18 @@ export default function PrivacyPage(): ReactElement {
             deployment shows no control for this, the feature has not been wired up in that build, and nothing
             on this page can delete anything on your behalf — ask whoever runs it.
           </p>
+          <p>
+            <strong>What deletion does not reach: backups.</strong> Deletion runs against the live database
+            and against nothing else. If this deployment takes backups — the shipped tooling takes one a
+            night, keeps the last seven, then one a week for four weeks and one a month for six months, and
+            never deletes the newest working one — then your rows are still inside the encrypted archives
+            taken before you left, and they stay there until those archives age out of that policy. There is
+            no way to edit a backup: an archive is a sealed snapshot, and rewriting one would destroy the
+            property that makes it trustworthy as a record. What this means in practice is that erasure is
+            immediate in the system you use and takes as long as the backup policy in the archives nobody
+            reads unless the database has to be rebuilt. Whether that is acceptable, and whether the backup
+            periods are the right ones, is part of the retention question marked in section 5.
+          </p>
         </section>
 
         <section className="prl-legal__section">
@@ -343,6 +525,14 @@ export default function PrivacyPage(): ReactElement {
             fonts loaded from anywhere. The only outbound connection it can make is to an identity provider,
             and only if this deployment has configured one and you choose to sign in through it — in which
             case that provider learns that you signed in here.
+          </p>
+          <p>
+            One thing points outwards without any connection being made. If you have been enrolled in a class,
+            your enrolment row carries a reference that an operator typed, and that reference is meaningful in
+            some system outside this one — a finance record, a registry, a spreadsheet. This application never
+            sends anything to that system, never reads from it, and does not know what kind of system it is.
+            What it means is that somebody holding both this database and that one can join them, and only the
+            operator can tell you what the other one is.
           </p>
           <CounselFlag clause={COUNSEL_CLAUSES['international-transfer']} />
           <CounselFlag clause={COUNSEL_CLAUSES['operator-identity']} />

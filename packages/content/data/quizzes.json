@@ -269,7 +269,7 @@
         "explanation": "From the flop onwards the order is fixed by distance to the left of the button, so the small blind acts first on every remaining street. Under the gun is the worst seat preflop, but once the flop comes the blinds are the first to act, and the small blind is first of all.",
         "optionNotes": [
           "The button is the best postflop seat, acting last on every street.",
-          "The cutoff acts second-to-last when the button folds, which makes it one of the better seats.",
+          "The cutoff acts immediately before the button, and last of all when the button folds, which makes it one of the better seats.",
           "Correct: the small blind acts first on the flop, turn and river.",
           "Under the gun is worst preflop, but postflop the blinds act before it."
         ]
@@ -1367,7 +1367,7 @@
       {
         "kind": "numeric",
         "id": "icm-q2",
-        "prompt": "Blinds are 1 and 2. A player with exactly 10 big blinds moves all in, everyone folds, and you are in the big blind with 2 already posted, so calling costs 8 more. The pot contains 13: their 10, your 2 and the small blind's 1. In pure chip terms, what share of the time do you need to win for calling to break even?",
+        "prompt": "Blinds are 1 and 2. A player with exactly 5 big blinds moves all in, everyone folds, and you are in the big blind with 2 already posted, so calling costs 8 more. The pot contains 13: their 10, your 2 and the small blind's 1. In pure chip terms, what share of the time do you need to win for calling to break even?",
         "calculation": { "kind": "potOdds", "pot": 13, "toCall": 8 },
         "field": "breakEvenEquity",
         "unit": "percent",

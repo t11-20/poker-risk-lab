@@ -701,6 +701,15 @@ test('educational play is measurably flatter than expert play across the same pr
 test('adaptation is switched off entirely at the easiest difficulty', () => {
   // Structural rather than statistical, and cheap: a profile that keeps adapting cannot be
   // characterised, because the thing being observed keeps moving.
+  //
+  // Structural is also this test's limit, and it is worth naming, because for a while this
+  // passed while the claim in its own title was false. It asserts that the *trait* reaches the
+  // policy as 0; it does not assert that a 0 trait actually stops the read from moving a
+  // decision. `estimateRange` was gated on neither the trait nor the sample, so the assumed
+  // opponent range tracked what a model had watched at every difficulty, and the sampled
+  // action differed in 209 of 1,050 paired decisions at educational with only the opponent
+  // model varying. The behavioural half of the claim is asserted in `test/policy.test.ts`,
+  // "at a difficulty with adaptation off, the opponent read cannot move a decision".
   for (const profile of PROFILES) {
     assert.equal(
       expressTraits(profile, 'educational').exploitativeAdaptation,

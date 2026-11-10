@@ -150,7 +150,7 @@ export function isCheckViolation(error: unknown, constraint?: string): boolean {
  * see the note above it. The statement that raised the error is what decides what the violation
  * means, and only the call site knows the statement.
  *
- * The concrete case this exists for: `deleteAccount` in `users.ts`. Eight foreign keys reference
+ * The concrete case this exists for: `deleteAccount` in `users.ts`. Nine foreign keys reference
  * `prl.users`, and two of them were `ON DELETE RESTRICT` before migration 0004 — so on a database
  * that has not had it applied, deleting an account raises 23503 and the honest answer is
  * `account_deletion_blocked` rather than a 500 that leaves a learner unable to tell whether their

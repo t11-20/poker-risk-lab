@@ -60,14 +60,36 @@ import { RECORD_PATH } from '@/lib/record-data.ts';
 import { SessionDuration } from './SessionDuration.tsx';
 import { ThemeToggle } from './ThemeToggle.tsx';
 
+/**
+ * A fixed id, not `useId()`, because the footer renders exactly once per document and the
+ * certification's G3 quotes the name it produces. A generated id would be just as correct and would
+ * make the name impossible to grep for from the document that asserts it.
+ */
+const FOOTER_HEADING_ID = 'prl-footer-heading';
+
 export function SiteFooter(): ReactElement {
   return (
-    <footer className="prl-footer">
+    <footer aria-labelledby={FOOTER_HEADING_ID} className="prl-footer" role="contentinfo">
       <div className="prl-container prl-footer__inner">
         {/* The landmark needs a name in the accessibility tree and does not need a heading on
             screen — the content below announces itself. `h2` rather than `h3`, because a page's
-            `h1` is its subject and this is a sibling section of it. */}
-        <h2 className="prl-visually-hidden">About Poker Risk Lab</h2>
+            `h1` is its subject and this is a sibling section of it.
+
+            `aria-labelledby` rather than proximity, and that is not a nicety. A heading INSIDE a
+            landmark does not name it: measured in Chrome 151, this footer's computed name was the
+            empty string for as long as the heading was merely nested here, so the landmark rotor
+            offered an unlabelled "content information" while G3 of the screen-reader certification
+            quoted a name it did not have. Caught by that assertion's automated check
+            (`scripts/ax-assertions.mjs`, G3) the first time it was run.
+
+            `role="contentinfo"` is written out even though `<footer>` already maps to it, because
+            Biome's `useAriaPropsSupportedByRole` does not apply the implicit mapping and refuses
+            `aria-labelledby` on a bare `<footer>`. Stating the role satisfies the rule without a
+            suppression comment, and it changes nothing in the computed tree — the landmark was
+            `contentinfo` either way. */}
+        <h2 className="prl-visually-hidden" id={FOOTER_HEADING_ID}>
+          About Poker Risk Lab
+        </h2>
 
         <nav aria-label="Sections" className="prl-footer__map">
           <p className="prl-footer__heading prl-label">Sections</p>

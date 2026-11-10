@@ -174,6 +174,8 @@ export const ID_PREFIXES = {
   quizAttempt: 'qatt',
   scenarioAttempt: 'satt',
   auditEvent: 'aud',
+  cohort: 'coh',
+  enrolment: 'enr',
 } as const;
 
 export type IdKind = keyof typeof ID_PREFIXES;
@@ -218,6 +220,12 @@ export function newScenarioAttemptId(): string {
 }
 export function newAuditEventId(): string {
   return generateId('auditEvent');
+}
+export function newCohortId(): string {
+  return generateId('cohort');
+}
+export function newEnrolmentId(): string {
+  return generateId('enrolment');
 }
 
 /**

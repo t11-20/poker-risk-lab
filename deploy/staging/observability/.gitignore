@@ -1,0 +1,21 @@
+# Files `scripts/alert-delivery.mjs` writes at bring-up. None of them are source:
+# each is rendered from configuration for the lifetime of one verification run and
+# removed again in the script's `finally`.
+#
+# `deploy/staging/.gitignore` already covers `metrics-token` for the same reason;
+# these two are here rather than there so that everything generated into this
+# directory is declared in the directory it appears in.
+
+# Rendered from alertmanager.template.yml. It is the file Alertmanager actually
+# loads, and it names this deployment's real paging destinations — which is
+# precisely why it must not be committed: a tracked copy is one merge away from
+# pointing somebody else's staging run at your on-call phone.
+alertmanager.yml
+
+# The SMTP submission password, written from PRL_ALERT_SMTP_PASSWORD at mode 0600
+# and mounted read-only into the alertmanager container. Empty when no
+# `PRL_ALERT_SMTP_USERNAME` is configured, and written anyway so that the bind
+# mount resolves against a FILE — Docker answers a missing bind-mount source by
+# creating a directory, and Alertmanager reports that as an unreadable password
+# rather than as a missing file.
+smtp-password

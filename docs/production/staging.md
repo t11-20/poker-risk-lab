@@ -171,7 +171,7 @@ Stating this is the point of the section. A rehearsal that overclaims is worse t
 
 - **Capacity, of anything.** One replica on one machine with the database on the same kernel is not a load test. [`load-test.md`](load-test.md) holds the measured ceiling with the environment it was measured in attached; `scripts/load-test.mjs` says the same about itself.
 - **A second API replica.** There must not be one — see §3.
-- **A registry-attested digest.** There is no registry and nothing is pushed. The digest is the one BuildKit's exporter assigns in the local image store: the value `--iidfile` writes, the value `docker image inspect --format '{{.Id}}'` reports, the value in `RepoDigests`. The manifest records this in its own `digestKind` field: *"local BuildKit image-store manifest digest (--iidfile). Content-addressed and stable, but not registry-attested: nothing is pushed, so no registry vouches for it."* It cannot be two different images; nobody signed it.
+- **A *third-party*-attested digest.** There is a registry — `deploy/registry/` on `127.0.0.1:5001`, and `pnpm run release:artifacts -- --push` pushes to it — but it runs on the release machine, so it vouches for nothing an outsider could not have forged. Without `--push` the digest is the one BuildKit's exporter assigns in the local image store: the value `--iidfile` writes, the value `docker image inspect --format '{{.Id}}'` reports, the value in `RepoDigests`, and the manifest's `digestKind` says *"…Content-addressed and stable, but local to the machine that built it: nothing was pushed, so no other machine can resolve it."* It cannot be two different images. Signing is real (`release:sign`, `security:image-provenance`) and its limits are `final-readiness-report.md` residual 3.
 - **A deploy identity.** Migrations here run as the cluster owner, the way `.github/workflows/ci.yml` does, because this stack creates its own throwaway cluster on every bring-up. A real deployment migrates as `prl_deployer` (`docs/RUNBOOK.md` §5, §11.3). The *runtime* identity **is** rehearsed, and that is the one whose missing `GRANT` would otherwise surface in production.
 - **A production rollout or a rollback.** There is no deploy target. See [`deployment.md`](deployment.md) §7 and [`rollback.md`](rollback.md).
 - **A real certificate authority, HSTS preloading, or a plaintext-to-TLS redirect.** There is deliberately no port-80 listener: a redirect means the staging origin answers on http, which is an origin somebody bookmarks and a first request that carried a cookie in the clear before the redirect was read. Connection refused is unambiguous. A production edge in front of a real domain *does* want the redirect, and `includeSubDomains` and `preload` on its HSTS header, decided deliberately at the edge that owns the public DNS name.
@@ -200,9 +200,22 @@ The exact-enumeration path was unaffected, which is precisely why the smoke test
 
 This works on the development stack only by coincidence: there the proxy publishes port 3000 and web listens on 3000, so the two spellings happen to match. It could not be fixed at the proxy — no forwarded header changed the answer — and it could not be worked around by allowlisting the wrong origin, because `PUBLIC_WEB_ORIGIN` refuses a plaintext entry in production and the port would still be wrong. Fixed with `apps/web/src/lib/public-origin.ts`.
 
-### The outstanding item
+### The outstanding item, and what has closed since
 
-**Because both fixes landed after that run, `staging up` has not yet been re-run to produce a green attestation, and no promotion has completed end to end.** The refusal paths are proven — `promote` refused with `nothing has been verified in staging`, and with a synthetic attestation naming a different api digest it printed both digests (`about to promote  sha256:65299822…` / `staging tested    sha256:0000…`) and also flagged the dirty working tree. The success path is implemented and is not yet evidenced. Do not read this document, or [`deployment.md`](deployment.md), as saying otherwise.
+This section used to end here, saying that because both fixes landed after that run, `staging up` had not yet been re-run to produce a green attestation and no promotion had completed end to end. **That is no longer the case.** `staging up` was re-run on the fixed code and wrote `deploy/staging/staging-verified.json`: `verifiedAt` `2026-08-22T18:55:36Z`, commit `b292b2ac234c` with `dirty: false`, and all four checks true —
+
+| Check | Result |
+| --- | --- |
+| `runningDigestsMatchManifest` | true |
+| `tlsChainVerified` | true |
+| `forwardedForOverwritten` | true |
+| `smokeTestStrict` | true |
+
+— with `/api/v1/ready` answering 200, HSTS at `max-age=31536000; includeSubDomains`, the strict smoke test passing 61 checks, the proxy overwriting `X-Forwarded-For` on 24 of 24, and `staging promote` reporting promotable and byte-identical. The run is written up in [`staging-verification.md`](staging-verification.md).
+
+The refusal paths remain proven from the earlier run — `promote` refused with `nothing has been verified in staging`, and with a synthetic attestation naming a different api digest it printed both digests (`about to promote  sha256:65299822…` / `staging tested    sha256:0000…`) and also flagged the dirty working tree.
+
+**What is still outstanding is the registry, not the run.** Those digests come from the local BuildKit store and are **not registry-attested**, so the attestation proves this machine deployed and verified the images this machine built. Nothing here proves a registry hands the same digests to a different host, because there is no registry. Do not read this document, or [`deployment.md`](deployment.md), as claiming more than that.
 
 ---
 

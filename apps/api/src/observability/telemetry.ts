@@ -64,7 +64,12 @@ export type ProblemEvent =
   | 'hands-interrupted'
   | 'reconcile-read'
   | 'seat-retake'
+  | 'seat-release'
   | 'bot-rehydrate'
+  | 'room-lease-refused'
+  | 'room-fenced'
+  | 'room-lease-release'
+  | 'seat-entitlement'
   // rooms/table.ts
   | 'turn-timeout'
   | 'engine-rejection'
@@ -95,7 +100,12 @@ export const PROBLEM_EVENTS: readonly ProblemEvent[] = [
   'hands-interrupted',
   'reconcile-read',
   'seat-retake',
+  'seat-release',
   'bot-rehydrate',
+  'room-lease-refused',
+  'room-fenced',
+  'room-lease-release',
+  'seat-entitlement',
   'turn-timeout',
   'engine-rejection',
   'departed-seat-fold',
@@ -133,9 +143,14 @@ export type ProblemHook = (message: string, detail: ProblemDetail) => void;
  *   gets `prl_table_actor_failures_total` and the event as its reason.
  * - `counted-at-source` — already counted by the module that raised it, against a metric that
  *   needs a number the hook does not carry. `archive-write` increments
- *   `prl_archive_failures_total` inside `rooms/registry.ts`, and `hands-interrupted` increments
- *   `prl_hands_failed_total` *by the number of hands it closed*. Counting either again here
- *   would double it.
+ *   `prl_archive_failures_total` inside `rooms/registry.ts`, `hands-interrupted` increments
+ *   `prl_hands_failed_total` *by the number of hands it closed*, and `seat-release` increments
+ *   `prl_seat_release_failures_total` by the number of chairs it could not free. Counting any of
+ *   them again here would double it.
+ *
+ *   Counting at the source rather than here also means the number is right for a registry built
+ *   with its own `onProblem` — every test, and any future embedder — instead of depending on the
+ *   one consumer in `routes/index.ts` being wired up.
  * - `logged-only` — worth a log line and not worth a series. A subscriber that threw, a socket
  *   send that failed on an already-dead socket, an audit row that could not be written: each is
  *   real, none is a question an operator would put on a dashboard, and every metric costs
@@ -156,8 +171,36 @@ export function classifyProblem(event: ProblemEvent): ProblemClass {
     case 'timeout-rejection':
     case 'departed-seat-fold':
       return 'actor';
+    // `seat-release` is deliberately NOT folded into `archive-write`, which is where it used to
+    // report for want of a name of its own. The two are different subsystems with different
+    // consequences and different runbooks: an archive failure loses hand history while play
+    // continues, and a seat-release failure leaves a chair durably occupied by somebody who has
+    // left — the summary shows it free, the next client to tap it is refused `seat_taken`, and
+    // nothing retries. Paging the archive runbook for that sends somebody to the wrong system.
+    //
+    // `room-lease-refused` and `room-fenced` are counted at their source too, and NOT as actor
+    // failures. An actor failure is "it is somebody's turn and nothing is going to act", which the
+    // turn clock resolves; these two are "two processes are pointed at one room", which nothing in
+    // the process can resolve and which has its own page-tier alert. `rooms/registry.ts` increments
+    // `prl_room_ownership_refusals_total` and `prl_room_fencings_total` at the moment it decides,
+    // because only that code knows which of the two reasons a fencing had.
+    //
+    // `seat-entitlement` joins them, and is deliberately NOT `seat-retake` even though it is
+    // raised from the same loop and means "this chair was not given back". `seat-retake` is an
+    // ACTOR failure — "it is somebody's turn and nothing is going to act", which the turn clock
+    // has to resolve — and a seat left free on purpose is the opposite of that: nobody is in it,
+    // nobody is waiting on it, and no clock has anything to do. Reusing the nearest existing kind
+    // is the mistake `docs/production/runbooks/stuck-seat.md` records being made once already,
+    // where an archive failure and a stuck chair became one indistinguishable series and sent
+    // somebody to the wrong subsystem. `rooms/registry.ts` increments
+    // `prl_seat_entitlement_refusals_total{reason="seat_not_restored"}` at the moment it decides,
+    // because only that code knows which of the two reasons a refusal had.
     case 'archive-write':
     case 'hands-interrupted':
+    case 'seat-release':
+    case 'room-lease-refused':
+    case 'room-fenced':
+    case 'seat-entitlement':
       return 'counted-at-source';
     // `engine-rejection` is deliberately NOT an actor failure: it is the engine refusing an
     // action a client submitted, the caller is told `illegal_action`, and it is already counted
@@ -168,6 +211,11 @@ export function classifyProblem(event: ProblemEvent): ProblemClass {
     case 'subscriber-throw':
     case 'room-open-read':
     case 'reconcile-read':
+    // A lease this process could not give back on the way out. Worth a line, not a series: the
+    // lease expires on its own within `LEASE_TTL_MS`, so the whole cost is that one room is
+    // unopenable for up to that long — and the two events that matter, being refused and being
+    // fenced, are counted above.
+    case 'room-lease-release':
     case 'socket-intent':
     case 'socket-send':
     case 'socket-close':
@@ -369,6 +417,62 @@ export type SecurityAuditEvent =
   | 'security.rate_limit.banned';
 
 /**
+ * The audit writes that have been started and not yet settled.
+ *
+ * ## Why this exists, and why it is not a queue
+ *
+ * The write in `recordSecurityAudit` is deliberately fire-and-forget: a security event must never
+ * delay or fail the request it describes. That is right in production, and it makes the write
+ * **unobservable to a test**, which is why `test/security-audit-trail.test.ts` polls for the row.
+ *
+ * Polling made that suite flaky in a way that got worse rather than better. It shares one
+ * process-wide pool with every other API test, so the write queues behind whatever else is in
+ * flight; the deadline was raised from five seconds to fifteen, and then failed at **15,036 ms**
+ * inside `pnpm run verify`. A third raise would buy a few hundred more tests of headroom and fail
+ * again, because the number was never the problem — waiting on a clock for something that has a
+ * handle is.
+ *
+ * `awaitPendingAuditWrites()` gives the test that handle. Nothing in production calls it, and the
+ * set is bounded by concurrency rather than by history: an entry removes itself when it settles.
+ */
+const pendingAuditWrites = new Set<Promise<unknown>>();
+
+/**
+ * Audit writes that were started and did not land, since this process began.
+ *
+ * `recordSecurityAudit` reports a failed write through `onFailure` and swallows it, which is right
+ * — a security event must never fail the request it describes. The cost is that a test polling for
+ * the row cannot tell "the write is slow" from "the write was refused and you will wait forever".
+ * `security-audit-trail.test.ts` timed out at 15,024 ms against a 15,000 ms deadline while the
+ * machine was saturated, and its message — "no audit row appeared within the deadline" — could not
+ * say which of the two had happened. This counter lets it say.
+ */
+let auditWriteFailures = 0;
+
+/** For tests: how many audit writes have been reported as failed. */
+export function failedAuditWrites(): number {
+  return auditWriteFailures;
+}
+
+function trackAuditWrite(write: Promise<unknown>): void {
+  pendingAuditWrites.add(write);
+  void write.finally(() => {
+    pendingAuditWrites.delete(write);
+  });
+}
+
+/**
+ * Resolve once every audit write started before this call has settled.
+ *
+ * For tests. A write started *after* this call is not waited for, and does not need to be: the
+ * caller has already had the HTTP response for the thing whose audit row it wants, so the route
+ * has returned and `recordSecurityAudit` has been reached.
+ */
+export async function awaitPendingAuditWrites(): Promise<void> {
+  await Promise.allSettled([...pendingAuditWrites]);
+}
+
+/**
  * Writes one audit entry, and never lets it fail the thing it describes.
  *
  * ## Why this wrapper exists at all
@@ -405,6 +509,7 @@ export function recordSecurityAudit(
 ): void {
   if (!isDatabaseConfigured()) return;
   const report = (error: unknown): void => {
+    auditWriteFailures += 1;
     onFailure('a security event could not be written to the audit log', {
       event: 'audit-write',
       auditEvent: entry.event,
@@ -412,13 +517,15 @@ export function recordSecurityAudit(
     });
   };
   try {
-    void auditRepository
-      .record(getSql(), {
-        event: entry.event,
-        userId: entry.userId ?? null,
-        ...(entry.detail === undefined ? {} : { detail: entry.detail }),
-      })
-      .catch(report);
+    trackAuditWrite(
+      auditRepository
+        .record(getSql(), {
+          event: entry.event,
+          userId: entry.userId ?? null,
+          ...(entry.detail === undefined ? {} : { detail: entry.detail }),
+        })
+        .catch(report),
+    );
   } catch (error) {
     // `getSql()` or `record`'s synchronous validation threw. Same treatment: reported, swallowed.
     report(error);

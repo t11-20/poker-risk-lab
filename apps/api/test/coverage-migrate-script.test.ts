@@ -488,7 +488,23 @@ describe('migrate.mjs — seeding and resetting', dbOptions, () => {
       assert.equal((await runMigrate(['up'], { url: throwaway.url })).code, 0);
       assert.equal((await runMigrate(['seed'], { url: throwaway.url })).code, 0);
 
-      const reset = await runMigrate(['reset'], { url: throwaway.url });
+      // `reset` now requires `--confirm-database <name>` matched against `current_database()`.
+      // That guard exists because `reset` used to decide from `NODE_ENV` alone — which describes
+      // the PROCESS, not the target — and the checked-in `.env` supplies it, so a `pnpm run
+      // db:reset` recalled from shell history emptied a 944,297-row database with one yellow line
+      // and no prompt. Naming the database binds the command to the thing it destroys.
+      const unconfirmed = await runMigrate(['reset'], { url: throwaway.url });
+      assert.equal(unconfirmed.code, 1, 'reset without --confirm-database must refuse');
+      assert.match(unconfirmed.output, /--confirm-database/);
+
+      const wrongName = await runMigrate(['reset', '--confirm-database', 'poker_risk_lab'], {
+        url: throwaway.url,
+      });
+      assert.equal(wrongName.code, 1, 'a name that is not the target must refuse');
+
+      const reset = await runMigrate(['reset', '--confirm-database', throwaway.name], {
+        url: throwaway.url,
+      });
       assert.equal(reset.code, 0, reset.output);
       assert.match(reset.output, /dropping schema prl/);
       assert.match(reset.output, /roles prl_migrator and prl_app are cluster-wide and left alone/);

@@ -1,0 +1,119 @@
+# ---------------------------------------------------------------------------
+# The two rules on `prl_seat_entitlement_refusals_total`.
+#
+# That counter was exported, primed on both of its reasons, argued about at
+# length in `observability/metrics.ts` — and read by no rule at all. It is the
+# only signal for either of two things nothing else in the deployment reports:
+# a cohort list that missed people on the morning of a class, and a chair that a
+# restart did not give back.
+#
+# The two reasons are separate rules because they are separate incidents, and
+# summing them would let a quiet, invisible one hide inside a loud, visible one.
+# The last case below holds that line explicitly.
+# ---------------------------------------------------------------------------
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    name: a cohort arriving to a list that missed them raises a ticket
+    input_series:
+      # Six people tap a seat over about a minute and are all refused. Both
+      # reasons render from boot because the counter is primed, so this is a rise
+      # from zero rather than a series appearing at six — which `increase()`
+      # could not have seen.
+      - series: 'prl_seat_entitlement_refusals_total{reason="not_entitled"}'
+        values: '0+0x20 1+1x5 6+0x400'
+      - series: 'prl_seat_entitlement_refusals_total{reason="seat_not_restored"}'
+        values: '0+0x426'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="SeatEntitlementRefused"}'
+        eval_time: 4m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="SeatEntitlementRefused"}'
+        eval_time: 7m
+        exp_samples:
+          - labels: 'ALERTS{alertname="SeatEntitlementRefused", alertstate="firing", severity="ticket"}'
+            value: 1
+      # The other rule must stay silent: nothing was lost at a restart.
+      - expr: 'ALERTS{alertname="SeatNotRestored"}'
+        eval_time: 7m
+        exp_samples: []
+
+  - interval: 15s
+    name: a passer-by tapping a seat on an enforced instance raises nothing
+    input_series:
+      # Three refusals, once. On an enforced deployment this is the guard doing
+      # exactly its job, and it must not open a ticket.
+      - series: 'prl_seat_entitlement_refusals_total{reason="not_entitled"}'
+        values: '0+0x40 3+0x400'
+      - series: 'prl_seat_entitlement_refusals_total{reason="seat_not_restored"}'
+        values: '0+0x441'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="SeatEntitlementRefused"}'
+        eval_time: 12m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="SeatEntitlementRefused"}'
+        eval_time: 40m
+        exp_samples: []
+
+  - interval: 15s
+    name: an open instance where nobody is ever refused raises nothing
+    input_series:
+      # `PRL_ENROLMENT_REQUIRED=off`, which is the default. Both series sit at
+      # zero forever and that is the correct reading.
+      - series: 'prl_seat_entitlement_refusals_total{reason="not_entitled"}'
+        values: '0+0x400'
+      - series: 'prl_seat_entitlement_refusals_total{reason="seat_not_restored"}'
+        values: '0+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="SeatEntitlementRefused"}'
+        eval_time: 60m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="SeatNotRestored"}'
+        eval_time: 60m
+        exp_samples: []
+
+  - interval: 15s
+    name: one chair not given back after a restart raises a ticket
+    input_series:
+      # Zero tolerance and no `for:`. Nobody is at a keyboard for this one — it
+      # happens when a room is re-opened and a seat recorded in `room_members` is
+      # not restored — so if this rule does not report it, nothing does.
+      - series: 'prl_seat_entitlement_refusals_total{reason="seat_not_restored"}'
+        values: '0+0x40 1+0x400'
+      - series: 'prl_seat_entitlement_refusals_total{reason="not_entitled"}'
+        values: '0+0x441'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="SeatNotRestored"}'
+        eval_time: 5m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="SeatNotRestored"}'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="SeatNotRestored", alertstate="firing", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: a busy morning of refusals does not hide a chair that was not restored
+    input_series:
+      # Both at once, which is the case a single summed rule would get wrong: the
+      # loud one would fire, the quiet one would be inside its total, and the
+      # operator would be told about the class list and not about the seat.
+      - series: 'prl_seat_entitlement_refusals_total{reason="not_entitled"}'
+        values: '0+0x20 1+1x9 10+0x400'
+      - series: 'prl_seat_entitlement_refusals_total{reason="seat_not_restored"}'
+        values: '0+0x20 1+0x420'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="SeatEntitlementRefused"}'
+        eval_time: 9m
+        exp_samples:
+          - labels: 'ALERTS{alertname="SeatEntitlementRefused", alertstate="firing", severity="ticket"}'
+            value: 1
+      - expr: 'ALERTS{alertname="SeatNotRestored"}'
+        eval_time: 9m
+        exp_samples:
+          - labels: 'ALERTS{alertname="SeatNotRestored", alertstate="firing", severity="ticket"}'
+            value: 1

@@ -136,6 +136,7 @@
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { connect } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // The gate's own constants rather than copies of them. `age-gate.ts` imports nothing and says in
@@ -1251,6 +1252,65 @@ function checkAttrValue(name, value, spec, byId) {
 // ===========================================================================
 
 /**
+ * The port an origin names, or `fallback` when it names none.
+ *
+ * Both servers are started with an explicit `PORT` rather than letting them pick
+ * their own default: `--base-url`/`--api-url` say where the audit will look, and a
+ * server listening somewhere else is a run that scores whatever else answered.
+ */
+function portFromOrigin(origin, fallback) {
+  const port = new URL(origin).port;
+  return port === '' ? fallback : port;
+}
+
+/**
+ * Refuses to start a server on a port something else already holds.
+ *
+ * `waitUntilReady` accepts the first 200 from its URL, and it cannot tell its own child's answer
+ * from a stranger's. With another process on the port, the audit scores whatever IS there.
+ * Reproduced: a twelve-line `node:http` server on 127.0.0.1:3472, then
+ * `node scripts/a11y-audit.mjs --base-url http://127.0.0.1:3472` printed "starting the web app...",
+ * "ready at http://127.0.0.1:3472", audited one route of the stranger's page and exited 0 with
+ * "PASS". A delegate's log on this machine shows the same sequence on :3000 while another
+ * project's container held that port, and its PASS was reported as this gate's. The same check as
+ * `refuseOccupiedPort` in `scripts/age-gate-audit.mjs`.
+ *
+ * It CONNECTS to 127.0.0.1, where the poll will go. The first version BOUND 127.0.0.1 instead, and
+ * that missed the commonest stranger: on macOS a bind of 127.0.0.1 succeeds beside a listener on the
+ * wildcard address, which is where `next start` listens (`TCP *:3521`). Measured on 2026-11-10 with
+ * a production `next start` from this checkout started by hand on :3521, that version printed
+ * "starting the web app...", "ready at http://127.0.0.1:3521", "PASS — no violation of the checked
+ * rules." and exited 0. The bind also called a `node:http` server free on its default address, on
+ * `0.0.0.0` and on `::`, and refused only one bound to 127.0.0.1; a connect reached all four. Only
+ * ECONNREFUSED counts as free, so a probe that cannot decide refuses.
+ */
+async function refuseOccupiedPort(port) {
+  const outcome = await new Promise((done) => {
+    const socket = connect({ host: '127.0.0.1', port: Number(port) });
+    socket.setTimeout(2000);
+    socket.once('connect', () => {
+      socket.destroy();
+      done('accepted');
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      done('was neither accepted nor refused within 2s');
+    });
+    socket.once('error', (error) =>
+      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
+    );
+  });
+  if (outcome !== 'refused') {
+    const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
+    throw new Error(
+      `${seen} on 127.0.0.1:${port}. --start audits a server this run ` +
+        'started, so it will not score one it did not. Stop it, pass another --base-url/--api-url, ' +
+        'or pass --no-start to audit that server on purpose.',
+    );
+  }
+}
+
+/**
  * A child server this script owns and must clean up.
  *
  * Detached, and signalled by process group, for the same reason as
@@ -1421,18 +1481,41 @@ try {
         'api',
         ['--filter', '@prl/api', 'start'],
         new URL('/api/v1/health', options.apiUrl).toString(),
-        { NODE_ENV: 'production' },
+        // Do NOT force NODE_ENV=production on the API. `loadConfig` refuses a
+        // production process that has no `SESSION_COOKIE_SECRET` and no
+        // `PUBLIC_WEB_ORIGIN`, and `--with-api` is used by exactly one caller —
+        // the `a11y` job in ci.yml — which supplies neither. Measured with that
+        // job's environment: `NODE_ENV=production DATABASE_URL=… node
+        // apps/api/dist/server.js` prints "Refusing to start: 2 configuration
+        // problems" and exits 78, so `waitUntilReady` threw "api exited (78)
+        // before it was ready" and the job could never go green. `verify` runs
+        // this gate WITHOUT `--with-api`, which is why nothing local ever saw it.
+        // `ax-tree-audit.mjs` reached the same conclusion for the same reason.
+        //
+        // `PUBLIC_WEB_ORIGIN` is this audit's own web origin: it is one allowlist
+        // for CORS and the WebSocket Origin check, so without it the pages the
+        // audit scores render their error state rather than their content.
+        {
+          PORT: portFromOrigin(options.apiUrl, '3001'),
+          HOST: '127.0.0.1',
+          PUBLIC_WEB_ORIGIN: new URL(options.baseUrl).origin,
+        },
       );
       servers.push(api);
+      await refuseOccupiedPort(portFromOrigin(options.apiUrl, '3001'));
       console.log(dim('  starting the API...'));
       api.start();
       await api.waitUntilReady(options.readyTimeoutSeconds);
     }
+    // The WEB server keeps NODE_ENV=production: its production build is the
+    // markup this audit exists to score. Only the API drops it, above.
     const web = new ManagedServer('web', ['--filter', '@prl/web', 'start'], options.baseUrl, {
       NODE_ENV: 'production',
       PRL_API_ORIGIN: options.apiUrl,
+      PORT: portFromOrigin(options.baseUrl, '3000'),
     });
     servers.push(web);
+    await refuseOccupiedPort(portFromOrigin(options.baseUrl, '3000'));
     console.log(dim('  starting the web app...'));
     web.start();
     await web.waitUntilReady(options.readyTimeoutSeconds);

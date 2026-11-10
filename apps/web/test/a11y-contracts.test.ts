@@ -208,6 +208,19 @@ describe('NEGATIVE CONTROL — a component that breaks every rule', () => {
  * point owning a contract about face-down cards in the app while the component that could break it
  * is checked nowhere. `packages/ui` has its own render harness and its own tests; this is the
  * belt-and-braces assertion that the specific defence has not been deleted as redundant.
+ *
+ * ## What these three do NOT cover, said here because it was quoted as if they did
+ *
+ * They are regexes over source text and every one of them asks what this app does when
+ * `holeCards === null` — the case where the server sent nothing and there is nothing to leak. All
+ * three pass against an API that serves one player another player's cards, because the source they
+ * read is correct and correct source renders a dishonest frame faithfully. `docs/VERIFICATION.md`
+ * §12 carried that as an open residual until 2026-08-27.
+ *
+ * The other case — a `holeCards` pair on a seat that is neither the reader's nor one that showed
+ * down — is `test/hole-card-entitlement.test.ts`, which runs real frames from `redactFor` through
+ * the real narrowing rather than reading any source at all. Keep both: this file notices a defence
+ * being deleted, that one notices the server lying, and neither sees the other's failure.
  */
 describe('a card the server hid stays hidden', () => {
   const card = withoutComments(read(join(UI_SRC, 'components', 'PlayingCard.tsx')));

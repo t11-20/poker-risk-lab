@@ -42,6 +42,7 @@
 import { randomBytes } from 'node:crypto';
 import type { UserKind } from '@prl/contracts';
 import { AppError } from '../errors.ts';
+import * as audit from './audit.ts';
 import { newUserId } from './ids.ts';
 import { revokeAllForUser } from './sessions.ts';
 import { type Db, isForeignKeyViolation, sqlViolation, violationError } from './sql.ts';
@@ -253,6 +254,13 @@ export async function byId(sql: Db, userId: string): Promise<UserRow | null> {
  * guest accounts have not been seen since <cutoff>" is an index scan, and this is what keeps
  * an active learner out of that answer. Returns false when the id does not exist, which lets a
  * caller notice a session pointing at a deleted account instead of assuming the write landed.
+ *
+ * The reaper is `findAbandonedGuests` below, run four times a day by
+ * `apps/api/src/maintenance/retention-sweep.ts`. Note what this write is NOT: it is a policy
+ * signal, not the safety check. A learner is kept out of the sweep by having a live session row,
+ * which the sweep reads directly — see `abandonedGuestPredicate`. This timestamp only decides
+ * how long after the last session dies the row is kept, which is why a lag of up to half the
+ * idle window in when it is written cannot cost anybody their account.
  */
 export async function touchLastSeen(sql: Db, userId: string): Promise<boolean> {
   const rows = await sql<{ id: string }[]>`
@@ -296,7 +304,7 @@ export async function rename(sql: Db, userId: string, displayName: string): Prom
  * delete has run, inside the same transaction, so this is a report on the state that is about to
  * be committed and not a prediction made before it. That matters because most of the work is done
  * by referential actions rather than by statements in this function: `deleteAccount` issues one
- * DELETE and PostgreSQL decides what happens to the other seven tables. A summary composed from
+ * DELETE and PostgreSQL decides what happens to the other eight tables. A summary composed from
  * what the code intended would be exactly as wrong as the schema, and it is the schema that was
  * wrong before migration 0004.
  */
@@ -320,6 +328,21 @@ export interface AccountDeletionSummary {
     readonly quizAttempts: number;
     readonly scenarioAttempts: number;
     readonly roomMemberships: number;
+    /**
+     * Entitlements this account held, in any cohort, live or already withdrawn.
+     *
+     * They go with the account (`enrolments_user_id_fkey` is ON DELETE CASCADE, argued in
+     * `db/migrations/0006_cohort_enrolments.sql`): an enrolment describes one person and nobody
+     * else, and one naming an account that no longer exists entitles nobody. The RECORD survives in
+     * `prl.audit_log` with `user_id` NULL, which is where the authority and the external reference
+     * remain readable afterwards.
+     *
+     * This used to say "the grant and the revocation", which was measurably false: a cascade is a
+     * referential action and writes nothing, so a live entitlement ended with no entry saying so.
+     * `deleteAccount` now writes an `enrolment.ended_by_erasure` entry per enrolment, in the same
+     * transaction and before the rows go.
+     */
+    readonly enrolments: number;
   };
   /** Rows that still exist and no longer name this learner. */
   readonly anonymised: {
@@ -339,6 +362,7 @@ interface AccountFootprintRow {
   readonly hand_seats: number;
   readonly audit_events: number;
   readonly rooms_owned: number;
+  readonly enrolments: number;
 }
 
 /**
@@ -359,7 +383,8 @@ async function accountFootprint(sql: Db, userId: string): Promise<AccountFootpri
       (select count(*) from prl.room_members       where user_id = ${userId})::int as room_members,
       (select count(*) from prl.hand_seats         where user_id = ${userId})::int as hand_seats,
       (select count(*) from prl.audit_log          where user_id = ${userId})::int as audit_events,
-      (select count(*) from prl.rooms  where owner_user_id = ${userId})::int as rooms_owned
+      (select count(*) from prl.rooms  where owner_user_id = ${userId})::int as rooms_owned,
+      (select count(*) from prl.enrolments        where user_id = ${userId})::int as enrolments
   `;
   const row = rows[0];
   if (row === undefined) {
@@ -375,8 +400,12 @@ async function accountFootprint(sql: Db, userId: string): Promise<AccountFootpri
  * ## The policy, because a reader here should not have to open the migration
  *
  *   REMOVED     `prl.sessions`, `prl.lesson_progress`, `prl.quiz_attempts`,
- *               `prl.scenario_attempts` and `prl.room_members` — every seat at every table, live
- *               or long departed.
+ *               `prl.scenario_attempts`, `prl.room_members` — every seat at every table, live
+ *               or long departed — and `prl.enrolments`, every entitlement the account held.
+ *               An enrolment describes one person and nobody else, and one naming an account
+ *               that no longer exists entitles nobody; the operator's RECORD of the grant and
+ *               the withdrawal survives in `prl.audit_log`, anonymised like everything else
+ *               there. `db/migrations/0006_cohort_enrolments.sql` argues it.
  *   DETACHED    `prl.hand_seats.user_id`, `prl.audit_log.user_id` and
  *               `prl.rooms.owner_user_id` become NULL. The hand, its actions, its board, its
  *               commitment root and its reveal proofs are untouched.
@@ -390,12 +419,12 @@ async function accountFootprint(sql: Db, userId: string): Promise<AccountFootpri
  *
  * ## Almost none of the work is in this function, deliberately
  *
- * Five of the eight foreign keys referencing `prl.users` do their half by themselves — four
+ * Every one of the nine foreign keys referencing `prl.users` does its half by itself — six
  * CASCADE, three SET NULL — and PostgreSQL executes a referential action with the CONSTRAINT
  * owner's privileges rather than the connected role's. So the erasure removes rows from tables
- * `prl_app` holds no DELETE on (`prl.quiz_attempts`, `prl.scenario_attempts`, `prl.room_members`)
- * and nulls a column in a table it holds no UPDATE on (`prl.audit_log`) without any of those
- * grants being made. Writing the deletes out by hand here would have required exactly those
+ * `prl_app` holds no DELETE on (`prl.quiz_attempts`, `prl.scenario_attempts`, `prl.room_members`,
+ * and since 0006 `prl.enrolments`, on which it holds nothing but SELECT) and nulls a column in a
+ * table it holds no UPDATE on (`prl.audit_log`) without any of those grants being made. Writing the deletes out by hand here would have required exactly those
  * grants, and would then have let any other request path remove any other learner's rows.
  *
  * The consequence is that the schema, not this function, decides what erasure means — which is
@@ -454,6 +483,71 @@ export async function deleteAccount(sql: Db, userId: string): Promise<AccountDel
   // about to stop existing.
   const sessionsRevoked = await revokeAllForUser(sql, userId);
 
+  // The end of every entitlement this account held, written BEFORE the rows stop existing.
+  //
+  // `enrolments_user_id_fkey` is ON DELETE CASCADE, and both this file and
+  // `db/migrations/0006_cohort_enrolments.sql` claimed the record survived it: "the RECORD that
+  // the grant and the revocation happened survives in `prl.audit_log`". Measured against the
+  // development database inside a rolled-back transaction — a user, a cohort, one live enrolment
+  // and its `enrolment.granted` entry, then `delete from prl.users` — the enrolment row went, the
+  // grant entry survived and was correctly detached, and `enrolment.revoked` entries matching that
+  // cohort: **zero**. A referential action is not a statement; it writes nothing.
+  //
+  // So the operator's trail said a place in a class had been granted on this authority against
+  // this external reference, and nothing ever ended it. Reconciling "who holds a place" against
+  // the audit log over-counted for ever, and it over-counted precisely for the learners who
+  // exercised erasure. For a course somebody paid for that is the shape of a dispute nobody can
+  // settle: the record shows a live entitlement and there is no row behind it.
+  //
+  // A distinct event rather than `enrolment.revoked`, because it is a different act. A revocation
+  // is an operator withdrawing a place and it names who did it; this is the entitlement ending as
+  // a consequence of the holder erasing themselves, on nobody's authority, and the two must not be
+  // read as the same thing when somebody asks why a place ended.
+  //
+  // Detached at the point of writing, for the reason `/me/delete` gives for the deletion event
+  // itself: `audit_log.user_id` is ON DELETE SET NULL, so the row is about to be detached anyway,
+  // and writing it detached means the log never briefly holds a pointer to an account that asked
+  // to stop existing. What survives is the cohort, the authority and the external reference — the
+  // three things an operator needs to reconcile a place — and nothing that names who held it.
+  //
+  // `prl_app` can do this: it holds SELECT on both tables and INSERT on `prl.audit_log`, and needs
+  // no DELETE on `prl.enrolments` — the cascade still does the removal with the constraint owner's
+  // privileges. This adds no privilege to the request path.
+  const ending = await sql<
+    {
+      id: string;
+      cohort_id: string;
+      cohort_key: string;
+      reference: string;
+      granted_by: string;
+      was_live: boolean;
+    }[]
+  >`
+    select e.id, e.cohort_id, c.key as cohort_key, e.reference, e.granted_by,
+           (e.revoked_at is null) as was_live
+      from prl.enrolments e
+      join prl.cohorts c on c.id = e.cohort_id
+     where e.user_id = ${userId}
+     order by e.granted_at
+  `;
+  for (const enrolment of ending) {
+    await audit.record(sql, {
+      event: 'enrolment.ended_by_erasure',
+      userId: null,
+      detail: {
+        enrolmentId: enrolment.id,
+        cohortId: enrolment.cohort_id,
+        cohortKey: enrolment.cohort_key,
+        reference: enrolment.reference,
+        grantedBy: enrolment.granted_by,
+        // Whether this place was still live when it ended. An already-revoked enrolment ending
+        // with the account is bookkeeping; a LIVE one ending is the case an operator has to
+        // answer for, and a reader cannot tell them apart from the cohort alone.
+        wasLive: enrolment.was_live,
+      },
+    });
+  }
+
   try {
     await sql`delete from prl.users where id = ${userId}`;
   } catch (error) {
@@ -503,6 +597,7 @@ export async function deleteAccount(sql: Db, userId: string): Promise<AccountDel
       quizAttempts: before.quiz_attempts,
       scenarioAttempts: before.scenario_attempts,
       roomMemberships: before.room_members,
+      enrolments: before.enrolments,
     },
     anonymised: {
       handSeats: before.hand_seats,
@@ -510,6 +605,236 @@ export async function deleteAccount(sql: Db, userId: string): Promise<AccountDel
       roomsCreated: before.rooms_owned,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Abandoned guests — the same erasure, reached without anybody asking for it
+// ---------------------------------------------------------------------------
+
+/**
+ * The definition of "abandoned", as one SQL fragment used by both statements below.
+ *
+ * ## Why this is a fragment and not two copies of a WHERE clause
+ *
+ * The sweep asks this question twice: once to CHOOSE a batch of accounts, and once again inside
+ * the transaction that deletes each one. Two copies would be two things to keep in step, and the
+ * copy that drifts is the one in the delete path — which is the copy whose failure mode is
+ * "deleted a learner who was still playing". So there is one text, interpolated into both.
+ *
+ * ## What each clause is for, and why none of them is redundant
+ *
+ * `kind = 'guest'` — a federated account is NEVER touched by this. Somebody who signed in through
+ * an identity provider can sign in again tomorrow, whatever `last_seen_at` says, so an idle
+ * federated account is dormant rather than abandoned and nothing in this repository may remove
+ * it. The partial index `users_guest_last_seen_idx` (`0002_indexes_and_constraints.sql:51-55`) is
+ * built with exactly this predicate, so it is also what makes the choosing query an index scan.
+ *
+ * `last_seen_at <= now() - cutoff` — the retention period, supplied by the caller rather than
+ * chosen here. `apps/api/src/maintenance/retention-sweep.ts` derives it and says where from.
+ * `touchLastSeen` above is what keeps an active learner on the right side of it.
+ *
+ * `not exists (a live session)` — **the clause that makes this safe, and it is not a duplicate of
+ * the timestamp.** `last_seen_at` moves when a session slides past its halfway mark, so it can lag
+ * genuine activity by up to half the idle window; a policy expressed only in timestamps would be
+ * reasoning about a clock when the question is "can anybody still reach this account?". A live
+ * session row IS that answer, read directly. If this ever disagrees with the timestamp, this wins.
+ *
+ * `not exists (a membership, a hand seat, an owned room)` — a guest who ever sat at a table is not
+ * an abandoned sign-up, and deleting one is a different decision from the one being implemented
+ * here. Their seat is in somebody else's hand history (`hand_seats.user_id` is SET NULL, so the
+ * deletion would silently blank a name in a record four other people share), their room is
+ * somebody else's table, and their membership row may be a chair at a table that is live right
+ * now. `docs/production/legal-register.md` §5 L5 puts "must a learner's hand history be deleted"
+ * in front of counsel; until that is answered, an unattended timer must not answer it four times
+ * a day by accident. The population this sweep is for — the account minted automatically for
+ * every visitor who opens a lesson and never comes back — has none of these rows.
+ *
+ * `not exists (an enrolment)` — **added 2026-08-25, and the one clause here whose absence could
+ * have destroyed a record somebody was owed.** Found by the legal review as D9, not by a test,
+ * because the sequence that reaches it is ordinary rather than contrived and 0006 sets it up
+ * itself: `enrolments.starts_at` exists "so that a class can be enrolled in advance of the day it
+ * opens". Enrol a January cohort for a course that opens in April; a student whose only visit was
+ * the one that minted their guest account is unseen for sixty days in March, and this sweep erases
+ * them — and `enrolments_user_id_fkey` is ON DELETE CASCADE, so their place goes with them, three
+ * weeks before the course begins. `granted_by` and `reference` survive in `prl.audit_log` with
+ * `user_id` NULL, so the operator's history is intact and the ENTITLEMENT is unreconstructable,
+ * because nothing left names the person.
+ *
+ * Deliberately ANY enrolment, with no predicate on `revoked_at` or `expires_at`, which is the same
+ * shape (and the same argument) as the membership clause above: a revoked place two years ago
+ * still means this is not an anonymous sign-up, whether such an account should ever be swept is
+ * L5's question rather than an engineer's, and the two errors are not the same size — keeping a row
+ * nobody needs costs a row, and erasing a student three weeks before their course costs a student.
+ *
+ * It is also the only clause here with no index behind it: `enrolments_live_user_idx` is partial on
+ * `revoked_at IS NULL` and cannot serve a question that includes revoked rows. That is accepted
+ * rather than overlooked. The query is a hash anti-join against a table with one row per grant ever
+ * made, evaluated four times a day, against `prl.hand_seats` in the same statement — which is
+ * orders of magnitude larger and is the one that decides the plan. A plain index on
+ * `prl.enrolments (user_id)` is a one-line migration if that ever stops being true.
+ *
+ * ## The incident this shape prevents
+ *
+ * A sweep that selected ids and then deleted them in a later statement can delete an account that
+ * became live in between. So the fragment is evaluated a second time inside the deleting
+ * transaction, and `deleteAbandonedGuest` takes the row lock BEFORE it, in a statement of its own.
+ * That ordering is the whole of the guard and it is argued there, because getting it wrong is not
+ * visible from here: locking and asking in ONE statement passes every test, blocks for exactly as
+ * long as it should, and still answers from the snapshot it took before it blocked.
+ */
+function abandonedGuestPredicate(sql: Db, cutoffSeconds: number) {
+  return sql`
+        u.kind = 'guest'
+    and u.last_seen_at <= now() - (${cutoffSeconds}::int * interval '1 second')
+    and not exists (
+      select 1
+        from prl.sessions s
+       where s.user_id = u.id
+         and s.revoked_at is null
+         and s.expires_at > now()
+    )
+    and not exists (select 1 from prl.room_members m where m.user_id = u.id)
+    and not exists (select 1 from prl.hand_seats  h where h.user_id = u.id)
+    and not exists (select 1 from prl.rooms       r where r.owner_user_id = u.id)
+    and not exists (select 1 from prl.enrolments  e where e.user_id = u.id)
+  `;
+}
+
+export interface AbandonedGuestQuery {
+  /** How long an account may go unseen before it is abandoned. Seconds. */
+  readonly cutoffSeconds: number;
+  /** Most ids to return. The sweep's batch size. */
+  readonly limit: number;
+}
+
+/**
+ * Ids of guest accounts nobody can reach any more, oldest first, bounded by `limit`.
+ *
+ * Reading and deleting are separate calls because the deletion of each account is its own
+ * transaction: one account that cannot be removed — a foreign key added later without a
+ * referential action, say — must not roll back the other 999 in the batch and must not become a
+ * permanent head-of-line block on a sweep that then reports "removed nothing" forever.
+ *
+ * `order by last_seen_at` is the oldest-first order the index already stores, so this is a
+ * bounded index scan rather than a sort of the whole guest population.
+ */
+export async function findAbandonedGuests(sql: Db, query: AbandonedGuestQuery): Promise<string[]> {
+  const rows = await sql<{ id: string }[]>`
+    select u.id
+      from prl.users u
+     where ${abandonedGuestPredicate(sql, query.cutoffSeconds)}
+     order by u.last_seen_at
+     limit ${query.limit}
+  `;
+  return rows.map((row) => row.id);
+}
+
+/**
+ * Erases one abandoned guest, or returns null because it is not abandoned after all.
+ *
+ * ## Why this calls `deleteAccount` instead of issuing its own DELETE
+ *
+ * One statement — `delete from prl.users where id in (select … limit n)` — would have been
+ * cheaper, and it is what the other two sweeps do. It is the wrong choice here, for three
+ * reasons that all reduce to the same one: this is an erasure, and there is already exactly one
+ * definition of what an erasure means.
+ *
+ *   1. `deleteAccount` VERIFIES ITSELF. It counts the eight tables that name the learner before
+ *      the delete and again afterwards inside the same transaction, and throws if anything
+ *      survived (`accountFootprint`). A schema change that half-erased an account would roll back
+ *      rather than commit. An unattended timer that runs four times a day with nobody reading its
+ *      output is precisely where that check earns its cost — a request-path deletion at least has
+ *      a learner watching the response.
+ *   2. The policy in `db/migrations/0004_account_deletion.sql` — what cascades, what is detached
+ *      to NULL, what is kept in full because it is four other people's record too — would
+ *      otherwise exist twice, in a migration and in a sweep, and the two would drift.
+ *   3. Rooms are closed before their ownership is detached (`deleteAccount` again), because a room
+ *      whose owner is gone can never be closed by anybody. A candidate here owns no rooms, so
+ *      that step does nothing today; it will still be right if the candidate rule ever widens.
+ *
+ * The cost, stated because it is real: a batch of N accounts is N transactions rather than one
+ * statement. At the sweep's default batch that is a few thousand statements four times a day, off
+ * every request path, and it buys the verification above. Throughput was not the property worth
+ * optimising in a DELETE against the table that holds every account.
+ *
+ * ## Why the predicate is evaluated again here
+ *
+ * See `abandonedGuestPredicate`. The caller chose this id from a query that ran earlier, in
+ * another transaction, against a snapshot that is now old. This is the evaluation that matters:
+ * it runs in the transaction that does the deleting, under a lock already held, so "still
+ * abandoned" and "deleted" are the same moment. Returning null rather than throwing is deliberate —
+ * an account that came back to life between the two is a correct outcome of a correct guard, not an
+ * error, and the sweep counts it as not removed.
+ *
+ * ## Why the lock is a statement of its own, and this is the whole of the fix
+ *
+ * ############################################################################
+ * ## LOCK, THEN ASK. ONE STATEMENT THAT DOES BOTH ANSWERS FROM THE SNAPSHOT ##
+ * ## IT TOOK BEFORE IT BLOCKED, WHICH IS THE SNAPSHOT WITHOUT THE ROW.      ##
+ * ############################################################################
+ *
+ * This used to be one `select u.id from prl.users u where u.id = $1 and <predicate> for update`,
+ * on the reasoning that `FOR UPDATE` conflicts with the `FOR KEY SHARE` an INSERT referencing the
+ * row must take — so nothing could be created for the account while the lock was held, and
+ * anything created before it would be seen. The first half is true. The second is not, and the
+ * gap between them destroyed a student's place in a course.
+ *
+ * Measured against Postgres 17 on a scratch database, with an `enrolments grant` transaction that
+ * had inserted and not yet committed: the sweep's statement **blocked for 1,124 ms** on exactly
+ * the lock conflict above, and then returned the account as abandoned anyway. Under READ
+ * COMMITTED a statement's snapshot is taken when the statement STARTS. Waiting on a row lock does
+ * not refresh it, and PostgreSQL re-checks a qual after such a wait only when the locked tuple was
+ * itself updated (EvalPlanQual) — an INSERT into `prl.enrolments` does not update `prl.users`, it
+ * only locks it. So the `not exists` had already been evaluated against a snapshot that predates
+ * the instructor's commit, and the answer survived the wait unchanged. The account went, and
+ * `enrolments_user_id_fkey` is ON DELETE CASCADE, so the place went with it — three weeks before
+ * the course, with nothing left that names the person, which is D9 all over again through a door
+ * D9's fix did not close.
+ *
+ * `consumeLoginAttempt` in `sessions.ts` was cited as the precedent and is not one: it is a single
+ * `UPDATE ... WHERE`, and an UPDATE is the case PostgreSQL does re-check.
+ *
+ * Two statements fix it. The bare `FOR UPDATE` blocks until the account is nobody else's business;
+ * the predicate then runs as a NEW statement, which takes a NEW snapshot, and that snapshot is
+ * after every transaction the lock made us wait for. Nothing can insert between them, because we
+ * hold the lock that would be needed to.
+ *
+ * The cost, stated because it is real: one extra round trip per candidate, inside a transaction
+ * this function was already opening, on a timer that runs four times a day and off every request
+ * path. That is the same trade the paragraph above makes for `deleteAccount`'s self-verification,
+ * and for the same reason.
+ *
+ * Requires a transaction handle for the reason `deleteAccount` does, and says so the same way.
+ */
+export async function deleteAbandonedGuest(
+  sql: Db,
+  userId: string,
+  cutoffSeconds: number,
+): Promise<AccountDeletionSummary | null> {
+  if (!('savepoint' in sql)) {
+    throw new AppError('internal_error', {
+      logDetail: 'deleteAbandonedGuest was given a pool handle; it must run inside a transaction',
+    });
+  }
+
+  // Statement one: take the lock and nothing else. No predicate here on purpose — the predicate
+  // must not be answered from the snapshot this statement had before it started waiting.
+  const locked = await sql<{ id: string }[]>`
+    select u.id from prl.users u where u.id = ${userId} for update
+  `;
+  if (locked[0] === undefined) return null;
+
+  // Statement two: a new statement, so a new snapshot, taken after every transaction the lock
+  // above made us wait for has committed. This is the evaluation that decides.
+  const abandoned = await sql<{ id: string }[]>`
+    select u.id
+      from prl.users u
+     where u.id = ${userId}
+       and ${abandonedGuestPredicate(sql, cutoffSeconds)}
+  `;
+  if (abandoned[0] === undefined) return null;
+
+  return deleteAccount(sql, userId);
 }
 
 // ---------------------------------------------------------------------------

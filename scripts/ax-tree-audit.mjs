@@ -49,6 +49,13 @@
  *   6. after a REAL interaction driven through Chrome's input pipeline, the announcement region's
  *      content actually changed and the focused node still has a computed accessible name.
  *
+ * The certification assertions that follow the sweep go further and sit down at a live table: see
+ * `scripts/ax-assertions.mjs`, which plays a hand over a real socket and replays it at
+ * `/review/<handId>`, recording every write into every live region with its politeness and its
+ * order — and then reads that same hand back through a proxy that has flipped one byte of its deck
+ * reveal, which is the only honest way to a proof that does not check out. Those are the eighteen
+ * rows the certification document could not automate until it had a fixture for them.
+ *
  * ## What it does NOT prove
  *
  *   - That any screen reader announces any of it. See above; this is the whole reason the manual
@@ -75,9 +82,12 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
+import { connect } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { ANNOUNCER_PROBE, ASSERTION_ROUTES, CARD_VALUE_WORDS, SPEECH_PROBE } from './ax-assertions.mjs';
+import { startReviewProxy } from './review-proxy.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -103,9 +113,13 @@ const cyan = (s) => paint('36', s);
  *
  * The fixture states of `/play` are used rather than a live socket wherever a check does not need
  * one. That is not a shortcut: `/play?state=decision` renders the same component tree the live route
- * does, with the action controls hydrated, and it renders it without a database — so this gate fails
- * on an accessibility defect and never on Postgres being down. What a live table could additionally
- * prove is covered by `scripts/keyboard-audit.mjs`, which does sit down at one.
+ * does, with the action controls hydrated, and it renders it without a database — so this per-journey
+ * sweep fails on an accessibility defect and never on Postgres being down.
+ *
+ * What a live table proves in addition — the connection status changing, the blinds before the bots,
+ * a turn announced once, a hand that completes and can then be replayed — is asserted by the
+ * `live-table` and `replay` pages of `ASSERTION_ROUTES`, which do sit down at one. Those need the
+ * API and its database; this sweep deliberately does not.
  *
  * `cards` and `interact` are per ROUTE and not per journey, which is a correction rather than a
  * detail: they were per journey in the first version, so the hand-review journey demanded cards on
@@ -177,6 +191,44 @@ const EXPECTED_LIVE_REGIONS = [{ politeness: 'polite', atLeast: 1 }];
 // ===========================================================================
 
 /**
+ * Where the second web app listens, and what it is for.
+ *
+ * Assertion 8.2 is about the **web server's** own fetch failing, not the browser's, so it cannot be
+ * reached the way 3.20 is: blocking `/api/*` in Chrome leaves the server render untouched, and the
+ * page still arrives with live data in it. What it needs is a Next process whose `PRL_API_ORIGIN`
+ * points at nothing — and taking the API away from the process every other assertion shares would
+ * take the live table, the replayed hand and `/lab` with it.
+ *
+ * So the gate runs a **second** `next start` off the same build, on its own port, with a dead API
+ * origin, and visits one page on it. Nothing else in the run touches it, and it costs one Next boot.
+ *
+ * `127.0.0.1:1` rather than a spare high port: binding port 1 needs root, so "nothing is listening
+ * there" is a property of the operating system rather than an assumption about this host. A stale
+ * server on a random port would serve live data and the assertion would fail for a reason that has
+ * nothing to do with accessibility.
+ */
+const OFFLINE_WEB_ORIGIN = process.env.PRL_WEB_OFFLINE_ORIGIN ?? 'http://127.0.0.1:3459';
+const DEAD_API_ORIGIN = 'http://127.0.0.1:1';
+
+/**
+ * The THIRD web app, and the proxy behind it. Assertion 6.7's fixture.
+ *
+ * Same argument as 8.2 one step further along. 6.7's failing half needs a reveal whose proofs do not
+ * reach its own hand's published root, `/review/<handId>` is a server component so the browser can
+ * never be made to receive one, and the product must not contain a switch that produces one — that
+ * is the single thing `CommitmentVerifier` exists to detect. What is left is a web app whose
+ * `PRL_API_ORIGIN` points at `scripts/review-proxy.mjs`, which forwards the REAL API's REAL review
+ * response with one hex digit of one salt flipped. It authors no payload, so it cannot go stale
+ * against `packages/contracts`; see that module's header for the whole argument and the refusals.
+ *
+ * 3465 and 3467, because the rest of the map is taken: 3000/3001 are the app and the API, 3456 is
+ * this gate, 3457 is `test:csp`, 3458/3459 are the age gate and 8.2's offline app, 3462 is
+ * `design:contrast`, 3463 is `test:layout` and 3464 is `test:keyboard`.
+ */
+const PROXIED_WEB_ORIGIN = process.env.PRL_WEB_PROXIED_ORIGIN ?? 'http://127.0.0.1:3465';
+const REVIEW_PROXY_ORIGIN = process.env.PRL_REVIEW_PROXY_ORIGIN ?? 'http://127.0.0.1:3467';
+
+/**
  * Defaults mirror `.env.example` and the two existing audits: the web app on 3000, the API on 3001.
  * `PRL_WEB_ORIGIN` is the variable `scripts/keyboard-audit.mjs` already honours, so a developer who
  * has set it for one audit does not have to set a second name for this one.
@@ -184,13 +236,21 @@ const EXPECTED_LIVE_REGIONS = [{ politeness: 'polite', atLeast: 1 }];
 const DEFAULTS = {
   baseUrl: process.env.PRL_WEB_ORIGIN ?? 'http://127.0.0.1:3000',
   apiUrl: process.env.PRL_API_ORIGIN ?? 'http://127.0.0.1:3001',
+  offlineUrl: OFFLINE_WEB_ORIGIN,
+  proxiedUrl: PROXIED_WEB_ORIGIN,
+  proxyUrl: REVIEW_PROXY_ORIGIN,
   start: false,
   withApi: false,
   headful: false,
   readyTimeoutSeconds: 120,
   journeys: [],
+  assertions: [],
+  skipJourneys: false,
+  skipAssertions: false,
   json: null,
 };
+
+const ASSERTION_KEYS_FOR_HELP = ASSERTION_ROUTES.map((route) => route.key).join(', ');
 
 const HELP = `
 ${bold('pnpm run test:ax')} — accessibility-TREE audit, in real Chrome
@@ -202,6 +262,11 @@ ${bold('pnpm run test:ax')} — accessibility-TREE audit, in real Chrome
   Server
     --base-url <url>      web app origin                   (default ${DEFAULTS.baseUrl})
     --api-url <url>       API origin                       (default ${DEFAULTS.apiUrl})
+    --offline-url <url>   where the second web app, the one with no API behind it, is put
+                          for assertion 8.2                (default ${DEFAULTS.offlineUrl})
+    --proxied-url <url>   where the third web app, the one behind the corrupting proxy, is put
+                          for assertion 6.7                (default ${DEFAULTS.proxiedUrl})
+    --proxy-url <url>     where that proxy listens          (default ${DEFAULTS.proxyUrl})
     --start               start the web app rather than using one already running
     --with-api            also start the API (only with --start)
     --ready-timeout <s>   how long to wait for a server    (default ${DEFAULTS.readyTimeoutSeconds})
@@ -209,6 +274,10 @@ ${bold('pnpm run test:ax')} — accessibility-TREE audit, in real Chrome
   Scope
     --journeys <a,b,c>    audit only these journey keys    (default: all)
                           ${JOURNEY_KEYS_FOR_HELP}
+    --assertions <a,b,c>  run only these certification pages (default: all)
+                          ${ASSERTION_KEYS_FOR_HELP}
+    --no-journeys         skip the per-journey tree audit
+    --no-assertions       skip the certification assertions
 
   Reporting
     --headful             run Chrome with a window, to watch it
@@ -251,6 +320,15 @@ function parseArgs(argv) {
       case '--api-url':
         options.apiUrl = need();
         break;
+      case '--offline-url':
+        options.offlineUrl = need();
+        break;
+      case '--proxied-url':
+        options.proxiedUrl = need();
+        break;
+      case '--proxy-url':
+        options.proxyUrl = need();
+        break;
       case '--json':
         options.json = need();
         break;
@@ -262,6 +340,18 @@ function parseArgs(argv) {
           .split(',')
           .map((key) => key.trim())
           .filter((key) => key.length > 0);
+        break;
+      case '--assertions':
+        options.assertions = need()
+          .split(',')
+          .map((key) => key.trim())
+          .filter((key) => key.length > 0);
+        break;
+      case '--no-journeys':
+        options.skipJourneys = true;
+        break;
+      case '--no-assertions':
+        options.skipAssertions = true;
         break;
       default:
         throw new Error(`unknown option ${arg} (try --help)`);
@@ -278,6 +368,15 @@ function parseArgs(argv) {
     if (!known.has(key)) {
       throw new Error(`no journey named "${key}" (known: ${[...known].join(', ')})`);
     }
+  }
+  const knownAssertions = new Set(ASSERTION_ROUTES.map((route) => route.key));
+  for (const key of options.assertions) {
+    if (!knownAssertions.has(key)) {
+      throw new Error(`no assertion page named "${key}" (known: ${[...knownAssertions].join(', ')})`);
+    }
+  }
+  if (options.skipJourneys && options.skipAssertions) {
+    throw new Error('--no-journeys and --no-assertions together leave nothing to audit');
   }
   return options;
 }
@@ -338,12 +437,11 @@ export const REQUIRED_LANDMARKS = [
 /**
  * Words that must never appear in the accessible name of a card the server chose to hide.
  *
- * Ranks and suits, as `packages/ui/src/cards.ts` spells them. Matched on word boundaries so
- * "face-down card" does not trip on anything, and so a name like "Ada hole cards" is not read as a
- * leak — "cards" is not a rank.
+ * Defined in `scripts/ax-assertions.mjs` and re-exported here because assertion 3.8 and the
+ * per-journey card audit below are the same rule applied twice, and two copies of a leak pattern is
+ * how one of them ends up not knowing about "deuce".
  */
-export const CARD_VALUE_WORDS =
-  /\b(ace|king|queen|jack|ten|nine|eight|seven|six|five|four|three|two|deuce|hearts?|diamonds?|clubs?|spades?)\b/iu;
+export { CARD_VALUE_WORDS };
 
 const roleOf = (node) => (node.role?.value ?? '').toString().toLowerCase();
 const nameOf = (node) => (node.name?.value ?? '').toString().trim();
@@ -667,21 +765,26 @@ class Page {
    * all. That distinction is documented at length in `scripts/keyboard-audit.mjs` and cost a
    * debugging session there; it is repeated here so it cannot be lost by editing one file.
    */
-  async press(key) {
+  async press(key, options = {}) {
     const KEYS = {
       Tab: { windowsVirtualKeyCode: 9, text: '\t' },
       Enter: { windowsVirtualKeyCode: 13, text: '\r' },
       Escape: { windowsVirtualKeyCode: 27 },
       ArrowRight: { windowsVirtualKeyCode: 39 },
+      Home: { windowsVirtualKeyCode: 36 },
+      End: { windowsVirtualKeyCode: 35 },
     };
     const spec = KEYS[key];
     if (spec === undefined) throw new Error(`no key spec for ${key}`);
+    // Shift is bit 8 in CDP's modifier mask. Without it Shift + Tab is just Tab, and a check for a
+    // backwards focus trap would walk forwards through it and report a pass.
+    const modifiers = options.shift === true ? 8 : 0;
     const base = {
       key,
       code: key,
       windowsVirtualKeyCode: spec.windowsVirtualKeyCode,
       nativeVirtualKeyCode: spec.windowsVirtualKeyCode,
-      modifiers: 0,
+      modifiers,
     };
     await this.send('Input.dispatchKeyEvent', {
       type: spec.text === undefined ? 'rawKeyDown' : 'keyDown',
@@ -690,6 +793,107 @@ class Page {
     });
     await this.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
     await delay(50);
+  }
+
+  /**
+   * Real typing, one character at a time, into whatever holds the caret.
+   *
+   * Not `element.value = ...`, and not `Input.insertText` either, and both alternatives were tried
+   * before this one. The check that needs this is assertion 2.6 — type letters into the quiz's
+   * numeric field and expect it to report itself invalid — and `<input type="number">` refuses a
+   * non-numeric value from BOTH of the shortcuts: the element reports an empty value and
+   * `validity.badInput` never becomes true, so the field is never made invalid, no correction is
+   * rendered, and the check reports a confident pass over an interaction that did not happen.
+   * Measured: `Input.insertText('abc')` left `aria-invalid` absent. Per-character key events, which
+   * is what a person does, set `badInput` and the field announces itself as refused.
+   */
+  async insertText(text) {
+    for (const character of text) {
+      const code = character.toUpperCase().charCodeAt(0);
+      const base = {
+        key: character,
+        text: character,
+        unmodifiedText: character,
+        windowsVirtualKeyCode: code,
+        nativeVirtualKeyCode: code,
+        modifiers: 0,
+      };
+      await this.send('Input.dispatchKeyEvent', { type: 'keyDown', ...base });
+      await this.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+      await delay(30);
+    }
+    await delay(120);
+  }
+
+  /** Replace the whole value of one field with `text`, through the same real input path. */
+  async selectAllAndType(selector, text) {
+    await this.evaluate(
+      `(() => {
+        const field = document.querySelector(${JSON.stringify(selector)});
+        if (field === null) return;
+        field.focus();
+        field.select();
+      })()`,
+    );
+    await this.insertText(text);
+  }
+
+  /**
+   * A device-metrics override, not a window resize.
+   *
+   * The two narrow-width journeys are decided by `matchMedia('(min-width: 860px)')` and by a
+   * container query. A headless window that was merely made smaller does not reliably move either,
+   * so a "narrow width" check run that way would audit the desktop layout and pass.
+   */
+  async setViewport(viewport) {
+    if (viewport === null || viewport === undefined) {
+      await this.send('Emulation.clearDeviceMetricsOverride');
+      return;
+    }
+    await this.send('Emulation.setDeviceMetricsOverride', {
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+  }
+
+  /** Run `source` in every document this page loads, before any of its own script does. */
+  async onNewDocument(source) {
+    await this.send('Page.addScriptToEvaluateOnNewDocument', { source });
+  }
+
+  /**
+   * Refuse every request whose URL matches one of `patterns`, for this page only.
+   *
+   * This is how assertion 3.20 — "stop the API, then reload /play and open the table" — is reached
+   * without stopping the API this gate started. Stopping it really would be the literal recipe and
+   * would also take out every other assertion in the run: the shared API serves `/lab` and the hand
+   * this run played. Blocked at the browser is the same fact from the page's point of view — the
+   * fetch and the socket fail — and it is the failure the page has to survive.
+   *
+   * Pass `[]` to clear. A page left with the API blocked would score every route after it as an
+   * outage, so callers clear in a `finally`.
+   */
+  async blockUrls(patterns) {
+    await this.send('Network.setBlockedURLs', { urls: patterns });
+  }
+
+  /**
+   * Forget every cookie in this profile.
+   *
+   * The live-table journey needs a reader who has never been here: Chrome keeps its profile in
+   * `/tmp/prl-ax-tree-audit-profile` across runs, so without this the second run reuses the guest
+   * session — and therefore the room — that the first run left the reader SEATED in. "Deal me in"
+   * then has no seat to take, and assertion 3.2 would be checking steps that never happen.
+   */
+  async clearCookies() {
+    await this.send('Network.clearBrowserCookies');
+  }
+
+  /** Let the page finish whatever it started. Named rather than inlined so the waits are findable. */
+  async settle(ms) {
+    await delay(ms);
   }
 
   async goto(url) {
@@ -725,6 +929,34 @@ class Page {
       const node = (partial.nodes ?? [])[0];
       const html = await this.send('DOM.getOuterHTML', { nodeId }).catch(() => ({ outerHTML: '' }));
       out.push({ node: node ?? null, html: html.outerHTML ?? '' });
+    }
+    return out;
+  }
+
+  /**
+   * The same question as `axFor`, asked of a whole sweep: is each match IGNORED by the
+   * accessibility tree, and what are its computed role and name — without its markup.
+   *
+   * `axFor` fetches `DOM.getOuterHTML` for every match, which several checks need (a card's leak
+   * can hide in an attribute) and which makes it the wrong tool for a sweep. Assertion 7.4 asks
+   * this of every content-bearing element on a page with a modal open — `<main>`, its heading, the
+   * footer, and every ancestor of each of them — so pulling each one's outer HTML transfers the
+   * document many times over to decide a boolean per node.
+   */
+  async axFlagsFor(selector) {
+    const doc = await this.send('DOM.getDocument', { depth: 1 });
+    const found = await this.send('DOM.querySelectorAll', { nodeId: doc.root.nodeId, selector });
+    const out = [];
+    for (const nodeId of found.nodeIds ?? []) {
+      const partial = await this.send('Accessibility.getPartialAXTree', { nodeId, fetchRelatives: false });
+      const node = (partial.nodes ?? [])[0];
+      out.push({
+        ignored: node === undefined || node.ignored === true,
+        role: String(node?.role?.value ?? ''),
+        name: String(node?.name?.value ?? '')
+          .replace(/\s+/gu, ' ')
+          .trim(),
+      });
     }
     return out;
   }
@@ -792,8 +1024,19 @@ async function withChrome(headful, run) {
     await page.send('Page.enable');
     await page.send('Runtime.enable');
     await page.send('DOM.enable');
+    // Needed for `Network.setBlockedURLs` and `Network.clearBrowserCookies`, which the live-table
+    // and API-down fixtures use. Enabling it costs a stream of events nobody subscribes to.
+    await page.send('Network.enable');
     // The whole point of this script. Without it `getFullAXTree` answers with an empty tree.
     await page.send('Accessibility.enable');
+    // Installed before any document loads: G9 asserts the app announces NOTHING on a full load, and
+    // an observer attached after the page has settled cannot tell "never wrote" from "wrote and was
+    // cleared". See `ANNOUNCER_PROBE`.
+    await page.onNewDocument(ANNOUNCER_PROBE);
+    // The same argument, for every live region rather than only the route announcer: the live table
+    // says most of what it says once and replaces it a second later, so an observer that starts
+    // after the hand cannot tell what was said. See `SPEECH_PROBE`.
+    await page.onNewDocument(SPEECH_PROBE);
     try {
       await run(page);
     } finally {
@@ -807,6 +1050,61 @@ async function withChrome(headful, run) {
 // ===========================================================================
 // Servers
 // ===========================================================================
+
+/**
+ * Refuses to go on when something already answers where a server this run starts will be polled.
+ *
+ * `waitUntilReady` accepts the first 200 from its URL and cannot tell its own child's answer from a
+ * stranger's, so with the port taken the audit scores whatever IS there. Measured on 2026-11-10 with
+ * a production `next start` from this checkout started by hand on :3521: `--start --base-url
+ * http://127.0.0.1:3521 --journeys learn,practice --no-assertions` printed "starting the web
+ * app...", then "PASS — the computed accessibility tree satisfied every check above." and exited 0.
+ * With a `node:http` page on all five ports in 3523-3527 and `--start --with-api` pointed at them,
+ * the API, all three web apps and the proxy were reported as starting, none as exited, and 81 checks
+ * ran against the stranger; it exited 1 only because the stranger's page is not this app's.
+ *
+ * Every port is checked before the first child is spawned, the fixtures' ports on the same terms as
+ * the main one. `bad()`-and-carry-on is right for a fixture that failed to START, but a stranger on
+ * its port is a precondition of the whole run, and the run refuses before anything has started
+ * rather than losing 8.2 or 6.7 part-way through. The proxy's port is checked too: it "started" at
+ * :3527 above because a bind of 127.0.0.1 succeeds beside the stranger's wildcard listener.
+ *
+ * It CONNECTS to where the poll will go, rather than binding 127.0.0.1 as `scripts/a11y-audit.mjs`
+ * first did. Measured on macOS with Node 24.18: a bind of 127.0.0.1 succeeds beside a listener on
+ * the wildcard address, so it called a `node:http` server free on its default address, on `0.0.0.0`
+ * and on `::` (`lsof`: `TCP *:3533`), and refused only one bound to 127.0.0.1; a connect to
+ * 127.0.0.1 reached all four. `next start` listens on the wildcard (`TCP *:3521`). A second `next
+ * start` there exits `EADDRINUSE :::3521`; beside a stranger on 127.0.0.1 alone it binds `*:3522` and
+ * stays up while the poll reaches the stranger. Only ECONNREFUSED counts as free, so a probe that
+ * cannot decide refuses.
+ */
+async function refuseOccupiedPort(url) {
+  const { hostname, port, protocol } = new URL(url);
+  const host = hostname.replace(/^\[(.*)\]$/, '$1');
+  const target = { host, port: Number(port || (protocol === 'https:' ? 443 : 80)) };
+  const outcome = await new Promise((done) => {
+    const socket = connect(target);
+    socket.setTimeout(2000);
+    socket.once('connect', () => {
+      socket.destroy();
+      done('accepted');
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      done('was neither accepted nor refused within 2s');
+    });
+    socket.once('error', (error) =>
+      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
+    );
+  });
+  if (outcome === 'refused') return;
+  const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
+  throw new Error(
+    `${seen} on ${host}:${String(target.port)}. This run starts the server it audits there, so it ` +
+      'will not score one it did not. Stop it, or pass another --base-url, --api-url, ' +
+      '--offline-url, --proxied-url or --proxy-url.',
+  );
+}
 
 /**
  * A child server this script owns and must clean up.
@@ -1215,6 +1513,74 @@ async function auditRoute(page, journey, route, baseUrl) {
   if (route.interact === true) await actAtTheTable(page, label);
 }
 
+/**
+ * The certification assertions a machine can decide, run one page at a time.
+ *
+ * Every finding is stamped with the assertion ID from
+ * `docs/production/accessibility-certification.md`, because a failure here has to be traceable back
+ * to the sentence a reviewer would otherwise have been asked to listen for. A message that says
+ * "the slider has no name" and does not say "3.13" leaves somebody grepping the document.
+ *
+ * A page whose `gather` throws fails every assertion on it rather than skipping them. The whole
+ * point of the split is that these 65 rows are no longer in the human session; a page that quietly
+ * audited nothing would take them out of BOTH.
+ */
+async function runAssertions(page, context, wanted) {
+  const origins = context.origins;
+  for (const route of wanted) {
+    section(`${route.title}  ${dim(`${route.path}${route.viewport === undefined ? '' : ' · narrow'}`)}`);
+    // A route may name a different origin than the app under test — 8.2's is the second web app,
+    // the one with no API behind it. `null` means that server did not come up, and every check on
+    // the route says so rather than being skipped: a route audited against nothing would take its
+    // assertions out of the automated set AND out of the human session at once.
+    const baseUrl = origins[route.origin ?? 'default'] ?? null;
+    if (baseUrl === null) {
+      for (const check of route.checks) {
+        bad(
+          `${check.id} — ${check.what}`,
+          `this assertion runs against the "${route.origin}" server, which did not start. Nothing ` +
+            'was checked; see the startup failure above',
+        );
+      }
+      continue;
+    }
+    let evidence = null;
+    let gatherError = null;
+    try {
+      await page.setViewport(route.viewport ?? null);
+      await page.goto(`${baseUrl}${route.path}`);
+      // `context` carries the OTHER origins and the corrupting proxy's log. 6.7 is one row about
+      // one hand seen twice — honestly on the app under test, and with one byte of its reveal
+      // flipped on the third web app — so its gather is the one that needs more than its own origin.
+      evidence = await route.gather(page, baseUrl, context);
+    } catch (error) {
+      gatherError = error instanceof Error ? error.message : String(error);
+    } finally {
+      // Always put the window back, even when the page could not be driven. A narrow-width page
+      // that failed halfway would otherwise leave every route after it being audited at 390px, and
+      // those failures would be reported against routes that are perfectly correct at the width
+      // they are meant to be read at.
+      await page.setViewport(null).catch((error) => {
+        console.log(dim(`  could not clear the viewport override: ${error.message}`));
+      });
+    }
+    for (const check of route.checks) {
+      if (gatherError !== null) {
+        bad(`${check.id} — ${check.what}`, `the page could not be driven: ${gatherError}`);
+        continue;
+      }
+      let verdict;
+      try {
+        verdict = check.decide(evidence);
+      } catch (error) {
+        verdict = { ok: false, detail: `the check threw: ${error instanceof Error ? error.message : error}` };
+      }
+      if (verdict.ok) ok(`${check.id} — ${check.what}`, verdict.detail);
+      else bad(`${check.id} — ${check.what}`, verdict.detail);
+    }
+  }
+}
+
 async function main() {
   let options;
   try {
@@ -1235,9 +1601,35 @@ async function main() {
   console.log(dim(`  ${options.baseUrl}\n`));
 
   const servers = [];
+  // Declared out here, not where it is started: `finally` below is the only thing that closes it,
+  // and a listening socket this process owns outlives a failing check exactly as a `next start`
+  // does. See `ManagedServer` — every exit path has to run the cleanup.
+  let reviewProxy = null;
   let exitCode = 0;
 
+  const wanted =
+    options.journeys.length === 0
+      ? JOURNEYS
+      : JOURNEYS.filter((journey) => options.journeys.includes(journey.key));
+
+  const wantedAssertions =
+    options.assertions.length === 0
+      ? ASSERTION_ROUTES
+      : ASSERTION_ROUTES.filter((route) => options.assertions.includes(route.key));
+
+  const needsOffline =
+    !options.skipAssertions && wantedAssertions.some((route) => route.origin === 'offline');
+  const needsProxied =
+    !options.skipAssertions && wantedAssertions.some((route) => route.origin === 'proxied');
+
   try {
+    const ours = [
+      ...(options.start ? [options.baseUrl] : []),
+      ...(options.start && options.withApi ? [options.apiUrl] : []),
+      ...(needsOffline ? [options.offlineUrl] : []),
+      ...(needsProxied ? [options.proxyUrl, options.proxiedUrl] : []),
+    ];
+    for (const url of ours) await refuseOccupiedPort(url);
     if (options.start) {
       if (options.withApi) {
         const api = new ManagedServer(
@@ -1249,7 +1641,27 @@ async function main() {
           // development secrets in `.env` and the audit would then score the
           // lab error page, which is how `--start` without an API went green
           // whenever something leftover answered on :3001.
-          { PORT: portFromOrigin(options.apiUrl), HOST: '127.0.0.1' },
+          //
+          // `PUBLIC_WEB_ORIGIN` is this audit's own origin, and it is what makes
+          // the live table reachable at all. It is one allowlist for CORS and
+          // for the WebSocket `Origin` check, and `.env` holds a developer's
+          // `http://localhost:3000` — so with it inherited, every browser-side
+          // call this gate makes from `http://127.0.0.1:3456` was answered
+          // `forbidden`. Measured: "Open the table" produced "You do not have
+          // access to that. (forbidden)" and the socket never opened.
+          //
+          // Two origins, and the order is load-bearing: `config.webOrigins[0]` is what
+          // `auth/oidc.ts` redirects back to, so this gate's own origin stays first. The second is
+          // 6.7's third web app — its pages make the same browser-side calls every other page does,
+          // and an origin that is not on the allowlist would have them all answered `forbidden`
+          // while the assertion reported it as an accessibility failure.
+          {
+            PORT: portFromOrigin(options.apiUrl),
+            HOST: '127.0.0.1',
+            PUBLIC_WEB_ORIGIN: [new URL(options.baseUrl).origin, new URL(options.proxiedUrl).origin].join(
+              ',',
+            ),
+          },
         );
         servers.push(api);
         console.log(dim('  starting the API...'));
@@ -1274,35 +1686,122 @@ async function main() {
       }
     }
 
-    const wanted =
-      options.journeys.length === 0
-        ? JOURNEYS
-        : JOURNEYS.filter((journey) => options.journeys.includes(journey.key));
+    // The second web app, started only when something in this run actually needs it. See
+    // `OFFLINE_WEB_ORIGIN`: it exists so that 8.2 can reach the bundled-copy path without taking
+    // the API away from every other assertion in the run.
+    const origins = { default: options.baseUrl, offline: null, proxied: null };
+    if (needsOffline) {
+      const offline = new ManagedServer(
+        'web with no API behind it',
+        ['--filter', '@prl/web', 'start'],
+        options.offlineUrl,
+        {
+          NODE_ENV: 'production',
+          PRL_API_ORIGIN: DEAD_API_ORIGIN,
+          PORT: portFromOrigin(options.offlineUrl),
+        },
+      );
+      servers.push(offline);
+      console.log(dim('  starting a second web app with no API behind it, for 8.2...'));
+      offline.start();
+      try {
+        await offline.waitUntilReady(options.readyTimeoutSeconds);
+        origins.offline = options.offlineUrl;
+      } catch (error) {
+        // Recorded and carried on. This server is a fixture for one assertion; letting it abort the
+        // run would cost the other sixty-odd their check as well.
+        bad(
+          'offline web app',
+          `${error instanceof Error ? error.message : String(error)}. 8.2 cannot be checked without it`,
+        );
+      }
+    }
+
+    // The third web app and the proxy behind it, on the same terms: started only when a route in
+    // this run asks for them, and a failure to start is recorded rather than allowed to abort the
+    // other hundred-odd checks. See `PROXIED_WEB_ORIGIN` and `scripts/review-proxy.mjs`.
+    if (needsProxied) {
+      try {
+        reviewProxy = await startReviewProxy({
+          upstream: options.apiUrl,
+          host: new URL(options.proxyUrl).hostname,
+          port: Number(new URL(options.proxyUrl).port),
+        });
+        console.log(dim(`  starting a corrupting pass-through proxy at ${reviewProxy.origin}, for 6.7...`));
+      } catch (error) {
+        bad(
+          'review proxy',
+          `${error instanceof Error ? error.message : String(error)}. 6.7 cannot be checked without it`,
+        );
+      }
+      if (reviewProxy !== null) {
+        const proxied = new ManagedServer(
+          'web behind the corrupting proxy',
+          ['--filter', '@prl/web', 'start'],
+          options.proxiedUrl,
+          {
+            NODE_ENV: 'production',
+            PRL_API_ORIGIN: reviewProxy.origin,
+            PORT: portFromOrigin(options.proxiedUrl),
+          },
+        );
+        servers.push(proxied);
+        console.log(dim('  starting a third web app behind that proxy, for 6.7...'));
+        proxied.start();
+        try {
+          await proxied.waitUntilReady(options.readyTimeoutSeconds);
+          origins.proxied = options.proxiedUrl;
+        } catch (error) {
+          bad(
+            'proxied web app',
+            `${error instanceof Error ? error.message : String(error)}. 6.7 cannot be checked without it`,
+          );
+        }
+      }
+    }
 
     await withChrome(options.headful, async (page) => {
-      for (const journey of wanted) {
-        section(`${journey.title}  ${dim(journey.key)}`);
-        for (const route of journey.routes) {
-          try {
-            await auditRoute(page, journey, route, options.baseUrl);
-          } catch (error) {
-            bad(
-              `${journey.title} ${route.path}: audit`,
-              error instanceof Error ? error.message : String(error),
-            );
+      if (!options.skipJourneys) {
+        for (const journey of wanted) {
+          section(`${journey.title}  ${dim(journey.key)}`);
+          for (const route of journey.routes) {
+            try {
+              await auditRoute(page, journey, route, options.baseUrl);
+            } catch (error) {
+              bad(
+                `${journey.title} ${route.path}: audit`,
+                error instanceof Error ? error.message : String(error),
+              );
+            }
           }
         }
+      }
+      if (!options.skipAssertions) {
+        console.log(
+          bold(`\n${'═'.repeat(70)}\nCertification assertions — the machine-checkable half of the 72`),
+        );
+        console.log(
+          dim(
+            '  docs/production/accessibility-certification.md marks each of these `auto`. A failure\n' +
+              '  here is a regression in a fact one of its manual assertions rests on.',
+          ),
+        );
+        await runAssertions(page, { origins, proxy: reviewProxy }, wantedAssertions);
       }
     });
 
     // A journey that was asked for and produced no result at all is a failure, never a warning.
-    if (wanted.length === 0) {
+    if (!options.skipJourneys && wanted.length === 0) {
       bad('scope', 'no journey matched, so nothing was audited');
+    }
+    if (!options.skipAssertions && wantedAssertions.length === 0) {
+      bad('scope', 'no assertion page matched, so no certification assertion was checked');
     }
   } catch (error) {
     bad('audit', error instanceof Error ? error.message : String(error));
   } finally {
     for (const server of servers) server.stop();
+    if (reviewProxy !== null) reviewProxy.close();
   }
 
   if (options.json !== null) {

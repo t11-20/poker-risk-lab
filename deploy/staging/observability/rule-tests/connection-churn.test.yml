@@ -1,0 +1,248 @@
+# ---------------------------------------------------------------------------
+# The `connection-churn` group: `WebSocketReconnectStorm` and
+# `WebSocketConnectionsHigh`. Both are tickets, both read
+# `prl_websocket_connections`, and they read it for two different questions —
+# churn and volume. The cases at the end of this file hold that line in both
+# directions, because one signal answering two questions badly is how a capacity
+# alert starts firing on a storm and a storm alert starts firing on a full house.
+#
+# `WebSocketReconnectStorm`, which fired on healthy mornings and could not fire
+# on the failure it names.
+#
+# It was `rate(opened[5m]) > 3 * rate(closed[1h])`, a rate against this
+# deployment's own recent past. Two consequences, both reproduced below:
+#
+#   * After any quiet period the baseline is zero, and three times zero is zero.
+#     A class of thirty arriving on a morning after an overnight lull clears it
+#     on thirty sockets that each open once and stay open.
+#   * A genuine storm raises BOTH counters, so the baseline rises with the
+#     signal and the ratio never moves. Thirty learners reconnecting every ten
+#     seconds is 3 opens/s against a bar of 9 — silent.
+#   * And before any socket had ever closed, `prl_websocket_closed_total` did not
+#     exist, so the right-hand side was absent and the comparison was empty.
+#
+# The baseline is now the live connection count, which is read at scrape time
+# from the hub and therefore always present. A storm is churn rather than
+# volume: sockets opening faster than one per standing connection per minute.
+# ---------------------------------------------------------------------------
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    name: a class of thirty arriving after a quiet night raises nothing
+    input_series:
+      # Two hours of night with nothing opening and nothing closing, then thirty
+      # learners connecting over twenty minutes and staying connected.
+      - series: 'prl_websocket_opened_total'
+        values: '100+0x480 100.375+0.375x79 130+0x200'
+      - series: 'prl_websocket_closed_total'
+        values: '100+0x760'
+      - series: 'prl_websocket_connections'
+        values: '0+0x480 0.375+0.375x79 30+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm"}'
+        eval_time: 125m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm"}'
+        eval_time: 135m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm"}'
+        eval_time: 160m
+        exp_samples: []
+      # The old expression on the same morning: true, and true for long enough
+      # to have fired. Every deployment used by day and not by night trips this
+      # once a day, which is how a ticket queue is taught to be scrolled past.
+      # `count()` rather than the value itself, because the value is a float and
+      # the assertion here is "this was true", not "this was 0.025".
+      - expr: 'count(sum(rate(prl_websocket_opened_total[5m])) > 3 * sum(rate(prl_websocket_closed_total[1h])))'
+        eval_time: 132m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  - interval: 15s
+    name: thirty learners reconnecting every ten seconds raises a ticket
+    input_series:
+      # Three opens a second against thirty standing connections: every table in
+      # the deployment re-establishing itself six times a minute. Nothing in a
+      # per-request metric looks wrong, because every reconnect succeeds.
+      - series: 'prl_websocket_opened_total'
+        values: '0+45x400'
+      - series: 'prl_websocket_closed_total{code="abnormal"}'
+        values: '0+45x400'
+      - series: 'prl_websocket_connections'
+        values: '30+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm", alertstate="firing"}'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketReconnectStorm", alertstate="firing", severity="ticket"}'
+            value: 1
+      # The old expression, on the storm it was written for. The closes rise with
+      # the opens, so the baseline rises with the signal: 3 opens/s against a bar
+      # of 9. Silent.
+      - expr: 'sum(rate(prl_websocket_opened_total[5m])) > 3 * sum(rate(prl_websocket_closed_total[1h]))'
+        eval_time: 30m
+        exp_samples: []
+
+  - interval: 15s
+    name: a storm before any socket has ever closed raises a ticket
+    input_series:
+      # `prl_websocket_closed_total` is absent, which is what a counter looks
+      # like before its first increment — a proxy resetting connections at the
+      # same deploy that started the process, so the hub's close handler has
+      # never run. The old right-hand side was the empty vector and the whole
+      # comparison was empty, so the alert could not fire at the start of a
+      # deployment's life.
+      - series: 'prl_websocket_opened_total'
+        values: '0+15x400'
+      - series: 'prl_websocket_connections'
+        values: '0+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm", alertstate="firing"}'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketReconnectStorm", alertstate="firing", severity="ticket"}'
+            value: 1
+      - expr: 'sum(rate(prl_websocket_opened_total[5m])) > 3 * sum(rate(prl_websocket_closed_total[1h]))'
+        eval_time: 12m
+        exp_samples: []
+
+  - interval: 15s
+    name: a busy deployment where every socket stays up raises nothing
+    input_series:
+      # Sixty standing connections and one open a minute — people arriving and
+      # staying. Volume without churn, which is the state the old ratio could not
+      # tell from a storm.
+      - series: 'prl_websocket_opened_total'
+        values: '0+0.25x400'
+      - series: 'prl_websocket_closed_total{code="normal"}'
+        values: '0+0.05x400'
+      - series: 'prl_websocket_connections'
+        values: '60+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm"}'
+        eval_time: 40m
+        exp_samples: []
+
+  # -------------------------------------------------------------------------
+  # WebSocketConnectionsHigh — ticket
+  #
+  # `prl_websocket_connections > 67`, `for: 10m`. 67 is 70% of 96, the concurrent
+  # seated players at which one instance saturated in `docs/production/load-test.md`,
+  # and `alerts.md` says that number must be re-derived whenever the measurement
+  # is repeated rather than copied from anywhere else.
+  #
+  # The two churn rules read the same gauge and must not be confused: this one is
+  # VOLUME — sockets standing — and `WebSocketReconnectStorm` above is CHURN,
+  # sockets opening faster than the number standing. Both directions of that
+  # distinction are asserted below, because a capacity ticket that also fired on
+  # a storm, or a storm ticket that fired on a full house, would each be one
+  # signal doing two jobs badly.
+  # -------------------------------------------------------------------------
+  - interval: 15s
+    name: seventy standing connections raise the capacity ticket after ten minutes
+    input_series:
+      # Past 70% of the measured saturation point and staying there: two cohorts
+      # in at once, everybody connected, nobody reconnecting.
+      - series: 'prl_websocket_connections'
+        values: '40+0x40 70+0x300'
+      # One open per minute against seventy standing connections, which is far
+      # under the storm bar of 75. The capacity ticket must speak and the churn
+      # ticket must not.
+      - series: 'prl_websocket_opened_total'
+        values: '0+0.25x341'
+      - series: 'prl_websocket_closed_total{code="normal"}'
+        values: '0+0.05x341'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh"}'
+        eval_time: 10m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="pending"}'
+        eval_time: 19m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="pending", severity="ticket"}'
+            value: 1
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="firing"}'
+        eval_time: 20m15s
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="firing", severity="ticket"}'
+            value: 1
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm"}'
+        eval_time: 40m
+        exp_samples: []
+
+  - interval: 15s
+    name: a full class of sixty raises nothing, and neither does exactly sixty-seven
+    input_series:
+      # Sixty is two cohorts of thirty and is the deployment being used. Then it
+      # sits at exactly 67 for half an hour — the threshold, and `> 67` rather
+      # than `>=`, which no other case in this file can tell apart.
+      - series: 'prl_websocket_connections'
+        values: '60+0x80 67+0x300'
+      - series: 'prl_websocket_opened_total'
+        values: '0+0.25x381'
+      - series: 'prl_websocket_closed_total{code="normal"}'
+        values: '0+0.05x381'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh"}'
+        eval_time: 15m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh"}'
+        eval_time: 40m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh"}'
+        eval_time: 90m
+        exp_samples: []
+
+  - interval: 15s
+    name: a five-minute spike over the bar does not raise a capacity ticket
+    input_series:
+      # Everybody joining for the last five minutes of a class and then leaving.
+      # Over the threshold, and nowhere near ten continuous minutes of it.
+      - series: 'prl_websocket_connections'
+        values: '40+0x40 80+0x19 40+0x300'
+      - series: 'prl_websocket_opened_total'
+        values: '0+0.25x360'
+      - series: 'prl_websocket_closed_total{code="normal"}'
+        values: '0+0.25x360'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="firing"}'
+        eval_time: 16m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="firing"}'
+        eval_time: 60m
+        exp_samples: []
+      # And it did reach pending, so the silence is the `for:` outlasting the
+      # spike rather than a gauge that was never read.
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="pending"}'
+        eval_time: 13m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketConnectionsHigh", alertstate="pending", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: a reconnect storm on a small deployment is churn and not capacity
+    input_series:
+      # Thirty standing connections re-establishing themselves constantly. The
+      # churn ticket is the one that must speak; the capacity ticket must not,
+      # because there is no capacity problem — the same gauge, read for the
+      # other question.
+      - series: 'prl_websocket_opened_total'
+        values: '0+45x400'
+      - series: 'prl_websocket_closed_total{code="abnormal"}'
+        values: '0+45x400'
+      - series: 'prl_websocket_connections'
+        values: '30+0x400'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="WebSocketReconnectStorm", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="WebSocketReconnectStorm", alertstate="firing", severity="ticket"}'
+            value: 1
+      - expr: 'ALERTS{alertname="WebSocketConnectionsHigh"}'
+        eval_time: 20m
+        exp_samples: []

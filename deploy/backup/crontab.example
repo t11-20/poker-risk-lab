@@ -3,10 +3,58 @@
 # The supported scheduler is systemd (prl-backup.timer / prl-backup-verify.timer). Use this
 # only where systemd is genuinely not available, and read what you are giving up first.
 #
-# Install with:  crontab -u prl-backup deploy/backup/crontab.example
+# Install with:
+#
+#   sudo install -o root -g root -m 0644 deploy/backup/crontab.example /etc/cron.d/prl-backup
+#
+# NOT `crontab -u prl-backup`. That is what this file used to say, and it did not work: the
+# lines below source /etc/poker-risk-lab/backup.env, which every other file in this directory
+# documents as 0600 root-owned inside a 0700 root-owned directory — backup.env.example says
+# so, prl-backup.service's EnvironmentFile comment says so, and README.md's install block
+# installs it that way. As prl-backup the `.` would fail with EACCES, the `&&` chain after it
+# would never run, and the result is the worst failure mode a backup has: nothing happens,
+# nothing is restored, and the only sign is a line in a log file nobody reads until the day
+# they need an archive that was never written.
+#
+# ## Why this runs as root, and what that costs
+#
+# systemd solves this properly. It reads EnvironmentFile as root and THEN drops to
+# `User=prl-backup`, so the secret never has to be readable by the account that does the work.
+# Cron has no equivalent step, so there are exactly two honest options:
+#
+#   (a) run the cron job as root, read the env file as root, and drop privileges for the
+#       backup process itself — what this file does; or
+#   (b) loosen the env file to 0640 root:prl-backup so the backup user can read it, and run
+#       cron as prl-backup — which puts PRL_BACKUP_KEY and the DATABASE_URL password inside
+#       the blast radius of the unprivileged account, defeating the reason they are 0600.
+#
+# (a) is chosen because it keeps the secret exactly as restricted as the systemd path does,
+# and because the alternative silently weakens a file three other files in this directory
+# describe as 0600 for a stated reason. If you take (b) instead, change the permissions
+# deliberately and write down that you did — do not discover it from a EACCES.
+#
+# The cost of (a), stated plainly: cron runs `flock`, `sh` and the `.` of the env file as
+# root, so a compromise of any of those three, or of this file, or of /etc/cron.d, is root and
+# not merely the backup user. `runuser` narrows the window to the shell wrapper — node,
+# pg_dump and everything that touches the archive still run as prl-backup, and the file mode
+# on /etc/cron.d/prl-backup (0644 root:root, enforced by cron itself, which refuses
+# group- or world-writable files) is what keeps the wrapper from being editable by anyone
+# else. It is a genuinely worse posture than the timer. That is the price of not having
+# systemd, and it is the reason the timer is the supported path rather than a preference.
+#
+# ## Installed as /etc/cron.d/prl-backup, not into a user crontab
+#
+# Two reasons. It does not clobber whatever root's personal crontab already contains, which
+# `crontab -u root` would. And /etc/cron.d entries carry an explicit user column, so the
+# account each line runs as is visible in the file a reviewer is reading — with `crontab -u`
+# the answer lives in the install command, which is exactly how the wrong user got baked in
+# here in the first place. Note that cron ignores files in /etc/cron.d whose names contain a
+# dot, so the installed name must stay `prl-backup`.
 #
 # ## What cron does not give you, concretely
 #
+#  * NO PRIVILEGE SEPARATION FOR THE SECRET. The paragraphs above. This is the item that is
+#    specific to this deployment; the six below are true of cron generally.
 #  * NO CATCH-UP FOR A MISSED RUN. If the host is off, suspended, or rebooting at 02:30, cron
 #    skips the run entirely and says nothing. The day with no backup is invisible until
 #    somebody needs it. `Persistent=true` on a systemd timer is precisely this, and it is the
@@ -18,7 +66,8 @@
 #    a failure has to be built into the command line, and the `|| ...` below is a placeholder
 #    for it, not an implementation.
 #  * NO SANDBOX. Every hardening directive in prl-backup.service — ProtectSystem, PrivateTmp,
-#    NoNewPrivileges, the syscall filter — has no cron equivalent.
+#    NoNewPrivileges, the syscall filter — has no cron equivalent. Under (a) above that is
+#    worse than it sounds, because the unsandboxed part is running as root.
 #  * NO OVERLAP PROTECTION. systemd will not start a oneshot unit that is still running. Cron
 #    will happily start a second backup on top of a first one that is stuck, hence flock.
 #  * A NEARLY EMPTY ENVIRONMENT. Cron does not read the shell profile. PATH is minimal, and
@@ -28,15 +77,33 @@ SHELL=/bin/sh
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MAILTO=""
 
+# The seventh field is the user, which /etc/cron.d requires and which is `root` for the reason
+# written out at length above: only root can read /etc/poker-risk-lab/backup.env.
+#
+# `runuser -u prl-backup --` is the cron stand-in for systemd's `User=`: it execs the command
+# directly with the environment the shell has already loaded, so the secrets survive the
+# transition and the account's `/usr/sbin/nologin` shell does not matter. `su -c` would matter
+# — it runs the command through the login shell and nologin refuses. If runuser is missing
+# (it is util-linux; present on Debian and RHEL), `setpriv --reuid=prl-backup --regid=prl-backup
+# --init-groups --` is the equivalent. If node is suddenly not found after the drop, it is
+# ALWAYS_SET_PATH in /etc/login.defs resetting PATH; use an absolute path to node.
+#
 # Nightly backup, 02:30. flock refuses to start a second run while one is in flight; without
 # --nonblock it would queue instead, and tomorrow's backup would begin the moment today's
 # stuck one was killed.
-30 2 * * * flock --nonblock /var/lock/prl-backup.lock sh -c 'set -a; . /etc/poker-risk-lab/backup.env; set +a; cd /opt/poker-risk-lab && node scripts/backup.mjs create' >> /var/log/prl-backup.log 2>&1 || logger -t prl-backup -p daemon.err 'nightly backup FAILED'
+30 2 * * * root flock --nonblock /var/lock/prl-backup.lock sh -c 'set -a; . /etc/poker-risk-lab/backup.env; set +a; cd /opt/poker-risk-lab && runuser -u prl-backup -- node scripts/backup.mjs create' >> /var/log/prl-backup.log 2>&1 || logger -t prl-backup -p daemon.err 'nightly backup FAILED'
 
 # Weekly verification and prune, Sunday 04:00. The three steps are chained with && so a
 # failure stops the sequence: pruning after a failed verification can delete the last archive
 # that would have restored.
-0 4 * * 0 flock --nonblock /var/lock/prl-backup.lock sh -c 'set -a; . /etc/poker-risk-lab/backup.env; set +a; cd /opt/poker-risk-lab && node scripts/backup.mjs verify --all && node scripts/backup.mjs verify --deep && node scripts/backup.mjs prune --apply' >> /var/log/prl-backup.log 2>&1 || logger -t prl-backup -p daemon.err 'weekly backup verification FAILED'
+0 4 * * 0 root flock --nonblock /var/lock/prl-backup.lock sh -c 'set -a; . /etc/poker-risk-lab/backup.env; set +a; cd /opt/poker-risk-lab && runuser -u prl-backup -- sh -c "node scripts/backup.mjs verify --all && node scripts/backup.mjs verify --deep && node scripts/backup.mjs prune --apply"' >> /var/log/prl-backup.log 2>&1 || logger -t prl-backup -p daemon.err 'weekly backup verification FAILED'
+
+# The inner `sh -c` on the weekly line is not decoration: `runuser -u user -- a && b` would run
+# only `a` as prl-backup and then `b` as root, so the prune that deletes archives would run
+# with more privilege than the verification that decides whether it is safe to.
 
 # /var/log/prl-backup.log needs its own logrotate entry, or the thing that was supposed to
-# protect the disk eventually fills it.
+# protect the disk eventually fills it. It is written by root's cron, so install it 0640
+# root:adm rather than leaving it to be created world-readable — the backup script logs
+# archive paths, not the key, but there is no reason for every account on the host to read
+# the shape of the backup schedule.

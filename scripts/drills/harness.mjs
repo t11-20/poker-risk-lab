@@ -173,9 +173,9 @@ export function run(command, args, options = {}) {
  * The pieces of a `postgres://` DSN the harness needs.
  *
  * Parsed with `URL` rather than a regex, and the password is decoded because a DSN carries it
- * percent-encoded. Nothing here logs the password; it goes into `docker exec -e PGPASSWORD`
- * and into the child's `DATABASE_URL`, and both of those are the credentials the developer
- * already has in `.env`.
+ * percent-encoded. Nothing here logs the password, and it never travels in argv: `psqlCommand`
+ * below passes it through the child's ENVIRONMENT via a bare `docker exec -e PGPASSWORD`. The
+ * `DATABASE_URL` a spawned server receives is an environment variable too, for the same reason.
  */
 export function parseDsn(dsn) {
   const url = new URL(dsn);
@@ -195,6 +195,50 @@ export function parseDsn(dsn) {
 }
 
 /**
+ * The argv and environment for one `docker exec ... psql`, as data.
+ *
+ * ## The defect this exists for
+ *
+ * This used to pass `'-e', \`PGPASSWORD=${parts.password}\`` — the password, in argv. Process
+ * arguments are world-readable on Linux (`/proc/<pid>/cmdline`), so for as long as the exec ran,
+ * every user on the host could read the database password out of `ps`. It also reaches the
+ * shell's history, any process accounting, and any `ps` output pasted into a bug report.
+ *
+ * `docker exec -e PGPASSWORD` with NO `=value` is the fix, and it is the same one
+ * `scripts/backup.mjs` uses (see the comment above its `toolCommand`): the bare form tells
+ * Docker to forward the variable from the calling process's environment, so the secret travels
+ * through the environment the whole way and never appears in anybody's argv.
+ *
+ * Exported separately from `psql` so `scripts/reliability-drills.test.mjs` can assert the
+ * property directly — that no element of the argv contains the password — without a container.
+ */
+export function psqlCommand(container, dsn, database, sql) {
+  const parts = parseDsn(dsn);
+  return {
+    command: 'docker',
+    args: [
+      'exec',
+      // Bare, deliberately. Adding `=${parts.password}` here is the bug this comment exists for.
+      '-e',
+      'PGPASSWORD',
+      container,
+      'psql',
+      '-U',
+      parts.user,
+      '-d',
+      database,
+      '-v',
+      'ON_ERROR_STOP=1',
+      '-tAc',
+      sql,
+    ],
+    // `run` merges this over `process.env` for the child only, so the value is not exported into
+    // this process either.
+    env: { PGPASSWORD: parts.password },
+  };
+}
+
+/**
  * One SQL statement, run inside the Postgres container as the DSN's own user.
  *
  * `docker exec` rather than a client library, for the reason in the file header, and `-tAc` so
@@ -204,22 +248,8 @@ export function parseDsn(dsn) {
  */
 // Not `async`: it has nothing to await, and the promise `run` returns is the one the caller wants.
 export function psql(container, dsn, database, sql) {
-  const parts = parseDsn(dsn);
-  return run('docker', [
-    'exec',
-    '-e',
-    `PGPASSWORD=${parts.password}`,
-    container,
-    'psql',
-    '-U',
-    parts.user,
-    '-d',
-    database,
-    '-v',
-    'ON_ERROR_STOP=1',
-    '-tAc',
-    sql,
-  ]);
+  const { command, args, env } = psqlCommand(container, dsn, database, sql);
+  return run(command, args, { env });
 }
 
 /**
@@ -334,24 +364,54 @@ export async function startServer(options = {}) {
     exited = { code, signal };
   });
 
-  const listeningPort = await new Promise((done, fail) => {
-    const timer = setTimeout(() => {
-      fail(new Error(`the server did not report a listening address in 30s. Output:\n${text}`));
-    }, 30_000);
-    timer.unref();
-    const check = () => {
-      const match = /"address":"http:\/\/127\.0\.0\.1:(\d+)"/.exec(text);
-      if (match?.[1] === undefined) return;
-      clearTimeout(timer);
-      done(Number(match[1]));
-    };
-    child.stdout.on('data', check);
-    child.on('exit', (code) => {
-      clearTimeout(timer);
-      fail(new Error(`the server exited with ${String(code)} before listening. Output:\n${text}`));
+  /** Cleanup. Safe to call twice, and on a process that has already gone. */
+  const stop = async () => {
+    if (exited !== null) return exited;
+    try {
+      return await signalAndWait(child, 'SIGKILL', 5_000, () => text);
+    } catch {
+      return exited;
+    }
+  };
+
+  // Handed to the caller SYNCHRONOUSLY, before the 30-second wait below can reject. A detached
+  // child that never printed a listening line is otherwise unreachable — the rejection carries a
+  // message, not a pid — and it survives the run holding a port and a connection pool. See the
+  // matching comment in `scripts/reliability-drills.mjs`, which registers this for cleanup here
+  // rather than after the await.
+  options.onSpawn?.({ child, stop, output: () => text });
+
+  let listeningPort;
+  try {
+    listeningPort = await new Promise((done, fail) => {
+      const timer = setTimeout(() => {
+        fail(new Error(`the server did not report a listening address in 30s. Output:\n${text}`));
+      }, 30_000);
+      timer.unref();
+      const check = () => {
+        const match = /"address":"http:\/\/127\.0\.0\.1:(\d+)"/.exec(text);
+        if (match?.[1] === undefined) return;
+        clearTimeout(timer);
+        done(Number(match[1]));
+      };
+      child.stdout.on('data', check);
+      child.on('exit', (code) => {
+        clearTimeout(timer);
+        fail(new Error(`the server exited with ${String(code)} before listening. Output:\n${text}`));
+      });
+      check();
     });
-    check();
-  });
+  } catch (error) {
+    // Belt and braces to `onSpawn`, and the layer that protects callers who did not pass one:
+    // the child is killed here before the rejection leaves this function, so no path out of
+    // `startServer` leaves a process behind. `stop()` is idempotent, so a caller that ALSO
+    // registered it for cleanup runs it twice harmlessly.
+    await stop().catch(() => {
+      // Nothing useful to do: the start already failed, and the reason for THAT is the error
+      // being rethrown below. A kill that also fails must not replace it.
+    });
+    throw error;
+  }
 
   return {
     child,
@@ -362,15 +422,7 @@ export async function startServer(options = {}) {
     origin: `http://127.0.0.1:${listeningPort}`,
     /** Sends a signal to the process group and resolves with the exit, timing it. */
     signal: (name) => signalAndWait(child, name, graceMs * 4, () => text),
-    /** Cleanup. Safe to call twice, and on a process that has already gone. */
-    stop: async () => {
-      if (exited !== null) return exited;
-      try {
-        return await signalAndWait(child, 'SIGKILL', 5_000, () => text);
-      } catch {
-        return exited;
-      }
-    },
+    stop,
   };
 }
 

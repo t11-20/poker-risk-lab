@@ -185,3 +185,66 @@ describe('where the invalid state comes from', () => {
     }
   });
 });
+
+describe('a call that takes the whole stack says so', () => {
+  /** Facing a bet of 62 with exactly 62 behind: calling is all in. */
+  const ALL_IN_CALL: readonly LegalAction[] = [
+    { type: 'fold' },
+    {
+      type: 'call',
+      minTo: 62,
+      costAtMin: 62,
+      allInAtMax: true,
+      note: 'Calling puts your whole remaining stack in.',
+    },
+  ];
+
+  it('speaks the all-in and prints the engine sentence (REGRESSION)', async () => {
+    // The engine decides this and writes the sentence; both were dropped here, so a learner
+    // pressing Call for their last chip saw "Call / 62 units" — identical to any other call.
+    // Measured over 3,000 hands: 3,569 of 15,137 call offers were all-in calls.
+    const markup = await render({ legalActions: ALL_IN_CALL, toCall: 62 });
+    assert.match(markup, /call 62 units, which is all in/u, 'the spoken label must say it is all in');
+    assert.match(markup, /Calling puts your whole remaining stack in\./u, "the engine's note must be shown");
+  });
+
+  it('says nothing of the sort on an ordinary call, so the wording is conditional', async () => {
+    // Without this, the guard above is satisfied by printing "all in" on every call.
+    const markup = await render();
+    assert.ok(!markup.includes('which is all in'), 'an ordinary call must not be announced as all in');
+    assert.ok(
+      !markup.includes('Calling puts your whole remaining stack in.'),
+      'an ordinary call must not carry the all-in note',
+    );
+  });
+});
+
+describe('a fold where checking is free says what it gives up', () => {
+  /** First to act on the flop: nothing to call, a bet on offer. */
+  const CHECK_IS_FREE: readonly LegalAction[] = [
+    { type: 'fold' },
+    { type: 'check', costAtMin: 0 },
+    { type: 'bet', minTo: 10, maxTo: 840 },
+  ];
+
+  it('prints and speaks both prices beside a free check (REGRESSION)', async () => {
+    // The engine's fold note here is "Legal, but checking costs nothing."; the bar printed only
+    // "Folding costs nothing", which beside a free check reads as no reason not to.
+    const markup = await render({ legalActions: CHECK_IS_FREE, toCall: 0 });
+    assert.match(
+      markup,
+      /Checking costs nothing here; folding gives up any claim on the pot for no saving\./u,
+    );
+    assert.match(
+      markup,
+      /fold, costs 0 units, gives up the hand and any claim on the pot; checking also costs 0 units/u,
+    );
+    assert.ok(!markup.includes('Folding costs nothing and'), 'the facing-a-bet sentence must not appear');
+  });
+
+  it('keeps the facing-a-bet sentence when there is something to call', async () => {
+    const markup = await render();
+    assert.match(markup, /Folding costs nothing and gives up any claim on the pot\./u);
+    assert.ok(!markup.includes('Checking costs nothing here'), 'no free check is on offer');
+  });
+});

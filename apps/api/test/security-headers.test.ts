@@ -17,6 +17,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ERROR_MESSAGES } from '@prl/contracts';
+import { cardToString, createDeterministicRandomForTests, orderedDeck, startHand } from '@prl/poker-engine';
 import type { FastifyInstance, InjectOptions } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import { type AppConfig, type EnvRecord, loadConfig } from '../src/config.ts';
@@ -667,6 +668,118 @@ describe('log redaction', () => {
     for (const key of ['clientKey', 'routePattern', 'statusCode', 'method', 'reqId', 'apiErrorCode']) {
       assert.ok(!isSensitiveKey(key), `${key} must stay readable`);
     }
+  });
+
+  /**
+   * The scrub, against the object it exists to stop — a real `HandState`, not a hand-written one.
+   *
+   * ## The defect
+   *
+   * The assertion above names `deck`, `salt` and `commitmentSalt`, and the denylist it checks
+   * carried exactly those spellings. None of them is a field of `HandState`. The fields that hold
+   * the hand's secrets are `deck`, `deckCursor`, `deckSalts`, `holeCardPositions` and
+   * `boardPositions` (see `packages/poker-engine/src/types.ts`, which calls the deck, the cursor
+   * and the salts "the hand's secrets"), and an exact-match list matched one of the five.
+   *
+   * Measured on 2026-08-27 by handing a real dealt state to `scrubLogObject`:
+   *
+   *     deck=REDACTED  deckCursor=present  deckSalts=present  holeCardPositions=present
+   *     deckSalts logged: {"0":208,"1":81,"2":117,"3":22,...}
+   *     identical to the real bytes: true
+   *
+   * `deckSalts` is a `Uint8Array`, so the recursive scrub walked it as an object and emitted the
+   * first `MAX_KEYS_PER_OBJECT` entries — two whole 32-byte commitment salts, byte for byte —
+   * while `logging.ts`'s own header promised that "hole cards, decks and commitment salts" never
+   * reach a log line.
+   *
+   * ## Why a real state and not a fixture of key names
+   *
+   * Because the defect WAS a fixture of key names. Every spelling in the old list was plausible
+   * and none was real, and a test that lists spellings can only ever re-assert the same guess. So
+   * this one dials the whole object out of the engine and then requires that every field which is
+   * not public information be gone — by walking the state's own keys, so a field added to
+   * `HandState` later arrives here as an unclassified key rather than as silence.
+   *
+   * ## Would it fail against the old code?
+   *
+   * Yes, and it did: run against the denylist as it stood, it reports `deckCursor`,
+   * `deckSalts` and `holeCardPositions` surviving.
+   */
+  it('censors every secret on a real HandState, not the spellings someone guessed', () => {
+    const dealt = startHand({
+      handId: 'hand_scrubaaaaaaaaaaaaaaaa',
+      roomId: 'room_scrubaaaaaaaaaaaaaaaa',
+      handNumber: 1,
+      config: { smallBlind: 5, bigBlind: 10, ante: 0, maxSeats: 3, actionTimeoutSeconds: 30 },
+      buttonSeat: 0,
+      seats: [
+        { seat: 0, playerId: 'usr_scrubaliceaaaaaaaaaaa', stack: 200 },
+        { seat: 1, playerId: 'usr_scrubborysaaaaaaaaaaa', stack: 200 },
+      ],
+      random: createDeterministicRandomForTests(4242),
+    });
+    const state = dealt.state;
+
+    /**
+     * Every key of `HandState` that is public information, and therefore may survive a log line.
+     * Written as the ALLOWLIST rather than as a denylist of secrets, so a new secret field is a
+     * failure by default and a new public one is a deliberate edit here.
+     */
+    const publicKeys = new Set([
+      'handId',
+      'roomId',
+      'handNumber',
+      'config',
+      'buttonSeat',
+      'smallBlindSeat',
+      'bigBlindSeat',
+      'seats',
+      'board',
+      'street',
+      'commitment',
+      'toAct',
+      'betLevel',
+      'lastFullRaiseBetLevel',
+      'lastFullRaiseIncrement',
+      'potFromPreviousStreets',
+      'forcedBets',
+      'actions',
+      'actionSequence',
+      'result',
+      'randomSourceKind',
+    ]);
+
+    const scrubbed = scrubLogObject({ state })['state'] as Record<string, unknown>;
+    assert.ok(Object.keys(scrubbed).length >= 20, 'the scrub must have walked a whole state');
+    const survived = Object.keys(scrubbed).filter((key) => !publicKeys.has(key) && scrubbed[key] !== CENSOR);
+    assert.deepEqual(
+      survived,
+      [],
+      `hidden state reached the log under: ${survived.join(', ')}. Either it is a secret and the ` +
+        'denylist in logging.ts must cover it, or it is public and belongs in `publicKeys` above.',
+    );
+
+    // Named on its own as well as caught by the walk, because this is the field the incident was
+    // about: `deckSalts` is a `Uint8Array`, the scrub walks an array-like as an object, and the
+    // salts plus the published Merkle root are the material the commitment scheme withholds.
+    assert.equal(scrubbed['deckSalts'], CENSOR, 'the commitment salts must never reach a log line');
+    assert.equal(scrubbed['deck'], CENSOR);
+    assert.equal(scrubbed['deckCursor'], CENSOR);
+    assert.equal(scrubbed['holeCardPositions'], CENSOR);
+
+    // And no card, under any key, in the whole scrubbed line. The quoted form, as everywhere else
+    // here: a bare "2c" occurs inside a 64-character hex root often enough to be flaky, and a card
+    // can only reach a log as a JSON string in the first place.
+    const asText = JSON.stringify(scrubbed);
+    const leakedCards = orderedDeck()
+      .map((card) => cardToString(card))
+      .filter((notation) => asText.includes(`"${notation}"`));
+    assert.deepEqual(leakedCards, [], `card notation reached the log: ${leakedCards.join(', ')}`);
+
+    // And the positive control: the scrub is not simply censoring everything. A log line that said
+    // nothing would satisfy every assertion above and would be useless to an operator.
+    assert.equal(scrubbed['handId'], state.handId);
+    assert.equal(scrubbed['street'], 'preflop');
   });
 
   it('survives a cyclic object instead of recursing forever', () => {

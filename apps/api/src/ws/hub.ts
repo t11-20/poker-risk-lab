@@ -28,6 +28,26 @@
  * carries a protocol version and a room, and no credential: a token in the first frame would end
  * up in client-side logs and browser history far more easily than an `HttpOnly` cookie does.
  *
+ * ## …and it is checked ONCE, which is why this file also has to un-check it
+ *
+ * That is the whole difference between a request and a connection. Every REST request re-reads the
+ * session row, so expiry and revocation are enforced there by `findValidByToken` and nothing else
+ * has to think about it. A socket reads it at the upgrade and then never again — so before the two
+ * mechanisms below, a socket was authenticated by a credential that no longer existed:
+ *
+ *   * `POST /auth/logout`, `POST /me/delete` and a second sign-in all revoked the session row and
+ *     left the learner's open socket fully live. Measured against the shipped code, with the row
+ *     deleted while the socket was open: `sit` still answered `ack`, `ping` still answered `pong`,
+ *     and no close frame was ever sent.
+ *   * Neither the fourteen-day idle window nor `SESSION_ABSOLUTE_TTL_SECONDS` — the sixty-day
+ *     ceiling `auth/session.ts` exists to impose, because "a stolen cookie stays valid forever
+ *     provided the thief keeps using it… is precisely the property an attacker wants" — applied to
+ *     a socket at all. A peer that answers pings had an unbounded authenticated channel.
+ *
+ * So: `onSessionRevoked` closes a session's sockets the moment its row is revoked, and every
+ * socket carries the row's `expires_at`, checked on each inbound frame and swept on the heartbeat.
+ * Both close `4401`, which is what tells the client to ask the reader to sign in again.
+ *
  * ## Why the frame validator is Fastify's own Ajv
  *
  * `wsClientMessageSchema` is registered on the instance with every other contract schema, and
@@ -46,7 +66,7 @@ import websocketPlugin from '@fastify/websocket';
 import type { WsClientMessage } from '@prl/contracts';
 import { WS_CLOSE, WS_LIMITS, wsClientMessageSchema } from '@prl/contracts';
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from 'fastify';
-import { type SessionStore, sessionPlugin } from '../auth/session.ts';
+import { onSessionRevoked, type SessionStore, sessionPlugin } from '../auth/session.ts';
 import { getSql } from '../db.ts';
 import type { AppMetrics } from '../observability/metrics.ts';
 import { recordSecurityAudit } from '../observability/telemetry.ts';
@@ -182,6 +202,17 @@ export interface WsHubOptions {
   readonly onRouterReady?: (router: WsRouter) => void;
   /** Defaults to the process-wide metrics. A test that wants isolation passes its own. */
   readonly metrics?: AppMetrics;
+  /**
+   * Test seam: how often the sweep below runs. Defaults to `WS_LIMITS.heartbeatIntervalMs`.
+   *
+   * Here because the sweep enforces something no other code path does — the session's expiry on a
+   * socket that has gone QUIET — and at the shipped fifteen seconds no test could reach it. That
+   * is not a hypothetical gap: an adversarial review removed the expiry check from the sweep and
+   * the whole 1,001-test suite stayed green, because `ws-session-revocation.test.ts` reached the
+   * per-frame check instead by sending a `ping`. A guard whose failure mode has never been
+   * observed is decoration, and this option is what makes it observable.
+   */
+  readonly heartbeatIntervalMs?: number;
 }
 
 /**
@@ -375,6 +406,26 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
     });
     options.onRouterReady?.(router);
 
+    /**
+     * Sockets watching a room this process has been FENCED from.
+     *
+     * The registry has already closed the table and dropped the room by the time this runs — that
+     * ordering is deliberate and is documented on `RoomRegistry.evict` — so what is left is a set of
+     * sockets attached to a table that will never send another frame. Left open they are the worst
+     * failure shape this hub has: the connection is healthy, pings are answered, the client's
+     * watchdog never fires, and the learner simply watches a table that has stopped moving. The
+     * registry's own header records the same symptom from an in-process version of this bug.
+     *
+     * `serverShuttingDown` (4503) rather than a code of this hub's own, because it is exactly what
+     * the client must do: `describeClose` in `apps/web/src/lib/table-socket.ts` treats it as
+     * retryable and reconnects with backoff, which lands the learner on the process that does own
+     * the room. 4403 would be permanent and would tell them the table is not theirs, which is false.
+     */
+    const stopWatchingEvictions = registry.onEviction((roomId) => {
+      app.log.warn({ roomId }, 'room lease lost; closing its sockets');
+      router.closeRoom(roomId, WS_CLOSE.serverShuttingDown, 'this table moved to another server');
+    });
+
     /** Sockets per session, for `maxSocketsPerSession`. */
     const bySession = new Map<string, number>();
     /**
@@ -385,8 +436,54 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
      * the router indexes connections by room, so a socket that is open but has not sent `hello` yet
      * is in no room and `closeAll` cannot see it. It is still an upgraded TCP connection that
      * `server.close()` will wait for.
+     *
+     * `sessionExpiresAtMs` is the session row's own `expires_at`, read once during the upgrade. It
+     * is here rather than on `WsConnection` because it is a property of the CREDENTIAL and not of
+     * the protocol, and `router.ts` deliberately knows nothing about cookies or sessions.
      */
-    const live = new Map<string, { readonly connection: WsConnection; readonly heartbeat: Heartbeat }>();
+    const live = new Map<
+      string,
+      {
+        readonly connection: WsConnection;
+        readonly heartbeat: Heartbeat;
+        readonly sessionExpiresAtMs: number;
+      }
+    >();
+
+    /**
+     * Closes every socket a revoked session was holding.
+     *
+     * ## The defect
+     *
+     * A socket is authenticated ONCE, at the upgrade, and never again. So revocation reached
+     * every REST request — each of which re-reads the row — and reached no socket at all.
+     * Measured against the shipped code: with the session row deleted while the socket was open,
+     * `sit` still came back `ack` and `ping` still came back `pong`, and the socket was never
+     * closed. `POST /auth/logout`, `POST /me/delete` and signing in a second time were all in that
+     * position: the credential was revoked and the channel it had opened was not.
+     *
+     * `4401` rather than a code of this hub's own, because it is exactly what the client must do —
+     * `describeClose` in `apps/web/src/lib/table-socket.ts` treats `unauthenticated` as a signal to
+     * stop and ask the reader to sign in, which is true: the session is gone and a reconnect with
+     * the same cookie would be refused by `evaluateUpgrade` anyway.
+     *
+     * Matching is exact on either the session id or the user id, never a prefix, and a revocation
+     * carrying neither matches nothing — a bus message that closed every socket in the process
+     * because a field was absent is the failure this guard exists to make impossible.
+     */
+    const stopWatchingRevocations = onSessionRevoked((revocation) => {
+      const { sessionId, userId } = revocation;
+      if (sessionId === undefined && userId === undefined) return;
+      for (const entry of [...live.values()]) {
+        const principal = entry.connection.principal;
+        const matches =
+          (sessionId !== undefined && principal.sessionId === sessionId) ||
+          (userId !== undefined && principal.userId === userId);
+        if (!matches) continue;
+        app.log.warn({ wsRefusal: 'session revoked' }, 'closing a websocket whose session ended');
+        router.closeConnection(entry.connection, WS_CLOSE.unauthenticated, 'session ended');
+      }
+    });
 
     // Read at scrape time from the map that already holds the answer, never incremented and
     // decremented alongside it. A mirrored count drifts the first time a socket leaves by a path
@@ -407,7 +504,24 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
      * waiting for one is how a dead connection holds a seat's turn open until the timer expires.
      */
     const heartbeat = setInterval(() => {
+      const now = Date.now();
       for (const [id, entry] of [...live]) {
+        // The session's own expiry, enforced on the connection.
+        //
+        // `auth/session.ts` sets a ceiling — `SESSION_ABSOLUTE_TTL_SECONDS`, sixty days — and says
+        // why: "sliding expiry with no ceiling means a stolen cookie stays valid forever provided
+        // the thief keeps using it, which is precisely the property an attacker wants". That
+        // ceiling is enforced by `findValidByToken`, which every REST request goes through and no
+        // socket does. A socket answering pings therefore had NO lifetime at all: neither the
+        // fourteen-day idle window nor the sixty-day ceiling applied to it, and the one connection
+        // in this product that carries a learner's cards was the one credential-expiry did not
+        // reach. Checked on the heartbeat rather than per frame because it is a wall-clock deadline
+        // and a socket that sends nothing must expire too.
+        if (entry.sessionExpiresAtMs <= now) {
+          app.log.warn({ wsRefusal: 'session expired' }, 'closing a websocket whose session expired');
+          router.closeConnection(entry.connection, WS_CLOSE.unauthenticated, 'session expired');
+          continue;
+        }
         if (entry.connection.missedHeartbeats >= MISSED_HEARTBEATS_ALLOWED) {
           entry.heartbeat.terminate();
           router.handleClose(entry.connection);
@@ -417,7 +531,7 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
         entry.connection.missedHeartbeats += 1;
         entry.heartbeat.ping();
       }
-    }, WS_LIMITS.heartbeatIntervalMs);
+    }, options.heartbeatIntervalMs ?? WS_LIMITS.heartbeatIntervalMs);
     heartbeat.unref();
 
     /**
@@ -461,6 +575,15 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
       // Idempotent, and both calls are meant: `preClose` stops the pings as early as it can, and
       // this runs even for a close that never reached `preClose` (a hook before it having thrown).
       clearInterval(heartbeat);
+      // The registry outlives this hub in a process that builds several apps — every test that
+      // does, and `resetRoomRegistryForTests` exists precisely because it is shared. A listener
+      // left behind would hold a closed router alive and, on the next eviction, close sockets
+      // through it: the same shape as the room subscription `handleClose` is careful to drop.
+      stopWatchingEvictions();
+      // Same reason, same shape: the revocation bus is module scope in `auth/session.ts` and
+      // outlives this hub in any process that builds more than one app. A listener left behind
+      // would hold a closed router alive and close sockets through it on the next sign-out.
+      stopWatchingRevocations();
       // A backstop, not the mechanism — `preClose` has already closed every socket by now, and
       // `closeConnection` is a no-op on a connection that is already closed. It stays because it
       // costs nothing and because a router left holding room subscriptions for a closed app is a
@@ -569,6 +692,7 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
           return;
         }
 
+        const sessionExpiresAtMs = session.expiresAt.getTime();
         const connection = router.open(sinkFor(socket), {
           userId: session.user.id,
           displayName: session.user.displayName,
@@ -579,9 +703,20 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
         live.set(connection.id, {
           connection,
           heartbeat: { ping: () => socket.ping(), terminate: () => socket.terminate() },
+          // Read from the session the upgrade resolved, so the socket cannot outlive the cookie
+          // that opened it. See the heartbeat above.
+          sessionExpiresAtMs,
         });
 
         socket.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
+          // Before the frame is even measured, because an expired credential must not be able to
+          // act. The heartbeat above sweeps a socket that has gone quiet; this is what stops one
+          // that has not, in the up-to-fifteen-second window before the sweep reaches it. One
+          // comparison per frame, ahead of a size check that is already one comparison.
+          if (sessionExpiresAtMs <= Date.now()) {
+            router.closeConnection(connection, WS_CLOSE.unauthenticated, 'session expired');
+            return;
+          }
           router.handleFrame(connection, toBytes(data));
         });
         socket.on('pong', () => {

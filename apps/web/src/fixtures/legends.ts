@@ -120,8 +120,10 @@ const TRAIT_DESCRIPTIONS: Readonly<Record<LegendTraitKey, string>> = {
     'When it plays a hand, how often it raises rather than calls. Raising takes the initiative but ' +
     'commits more chips.',
   aggressionFrequency:
-    'How often it bets and raises. Aggression wins pots nobody contests, and loses more when it runs ' +
-    'into a real hand.',
+    'How often it bets and raises on a hand it reads as neither strong nor hopeless. With nothing it ' +
+    'bets less often than this, and with a real hand more, so its overall bet-and-raise rate sits ' +
+    'below this number. Aggression wins pots nobody contests, and loses more when it runs into a ' +
+    'real hand.',
   bluffFrequency:
     'How often it bets with a hand that cannot win at showdown. Bluffing too little is readable; too ' +
     'much is expensive.',
@@ -129,8 +131,10 @@ const TRAIT_DESCRIPTIONS: Readonly<Record<LegendTraitKey, string>> = {
     'How much it cares about acting last. Acting last is a genuine edge, and ignoring it is one of the ' +
     'most common leaks.',
   threeBetTendency:
-    'How often it re-raises someone who opened. Re-raising isolates and takes control, at the cost of a ' +
-    'bigger pot with less information.',
+    'How much of the range it would have called an opening raise with it re-raises instead. It only ' +
+    'applies to the hands it plays at all, so a tight profile still re-raises rarely however high ' +
+    'this reads. Re-raising isolates and takes control, at the cost of a bigger pot with less ' +
+    'information.',
   betSizingPreference:
     'How big it likes to bet. Bigger bets charge draws more but risk more to win the same pot.',
   sizingVariance:
@@ -647,7 +651,9 @@ export const LEGEND_PROFILE_FIXTURES: readonly LegendProfileCardDto[] = [
       'How often re-raising preflop is available, and how much pressure that puts on someone who only raises with strong hands.',
     ],
     styleNotes: [
-      'Re-raises preflop more than any other profile here.',
+      'Re-raises a larger share of the openings it plays back at than any other profile here — ' +
+        'which is not the same as making the most 3-bets, since looser profiles get more openings ' +
+        'to answer.',
       'Takes marginal all-in spots that other profiles decline.',
       'Its short-run results swing hard in both directions.',
     ],
@@ -752,13 +758,13 @@ export const LEGEND_PROFILE_FIXTURES: readonly LegendProfileCardDto[] = [
     axes: axesFor(FUNDAMENTALS_COACH_TRAITS),
     learnFrom: [
       'What a disciplined, fundamentals-first strategy looks like when played without deviation — the baseline every other style is a departure from.',
-      'How position, pot odds and stack depth alone, applied consistently, produce a solid strategy with no reads at all.',
+      'How position, pot odds and stack depth alone, applied consistently, produce a solid strategy that leans on reads barely at all.',
       'Why a consistent, readable strategy is a reasonable place to start: it is exploitable, but it is also correct often enough to learn from.',
     ],
     styleNotes: [
       'Tight, position-aware, and highly consistent — the easiest profile here to predict.',
       'One bet size for almost everything, chosen by pot fraction rather than by hand.',
-      'Does not adapt to you at all, by design.',
+      'Barely adapts to you: 0.30 on that axis, and nothing at all at the Educational setting.',
     ],
     counterStrategy: [
       'Its consistency is the weakness. Once you know its opening range you know its continuing range.',
@@ -781,9 +787,9 @@ export const LEGEND_PROFILE_FIXTURES: readonly LegendProfileCardDto[] = [
     traits: CALLING_STATION_TRAITS,
     axes: axesFor(CALLING_STATION_TRAITS),
     learnFrom: [
-      'That the correct adjustment against someone who never folds is to value-bet relentlessly and stop bluffing entirely.',
+      'That the adjustment against a wide, passive caller is to value-bet thinner than usual, because far more of what calls you is worse.',
       'How to recognise a passive opponent from their actions within a handful of hands.',
-      'Why fold equity is worth naming as a separate concept: against this profile you have almost none, and every bluff calculation changes.',
+      'Why fold equity is worth naming as a separate concept: it is the half of a bluff that has nothing to do with your cards, and it is the half a wide, passive caller takes away from you most.',
     ],
     styleNotes: [
       'Calls with almost anything and rarely raises.',
@@ -792,7 +798,7 @@ export const LEGEND_PROFILE_FIXTURES: readonly LegendProfileCardDto[] = [
     ],
     counterStrategy: [
       'Bet your good hands, every street, and size up. It will pay.',
-      'Stop bluffing. With no fold equity, a bluff is a donation.',
+      'Bluff less, and stop bluffing into the hands it will not fold. Its calling range is wide enough that a bluff runs into a caller far more often than the board suggests.',
       'Believe its rare aggression.',
     ],
     modelBasis: ARCHETYPE_BASIS,

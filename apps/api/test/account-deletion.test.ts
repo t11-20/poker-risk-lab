@@ -62,6 +62,7 @@ import {
 } from '../src/db.ts';
 import { AppError } from '../src/errors.ts';
 import * as audit from '../src/repositories/audit.ts';
+import * as enrolments from '../src/repositories/enrolments.ts';
 import * as hands from '../src/repositories/hands.ts';
 import { generateId } from '../src/repositories/ids.ts';
 import * as progress from '../src/repositories/progress.ts';
@@ -70,7 +71,7 @@ import * as sessions from '../src/repositories/sessions.ts';
 import * as users from '../src/repositories/users.ts';
 import { registerApiRoutes } from '../src/routes/index.ts';
 import { closeSharedPool } from '../src/workers/pool.ts';
-import { databaseSkip, TEST_DATABASE_URL } from './helpers/database.ts';
+import { adminDatabaseUrl, databaseSkip, TEST_DATABASE_URL, testClientFor } from './helpers/database.ts';
 
 const TEST_SECRET = 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA';
 const ALLOWED_ORIGIN = 'http://localhost:3000';
@@ -129,6 +130,39 @@ async function inRollback(fn: (tx: TransactionSql) => Promise<void>): Promise<vo
   } catch (error) {
     if (error !== ROLLBACK) throw error;
   }
+}
+
+/**
+ * `inRollback` on the schema-owning identity, for a fixture the runtime role may not build.
+ *
+ * Two cases here set up what `prl_app` cannot: one rewrites a foreign key as `prl_migrator`, the
+ * other creates cohorts and grants places, and `prl_app` holds SELECT only on the enrolment tables.
+ * Run on `DATABASE_URL`, they passed wherever that login owned the schema, which is every
+ * developer's `.env`, and failed in CI, where it is `prl_ci_app`, a member of `prl_app` and nothing
+ * else: "permission denied to set role prl_migrator" and "permission denied for table cohorts", in
+ * every CI run since at least 2026-10-11. The case itself drops to `prl_app` with
+ * `actAsRuntimeRole` before the code under test runs, so the deletion is still exercised with the
+ * privileges production gives it.
+ */
+async function inOwnerRollback(fn: (tx: TransactionSql) => Promise<void>): Promise<void> {
+  const url = adminDatabaseUrl();
+  if (url === undefined) throw new Error('inOwnerRollback called without a database');
+  const owner = testClientFor(url);
+  try {
+    await owner.begin(async (tx) => {
+      await fn(tx);
+      throw ROLLBACK;
+    });
+  } catch (error) {
+    if (error !== ROLLBACK) throw error;
+  } finally {
+    await owner.end({ timeout: 5 }).catch(() => undefined);
+  }
+}
+
+/** For the rest of the transaction, the request path's role: what `/me/delete` runs as. */
+async function actAsRuntimeRole(tx: TransactionSql): Promise<void> {
+  await tx`set local role prl_app`;
 }
 
 async function makeGuest(tx: TransactionSql, name: string): Promise<string> {
@@ -474,7 +508,7 @@ describe('account deletion — what goes, what is detached, what stays', dbOptio
    * back whatever this case does.
    */
   it('answers account_deletion_blocked when a foreign key still restricts the account', async () => {
-    await inRollback(async (tx) => {
+    await inOwnerRollback(async (tx) => {
       const leaverId = await makeGuest(tx, 'Leaver');
       const table = (await makeRoom(tx, leaverId)).room;
       await rooms.addMember(tx, { roomId: table.id, userId: leaverId });
@@ -489,6 +523,7 @@ describe('account deletion — what goes, what is detached, what stays', dbOptio
           foreign key (user_id) references prl.users (id) on delete restrict
       `;
       await tx`reset role`;
+      await actAsRuntimeRole(tx);
 
       await assert.rejects(
         users.deleteAccount(tx, leaverId),
@@ -597,6 +632,124 @@ function errorCodeOf(payload: string): string {
   assert.ok(typeof error === 'object' && error !== null, payload.slice(0, 120));
   return String(Reflect.get(error, 'code'));
 }
+
+describe('an entitlement that ends because its holder erased themselves', dbOptions, () => {
+  /**
+   * The record of a place in a class ending, which did not exist.
+   *
+   * `enrolments_user_id_fkey` is ON DELETE CASCADE. Both `users.ts` and
+   * `db/migrations/0006_cohort_enrolments.sql` said the record survived that: "the RECORD that the
+   * grant and the revocation happened survives in `prl.audit_log`". Measured against the
+   * development database inside a rolled-back transaction — a user, a cohort, one live enrolment
+   * and its `enrolment.granted` entry, then `delete from prl.users` — the enrolment row went, the
+   * grant entry survived and was correctly detached, and entries recording a revocation: **zero**.
+   * A referential action is not a statement; it writes nothing.
+   *
+   * The operator's trail therefore said a place had been granted on this authority against this
+   * external reference and that nothing ever ended it. Reconciling "who holds a place" against the
+   * audit log over-counted for ever, and it over-counted precisely for the learners who exercised
+   * erasure. For a course somebody paid for, that is a dispute with no record behind either side.
+   */
+  it('writes an entry per enrolment, detached, before the rows go (REGRESSION)', async () => {
+    await inOwnerRollback(async (tx) => {
+      const leaverId = await makeGuest(tx, 'Leaver');
+      const cohort = await enrolments.createCohort(tx, {
+        key: 'erasure-record-cohort',
+        name: 'Erasure record',
+        startsAt: new Date(Date.now() - 86_400_000),
+      });
+
+      const live = await enrolments.grant(tx, {
+        cohortId: cohort.id,
+        userId: leaverId,
+        grantedBy: 'registrar',
+        reference: 'external-ref-live',
+      });
+      assert.equal(live.outcome, 'granted');
+
+      // A second place that was ALREADY withdrawn before the erasure. Both rows cascade; only one
+      // of them is a live entitlement ending, and an operator asked "did anybody lose a place"
+      // needs to tell them apart. If both were recorded identically this test would pass while the
+      // record stayed useless.
+      const other = await enrolments.createCohort(tx, {
+        key: 'erasure-record-cohort-two',
+        name: 'Erasure record two',
+        startsAt: new Date(Date.now() - 86_400_000),
+      });
+      const withdrawn = await enrolments.grant(tx, {
+        cohortId: other.id,
+        userId: leaverId,
+        grantedBy: 'registrar',
+        reference: 'external-ref-withdrawn',
+      });
+      assert.equal(withdrawn.outcome, 'granted');
+      await enrolments.revoke(tx, {
+        cohortId: other.id,
+        userId: leaverId,
+        revokedBy: 'registrar',
+        reason: 'withdrew before the course began',
+      });
+
+      // The control: both rows exist before the deletion, so the entries asserted afterwards are a
+      // change rather than a sweep over a table that was always empty.
+      const held = await enrolments.forUser(tx, leaverId);
+      assert.equal(held.length, 2, 'the fixture did not create two enrolments');
+
+      await actAsRuntimeRole(tx);
+      const summary = await users.deleteAccount(tx, leaverId);
+      assert.ok(summary !== null);
+      assert.equal(summary.deleted.enrolments, 2, 'the cascade did not take both enrolments');
+      // Back to the owner to read the append-only log, which the runtime role may only append to.
+      await tx`reset role`;
+
+      const written = await tx<
+        { user_id: string | null; cohort_key: string; reference: string; was_live: boolean }[]
+      >`
+        select user_id,
+               detail->>'cohortKey'  as cohort_key,
+               detail->>'reference'  as reference,
+               (detail->>'wasLive')::boolean as was_live
+          from prl.audit_log
+         where event = 'enrolment.ended_by_erasure'
+         order by detail->>'reference'
+      `;
+      assert.equal(written.length, 2, 'one entry per enrolment, and there were two');
+
+      // Detached at the point of writing, for the reason `/me/delete` gives for the deletion event
+      // itself: the log must never hold a pointer to an account that asked to stop existing.
+      for (const entry of written) {
+        assert.equal(entry.user_id, null, 'an erasure record named the person it erased');
+      }
+
+      assert.deepEqual(
+        written.map((entry) => [entry.reference, entry.cohort_key, entry.was_live]),
+        [
+          ['external-ref-live', 'erasure-record-cohort', true],
+          ['external-ref-withdrawn', 'erasure-record-cohort-two', false],
+        ],
+        'the external reference, the cohort and whether the place was still live must all survive',
+      );
+
+      // And the rows really are gone, so this is a record of something that happened rather than
+      // an entry written beside an entitlement that still exists.
+      const left = await tx<{ n: number }[]>`
+        select count(*)::int as n from prl.enrolments where user_id = ${leaverId}`;
+      assert.equal(left[0]?.n, 0);
+    });
+  });
+
+  it('writes nothing for a learner who never held a place (NEGATIVE CONTROL)', async () => {
+    // The other half. An erasure log that gained an entry for every account, enrolled or not,
+    // would satisfy the test above and tell an operator nothing.
+    await inRollback(async (tx) => {
+      const leaverId = await makeGuest(tx, 'Never enrolled');
+      await users.deleteAccount(tx, leaverId);
+      const written = await tx<{ n: number }[]>`
+        select count(*)::int as n from prl.audit_log where event = 'enrolment.ended_by_erasure'`;
+      assert.equal(written[0]?.n, 0, 'an erasure with no enrolment wrote an entitlement record');
+    });
+  });
+});
 
 describe('POST /me/delete', dbOptions, () => {
   it('refuses an unauthenticated caller with not_authenticated', async () => {

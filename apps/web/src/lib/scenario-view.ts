@@ -49,7 +49,7 @@
  */
 
 import type { Scenario, ScenarioSeat } from '@prl/contracts';
-import type { LegalAction, PlayerView, SeatStatus, SeatView } from '@prl/poker-engine';
+import type { LegalAction, PlayerView, PositionLabel, SeatStatus, SeatView } from '@prl/poker-engine';
 import { assignBlinds, parseCards, positionLabels } from '@prl/poker-engine';
 
 export interface ScenarioTable {
@@ -58,6 +58,32 @@ export interface ScenarioTable {
   readonly heroSeat: number;
   /** The legal actions offered to hero, already bounded. Empty when hero has no decision. */
   readonly legalActions: readonly LegalAction[];
+}
+
+const POSITION_LABELS: ReadonlySet<string> = new Set<PositionLabel>([
+  'BTN',
+  'SB',
+  'BB',
+  'UTG',
+  'UTG+1',
+  'MP',
+  'HJ',
+  'CO',
+  'BTN/SB',
+]);
+
+/**
+ * The name a scenario seat's plate shows.
+ *
+ * Every seat in the bundled scenarios is labelled with its position, and the plate prints the
+ * position as well, so the Lab table read "BTN / BTN", "CO / CO" six times over and never said which
+ * plate was the reader's opponent. A label that is a position says nothing the plate does not, so
+ * it becomes the seat's role instead. A label that is anything else is the scenario naming the seat
+ * on purpose, and is kept.
+ */
+export function scenarioSeatName(seat: ScenarioSeat): string {
+  if (!POSITION_LABELS.has(seat.label)) return seat.label;
+  return seat.isHero === true ? 'Hero' : 'Opponent';
 }
 
 /** A pair of cards, or null when the notation does not parse into exactly two. */
@@ -240,8 +266,19 @@ function heroLegalActions(
     actions.push({ type: 'check', note: 'Stay in the hand without putting chips in.' });
   }
 
-  // Aggression needs chips behind the call. With none there is nothing to size.
-  if (ceiling > heroCommitted + Math.min(owed, hero.stack)) {
+  // Aggression needs chips behind the call on BOTH sides. The comment here has always said so and
+  // the condition only ever tested hero's, so the Lab published a Raise button on spots where every
+  // opponent was already all in — `eq-rule-of-four-big-draw-flop` offered "raise to 260" against an
+  // opponent with 0 behind, and `eq-set-on-connected-flop-jam` offered 300-320 against the same.
+  // The Coach never priced those: `deriveLegalActions` in @prl/poker-math tests
+  // `opponentStacks.some((stack) => stack > 0)`, so its table listed only fold and call. A learner
+  // who pressed the button got `pricing: 'action-not-priced'` and was told their decision was not
+  // the line the analysis leans towards — for taking an action the product had offered them.
+  //
+  // `ScenarioSeat.stack` is chips BEHIND, so a seat that is all in is exactly `stack === 0`; this
+  // is the same test the Coach makes, against the same numbers, which is the point.
+  const someOpponentCanAnswer = scenario.seats.some((seat) => seat.isHero !== true && seat.stack > 0);
+  if (someOpponentCanAnswer && ceiling > heroCommitted + Math.min(owed, hero.stack)) {
     const floor = owed > 0 ? raiseFloor(betLevel, heroCommitted, scenario.bigBlind) : scenario.bigBlind;
     const capped = Math.min(floor, ceiling);
     const isAllInOnly = floor >= ceiling;

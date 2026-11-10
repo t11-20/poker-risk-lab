@@ -27,6 +27,16 @@
 #     pnpm run staging status
 #     pnpm run staging down      # add --volumes to destroy the database too
 #
+# Optionally, and only if you want the artefacts to be fetchable from another
+# machine rather than merely identified:
+#
+#     docker compose -f deploy/registry/docker-compose.registry.yml up -d
+#     pnpm run release:artifacts -- --push
+#     pnpm run staging up        # now deploys the REGISTRY digests, pull_policy always
+#
+# Nothing above requires that. With no registry running, this stack behaves
+# exactly as it always has.
+#
 # See deploy/staging/README.md for the whole procedure, including what promotion
 # checks and what it deliberately does not.
 #
@@ -57,6 +67,12 @@
 # public repository that works, which is how a placeholder becomes a production
 # credential.
 #
+# Exactly one variable breaks that rule — `PRL_PULL_POLICY`, which defaults to
+# `never`. It is not a secret, its default is the safe value and the behaviour
+# this file had before it existed, and requiring it would break `staging status`
+# and `staging logs` for anybody whose .env.staging predates it. The full argument
+# is on the `pull_policy` line of the api service, beside the code it governs.
+#
 # ## RATE_LIMIT_RESET_TOKEN is absent, and that is deliberate
 #
 # `NODE_ENV=production` here, and `apps/api/src/config.ts` **refuses to boot** when
@@ -68,13 +84,26 @@
 # limiter between phases here and waits out the window instead; that is slower and
 # it is honest.
 #
-# ## The one thing staging cannot rehearse
+# ## `deploy.replicas: 1` is a correctness constraint, and it is now ENFORCED
 #
 # `apps/api/src/rooms/registry.ts` keeps authoritative hand state in process
 # memory, so `deploy.replicas: 1` below is a correctness constraint, not a sizing
 # choice (ADR 0001, RUNBOOK §11.1). Two API processes serving one room deal two
-# different hands. Staging runs one replica because production must; nothing here
-# tests a second one, because there must not be a second one.
+# different hands: two decks, two pots, and whichever settlement lands second
+# destroys the chips the other paid out.
+#
+# That used to be the whole of it — a comment here, a comment there, and nothing
+# in the code that refused a second process. It is no longer. Each API process
+# takes a lease on every room it opens (`prl.room_ownership`, migration 0005,
+# `apps/api/src/rooms/ownership.ts`), a second process is refused with a typed
+# `room_owned_elsewhere` and a counter, and a process that LOSES a lease it held
+# stops serving that room immediately. So raising the number below no longer
+# corrupts play — it produces a second process that can serve almost nothing,
+# refuses every learner routed to it, and pages `RoomOwnershipRefused`.
+#
+# It is still 1, and must be: the lease makes a second replica safe, not useful.
+# What staging still cannot rehearse is a SECOND replica serving anything, because
+# there is nothing for it to serve.
 # ---------------------------------------------------------------------------
 
 name: poker-risk-lab-staging
@@ -126,6 +155,22 @@ services:
     tmpfs:
       - /var/run/postgresql:mode=1777
       - /tmp:mode=1777
+    # 10 MiB × 3 = 30 MiB, the same numbers as the postgres service in
+    # docker-compose.yml, which is where the reasoning for every cap in this file
+    # is written out ("Why every service has a `logging:` block"). The short
+    # version: quietest service in the stack today, two orders of magnitude louder
+    # the moment somebody adds `log_min_duration_statement=0` to chase a slow
+    # query — and the disk it would fill is the one holding this database.
+    #
+    # Identical to the dev stack ON PURPOSE. The whole lesson of D2 is that these
+    # two files drift and a fix in one is not a fix, so
+    # `scripts/supply-chain/log-policy.mjs` fails if a service present in both
+    # files carries different caps in each.
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     healthcheck:
       test:
         ['CMD-SHELL', 'pg_isready --quiet --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB"']
@@ -147,12 +192,35 @@ services:
     # not a `name@sha256:<64 hex>` reference, and after `up` it compares the
     # running container's image against the manifest and fails if they differ.
     image: ${PRL_API_IMAGE:?the API image DIGEST. Run `pnpm run release:artifacts`, then `pnpm run staging up`}
-    # `never`, because there is no registry: the image exists only because it was
-    # built on this machine, and a pull attempt would reach out to Docker Hub for a
-    # repository named `prl-api` that belongs to somebody else. With a registry in
-    # play this becomes `always` and the digest still guarantees identity — a
-    # digest pull cannot return different bytes.
-    pull_policy: never
+    # Decided per run by `scripts/staging.mjs` (`deploymentPlan`), and defaulting
+    # to the old hard-coded `never` when nothing sets it.
+    #
+    # This line used to be `pull_policy: never`, because there was no registry:
+    # the image existed only because it was built on this machine, and a pull
+    # would have gone to Docker Hub for a repository named `prl-api` that belongs
+    # to somebody else. That comment also said what would happen once a registry
+    # existed — "this becomes `always` and the digest still guarantees identity, a
+    # digest pull cannot return different bytes" — and that is now what happens.
+    #
+    # `pnpm run release:artifacts --push` publishes both artefacts to the registry
+    # in deploy/registry/ and records the digest the registry returned.
+    # `pnpm run staging up` then re-fetches each of those manifests, re-hashes them
+    # itself, and only if that succeeds writes PRL_API_IMAGE as the REGISTRY
+    # reference and PRL_PULL_POLICY=always. Pulling is then the point rather than a
+    # risk: the reference is the hash of the manifest, so the pull produces exactly
+    # those bytes or fails. Under `never` a pull is what would be dangerous —
+    # there is no registry to pull from and the name would resolve to a stranger's.
+    #
+    # The `:-never` default is the one interpolation in this file that HAS a
+    # default, which the header's "every variable is `${VAR:?}`" rule otherwise
+    # forbids. The reasoning that rule is built on — a defaulted secret is a secret
+    # in a public repository that works — does not apply to a pull policy, and the
+    # cost of requiring it would land on exactly the wrong person: an operator
+    # whose deploy/staging/.env.staging predates this line, running `staging status`
+    # against a stack that is up, would get "required variable PRL_PULL_POLICY is
+    # missing" instead of an answer. The default is also the SAFE value: with no
+    # registry involved, `never` is what must happen.
+    pull_policy: ${PRL_PULL_POLICY:-never}
     restart: unless-stopped
     init: true
     depends_on:
@@ -180,6 +248,35 @@ services:
       # NODE_ENV=production, which is exactly right and is why staging does it in
       # SQL with a generated value instead.
       DATABASE_URL: postgres://${PRL_STAGING_API_DB_USER:?set it in deploy/staging/.env.staging}:${PRL_STAGING_API_DB_PASSWORD:?set it in deploy/staging/.env.staging (pnpm run staging init generates one)}@postgres:5432/${PRL_STAGING_DB_NAME:?set it in deploy/staging/.env.staging}
+      # ENFORCED here, and a literal rather than a `${...:?}` interpolation.
+      #
+      # `PRL_ENROLMENT_REQUIRED` gates ONE thing: taking a seat at a table. Its
+      # shipped default is `off`, because an open public instance is a legitimate
+      # deployment and every deployment that predates the switch is one — and a
+      # default-off guard is decoration unless something exercises it
+      # continuously. This line is what exercises it. Staging runs the guard ON,
+      # `scripts/staging.mjs` passes `--expect-enrolment enforced` to the smoke
+      # test, and that run proves BOTH directions over TLS on every deploy: an
+      # enrolled learner seated and an unenrolled one refused, over REST and over
+      # a real `sit` frame. A run that finds this deployment behaving as `off`
+      # FAILS rather than reporting the open behaviour, so deleting this line
+      # breaks the gate instead of quietly disarming it.
+      #
+      # Not in .env.staging, unlike every secret here, for two reasons. It is not
+      # a secret and has no generated value, so the header's "every variable is
+      # ${VAR:?}" rule — which exists so that a defaulted SECRET cannot ship in a
+      # public repository — is not what it is protecting against. And requiring
+      # it would break `staging status` and `staging logs` for anybody whose
+      # deploy/staging/.env.staging predates this line, which is the same
+      # argument written out at `pull_policy` above.
+      #
+      # The smoke test needs an enrolment to exist, and the API cannot write one:
+      # migration 0006 grants prl_app SELECT and nothing else on prl.enrolments.
+      # `scripts/staging.mjs` therefore hands the smoke run the same
+      # DATABASE_MIGRATION_URL it used for the migration step, and the run drives
+      # `apps/api/scripts/enrolments.mjs` — the operator's own tool — to grant and
+      # then revoke. No enrolment is ever written by anything reachable over HTTP.
+      PRL_ENROLMENT_REQUIRED: enforced
       # The origin the BROWSER uses: the proxy's published https origin. Not the
       # API's, not web's — neither of which a browser ever sees. It is matched
       # EXACTLY on CSRF checks and on every WebSocket upgrade, so a wrong value
@@ -226,6 +323,19 @@ services:
     read_only: true
     tmpfs:
       - /tmp:mode=1777,noexec,nosuid,size=64m
+    # 20 MiB × 5 = 100 MiB, the largest allowance in the stack and the same numbers
+    # as the api service in docker-compose.yml — see that file's header for the
+    # full argument. Largest because it is the highest-volume writer (a JSON line
+    # per HTTP request and per WebSocket lifecycle event) AND because it is the log
+    # an incident is reconstructed from; a cap that holds only the last few minutes
+    # deletes the evidence exactly when somebody goes looking for it. Staging is
+    # the stack that gets left running for days, so this is the one that would have
+    # got there first.
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '5'
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -237,10 +347,12 @@ services:
       # while the database is unreachable. `depends_on: service_healthy` on the
       # proxy therefore means "the API can actually serve", not "a process exists".
       #
-      # `node -e` rather than curl or wget: neither is in bookworm-slim and adding
-      # a package to run a probe is a package in the runtime image for nothing. The
-      # probe targets the container's own network address, not 127.0.0.1, so a
-      # server bound to loopback fails it instead of passing it.
+      # `node -e` rather than curl or wget. The images are Alpine-based
+      # (Dockerfile.api), so busybox wget does exist now where bookworm-slim had
+      # neither — but node is the binary a Node image is guaranteed to have, so a
+      # node probe cannot be broken by a base change, and it needs no shell to
+      # build its URL. The probe targets the container's own network address, not
+      # 127.0.0.1, so a server bound to loopback fails it instead of passing it.
       #
       # Written with string concatenation rather than a template literal on
       # purpose: `${...}` inside a compose VALUE is interpolated by compose before
@@ -266,7 +378,11 @@ services:
   # -------------------------------------------------------------------------
   web:
     image: ${PRL_WEB_IMAGE:?the web image DIGEST. Run `pnpm run release:artifacts`, then `pnpm run staging up`}
-    pull_policy: never
+    # The same variable the api service uses, and for the same reasons — see the
+    # long comment there. Both services move together: `staging up` deploys either
+    # both registry references or both local digests, because one pull policy
+    # cannot describe a mixed stack.
+    pull_policy: ${PRL_PULL_POLICY:-never}
     restart: unless-stopped
     init: true
     depends_on:
@@ -299,6 +415,16 @@ services:
       # build state), so it comes back as a tmpfs: it is cache, so losing it on
       # restart is correct rather than merely tolerable. uid/gid 1000 is `node`.
       - /app/apps/web/.next/cache:mode=0700,uid=1000,gid=1000,size=256m
+    # 10 MiB × 3 = 30 MiB, the same as the web service in docker-compose.yml.
+    # `next start` logs startup and errors rather than a line per request, so this
+    # is close to silent in steady state — but quiet and bounded are different
+    # properties, and one broken render in a hot route is a stack trace per
+    # request. See docker-compose.yml's header for the full argument.
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -347,6 +473,15 @@ services:
     read_only: true
     tmpfs:
       - /tmp:mode=1777,noexec,nosuid,size=16m
+    # 10 MiB × 5 = 50 MiB, the same as the proxy service in docker-compose.yml. A
+    # line per request, but a narrow one; five files rather than three for the same
+    # reason the api gets five — it is a per-request record and an incident is
+    # reconstructed from it. See docker-compose.yml's header for the full argument.
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
     security_opt:
       - no-new-privileges:true
     cap_drop:

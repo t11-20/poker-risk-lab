@@ -35,13 +35,20 @@ What is *not* at stake removes whole categories of threat, and the absence is de
 | Dependency shape checks (unexpected binaries, install hooks) | `security:shapes` |
 | Published-vulnerability scan | `security:osv` (allowlist entries require an expiry and a justification) |
 | SBOM, CycloneDX 1.6, per build | `security:sbom` |
-| Provenance | `security:provenance` |
+| npm package integrity + release-age cooldown | `security:provenance` (gate name `integrity-and-release-age`; it is about **packages**, not images) |
 | Container base images pinned by digest | `security:pinning` |
 | CI actions pinned by SHA, least-privilege `permissions:` | `security:pinning` |
 | Container image CVE scan | `security:containers` (trivy) |
+| **Release images signed by digest, and the signature verified** | `security:image-provenance` (cosign, against the committed `deploy/signing/cosign.pub`; needs no private key). Signing is `release:sign` |
+| **A signed CycloneDX SBOM attestation bound to each image digest** | `security:image-provenance` — the attestation's in-toto subject must be the image's own digest, and an empty predicate fails |
 | Repository hygiene — no NUL, no C0 controls, no bidi overrides, no zero-width characters, no CRLF | `security:hygiene` |
+| No credential material in a tracked file | `security:secrets` |
+| An ignore rule exists for every path an operator is told to write a secret to | `security:secrets` |
+| No credential in git history | `security:secrets --history` (opt-in; see below) |
 
-`pnpm run security:audit` chains the gates and is release-blocking. `supply-chain.yml` re-runs them daily, so a package that becomes bad after it was vetted is caught without a commit.
+`pnpm run security:audit` chains the gates and is release-blocking. Nothing re-runs them on a schedule any more (`supply-chain.yml` was removed on 2026-10-11); a package that becomes bad after it was vetted is caught at the next push, or earlier by Dependabot security updates if they are enabled in the repository settings.
+
+**The signature gate is not in CI, and cannot be as things stand.** Signing needs a private key and there is no CI signing identity, so `security:audit` in CI runs at a point where no release image exists and reports the gate *not applicable*, saying so loudly rather than passing over it. It is a release-machine step: `pnpm run release:sign` then `pnpm run security:image-provenance`. What a locally-held key does and does not establish — possession of a key, not the identity of a builder, and no transparency log — is [`deploy/signing/README.md`](../../deploy/signing/README.md).
 
 **A note on why lifecycle scripts being disabled matters more than it sounds.** A malicious package overwhelmingly acts at install time. With scripts off, a compromised package present in the graph has to be *imported* to do anything — which turns "it is in the lockfile" from a compromise into a question with an answer.
 
@@ -102,6 +109,48 @@ Keys are hashed, never raw: the rate limiter keeps keys in memory and hands them
 
 Addresses are normalised so one caller is one bucket. `::ffff:203.0.113.4` and `203.0.113.4` are the same host, and Node reports the mapped spelling on a dual-stack socket and the plain one otherwise — two spellings means two buckets and a limit that quietly counts to half of what it says. `::1` and `127.0.0.1` are deliberately **not** folded together: those are genuinely different addresses.
 
+### Sign-in: two budgets, because a classroom is one caller
+
+Address keying is correct and it has a cost that was, for a while, understated in this document and in the code: behind one campus NAT, office egress or VPN concentrator, a whole class is one caller. Measured against the then-shipped 15-per-minute OIDC limit — thirty learners, one address, one window — **15 completed sign-ins and 15 `429`s, the first at learner 16.**
+
+Raising the number alone would have handed a script the same headroom, so the limit was split into two budgets that count different things:
+
+- **The ceiling**, `RATE_LIMIT_OIDC_MAX`, applied to `/auth/oidc/start` and `/auth/oidc/callback` through the same address key as before. Sized for the classroom: `simultaneous starts x 2` (a start plus one retry), default 60.
+- **The failed-outcome budget**, `RATE_LIMIT_OIDC_FAILURE_MAX`, charged only by OIDC requests that end in an error. Default 15 — *unchanged in effect from what shipped*, so the outbound load a script can force on the identity provider has not moved.
+
+The distinction that makes this safe is that a request cannot be judged on arrival but can be judged on how it **ends**. Completing a sign-in requires an authorization code only the provider can mint, presented with a single-use attempt row and a PKCE verifier from a cookie handed out one request earlier. A script cannot produce that; it can produce unlimited requests that fail to. Thirty completions from one address in a minute is a classroom; fifteen failures is not.
+
+A refusal is never itself charged. Charging it would push a caller's own window forward on every retry — `continueExceeding` by accident — and turn one cancelled consent screen into an unbounded lockout for everyone behind a shared address.
+
+**Guest creation is deliberately excluded from this and keeps a budget of 10.** On `POST /auth/guest` every attempt succeeds: no password, no provider, nothing to fail. There is no failed outcome to charge, and the successful creations *are* the abuse — it is the one unauthenticated endpoint that writes a user row.
+
+### The third budget: starts nobody comes back for
+
+The two budgets above cannot see the cheapest attack there is. A caller that only ever hits `/auth/oidc/start` writes an attempt row every time and produces **no failed outcome**, because a start that succeeds is not a failure. Raising the ceiling from 15 to 60 therefore quadrupled what that caller could write, and two things a first draft of this section assumed would bound it turned out not to:
+
+- **The global limiter contributes nothing.** `@fastify/rate-limit` lets a route's own `config.rateLimit` *replace* the global bucket rather than stack with it. Measured: after 500 starts from one address, `GET /ready` from that address still answered 200 and `POST /auth/guest` still answered 201.
+- **The 10-minute TTL does not remove rows.** It bounds when a row is *usable*. `maintenance/retention-sweep.ts` is what removes them — every **six hours**, at most 1,000 x 100 = 100,000 rows per table per sweep. Residency is `rate x 360 minutes`, not `rate x 10`.
+
+The honest arithmetic for the one table nothing else bounds:
+
+| | rows/min | per address per 6 h sweep | addresses to outrun the sweep |
+| --- | --- | --- | --- |
+| before this change | 15 | 5,400 | 19 |
+| ceiling raised alone | 60 | 21,600 | **5** |
+| with the third budget | 60 per 10 min | 2,160 | 46 |
+
+Five addresses to make `prl.oidc_login_attempts` grow without limit was not an acceptable price for the cohort fix. So a third budget charges a start when it writes an attempt row and **credits** it when a callback redeems one, over the attempt row's own 10-minute TTL — so "still charged when the window closes" means exactly "the row expired unredeemed", with no timer per attempt and no second sweep. Its max is `RATE_LIMIT_OIDC_MAX`, so it sizes itself from the cohort declaration rather than being a fourth number an operator must reason about. A class of thirty holds about thirty for a few seconds and gives them all back.
+
+**The security delta, stated so it can be argued with.** From one address: an attacker can now complete up to `RATE_LIMIT_OIDC_MAX` sign-ins per window instead of 15 (each needing real credentials at the provider, so our limiter was never the bound on that), and can burst 60 attempt rows in a minute rather than 15. Against that, sustained attempt-row creation is now **60 per 10 minutes rather than 15 per minute** — 2,160 rows per address per sweep against 5,400 before, so that channel ends up *tighter* than it shipped. Unchanged: forced token-endpoint exchanges (15 per window, measured before and after), guest account creation (10 per window), and the refusal of unbounded account creation and unbounded IdP round trips.
+
+### The sizing is a boot refusal, not a comment
+
+The correct size depends on a fact the process cannot discover: how many learners share one egress address. So the operator declares it. `COHORT_SIZE` and `COHORT_ENTRY` change no limit; they make `loadConfig` check the configured limits against the declaration and **refuse to start** when they cannot serve it, naming the variable and the arithmetic — the same mechanism as the `RATE_LIMIT_RESET_TOKEN` refusal below, pointing the other way. Nothing is raised automatically: declaring a cohort of thirty tells you guest creation is set to ten, it does not open it to thirty on your behalf.
+
+`COHORT_ENTRY` defaults to `both`, which checks every door. It also refuses a configuration where `RATE_LIMIT_OIDC_FAILURE_MAX` has been raised to meet the ceiling, because at that point the split is gone and the classroom's headroom is the script's.
+
+Proven by: `apps/api/test/cohort-sign-in-limits.test.ts` — the cohort completing, the script still refused and still bounded to the same number of forced token exchanges, guest creation still bounded, the refusals, and the positive control that a correctly sized cohort boots.
+
 ### The test-isolation control, and why it cannot exist in production
 
 `RATE_LIMIT_RESET_TOKEN` unlocks `POST /api/v1/_test/rate-limit/reset`, which empties every counter. It exists because the smoke test proves the guest limiter works by exhausting it, and the bucket it drains is address-keyed — the same bucket the next run needs.
@@ -150,7 +199,7 @@ Every request body, query string and WebSocket frame is validated against a clos
 
 Router hardening: `maxParamLength: 64` (id patterns cap at 64, so anything longer is a bug or a probe) and `allowUnsafeRegex: false` (a backtracking route pattern is a denial of service in the router itself).
 
-**Every query uses tagged-template parameterisation.** postgres.js sends the template text and its values as separate protocol fields, so a parameterised value can never become SQL syntax. There is no ORM escaping and no sanitiser behind it — that property *is* the defence. `.unsafe()` appears exactly once, in the migration runner executing a file from `db/migrations/` that contains no user input.
+**Every query uses tagged-template parameterisation.** postgres.js sends the template text and its values as separate protocol fields, so a parameterised value can never become SQL syntax. There is no ORM escaping and no sanitiser behind it — that property *is* the defence. `.unsafe()` takes SQL that is not a literal in exactly one place: the migration runner executing a file from `db/migrations/`, which contains no user input. (It has **seven** call sites, all in `apps/api/scripts/migrate.mjs` and **none** in `apps/api/src`; the other six execute hardcoded strings such as `set role prl_migrator`. This sentence said "appears exactly once" until 2026-08-26, so a reviewer who grepped it got seven and had no way to reconcile that with the claim.)
 
 Bounds: 64 KiB request body, a 20 s request timeout, a per-statement Postgres timeout, an idle-in-transaction timeout, a bounded connection pool, a bounded worker queue, and message-size limits on WebSocket frames. Each is a place where an unbounded input would otherwise become the attack.
 
@@ -177,7 +226,15 @@ The `rooms_visibility_invite_only` CHECK constraint keeps public matchmaking off
 
 Every operator-supplied secret is validated at boot for length (≥32 characters), distinct-character count (so a "long" secret is not a short one repeated), and placeholder substrings — `change`, `example`, `insecure`, `password`, `secret`, `default`, `todo`, `test` and the rest. A secret that ships in an example file is public knowledge the moment it is written down.
 
-Secrets are injected externally, never baked into an image, never defaulted in a compose file. `.env` is gitignored and `security:hygiene` enforces it. Three overlapping log-redaction layers censor anything whose key name looks sensitive, and the censor string is a fixed literal so it is greppable.
+Secrets are injected externally, never baked into an image, never defaulted in a compose file.
+
+`.env` is gitignored, and until recently this sentence said `security:hygiene` enforced that. It did not: that gate reads source files for hidden characters and has never looked at an ignore rule. The claim was true about the ignore rule and false about the gate, which is the exact shape this document's own opening paragraph warns about — a control is real only because a named gate asserts it.
+
+`security:secrets` now asserts it, and asserts it for the whole set rather than for `.env` alone — **nine paths**, and this sentence listed seven until 2026-08-26: `.env`, `.env.local`, `deploy/staging/.env.staging`, the staging CA and leaf private keys, the Prometheus scrape token, `deploy/backup/backup.env`, and the two signing secrets `deploy/signing/cosign.key` and `deploy/signing/signing.env`. `MUST_BE_IGNORED` in `scripts/supply-chain/secret-scan.mjs` is the list; read it there rather than here. It asks git — `git check-ignore --no-index` — rather than reading `.gitignore`, so the answer is what git will actually do, and it asks whether or not the file exists on the machine running the gate.
+
+**That check found a real hole.** `deploy/backup/backup.env` is the file `deploy/backup/README.md` instructs an operator to create, and it holds `PRL_BACKUP_KEY` — the key that decrypts every archive ever taken with it — and the backup role's database password. No ignore rule matched it. On a backup host, one `git add -A` would have committed it, and no working-tree scan anywhere could have found it first, because on every machine that runs the gates that file does not exist. The rule is now in `.gitignore` and the gate asserts it.
+
+The content half of the gate reads every tracked file for provider token shapes, credentialed URLs pointing at hosts somebody else can reach, and high-entropy literals assigned to credential-shaped names. Findings are printed redacted — first four characters and a length — because a scanner that prints what it found has published it a second time into logs that are kept longer than the file was. `--history` scans every blob reachable from every ref and is deliberately **not** part of `security:audit`: its only remedy is a history rewrite plus rotation, which a release gate cannot demand on the day it first notices, and a permanently red gate is a gate somebody turns off. It is clean on this repository today. Three overlapping log-redaction layers censor anything whose key name looks sensitive, and the censor string is a fixed literal so it is greppable.
 
 Rotation procedures and their blast radii: [`runbooks/leaked-secret.md`](runbooks/leaked-secret.md).
 
@@ -217,7 +274,7 @@ Stated rather than closed. Each is a real limitation.
 | 6 | Live table state is in-process | A crash mid-hand drops the hand. Accepted architecture (`docs/adr/0001`), not a hidden defect. |
 | 7 | DB pool pressure is inferred, not measured | postgres.js exposes no wait counter; reaching into its internals would break silently on a patch release. Inferred from the timed readiness probe and verified by a drill. |
 | 8 | Container base digests age | Pinned by digest, so they do not drift — which also means they do not receive upstream security rebuilds. A freshness check reports drift; acting on it is a deliberate bump. |
-| 9 | OIDC flow not exercised in this environment | No identity provider is configured here. The code paths are unit-tested; the live flow is not verified. |
+| 9 | OIDC flow not exercised against a real provider | No identity provider is configured here, so the live round trip is still unverified. It is materially narrower than it was: the callback schema was `additionalProperties: false` over `code`/`state`/`error` only, which with `removeAdditional: false` made **every** real provider callback a 400 before the handler ran — Google appends `scope`/`authuser`/`prompt`/`hd`, Keycloak `session_state`, Microsoft `client_info`, and RFC 9207 requires `iss`. That is fixed, the parameters are enumerated rather than allowed wholesale, and `iss` is now **validated against the configured issuer** (RFC 9207 mix-up defence) rather than merely tolerated. `apps/api/test/auth.test.ts` drives a callback carrying all of them, and refuses one whose issuer is wrong while asserting the legitimate attempt survives. |
 | 10 | Attributed AI Legend naming | `PRL_LEGEND_NAMING=attributed` must not be enabled without written legal review of name and likeness. Production default is `archetype`. |
 
 ---
@@ -226,6 +283,7 @@ Stated rather than closed. Each is a real limitation.
 
 ```bash
 pnpm run security:audit          # every supply-chain gate, release-blocking
+pnpm run security:secrets        # committed credentials + the ignore rules that prevent them
 pnpm run security:containers     # image CVE scan (trivy)
 pnpm run security:sbom           # CycloneDX 1.6 for the current graph
 pnpm run test                    # includes the security and hidden-information suites

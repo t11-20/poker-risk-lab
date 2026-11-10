@@ -111,15 +111,123 @@ export interface RateLimitConfig {
    */
   readonly guestMax: number;
   readonly guestWindowMs: number;
-  /** OIDC start and callback, per window. Address-keyed for the same reason as guests. */
+  /**
+   * The CEILING on `/auth/oidc/start` and, separately, on `/auth/oidc/callback`, per window,
+   * per address. Address-keyed for the same reason as guests.
+   *
+   * Sized for a classroom rather than for a person, because these are the two requests a whole
+   * cohort makes in the same ten seconds and they all arrive from one campus egress address.
+   * The arithmetic is in `.env.example`: at least two per learner, a start plus one retry.
+   *
+   * This is deliberately NOT the anti-abuse control any more — `oidcFailureMax` below is. A
+   * ceiling that a cohort must fit under cannot also be the number that stops a script, which is
+   * what the shipped 15 was trying to be and why fifteen of thirty learners were refused.
+   */
   readonly oidcMax: number;
   readonly oidcWindowMs: number;
+  /**
+   * OIDC requests per window per address that END IN AN ERROR — a start that could not reach the
+   * provider, a callback whose state, PKCE, issuer or token exchange did not check out.
+   *
+   * This is the tight one, and the one an abusive caller actually meets: completing a sign-in
+   * needs an authorization code only the identity provider can mint, so a script's every attempt
+   * lands here while a cohort's attempts never do. Shares `oidcWindowMs` with the ceiling above,
+   * because two windows on one route would give `Retry-After` two answers.
+   *
+   * The default is 15 — the same number the shipped `RATE_LIMIT_OIDC_MAX` was, and not a
+   * coincidence: 15 failed callbacks per address per minute is exactly what the shipped
+   * configuration permitted (measured), so splitting the budget in two does not loosen the
+   * expensive path at all. It only stops a cohort's SUCCESSES from spending it.
+   */
+  readonly oidcFailureMax: number;
   /**
    * How far past the limit a caller may go before being blocked outright rather than
    * merely told to slow down. Blunts a script that ignores `retryAfterSeconds`.
    */
   readonly banAfter: number;
 }
+
+/**
+ * Which doors a declared cohort comes through.
+ *
+ * `both` is the default because it is the safe one: it checks every entrance, so an operator who
+ * declares a cohort and forgets that half the class clicks "Play as guest" is told at boot rather
+ * than by thirty students at once. Narrowing it is an explicit act.
+ */
+export type CohortEntry = 'oidc' | 'guest' | 'both';
+
+/**
+ * The operator's declaration of how many learners arrive together from ONE address.
+ *
+ * ## Why this exists at all, rather than just a comment in `.env.example`
+ *
+ * Every limit that a classroom trips is address-keyed, and it has to be: `POST /auth/guest` and
+ * `GET /auth/oidc/callback` both ISSUE a session, so a session-keyed limit on them never
+ * accumulates (measured — see `clientKeyedRateLimit` in `plugins/security.ts`). That makes a
+ * campus, office or VPN egress address a single caller as far as every one of these limits is
+ * concerned, and it makes the correct SIZE of those limits a fact about the deployment that this
+ * process cannot discover for itself.
+ *
+ * An operator who gets it wrong does not find out from a log line. They find out from a cohort:
+ * against the shipped defaults, thirty learners signing in through the identity provider from one
+ * address produced fifteen sign-ins and fifteen 429s, the first at learner sixteen. That is a
+ * discovery made in front of paying students, once, and it is the reason this is a boot refusal
+ * in the same style as `RATE_LIMIT_RESET_TOKEN` rather than a warning.
+ *
+ * ## Why it is a declaration rather than an inference
+ *
+ * The limits could have been raised until nothing plausible trips them, which is the shape of fix
+ * that quietly hands a script the same headroom. Instead the operator says how big the class is,
+ * and `checkCohortSizing` refuses to boot when the configured limits cannot serve it. Nothing is
+ * raised automatically: declaring a cohort of thirty tells you that guest creation is set to ten,
+ * it does not set it to thirty behind your back. What the limits permit stays something a person
+ * chose and can be held to.
+ *
+ * Unset (`0`) means "no cohort is declared", the shipped defaults apply and nothing is checked —
+ * which is right for a public instance, where thirty accounts a minute from one address is not a
+ * classroom.
+ */
+export interface CohortConfig {
+  /** Learners expected to arrive together from one address. `0` when nothing was declared. */
+  readonly size: number;
+  /** Which sign-in doors that cohort uses. Only the declared ones are size-checked. */
+  readonly entry: CohortEntry;
+}
+
+/**
+ * Whether a live enrolment is required to take a seat at a table (`PRL_ENROLMENT_REQUIRED`).
+ *
+ * ## What it gates, and what it deliberately does not
+ *
+ * `enforced` means one thing: `RoomRegistry.sitAtTable` refuses a learner for whom
+ * `enrolments.entitlementFor` answers null, with `enrolment_required`. It gates TAKING A SEAT and
+ * nothing else. `/learn`, the Lab, the glossary, the Legends pages, creating a room, joining one
+ * by invite code and watching a table from a socket all stay exactly as open as they were, because
+ * that is the surface a prospective student browses and gating it would be gating the shop window
+ * rather than the course.
+ *
+ * ## Why the default is `off`, and why that does not make this decoration
+ *
+ * An open public instance is a legitimate deployment of this product — most of what it teaches is
+ * free reading — and every deployment that exists today runs without an enrolment table having
+ * meant anything. A default of `enforced` would turn one migration into an outage for all of them.
+ *
+ * The usual cost of a default-off guard is that nobody ever sees it refuse, so it rots. That is
+ * closed by running staging with it ON: `docker-compose.staging.yml` sets `enforced` on the api
+ * service, and `scripts/smoke-test.mjs` section 13 drives both directions over TLS — an enrolled
+ * learner seated, an unenrolled one refused, over REST and over the socket — on every
+ * `pnpm run staging up`. The switch's `off` behaviour is covered by the unit tests, which run the
+ * whole matrix regardless of what any deployment is set to.
+ *
+ * ## Why an enum of two rather than a boolean
+ *
+ * `readBoolean` accepts `true/1/yes` and `false/0/no`, and this is a value an operator will one
+ * day want a third setting for — "warn but allow", to find out how many learners a cohort list
+ * missed before the class starts. A boolean would have to be replaced to get there; an enum gets
+ * a value added. Nothing here promises that third value exists, and adding one means writing what
+ * it does at the refusal site.
+ */
+export type EnrolmentRequirement = 'off' | 'enforced';
 
 export interface DatabaseConfig {
   readonly url: string;
@@ -179,6 +287,18 @@ export interface AppConfig {
   readonly learnerTurnSeconds: number;
 
   readonly rateLimit: RateLimitConfig;
+
+  /** The declared classroom behind one address, and which doors it uses. See `CohortConfig`. */
+  readonly cohort: CohortConfig;
+
+  /**
+   * Whether a live enrolment is required to TAKE A SEAT at a table. See `EnrolmentRequirement`.
+   *
+   * Read by `routes/index.ts`, which binds the registry's entitlement port accordingly. Nothing
+   * else in the process reads it, and nothing else may: a second reader is a second place for the
+   * enforcement decision to be made, and one of them would eventually be the one nobody looks at.
+   */
+  readonly enrolmentRequired: EnrolmentRequirement;
 
   /**
    * Whether to believe `X-Forwarded-For`.
@@ -674,6 +794,172 @@ function readOidc(env: EnvRecord, collect: Collector): OidcConfig | null {
   };
 }
 
+/** The three legal values of `COHORT_ENTRY`, in the order the refusal message lists them. */
+const COHORT_ENTRIES = ['both', 'oidc', 'guest'] as const;
+
+/** Parses `COHORT_ENTRY`. Defaults to the safe value, `both`; see `CohortConfig`. */
+function readCohortEntry(env: EnvRecord, collect: Collector): CohortEntry {
+  const value = trimmed(env, 'COHORT_ENTRY');
+  if (value === undefined) return 'both';
+  const lowered = value.toLowerCase();
+  const found = COHORT_ENTRIES.find((entry) => entry === lowered);
+  if (found === undefined) {
+    collect.problems.push(`COHORT_ENTRY must be one of ${COHORT_ENTRIES.join(', ')}, got "${value}"`);
+    return 'both';
+  }
+  return found;
+}
+
+/** The legal values of `PRL_ENROLMENT_REQUIRED`, in the order the refusal message lists them. */
+const ENROLMENT_REQUIREMENTS = ['off', 'enforced'] as const;
+
+/**
+ * Parses `PRL_ENROLMENT_REQUIRED`. Defaults to `off`; see `EnrolmentRequirement`.
+ *
+ * An unrecognised value is a boot refusal rather than a fallback to the default, and the direction
+ * matters more here than for most of this file. The realistic typo is `PRL_ENROLMENT_REQUIRED=true`
+ * or `=on` from somebody who expected a boolean — an operator who has decided to enforce and
+ * believes they have. Silently taking `off` from that would leave a cohort's tables open to the
+ * whole internet while the deployment's own configuration says otherwise, and nothing anywhere
+ * would say so. So it names both legal values and stops the process (exit 78).
+ */
+function readEnrolmentRequirement(env: EnvRecord, collect: Collector): EnrolmentRequirement {
+  const value = trimmed(env, 'PRL_ENROLMENT_REQUIRED');
+  if (value === undefined) return 'off';
+  const lowered = value.toLowerCase();
+  const found = ENROLMENT_REQUIREMENTS.find((entry) => entry === lowered);
+  if (found === undefined) {
+    collect.problems.push(
+      `PRL_ENROLMENT_REQUIRED must be one of ${ENROLMENT_REQUIREMENTS.join(', ')}, got "${value}". ` +
+        'It is not a boolean: "enforced" means a learner needs a live enrolment to take a seat, ' +
+        '"off" means seating is open to anybody with a session.',
+    );
+    return 'off';
+  }
+  return found;
+}
+
+/**
+ * Requests one learner is expected to make against the OIDC ceiling inside one window.
+ *
+ * Two: the start that sends them to the identity provider, and the callback that brings them
+ * back. `@fastify/rate-limit` gives each route its own counter, so the two do not in fact share a
+ * bucket — but a learner who lands on a stale tab, presses back, or is bounced through a
+ * re-consent screen makes a second start, and a ceiling with no room for that is a ceiling that
+ * fails for the least confident student in the room. So the check demands two per learner on both
+ * routes rather than one, and the spare is the retry.
+ */
+const OIDC_REQUESTS_PER_LEARNER = 2;
+
+/**
+ * Refuses to boot when a declared cohort cannot get in.
+ *
+ * ## Why this is a refusal and not a warning
+ *
+ * The same argument as `readRateLimitResetToken`, pointing the other way. There, a variable that
+ * must never reach production is fatal because the realistic failure is a `.env` copied without
+ * being re-read. Here, a limit that is too SMALL for the class it will serve is fatal because the
+ * realistic failure is nobody thinking about it at all — the shipped defaults are correct for a
+ * public instance and silently wrong for a classroom, and the difference is invisible until
+ * thirty students are looking at it. Measured against the shipped defaults before this check
+ * existed: thirty learners from one address, fifteen sign-ins, fifteen 429s.
+ *
+ * A warning would be logged at boot, into the same stream as everything else, days before the
+ * class. It would not be read.
+ *
+ * ## Why nothing is raised automatically
+ *
+ * Declaring `COHORT_SIZE=30` does not set `RATE_LIMIT_GUEST_MAX` to thirty. It refuses to start
+ * until somebody sets it, because raising it means this deployment will create thirty accounts a
+ * minute for whoever is behind that address, and that is a decision with a security consequence.
+ * The point of the check is to make the decision unavoidable, not to make it invisibly.
+ *
+ * ## Why `both` is the default entry
+ *
+ * `COHORT_ENTRY` narrows which doors are checked, and the default checks all of them. An operator
+ * whose class signs in through the identity provider and never touches guest accounts says so
+ * (`COHORT_ENTRY=oidc`) and keeps the tight public default on guest creation. An operator who
+ * says nothing gets both checked, which costs them one line of configuration and cannot cost them
+ * a room full of refused students.
+ */
+function checkCohortSizing(
+  cohort: CohortConfig,
+  rateLimit: RateLimitConfig,
+  oidcConfigured: boolean,
+  collect: Collector,
+): void {
+  if (cohort.size === 0) return;
+
+  const windowSeconds = Math.round(rateLimit.oidcWindowMs / 1_000);
+  const wantsOidc = cohort.entry === 'oidc' || cohort.entry === 'both';
+  const wantsGuest = cohort.entry === 'guest' || cohort.entry === 'both';
+
+  if (wantsOidc && !oidcConfigured) {
+    collect.problems.push(
+      `COHORT_ENTRY=${cohort.entry} declares that a cohort of ${cohort.size} signs in through an ` +
+        'identity provider, but OIDC is not configured on this process. Set OIDC_ISSUER, ' +
+        'OIDC_CLIENT_ID, OIDC_CLIENT_SECRET and OIDC_REDIRECT_URI, or set COHORT_ENTRY=guest.',
+    );
+  }
+
+  if (wantsOidc && oidcConfigured) {
+    const needed = cohort.size * OIDC_REQUESTS_PER_LEARNER;
+    if (rateLimit.oidcMax < needed) {
+      collect.problems.push(
+        `RATE_LIMIT_OIDC_MAX is ${rateLimit.oidcMax}, which cannot serve the declared ` +
+          `COHORT_SIZE of ${cohort.size}. Every learner behind one address shares this budget, ` +
+          `and each needs ${OIDC_REQUESTS_PER_LEARNER} requests per ${windowSeconds}s window ` +
+          `(a sign-in start plus one retry), so it must be at least ${needed}. Raise it, or ` +
+          'lower COHORT_SIZE to what one egress address really carries.',
+      );
+    }
+  }
+
+  if (wantsGuest && rateLimit.guestMax < cohort.size) {
+    collect.problems.push(
+      `RATE_LIMIT_GUEST_MAX is ${rateLimit.guestMax}, which cannot serve the declared ` +
+        `COHORT_SIZE of ${cohort.size}. Guest creation is a different case from sign-in and the ` +
+        'shipped default of 10 is deliberately tight: every attempt on that endpoint SUCCEEDS, ' +
+        'so there is no failed outcome to charge and the successful creations are themselves the ' +
+        `abuse. Raising it to ${cohort.size} accepts that ${cohort.size} accounts a minute can be ` +
+        'created from that address, which is only reasonable for an ingress you control. If this ' +
+        'cohort signs in through the identity provider instead, set COHORT_ENTRY=oidc and leave ' +
+        'guest creation at its public default.',
+    );
+  }
+}
+
+/**
+ * The failed-outcome budget must stay below the ceiling. Checked on EVERY boot.
+ *
+ * ## Why this is not inside `checkCohortSizing`, which is where it used to live
+ *
+ * It was, and an adversarial review found that `checkCohortSizing` returns immediately when
+ * `COHORT_SIZE` is 0 — the shipped default, and the state `.env.example` calls the right one for a
+ * public instance. So the invariant was enforced only on the deployments that had declared a
+ * classroom, and not on the deployments this budget was written to protect. Measured against the
+ * code as it stood: `RATE_LIMIT_OIDC_FAILURE_MAX=10000` with the default ceiling of 60 and no
+ * `COHORT_SIZE` booted cleanly, while `.env.example` said in as many words that "the process
+ * refuses to boot if this is not below RATE_LIMIT_OIDC_MAX".
+ *
+ * The two checks were never the same kind of thing. Cohort sizing asks whether the configured
+ * limits can serve a class somebody declared, and has no answer when nobody declared one. This asks
+ * whether the two budgets still count different things, and the answer does not depend on who is
+ * signing in: a failure budget at or above the ceiling can never refuse anything the ceiling has
+ * not refused already, on any deployment at all.
+ */
+function checkSignInBudgets(rateLimit: RateLimitConfig, collect: Collector): void {
+  if (rateLimit.oidcFailureMax >= rateLimit.oidcMax) {
+    collect.problems.push(
+      `RATE_LIMIT_OIDC_FAILURE_MAX (${rateLimit.oidcFailureMax}) is not below RATE_LIMIT_OIDC_MAX ` +
+        `(${rateLimit.oidcMax}), so it can never refuse anything the ceiling has not refused ` +
+        'already. It is the budget that separates a classroom from a script: the ceiling is sized ' +
+        'for the cohort and this one is sized for the abuse, and raising them together throws away ' +
+        'the whole distinction.',
+    );
+  }
+}
+
 /**
  * Default worker count: leave a core for the event loop, and never spawn more than
  * four. Equity work is CPU-bound, and a pool larger than the machine turns one
@@ -817,15 +1103,37 @@ export function loadConfig(env: EnvRecord): AppConfig {
         { min: 1_000, max: 3_600_000, fallback: 60_000 },
         collect,
       ),
-      oidcMax: readInt(env, 'RATE_LIMIT_OIDC_MAX', { min: 1, max: 10_000, fallback: 15 }, collect),
+      // 60, raised from the 15 that shipped as a literal. That 15 was the ceiling AND the
+      // anti-abuse control at once, and it could not be both: a class of thirty behind one
+      // campus address needs sixty of these requests in a minute, and fifteen of them were
+      // refused. 60 = 30 learners x 2 requests, which is the arithmetic `.env.example` states
+      // and `checkCohortSizing` enforces against a declared COHORT_SIZE. The anti-abuse job
+      // moved to `oidcFailureMax`, which did NOT move.
+      oidcMax: readInt(env, 'RATE_LIMIT_OIDC_MAX', { min: 1, max: 10_000, fallback: 60 }, collect),
       oidcWindowMs: readInt(
         env,
         'RATE_LIMIT_OIDC_WINDOW_MS',
         { min: 1_000, max: 3_600_000, fallback: 60_000 },
         collect,
       ),
+      oidcFailureMax: readInt(
+        env,
+        'RATE_LIMIT_OIDC_FAILURE_MAX',
+        { min: 1, max: 10_000, fallback: 15 },
+        collect,
+      ),
       banAfter: readInt(env, 'RATE_LIMIT_BAN_AFTER', { min: 0, max: 100_000, fallback: 200 }, collect),
     },
+
+    cohort: {
+      // 0 means "nothing declared": the shipped defaults apply and nothing is size-checked,
+      // which is right for a public instance where thirty accounts a minute from one address
+      // is not a classroom. See `CohortConfig`.
+      size: readInt(env, 'COHORT_SIZE', { min: 0, max: 10_000, fallback: 0 }, collect),
+      entry: readCohortEntry(env, collect),
+    },
+
+    enrolmentRequired: readEnrolmentRequirement(env, collect),
 
     metricsToken: readMetricsToken(env, nodeEnv, collect),
     rateLimitResetToken: readRateLimitResetToken(env, nodeEnv, collect),
@@ -854,6 +1162,15 @@ export function loadConfig(env: EnvRecord): AppConfig {
 
   const oidc = readOidc(env, collect);
 
+  // After `readOidc`, because whether an identity provider is configured is half of what makes a
+  // declared cohort servable, and before the throw so a sizing problem is reported alongside
+  // every other one rather than on the next boot.
+  checkCohortSizing(config.cohort, config.rateLimit, oidc !== null, collect);
+
+  // Unconditional, and deliberately not inside the call above: that one returns early when no
+  // cohort is declared, which is every public instance. See `checkSignInBudgets`.
+  checkSignInBudgets(config.rateLimit, collect);
+
   if (collect.problems.length > 0) throw new ConfigError(collect.problems);
 
   // Rebuilt rather than mutated so the exported object is genuinely immutable, and so
@@ -863,6 +1180,7 @@ export function loadConfig(env: EnvRecord): AppConfig {
     oidcEnabled: oidc !== null,
     oidc,
     rateLimit: Object.freeze(config.rateLimit),
+    cohort: Object.freeze(config.cohort),
     database: Object.freeze(config.database),
     webOrigins: Object.freeze(config.webOrigins),
     warnings: Object.freeze(config.warnings),
@@ -880,9 +1198,4 @@ let cached: AppConfig | null = null;
 export function getConfig(): AppConfig {
   cached ??= loadConfig(process.env);
   return cached;
-}
-
-/** Test seam: drops the memoised config so a later `getConfig()` re-parses. */
-export function resetConfigForTests(): void {
-  cached = null;
 }

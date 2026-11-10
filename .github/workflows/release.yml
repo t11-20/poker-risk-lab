@@ -162,6 +162,13 @@ jobs:
         # decision somebody makes rather than one nobody knows is available.
         run: node scripts/supply-chain/ci-pinning.mjs --freshness
 
+      - name: Repository hygiene
+        # The second of the sixteen gates, and one this workflow did not run. It
+        # is the check that first-party source carries no C0 control characters, no
+        # secrets and none of the shapes the campaign snapshot lists — cheap, and
+        # exactly the sort of gate whose absence from a RELEASE is worst.
+        run: pnpm run security:hygiene
+
       - name: Lint
         run: pnpm run lint
 
@@ -258,6 +265,200 @@ jobs:
       - name: Test
         run: pnpm run test
 
+      - name: Enumerate every seven-card hand
+        # `test:exhaustive` and `test:simulation` are two of the sixteen gates and
+        # ran nowhere in this workflow. They are the two that decide whether the
+        # thing being released EVALUATES POKER CORRECTLY, which makes their absence
+        # from the release pipeline the least defensible of the nine.
+        #
+        # `!cancelled()` rather than the default: these are independent measurements
+        # and a failure in one must not hide the verdict of the other, for the same
+        # reason `pnpm run verify` runs every gate after a failure.
+        if: ${{ !cancelled() }}
+        run: pnpm run test:exhaustive
+
+      - name: Simulate the opponent profiles
+        if: ${{ !cancelled() }}
+        run: pnpm run test:simulation
+
+  # -------------------------------------------------------------------------
+  # 2b. The browser gates, on the same commit, BEFORE anything is built.
+  #
+  # These five ran in `ci.yml` and nowhere here, so a commit that failed the
+  # contrast budget, shipped an inaccessible control, lost the CSP negative
+  # control or broke the age gate — a LEGAL control, off by default, whose whole
+  # point is that it is provably correct when switched on — was built into an
+  # immutable artefact, scanned, staged and offered to `release-sign.yml`. The
+  # release pipeline was green throughout; the red was in another workflow, which
+  # is a thing a person has to notice.
+  #
+  # `scripts/release-gate-coverage.mjs` is the guard that keeps this job in step
+  # with `verify`, and it runs inside `pnpm run test` in the job above — so a
+  # gate added to `verify` and not wired in here fails THIS pipeline. It has
+  # already earned its keep once: `test:layout` was added to `verify` as the
+  # fifteenth gate, and this job is where that guard said it had to be wired.
+  # -------------------------------------------------------------------------
+  browser-gates:
+    name: Contrast, a11y, ax tree, keyboard, painted text, CSP and age gate (real Chrome)
+    needs: gates
+    runs-on: ubuntu-24.04
+    # Seven browser sweeps on top of a full build. `test:ax` and `test:keyboard`
+    # each play a hand at a live table and wait on bots; the keyboard pass takes
+    # about a minute on its own.
+    timeout-minutes: 60
+
+    services:
+      postgres:
+        # postgres:16-bookworm
+        image: postgres:16-bookworm@sha256:60f4761b9035e0b8d5218f701a8c3382f641bf12b1604822574cf5be3baeb537
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: poker_risk_lab_browser
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username postgres --dbname poker_risk_lab_browser"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # As in `tests`: the job default is the least-privileged runtime identity, so
+      # the servers these gates drive run as a `prl_app` member and a missing GRANT
+      # fails the release rather than the deployment.
+      DATABASE_URL: postgres://prl_ci_app:prl-ci-not-a-secret@127.0.0.1:5432/poker_risk_lab_browser
+      DATABASE_URL_ADMIN: postgres://postgres:postgres@127.0.0.1:5432/poker_risk_lab_browser
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build
+        # The `build` gate itself, and a precondition of the seven below: every one
+        # of them measures a PRODUCTION build and says so, because the development
+        # Content-Security-Policy adds `'unsafe-eval'` and an HMR websocket on
+        # purpose and a pass against `next dev` would be worth nothing.
+        run: pnpm run build
+
+      - name: Wait for PostgreSQL
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
+        run: pnpm run db:wait
+
+      - name: Migrate and seed
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL_ADMIN }}
+        run: |
+          pnpm run db:migrate
+          pnpm run db:seed
+
+      - name: Grant a login identity membership of prl_app
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql --host 127.0.0.1 --username postgres --dbname poker_risk_lab_browser \
+            --set ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'prl_ci_app') THEN
+              CREATE ROLE prl_ci_app LOGIN PASSWORD 'prl-ci-not-a-secret';
+            END IF;
+          END
+          $$;
+          GRANT prl_app TO prl_ci_app;
+          GRANT CONNECT ON DATABASE poker_risk_lab_browser TO prl_ci_app;
+          SQL
+
+      - name: Resolve the browser
+        id: browser
+        # Same list, same reason, as the browser jobs in ci.yml. A missing Chrome
+        # FAILS: six of the seven gates below cannot run without one, and a release
+        # pipeline that skips them quietly is the hole this job was added to close.
+        run: |
+          for candidate in /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser; do
+            if [ -x "$candidate" ]; then
+              "$candidate" --version
+              echo "CHROME_PATH=$candidate" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "no Chrome on this runner image, so the gates below cannot run."
+          echo "They need one of: /usr/bin/google-chrome /usr/bin/chromium /usr/bin/chromium-browser"
+          exit 1
+
+      - name: Contrast budget
+        run: pnpm run design:contrast
+
+      - name: Accessibility audit
+        # Every gate below carries `!cancelled() && steps.browser.outcome`: seven
+        # independent measurements, and one failing must not hide the other six's
+        # verdicts. The condition is on the BROWSER step rather than `always()`,
+        # because with no browser there is nothing to measure and a second
+        # confusing failure helps nobody.
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:a11y -- --with-api --out a11y-report.json
+
+      - name: Accessibility tree
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:ax -- --json ax-tree-report.json
+
+      - name: Keyboard journeys
+        # Real `Input.dispatchKeyEvent` through Chrome's own input pipeline: tab
+        # order, focus visibility, the modal sheet's trap, the bet-size slider,
+        # and a whole hand opened, sat down at, dealt and folded from the
+        # keyboard at a live socket-backed table. It ran NOWHERE until 2026-08-26
+        # — not in `verify`, not in either workflow — because it had no `--start`
+        # and so needed a person to bring up two servers first.
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:keyboard -- --json keyboard-report.json
+
+      - name: CSP negative control
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:csp -- --out csp-negative-control.json
+
+      - name: Age gate
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:age-gate -- --out age-gate-report.json
+
+      - name: Painted text
+        # `Range.getClientRects()` over every text node on every route, in both
+        # themes, at five widths, with six injected negative controls run first.
+        # It is here because a collapsed grid track in the Coach rail shipped
+        # with every other gate in this job green — the element boxes did not
+        # overlap, the glyphs did — and nothing in this pipeline could see it.
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
+        run: pnpm run test:layout -- --out text-layout-report.json
+
+      - name: Upload the browser-gate reports
+        # `always()`, because the report of a FAILING run is the one worth reading.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-browser-gate-reports
+          path: |
+            a11y-report.json
+            ax-tree-report.json
+            keyboard-report.json
+            csp-negative-control.json
+            age-gate-report.json
+            text-layout-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
   # -------------------------------------------------------------------------
   # 3. BUILD ONCE.
   #
@@ -268,7 +469,10 @@ jobs:
   # -------------------------------------------------------------------------
   build:
     name: Build immutable artefacts
-    needs: tests
+    # BOTH, and the pairing is the invariant: a gate that runs BESIDE this job
+    # turns the workflow red without stopping anything, because the artefact is
+    # still built, scanned, pushed through staging and offered for signing.
+    needs: [tests, browser-gates]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -335,14 +539,37 @@ jobs:
         with:
           persist-credentials: false
 
+      # This job had neither of the next two steps, and it was the only
+      # pnpm-invoking job in any of the three workflow files without them. The
+      # ubuntu-24.04 image has no pnpm on PATH, so the `Scan` step below exited
+      # 127 before trivy was ever consulted — and because `staging` needs this job
+      # and `promote` needs `staging`, the mandatory container-CVE gate did not
+      # merely fail open, it took the rest of the release down with it in a way
+      # that read as a scanner problem rather than a missing toolchain. Neither
+      # step is optional here.
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Enable corepack (pins pnpm via the packageManager integrity hash)
+        run: corepack enable
+
+      # Deliberately no `pnpm install`: `security:containers` is `node
+      # scripts/supply-chain/container-scan.mjs`, which imports node: builtins and
+      # its sibling lib.mjs and nothing else. corepack is here so `pnpm run` can
+      # resolve the script name, not to provide a dependency tree — and this job
+      # decides whether the artefacts are safe, so not installing the graph it is
+      # judging is the same reasoning `build` uses one job above.
+
       - name: Download the release manifest
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-manifest
           path: deploy/staging
 
       - name: Download the images
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-images
           path: release-images
@@ -419,13 +646,13 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Download the release manifest
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-manifest
           path: deploy/staging
 
       - name: Download the images
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-images
           path: release-images
@@ -507,13 +734,13 @@ jobs:
           persist-credentials: false
 
       - name: Download the release manifest
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-manifest
           path: deploy/staging
 
       - name: Download the staging attestation
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: staging-verified
           path: deploy/staging
@@ -523,6 +750,48 @@ jobs:
         # differ. It does not deploy — see its header — and there is nothing here
         # that could.
         run: node scripts/staging.mjs promote
+
+      - name: Record that this release was PROMOTED, not rehearsed
+        # The artefact `release-sign.yml` refuses to sign without.
+        #
+        # Signing keyed off the triggering run's conclusion alone, and a rehearsal
+        # concludes success: `workflow_dispatch` with the default `dry_run: true`
+        # against any branch runs the gates, builds the images, passes staging,
+        # skips this job — and the release run goes green. `release-sign.yml` then
+        # pushed those branch images to GHCR and signed them with a Fulcio
+        # certificate naming this repository. The safe-by-default input made the
+        # rehearsal path the LIKELY one.
+        #
+        # This job only runs on a tag push or an explicit `dry_run: false`, so its
+        # output is the only artefact in the release that means "promoted". A
+        # branch name cannot forge it and a conclusion cannot imply it.
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('node:fs');
+            const manifest = require('./deploy/staging/release-manifest.json');
+            fs.writeFileSync(
+              'deploy/staging/release-promotable.json',
+              \`\${JSON.stringify({
+                promotable: true,
+                sha: manifest.commit.sha,
+                event: process.env.GITHUB_EVENT_NAME,
+                ref: process.env.GITHUB_REF,
+                runId: process.env.GITHUB_RUN_ID,
+              }, null, 2)}\n\`,
+            );
+          "
+          cat deploy/staging/release-promotable.json
+
+      - name: Upload the promotion attestation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-promotable
+          path: deploy/staging/release-promotable.json
+          # `error`, not `warn`: an absent attestation would make every later
+          # signing run fail for a reason nobody could see from here.
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Record the digests being promoted
         run: |
@@ -639,7 +908,7 @@ jobs:
           persist-credentials: false
 
       - name: Download the release manifest
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-manifest
           path: deploy/staging

@@ -1,0 +1,236 @@
+# ---------------------------------------------------------------------------
+# The front door, and the blind spot these four rules exist to close.
+#
+# Prometheus scrapes the API on the compose network, so nginx, TLS and the page
+# server are all downstream of every `prl_*` series in this file. A dead proxy or
+# an expired certificate left every one of those rules green while learners saw
+# nothing at all. The `prl-public-origin` job makes a real HTTPS request through
+# the front door every 15 s, and these are the rules that read it.
+#
+# The case worth being careful about is the last one. `probe_ssl_earliest_cert_expiry`
+# is 0 on a FAILED probe, and `0 - time()` is a large negative number — so a
+# certificate rule written without the `> 0` filter fires on every outage,
+# claiming an expiry that has not happened and sending somebody to renew a
+# certificate that is fine, in the middle of an incident that is about something
+# else. That case is asserted here in both directions.
+#
+# promtool's clock starts at the Unix epoch, so `time()` at eval_time 20m is
+# 1200 and every certificate expiry below is written as seconds-since-epoch from
+# that origin.
+# ---------------------------------------------------------------------------
+rule_files:
+  - ../alert-rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    name: a proxy that stops answering pages, and names which upstream failed
+    input_series:
+      # Both targets healthy for five minutes, then the whole front door goes.
+      - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '1+0x20 0+0x200'
+      - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
+        values: '1+0x20 0+0x200'
+      - series: 'up{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '1+0x221'
+      - series: 'up{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
+        values: '1+0x221'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="PublicOriginDown"}'
+        eval_time: 4m
+        exp_samples: []
+      # Two targets down is two alerts with one alertname, which
+      # `group_by: ['alertname']` delivers as one notification carrying both.
+      - expr: 'count(ALERTS{alertname="PublicOriginDown", alertstate="firing"})'
+        eval_time: 8m
+        exp_samples:
+          - labels: '{}'
+            value: 2
+      - expr: 'ALERTS{alertname="PublicOriginDown", alertstate="firing", module="learner_page_https"}'
+        eval_time: 8m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PublicOriginDown", alertstate="firing", severity="page", job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+            value: 1
+      # The probe itself is fine, so nothing says the origin is unwatched.
+      - expr: 'ALERTS{alertname="PublicOriginProbeDown"}'
+        eval_time: 8m
+        exp_samples: []
+
+  - interval: 15s
+    name: the page server dark behind a healthy proxy pages for that target alone
+    input_series:
+      # `/` fails and `/api/v1/health` passes, which is the `web` service and not
+      # the proxy. The module label is the whole of that triage.
+      - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '0+0x200'
+      - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
+        values: '1+0x200'
+      - series: 'probe_ssl_earliest_cert_expiry{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
+        values: '5184000+0x200'
+    promql_expr_test:
+      - expr: 'count(ALERTS{alertname="PublicOriginDown", alertstate="firing"})'
+        eval_time: 8m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: 'ALERTS{alertname="PublicOriginDown", alertstate="firing", module="api_health_https"}'
+        eval_time: 8m
+        exp_samples: []
+
+  - interval: 15s
+    name: a front door that is answering raises nothing at all
+    input_series:
+      - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '1+0x200'
+      - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
+        values: '1+0x200'
+      - series: 'up{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '1+0x200'
+      - series: 'up{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
+        values: '1+0x200'
+      # Sixty days of certificate, which is the shipped state.
+      - series: 'probe_ssl_earliest_cert_expiry{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '5184000+0x200'
+      - series: 'probe_ssl_earliest_cert_expiry{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
+        values: '5184000+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname=~"PublicOrigin.*|TlsCertificate.*"}'
+        eval_time: 30m
+        exp_samples: []
+
+  - interval: 15s
+    name: an exporter that is scraped and failing raises the unwatched ticket
+    input_series:
+      - series: 'up{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '1+0x20 0+0x200'
+      - series: 'up{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
+        values: '1+0x20 0+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="PublicOriginProbeDown", alertstate="firing"}'
+        eval_time: 10m
+        exp_samples: []
+      - expr: 'count(ALERTS{alertname="PublicOriginProbeDown", alertstate="firing"})'
+        eval_time: 18m
+        exp_samples:
+          - labels: '{}'
+            value: 2
+
+  - interval: 15s
+    name: an exporter removed from the configuration entirely still raises the ticket
+    input_series:
+      # No `up` series at all, which is what deleting the job or the container
+      # looks like from here. `up == 0` over nothing is empty, so without the
+      # `absent()` half this rule would go quiet at the same moment as the three
+      # it exists to cover for.
+      - series: 'prl_readiness_state'
+        values: '1+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="PublicOriginProbeDown", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PublicOriginProbeDown", alertstate="firing", severity="ticket", job="prl-public-origin"}'
+            value: 1
+
+  - interval: 15s
+    name: a certificate ten days out raises a ticket and does not page
+    input_series:
+      - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '1+0x200'
+      - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
+        values: '1+0x200'
+      # Both targets are one nginx with one certificate, so both report the same
+      # expiry. `min()` is what keeps that one fact from becoming two alerts.
+      - series: 'probe_ssl_earliest_cert_expiry{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '865200+0x200'
+      - series: 'probe_ssl_earliest_cert_expiry{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
+        values: '865200+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="TlsCertificateExpiringSoon", alertstate="firing"}'
+        eval_time: 10m
+        exp_samples: []
+      - expr: 'count(ALERTS{alertname="TlsCertificateExpiringSoon", alertstate="firing"})'
+        eval_time: 20m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      - expr: 'ALERTS{alertname="TlsCertificateExpiryImminent"}'
+        eval_time: 20m
+        exp_samples: []
+
+  - interval: 15s
+    name: a certificate two days out pages
+    input_series:
+      - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '1+0x200'
+      - series: 'probe_ssl_earliest_cert_expiry{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '174000+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="TlsCertificateExpiryImminent", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="TlsCertificateExpiryImminent", alertstate="firing", severity="page"}'
+            value: 1
+      # The ticket is true as well — under three days is also under twenty-one —
+      # and it is suppressed by an inhibit rule in `alertmanager.template.yml`
+      # rather than by the expression, because at delivery is where "one incident,
+      # one notification" is decided.
+      - expr: 'ALERTS{alertname="TlsCertificateExpiringSoon", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="TlsCertificateExpiringSoon", alertstate="firing", severity="ticket"}'
+            value: 1
+
+  - interval: 15s
+    name: an outage does not invent a certificate expiry
+    input_series:
+      # The defect this guards: a failed probe reports `probe_ssl_earliest_cert_expiry 0`,
+      # and without the `> 0` filter `0 - time()` is minus twenty minutes — which
+      # is under three days, so a dead proxy would ALSO page a certificate expiry
+      # that is sixty days away, and send somebody to renew it mid-incident.
+      - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '0+0x200'
+      - series: 'probe_ssl_earliest_cert_expiry{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '0+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="TlsCertificateExpiringSoon"}'
+        eval_time: 20m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="TlsCertificateExpiryImminent"}'
+        eval_time: 20m
+        exp_samples: []
+      # And the unfiltered spelling, evaluated on the same input, to show the
+      # difference is the filter and not the threshold.
+      - expr: 'count(min(probe_ssl_earliest_cert_expiry{job="prl-public-origin"}) - time() < 3 * 86400)'
+        eval_time: 20m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+      # What must fire here is the outage.
+      - expr: 'ALERTS{alertname="PublicOriginDown", alertstate="firing"}'
+        eval_time: 20m
+        exp_samples:
+          - labels: 'ALERTS{alertname="PublicOriginDown", alertstate="firing", severity="page", job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+            value: 1
+
+  - interval: 15s
+    name: one target failing does not blind the certificate rules on the other
+    input_series:
+      # `/` is dark, `/api/v1/health` still handshakes. The zero from the failed
+      # probe must be filtered out rather than dragging the minimum to zero — a
+      # `min()` without the filter reports the broken target's 0 and pages.
+      - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '0+0x200'
+      - series: 'probe_success{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
+        values: '1+0x200'
+      - series: 'probe_ssl_earliest_cert_expiry{job="prl-public-origin", instance="https://proxy:8443/", module="learner_page_https"}'
+        values: '0+0x200'
+      - series: 'probe_ssl_earliest_cert_expiry{job="prl-public-origin", instance="https://proxy:8443/api/v1/health", module="api_health_https"}'
+        values: '5184000+0x200'
+    promql_expr_test:
+      - expr: 'ALERTS{alertname="TlsCertificateExpiringSoon"}'
+        eval_time: 20m
+        exp_samples: []
+      - expr: 'ALERTS{alertname="TlsCertificateExpiryImminent"}'
+        eval_time: 20m
+        exp_samples: []

@@ -52,7 +52,7 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { after, test } from 'node:test';
+import { after, describe, it, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import {
@@ -60,6 +60,8 @@ import {
   declaresIrreversible,
   findIrreversibleStatements,
   locateInSource,
+  parseArgs,
+  refuseUnconfirmedReset,
   stripSqlComments,
 } from './migrate.mjs';
 
@@ -369,7 +371,9 @@ test('a migration that fails names the file, the line, the statement and the SQL
   // The path was exercised: the transaction opened, the lock timeout was set, and the whole file
   // went through `unsafe`. Without this, a rejection thrown before any of that would satisfy
   // every assertion below.
-  assert.deepEqual(calls, ['tagged:select set_config', `unsafe:${sql.length}`]);
+  // Two set_config statements, not one: the lock timeout, and the transaction-local witness
+  // `applyFile` reads back to prove the file did not end the transaction under it.
+  assert.deepEqual(calls, ['tagged:select set_config', 'tagged:select set_config', `unsafe:${sql.length}`]);
 
   assertNamesTheFile(message, file, {
     line: 4,
@@ -408,7 +412,7 @@ test('a failure with no cursor position still names the file', async () => {
 
   const thrown = await rejectionOf(() => applyFile(handle, file, true, 'migration'));
   const message = String(thrown?.message ?? thrown);
-  assert.ok(calls.length === 2, `the file must have been sent before it failed, saw ${calls.join(', ')}`);
+  assert.ok(calls.length === 3, `the file must have been sent before it failed, saw ${calls.join(', ')}`);
 
   assertNamesTheFile(message, file, { code: '42P07' });
   assert.match(message, /relation "users" already exists/, 'the driver’s own words are still shown');
@@ -420,6 +424,124 @@ test('a failure with no cursor position still names the file', async () => {
     /must name the file/,
     'the negative control: the old message is the defect, verbatim',
   );
+});
+
+/**
+ * A handle whose file SUCCEEDS but whose transaction did not survive it.
+ *
+ * `set_config(..., true)` is transaction-local, so a file containing `COMMIT;` leaves
+ * `current_setting` with nothing to return. This stub models exactly that: the witness write is
+ * accepted, `unsafe` resolves, and the read-back comes up empty — which is what PostgreSQL
+ * actually does once the transaction has been closed underneath the runner.
+ */
+function handleWhoseTransactionEscapes(calls) {
+  let wrote = 0;
+  const tx = Object.assign(
+    (strings) => {
+      const text = String(strings?.raw?.[0] ?? '').trim();
+      calls.push(`tagged:${text.slice(0, 17)}`);
+      // The second set_config is the witness write; the third tagged call is the read-back.
+      if (text.startsWith('select current_setting')) return Promise.resolve([{ value: null }]);
+      wrote += 1;
+      return Promise.resolve([]);
+    },
+    {
+      unsafe: (text) => {
+        calls.push(`unsafe:${text.length}`);
+        return Promise.resolve([]);
+      },
+    },
+  );
+  return { begin: (fn) => fn(tx), wrote: () => wrote };
+}
+
+test('NEGATIVE CONTROL: a file that ends its own transaction is refused, and the message says so', async () => {
+  // ## Reproduced, against the pre-fix runner, on a real PostgreSQL 16
+  //
+  //   db/migrations/0009_rev_commit.sql:
+  //     CREATE TABLE prl.rev_half_a (id text primary key);
+  //     COMMIT;
+  //     CREATE TABLE prl.rev_half_b (id text primary key);
+  //     CREATE TABLE prl.rev_half_b (id text primary key);   -- deliberate duplicate
+  //
+  //   ✗ migration 0009_rev_commit.sql failed. Nothing it contained was applied.
+  //     error:  relation "rev_half_b" already exists
+  //   Each file is applied inside one transaction, so that transaction has been rolled back and
+  //   this database is exactly as it was before the run started.
+  //
+  // `prl.rev_half_a` was present afterwards and prl.schema_migrations had no row, so the
+  // sentence was false in both halves. The retry — which is what a deploy pipeline does — then
+  // failed on `relation "rev_half_a" already exists`, and `up` could not succeed again.
+  //
+  // The old code cannot pass this test: without the witness read-back there is nothing to
+  // detect, `applyFile` resolves, and `rejectionOf` fails its own `instanceof Error` assertion.
+  const file = await brokenMigration('0099_commits_halfway.sql', 'create table prl.a (id text);\nCOMMIT;\n');
+  const calls = [];
+  const handle = handleWhoseTransactionEscapes(calls);
+
+  const thrown = await rejectionOf(() => applyFile(handle, file, true, 'migration'));
+  const message = String(thrown?.message ?? thrown);
+
+  assert.match(message, /ENDED ITS OWN TRANSACTION/, 'the headline must not say "nothing was applied"');
+  assert.doesNotMatch(
+    message,
+    /Nothing it contained was applied|exactly as it was before/,
+    'the false reassurance is the defect; it must not survive anywhere in the message',
+  );
+  assert.match(message, /DURABLE/, 'the operator must be told the committed half is still there');
+  assert.match(message, /schema_migrations/, 'and that no ledger row was written, so a retry replays it');
+  assertNamesTheFile(message, file, {});
+
+  // The ledger insert must NOT have been attempted: recording a version for a file whose first
+  // half committed and whose second half may not have run is the worst of both.
+  assert.ok(
+    !calls.some((call) => call.startsWith('tagged:insert')),
+    `no ledger write may be attempted, saw ${calls.join(', ')}`,
+  );
+});
+
+describe('reset refuses until it is told which database it is emptying', () => {
+  // ## Reproduced, against the pre-fix runner, on a real PostgreSQL 16
+  //
+  //   DATABASE_MIGRATION_URL=<a database holding 944,297 rows> node .../migrate.mjs reset
+  //     ! dropping schema prl in database "poker_risk_lab_restored" as "postgres"
+  //     ✓ schema prl dropped
+  //   select count(*) from prl.hands  →  68677 before, 0 after
+  //
+  // NODE_ENV was unset in that shell; nothing else was needed. The only guard was
+  // `NODE_ENV === 'production'`, which describes the process rather than the target, and
+  // `pnpm run db:reset` loads a checked-in .env that sets NODE_ENV=development.
+  it('NEGATIVE CONTROL: an unconfirmed reset is refused, and the message names the database', () => {
+    assert.throws(
+      () => refuseUnconfirmedReset('poker_risk_lab', null),
+      (error) => {
+        assert.match(error.message, /poker_risk_lab/, 'the target must be named so a typo is visible');
+        assert.match(error.message, /--confirm-database poker_risk_lab/, 'and the exact fix shown');
+        assert.match(error.message, /NODE_ENV is not a guard/, 'and why the old guard was not one');
+        return true;
+      },
+    );
+  });
+
+  it('NEGATIVE CONTROL: a confirmation for a DIFFERENT database is refused', () => {
+    // The property that makes the flag worth having: an acknowledgement recalled from shell
+    // history is bound to the database it was typed for and cannot empty another one.
+    assert.throws(
+      () => refuseUnconfirmedReset('poker_risk_lab_prod', 'poker_risk_lab_dev'),
+      /You named "poker_risk_lab_dev", but this connection is to "poker_risk_lab_prod"/,
+    );
+  });
+
+  it('POSITIVE CONTROL: the matching name passes', () => {
+    assert.doesNotThrow(() => refuseUnconfirmedReset('poker_risk_lab', 'poker_risk_lab'));
+  });
+
+  it('parses the flag in both spellings, and refuses it without a value', () => {
+    assert.equal(parseArgs(['reset', '--confirm-database', 'x']).confirmDatabase, 'x');
+    assert.equal(parseArgs(['reset', '--confirm-database=x']).confirmDatabase, 'x');
+    assert.equal(parseArgs(['up']).confirmDatabase, null);
+    assert.throws(() => parseArgs(['reset', '--confirm-database']), /needs the name/);
+  });
 });
 
 test('a role file and a seed file are named by their own labels, not as migrations', async () => {

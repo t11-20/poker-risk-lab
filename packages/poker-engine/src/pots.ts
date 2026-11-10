@@ -35,7 +35,7 @@
 
 import type { Card } from './cards.ts';
 import { describeScore, evaluate, type HandScore } from './evaluate.ts';
-import type { Pot, PotAward, SeatIndex, SeatShowdown, SeatState } from './types.ts';
+import type { Pot, PotAward, SeatIndex, SeatShowdown, SeatState, SeatStatus } from './types.ts';
 
 export class PotError extends Error {
   override readonly name = 'PotError';
@@ -45,6 +45,23 @@ export class PotError extends Error {
 export interface UncontestedReturn {
   readonly seat: SeatIndex;
   readonly amount: number;
+}
+
+/**
+ * The three fields the layering rule actually reads off a seat.
+ *
+ * `SeatState` satisfies this structurally, so every existing caller is unaffected. It
+ * exists because `contestablePotFor` below has to ask the same question about a
+ * *hypothetical* table — the one that exists a moment after hero calls — and building a
+ * whole `SeatState` (hole cards, `lastActedAtBetLevel`, `isAllInThisHand`) to ask it
+ * would mean inventing five fields the answer does not depend on. Widening the parameter
+ * is the alternative to a second copy of the layering rule, and a second copy of this
+ * rule is exactly what the Coach's mispriced side pot was.
+ */
+export interface PotContributor {
+  readonly seat: SeatIndex;
+  readonly committedTotal: number;
+  readonly status: SeatStatus;
 }
 
 export interface PotLayers {
@@ -76,7 +93,7 @@ export interface PotLayers {
  *
  * @param seats every seat that put chips in this hand, folded or not
  */
-export function buildPotLayers(seats: readonly SeatState[]): PotLayers {
+export function buildPotLayers(seats: readonly PotContributor[]): PotLayers {
   const contributors = seats.filter((seat) => seat.committedTotal > 0);
   if (contributors.length === 0) return { pots: [], returns: [] };
 
@@ -96,7 +113,7 @@ export function buildPotLayers(seats: readonly SeatState[]): PotLayers {
     if (excess > 0) returns.push({ seat: seat.seat, amount: excess });
   }
 
-  const contested = (seat: SeatState): number => Math.min(seat.committedTotal, contestableCap);
+  const contested = (seat: PotContributor): number => Math.min(seat.committedTotal, contestableCap);
   const levels = [...new Set(contributors.map(contested))].filter((level) => level > 0).sort((a, b) => a - b);
 
   const pots: Pot[] = [];
@@ -148,8 +165,125 @@ export function buildPotLayers(seats: readonly SeatState[]): PotLayers {
 }
 
 /** Convenience wrapper for callers that only need the contested pots. */
-export function buildPots(seats: readonly SeatState[]): Pot[] {
+export function buildPots(seats: readonly PotContributor[]): Pot[] {
   return [...buildPotLayers(seats).pots];
+}
+
+/** One seat's stake in the street being priced. `SeatState` and `SeatView` both satisfy it. */
+export interface StreetContribution {
+  readonly seat: SeatIndex;
+  readonly committedThisStreet: number;
+  readonly status: SeatStatus;
+}
+
+export interface ContestablePotInput {
+  /** Every seat with chips in this hand, folded ones included — their chips stay in the middle. */
+  readonly seats: readonly StreetContribution[];
+  readonly heroSeat: SeatIndex;
+  /**
+   * What hero is about to put in, **already capped at hero's stack** — the engine's own
+   * `amountToCall`. Passing an uncapped figure describes a call hero cannot make and
+   * produces a pot hero cannot reach.
+   */
+  readonly callAmount: number;
+  /** Everything in the middle right now, across every street, hero's pending call excluded. */
+  readonly potTotal: number;
+}
+
+export interface ContestablePot {
+  /** `input.potTotal`, echoed so a caller can print both halves without re-deriving either. */
+  readonly potTotal: number;
+  /** The part of `potTotal` hero could win by calling. Equal to `potTotal` in the ordinary spot. */
+  readonly contestable: number;
+  /** `potTotal - contestable`: the side pot(s) hero's stack does not reach. Usually 0. */
+  readonly uncontestable: number;
+}
+
+/**
+ * How much of the middle hero could actually win, when hero is all-in for less than the
+ * bet in front of them.
+ *
+ * ## The defect this exists to close
+ *
+ * A learner all-in for less than the bet facing them was being priced against the whole
+ * middle. Measured, heads-up at 5/10 with hero holding 40 and villain shoving 310: the
+ * engine reported `potTotal 320, amountToCall 30` and laid out its own layers as an
+ * 80-chip main pot both seats can win and a 270-chip side pot only villain can. The Coach
+ * quoted "10.7 to 1, so you need 8.6%" against that 320. The true price is 30 into an
+ * 80-chip pot — 1.67 to 1, 37.5% — so the requirement was understated 4.4x and a losing
+ * call was published at +82.8 chips. `test/invariants.test.ts` plays 4,000 random hands at
+ * 2-6 seats and mixed depths and finds 5,793 decision points with a call the engine capped,
+ * 5,650 of them leaving chips beyond hero's reach — the worst understating the equity a call
+ * needs by 271x.
+ *
+ * ## Why it is a sum over opponents, not one subtraction
+ *
+ * Three-handed with hero capped at 40, opponent A all-in for 100 and opponent B all-in for
+ * 300, the chips above hero's reach are 60 from A *and* 260 from B. There are two side
+ * pots, and subtracting only the largest bet's excess leaves the other opponent's on the
+ * table. The layering below sums them because that is what layering does.
+ *
+ * ## Why this street's commitments are enough
+ *
+ * Only the current street can hold chips above hero's reach. A seat that is *to act* has
+ * matched the closing level of every completed street — that is what being still in the
+ * hand means — so no earlier-street contribution can sit above hero's total, and
+ * `potTotal` carries all of it as contestable. A hero who could not match an earlier
+ * street is all-in already and is never asked to act again. So the layering runs over
+ * `committedThisStreet` and the carried-in money is added back whole.
+ *
+ * ## Implementation note
+ *
+ * `buildPotLayers` is asked rather than a formula written out here, on the table as it
+ * would stand a moment after hero calls. The eligibility rule — folded seats contribute
+ * chips and win nothing, a layer belongs to the seats that reached its cap — has exactly
+ * one implementation, and the Coach reads it rather than owning a second one.
+ */
+export function contestablePotFor(input: ContestablePotInput): ContestablePot {
+  const hero = input.seats.find((seat) => seat.seat === input.heroSeat);
+  if (hero === undefined) {
+    throw new PotError(`seat ${input.heroSeat} is not among the seats supplied, so it has no pot share`);
+  }
+  if (hero.status !== 'active' && hero.status !== 'allIn') {
+    throw new PotError(`seat ${input.heroSeat} is ${hero.status} and can win nothing; there is no price`);
+  }
+  if (!Number.isInteger(input.callAmount) || input.callAmount < 0) {
+    throw new PotError(`callAmount must be a non-negative whole number of chips, got ${input.callAmount}`);
+  }
+  const streetTotal = input.seats.reduce((sum, seat) => sum + seat.committedThisStreet, 0);
+  if (!Number.isInteger(input.potTotal) || input.potTotal < streetTotal) {
+    throw new PotError(
+      `potTotal ${input.potTotal} is below the ${streetTotal} committed on this street alone — it is ` +
+        "everything in the middle across every street, excluding hero's pending call",
+    );
+  }
+
+  // The table one moment after hero calls. Hero's own call is what decides which layers
+  // hero reaches, so it has to be in the commitment the layering sees.
+  const afterCall: PotContributor[] = input.seats.map((seat) => ({
+    seat: seat.seat,
+    committedTotal: seat.committedThisStreet + (seat.seat === input.heroSeat ? input.callAmount : 0),
+    status: seat.status,
+  }));
+  const layers = buildPotLayers(afterCall);
+
+  let heroEligible = 0;
+  for (const pot of layers.pots) {
+    if (pot.eligibleSeats.includes(input.heroSeat)) heroEligible += pot.amount;
+  }
+  // `heroEligible` counts hero's own call, which is not yet in the middle. Every caller
+  // here reports a pot "before hero's call" and would double-count it otherwise.
+  const contestableThisStreet = heroEligible - input.callAmount;
+  const uncontestable = streetTotal - contestableThisStreet;
+  const contestable = input.potTotal - uncontestable;
+
+  if (uncontestable < 0 || contestable < 0 || contestable > input.potTotal) {
+    throw new PotError(
+      `internal: seat ${input.heroSeat} can contest ${contestable} of ${input.potTotal} with ` +
+        `${uncontestable} beyond reach — the three do not describe one pot`,
+    );
+  }
+  return { potTotal: input.potTotal, contestable, uncontestable };
 }
 
 function sameSeats(a: readonly SeatIndex[], b: readonly SeatIndex[]): boolean {
@@ -165,7 +299,7 @@ function sameSeats(a: readonly SeatIndex[], b: readonly SeatIndex[]): boolean {
  * committed. This is the conservation invariant: a side-pot bug silently creates
  * or destroys chips, and there is no other symptom.
  */
-export function assertPotsBalance(seats: readonly SeatState[], layers: PotLayers): void {
+export function assertPotsBalance(seats: readonly PotContributor[], layers: PotLayers): void {
   const committed = seats.reduce((sum, seat) => sum + seat.committedTotal, 0);
   const inPots = layers.pots.reduce((sum, pot) => sum + pot.amount, 0);
   const returned = layers.returns.reduce((sum, entry) => sum + entry.amount, 0);

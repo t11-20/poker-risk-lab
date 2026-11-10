@@ -66,6 +66,13 @@
  * Exit codes: 0 pass, 1 any failure (or any warning under --strict), 0 for --help.
  */
 
+import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** The repository root, so the enrolment CLI can be found however this script was invoked. */
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
@@ -99,6 +106,37 @@ const DEFAULTS = {
    * 90 seconds with a diagnosis rather than hanging a release gate for one.
    */
   maxWaitSeconds: 90,
+  /**
+   * What this run expects `PRL_ENROLMENT_REQUIRED` to be on the deployment it is pointed at.
+   *
+   * `discover` accepts either posture and asserts whichever one it finds, which is right for a
+   * developer stack: the shipped default is `off`, and proving that an open instance seats anybody
+   * is a real check rather than a skip. `scripts/staging.mjs` passes `enforced`, because staging is
+   * the deployment that runs the guard ON and a run that could not exercise it there must fail
+   * rather than quietly report the open behaviour.
+   */
+  expectEnrolment: 'discover',
+};
+
+/** The legal values of `--expect-enrolment`. */
+const ENROLMENT_EXPECTATIONS = ['discover', 'off', 'enforced'];
+
+/**
+ * The cohort this harness enrols its throwaway guests into.
+ *
+ * Created once per database and then reused forever, because a cohort with enrolments in it is not
+ * a row anybody may remove — `enrolments.cohort_id` is `ON DELETE RESTRICT` and no role holds
+ * DELETE on the table. That is the schema working, not an obstacle: the accounts this run creates
+ * are guests that the retention sweep erases after 60 days, and `enrolments.user_id` is ON DELETE
+ * CASCADE, so the rows go with the accounts that own them. What this run cleans up itself is the
+ * ENTITLEMENT, by revoking it — which is an UPDATE that keeps the record, and is the only shape of
+ * withdrawal this schema has.
+ */
+const SMOKE_COHORT = {
+  key: 'smoke-test',
+  name: 'Smoke test cohort',
+  by: 'scripts/smoke-test.mjs',
+  reference: 'smoke-test-harness',
 };
 
 const HELP = `Poker Risk Lab smoke test — walks the critical journeys against a running API.
@@ -115,6 +153,12 @@ Options:
   --no-reset              Never call the reset control, even with a token, so the
                           wait-out fallback is the thing under test
   --max-wait <seconds>    Bound on the wait-out fallback       (default ${DEFAULTS.maxWaitSeconds})
+  --expect-enrolment <v>  discover | off | enforced            (default ${DEFAULTS.expectEnrolment},
+                          env PRL_SMOKE_ENROLMENT_REQUIRED). What PRL_ENROLMENT_REQUIRED is
+                          expected to be on the deployment under test. "enforced" makes a run
+                          that cannot exercise the seat guard a FAILURE rather than a note.
+  --migration-url <dsn>   Migrating identity, for writing the enrolment the enforced direction
+                          needs (env DATABASE_MIGRATION_URL). Never printed.
   -h, --help              Print this and exit 0
 
 Exit codes: 0 pass, 1 any failure (or any warning under --strict).
@@ -124,6 +168,8 @@ const STRING_OPTIONS = new Map([
   ['--origin', 'apiOrigin'],
   ['--web-origin', 'webOrigin'],
   ['--reset-token', 'resetToken'],
+  ['--expect-enrolment', 'expectEnrolment'],
+  ['--migration-url', 'migrationUrl'],
 ]);
 
 const NUMERIC_OPTIONS = new Map([['--max-wait', 'maxWaitSeconds']]);
@@ -172,6 +218,12 @@ export function parseArgs(argv, env = process.env) {
     resetToken: env['PRL_RATE_LIMIT_RESET_TOKEN'] ?? env['RATE_LIMIT_RESET_TOKEN'] ?? '',
     noReset: false,
     maxWaitSeconds: Number(env['PRL_SMOKE_MAX_WAIT_SECONDS'] ?? DEFAULTS.maxWaitSeconds),
+    // What the deployment under test is expected to have set for PRL_ENROLMENT_REQUIRED, or
+    // `discover` to accept whichever posture it is in. See `sectionEnrolment`.
+    expectEnrolment: env['PRL_SMOKE_ENROLMENT_REQUIRED'] ?? DEFAULTS.expectEnrolment,
+    // The MIGRATING identity, which is the only one that can write an enrolment: `prl_app` holds
+    // SELECT and nothing else on prl.enrolments, on purpose. Never printed; see `redactUrl`.
+    migrationUrl: env['DATABASE_MIGRATION_URL'] ?? '',
     help: false,
   };
 
@@ -212,6 +264,12 @@ export function parseArgs(argv, env = process.env) {
 
   options.apiOrigin = requireHttpOrigin('--origin', options.apiOrigin);
   options.webOrigin = requireHttpOrigin('--web-origin', options.webOrigin);
+  if (!ENROLMENT_EXPECTATIONS.includes(options.expectEnrolment)) {
+    throw new Error(
+      '--expect-enrolment (or PRL_SMOKE_ENROLMENT_REQUIRED) must be one of ' +
+        `${ENROLMENT_EXPECTATIONS.join(', ')}, got "${options.expectEnrolment}"`,
+    );
+  }
   if (!Number.isInteger(options.maxWaitSeconds) || options.maxWaitSeconds < 0) {
     // Names the environment variable as well as the flag, because the value can arrive from
     // either and "got NaN" sends the reader looking at a command line that does not mention it.
@@ -407,6 +465,236 @@ export function originBucketNote(origin) {
     : `${host} is a hostname; whichever address it resolves to decides the rate-limit bucket, and ` +
         '::1 and 127.0.0.1 are deliberately separate buckets — pass --origin with a literal address ' +
         'to pin it';
+}
+
+// ---------------------------------------------------------------------------
+// Assertions about absence
+// ---------------------------------------------------------------------------
+
+/**
+ * True when `value` is not a non-empty array — because it is empty, or because it is not there.
+ *
+ * ## The defect this exists for
+ *
+ * Section 5 asserted `report.uncertainty?.limitations?.length === 0`. For a report that carries
+ * no `uncertainty` at all, `?.` short-circuits to `undefined`, `undefined === 0` is false, and
+ * there was no `else` — so the field simply going missing produced neither a pass nor a
+ * failure. The check evaporated, silently, in exactly the state that is MORE broken than the
+ * one it was written to catch: an empty `limitations` array is a coach report that stated no
+ * limitations, and a missing `uncertainty` object is a coach report that has stopped modelling
+ * uncertainty at all.
+ *
+ * This is the idiom the rest of the file already used two lines away (`assumptions`,
+ * `whatWouldChangeIt`, the Legends disclaimers), named and shared so that the next assertion
+ * about a list cannot be written the other way by accident.
+ */
+export function listIsMissingOrEmpty(value) {
+  return !Array.isArray(value) || value.length === 0;
+}
+
+/**
+ * True when a sampled equity result came back without the interval that makes it honest.
+ *
+ * `== null`, not `=== null`: the check was written `=== null` and therefore passed a response
+ * whose `confidenceHalfWidthPoints` key was absent entirely — which is what a serialiser that
+ * drops undefined fields produces, and what a route that stopped computing the interval would
+ * produce. A Monte Carlo figure printed without its half-width is a number that reads as exact
+ * and is not, which is the single claim this repository's uncertainty policy is about. `!= null`
+ * is the idiom already used for `holeCards` in section 8.
+ */
+export function sampledEquityMissesInterval(equity) {
+  return equity?.method === 'monte-carlo' && equity?.confidenceHalfWidthPoints == null;
+}
+
+/**
+ * Seats in one live `state` frame whose hole cards the recipient was not entitled to see.
+ *
+ * ## The defect this exists for
+ *
+ * Section 7's scan was `if (frame.view.street === 'complete') return false` — every frame of a
+ * finished hand skipped, unconditionally, on the reasoning that a showdown makes cards public.
+ * A showdown does. A FOLD does not, and `HandResult.showdowns` is documented as "empty when the
+ * hand ended before showdown (everyone else folded)" while `endedByFold` says so in one field.
+ * The smoke run's own client checks or calls when it can and folds when it cannot, so hands that
+ * end without a showdown are the ordinary case here, not the exotic one.
+ *
+ * Measured against a stub API that served the opponent's hole cards in the `street: 'complete'`
+ * frame of a hand nobody showed down: section 7 printed
+ * `✓ no live frame carried another seat's hole cards mid-hand` and
+ * `✓ no socket frame carried a deck, cursor or salt`, section 8 printed
+ * `✓ an archived hand carries no opponent's unshown hole cards` — because the archive was
+ * honest and only the wire was not — and the run reported no failure of any kind. That is the
+ * single claim this script exists to make ("one player must never receive another player's
+ * private cards") passing green over a live leak.
+ *
+ * So the exemption is now the one `redactFor` actually implements
+ * (`maySeeCards = isSelf || shownSeats.has(seat.seat)`, packages/poker-engine/src/redact.ts):
+ * cards may appear for the recipient's own seat, and for a seat named in
+ * `view.result.showdowns` of a COMPLETED hand. Anything else is a leak whatever the street says.
+ *
+ * Three deliberate details:
+ *
+ *   * `holeCards != null`, not `!== null`. An absent key is a seat whose cards were not sent,
+ *     which is the safe state; the strict form called that a leak and would have reported one
+ *     against a serialiser that drops nulls. This is the idiom section 8 already uses.
+ *   * A seat is the recipient's own when `isSelf === true` OR its index equals `viewerSeat`.
+ *     Either field being renamed away therefore narrows the exemption rather than widening it,
+ *     so the failure lands in the safe direction.
+ *   * `shown` is built only for a completed hand, and only from an ARRAY. A `result` of null —
+ *     which is what a completed frame carries if the server stopped populating it — exempts
+ *     nobody, so the check gets stricter rather than evaporating.
+ *
+ * @returns {number[]} the offending seat indices, empty when the frame is clean or is not a view
+ */
+export function unentitledHoleCardSeats(frame) {
+  if (frame?.type !== 'state' || frame.view === null || frame.view === undefined) return [];
+  const view = frame.view;
+  const seats = Array.isArray(view.seats) ? view.seats : [];
+  const showdowns =
+    view.street === 'complete' && Array.isArray(view.result?.showdowns) ? view.result.showdowns : [];
+  const shown = new Set(showdowns.map((showdown) => showdown?.seat));
+  return seats
+    .filter((seat) => seat?.holeCards != null)
+    .filter((seat) => seat.isSelf !== true && seat.seat !== view.viewerSeat)
+    .filter((seat) => !shown.has(seat.seat))
+    .map((seat) => seat.seat);
+}
+
+/**
+ * What the live wire said about the hand section 7 just played, for section 8 to hold the archive
+ * to.
+ *
+ * The ground truth has to come from the socket and not from the archive, because the archive is
+ * the thing being checked. `viewerSeat` says which seat's cards this caller is entitled to and
+ * `result.showdowns` says which other seats legitimately opened theirs; a review that disagrees
+ * with either is either serving cards nobody showed or claiming a showdown that never happened.
+ *
+ * Read off the LAST `state` frame, which for a completed hand is the terminal one. Every field is
+ * type-checked rather than defaulted: a rename that turned `viewerSeat` into `undefined` would
+ * otherwise make `seat.seat === truth.viewerSeat` false for every seat and quietly widen the
+ * caller's entitlement to nothing, which reads as a stricter check and is in fact a broken one.
+ * Absence returns null, and the caller treats null as a failure rather than as "nothing to check".
+ *
+ * @returns {{handId: string|null, viewerSeat: number|null, shownSeats: number[], complete: boolean}|null}
+ */
+export function liveHandTruth(frames) {
+  const states = (Array.isArray(frames) ? frames : []).filter(
+    (frame) => frame?.type === 'state' && frame.view !== null && frame.view !== undefined,
+  );
+  const last = states[states.length - 1];
+  if (last === undefined) return null;
+  const view = last.view;
+  const showdowns = Array.isArray(view.result?.showdowns) ? view.result.showdowns : [];
+  return {
+    handId: typeof view.handId === 'string' ? view.handId : null,
+    viewerSeat: typeof view.viewerSeat === 'number' ? view.viewerSeat : null,
+    shownSeats: showdowns.map((showdown) => showdown?.seat).filter((seat) => typeof seat === 'number'),
+    complete: view.street === 'complete',
+  };
+}
+
+/**
+ * Audits one served `GET /hands/:handId` against what the live wire said about the same hand.
+ *
+ * ## The defect this exists for
+ *
+ * Section 8's card check was:
+ *
+ *     const foreignCards = aliceRows.filter((hand) => {
+ *       const seats = Array.isArray(hand.seats) ? hand.seats : [];
+ *       return seats.some((seat) => seat.holeCards != null && seat.isSelf !== true && ...);
+ *     });
+ *
+ * over the rows of `GET /api/v1/hands`. That response is `HandListResponse`, whose rows are
+ * `HandSummary` — `id, roomId, handNumber, startedAt, completedAt, board, heroNet, endedByFold,
+ * potTotal` — and it has no `seats` field at all, by design: `routes/hands.ts` says "hand_seats.
+ * hole_cards is never projected here". So `hand.seats` was `undefined` on every row, the ternary
+ * substituted `[]`, `.some()` over `[]` is false, and the run printed
+ * `✓ an archived hand carries no opponent's unshown hole cards` having examined zero seats and
+ * zero cards. Measured against the real routes and a real database on 2026-08-27, with a two-seat
+ * fold-out hand in the archive: `row keys: ["id","roomId","handNumber","startedAt","completedAt",
+ * "board","heroNet","endedByFold","potTotal"]`, `row.seats is undefined`, `foreignCards=0, seats
+ * actually examined=0`. The one route that does serve hole cards, `GET /hands/:handId`, was never
+ * fetched by this script for a real hand — only `hand_doesnotexist`.
+ *
+ * That is the same shape as the incident `unentitledHoleCardSeats` above was written for: the
+ * strongest confidentiality claim in this file, green over a surface it had never looked at.
+ *
+ * ## The rule, and why `overclaimed` is part of it
+ *
+ * `HandReviewSeat` carries `{seat, displayName, isBot, startingStack, net, holeCards, showedDown}`
+ * and — unlike a live `SeatView` — has no `isSelf`, so the caller's own seat has to come from the
+ * wire (`truth.viewerSeat`). Cards may appear for that seat, or for a seat whose `showedDown` is
+ * true, and nowhere else: the rule in `apps/api/src/review/build-review.ts`'s `toReviewSeat` and
+ * in the SQL `case` it is fed from.
+ *
+ * `showedDown` is itself an assertion the server makes, so trusting it alone would let a server
+ * that marked every seat as having shown open every hand and still pass. `overclaimed` holds it
+ * to `result.showdowns` from the live hand: a seat the wire did not name as having shown must not
+ * be marked as having shown in the archive.
+ *
+ * `examined` and `ownCards` exist because a sweep of nothing is not a pass. A review with no seat
+ * rows, or one carrying no hole cards whatsoever, satisfies `leaked.length === 0` for free — which
+ * is exactly how the old check passed. The caller fails on both.
+ *
+ * @returns {{leaked: number[], overclaimed: number[], examined: number, ownCards: boolean}}
+ */
+export function auditReviewSeats(review, truth) {
+  const seats = Array.isArray(review?.seats) ? review.seats : [];
+  const shown = new Set(Array.isArray(truth?.shownSeats) ? truth.shownSeats : []);
+  const ownSeat = typeof truth?.viewerSeat === 'number' ? truth.viewerSeat : null;
+  const leaked = [];
+  const overclaimed = [];
+  let ownCards = false;
+  for (const seat of seats) {
+    // `!= null`, not `!== null`: an absent key is a seat whose cards were not sent, which is the
+    // safe state. The idiom `unentitledHoleCardSeats` already uses, for the same reason.
+    const hasCards = seat?.holeCards != null;
+    const isOwn = ownSeat !== null && seat?.seat === ownSeat;
+    if (seat?.showedDown === true && !shown.has(seat.seat)) overclaimed.push(seat.seat);
+    if (hasCards && isOwn) ownCards = true;
+    if (hasCards && !isOwn && seat?.showedDown !== true) leaked.push(seat.seat);
+  }
+  return { leaked, overclaimed, examined: seats.length, ownCards };
+}
+
+/**
+ * What a hostile calculation input's response actually proves.
+ *
+ * ## The defect this exists for
+ *
+ * The negative control read `if (response.status >= 400 && response.status < 500) rejected += 1`,
+ * so ANY 4xx counted. Section 12 exhausts the expensive-rate-limit budget, and a run in which
+ * that budget was already spent answered all six probes with 429 — a status the limiter produces
+ * before the request reaches a route, let alone a validator. The script then printed "all 6
+ * hostile calculation inputs rejected" having demonstrated nothing whatsoever about validation:
+ * the strongest safety claim in section 5, entirely unearned, on a green run.
+ *
+ * So the refusal has to be a VALIDATION refusal, identified by the contract error code the way
+ * section 3 identifies `csrf_failed` rather than by a status class:
+ *
+ *   - `invalid_request` (400) — the closed schema rejected the body;
+ *   - `computation_rejected` (422) — the body parsed and the calculator refused it, which is
+ *     where the absurd sample count and the duplicate card land;
+ *   - `payload_too_large` (413) — the same refusal taken at the body limit.
+ *
+ * A 429 is `untested`, never a pass: the probe did not reach a validator, so the run has no
+ * evidence either way and must say so rather than count it.
+ */
+const VALIDATION_REFUSAL_CODES = new Set(['invalid_request', 'computation_rejected', 'payload_too_large']);
+
+export function classifyHostileRefusal(response) {
+  const code = response?.json?.error?.code;
+  if (response?.status === 429 || code === 'rate_limited') {
+    return { kind: 'untested', why: 'the rate limiter answered before any validator ran' };
+  }
+  if (typeof code === 'string' && VALIDATION_REFUSAL_CODES.has(code)) {
+    return { kind: 'rejected', why: code };
+  }
+  if (response?.status >= 400 && response?.status < 500) {
+    return { kind: 'wrong-refusal', why: `refused with ${response.status} ${code ?? '(no contract code)'}` };
+  }
+  return { kind: 'accepted', why: `returned ${response?.status}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +939,141 @@ async function playOneHandOverSocket(client, roomId, seat, timeoutMs = 30_000) {
   });
 
   return observed;
+}
+
+/**
+ * Opens a socket, handshakes, sends ONE `sit` frame, and reports what came back.
+ *
+ * ## Why this exists next to `playOneHandOverSocket`
+ *
+ * That helper plays a whole hand and treats any `error` frame as a failure, which is exactly right
+ * for what it proves and exactly wrong here: the subject IS the error frame. This one asks the one
+ * question the seat guard is about — what does the server do with a `sit` from this session — and
+ * reports the answer as data rather than as a verdict.
+ *
+ * ## The three things it reports and why each matters
+ *
+ * `welcomed` — the handshake succeeded. It must, in BOTH directions: watching a table is not the
+ * course, and a deployment that refused the upgrade to an unenrolled learner would have gated the
+ * shop window rather than the seat.
+ *
+ * `errorCode` — the refusal, as a contract code. A bare 403 would be a bad answer to a student.
+ *
+ * `closeCode` — null when the socket was left open, which is the required behaviour for this
+ * refusal: it is permanent, so closing would send an honest client into a reconnect loop against
+ * something only an operator can lift, and it would throw away the panel that displays the reason.
+ *
+ * Never throws, like every other helper here: a failure is reported through the caller's `bad()`.
+ */
+async function sitOverSocket(client, roomId, seat, timeoutMs = 20_000) {
+  const url = new URL('/api/v1/ws', options.apiOrigin);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  const observed = { welcomed: false, acked: false, errorCode: null, closeCode: null, error: null };
+
+  await new Promise((resolve) => {
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      observed.error = error;
+      clearTimeout(timer);
+      if (socket.readyState === WebSocket.OPEN) socket.close(1000, 'smoke test complete');
+      resolve();
+    };
+    const timer = setTimeout(() => finish('timed out waiting for an answer to the sit frame'), timeoutMs);
+    const socket = new WebSocket(url, {
+      headers: { cookie: client.cookieHeader, origin: options.webOrigin },
+    });
+
+    socket.addEventListener('open', () => {
+      socket.send(
+        JSON.stringify({
+          type: 'hello',
+          protocolVersion: WS_PROTOCOL_VERSION,
+          roomId,
+          clientNonce: 'enrolment-nonce-1',
+        }),
+      );
+    });
+    socket.addEventListener('close', (event) => {
+      observed.closeCode = event.code;
+      finish(observed.welcomed ? null : `socket closed with ${event.code} before the handshake`);
+    });
+    socket.addEventListener('error', () => finish('websocket error'));
+    socket.addEventListener('message', (message) => {
+      let frame;
+      try {
+        frame = JSON.parse(typeof message.data === 'string' ? message.data : String(message.data));
+      } catch {
+        finish('a frame did not parse as JSON');
+        return;
+      }
+      if (frame.type === 'welcome') {
+        observed.welcomed = true;
+        socket.send(JSON.stringify({ type: 'sit', seat, requestId: 'req-enrolsit1' }));
+        return;
+      }
+      if (frame.type === 'error') {
+        observed.errorCode = frame.error?.code ?? 'unknown';
+        // Deliberately does NOT finish immediately. The point of the next moment is to see whether
+        // the server ALSO closes the socket, which is the behaviour under test — a permanent
+        // refusal that closed the connection would put an honest client into a reconnect loop. The
+        // `close` listener settles the run if it happens; this short timer settles it if it does
+        // not. Short because both the frame and any close arrive in the same round trip, and
+        // waiting out the full deadline would add twenty seconds per refusal to a release gate.
+        setTimeout(() => finish(null), REFUSAL_OBSERVATION_MS);
+        return;
+      }
+      if (frame.type === 'ack' && frame.requestId === 'req-enrolsit1') {
+        observed.acked = true;
+        finish(null);
+      }
+    });
+  });
+
+  return observed;
+}
+
+/** How long a refused sit is watched for a close frame that must not arrive. */
+const REFUSAL_OBSERVATION_MS = 1_000;
+
+// ---------------------------------------------------------------------------
+// The enrolment CLI, as an operator would run it
+// ---------------------------------------------------------------------------
+
+/**
+ * Runs `apps/api/scripts/enrolments.mjs`, which is the ONLY way an enrolment can be written.
+ *
+ * ## Why this shells out instead of connecting to the database itself
+ *
+ * Because the privilege model says it must, and because the alternative is a second copy of the
+ * grant statement. `db/migrations/0006_cohort_enrolments.sql` grants `prl_app` — the role the API
+ * connects as — SELECT and nothing else on `prl.cohorts` and `prl.enrolments`, so the running
+ * server cannot enrol anybody and there is no HTTP route that could. The write needs
+ * `DATABASE_MIGRATION_URL`, the migrating identity, which this harness has only when its caller
+ * hands it one. Running the operator's own tool means this run exercises the documented path
+ * rather than a private one that could drift from it.
+ *
+ * ## What is redacted
+ *
+ * The DSN goes in through the environment and never onto a command line (where `ps` would show it)
+ * and never into the output: the CLI redacts every connection string it prints, and the caller
+ * below prints only the exit status and the tail of the message.
+ */
+function runEnrolmentCli(args) {
+  const result = spawnSync(process.execPath, [join(REPO_ROOT, 'apps/api/scripts/enrolments.mjs'), ...args], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    env: { ...process.env, DATABASE_MIGRATION_URL: options.migrationUrl, NO_COLOR: '1' },
+  });
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
+  return { ok: result.status === 0, status: result.status, output };
+}
+
+/** The last non-empty line of the CLI's output, which is where its verdict is. */
+function lastLine(output) {
+  const lines = output.split('\n').filter((line) => line.trim() !== '');
+  return (lines.at(-1) ?? '').trim().slice(0, 200);
 }
 
 // ---------------------------------------------------------------------------
@@ -905,7 +1328,306 @@ async function sectionGuestSession() {
   if (authed.json?.user?.id !== undefined) ok('the session persists across requests', authed.json.user.id);
   else bad('session persistence', `got ${authed.status} ${authed.text.slice(0, 120)}`);
 
-  return alice;
+  // The account id as well as the client. The enrolment section needs it, because the operator CLI
+  // resolves people by `usr_` id or by OIDC subject and a guest has only the first.
+  return { client: alice, userId: authed.json?.user?.id ?? user?.id ?? '' };
+}
+
+/**
+ * Enrolment and the seat guard: BOTH directions, over BOTH transports, against the live deployment.
+ *
+ * ## Why this section is unnumbered, and why it runs here
+ *
+ * Unnumbered for the same reason `Rate-limit isolation` is: it is not one of the numbered journeys,
+ * it prepares the ones that follow. It runs immediately after the guest session because section 7
+ * has Alice take a seat and play a hand — so on a deployment with `PRL_ENROLMENT_REQUIRED=enforced`,
+ * which is what staging runs, Alice has to be enrolled before section 7 or three later sections
+ * fail for a reason that has nothing to do with rooms, hidden information or hand history. That is
+ * the same mistake `createGuestSession` exists to stop making, one subsystem along.
+ *
+ * ## What it proves, and how the posture is decided
+ *
+ * The posture is DISCOVERED rather than assumed: a fresh guest who has never been enrolled asks for
+ * a seat, and what comes back says which mode the server is in. That makes the discovery probe and
+ * the negative direction the same request — there is no way for this to report "enforced" without
+ * having watched a refusal happen.
+ *
+ * Enforced, four cells, all four asserted:
+ *
+ *   * unenrolled over REST      -> 403 enrolment_required
+ *   * unenrolled over wss       -> an `error` frame carrying enrolment_required, socket LEFT OPEN
+ *   * enrolled over wss         -> `ack`, seated
+ *   * enrolled over REST        -> 200, seated
+ *
+ * Off (the shipped default, and what a developer stack runs): the same first request seats the
+ * learner, and that is asserted too. It is not a skip — it is the control, run on every developer
+ * and CI run of this script, that says the guard is absent exactly where it is meant to be absent.
+ *
+ * ## Where the enrolment comes from, given that the API cannot write one
+ *
+ * `prl_app` holds SELECT and nothing else on `prl.enrolments`, deliberately and by GRANT, so there
+ * is no request this harness could make that would enrol anybody — which is the property being
+ * relied on, not an inconvenience. The write goes through `apps/api/scripts/enrolments.mjs` as the
+ * MIGRATING identity, from `DATABASE_MIGRATION_URL`, which `scripts/staging.mjs` already computes
+ * for the migration step and now also hands to this run.
+ *
+ * A deployment that enforces, reached by a run with no migrating identity, is a FAILURE rather than
+ * a note: the whole positive direction is unprovable, and quietly reporting three of four cells is
+ * how a gate starts passing over less than it says.
+ *
+ * ## What it leaves behind
+ *
+ * Two revocations and a cohort. The cohort stays — `enrolments.cohort_id` is ON DELETE RESTRICT and
+ * no role holds DELETE — and is reused by every later run. The entitlements are withdrawn by
+ * `revokeEnrolments` at the very end of the run (not here, because Alice needs hers for sections 7
+ * and 8), which is an UPDATE that keeps the record of the grant and its withdrawal. The guest
+ * accounts themselves are erased by the retention sweep after 60 days, and `enrolments.user_id` is
+ * ON DELETE CASCADE, so the rows go with them.
+ */
+async function sectionEnrolment(alice, aliceUserId) {
+  section('Enrolment and the seat guard');
+
+  /**
+   * Puts a second session into the probe table by invite code, the way a second learner arrives.
+   *
+   * A second session is what both branches below need for their socket half, and for the same
+   * reason: the first one is already in seat 0 by then, and a second `sit` from the SAME session is
+   * answered `already_seated` whatever this deployment's entitlement posture is. That is a check
+   * that passes or fails for a reason unrelated to the guard, which is worse than no check.
+   */
+  const joinProbeTable = async (client, inviteCode) => {
+    if (typeof inviteCode !== 'string') return false;
+    const joined = await client.request('POST', '/api/v1/rooms/join', { inviteCode });
+    if (joined.status === 200 || joined.status === 201) return true;
+    bad('enrolment probe', `a second session could not join the probe table: ${joined.status}`);
+    return false;
+  };
+
+  // A guest who has never been enrolled and never will be until this section says so. Separate
+  // from Alice on purpose: the refusal has to be observed against an account in the state a real
+  // prospective student is in, and Alice is about to be enrolled.
+  const carol = createClient('carol');
+  const seed = await carol.request('GET', '/api/v1/auth/session');
+  if (typeof seed.json?.csrfToken === 'string') carol.setCsrf(seed.json.csrfToken);
+  const guest = await createGuestSession(carol, 'Carol');
+  if (typeof guest.json?.csrfToken === 'string') carol.setCsrf(guest.json.csrfToken);
+  const carolUserId = guest.json?.user?.id;
+  if (typeof carolUserId !== 'string') {
+    bad('enrolment probe', `the guest response carried no user id: ${guest.text.slice(0, 160)}`);
+    return { enforced: false, enrolled: [] };
+  }
+
+  // Creating a table is NOT the course and must stay open, so this is asserted rather than assumed.
+  // Somebody deciding whether to enrol can still open a table and look at it; what they cannot do
+  // is take a seat at one.
+  const created = await carol.request('POST', '/api/v1/rooms', {
+    name: 'Enrolment probe table',
+    maxSeats: 3,
+    smallBlind: 5,
+    bigBlind: 10,
+    startingStack: 1000,
+  });
+  const roomId = created.json?.room?.id;
+  const inviteCode = created.json?.inviteCode;
+  if ((created.status === 200 || created.status === 201) && typeof roomId === 'string') {
+    ok('an unenrolled learner can still create a table', 'the guard is on the seat, not the door');
+  } else {
+    bad('enrolment probe', `could not create a table: ${created.status} ${created.text.slice(0, 160)}`);
+    return { enforced: false, enrolled: [] };
+  }
+
+  // THE PROBE, and the negative direction, in one request.
+  const refusedRest = await carol.request('POST', `/api/v1/rooms/${roomId}/sit`, { seat: 0 });
+  const restCode = refusedRest.json?.error?.code ?? '';
+  const enforced = refusedRest.status === 403 && restCode === 'enrolment_required';
+
+  if (!enforced && refusedRest.status !== 200) {
+    bad(
+      'seat guard',
+      `sitting answered ${refusedRest.status} ${restCode || refusedRest.text.slice(0, 140)}, which is ` +
+        'neither the open behaviour (200) nor the enforced one (403 enrolment_required)',
+    );
+    return { enforced: false, enrolled: [] };
+  }
+
+  if (options.expectEnrolment !== 'discover' && (options.expectEnrolment === 'enforced') !== enforced) {
+    bad(
+      'seat guard posture',
+      `this run was told to expect PRL_ENROLMENT_REQUIRED=${options.expectEnrolment} and the server ` +
+        `behaves as ${enforced ? 'enforced' : 'off'}. Either the deployment is not configured the ` +
+        'way the caller believes, or the guard is not wired into the image it is running.',
+    );
+    return { enforced, enrolled: [] };
+  }
+
+  if (!enforced) {
+    ok('an unenrolled learner is seated', 'PRL_ENROLMENT_REQUIRED is off, which is the shipped default');
+    // A SECOND session for the socket half, not Carol again. Carol is now in seat 0, and a second
+    // `sit` from her is answered `already_seated` whatever the entitlement posture is — which is a
+    // check that proves nothing about the guard and passes for the wrong reason. Measured: it
+    // reported `no ack; last code already_seated` and read as a socket-path failure.
+    const joinedForSocket = await joinProbeTable(alice, inviteCode);
+    const openSocket = joinedForSocket ? await sitOverSocket(alice, roomId, 1) : null;
+    if (openSocket?.acked === true) {
+      ok('and seated over the socket too', 'a second session, so the seat is genuinely free');
+    } else {
+      bad(
+        'seat guard (off)',
+        openSocket === null
+          ? 'the second session could not join the probe table'
+          : (openSocket.error ?? `no ack; last code ${String(openSocket.errorCode)}`),
+      );
+    }
+    await alice.request('POST', `/api/v1/rooms/${roomId}/leave`);
+    note(
+      'the ENFORCED direction was not exercised here, because this deployment does not enforce. ' +
+        '`pnpm run staging up` runs a stack that does, and passes --expect-enrolment enforced so ' +
+        'that a run which cannot exercise it there fails instead of printing this line.',
+    );
+    return { enforced: false, enrolled: [] };
+  }
+
+  ok('an unenrolled learner is refused a seat over REST', `403 ${restCode}`);
+  const message = refusedRest.json?.error?.message ?? '';
+  if (/enrols? your class|not enrolled/i.test(message)) {
+    ok('the refusal tells the learner what to do', `"${message.slice(0, 80)}…"`);
+  } else {
+    bad('refusal quality', `the message is not actionable: "${message.slice(0, 160)}"`);
+  }
+  if (/[$£€]|\bUSD\b|\bprice\b|\bpay\b/i.test(message)) {
+    bad('refusal quality', 'the refusal implies a transaction; this software cannot take money');
+  }
+
+  const refusedSocket = await sitOverSocket(carol, roomId, 0);
+  if (!refusedSocket.welcomed) {
+    bad('seat guard (socket)', refusedSocket.error ?? 'the handshake itself failed');
+  } else if (refusedSocket.errorCode === 'enrolment_required') {
+    ok('an unenrolled learner is refused a seat over the socket', 'a real sit frame, over wss');
+  } else if (refusedSocket.acked) {
+    bad(
+      'seat guard (socket)',
+      'THE SOCKET PATH IS NOT GATED. REST refused this session and the sit frame seated it, which ' +
+        'is worse than no guard at all: the deployment reads as enforced and is not.',
+    );
+  } else {
+    bad('seat guard (socket)', `expected enrolment_required, got ${String(refusedSocket.errorCode)}`);
+  }
+  if (refusedSocket.closeCode === null) {
+    ok('the refusal left the socket open', 'a permanent refusal must not drive a reconnect loop');
+  } else {
+    bad(
+      'seat guard (socket)',
+      `the socket was closed ${refusedSocket.closeCode} for a refusal that is permanent. A client ` +
+        'that reconnects against it will do so forever; the refusal belongs in a frame.',
+    );
+  }
+
+  // ---- The positive direction, which needs a write the API cannot make ----
+  if (options.migrationUrl.trim() === '') {
+    bad(
+      'seat guard (enrolled)',
+      'this deployment enforces and this run has no DATABASE_MIGRATION_URL, so no enrolment can be ' +
+        'written and the ENROLLED direction cannot be exercised. prl_app holds SELECT and nothing ' +
+        'else on prl.enrolments, on purpose, so there is no request that would do it instead. Pass ' +
+        '--migration-url or set DATABASE_MIGRATION_URL.',
+    );
+    return { enforced, enrolled: [] };
+  }
+
+  const cohort = runEnrolmentCli([
+    'cohort-create',
+    '--key',
+    SMOKE_COHORT.key,
+    '--name',
+    SMOKE_COHORT.name,
+    '--starts',
+    '2020-01-01',
+  ]);
+  // A cohort that already exists is the normal case from the second run onwards, and the CLI says
+  // so by name. Anything else is a real failure.
+  if (cohort.ok) note(`created the ${SMOKE_COHORT.key} cohort`);
+  else if (/already taken/i.test(cohort.output)) note(`reusing the existing ${SMOKE_COHORT.key} cohort`);
+  else {
+    bad('enrolment CLI', `cohort-create exited ${cohort.status}: ${lastLine(cohort.output)}`);
+    return { enforced, enrolled: [] };
+  }
+
+  const grant = runEnrolmentCli([
+    'grant',
+    '--cohort',
+    SMOKE_COHORT.key,
+    '--by',
+    SMOKE_COHORT.by,
+    '--reference',
+    SMOKE_COHORT.reference,
+    '--user',
+    carolUserId,
+    '--user',
+    aliceUserId,
+  ]);
+  if (grant.ok) {
+    ok('two learners enrolled through the operator CLI', 'as the migrating identity, never the API');
+  } else {
+    bad('enrolment CLI', `grant exited ${grant.status}: ${lastLine(grant.output)}`);
+    return { enforced, enrolled: [] };
+  }
+
+  const seatedSocket = await sitOverSocket(carol, roomId, 0);
+  if (seatedSocket.acked) {
+    ok('an enrolled learner takes a seat over the socket', 'the same frame that was refused a moment ago');
+  } else {
+    bad(
+      'seat guard (enrolled, socket)',
+      seatedSocket.error ?? `expected an ack, got ${String(seatedSocket.errorCode)}`,
+    );
+  }
+
+  // Alice reaches the same table the way a second learner does, and sits over REST.
+  const joinedForRest = await joinProbeTable(alice, inviteCode);
+  const seatedRest = joinedForRest
+    ? await alice.request('POST', `/api/v1/rooms/${roomId}/sit`, { seat: 1 })
+    : { status: 0, json: { error: { code: 'never joined the probe table' } } };
+  if (seatedRest.status === 200) {
+    ok('an enrolled learner takes a seat over REST', 'both transports, both directions, over TLS');
+  } else {
+    bad(
+      'seat guard (enrolled, REST)',
+      `expected 200, got ${seatedRest.status} ${seatedRest.json?.error?.code ?? ''}`,
+    );
+  }
+  // Alice leaves this table, so section 7 finds her at exactly one room: her own.
+  await alice.request('POST', `/api/v1/rooms/${roomId}/leave`);
+
+  return { enforced, enrolled: [carolUserId, aliceUserId] };
+}
+
+/**
+ * Withdraws the entitlements this run granted, at the end of the run.
+ *
+ * A revocation and not a delete, because that is the only withdrawal this schema has: the row stays
+ * with `revoked_at`, `revoked_by` and `revoked_reason` set, which is what makes "was their access
+ * withdrawn, when and why?" answerable, and `prl_app` holds no DELETE on the table in any case. The
+ * accounts are throwaway guests; the retention sweep erases them after 60 days and the enrolment
+ * rows cascade away with them.
+ *
+ * Reported rather than silent, and a failure here is a real failure: an entitlement this harness
+ * granted and could not withdraw is a row somebody has to clean up by hand.
+ */
+function revokeEnrolments(userIds) {
+  if (userIds.length === 0) return;
+  section('Enrolment cleanup');
+  const revoke = runEnrolmentCli([
+    'revoke',
+    '--cohort',
+    SMOKE_COHORT.key,
+    '--by',
+    SMOKE_COHORT.by,
+    '--reason',
+    'smoke test run finished',
+    ...userIds.flatMap((userId) => ['--user', userId]),
+  ]);
+  if (revoke.ok) ok(`withdrew ${userIds.length} entitlement(s) this run granted`, lastLine(revoke.output));
+  else bad('enrolment cleanup', `revoke exited ${revoke.status}: ${lastLine(revoke.output)}`);
 }
 
 /** 3. CSRF is actually enforced. */
@@ -988,11 +1710,16 @@ async function sectionCalculation(alice) {
     } else {
       bad('equity', `AA vs KK returned ${percent.toFixed(2)}%, which is not credible`);
     }
-    if (
-      equity.json.equity.method === 'monte-carlo' &&
-      equity.json.equity.confidenceHalfWidthPoints === null
-    ) {
+    // `sampledEquityMissesInterval` uses `!= null` rather than the `=== null` that used to be
+    // written out here: an absent key is the more broken state, and it was the one this check
+    // could not see.
+    if (sampledEquityMissesInterval(equity.json.equity)) {
       bad('equity', 'a sampled result reported no confidence interval');
+    } else if (equity.json.equity.method === 'monte-carlo') {
+      ok(
+        'the sampled result carries a confidence interval',
+        `±${equity.json.equity.confidenceHalfWidthPoints} pts`,
+      );
     }
   } else {
     bad('equity endpoint', `got ${equity.status} ${equity.text.slice(0, 160)}`);
@@ -1012,14 +1739,16 @@ async function sectionCalculation(alice) {
   const report = coach.json?.report;
   if (coach.status === 200 && report !== undefined) {
     ok('coach report returned', `suggests ${report.suggestion?.action} (${report.suggestion?.confidence})`);
-    if (!Array.isArray(report.assumptions) || report.assumptions.length === 0) {
-      bad('coach report', 'assumptions empty');
+    if (listIsMissingOrEmpty(report.assumptions)) {
+      bad('coach report', 'assumptions empty or absent');
     } else ok('coach states assumptions', `${report.assumptions.length}`);
-    if (report.uncertainty?.limitations?.length === 0) bad('coach report', 'no limitations stated');
-    if (
-      !Array.isArray(report.suggestion?.whatWouldChangeIt) ||
-      report.suggestion.whatWouldChangeIt.length === 0
-    ) {
+    // Was `report.uncertainty?.limitations?.length === 0` with no `else`, which is false for
+    // `undefined` — so a report that had lost its `uncertainty` object entirely produced neither
+    // a pass nor a failure and the assertion vanished from the run. See `listIsMissingOrEmpty`.
+    if (listIsMissingOrEmpty(report.uncertainty?.limitations)) {
+      bad('coach report', 'no limitations stated (the uncertainty block is empty or missing)');
+    } else ok('coach states its limitations', `${report.uncertainty.limitations.length}`);
+    if (listIsMissingOrEmpty(report.suggestion?.whatWouldChangeIt)) {
       bad('coach report', 'the suggestion does not say what would change it');
     } else ok('the suggestion says what would change it');
   } else {
@@ -1036,12 +1765,30 @@ async function sectionCalculation(alice) {
     [{ heroCards: 'AhAd', opponents: ['KsKc'], unexpectedField: 1 }, 'unknown field (closed schema)'],
   ];
   let rejected = 0;
+  let untested = 0;
   for (const [body, label] of hostile) {
     const response = await alice.request('POST', '/api/v1/math/equity', body);
-    if (response.status >= 400 && response.status < 500) rejected += 1;
-    else bad('hostile input accepted', `${label} returned ${response.status}`);
+    // Not `status >= 400 && status < 500`. See `classifyHostileRefusal`: that test counted the
+    // limiter's 429 as a validation refusal, so a run whose expensive-rate-limit budget was
+    // already spent printed "all 6 hostile calculation inputs rejected" without a validator
+    // having seen a single one of them.
+    const verdict = classifyHostileRefusal(response);
+    if (verdict.kind === 'rejected') rejected += 1;
+    else if (verdict.kind === 'untested') untested += 1;
+    else bad('hostile input accepted', `${label} ${verdict.why}`);
   }
-  if (rejected === hostile.length) ok(`all ${hostile.length} hostile calculation inputs rejected`);
+  if (untested > 0) {
+    // A failure, not a warning. This is the section's strongest claim, and a gate that reports
+    // a claim it could not test is a gate that lies. The fix on the operator's side is to let
+    // the expensive-input window drain, or to run with a reset token configured.
+    bad(
+      'hostile input untested',
+      `${untested} of ${hostile.length} probes were answered by the rate limiter (429), so no ` +
+        'validator was reached and this run proves nothing about input validation',
+    );
+  } else if (rejected === hostile.length) {
+    ok(`all ${hostile.length} hostile calculation inputs rejected`, 'by a validator, with a contract code');
+  }
 }
 
 /** 6. AI Legends labelling. */
@@ -1077,9 +1824,17 @@ async function sectionLegends(alice) {
   }
 }
 
-/** 7. Rooms, a real hand over a real socket, and the confidentiality property on the wire. */
+/**
+ * 7. Rooms, a real hand over a real socket, and the confidentiality property on the wire.
+ *
+ * Returns the second client AND `truth` — what the terminal `state` frame said about the hand that
+ * was played. Section 8 needs it: the archive cannot be checked against its own account of which
+ * seats showed down, and `HandReviewSeat` has no `isSelf` for the caller's own seat to be found by.
+ * Null when no hand completed, which section 8 treats as a failure rather than as nothing to do.
+ */
 async function sectionRooms(alice) {
   section('7. Rooms and hidden information');
+  let truth = null;
   const bob = createClient('bob');
   const seed = await bob.request('GET', '/api/v1/auth/session');
   if (typeof seed.json?.csrfToken === 'string') bob.setCsrf(seed.json.csrfToken);
@@ -1170,21 +1925,45 @@ async function sectionRooms(alice) {
       bad('hidden information', 'no frames were received, so the socket scan proved nothing');
     }
 
-    const preShowdownLeak = played.frames.some((frame) => {
-      if (frame.type !== 'state' || frame.view === null || frame.view === undefined) return false;
-      if (frame.view.street === 'complete') return false;
-      const seats = Array.isArray(frame.view.seats) ? frame.view.seats : [];
-      return seats.some((seat) => seat.holeCards !== null && seat.seat !== frame.view.viewerSeat);
-    });
-    if (preShowdownLeak) bad('hidden information', "a live frame carried another seat's hole cards mid-hand");
-    else if (played.frames.length > 0) ok("no live frame carried another seat's hole cards mid-hand");
+    // Every frame, including the completed ones. The old scan skipped `street === 'complete'`
+    // outright, which exempts a hand that ended by FOLD — the ordinary outcome for this client —
+    // from the only confidentiality check on the wire. See `unentitledHoleCardSeats`.
+    const leakedSeats = [...new Set(played.frames.flatMap(unentitledHoleCardSeats))];
+    const completedFrames = played.frames.filter(
+      (frame) => frame.type === 'state' && frame?.view?.street === 'complete',
+    );
+    if (leakedSeats.length > 0) {
+      bad(
+        'hidden information',
+        `a live frame carried the hole cards of seat(s) ${leakedSeats.join(', ')}, which are neither ` +
+          "the recipient's own nor named in result.showdowns",
+      );
+    } else if (completedFrames.length > 0) {
+      ok(
+        'no live frame carried hole cards the recipient was not entitled to',
+        `${played.frames.length} frame(s), including ${completedFrames.length} completed-hand frame(s) ` +
+          'checked against result.showdowns rather than exempted',
+      );
+    } else {
+      // A sweep of nothing is not a pass: with no completed frame the showdown exemption was
+      // never exercised, and the mid-hand half alone is the weaker of the two claims.
+      bad(
+        'hidden information',
+        'no completed-hand frame reached this scan, so the showdown half of the confidentiality ' +
+          'check ran over nothing',
+      );
+    }
+
+    // What the wire said about this hand, so section 8 can hold the ARCHIVE to it rather than to
+    // the archive's own account of itself. See `liveHandTruth` and `auditReviewSeats`.
+    truth = liveHandTruth(played.frames);
   }
 
-  return bob;
+  return { bob, truth };
 }
 
 /** 8. Hand history isolation. */
-async function sectionHandHistory(alice, bob) {
+async function sectionHandHistory(alice, bob, truth) {
   section('8. Hand history isolation');
   const aliceHands = await alice.request('GET', '/api/v1/hands');
   const aliceRows = aliceHands.json?.hands ?? [];
@@ -1209,16 +1988,17 @@ async function sectionHandHistory(alice, bob) {
     if (leaked.length > 0) bad('hidden information', `the hand list exposes ${leaked.join(', ')}`);
     else if (aliceRows.length >= 1) ok('the hand list exposes no deck, cursor or salt key');
 
-    // A row in your own history must carry your own cards and nobody else's, unless they showed
-    // down. Only checkable now that there is a row.
-    const foreignCards = aliceRows.filter((hand) => {
-      const seats = Array.isArray(hand.seats) ? hand.seats : [];
-      return seats.some((seat) => seat.holeCards != null && seat.isSelf !== true && seat.showedDown !== true);
-    });
-    if (foreignCards.length > 0) {
-      bad('hidden information', `${foreignCards.length} archived hand(s) carry an opponent's unshown cards`);
-    } else if (aliceRows.length >= 1) {
-      ok("an archived hand carries no opponent's unshown hole cards");
+    // The list must carry no hole card under ANY key, which is a real property of this route:
+    // `routes/hands.ts` never projects `hand_seats.hole_cards` into a summary. Stated as "the key
+    // is absent" rather than as a scan of `hand.seats`, because `hand.seats` does not exist — the
+    // check that used to stand here walked it anyway and examined zero seats. See
+    // `auditReviewSeats` for the measurement.
+    if (aliceRows.length >= 1) {
+      if (keys.has('holeCards') || keys.has('seats')) {
+        bad('hidden information', 'a hand summary now carries seats or hole cards; it never did');
+      } else {
+        ok('a hand summary carries no seats and no hole cards', `${keys.size} distinct keys walked`);
+      }
     }
   } else {
     bad(
@@ -1235,10 +2015,21 @@ async function sectionHandHistory(alice, bob) {
     bad('hand isolation', `Bob's history returned ${bobHands.status} ${bobHands.text.slice(0, 200)}`);
   }
   if (bobHands.status === 200) {
-    const aliceIds = new Set(aliceRows.map((h) => h.id));
-    const overlap = (bobHands.json?.hands ?? []).filter((h) => aliceIds.has(h.id));
+    // `.filter(typeof === 'string')` and not a bare `.map`, because the guard below is the whole
+    // reason this comparison is trustworthy and a bare map defeats it. A list of rows that carry
+    // no `id` at all — a renamed field, a summary shape that dropped it — maps to `[undefined]`,
+    // and `new Set([undefined]).size` is 1, so `aliceIds.size === 0` was false and the run printed
+    // "1 of Alice's ids checked" having compared nothing to nothing. Measured against a stub whose
+    // /hands rows carried `handId` instead of `id`: that exact line, green.
+    const aliceIds = new Set(aliceRows.map((hand) => hand.id).filter((id) => typeof id === 'string'));
+    const overlap = (bobHands.json?.hands ?? []).filter((hand) => aliceIds.has(hand.id));
     if (aliceIds.size === 0) {
-      bad('hand isolation', 'Alice has no hand ids, so the overlap comparison is two empty sets');
+      bad(
+        'hand isolation',
+        `Alice has ${aliceRows.length} archived hand(s) and not one usable id among them, so the ` +
+          'overlap comparison would be two empty sets. The rows are there and the identifier this ' +
+          'check keys on is not.',
+      );
     } else if (overlap.length === 0) {
       ok("Bob's hand history does not contain Alice's hands", `${aliceIds.size} of Alice's ids checked`);
     } else {
@@ -1246,10 +2037,114 @@ async function sectionHandHistory(alice, bob) {
     }
   }
 
+  // ---- The archive's ONE card-bearing route, fetched for a real hand ----
+  //
+  // `GET /hands/:handId` is the only route in this API that ever serves a hole card over HTTP, and
+  // until this block existed no smoke run had ever asked it for a hand that exists — only
+  // `hand_doesnotexist`, below. The check that claimed to cover it walked `hand.seats` on a
+  // `HandSummary`, which has no such field. See `auditReviewSeats` for what that measured.
+  await sectionHandReview(alice, aliceRows, truth);
+
   // Requesting a hand that does not exist must 404, not 403 or 500.
   const missing = await alice.request('GET', '/api/v1/hands/hand_doesnotexist');
   if (missing.status === 404) ok('an unknown hand returns 404');
   else warn('unknown hand', `status ${missing.status}`);
+}
+
+/**
+ * The hole-card rule on the served review, held to what the live wire said about the same hand.
+ *
+ * Split out of `sectionHandHistory` only for length: it is section 8, and it is the half of it
+ * that touches cards at all.
+ *
+ * Every branch that cannot check the property FAILS rather than falling through. A hand id that
+ * did not survive section 7, a review that would not load, a review with no seats, a review
+ * carrying no hole cards whatsoever — each of those makes the scan below prove nothing, and each
+ * used to be the state this script was silently in.
+ */
+async function sectionHandReview(alice, aliceRows, truth) {
+  if (truth === null) {
+    bad(
+      'hidden information',
+      'section 7 produced no terminal state frame, so there is no wire account of the hand to hold ' +
+        'the archive to and the review scan would have nothing to compare against',
+    );
+    return;
+  }
+  if (truth.viewerSeat === null) {
+    bad(
+      'hidden information',
+      "the terminal frame named no viewerSeat, so the caller's own seat is unknown and every seat " +
+        'in the review would read as foreign — a scan that is stricter by accident and wrong',
+    );
+    return;
+  }
+  // The hand section 7 played, by id, and not merely "the first row": the list is ordered by start
+  // time and this run has created exactly one, but keying on the id is what makes the seat indices
+  // below belong to the same hand as `truth`.
+  const row = aliceRows.find((hand) => hand.id === truth.handId);
+  if (row === undefined) {
+    bad(
+      'hidden information',
+      `the hand played over the socket (${String(truth.handId)}) is not in Alice's history, so the ` +
+        'review below would be about a different hand than the wire account it is checked against',
+    );
+    return;
+  }
+
+  // `GET /hands/:handId` takes `app.expensiveRateLimit`, the same bucket sections 5 and the
+  // `hand_doesnotexist` probe below draw on. Named as its own failure rather than folded into
+  // 'hidden information', because a run that reported a confidentiality failure when what actually
+  // happened was a spent budget is the mis-attribution `classifyHostileRefusal` above exists for.
+  // Counted at the time of writing: Alice spends eight expensive tokens before this call, against
+  // a default `RATE_LIMIT_EXPENSIVE_MAX` of 20.
+  const review = await alice.request('GET', `/api/v1/hands/${row.id}`);
+  if (review.status === 429) {
+    bad(
+      'hand review',
+      "the expensive rate limit refused the review of Alice's own hand, so the confidentiality " +
+        'scan below did not run. This is a budget problem, not a leak — see RATE_LIMIT_EXPENSIVE_MAX.',
+    );
+    return;
+  }
+  if (review.status !== 200) {
+    bad('hidden information', `the review of Alice's own hand returned ${review.status}`);
+    return;
+  }
+  ok('a learner can review their own hand', `${row.id}, seat ${truth.viewerSeat}`);
+
+  const audit = auditReviewSeats(review.json, truth);
+  if (audit.examined === 0) {
+    bad(
+      'hidden information',
+      'the served review carried no seat rows, so the hole-card scan ran over nothing. This is the ' +
+        'exact state the old check was permanently in, against a response shape that has no seats.',
+    );
+  } else if (audit.leaked.length > 0) {
+    bad(
+      'hidden information',
+      `the review served seat(s) ${audit.leaked.join(', ')}'s hole cards, which are neither the ` +
+        "caller's own seat nor a seat that showed down",
+    );
+  } else if (audit.overclaimed.length > 0) {
+    bad(
+      'hidden information',
+      `the review marks seat(s) ${audit.overclaimed.join(', ')} as having shown down, which the ` +
+        'live hand never did — the archive is opening cards the game did not',
+    );
+  } else if (!audit.ownCards) {
+    bad(
+      'hidden information',
+      "the review carried no hole cards at all, not even the caller's own, so a scan for foreign " +
+        'cards would have passed whatever the server sent',
+    );
+  } else {
+    ok(
+      "the served review carries the caller's own cards and no unshown opponent's",
+      `${audit.examined} seat(s) checked against a wire account naming ` +
+        `${truth.shownSeats.length} showdown(s)`,
+    );
+  }
 }
 
 /** 9. Progress carries no score. */
@@ -1536,17 +2431,22 @@ async function main() {
 
   await sectionHealth();
   await sectionIsolation();
-  const alice = await sectionGuestSession();
+  const { client: alice, userId: aliceUserId } = await sectionGuestSession();
+  // Before section 7, deliberately: on a deployment that enforces, Alice cannot take a seat or play
+  // a hand until she is enrolled, and sections 7, 8 and 9 would all fail naming the wrong subsystem.
+  const enrolment = await sectionEnrolment(alice, aliceUserId);
   await sectionCsrf();
   await sectionContent(alice);
   await sectionCalculation(alice);
   await sectionLegends(alice);
-  const bob = await sectionRooms(alice);
-  await sectionHandHistory(alice, bob);
+  const { bob, truth } = await sectionRooms(alice);
+  await sectionHandHistory(alice, bob, truth);
   await sectionProgress(alice);
   await sectionWebHeaders();
   await sectionGuestBootstrap();
   await sectionRateLimiting();
+  // Last, so that everything above ran with the entitlements it needed.
+  revokeEnrolments(enrolment.enrolled);
 
   console.log(`\n${BOLD}Summary${RESET}`);
   console.log(`  ${GREEN}${passed} check(s) passed${RESET}`);

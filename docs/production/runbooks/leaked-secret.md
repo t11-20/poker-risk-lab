@@ -42,14 +42,16 @@ Expect a reconnect wave immediately afterwards, with WebSocket closes at `4401`.
 
 Note the second consequence, which is easy to miss: the client key in the logs is `HMAC(secret, address)`, so rotating the secret **changes every client key**. Log correlation across the rotation boundary breaks. If an investigation depends on correlating before and after, record that boundary.
 
-### `DATABASE_URL` credentials
+### `DATABASE_URL` / `DATABASE_MIGRATION_URL` credentials
 
 ```sql
-ALTER ROLE prl_api WITH PASSWORD '<new>';
-ALTER ROLE prl_app WITH PASSWORD '<new>';
+ALTER ROLE prl_api      WITH PASSWORD '<new>';   -- DATABASE_URL, the runtime identity
+ALTER ROLE prl_deployer WITH PASSWORD '<new>';   -- DATABASE_MIGRATION_URL, the migration identity
 ```
 
-Update the environment and restart the API. Live connections keep working on the old credential until they recycle — `max_lifetime` is 1,800 s in `apps/api/src/db.ts` — so restart rather than waiting.
+**`prl_app` is deliberately not on that list**, and this block used to name it instead of `prl_deployer`: `prl_app` and `prl_migrator` are `NOLOGIN` privilege containers created with no password (`db/migrations/0001_initial.sql`, `db/roles/0001_privilege_roles.sql`), so `ALTER ROLE prl_app WITH PASSWORD` rotated nothing while the login role that can alter the schema — `prl_deployer`, a member of `prl_migrator` — was left untouched. Rotate the identities that log in; the containers hold privileges, not credentials.
+
+Update the environment and restart the API. Live connections keep working on the old credential until they recycle — `max_lifetime` is 1,800 s in `apps/api/src/db.ts` — so restart rather than waiting. If `DATABASE_MIGRATION_URL` was the leaked one, treat it as the more serious of the two: it reaches the schema and the migration ledger, which `prl_api` cannot.
 
 Then check what the credential could have reached. The least-privilege split is the containment: `prl_app`/`prl_api` cannot alter the schema, and `prl_migrator` owns the objects. A leaked runtime credential is a data-read incident, not a schema-destruction one.
 

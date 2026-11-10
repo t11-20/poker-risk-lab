@@ -73,6 +73,7 @@ function withSignedInCaller(app: FastifyInstance, userId: string): void {
   app.addHook('preHandler', (request, _reply, done) => {
     request.session = {
       sessionId: 'ses_y2quizrecording00000000',
+      expiresAt: new Date(Date.now() + 3_600_000),
       user: { id: userId, kind: 'guest', displayName: 'Test Learner', createdAt: new Date().toISOString() },
     };
     done();

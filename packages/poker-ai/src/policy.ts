@@ -117,14 +117,22 @@
  * `opponent-model.ts` owns the counting, the range estimate and the reliability weighting.
  * This file consumes three of its methods and adds nothing of its own to them:
  *
- *   - `rangeFor(seat, street, facingAction)` is the assumed opponent continuing range. Its
- *     blockers are removed here, because the estimator cannot know this seat's cards and an
- *     opponent cannot hold a card this seat can see.
+ *   - `rangeFor(seat, street, facingAction, adaptation)` is the assumed opponent continuing
+ *     range, scaled by `traits.exploitativeAdaptation` *and* by how reliable the sample is,
+ *     exactly as the multipliers are. Its blockers are removed here, because the estimator
+ *     cannot know this seat's cards and an opponent cannot hold a card this seat can see.
  *   - `adjustmentsFor(seat, adaptation)` returns five multipliers on this model's own
  *     tendencies, already scaled by `traits.exploitativeAdaptation` *and* by how reliable the
- *     sample is. Passing the adaptation trait in and multiplying by what comes back is the
- *     whole of the adaptation in this file — there is no second, unscaled path where a
- *     twelve-hand read could move a decision.
+ *     sample is.
+ *
+ * Both take the adaptation weight, and `adaptationWeight(input)` is the only thing this file
+ * ever passes for it — so there is no unscaled path where a twelve-hand read, or any read at
+ * all at the `educational` difficulty, could move a decision. The range needs the gate more
+ * than the multipliers do, not less: `assessPostflop` prices relative strength, equity and the
+ * value/bluff split against the assumed range, so an unscaled range moves the whole action
+ * distribution. It was unscaled, and it did — measured at `educational` over 350 real
+ * postflop spots, swapping a station read for a folder read changed the sampled action in 209
+ * of 1,050 paired decisions. After the gate, zero.
  *   - `statsFor(seat)` is used only to describe the read in `whatChangedIt`, and it returns
  *     null below the model's own minimum sample, which is reported as "no read yet" rather
  *     than smoothed into a number.
@@ -236,8 +244,11 @@ export interface ObservedAdjustments {
 export interface PolicyObservations {
   /** Null below the observer's own minimum sample: unknown, said in the type. */
   statsFor(seat: number): ObservedSeatRead | null;
-  /** The assumed continuing range for a seat, as a slice of the computed strength ordering. */
-  rangeFor(seat: number, street: string, facingAction: string): ParsedRange;
+  /**
+   * The assumed continuing range for a seat, as a slice of the computed strength ordering,
+   * already scaled by `adaptation` and by the sample's reliability.
+   */
+  rangeFor(seat: number, street: string, facingAction: string, adaptation: number): ParsedRange;
   /** Multipliers, already scaled by `adaptation` and by the sample's reliability. */
   adjustmentsFor(seat: number, adaptation: number): ObservedAdjustments;
 }
@@ -668,12 +679,19 @@ function adaptationWeight(input: PolicyInput): number {
  * `docs/AI-LEGENDS.md` L5: one tightness number mapped onto a slice of the computed strength
  * ordering, with no knowledge of board texture and no removal of hands an earlier line rules
  * out.
+ *
+ * `adaptationWeight(input)` goes in for the same reason it goes into `adjustmentsFor`. An
+ * assumed range built from what this model has watched the learner do IS adaptation, and the
+ * strongest kind, because everything `assessPostflop` returns is priced against it. Passing 0
+ * here — which `educational` always does — gets the neutral 25% entry range, so the profile
+ * plays the same hand the same way whatever it has seen.
  */
 function assumedOpponentRange(input: PolicyInput, situation: Situation): ParsedRange {
   const estimated = input.observations.rangeFor(
     situation.primaryOpponent,
     situation.street,
     situation.facingAction,
+    adaptationWeight(input),
   );
   const labels = estimated.classes.map((handClass) => handClass.label);
   if (labels.length === 0) {
@@ -699,10 +717,38 @@ function assessStrength(input: PolicyInput, situation: Situation): StrengthAsses
 // Stage 2: build the candidate set, with sizes
 // ---------------------------------------------------------------------------
 
+/**
+ * Above this equity, folding to a bet is not a style — it is an error, so the noise floor does not
+ * fund it.
+ *
+ * The module comment says the floor exists "to keep a style unpredictable, not to make it play
+ * worse than any style plays", and excluded exactly one thing: a fold when checking is free. The
+ * justification reaches further than the exclusion did. Facing a bet with the effective nuts, every
+ * profile still folded at `noise / plausibleCount`, because the score-driven share of a fold is
+ * ~0 there and the floor becomes the whole probability.
+ *
+ * Measured on the flop nut flush (Ah5h on Kh 9h 2h) facing half pot, 40 trials x 12 profiles:
+ *
+ *     realistic    P(fold) up to 0.075, 10 of 12 profiles folded it at least once
+ *     educational  P(fold) up to 0.125, 12 of 12 — and `educational` is what every Legends page
+ *                  defaults to, the setting aimed at beginners
+ *
+ * The spread across twelve profiles whose `foldToPressure` spans 0.14-0.76 was 0.002: the trait had
+ * no effect, the floor was the number. A learner watching a bot fold a made flush learns nothing
+ * about that bot's style.
+ *
+ * The bar is deliberately high rather than at the break-even price. Folding a marginal hand at a
+ * bad price IS a style choice and the floor should still fund it; folding this is not.
+ */
+const FOLD_IS_AN_ERROR_ABOVE = 0.9;
+
 interface Candidate {
   readonly legal: LegalAction;
   readonly action: Action;
-  /** False only for a fold that costs nothing to decline. See the module comment. */
+  /**
+   * False for a fold that no style would make: one that costs nothing to decline, and one facing a
+   * bet with the hand already won. See the module comment and `FOLD_IS_AN_ERROR_ABOVE`.
+   */
   readonly plausible: boolean;
   readonly isAggressive: boolean;
   readonly isPassiveContinue: boolean;
@@ -721,7 +767,7 @@ function planCandidates(
         out.push({
           legal,
           action: { type: 'fold' },
-          plausible: situation.toCall > 0,
+          plausible: situation.toCall > 0 && strength.equity < FOLD_IS_AN_ERROR_ABOVE,
           isAggressive: false,
           isPassiveContinue: false,
         });

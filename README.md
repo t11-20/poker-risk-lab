@@ -51,7 +51,7 @@ positions.
 corepack enable                      # Node 24.18.0 and pnpm 11.10.0 required
 
 pnpm install --frozen-lockfile
-pnpm run security:audit              # 9 supply-chain gates — run this first
+pnpm run security:audit              # 15 supply-chain gates — run this first
 
 cp .env.example .env
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
@@ -119,9 +119,9 @@ through EV-of-bet to zero; the closed-form two-card hit probability is confirmed
 enumerating run-outs through the engine; ICM with 3:1 stacks and 70/30 payouts gives
 exactly 60/40.
 
-**The rules** are checked by three randomised soaks — **8,500 hands and 50,236 applied
-actions** in total (4,000 general-invariant, 1,500 shove-heavy, 3,000 short-blind-heavy),
-measured 2026-08-19 — asserting, after **every single action**, that chips are conserved,
+**The rules** are checked by three randomised soaks — **8,500 hands and 50,234 applied
+actions** in total (4,000 general-invariant → 27,233 actions, 1,500 shove-heavy → 6,845,
+3,000 short-blind-heavy → 16,156), re-measured 2026-08-27 — asserting, after **every single action**, that chips are conserved,
 that no card is dealt twice, that the bet level agrees with the seats, that pots always
 balance, and that a rejected action leaves the state byte-identical. Each soak also asserts
 its own coverage, so a generator that degenerated into folding every hand fails rather than
@@ -165,13 +165,17 @@ have to be designed together.
 This repo was built during the **Mini Shai-Hulud** campaign — a self-propagating npm/PyPI
 worm that compromised on the order of 1,300 package versions, steals CI and developer
 credentials, and forges Sigstore provenance attestations. So the dependency policy is
-release-blocking and enforced by nine gates:
-lifecycle scripts disabled, registry-only resolutions, a 7-day release-age cooldown, exact
-versions, lockfile hashes cross-checked against the registry, a family deny-list, an OSV
-scan, an on-disk IOC sweep, a CycloneDX SBOM, and — added after the release audit —
-**pinning of the pipeline's own dependencies**: every GitHub Action by 40-hex commit SHA and
-every container base image by `@sha256:` digest, because `actions/cache@v4` is a pointer its
-owner can repoint at code that then runs inside this repository's CI.
+release-blocking and enforced by **twelve gates**, which between them assert: the policy is
+in effect, lifecycle scripts disabled, registry-only resolutions, a 7-day release-age
+cooldown, exact versions, source-encoding hygiene, lockfile hashes cross-checked against the
+registry, a family deny-list, an OSV scan, an on-disk IOC sweep, **no committed
+credentials**, a CycloneDX SBOM, **a trivy CVE scan of the built container images**, and —
+added after the release audit — **pinning of the pipeline's own dependencies**: every GitHub
+Action by 40-hex commit SHA and every container base image by `@sha256:` digest, because
+`actions/cache@v4` is a pointer its owner can repoint at code that then runs inside this
+repository's CI. (This paragraph said "nine gates" and listed ten things; the count and the
+list are both taken from the `GATES` array in `scripts/supply-chain/audit.mjs`, which has
+gained a secret scan and a container-image scan since.)
 
 The footgun: **pnpm 11 reads only auth and registry settings from `.npmrc`.** A policy
 written there is *silently ignored* — the repo looks hardened while being wide open. That
@@ -219,8 +223,8 @@ Full list with severity and what would close each:
 ## Stack
 
 Node 24.18.0 · pnpm 11.10.0 · TypeScript 7.0.2 (strict, plus `exactOptionalPropertyTypes`,
-`noUncheckedIndexedAccess`, `erasableSyntaxOnly`) · Next.js 16.3.0 · React 19.2.8 ·
-Fastify 5.11.3 · PostgreSQL 16 · Biome 2.5.7 · native CSS · `node --test`
+`noUncheckedIndexedAccess`, `erasableSyntaxOnly`) · Next.js 16.3.8 · React 19.2.8 ·
+Fastify 5.12.5 · PostgreSQL 16 · Biome 2.5.7 · native CSS · `node --test`
 
 Every version is pinned exact and chosen to satisfy a 7-day release-age cooldown. Tests run
 on Node's built-in runner against TypeScript directly, so there is no test framework and no
@@ -240,7 +244,9 @@ transpiler in the test path.
 | [`docs/VERIFICATION.md`](docs/VERIFICATION.md) | Every correctness claim and the evidence for it |
 | [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Commands, configuration, troubleshooting |
 | [`docs/adr/`](docs/adr/) | Twelve decision records |
+| [`docs/production/counsel-pack.md`](docs/production/counsel-pack.md) | **For a lawyer, in one sitting**: the eleven open legal decisions ordered so the three that block taking money come first, each with the verified facts it turns on and what changes in the product per answer. Derived from, and does not replace, [`legal-review-requirements.md`](docs/production/legal-review-requirements.md) |
 | [`docs/REPORT.md`](docs/REPORT.md) | Final delivery report: what was built, tested, and left undone |
+| [`docs/HANDOVER.md`](docs/HANDOVER.md) | **Start here to review the hardening branch**: what changed across the branch, every measurement with its caveats, what is deliberately not done, and where to be sceptical |
 
 ## Licence
 

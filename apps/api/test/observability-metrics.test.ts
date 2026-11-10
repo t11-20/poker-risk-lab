@@ -596,3 +596,210 @@ describe('no metric label carries anything secret or identifying', () => {
     assert.deepEqual(leakedLabels(legitimate), []);
   });
 });
+
+describe('counters whose alerts are zero-tolerance are primed at zero', () => {
+  /**
+   * The defect, measured against staging rather than reasoned about.
+   *
+   * A counter series is created by its first `inc()`. Until then the exposition has no line for
+   * it, and `rate()`/`increase()` are computed only from samples inside their range — Prometheus
+   * does not assume a series that appears mid-range began at zero, so `1, 1, 1` has an increase
+   * of 0. The first occurrence of a counted event is therefore invisible to any alert keyed on
+   * its rate.
+   *
+   * `docs/production/alerts.md` writes exactly those alerts that way, on the stated grounds that
+   * there is no acceptable background rate: `RateLimitBans` on
+   * `increase(prl_rate_limit_events_total{kind="banned"}[15m]) > 0` and `ArchiveFailing` on
+   * `rate(prl_archive_failures_total[15m]) > 0`.
+   *
+   * What was measured: a flood drove the staging limiter past its ban threshold, the counter read
+   * `prl_rate_limit_events_total{kind="banned"} 1`, and `RateLimitBans` never fired. One recorded
+   * ban — the dedupe working — and an alert that could not see it.
+   */
+  it('renders the banned and limited series before anything is limited', () => {
+    const metrics = new AppMetrics();
+    const text = metrics.render();
+    assert.match(
+      text,
+      /prl_rate_limit_events_total\{kind="banned"\} 0/,
+      'a ban that is the first ever ban must be a rise from zero, not a series appearing',
+    );
+    assert.match(text, /prl_rate_limit_events_total\{kind="limited"\} 0/);
+  });
+
+  it('renders the archive-failure series before anything fails', () => {
+    // The metric whose own documentation says nothing else surfaces the failure, because play
+    // deliberately continues when an archive write fails.
+    assert.match(new AppMetrics().render(), /prl_archive_failures_total 0/);
+  });
+
+  /**
+   * The same argument, for the same reason, one subsystem over.
+   *
+   * A seat is released when the hand it was in settles, and the durable write that frees
+   * `room_members.seat` hangs off that settlement. When it fails nothing else sees it: the room
+   * summary is built from the live table, which has already dropped the chair, so it advertises a
+   * seat the database refuses — and nothing retries. The FIRST stuck chair is the one worth
+   * paging on, and priming is what makes it a rise from zero rather than a series appearing.
+   *
+   * Run against the counter with `primeLabels` removed: `prl_seat_release_failures_total` is
+   * absent from the exposition entirely and this fails on the match, exactly as the two above do.
+   */
+  it('renders the seat-release series before any chair is stuck', () => {
+    assert.match(new AppMetrics().render(), /prl_seat_release_failures_total 0/);
+  });
+
+  /**
+   * The room lease, where the first event is the ONLY event worth alerting on.
+   *
+   * Both rules are `increase(...) > 0`, and both describe something that must never happen at all:
+   * a second API process asking for a room this one is serving, and — worse — this process being
+   * fenced from a room it was already serving, which means two processes were both authoritative
+   * for one room's hand state for some window. There is no background rate to distinguish a spike
+   * from, so the alert's whole job is the first occurrence, and an unprimed series is invisible to
+   * it exactly as `RateLimitBans` was against staging.
+   *
+   * `prl_room_fencings_total` is labelled by reason and the set is closed at two, so both are
+   * primed: `fenced` (somebody took the room) and `lease_expired` (this process could not renew and
+   * stepped down) send an operator to different places and neither may be the one that is missing.
+   */
+  it('renders the room-lease series before any process contends for a room', () => {
+    const text = new AppMetrics().render();
+    assert.match(text, /prl_room_ownership_refusals_total 0/);
+    assert.match(text, /prl_room_fencings_total\{reason="fenced"\} 0/);
+    assert.match(text, /prl_room_fencings_total\{reason="lease_expired"\} 0/);
+  });
+
+  /**
+   * The three hand counters, which are primed for two independent reasons.
+   *
+   * `HandsFailing` is `sum(increase(prl_hands_failed_total[10m])) > 0` — the same zero-tolerance
+   * shape as `RateLimitBans`, and unprimed it hides the same first occurrence.
+   * `rooms/registry.ts` increments it ONCE, by `abandoned.length`, when it reconciles the hands a
+   * restart interrupted, so the whole of a real incident can be a single step from absent to
+   * three, which has an `increase()` of zero.
+   *
+   * `HandCompletionGap` needs all three, and needs them for a different reason: it is
+   * `sum(started) - sum(completed) - sum(failed) > sum(prl_rooms_live)`, and in PromQL a series
+   * that has never been incremented is absent rather than zero, so `A - absent` is the EMPTY
+   * VECTOR. On a deployment where no hand has ever completed — precisely the catastrophe the rule
+   * exists for — the subtraction produced nothing and the rule could not fire.
+   * `deploy/staging/observability/rule-tests/product-correctness.test.yml` holds that case against
+   * a real Prometheus rule engine, with the completed counter absent, and shows the alert silent.
+   *
+   * Run against the counters with `primeLabels` removed: all four matches below fail, because the
+   * lines are not in the exposition at all.
+   */
+  it('renders all three hand counters before a single hand has been dealt', () => {
+    const text = new AppMetrics().render();
+    assert.match(text, /prl_hands_started_total 0/);
+    assert.match(
+      text,
+      /prl_hands_completed_total 0/,
+      'absent is not zero: a subtraction against a series that has never been scraped is empty, ' +
+        'and HandCompletionGap is a subtraction',
+    );
+    assert.match(text, /prl_hands_failed_total\{reason="room_closed"\} 0/);
+    assert.match(text, /prl_hands_failed_total\{reason="interrupted_by_restart"\} 0/);
+  });
+
+  it('a primed series still counts normally, so priming costs nothing (POSITIVE CONTROL)', () => {
+    // Without this, the two assertions above would also hold for a counter that had been broken
+    // into always reporting zero.
+    const metrics = new AppMetrics();
+    metrics.rateLimitEvents.inc({ kind: 'banned' });
+    metrics.archiveFailures.inc();
+    // By two, because this counter counts CHAIRS rather than passes: one settlement can fail to
+    // free several at once, and a primed series must add to what is already there rather than
+    // replace it.
+    metrics.seatReleaseFailures.inc({}, 2);
+    metrics.roomOwnershipRefusals.inc();
+    metrics.roomFencings.inc({ reason: 'fenced' });
+    // By three, for the same reason: one reconciliation closes every hand a restart abandoned in
+    // that room, and `rooms/registry.ts` records the count rather than one event.
+    metrics.handsFailed.inc({ reason: 'interrupted_by_restart' }, 3);
+    metrics.handsStarted.inc();
+    const text = metrics.render();
+    assert.match(text, /prl_hands_failed_total\{reason="interrupted_by_restart"\} 3/);
+    assert.match(text, /prl_hands_failed_total\{reason="room_closed"\} 0/);
+    assert.match(text, /prl_hands_started_total 1/);
+    assert.match(text, /prl_hands_completed_total 0/);
+    assert.match(text, /prl_rate_limit_events_total\{kind="banned"\} 1/);
+    assert.match(text, /prl_archive_failures_total 1/);
+    assert.match(text, /prl_seat_release_failures_total 2/);
+    assert.match(text, /prl_room_ownership_refusals_total 1/);
+    assert.match(text, /prl_room_fencings_total\{reason="fenced"\} 1/);
+    assert.match(
+      text,
+      /prl_room_fencings_total\{reason="lease_expired"\} 0/,
+      'one reason moving must not move the other; they are different incidents',
+    );
+    assert.match(text, /prl_rate_limit_events_total\{kind="limited"\} 0/, 'priming must not move a sibling');
+  });
+});
+
+/**
+ * The start timestamp, which paged for a clock and not for a restart.
+ *
+ * `ProcessRestartLoop` is `changes(prl_process_start_time_seconds[15m]) >= 3` and it is a page.
+ * `changes()` counts every difference between consecutive samples, and it cannot tell a restart
+ * from a rounding flip — so the whole rule rests on this gauge exporting the same integer for the
+ * life of the process.
+ *
+ * It did not. It was bound with `setFrom(() => Math.floor(Date.now() / 1000 - process.uptime()))`,
+ * which re-derives one fixed instant on every scrape from a wall clock and a monotonic clock that
+ * drift apart, and floors the difference. Measured on the development machine: 1.11 ms of drift
+ * over 20 s of sampling, and on a series phased onto a second boundary — which one process in
+ * roughly a thousand is, by the accident of when it started — `changes()` counted 32 transitions
+ * over those same samples. Three is a page. The alert fired inside twenty minutes on a process
+ * that had never restarted.
+ *
+ * The fix is to compute the value once, at construction, and `set()` it. That makes this the one
+ * gauge in `metrics.ts` that is deliberately not read at scrape time, because it is the one whose
+ * value is an instant in the past rather than a state that can change.
+ */
+describe('the process start time is a constant, not a reading', () => {
+  /**
+   * The mechanism, demonstrated rather than described.
+   *
+   * This is the negative control for the assertion below: a `setFrom` gauge calls its collector on
+   * every render, so two scrapes of one process can carry two different values — and two different
+   * values IS what `changes()` counts. The real gauge must not be able to do this.
+   */
+  it('a setFrom gauge is re-derived on every scrape, and two scrapes can disagree (NEGATIVE CONTROL)', () => {
+    const registry = new MetricsRegistry();
+    const drifting = registry.gauge({ name: 'prl_probe_start_time_seconds', help: 'probe' });
+    let scrape = 0;
+    // Stands in for the two clocks disagreeing across a second boundary: same instant, different
+    // integer, decided by when the scrape happened to land.
+    drifting.setFrom(() => {
+      scrape += 1;
+      return 1787678914 + (scrape % 2);
+    });
+    const first = sampleValue(samplesFor(registry.render(), 'prl_probe_start_time_seconds')[0] ?? '');
+    const second = sampleValue(samplesFor(registry.render(), 'prl_probe_start_time_seconds')[0] ?? '');
+    assert.notEqual(first, second, 'a collector that can return two values is a restart to changes()');
+  });
+
+  it('renders the same integer on every scrape for the life of the process', () => {
+    const metrics = new AppMetrics();
+    const seen = new Set<number>();
+    // Two hundred scrapes is fifty minutes at the 15 s interval this deployment scrapes on, which
+    // is more than three times the 15 m window `ProcessRestartLoop` looks back over.
+    for (let index = 0; index < 200; index += 1) {
+      seen.add(sampleValue(samplesFor(metrics.render(), 'prl_process_start_time_seconds')[0] ?? ''));
+    }
+    assert.equal(
+      seen.size,
+      1,
+      `two hundred scrapes produced ${seen.size} distinct start times: ${[...seen].join(', ')}`,
+    );
+    // And it is a plausible epoch second rather than the zero a broken gauge would render, which
+    // would satisfy the assertion above while telling an operator the process started in 1970.
+    const [only] = [...seen];
+    assert.ok(
+      only !== undefined && only > 1_700_000_000 && only <= Math.floor(Date.now() / 1000),
+      `start time ${only} is not a moment in this process's past`,
+    );
+  });
+});

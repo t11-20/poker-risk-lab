@@ -672,11 +672,16 @@ function countSentence(args: {
   readonly cardsConsidered: number;
   readonly refusal: OutsCountRefusal | null;
 }): string {
+  // `is`/`are` and `out`/`outs` agree with their counts. They did not: a spot with a single clean
+  // card read "1 are clean and 0 are dirty, which is 1 outs in total", on nine of the thirty-six
+  // Lab scenarios. The idiom is `coach.ts`'s, which has agreed with its counts all along.
+  const total = args.cleanCount + args.dirtyCount;
   const preamble =
-    `Of the ${args.cardsConsidered} cards that can come next, ${args.cleanCount} are clean and ` +
-    `${args.dirtyCount} are dirty`;
+    `Of the ${args.cardsConsidered} cards that can come next, ${args.cleanCount} ` +
+    `${args.cleanCount === 1 ? 'is' : 'are'} clean and ${args.dirtyCount} ` +
+    `${args.dirtyCount === 1 ? 'is' : 'are'} dirty`;
   if (args.refusal === null) {
-    return `${preamble}, which is ${args.cleanCount + args.dirtyCount} outs in total`;
+    return `${preamble}, which is ${total} ${total === 1 ? 'out' : 'outs'} in total`;
   }
   return (
     `${preamble} — but none of them is an out and there is no outs count here, deliberately: an out is ` +

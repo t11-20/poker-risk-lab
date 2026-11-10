@@ -190,6 +190,56 @@ function twoSeatShowdown(handId: string, roomId: string, aliceId: string, borysI
   });
 }
 
+/**
+ * Three seats: one folds preflop, the other two check it down and show.
+ *
+ * The case the two fixtures above cannot produce, and the one the rule is most easily got wrong
+ * in. A heads-up hand is either "nobody showed" or "everybody showed", so a review that opened
+ * every seat's cards the moment the hand reached a showdown would pass both of them. Here a
+ * showdown happens AND a seat that folded into it is sitting in the same `hand_seats` rows, so
+ * `showed_down` has to be read per seat rather than off the hand — which is exactly the shape of
+ * the defect `unentitledHoleCardSeats` in `scripts/smoke-test.mjs` was written for on the wire.
+ *
+ * The folder is also the one recipient who legitimately learns something: seats 0 and 2 opened
+ * their hands in front of them. So this fixture asserts both directions at once — the folder sees
+ * both showdowns and neither showdown participant sees the folder.
+ */
+function threeSeatFoldAndShowdown(
+  handId: string,
+  roomId: string,
+  aliceId: string,
+  borysId: string,
+  chidiId: string,
+): PersistedHand {
+  return persistHand({
+    handId,
+    roomId,
+    handNumber: 3,
+    // Button on seat 0, so the small blind is seat 1 and the big blind seat 2.
+    buttonSeat: 0,
+    seats: [
+      { seat: 0, userId: aliceId, displayName: 'Alice', stack: 200 },
+      { seat: 1, userId: borysId, displayName: 'Borys', stack: 200 },
+      { seat: 2, userId: chidiId, displayName: 'Chidi', stack: 200 },
+    ],
+    holeCards: { 0: 'AhKs', 1: '7c2d', 2: 'Ts9s' },
+    board: 'Qh Jh 2s 4d 3c',
+    steps: [
+      // Preflop: the button calls, the small blind folds, the big blind checks its option.
+      { seat: 0, action: { type: 'call' } },
+      { seat: 1, action: { type: 'fold' } },
+      { seat: 2, action: { type: 'check' } },
+      // Three streets checked through, so the hand reaches a showdown between seats 0 and 2.
+      { seat: 2, action: { type: 'check' } },
+      { seat: 0, action: { type: 'check' } },
+      { seat: 2, action: { type: 'check' } },
+      { seat: 0, action: { type: 'check' } },
+      { seat: 2, action: { type: 'check' } },
+      { seat: 0, action: { type: 'check' } },
+    ],
+  });
+}
+
 function reviewFor(fixture: PersistedHand, viewerUserId: string): HandReviewResponse {
   return buildHandReview(
     {
@@ -282,6 +332,57 @@ describe('a hand review never carries what the viewer may not see', () => {
     assert.deepEqual(findLeaks({ nextCursor: 'abc' }, LIST_ALLOWED_PATHS), []);
     assert.equal(findLeaks({ nextCursor: 'abc' }).length, 1, 'a review has no cursor at all');
     assert.equal(findLeaks({ hands: [{ deckCursor: 4 }] }, LIST_ALLOWED_PATHS).length, 1);
+  });
+
+  it('opens the seats that showed and keeps the seat that folded sealed, in one hand', () => {
+    const CHIDI = 'usr_hiddenchidiccccccccccc';
+    const multiway = threeSeatFoldAndShowdown(
+      'hand_hiddenmultiwayaaaaaaa',
+      'room_hiddentableaaaaaaaaaa',
+      ALICE,
+      BORYS,
+      CHIDI,
+    );
+    // The fixture must actually be the shape the assertions below are about, or they prove nothing
+    // about a mixed hand: one folder, two showdowns, and a board.
+    const shown = multiway.state.result?.showdowns.map((showdown) => showdown.seat) ?? [];
+    assert.deepEqual(shown, [0, 2], 'seats 0 and 2 must show; seat 1 folded before the flop');
+    assert.equal(multiway.state.result?.endedByFold, false);
+    assert.equal(multiway.state.board.length, 5);
+
+    const folderCards = holeCardsOf(multiway, 1);
+    for (const [viewer, ownSeat] of [
+      [ALICE, 0],
+      [BORYS, 1],
+      [CHIDI, 2],
+    ] as const) {
+      const review = reviewFor(multiway, viewer);
+      const bySeat = new Map(review.seats.map((seat) => [seat.seat, seat]));
+
+      // The two seats that showed are open to everybody at the table, including the folder.
+      assert.deepEqual(bySeat.get(0)?.holeCards, holeCardsOf(multiway, 0), `seat 0 showed, for ${viewer}`);
+      assert.deepEqual(bySeat.get(2)?.holeCards, holeCardsOf(multiway, 2), `seat 2 showed, for ${viewer}`);
+
+      // The folder's cards are their own and nobody else's — permanently, because whether they
+      // folded a bluff or a monster is what the commitment scheme exists to keep sealed.
+      if (ownSeat === 1) {
+        assert.deepEqual(bySeat.get(1)?.holeCards, folderCards, 'the folder sees their own hand');
+      } else {
+        assert.equal(bySeat.get(1)?.holeCards, null, `seat 1 never showed, so ${viewer} may not see it`);
+        const serialised = JSON.stringify(review);
+        for (const card of folderCards) {
+          assert.ok(!serialised.includes(`"${card}"`), `the folder's ${card} reached ${viewer}`);
+        }
+      }
+      assert.equal(bySeat.get(1)?.showedDown, false, 'and the flag that would open it stays false');
+      assertNoLeaks(JSON.parse(JSON.stringify(review)), `the multiway review for ${viewer}`);
+    }
+
+    // The reveal proves exactly the five board cards and the two hands that opened — never the
+    // folder's two, which would make the proof itself the leak.
+    const review = reviewFor(multiway, ALICE);
+    assert.equal(review.verification.ok, true);
+    assert.equal(review.verification.verifiedPositions, 9, 'five board cards and two shown hands');
   });
 
   it('never carries an unshown seat’s cards even in the field that proves the deal', () => {

@@ -513,6 +513,38 @@ function validateQuizQuestion(problems: Problems, path: string, raw: unknown): Q
       problems.add(`${path}.correctIndex`, `${correctIndex} is out of range for ${options.length} options`);
     }
     const optionNotes = raw['optionNotes'];
+    const notes = Array.isArray(optionNotes)
+      ? requireStringArray(problems, `${path}.optionNotes`, optionNotes, { max: 6 })
+      : null;
+    if (notes !== null && options.length > 0) {
+      // A note array is positional: `optionNotes[i]` explains `options[i]`, and the runner renders
+      // them side by side. Nothing joined them, so an option added or removed without the notes
+      // following ships a quiz whose rationale sits against the wrong choice.
+      //
+      // WHAT THIS DOES NOT CATCH, measured rather than assumed: reversing an `options` array and
+      // leaving `optionNotes` and `correctIndex` alone passes both checks below. The marker has not
+      // moved and neither has the index, so nothing here can see that `correctIndex` now names a
+      // different string. That is the worse defect — a student marked wrong for a right answer —
+      // and it is not detectable from this file, because no note quotes the option it explains.
+      // Catching it needs the correct ANSWER pinned by text rather than by position, which is a
+      // content-model change and not this guard. Said plainly because the first version of this
+      // comment claimed the reorder case and the negative control disproved it.
+      if (notes.length !== options.length) {
+        problems.add(
+          `${path}.optionNotes`,
+          `${notes.length} note(s) for ${options.length} option(s); they are read positionally`,
+        );
+      }
+      // The convention the whole file follows: the note on the right answer opens with "Correct:".
+      // It is what makes a reorder visible, so it is asserted rather than left to review.
+      const marked = notes.findIndex((note) => note.trimStart().startsWith('Correct:'));
+      if (marked !== -1 && marked !== correctIndex) {
+        problems.add(
+          `${path}.optionNotes`,
+          `the note beginning "Correct:" is at ${marked} and correctIndex is ${correctIndex}`,
+        );
+      }
+    }
     return {
       kind,
       id,
@@ -520,9 +552,7 @@ function validateQuizQuestion(problems: Problems, path: string, raw: unknown): Q
       options,
       correctIndex,
       explanation,
-      ...(Array.isArray(optionNotes)
-        ? { optionNotes: requireStringArray(problems, `${path}.optionNotes`, optionNotes, { max: 6 }) }
-        : {}),
+      ...(notes !== null ? { optionNotes: notes } : {}),
     };
   }
   if (kind === 'numeric') {

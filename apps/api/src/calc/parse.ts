@@ -56,7 +56,14 @@
 
 import type { CoachRequest, EquityRequest } from '@prl/contracts';
 import { type Card, CardParseError, cardsToString, parseCards } from '@prl/poker-engine';
-import { choose, deriveLegalActions, type ParsedRange, parseRange, RangeParseError } from '@prl/poker-math';
+import {
+  choose,
+  deriveContestablePot,
+  deriveLegalActions,
+  type ParsedRange,
+  parseRange,
+  RangeParseError,
+} from '@prl/poker-math';
 import { AppError } from '../errors.ts';
 import { withoutControlCharacters } from '../logging.ts';
 import type { CoachTask, WireRange, WireSpec } from '../workers/equity-worker.ts';
@@ -673,6 +680,19 @@ export function parseCoachRequest(body: CoachRequest, limits: WorkLimits = DEFAU
       spec: situation.spec,
       street: body.street,
       pot: body.pot,
+      // Derived, because a request body describes a spot rather than a table: it carries no
+      // per-seat commitments, so there is no seat state for `contestablePotFor` to layer. What a
+      // description does establish is the part of the bet hero's stack cannot cover, and
+      // `deriveContestablePot` subtracts exactly that and nothing else. Exact heads-up; see its
+      // doc for what it cannot see multiway, and why the answer there is per-seat commitments in
+      // the request rather than a guess.
+      contestablePot: deriveContestablePot({
+        pot: body.pot,
+        toCall: body.toCall,
+        heroCommittedThisStreet: 0,
+        heroStack: body.heroStack,
+        opponentStacks,
+      }),
       toCall: body.toCall,
       // The ad-hoc calculator describes a spot, not a seat at a table: the request has
       // no field for chips hero has already put out on this street, and its `pot` is

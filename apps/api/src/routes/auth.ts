@@ -59,6 +59,7 @@ import type { SessionAccount, SessionStore } from '../auth/session.ts';
 import {
   destroySession,
   issueSession,
+  noteSessionRevoked,
   requireSession,
   SESSION_ABSOLUTE_TTL_SECONDS,
   sessionPlugin,
@@ -66,9 +67,10 @@ import {
 import type { AppConfig } from '../config.ts';
 import type { Sql } from '../db.ts';
 import { getSql } from '../db.ts';
-import { AppError } from '../errors.ts';
+import { AppError, rateLimitError } from '../errors.ts';
 import { recordSecurityAudit } from '../observability/telemetry.ts';
-import { clientKeyedRateLimit, sessionCookieOptions } from '../plugins/security.ts';
+import { OutcomeBudget } from '../plugins/outcome-budget.ts';
+import { addressRateLimitKey, clientKeyedRateLimit, sessionCookieOptions } from '../plugins/security.ts';
 import { hashOidcSecret, timingSafeEquals } from '../repositories/hashing.ts';
 import * as sessionsRepository from '../repositories/sessions.ts';
 import { SESSION_TTL_SECONDS } from '../repositories/sessions.ts';
@@ -79,34 +81,138 @@ import * as usersRepository from '../repositories/users.ts';
 // ---------------------------------------------------------------------------
 
 /*
- * Guest creation, rate limited hard.
+ * The unauthenticated limits, and the classroom that broke the first version of them.
  *
- * This is the one unauthenticated endpoint that writes a row, so it is the one a script would
- * point at to fill the users table. Ten a minute per caller is far more than a person needs and
- * far less than a loop wants.
+ * ## The part that has not changed: the KEY
  *
- * The bucket is deliberately NOT the default one from `plugins/security.ts`. That key prefers the
- * session cookie, which is correct for ordinary routes and broken here: this endpoint ISSUES a
- * session, so a client that keeps the cookie it was just handed presents a different key on its
- * next request and the counter never accumulates. Measured against the running server: 60
- * consecutive guest creations produced zero 429s, while freezing the cookie produced a 429 after
- * six — which is what proved key rotation was the cause rather than a missing config.
+ * Every limit in this section is keyed on a hash of the client ADDRESS and deliberately ignores
+ * the session cookie. That is not a preference, it is forced: `POST /auth/guest` and
+ * `GET /auth/oidc/callback` both ISSUE a session, so a client that keeps the cookie it was just
+ * handed presents a DIFFERENT key on its next request and the counter never accumulates.
+ * Measured against the running server: 60 consecutive guest creations produced zero 429s, while
+ * freezing the cookie produced a 429 after six — which is what proved key rotation was the cause
+ * rather than a missing config. `clientKeyedRateLimit` in `plugins/security.ts` carries the whole
+ * argument. Nothing below may reintroduce a key that rotates under the caller.
  *
- * `clientKeyedRateLimit` ignores the cookie and keys on the hashed address instead. The NAT
- * trade-off is accepted knowingly: a classroom of thirty sharing an account-creation budget will
- * occasionally be told to wait, which is much better than unbounded account creation.
+ * ## The part that WAS wrong: the size, and the shape
  *
- * The numbers themselves live in `config.rateLimit.guestMax` / `guestWindowMs` rather than
- * here. They were literals until a smoke run proved why that was wrong: this is the limit a
- * test run actually hits, `RATE_LIMIT_MAX` in CI raises only the global bucket, and so the
- * one limit that needed tuning for an automated caller was the one that could not be tuned.
- * The shipped defaults are unchanged (10 per 60 s).
+ * This comment used to say the NAT cost of address keying was accepted knowingly, because "a
+ * classroom of thirty sharing an account-creation budget will occasionally be told to wait". That
+ * was reasoned for a public instance and it was wrong for the product's actual first five minutes.
+ * A cohort of thirty students on one campus, office or VPN egress address IS one caller as far as
+ * these limits are concerned, and they all sign in inside the same ten seconds.
  *
- * Sign-in starts and callbacks are limited the same way and just as tightly: each start writes
- * an attempt row, and each callback can cost two outbound requests to the identity provider.
- * Address-keyed for the same reason as guest creation — the callback completes by issuing a
- * session. Configured by
- * `config.rateLimit.oidcMax` / `oidcWindowMs`; the shipped defaults are 15 per 60 s.
+ * Measured against the shipped defaults, thirty learners, one address, one window
+ * (`test/cohort-sign-in-limits.test.ts` drives exactly this):
+ *
+ *     OIDC sign-in    15 of 30 completed, 15 refused with 429, first refusal at learner 16
+ *     guest creation  10 of 30 created,   20 refused with 429, first refusal at learner 11
+ *
+ * "Occasionally told to wait" was half the room, on their first interaction with a product their
+ * institution had paid for.
+ *
+ * ## Why the fix is not a bigger number
+ *
+ * Raising `oidcMax` from 15 to 60 on its own would buy the cohort headroom by handing the same
+ * headroom to a script. So the OIDC limit became THREE budgets counting three different things:
+ *
+ *   1. **A ceiling, sized for the cohort** — `config.rateLimit.oidcMax` / `oidcWindowMs`, applied
+ *      to `/auth/oidc/start` and `/auth/oidc/callback` through `clientKeyedRateLimit` exactly as
+ *      before. Default 60 per 60 s, which is 30 learners x 2 requests each.
+ *
+ *   2. **A budget spent only by FAILURES, sized for the abuse** — `config.rateLimit.oidcFailureMax`
+ *      over the same window, held in an `OutcomeBudget` and charged in an `onResponse` hook when
+ *      the request ended in an error. Default 15 per 60 s, unchanged in effect from what shipped.
+ *
+ *   3. **A budget spent by UNREDEEMED STARTS** — charged when a start writes an attempt row,
+ *      credited when a callback redeems one, over the attempt row's own 10-minute TTL. It exists
+ *      because (1) and (2) together cannot see the cheapest attack of all; the measurement that
+ *      forced it is on `oidcUnredeemedStarts` in `createAuthRoutes` below and summarised in the
+ *      delta at the end of this comment.
+ *
+ * The reason an OUTCOME is a better thing to count than a request: at the moment it arrives, a
+ * start from a student is identical to a start from a script, and no limiter can separate them.
+ * What separates them is how the flow ENDS. Completing a sign-in needs an authorization code that
+ * only the identity provider can mint, presented with the matching single-use attempt row and the
+ * PKCE verifier from a cookie handed out one request earlier. A script cannot produce that. It can
+ * produce unlimited requests that FAIL to produce it, and unlimited starts it never comes back
+ * for. Thirty completions from one address in a minute is a classroom; fifteen failures, or sixty
+ * abandoned attempt rows, is not.
+ *
+ * The budgets are checked in `preHandler`, so a refused caller never reaches the attempt row or
+ * the token exchange. A 429 is never itself charged: a caller who kept retrying would otherwise
+ * keep pushing their own window forward and never be let back in, which is `continueExceeding` by
+ * accident and is not something this application enables anywhere.
+ *
+ * ## Guest creation is a DIFFERENT case, and keeps the tight default
+ *
+ * The split above does not transfer, and pretending it did would be the dangerous move. On
+ * `POST /auth/guest` every attempt SUCCEEDS — there is no email, no password and no provider to
+ * fail against. So there is no failed outcome to charge, "refund on success" is meaningless, and
+ * the successful creations ARE the abuse: this is the one unauthenticated endpoint that writes a
+ * user row, so it is the one a script points at to fill the users table.
+ *
+ * Therefore `config.rateLimit.guestMax` stays at its shipped 10 per 60 s for every deployment. A
+ * cohort that uses guest accounts needs that raised, and raising it is an operator decision with a
+ * security consequence rather than a default: `COHORT_SIZE` plus `COHORT_ENTRY` in `config.ts`
+ * makes the process REFUSE TO BOOT when a declared cohort cannot get in, naming the arithmetic and
+ * naming what raising it costs. Nothing is raised automatically.
+ *
+ * The numbers live in `config.rateLimit.*` rather than as literals here, and that has been true
+ * since a smoke run proved why: this is the limit an automated caller actually hits, `RATE_LIMIT_MAX`
+ * in CI raises only the global bucket, and so the one limit that needed tuning for an automated
+ * caller was the one that could not be tuned.
+ *
+ * ## THE SECURITY DELTA, stated plainly
+ *
+ * A first version of this comment said the raised ceiling cost "roughly 600 short-lived rows per
+ * address, and the global limiter (300 per minute) still sits above it". BOTH HALVES OF THAT WERE
+ * WRONG, and they are recorded here rather than quietly corrected because the shape of the error
+ * is the useful part: it assumed a bound existed instead of measuring it.
+ *
+ *   * The 10-minute TTL does not remove rows. It bounds when a row is USABLE.
+ *     `maintenance/retention-sweep.ts` is what removes them, every SIX HOURS, at most 1,000 x 100
+ *     = 100,000 rows per table per sweep. Residency is `rate x 360 minutes`, not `rate x 10`.
+ *   * The global limiter contributes NOTHING here. `@fastify/rate-limit` lets a route's own
+ *     `config.rateLimit` replace the global bucket rather than stack with it. Measured: after 500
+ *     starts from one address, `GET /ready` from that address still answered 200 and
+ *     `POST /auth/guest` still answered 201. A start flood is free of the 300-per-minute budget.
+ *
+ * With those two facts, the honest arithmetic for the one table nothing else bounds:
+ *
+ *                            rows/min   per address per 6 h sweep   addresses to outrun the sweep
+ *     before this change        15                5,400                          19
+ *     ceiling raised alone      60               21,600                           5
+ *     with budget (3)           60 per 10 min     2,160                          46
+ *
+ * So the raised ceiling ALONE was a real regression — it took the number of addresses needed to
+ * make `prl.oidc_login_attempts` grow without limit from 19 to 5 — and budget (3) is what pays it
+ * back with interest. The final position, per address:
+ *
+ *   GAINED by an attacker:
+ *   * Complete up to `oidcMax` (60) sign-ins per minute instead of 15. Accepted: every one needs
+ *     real credentials at the identity provider, so the bound on this was never our limiter — it
+ *     is how many accounts the attacker actually holds at the IdP.
+ *   * Burst up to 60 attempt rows in a minute rather than 15, which matters for a spike and not
+ *     for residency, because the row below is what governs the sustained rate.
+ *
+ *   TIGHTENED against an attacker:
+ *   * Sustained attempt-row creation: 60 per 10 minutes, down from 15 per minute. That is 2,160
+ *     rows per address per sweep against 5,400 before — TIGHTER than the code this started from.
+ *
+ *   UNCHANGED, which is the part that matters most:
+ *   * Outbound requests to the identity provider. Those cost real money and real reputation with
+ *     the provider, and they only happen on a callback that gets past the state, cookie and PKCE
+ *     checks and then fails at the token endpoint — that is, on a FAILED outcome. Measured, a
+ *     script driving incomplete sign-ins from one address forced 15 token exchanges per minute
+ *     and was then refused. It still forces 15 and is still refused. The failure budget's default
+ *     is 15 precisely so that this number does not move.
+ *   * Guest account creation: 10 per minute per address, exactly as before.
+ *   * Unbounded account creation and unbounded IdP round trips are still refused. The refusal
+ *     arrives from a different counter, at the same place.
+ *
+ * Every line of that table is asserted, with the before and after numbers, in
+ * `test/cohort-sign-in-limits.test.ts`.
  */
 
 /**
@@ -267,8 +373,26 @@ async function sessionUserFor(account: SessionAccount, users: UserStore): Promis
  *
  * The CSRF token is minted for everybody, signed in or not, and that is not an oversight: the
  * first mutating request a new visitor makes is `POST /auth/guest`, which needs a token, so a
- * token issued only to authenticated callers would be unreachable. `generateCsrf` rotates the
- * paired secret cookie, which is exactly what should happen when the session changes.
+ * token issued only to authenticated callers would be unreachable.
+ *
+ * ## What `generateCsrf` does NOT do
+ *
+ * This comment used to say it "rotates the paired secret cookie, which is exactly what should
+ * happen when the session changes". Read `generateCsrfCookie` in
+ * `@fastify/csrf-protection@8.0.1`: it unsigns the existing `prl_csrf` cookie and mints a NEW
+ * secret only when there is not already a usable one. So the secret survives sign-in, sign-out and
+ * account deletion, and a token minted while anonymous still verifies afterwards.
+ *
+ * That is not a hole, and the reason is worth writing down rather than assuming — the rotation
+ * this comment claimed was never what made the scheme work. Double submit is sound because a
+ * cross-site page cannot READ or WRITE the secret: the cookie is `__Host-` prefixed in production
+ * (so no sibling subdomain can plant one), `HttpOnly` (so script cannot read it), signed (so it
+ * cannot be forged), and the token has to arrive in an `x-csrf-token` header, which a cross-origin
+ * request cannot carry without a preflight that only an allowlisted origin is granted. None of
+ * those depends on the secret being fresh.
+ *
+ * Anyone reaching for rotation as a security property — "the old tab's token stopped working after
+ * sign-in" — should note that it is not one this code has.
  */
 async function sessionResponse(
   reply: FastifyReply,
@@ -334,6 +458,15 @@ interface CallbackQuery {
   readonly code?: string;
   readonly state: string;
   readonly error?: string;
+  /**
+   * RFC 9207's issuer identifier, present on any OpenID-conformant provider.
+   *
+   * Optional because the RFC is newer than plenty of deployed providers, and refusing a callback
+   * that omits it would lock this endpoint to the modern half of the ecosystem. Present, it is
+   * checked; absent, the state/nonce/PKCE triple is what carries the attempt's identity, exactly
+   * as before.
+   */
+  readonly iss?: string;
 }
 
 interface AcceptedAttempt {
@@ -427,11 +560,241 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
       config.rateLimit.guestMax,
       config.rateLimit.guestWindowMs,
     );
+    // The cohort-sized CEILING. Sized so a class fits under it; see the limits note above.
     const oidcRateLimit = clientKeyedRateLimit(
       config,
       config.rateLimit.oidcMax,
       config.rateLimit.oidcWindowMs,
     );
+
+    /**
+     * The second OIDC budget: the one only a FAILURE spends.
+     *
+     * Per app instance rather than per module, so two apps built in one process (which is what
+     * every test file here does) cannot see each other's counters — the same isolation
+     * `forgetRateLimitStoresForTests` exists to give the route limiters.
+     */
+    const oidcFailures = new OutcomeBudget({
+      max: config.rateLimit.oidcFailureMax,
+      windowMs: config.rateLimit.oidcWindowMs,
+    });
+
+    /**
+     * The third: unredeemed starts, which is the one the first two cannot see.
+     *
+     * A caller that only ever hits `/auth/oidc/start` and never comes back writes an attempt row
+     * every time and produces NO failed outcome, because a start that succeeds is not a failure.
+     * So `oidcFailures` never charges it, and the only thing bounding it is the ceiling — which
+     * this change raised from 15 to 60. Measured, and the numbers are the reason this budget
+     * exists rather than a comment saying it is probably fine:
+     *
+     *   * A start flood is bounded by the route ceiling and by NOTHING ELSE. `@fastify/rate-limit`
+     *     lets a route's own `config.rateLimit` REPLACE the global bucket rather than stack with
+     *     it, so 500 starts from one address cost that address zero of its 300-per-minute global
+     *     budget — measured: after the flood, `GET /ready` still answered 200 and
+     *     `POST /auth/guest` still answered 201 from the same address.
+     *   * `prl.oidc_login_attempts` rows are not removed when they expire. They are removed by
+     *     `maintenance/retention-sweep.ts`, which runs every SIX HOURS and deletes at most
+     *     `batchSize x maxPasses` = 1,000 x 100 = 100,000 rows per table per sweep. The 10-minute
+     *     TTL bounds when a row is USABLE; the sweep is what bounds when it is GONE.
+     *   * So residency per flooding address is `rate x 360 minutes`, and the number of addresses
+     *     needed to outrun the sweep is `100,000 / that`:
+     *
+     *         before this change  15/min ->  5,400 rows per address per sweep -> 19 addresses
+     *         ceiling raised      60/min -> 21,600 rows per address per sweep ->  5 addresses
+     *         with this budget    60 per 10 min -> 2,160 per address per sweep -> 46 addresses
+     *
+     * Five addresses to make the only table with no other bound grow without limit, for ever, was
+     * not an acceptable price for the cohort fix. With this budget the same attacker needs 46 —
+     * better than the code this change started from, so the attempt-row channel ends up TIGHTER
+     * than it shipped rather than four times looser.
+     *
+     * The window is `OIDC_ATTEMPT_TTL_MS`, not `oidcWindowMs`, and that is the whole trick: "still
+     * charged when the window closes" then means exactly "the attempt row expired without being
+     * redeemed", with no timer per attempt and no second sweep. The max is `oidcMax` — one
+     * ceiling-window's worth of starts may be in flight at once — so it sizes itself from the
+     * cohort declaration instead of being a fourth number an operator has to reason about. A
+     * class of thirty holds about thirty for a few seconds and then gives them all back.
+     */
+    const oidcUnredeemedStarts = new OutcomeBudget({
+      max: config.rateLimit.oidcMax,
+      windowMs: OIDC_ATTEMPT_TTL_MS,
+    });
+
+    /**
+     * The hooks that check and charge them.
+     *
+     * `preHandler` for the checks, so a refused caller is turned away before the attempt row is
+     * written or the token endpoint is called — the two things these budgets exist to bound. It
+     * runs after `@fastify/rate-limit`'s `onRequest`, so the ceiling still answers first when
+     * both would.
+     *
+     * `onResponse` for the failure charge, because that is the first moment the OUTCOME is known,
+     * which is the whole idea: this budget counts how a request ended, not that it happened.
+     *
+     * The unredeemed-start budget is charged and credited in the handlers instead, not here, for
+     * a reason worth stating: BOTH routes answer 303 on success, so a response-status hook cannot
+     * tell "sent a learner to the provider" from "brought one back with a session". The charge
+     * belongs next to the `create` that writes the row it counts, and the credit next to the
+     * `issueSession` that proves the row was redeemed.
+     *
+     * A 429 is never charged. Charging it would push the caller's own window forward on every
+     * retry and lock them out for longer than the window they were told to wait — the library
+     * calls that `continueExceeding`, this application does not enable it anywhere, and
+     * re-inventing it here by accident would turn one cancelled consent screen into a lockout.
+     */
+    const refuseWhenFailing = (
+      request: FastifyRequest,
+      _reply: FastifyReply,
+      done: (error?: Error) => void,
+    ) => {
+      const refusalMs = oidcFailures.refusalFor(addressRateLimitKey(request, config));
+      if (refusalMs === null) {
+        done();
+        return;
+      }
+      done(rateLimitError(refusalMs / 1_000));
+    };
+
+    const refuseWhenTooManyUnredeemed = (
+      request: FastifyRequest,
+      _reply: FastifyReply,
+      done: (error?: Error) => void,
+    ) => {
+      const refusalMs = oidcUnredeemedStarts.refusalFor(addressRateLimitKey(request, config));
+      if (refusalMs === null) {
+        done();
+        return;
+      }
+      done(rateLimitError(refusalMs / 1_000));
+    };
+
+    /**
+     * The OIDC requests whose failure is the CALLER'S to pay for.
+     *
+     * ## The defect this closes
+     *
+     * The failed-outcome budget is keyed on the client ADDRESS — which it must be, because these
+     * routes issue a session (measured, at the top of this file). Charge every 4xx and the budget
+     * becomes spendable by somebody who is not the caller: both OIDC routes are GETs, so a page on
+     * any other site can make a visitor's browser issue them as plain subresource loads. CORS does
+     * not stop the REQUEST, only the reading of the response; there is no CSRF token on a GET; and
+     * no session is needed. Measured with `<img>`-shaped headers (`sec-fetch-mode: no-cors`,
+     * `origin: https://evil.test`):
+     *
+     *     20 cross-site GETs to the callback   -> 400 x15 then 429 x5
+     *     a legitimate learner's /auth/oidc/start from the same address -> 429, retryAfter 60
+     *
+     * Fifteen image tags on any page one student on a campus network visits therefore locked the
+     * whole cohort out of signing in for the rest of the window — the exact failure the cohort
+     * work exists to prevent, reachable by a third party for free.
+     *
+     * ## Why this set covers the START route too, and why the first fix did not
+     *
+     * ############################################################################
+     * ## THE SAME HAZARD EXISTED ON TWO ROUTES AND THE GUARD WENT ON ONE.       ##
+     * ############################################################################
+     *
+     * That fix gated only the CALLBACK, on membership of an `acceptAttempt` that had succeeded.
+     * `/auth/oidc/start` kept an unconditional `chargeFailedOutcome`, and a start is refused with
+     * a 400 in two ways a third party can reach for nothing — measured against the code that
+     * shipped the callback fix, on the same harness:
+     *
+     *     20 cross-site <img>-shaped GETs to /auth/oidc/start
+     *       (refused 400 x20 by `refuseNonNavigationOidc`, every one of them charged)
+     *       -> the victim's own /auth/oidc/start   429, retryAfter 60
+     *       -> the victim's own /auth/oidc/callback 429, retryAfter 60
+     *
+     *     17 cross-site GETs to /auth/oidc/start?redirectAfter=https%3A%2F%2Fevil.test%2Fx
+     *       (refused 400 by the SCHEMA, which Fastify runs BEFORE `preHandler`, so the
+     *        Fetch-Metadata guard never even runs)
+     *       -> the victim's own /auth/oidc/start   429
+     *
+     * The second door is the one that matters: `refuseNonNavigationOidc` cannot close it, because
+     * validation refuses the request before any `preHandler` is reached. Fifteen image tags with a
+     * malformed query lock a whole campus address out of signing in, and the attacker never even
+     * sees the 429 — they are refused by the guard while the victim pays.
+     *
+     * ## Why membership of this set is the right condition
+     *
+     * The budget's own argument (see the header of `plugins/outcome-budget.ts`) is that a failure
+     * is worth counting because "a script cannot produce" the thing that separates a real sign-in
+     * from a fake one. On the callback that thing is `acceptAttempt`: the single-use attempt row,
+     * matched against a `state` and a PKCE verifier carried in a cookie THIS SERVER set on the
+     * browser one request earlier. A hostile third party cannot make a victim's browser present
+     * one, because it cannot write a `__Host-`, `HttpOnly`, signed cookie for our origin.
+     *
+     * On the start there is no such credential and there cannot be — a start is the request that
+     * has nothing yet. The line there is entering the HANDLER, which is the same line by the other
+     * measure: it is the point past which a failure COSTS something. Everything before it is
+     * refused from memory (the schema, the Fetch-Metadata guard, the budgets themselves), and
+     * everything after it has spent a discovery fetch, an authorization-URL build and an attempt
+     * row. So the requests that are now uncharged are exactly the ones that were never expensive,
+     * and every request the original measurement counted — a script that starts a real flow and
+     * then fails at the provider — is still counted. `refusingRelyingParty` in
+     * `test/cohort-sign-in-limits.test.ts` drives that case and still meets its fifteen.
+     *
+     * A `WeakSet` rather than a request decorator: it is three call sites in one closure, it
+     * cannot be read or set by anything else in the process, and it holds no request after the
+     * response.
+     */
+    const chargeableOidcFailures = new WeakSet<FastifyRequest>();
+
+    const chargeFailedOutcome = (
+      request: FastifyRequest,
+      reply: FastifyReply,
+      done: (error?: Error) => void,
+    ) => {
+      // `delete` rather than `has`: the mark is spent here, so `chargeAbandonedOutcome` below
+      // cannot charge the same request a second time if both hooks ever ran for one request.
+      // It also drops the reference eagerly rather than waiting for the collector.
+      const chargeable = chargeableOidcFailures.delete(request);
+      if (chargeable && reply.statusCode >= 400 && reply.statusCode !== 429) {
+        oidcFailures.charge(addressRateLimitKey(request, config));
+      }
+      done();
+    };
+
+    /**
+     * The outcome that is never a status code: the caller hung up.
+     *
+     * ############################################################################
+     * ## `onResponse` DOES NOT RUN ON A REQUEST THE CLIENT ABORTED.             ##
+     * ############################################################################
+     *
+     * Fastify attaches its `onResponse` runner to the raw response's `finish` and `error`
+     * events (`lib/reply.js`, `setupResponseListeners`). A client that writes the request and
+     * then destroys the socket produces neither, so a charge that lives only in `onResponse` is
+     * a charge an attacker opts out of by not waiting for the answer. The handler keeps running
+     * — Node does not cancel it — so the token exchange still leaves this process.
+     *
+     * Measured against the code this hook was added to, one address, a stub provider whose token
+     * endpoint always refuses, `RATE_LIMIT_OIDC_MAX=400` so only this budget could refuse:
+     *
+     *     start, then callback, read the answer      15 forced token exchanges, then 429
+     *     start, then callback, destroy the socket  120 forced token exchanges, no refusal,
+     *                                               and a fresh /auth/oidc/start still 303
+     *
+     * 120 was where the loop stopped, not where the caller was refused. The one number the whole
+     * cohort change promised not to move — "a script driving incomplete sign-ins from one address
+     * forced 15 token exchanges per minute and was then refused" — was `curl --max-time 0.05`
+     * away from being unbounded.
+     *
+     * Charging here is deliberately pessimistic: a request that reached the mark and then vanished
+     * is charged as a failure even though its outcome is unknown. That is the safe direction. The
+     * mark is only set once a request has spent something (a discovery fetch and an attempt row on
+     * the start, an outbound token exchange on the callback), so "unknown" and "failed" cost this
+     * server the same thing, and the case it charges a learner for — abandoning a sign-in in the
+     * few milliseconds between the handler being entered and the redirect being written — is one
+     * a person cannot produce on purpose.
+     */
+    const chargeAbandonedOutcome = (request: FastifyRequest, done: (error?: Error) => void) => {
+      if (chargeableOidcFailures.delete(request)) {
+        oidcFailures.charge(addressRateLimitKey(request, config));
+      }
+      done();
+    };
+
     app.post<{ Body: GuestBody | undefined }>(
       '/auth/guest',
       { config: guestRateLimit, schema: { body: { $ref: 'prl:createGuestBody#' } } },
@@ -485,6 +848,87 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
     });
 
     /**
+     * Refuse an OIDC GET that a browser says is a subresource load rather than a navigation.
+     *
+     * ## The incident this closes
+     *
+     * Both OIDC GET routes are top-level navigations by construction: a learner clicks sign in, and
+     * the provider redirects their browser back. Neither is ever loaded as an image, a script or a
+     * fetch. But CORS does not stop a cross-site *request* — only the reading of its response — so any
+     * page a learner visits could make their browser issue them. An adversarial review measured what
+     * that buys an attacker: sixty `<img>` tags on any page one student on a campus network opens
+     * exhausts the whole address's unredeemed-start budget, and the next real learner to press sign in
+     * gets a 429. A third party denies sign-in to an entire cohort for ten minutes, for free, from a
+     * page nobody on the cohort's side controls.
+     *
+     * The budgets themselves are address-keyed and must be — a route that issues a session cannot be
+     * keyed by that session, which is measured and argued at the top of this file. So the budget
+     * cannot distinguish the attacker from the victim. What CAN distinguish them is that a browser
+     * tells us, in `Sec-Fetch-Dest`, what it is loading the URL *for*.
+     *
+     * ## Why this fails open on an absent header
+     *
+     * `Sec-Fetch-Dest` is sent by every current browser and by no `curl`. Absent means "not a browser
+     * that speaks Fetch Metadata", which includes a very old client and every command-line caller,
+     * and refusing those would break sign-in for them to stop an attack they cannot mount — a
+     * cross-site request only exists because a browser made it, and a browser that can be made to
+     * issue one sends the header. Present-and-not-`document` is the only refusal, and it is exactly
+     * the case that cannot be a person pressing a button.
+     *
+     * This is a deliberate constraint on the sign-in path, added before a real provider is wired
+     * rather than after, because the cohort work this protects assumes OIDC is how a class arrives.
+     *
+     * ## Why this is an `onRequest` hook and not a `preHandler`, which it was
+     *
+     * ############################################################################
+     * ## A GUARD BELOW THE COUNTER DOES NOT PROTECT THE COUNTER.                ##
+     * ############################################################################
+     *
+     * As a `preHandler` this guard stopped the attempt rows and stopped the failed-outcome
+     * budget being charged, and the comment above said the incident was closed. It was not.
+     * `@fastify/rate-limit` attaches its route hook at `onRequest`, so the COHORT CEILING —
+     * `oidcMax`, 60 per 60 s, keyed on the same hashed address for the whole campus — had
+     * already been spent by the time any `preHandler` ran. Measured on the test harness against
+     * the version that had this at `preHandler`:
+     *
+     *     60 cross-site <img> loads of /auth/oidc/start   400 x60 (this guard refused every one)
+     *       -> attempt rows written                        0
+     *       -> the victim's own /auth/oidc/start           429, retryAfter 60
+     *
+     *     60 cross-site <img> loads of /auth/oidc/callback 400 x60 (refused by the SCHEMA — no
+     *                                                      query at all, so no guard even ran)
+     *       -> the victim's own /auth/oidc/callback        429, retryAfter 60
+     *
+     * Sixty image tags, no session, no CSRF token, no valid query, and a whole NAT is refused
+     * sign-in for the rest of the window — renewable every window for as long as the page is
+     * open. The budgets were fixed twice and the counter above them was never moved.
+     *
+     * `@fastify/rate-limit` APPENDS its hook to a route's declared `onRequest` array
+     * (`addRouteRateHook` in its `index.js`), so listing this guard there puts it above the
+     * ceiling, which is the only place it can be and still protect it. It also puts it above the
+     * schema, which is what closes the callback case: a `<img src=".../callback">` carries no
+     * query, and validation used to answer it before any hook of ours ran at all.
+     *
+     * What that costs, stated because `plugins/security.ts` states the opposite invariant: a
+     * request refused here is answered WITHOUT being counted by anything. That is one header
+     * comparison and no I/O, on two routes, for a request carrying a header no navigation ever
+     * sends — and the alternative is counting it against the victim's address, which is the
+     * defect. `GET /health` is already deliberately uncounted, so this is not a new class.
+     */
+    const refuseNonNavigationOidc = (
+      request: FastifyRequest,
+      _reply: FastifyReply,
+      done: (error?: Error) => void,
+    ): void => {
+      const dest = request.headers['sec-fetch-dest'];
+      if (typeof dest === 'string' && dest !== '' && dest !== 'document') {
+        done(new AppError('invalid_request'));
+        return;
+      }
+      done();
+    };
+
+    /**
      * `GET /auth/oidc/start` — begin a sign-in.
      *
      * `redirectAfter` is a PATH, enforced by `oidcStartQuerySchema`. Restating why, because this is
@@ -497,8 +941,28 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
      */
     app.get<{ Querystring: StartQuery }>(
       '/auth/oidc/start',
-      { config: oidcRateLimit, schema: { querystring: { $ref: 'prl:oidcStartQuery#' } } },
+      {
+        config: oidcRateLimit,
+        // Both budgets guard the start: the failed-outcome one because a start can fail against
+        // the provider, and the unredeemed one because a start that SUCCEEDS is the whole of what
+        // a start flood produces.
+        // `onRequest`, ABOVE the route limiter, and that placement is the whole of the second
+        // fix — see `refuseNonNavigationOidc`. `@fastify/rate-limit` appends its own hook to
+        // whatever `onRequest` array a route declares, so a guard listed here runs first and a
+        // guard listed in `preHandler` runs one stage too late.
+        onRequest: [refuseNonNavigationOidc],
+        preHandler: [refuseWhenFailing, refuseWhenTooManyUnredeemed],
+        onResponse: chargeFailedOutcome,
+        onRequestAbort: chargeAbandonedOutcome,
+        schema: { querystring: { $ref: 'prl:oidcStartQuery#' } },
+      },
       async (request, reply) => {
+        // The handler has been entered, so this request is past everything that refuses from
+        // memory — the schema, the Fetch-Metadata guard and both budgets — and is about to spend a
+        // discovery fetch and an attempt row. Only from here is a failure the caller's to pay for.
+        // See `chargeableOidcFailures` for what a third party did with the version that charged
+        // every 400 this route produced.
+        chargeableOidcFailures.add(request);
         const party = requireRelyingParty(relyingParty);
         const wanted = request.query.redirectAfter;
         // Re-checked rather than trusted. The schema and this must agree, and if they ever drift
@@ -523,6 +987,10 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
           pkceVerifier: secrets.codeVerifier,
           redirectAfter,
         });
+        // Charged HERE, next to the row it counts, and only once that row exists — a start that
+        // threw on the way to the provider wrote nothing and is the failed-outcome budget's
+        // business, not this one's. The matching credit is in the callback below.
+        oidcUnredeemedStarts.charge(addressRateLimitKey(request, config));
 
         reply.setCookie(oidcCookieName(config), packAttemptCookie(secrets), oidcCookieOptions(config));
         // 303 rather than 302: the method on the way out is unambiguously GET, whatever the browser
@@ -544,13 +1012,55 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
      */
     app.get<{ Querystring: CallbackQuery }>(
       '/auth/oidc/callback',
-      { config: oidcRateLimit, schema: { querystring: { $ref: 'prl:oidcCallbackQuery#' } } },
+      {
+        config: oidcRateLimit,
+        // Only the failed-outcome budget. A callback REDEEMS an attempt row rather than writing
+        // one, so refusing it for having too many outstanding would be refusing the one request
+        // that reduces them.
+        // Above the route limiter, for the reason given on the start route.
+        onRequest: [refuseNonNavigationOidc],
+        preHandler: [refuseWhenFailing],
+        // …and only once the callback has proved it belongs to a sign-in this server started.
+        // See `chargeableOidcFailures`: without that condition the budget is spendable, against a
+        // victim's address, by any page the victim happens to visit.
+        onResponse: chargeFailedOutcome,
+        onRequestAbort: chargeAbandonedOutcome,
+        schema: { querystring: { $ref: 'prl:oidcCallbackQuery#' } },
+      },
       async (request, reply) => {
         const party = requireRelyingParty(relyingParty);
         const query = request.query;
         // Cleared unconditionally and early: the attempt is over either way, and a cookie left
         // behind after a failure is a PKCE verifier sitting in a browser for another ten minutes.
         reply.clearCookie(oidcCookieName(config), sessionCookieOptions(config));
+
+        /**
+         * RFC 9207, and the reason it exists.
+         *
+         * A client registered with more than one provider can be induced into a mix-up: the
+         * attacker starts a flow at provider A, and returns a code minted by A to this client's
+         * callback while the client believes it is talking to B. The client then sends A's code
+         * to B's token endpoint, and with some provider pairs that is an account takeover. The
+         * `state` cookie does not close it, because the attacker can start a genuine flow to get
+         * a genuine `state`.
+         *
+         * Checked before anything else touches the callback, and before the attempt is consumed,
+         * so a mismatched issuer cannot burn a legitimate single-use attempt row.
+         */
+        const expectedIssuer = config.oidc?.issuer;
+        if (query.iss !== undefined && expectedIssuer !== undefined && query.iss !== expectedIssuer) {
+          request.log.warn(
+            {
+              oidcCallbackIssuer: query.iss
+                .replace(/[^a-z0-9:/._-]/gi, '')
+                .slice(0, MAX_LOGGED_PROVIDER_ERROR),
+            },
+            'callback carried an issuer this deployment did not ask for',
+          );
+          throw new AppError('oidc_exchange_failed', {
+            logDetail: 'callback issuer did not match the configured issuer (RFC 9207)',
+          });
+        }
 
         if (query.error !== undefined) {
           // The provider's `error` is echoed nowhere and logged only after being stripped to a
@@ -565,6 +1075,11 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
         }
 
         const attempt = await acceptAttempt(request, query, store);
+        // Past this line the caller has presented the attempt cookie this server set on their
+        // browser, so a failure from here on is one only somebody who genuinely started a sign-in
+        // could produce — and the only kind that costs an outbound request. See
+        // `chargeableOidcFailures`.
+        chargeableOidcFailures.add(request);
         if (query.code === undefined) {
           throw new AppError('oidc_exchange_failed', {
             logDetail: 'callback carried neither code nor error',
@@ -583,6 +1098,10 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
         );
 
         await issueSession(reply, account);
+        // The attempt row this flow wrote has been redeemed, so the start that wrote it was not
+        // abandoned and must not count against the address as though it were. Credited only after
+        // `issueSession`, because up to that line the sign-in could still have failed.
+        oidcUnredeemedStarts.credit(addressRateLimitKey(request, config));
         return reply.redirect(safeRedirectTarget(attempt.redirectAfter, config.webOrigins), 303);
       },
     );
@@ -652,6 +1171,12 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
       async (request, reply) => {
         const session = requireSession(request);
         const deleted = await store.users.deleteAccount(session.user.id);
+        // Announced by USER, not by session id: the transaction above revoked every session the
+        // learner held and the other devices' ids never leave it. `destroySession` below announces
+        // this one anyway; this is what reaches the rest. Placed after the commit, so nothing is
+        // closed for an erasure that did not happen — and before the response, so a socket cannot
+        // be told about a hand at a table belonging to an account that no longer exists.
+        if (deleted !== null) noteSessionRevoked({ userId: session.user.id });
         // Null means the row had already gone — a retry of a request whose answer never arrived,
         // or a guest swept between the session read and this statement. The cookie is still
         // cleared and the answer is still 401, because "there is no such account" and "you are

@@ -19,7 +19,7 @@ This is a different incident from [db-unavailable.md](db-unavailable.md) and the
 | Alert | Rule |
 | --- | --- |
 | `DbPoolSaturated` | p95 of `prl_db_probe_duration_seconds` > 0.5 s for 5 minutes |
-| `ArchiveFailing` | `prl_archive_failures_total` rising for 15 minutes |
+| `ArchiveFailing` | `sum(increase(prl_archive_failures_total[15m])) > 0` — zero tolerance, no `for:` |
 
 **What the probe metric actually measures, and why it is the right signal.** `/ready` runs `select 1` — the cheapest query that exists. When it becomes slow, the time is not in the query. It is in **waiting for a pooled connection**. A probe that took 0.4 ms and now takes 200 ms is pool exhaustion with no other symptom yet, which is exactly when you want to know.
 

@@ -71,6 +71,7 @@ import {
   histogramBucket,
   metricValue,
   parseDsn,
+  psqlCommand,
   ROUTES,
 } from './drills/harness.mjs';
 import {
@@ -84,7 +85,7 @@ import {
 } from './drills/invariants.mjs';
 import { processDrills } from './drills/process-drills.mjs';
 import { protocolDrills } from './drills/protocol-drills.mjs';
-import { runPassed, selectDrills } from './reliability-drills.mjs';
+import { drillContext, runPassed, selectDrills } from './reliability-drills.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -221,13 +222,93 @@ describe('the structural hole-card check', () => {
     assert.match(findings[0], /seat 1 exposed hole cards on street "turn"/);
   });
 
-  it('accepts opponent cards at a completed showdown', () => {
+  /**
+   * POSITIVE CONTROL for the showdown clause: a genuine showdown, whose `result.showdowns`
+   * names the seat whose cards are visible. This is the shape `redactFor` produces at
+   * `street: 'complete'` for a hand that went to the end, and it must stay silent — a checker
+   * that fired here would fire on every finished hand and be turned off within a week.
+   */
+  it('accepts opponent cards at a completed showdown that names the seat', () => {
+    const view = {
+      street: 'complete',
+      viewerSeat: 0,
+      result: {
+        showdowns: [
+          { seat: 0, score: 1234 },
+          { seat: 1, score: 999 },
+        ],
+      },
+      seats: [seat(0, { holeCards: [1, 2], isSelf: true }), seat(1, { holeCards: [3, 4] })],
+    };
+    assert.deepEqual(visibleCardCheck(view, 'view'), []);
+  });
+
+  /**
+   * NEGATIVE CONTROL for the second clause of the rule.
+   *
+   * The documented rule is "once the street is complete, only the cards of seats that SHOWED
+   * DOWN". The implementation carried only the first clause, so any non-null `holeCards` on a
+   * completed view passed. The test that used to sit here asserted `[]` against a completed
+   * view with no `result` at ALL — vacuous twice over: it neither supplied a showdown list nor
+   * could have distinguished a checker that read one from a checker that did not, and it
+   * pinned the gap in place.
+   *
+   * This is the leak the clause exists to catch, and it is the worst kind: a hand that ends by
+   * folding produces an EMPTY showdown list by construction, so a folder's cards reaching the
+   * table tells every observer whether they were bluffing.
+   *
+   * Confirmed to fail against the old code: with the `showedDown` set removed from
+   * `visibleCardCheck`, this case returns `[]` and the assertion below fails with
+   * `findings.length` 0, while the two positive controls still pass.
+   */
+  it('fires when a completed hand exposes the cards of a seat that folded', () => {
+    const view = {
+      street: 'complete',
+      viewerSeat: 0,
+      // A fold-out: the hand finished, and nobody tabled anything.
+      result: { showdowns: [] },
+      seats: [seat(0, { holeCards: [1, 2], isSelf: true }), seat(1, { holeCards: [3, 4] })],
+    };
+    const findings = visibleCardCheck(view, 'view');
+    assert.equal(findings.length, 1, "a folder's cards on a completed hand must be a finding");
+    assert.match(findings[0], /seat 1 exposed hole cards on a completed hand it did NOT show down in/);
+  });
+
+  it('fires for the seat that did not show, and stays quiet for the one that did', () => {
+    // A river call between three seats where one had already folded. Distinguishes a checker
+    // that reads the showdown list from one that fires on every completed view.
+    const view = {
+      street: 'complete',
+      viewerSeat: 0,
+      result: { showdowns: [{ seat: 1, score: 500 }] },
+      seats: [
+        seat(0, { holeCards: [1, 2], isSelf: true }),
+        seat(1, { holeCards: [3, 4] }),
+        seat(2, { holeCards: [5, 6] }),
+      ],
+    };
+    const findings = visibleCardCheck(view, 'view');
+    assert.equal(findings.length, 1, 'exactly the seat that did not show down');
+    assert.match(findings[0], /seat 2 exposed hole cards on a completed hand/);
+  });
+
+  /**
+   * A completed view carrying opponent cards and NO showdown list cannot justify them.
+   *
+   * `redactFor` populates `result` on every `street: 'complete'` view, so this shape means
+   * either a serialiser that dropped the field or a frame that was assembled somewhere else —
+   * and "I cannot tell whether this was shown, therefore it is fine" is precisely the reasoning
+   * that produced the original gap.
+   */
+  it('fires when a completed view carries opponent cards with no showdown list at all', () => {
     const view = {
       street: 'complete',
       viewerSeat: 0,
       seats: [seat(0, { holeCards: [1, 2], isSelf: true }), seat(1, { holeCards: [3, 4] })],
     };
-    assert.deepEqual(visibleCardCheck(view, 'view'), []);
+    const findings = visibleCardCheck(view, 'view');
+    assert.equal(findings.length, 1);
+    assert.match(findings[0], /showdown seats: none/);
   });
 
   it('fires when isSelf and viewerSeat disagree', () => {
@@ -516,5 +597,165 @@ describe('the route table the harness speaks to', () => {
       assert.ok(manifest.has(path), `ROUTES.${name} is "${path}", which the API does not serve`);
     }
     assert.ok(checked > 8, `only ${checked} routes were cross-checked`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The database password never travels in argv
+// ---------------------------------------------------------------------------
+
+/**
+ * `psql` runs inside the Postgres container over `docker exec`, and the password used to be
+ * passed as `-e PGPASSWORD=<secret>` — in the argument vector. `/proc/<pid>/cmdline` is
+ * world-readable on Linux, so for the life of every one of those execs any user on the host
+ * could read the database password out of `ps`. It also reaches process accounting and any `ps`
+ * output somebody pastes into a bug report.
+ *
+ * `scripts/backup.mjs` already did this correctly (`'-e', 'PGPASSWORD'` bare, with the value in
+ * the child's environment) and says why above its `toolCommand`. This is the same shape.
+ *
+ * ## Would this fail against the old code?
+ *
+ * Yes — checked by running it against the previous argv. `assert.equal(withSecret, [])` failed
+ * with `[ '-e', 'PGPASSWORD=pa55w0rd-in-argv' ]`, naming the exact element. The password used
+ * here is a distinctive literal so a partial match cannot hide it.
+ */
+describe('the psql invocation', () => {
+  const SECRET = 'pa55w0rd-in-argv';
+  const DSN = `postgresql://poker:${SECRET}@127.0.0.1:5432/poker_risk_lab`;
+  const command = psqlCommand('prl-pg', DSN, 'prl_drills_1', 'select 1');
+
+  it('never puts the password in the argument vector', () => {
+    const withSecret = command.args.filter((argument) => String(argument).includes(SECRET));
+    assert.deepEqual(withSecret, [], 'the password would be readable in `ps` for the life of the exec');
+  });
+
+  it('forwards PGPASSWORD from the environment with a bare -e', () => {
+    // The positive control for the assertion above: an implementation that simply DROPPED the
+    // password would also pass "not in argv", and would then fail to authenticate. This pins
+    // that the secret is still delivered, by the other route.
+    const at = command.args.indexOf('PGPASSWORD');
+    assert.ok(at > 0, `the argv must forward PGPASSWORD by name; got ${command.args.join(' ')}`);
+    assert.equal(command.args[at - 1], '-e', 'the bare -e form is what makes docker forward it');
+    assert.equal(command.env.PGPASSWORD, SECRET, 'and the value must reach the child');
+  });
+
+  it('still speaks to the right container, user, database and statement', () => {
+    assert.equal(command.command, 'docker');
+    assert.ok(command.args.includes('prl-pg'));
+    assert.deepEqual(command.args.slice(-8, -2), [
+      '-U',
+      'poker',
+      '-d',
+      'prl_drills_1',
+      '-v',
+      'ON_ERROR_STOP=1',
+    ]);
+    assert.equal(command.args.at(-2), '-tAc');
+    assert.equal(command.args.at(-1), 'select 1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A drill that cannot start its server must not leak the child
+// ---------------------------------------------------------------------------
+
+/**
+ * `startServer` waits up to thirty seconds for the API's own listening line, and the child it
+ * spawned is `detached: true` — its own process group, unreachable from the rejection, which
+ * carries a message and not a pid.
+ *
+ * The registration used to sit AFTER that await, so it ran only when the start succeeded. A
+ * server that never printed a listening address left a live API process holding a port and a
+ * pool of database connections for as long as the machine stayed up, and the next run failed
+ * somewhere that had nothing to do with the cause. The file header promises every drill cleans
+ * up after itself INCLUDING ON FAILURE; that was the one case where it did not.
+ *
+ * ## Would this fail against the old code?
+ *
+ * Yes, and it was confirmed that way: with the `cleanups.push` moved back below the await, the
+ * first assertion fails with `cleanups.length` 0 — the drill context finished with nothing
+ * registered and the stub child never stopped.
+ */
+describe('the cleanup ledger a drill is handed', () => {
+  const BASE = {
+    databaseUrl: 'postgresql://u:p@127.0.0.1:5432/prl_drills_1',
+    webOrigin: 'http://127.0.0.1:3000',
+    graceMs: 5_000,
+    metricsToken: 'token',
+  };
+
+  it('registers a spawned API child for cleanup before the start can reject', async () => {
+    const cleanups = [];
+    let stopped = 0;
+    /** A server that spawns and then never reports a listening address, exactly as the real one. */
+    const neverListens = async (options) => {
+      options.onSpawn({
+        stop: () => {
+          stopped += 1;
+          return Promise.resolve();
+        },
+      });
+      // The await is what made the old ordering wrong: anything after it is not reached.
+      await new Promise((resolve) => setImmediate(resolve));
+      throw new Error('the server did not report a listening address in 30s.');
+    };
+
+    const scoped = drillContext(BASE, cleanups, neverListens);
+    await assert.rejects(() => scoped.startServer(), /did not report a listening address/);
+
+    assert.equal(cleanups.length, 1, 'the child must be registered for cleanup before it can be orphaned');
+    for (const fn of cleanups) await fn();
+    assert.equal(stopped, 1, 'and running the ledger must actually stop it');
+  });
+
+  it('registers exactly one cleanup for a server that DOES start', async () => {
+    // The positive control. A context that registered nothing would pass the assertion above's
+    // sibling only by accident, and a context that registered twice would kill a healthy server
+    // twice during teardown.
+    const cleanups = [];
+    let stopped = 0;
+    const starts = (options) => {
+      const handle = {
+        stop: () => {
+          stopped += 1;
+          return Promise.resolve();
+        },
+      };
+      options.onSpawn(handle);
+      return Promise.resolve({ ...handle, origin: 'http://127.0.0.1:1234' });
+    };
+
+    const scoped = drillContext(BASE, cleanups, starts);
+    const server = await scoped.startServer();
+    assert.equal(server.origin, 'http://127.0.0.1:1234');
+    assert.equal(cleanups.length, 1);
+    for (const fn of cleanups) await fn();
+    assert.equal(stopped, 1);
+  });
+
+  it('passes the run settings through, and lets a drill override them', async () => {
+    let seen = null;
+    const capture = (options) => {
+      seen = options;
+      // A stub that records nothing: this case is about what `drillContext` FORWARDS, and the
+      // ledger's contents are asserted by the two cases above.
+      options.onSpawn({ stop: () => Promise.resolve() });
+      return Promise.resolve({});
+    };
+    const scoped = drillContext(BASE, [], capture);
+    await scoped.startServer({ graceMs: 250, env: { LOG_LEVEL: 'debug' } });
+    assert.equal(seen.databaseUrl, BASE.databaseUrl);
+    assert.equal(seen.metricsToken, 'token');
+    assert.equal(seen.graceMs, 250, 'a drill must be able to override a run setting');
+    assert.deepEqual(seen.env, { LOG_LEVEL: 'debug' });
+    assert.equal(typeof seen.onSpawn, 'function', 'without this the harness cannot register the child');
+  });
+
+  it('still lets a drill register its own cleanups', () => {
+    const cleanups = [];
+    const scoped = drillContext(BASE, cleanups, () => Promise.resolve({}));
+    scoped.cleanup(() => Promise.resolve());
+    assert.equal(cleanups.length, 1);
   });
 });

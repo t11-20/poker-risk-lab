@@ -19,7 +19,7 @@
  *    at six concurrent players reported action p99 947.6 ms with Hand Review in the journey and
  *    29.2 ms with `--no-review` on the same warm process, and named the event loop as the
  *    saturated resource at every level.
- * 2. `requestCoach` over a socket called `coachForView` inline — a 2,000-sample Monte Carlo plus
+ * 2. `requestCoach` over a socket ran the Coach inline — a 2,000-sample Monte Carlo plus
  *    the preflop strength table its default `top:40` range needs. The same load run measured the
  *    first analysis in a fresh process at 3,033.9 ms with an event-loop p99 of 3,028.8 ms for
  *    that window: one socket asking for advice froze every table in the process for three
@@ -32,12 +32,12 @@
  * ## Would this fail if the behaviour broke? Yes, and that was checked by breaking it
  *
  * Each budget test is paired with a NEGATIVE CONTROL that runs the same analysis in this process
- * — through `buildHandReview` and `coachForView`, which are still the reference implementations —
+ * — through `buildHandReview` and `coachHere`, which are still the reference implementations —
  * and asserts the probe fires. So the detector is proved to detect on every run, on whatever
  * machine is running it, rather than on the author's machine once.
  *
  * It was also checked the harder way, by reverting the fix. `runAnalysisOn` was pointed back at the
- * in-process `analyse`, and `onCoach` back at `coachForView`, with this file left untouched. Real
+ * in-process `analyse`, and `onCoach` back at the in-process Coach, with this file left untouched. Real
  * numbers from that run, against the 50 ms budget:
  *
  *   - "builds every analysis on a calculator thread": stalled 180.8 ms (histogram max 184.9 ms);
@@ -83,7 +83,8 @@ import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { after, describe, it } from 'node:test';
 import { setImmediate as yieldToTheLoop } from 'node:timers/promises';
 import type { CoachReport } from '@prl/contracts';
-import { createSecureRandom } from '@prl/poker-engine';
+import { createSecureRandom, type PlayerView } from '@prl/poker-engine';
+import { buildCoachReport, coachInputFor, coachSpotForView, LIVE_COACH_POLICY } from '@prl/poker-math';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import { type AppConfig, type EnvRecord, loadConfig } from '../src/config.ts';
@@ -93,7 +94,7 @@ import { RoomRegistry } from '../src/rooms/registry.ts';
 import { createManualClock } from '../src/rooms/timers.ts';
 import { WorkerPool } from '../src/workers/pool.ts';
 import { compileFrameValidator } from '../src/ws/hub.ts';
-import { type CoachAnalyser, coachForView, type SocketSink, WsRouter } from '../src/ws/router.ts';
+import { type CoachAnalyser, type SocketSink, WsRouter } from '../src/ws/router.ts';
 import { persistHand } from './helpers/hand-rows.ts';
 import { seatingOnlyStore } from './helpers/live-room.ts';
 
@@ -287,6 +288,13 @@ function reviewInput(fixture: ReturnType<typeof persistHand>): Parameters<typeof
     viewerUserId: HERO,
     maxPotAfter: fixture.hand.max_pot_after,
   };
+}
+
+/** The live Coach's report for a view, computed on THIS thread: the in-process reference. */
+function coachHere(view: PlayerView): CoachReport {
+  const reading = coachSpotForView(view, LIVE_COACH_POLICY);
+  assert.ok(reading.kind === 'spot', `no decision in this view: ${JSON.stringify(reading)}`);
+  return buildCoachReport(coachInputFor(reading.spot));
 }
 
 function analysedCount(review: { readonly decisions: readonly { readonly analysis: unknown }[] }): number {
@@ -544,8 +552,8 @@ describe('the Coach over a socket does not block the event loop', () => {
       const view = room.table.viewFor(actor.connection.principal.userId);
       assert.ok(view !== null, 'the seat that is to act must have a view');
 
-      // `coachForView` is what `requestCoach` used to call, with the production sample count and
-      // the production default range. It is still exported, still correct, and still exactly as
+      // `coachHere` is what `requestCoach` used to run, with the production sample count and
+      // the production default range. It is still correct, and still exactly as
       // blocking as it was — which is what makes it the honest control rather than a synthetic one.
       //
       // Its size comes from the COLD preflop strength table that `top:40` needs, which is the
@@ -555,7 +563,7 @@ describe('the Coach over a socket does not block the event loop', () => {
       // tests above build that table inside a worker and the review tests use written-out notation.
       // If a future edit warms it first, this assertion fails with a message saying so rather than
       // passing quietly, and the fix is to move this test above whatever warmed it.
-      const { result, probe } = await whileWatchingTheLoop(() => coachForView(view, { samples: 2_000 }));
+      const { result, probe } = await whileWatchingTheLoop(() => coachHere(view));
       assert.ok(result.candidates.length > 0, 'the control has to do the same work to be a control');
       assertProbeFires('an in-process socket Coach', probe);
     } finally {
@@ -575,9 +583,9 @@ describe('the Coach over a socket does not block the event loop', () => {
       requestCoach(harness, actor, 'req-coach-parity');
       const frame = await waitForFrame(actor.recorded, 'coach');
       const fromThread = frame['report'] as CoachReport;
-      const local = coachForView(view, { samples: 2_000 });
+      const local = coachHere(view);
       // Same view, same samples, same seed: the thread's answer must be the reference answer to
-      // the digit. See the note on `coachForView`.
+      // the digit.
       assert.deepEqual(fromThread, local);
     } finally {
       await harness.app.close();

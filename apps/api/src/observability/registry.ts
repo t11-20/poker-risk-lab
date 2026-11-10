@@ -384,6 +384,38 @@ export interface MetricSpec {
   readonly name: string;
   readonly help: string;
   readonly labelNames?: readonly string[];
+  /**
+   * Label sets to render at zero from process start, before anything increments them.
+   *
+   * ## The defect this exists for, which is subtle and cost a real alert
+   *
+   * A counter series is created by its first `inc()`, so until something goes wrong the series
+   * does not exist and the exposition has no line for it. `rate()` and `increase()` are computed
+   * from samples INSIDE their range, and Prometheus does not assume a series that appears
+   * mid-range started at zero — a series whose samples read `1, 1, 1` has an increase of 0. So
+   * the FIRST occurrence of a counted event is invisible to any alert keyed on its rate.
+   *
+   * That is precisely how the zero-tolerance alerts are written.
+   * `docs/production/alerts.md` keys `RateLimitBans` on `increase(...{kind="banned"}[15m]) > 0`,
+   * `HandsFailing` on `rate(prl_hands_failed_total[10m]) > 0`, and `ArchiveFailing` on
+   * `rate(prl_archive_failures_total[15m]) > 0`, each with the reasoning that there is no
+   * acceptable background rate. Every one of them would have missed the first event on a fresh
+   * process and fired only on the second.
+   *
+   * Measured: a real ban was recorded against staging — the counter read
+   * `prl_rate_limit_events_total{kind="banned"} 1` — and `RateLimitBans` did not fire, because
+   * the series had never been zero for Prometheus to see it rise from.
+   *
+   * Priming the series makes the 0 → 1 step visible. It only works for a CLOSED label set, which
+   * is why it is opt-in per metric rather than automatic: `authFailures` is keyed on a contract
+   * error code and `handsFailed` on a reason, and inventing every possible value would be worse
+   * than the problem. Prime the ones whose alert cannot afford to miss the first event.
+   *
+   * This is the same failure `scripts/load-test.mjs` documents from the other side — that a
+   * scraper "cannot tell `0` from 'nothing in this build feeds this metric'". Here it is the
+   * alerting rule that could not tell them apart.
+   */
+  readonly primeLabels?: readonly Labels[];
 }
 
 /**
@@ -410,7 +442,12 @@ export class MetricsRegistry {
   }
 
   counter(spec: MetricSpec): Counter {
-    return this.add(new Counter({ ...spec, type: 'counter', labelNames: spec.labelNames ?? [] }));
+    const counter = this.add(new Counter({ ...spec, type: 'counter', labelNames: spec.labelNames ?? [] }));
+    // `inc(labels, 0)` creates the series through the same path a real increment uses, so a primed
+    // series is identical to one that has been incremented and then never again. Nothing special
+    // renders it and nothing special has to remember it exists.
+    for (const labels of spec.primeLabels ?? []) counter.inc(labels, 0);
+    return counter;
   }
 
   gauge(spec: MetricSpec): Gauge {

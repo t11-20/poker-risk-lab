@@ -17,12 +17,12 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { legalActions, seatsInHand, totalPot } from '../src/betting.ts';
+import { amountToCall, legalActions, seatsInHand, totalPot } from '../src/betting.ts';
 import { verifyDeckReveal } from '../src/commitment.ts';
 import { applyAction, type StartedHand, startHand } from '../src/machine.ts';
-import { assertPotsBalance, buildPotLayers } from '../src/pots.ts';
+import { assertPotsBalance, buildPotLayers, contestablePotFor } from '../src/pots.ts';
 import { createDeterministicRandomForTests } from '../src/rng.ts';
-import type { Action, HandState } from '../src/types.ts';
+import type { Action, HandState, SeatIndex } from '../src/types.ts';
 
 /** Everything that must be true of a hand state at all times. */
 function assertInvariants(state: HandState, chipsAtStart: number, context: string): void {
@@ -146,6 +146,68 @@ function assertInvariants(state: HandState, chipsAtStart: number, context: strin
   }
 }
 
+/**
+ * Checks the pot a seat about to act could actually win, and reports whether the engine capped
+ * its call.
+ *
+ * ## Why this is here rather than in a unit test
+ *
+ * `contestablePotFor` exists because the Coach priced a call that was capped at hero's stack
+ * against the WHOLE middle — the excess of the bet above that stack is a side pot hero is not in.
+ * Measured heads-up at 5/10 with hero holding 40 against a 310 shove, the Coach quoted "10.7 to 1,
+ * you need 8.6%" where the answer is 1.67 to 1 and 37.5%, and headlined a losing call at +82.8
+ * chips. A hand-written example proves one spot; this proves the rule over every shape the fuzz
+ * reaches, which is where the multiway two-side-pot cases live.
+ *
+ * ## The oracle is a different derivation, deliberately
+ *
+ * `contestablePotFor` layers THIS STREET's commitments and adds the carried-in pot back whole,
+ * because that is all a hand review or a scenario can supply. The oracle below sums
+ * `min(committedTotal, hero's cap)` over whole-hand totals. They agree only if a seat still to
+ * act has matched the closing level of every completed street — which is the argument that
+ * function's doc rests on, and this is what tests it rather than trusting it.
+ *
+ * @returns 1 when the engine capped this seat's call, 0 otherwise
+ */
+function assertContestablePot(state: HandState, seat: SeatIndex, where: string): number {
+  const actor = state.seats.find((entry) => entry.seat === seat);
+  assert.ok(actor !== undefined, `${where}: the seat to act does not exist`);
+  const call = amountToCall(state, actor);
+  const pot = totalPot(state);
+  const share = contestablePotFor({ seats: state.seats, heroSeat: seat, callAmount: call, potTotal: pot });
+
+  const cap = actor.committedTotal + call;
+  let oracle = -call;
+  for (const entry of state.seats) {
+    oracle += Math.min(entry.committedTotal + (entry.seat === seat ? call : 0), cap);
+  }
+  assert.equal(
+    share.contestable,
+    oracle,
+    `${where}: the street layering says seat ${seat} can win ${share.contestable} where the whole-hand ` +
+      `totals say ${oracle}`,
+  );
+  assert.equal(
+    share.contestable + share.uncontestable,
+    pot,
+    `${where}: the two halves of the pot do not add up to it`,
+  );
+
+  const capped = call > 0 && state.betLevel - actor.committedThisStreet > actor.stack;
+  if (!capped) {
+    // The negative control, asserted rather than assumed: a seat that can cover the bet leaves
+    // nothing above its reach, so the contestable pot is the whole middle and the Coach's figures
+    // for every ordinary spot are unmoved by this fix.
+    assert.equal(
+      share.contestable,
+      pot,
+      `${where}: seat ${seat} covers the ${call} owed out of ${actor.stack} behind, so nothing in the ` +
+        `middle is beyond its reach — but ${share.uncontestable} was withheld`,
+    );
+  }
+  return capped ? 1 : 0;
+}
+
 /** Picks a legal action, weighted so that aggression and all-ins actually occur. */
 function chooseAction(state: HandState, nextInt: (bound: number) => number): Action {
   const seat = state.toAct;
@@ -179,6 +241,9 @@ test('FUZZ: 4000 random hands satisfy every invariant after every action', () =>
   let endedByFold = 0;
   let sawSidePots = 0;
   let sawAllInPreflop = 0;
+  let cappedCalls = 0;
+  let cappedWithASidePot = 0;
+  let worstUnderstatement = 1;
   const streetsSeen = new Set<string>();
 
   for (let handIndex = 0; handIndex < HANDS; handIndex++) {
@@ -236,6 +301,28 @@ test('FUZZ: 4000 random hands satisfy every invariant after every action', () =>
       if (seat === null) {
         assert.fail(`hand ${handIndex} stalled on ${state.street} with nobody to act`);
       }
+      const capped = assertContestablePot(state, seat, `hand ${handIndex} before action ${guard}`);
+      cappedCalls += capped;
+      if (capped === 1) {
+        const actor = state.seats.find((entry) => entry.seat === seat);
+        const call = actor === undefined ? 0 : amountToCall(state, actor);
+        const pot = totalPot(state);
+        const share = contestablePotFor({
+          seats: state.seats,
+          heroSeat: seat,
+          callAmount: call,
+          potTotal: pot,
+        });
+        if (share.uncontestable > 0) {
+          cappedWithASidePot += 1;
+          // How much the whole middle understated the equity a call needs, which is the figure the
+          // learner was misled by. Reported so the fuzz says what it found rather than only that it
+          // found something.
+          const honest = call / (share.contestable + call);
+          const misleading = call / (pot + call);
+          worstUnderstatement = Math.max(worstUnderstatement, honest / misleading);
+        }
+      }
       const action = chooseAction(state, nextInt);
       state = applyAction(state, seat, action, { actionId: `a${guard}` }).state;
       actionsApplied += 1;
@@ -257,12 +344,21 @@ test('FUZZ: 4000 random hands satisfy every invariant after every action', () =>
   assert.ok(reachedShowdown > 200, `only ${reachedShowdown} hands reached showdown`);
   assert.ok(endedByFold > 200, `only ${endedByFold} hands ended by folding`);
   assert.ok(sawSidePots > 100, `only ${sawSidePots} hands produced side pots`);
+  // A sweep of nothing is not a pass: if the generator stops producing short stacks, every
+  // assertion above about the capped case becomes a green check over zero cases.
+  assert.ok(cappedCalls > 200, `only ${cappedCalls} decision points had a call capped at the stack`);
+  assert.ok(
+    cappedWithASidePot > 100,
+    `only ${cappedWithASidePot} capped calls left chips beyond hero's reach, which is the case this checks`,
+  );
   for (const street of ['preflop', 'flop', 'turn', 'river']) {
     assert.ok(streetsSeen.has(street), `the fuzz never reached ${street}`);
   }
   console.log(
     `      ${handsPlayed} hands, ${actionsApplied} actions | showdown ${reachedShowdown}, folded ${endedByFold}, ` +
-      `side pots ${sawSidePots}, all-in preflop ${sawAllInPreflop}`,
+      `side pots ${sawSidePots}, all-in preflop ${sawAllInPreflop} | capped calls ${cappedCalls}, ` +
+      `of which ${cappedWithASidePot} faced a side pot they could not win (worst price understated ` +
+      `${worstUnderstatement.toFixed(1)}x)`,
   );
 });
 

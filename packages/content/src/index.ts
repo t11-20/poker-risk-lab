@@ -53,6 +53,8 @@ export {
   checkScenarioClaims,
   describeAnalysis,
   readSituation,
+  SCENARIO_ANALYSIS_SAMPLES,
+  SCENARIO_ANALYSIS_SEED,
   ScenarioAnalysisError,
 } from './scenario-analysis.ts';
 export type { RawContent } from './validate.ts';
@@ -155,11 +157,6 @@ let cached: ContentBundle | null = null;
 export function content(): ContentBundle {
   if (cached === null) cached = validateContent(readRawContent());
   return cached;
-}
-
-/** Forces a reload. Tests only; nothing in the server should need this. */
-export function resetContentCacheForTests(): void {
-  cached = null;
 }
 
 // ---------------------------------------------------------------------------

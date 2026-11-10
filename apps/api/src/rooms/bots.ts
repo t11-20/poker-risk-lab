@@ -88,11 +88,13 @@ import type {
 } from '@prl/poker-engine';
 import { commitToKnownDeck, createSecureRandom, orderedDeck, redactFor } from '@prl/poker-engine';
 import {
+  type AssumedRange,
   buildCoachReport,
+  deriveContestablePot,
   deriveLegalActions,
+  expandAssumedRange,
+  LIVE_COACH_POLICY,
   type ParsedRange,
-  parseRange,
-  topPercentRange,
 } from '@prl/poker-math';
 import { AppError } from '../errors.ts';
 import type { ProblemHook } from '../observability/telemetry.ts';
@@ -220,6 +222,33 @@ export function botDisplayName(profileId: string): string {
   }
   if (name.length < 2) name = (words[0] ?? 'Bot').slice(0, MAX_BOT_NAME);
   return name.length < 2 ? 'Bot' : name;
+}
+
+/**
+ * The plates for a table's bots, in seat order, with a profile that sits more than once numbered.
+ *
+ * The bot table seats two `tight-aggressive` bots on purpose (`BOT_TABLE` in
+ * `apps/web/src/lib/table-rooms.ts`: one style watched twice is a policy, not a personality), and
+ * both were plated "Patient Technician". The plate's position told them apart on screen, but the
+ * table's narration names a seat by its display name alone, so a screen-reader user heard "Patient
+ * Technician raises to 40" with no way to know which one. Seen at a live table on `/play` at 1440.
+ *
+ * The number is taken from the name's own 24-character allowance rather than appended past it, so a
+ * long archetype loses a trailing word before it loses its number.
+ */
+export function botDisplayNames(profileIds: readonly string[]): readonly string[] {
+  const total = new Map<string, number>();
+  for (const id of profileIds) total.set(id, (total.get(id) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  return profileIds.map((id) => {
+    if ((total.get(id) ?? 0) < 2) return botDisplayName(id);
+    const ordinal = (seen.get(id) ?? 0) + 1;
+    seen.set(id, ordinal);
+    const suffix = ` ${String(ordinal)}`;
+    const words = botDisplayName(id).split(' ');
+    while (words.length > 1 && `${words.join(' ')}${suffix}`.length > MAX_BOT_NAME) words.pop();
+    return `${words.join(' ').slice(0, MAX_BOT_NAME - suffix.length)}${suffix}`;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -566,12 +595,13 @@ export function planLegendSeats(
       logDetail: `${profileIds.length} profiles exceed ${maxSeats} seats`,
     });
   }
-  return profileIds.map((profileId, index) => {
-    const profile = resolveProfile(profileId);
+  const profiles = profileIds.map(resolveProfile);
+  const names = botDisplayNames(profiles.map((profile) => profile.naming.id));
+  return profiles.map((profile, index) => {
     return {
       seat: index + 1,
       profileId: profile.naming.id,
-      displayName: botDisplayName(profile.naming.id),
+      displayName: names[index] ?? botDisplayName(profile.naming.id),
       disclosure: profileDisclosure(profile.naming, mode),
     };
   });
@@ -787,6 +817,9 @@ export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesR
 
     const counts = new Map<string, { count: number; readonly fractions: number[] }>();
     let last: PolicyDecision | null = null;
+    // One decision kept per action TYPE, so the explanation can be taken from a trial that actually
+    // chose the action the bar marks. See `representative` below for what went wrong without it.
+    const exemplars = new Map<string, PolicyDecision>();
     for (let trial = 0; trial < trials; trial += 1) {
       const decision = decide(
         buildPolicyInput({
@@ -800,6 +833,7 @@ export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesR
       );
       last = decision;
       const action = decision.action;
+      if (!exemplars.has(action.type)) exemplars.set(action.type, decision);
       const bucket = counts.get(action.type) ?? { count: 0, fractions: [] };
       bucket.count += 1;
       if (action.type === 'bet' || action.type === 'raise') {
@@ -820,20 +854,38 @@ export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesR
       .sort((left, right) => right.probability - left.probability);
     const modal = distribution[0];
 
+    /**
+     * The trial the explanation is taken from, chosen to MATCH the bar above it.
+     *
+     * This was `last` — whatever the final trial happened to draw — while `modalAction` and
+     * `actionDistribution` aggregate all of them. They disagree constantly, because that is what
+     * sampling a probabilistic style means: measured over 12 profiles x 33 spots, 161 of 396
+     * columns rendered a bar marked one action above a sentence beginning "This model prefers to"
+     * and naming a different one, often while reporting that action's weight as single digits.
+     * `/legends/compare`'s own default spot showed it in 6 of 12 columns — one of them marking
+     * "raise" over "prefers to fold, with 3.3% of its weight" on a set of sevens.
+     *
+     * `drivingTraits` and `whatChangedIt` came from the same trial and described the same wrong
+     * action, so all three parts of the explanation moved together and none of them contradicted
+     * each other — only the bar. Falling back to `last` keeps the old behaviour for the case that
+     * cannot happen (no exemplar for the modal action), rather than inventing a second failure.
+     */
+    const representative = (modal === undefined ? undefined : exemplars.get(modal.action)) ?? last;
+
     return {
       profileId: profile.naming.id,
       disclosure: profileDisclosure(profile.naming, request.namingMode),
       actionDistribution: distribution,
       modalAction: modal?.action ?? last.action.type,
       reasoning: {
-        modelPreference: last.modelPreference,
-        drivingTraits: last.drivingTraits.map((trait) => ({
+        modelPreference: representative.modelPreference,
+        drivingTraits: representative.drivingTraits.map((trait) => ({
           key: traitKeyOf(trait.key),
           label: trait.label,
           value: trait.value,
         })),
-        whatChangedIt: last.whatChangedIt,
-        actionProbabilities: last.distribution.map((weighted) => ({
+        whatChangedIt: representative.whatChangedIt,
+        actionProbabilities: representative.distribution.map((weighted) => ({
           action: weighted.action.type,
           probability: weighted.probability,
         })),
@@ -863,6 +915,19 @@ function coachReportFor(request: CompareRequest): CoachReport {
     street: spot.street,
     opponents: [{ label: 'the profile', range }],
     pot: spot.pot,
+    // A comparison spot is always heads-up, so the money hero cannot reach is one
+    // opponent's excess over hero's stack and `deriveContestablePot` is exact here —
+    // no layering needed and none available, since the spot has no per-seat street
+    // record to layer. Required rather than defaulted, deliberately: the defect this
+    // closes was the Coach pricing a call against a pot the learner cannot win, and a
+    // field with a fallback is a field the next call site forgets to think about.
+    contestablePot: deriveContestablePot({
+      pot: spot.pot,
+      toCall: spot.toCall,
+      heroCommittedThisStreet: 0,
+      heroStack: spot.heroStack,
+      opponentStacks: [spot.opponentStack],
+    }),
     toCall: spot.toCall,
     // A comparison spot is reconstructed rather than played: earlier-street money is
     // split evenly between the two seats and lands in `pot`, so hero has nothing out
@@ -887,35 +952,30 @@ function coachReportFor(request: CompareRequest): CoachReport {
 }
 
 /**
- * The default assumption when nobody names a range: the top 40% of hands.
- *
- * Stated as a number here and reported in words by the Coach, because an assumed range is an
- * input and not a measurement — the whole product turns on the difference.
- */
-export const DEFAULT_ASSUMED_RANGE_PERCENT = 40;
-
-/**
- * Parses a range in either of the two forms the contract's `RANGE_PATTERN` accepts.
+ * A range a caller named, in either form the contract's `RANGE_PATTERN` accepts, or a `400`.
  *
  * `top:NN` is not range notation and `parseRange` rightly refuses it: it is a *percentage of the
- * computed strength ordering*, so it has to go through `topPercentRange` first, which builds the
- * notation from that ordering and hands it to the same parser. One path, one parser, and the
- * percentage form cannot silently mean something different from the notation form.
+ * computed strength ordering*, which `expandAssumedRange` turns into notation for the same parser.
+ * Only its bounds are checked here, because expanding it builds the preflop strength table.
  */
-export function assumedRange(notation: string, dead: readonly Card[]): ParsedRange {
-  const percent = /^top:(\d{1,3})$/.exec(notation.trim());
-  if (percent !== null) {
-    const value = Number(percent[1]);
-    if (!Number.isInteger(value) || value < 1 || value > 100) {
-      throw new AppError('invalid_request', {
-        fields: { opponentRange: 'a top percentage must be between 1 and 100' },
-        logDetail: `rejected range "${notation}"`,
-      });
-    }
-    return parseRange(topPercentRange(value).notation, dead);
+export function opponentRangeOption(text: string): AssumedRange {
+  const percent = /^top:(\d{1,3})$/.exec(text.trim());
+  if (percent === null) return { kind: 'notation', notation: text };
+  const value = Number(percent[1]);
+  if (!Number.isInteger(value) || value < 1 || value > 100) {
+    throw new AppError('invalid_request', {
+      fields: { opponentRange: 'a top percentage must be between 1 and 100' },
+      logDetail: `rejected range "${text}"`,
+    });
   }
+  return { kind: 'topPercent', percent: value };
+}
+
+/** Expands an assumed range, with notation the parser refuses answered as a `400` naming the field. */
+export function assumedRange(range: AssumedRange, dead: readonly Card[]): ParsedRange {
+  if (range.kind === 'topPercent') return expandAssumedRange(range, dead);
   try {
-    return parseRange(notation, dead);
+    return expandAssumedRange(range, dead);
   } catch (error) {
     throw new AppError('invalid_request', {
       fields: { opponentRange: 'is not a range this server can read' },
@@ -925,9 +985,11 @@ export function assumedRange(notation: string, dead: readonly Card[]): ParsedRan
   }
 }
 
+/** The range a comparison assumes: the caller's, or the live Coach's top 40% when none is named. */
 function opponentRangeFor(request: CompareRequest): ParsedRange {
   const dead = [...request.spot.heroCards, ...request.spot.board];
-  return assumedRange(request.opponentRange ?? `top:${DEFAULT_ASSUMED_RANGE_PERCENT}`, dead);
+  const named = request.opponentRange;
+  return assumedRange(named === undefined ? LIVE_COACH_POLICY.range : opponentRangeOption(named), dead);
 }
 
 function median(values: readonly number[]): number | null {

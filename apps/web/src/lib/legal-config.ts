@@ -70,14 +70,21 @@ export type LegalPageKey = 'terms' | 'privacy' | 'responsible-use';
  * The revision of the *text* in `src/app/terms`, `src/app/privacy` and `src/app/responsible-use`.
  *
  * A code constant rather than an environment variable, because it describes the source, not the
- * deployment. `0.1-draft` says what it is: drafted by engineers from the schema and the code, and
- * not reviewed by anybody qualified to review it. Whoever replaces a clause with counsel-approved
- * wording moves this.
+ * deployment. `-draft` says what it is: drafted by engineers from the schema and the code, and not
+ * reviewed by anybody qualified to review it. Whoever replaces a clause with counsel-approved
+ * wording moves this past `draft` entirely.
+ *
+ * `0.2-draft` because §11 makes a promise to a reader — "when the text changes, the revision changes
+ * with it" — and the text materially changed: `/terms` §7 no longer states that the service is free
+ * of charge, and two clauses were added to `COUNSEL_CLAUSES`. A reader who was shown the old §7 was
+ * shown a different document, and the only mechanism this product has for telling them so is this
+ * string. It is still `draft`: nothing here has been reviewed, and moving the leading digit would
+ * claim that it had.
  */
-export const LEGAL_REVISION = '0.1-draft';
+export const LEGAL_REVISION = '0.2-draft';
 
 /** When the text in those three routes was last edited. Kept beside the revision it describes. */
-export const LEGAL_DRAFTED_ON = '2026-08-22';
+export const LEGAL_DRAFTED_ON = '2026-08-25';
 
 /**
  * The marker. One string, on every clause that a lawyer has to write before launch.
@@ -122,6 +129,8 @@ export type CounselClauseId =
   | 'play-money-classification'
   | 'governing-law'
   | 'liability-and-warranty'
+  | 'enrolment-and-fees'
+  | 'refunds-and-cancellation'
   | 'data-controller-and-rights'
   | 'retention-and-deletion'
   | 'international-transfer'
@@ -193,14 +202,59 @@ export const COUNSEL_CLAUSES: Readonly<Record<CounselClauseId, CounselClause>> =
       'against a consumer resident elsewhere? Consumer-protection rules in several jurisdictions ' +
       'override a choice-of-law clause, so a clause that reads as settled may not be.',
   },
+  /**
+   * The premise "and that the software is offered free of charge" used to sit at the end of this
+   * question, and it had to come out.
+   *
+   * It was true when it was written — an exhaustive search of this repository found no route by
+   * which money could be taken and no way to tell a paying reader from any other. (The wording of
+   * that sentence is deliberate: `test/legal-pages.test.ts` sweeps this file for the vocabulary of a
+   * money-moving integration, and this module is not on its reviewed-exemption list. Keeping it off
+   * that list is worth one careful sentence.) It stopped being a premise anybody here can
+   * assert the moment the schema grew a record of who is enrolled in a course: an enrolment is
+   * granted out of band, so this software cannot see whether money was involved, and a deployment
+   * enrolling a scholarship cohort and one charging a fee produce the same rows. Asking counsel a
+   * question premised on a fact this software can no longer establish would get an answer to the
+   * wrong question, which is worse than getting no answer.
+   */
   'liability-and-warranty': {
     id: 'liability-and-warranty',
     pages: ['terms'],
     subject: 'Warranty disclaimer and limitation of liability',
     question:
       'What may this deployment lawfully disclaim and limit, given that parts of a broad exclusion ' +
-      'are unenforceable against consumers in several jurisdictions, and that the software is ' +
-      'offered free of charge?',
+      'are unenforceable against consumers in several jurisdictions? This question used to end "and ' +
+      'that the software is offered free of charge", and that premise has been withdrawn rather ' +
+      'than answered: the software can record that an operator enrolled somebody in a course, and ' +
+      'it cannot tell whether that place was paid for. Counsel must answer for both a deployment ' +
+      'that charges and one that does not, because the code cannot distinguish them.',
+  },
+  'enrolment-and-fees': {
+    id: 'enrolment-and-fees',
+    pages: ['terms'],
+    subject: 'What an enrolment record means, and what the operator has sold',
+    question:
+      'This deployment can record that an operator granted somebody a place in a course — a cohort, ' +
+      'the authority it was granted on, a reference to an arrangement made outside this system, an ' +
+      'expiry and a revocation — and it records nothing about money, because no column in this ' +
+      'schema can hold an amount, a currency or a price. So: what, if anything, has the operator ' +
+      'sold; which contract terms and pre-contract disclosures must be presented before that sale, ' +
+      'on which page and by whom; and do terms displayed here bind a purchase completed somewhere ' +
+      'this software cannot see? Counsel must answer for the free case too — a scholarship or ' +
+      'employer-funded cohort produces exactly the same rows.',
+  },
+  'refunds-and-cancellation': {
+    id: 'refunds-and-cancellation',
+    pages: ['terms'],
+    subject: 'Refunds, cancellation, and what an interruption costs the reader',
+    question:
+      'If a place in a course was paid for, what refund, cancellation or cooling-off right must be ' +
+      'offered, does it survive the student starting the course, and where must it be stated? There ' +
+      'is no refund concept at any layer of this software — no amount, no order, no receipt — so ' +
+      'revoking an enrolment ends access and returns nothing. Counsel must also decide what the ' +
+      'operator owes a reader whose access ends because the deployment was taken down, reset or ' +
+      'changed, which the availability clause on this page reserves the right to do, and what ' +
+      'deleting an account should do to a place in a course that has not expired.',
   },
   'data-controller-and-rights': {
     id: 'data-controller-and-rights',
@@ -253,6 +307,12 @@ export const COUNSEL_CLAUSE_IDS: readonly CounselClauseId[] = [
   'retention-and-deletion',
   'international-transfer',
   'ai-legend-naming',
+  // Appended rather than filed beside `liability-and-warranty`, where they belong by subject. This
+  // list's contract is that it is "the order the review document lists them in", and the review
+  // document's entries are numbered in prose: inserting at position six would renumber four
+  // existing entries, and an entry number is how a lawyer's answer refers back to a question.
+  'enrolment-and-fees',
+  'refunds-and-cancellation',
 ];
 
 /** Every clause a given page has to render. Used by the pages and asserted by the test. */

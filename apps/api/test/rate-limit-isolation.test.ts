@@ -63,7 +63,7 @@ import { buildApp } from '../src/app.ts';
 import { type AppConfig, ConfigError, type EnvRecord, loadConfig } from '../src/config.ts';
 import { closeDatabase, configureDatabase, type DatabaseHandle } from '../src/db.ts';
 import { forgetRateLimitStoresForTests, resettableStoreInstalled } from '../src/plugins/rate-limit-store.ts';
-import { RATE_LIMIT_RESET_PATH } from '../src/plugins/security.ts';
+import { RATE_LIMIT_RESET_PATH, rateLimitKeyFor } from '../src/plugins/security.ts';
 import { registerApiRoutes } from '../src/routes/index.ts';
 import { closeSharedPool } from '../src/workers/pool.ts';
 import { TEST_DATABASE_URL } from './helpers/database.ts';
@@ -147,6 +147,20 @@ function postReset(
     },
     payload: {},
   });
+}
+
+/**
+ * A session cookie whose signature this app will accept.
+ *
+ * Tests used to write `prl_session=whatever` and rely on two different strings landing in two
+ * different rate-limit buckets. That worked, and it worked for the wrong reason: the limiter
+ * hashed the RAW cookie without checking its signature, so any invented value was a fresh
+ * bucket — which is precisely the defect `rateLimitKeyFor` was fixed for. Now an unsigned cookie
+ * is not a session at all and keys on the address, so a test that wants two buckets has to
+ * present two real ones. `app.signCookie` is the same signer the server uses to issue them.
+ */
+function sessionCookie(app: FastifyInstance, value: string): string {
+  return `prl_session=${app.signCookie(value)}`;
 }
 
 function errorCode(body: string): string {
@@ -239,7 +253,7 @@ describe('the rate-limit reset control actually clears counters', () => {
 
   it('turns a 429 back into a 200 without waiting out the window', async () => {
     const probe = (session: string) =>
-      app.inject({ method: 'GET', url: '/api/v1/ready', headers: { cookie: `prl_session=${session}` } });
+      app.inject({ method: 'GET', url: '/api/v1/ready', headers: { cookie: sessionCookie(app, session) } });
 
     assert.equal((await probe('drained')).statusCode, 200);
     assert.equal((await probe('drained')).statusCode, 200);
@@ -249,7 +263,7 @@ describe('the rate-limit reset control actually clears counters', () => {
     assert.equal(overLimit.statusCode, 429, overLimit.body);
     assert.equal(errorCode(overLimit.body), 'rate_limited');
 
-    const reset = await postReset(app, csrf, `Bearer ${RESET_TOKEN}`, 'prl_session=resetter');
+    const reset = await postReset(app, csrf, `Bearer ${RESET_TOKEN}`, sessionCookie(app, 'resetter'));
     assert.equal(reset.statusCode, 200, reset.body);
     const cleared: { readonly cleared?: unknown } = reset.json();
     assert.ok(
@@ -396,25 +410,91 @@ describe('POST /auth/guest is keyed on the address, not on the session it issues
     assert.equal(errorCode(second.body), 'rate_limited');
   });
 
-  it('would notice: the default key generator DOES let a rotated cookie start a fresh bucket', async () => {
-    // The negative control. Same app, same limit of one, default key generator. If this route also
-    // answered 429, the assertion above would be measuring "everything is limited" rather than
-    // "the guest route ignores the session".
-    const probe = (session: string) =>
+  /**
+   * The negative control, asserted against the key generator itself rather than over HTTP.
+   *
+   * It has to be. The property under test is "an ordinary route prefers the session", and
+   * demonstrating it needs a rate-limited route that does NOT resolve a session — which does not
+   * exist and should not: a cookie whose signature is valid reaches the session store, because
+   * that is what a session cookie is for. The HTTP probe this replaced presented a validly signed
+   * cookie to a stub database and got a 500, which is the harness talking rather than the limiter.
+   */
+  it('would notice: the key generator DOES give a rotated SIGNED cookie a fresh bucket', () => {
+    const keyOf = (cookie: string | undefined) =>
+      rateLimitKeyFor(
+        {
+          cookies: cookie === undefined ? {} : { prl_session: cookie },
+          unsignCookie: (value: string) => app.unsignCookie(value),
+          clientKey: 'a-fixed-address-key',
+          ip: '203.0.113.7',
+        } as unknown as Parameters<typeof rateLimitKeyFor>[0],
+        app.appConfig,
+      );
+
+    const a = keyOf(app.signCookie('session-a'));
+    const b = keyOf(app.signCookie('session-b'));
+    assert.notEqual(a, b, 'two genuine sessions must not share a bucket');
+    assert.ok(
+      a.startsWith('s:') && b.startsWith('s:'),
+      `signed cookies must key on the session: ${a} / ${b}`,
+    );
+
+    // The other half, and the regression: invented values are not sessions, so they all land in
+    // the caller's address bucket — the same one a caller with no cookie at all gets.
+    const anonymous = keyOf(undefined);
+    for (const forged of [
+      'forged-1',
+      'forged-2',
+      'x'.repeat(64),
+      `${app.signCookie('real').split('.')[0]}.bad`,
+    ]) {
+      assert.equal(
+        keyOf(forged),
+        anonymous,
+        `an unverified cookie (${forged.slice(0, 12)}…) reached a bucket of its own`,
+      );
+    }
+    assert.ok(anonymous.startsWith('c:'));
+  });
+
+  /**
+   * The regression that made every limiter in this API optional.
+   *
+   * `rateLimitKeyFor` hashed the raw `prl_session` cookie without checking its signature.
+   * `@fastify/cookie` parses cookies; it does not verify them — unsigning is a separate call that
+   * happens much later, at session resolution. So the bucket was chosen by a string the caller
+   * invents, and any caller who sent a different value each time was never counted at all.
+   * Measured against the unfixed code: 60 requests with a rotating garbage cookie, ZERO 429s,
+   * against a configured limit of 3. The same trick emptied the expensive limiter in front of
+   * `POST /math/equity`, which accepts up to 500,000 Monte Carlo samples per call.
+   *
+   * The test above is the positive control for the same mechanism: a rotated cookie that IS
+   * signed still gets its own bucket, because that is the design. What must not be free is
+   * inventing them.
+   */
+  it('a rotated UNSIGNED cookie does not start a fresh bucket, because it is not a session', async () => {
+    const forged = (value: string) =>
       app.inject({
         method: 'GET',
         url: '/api/v1/test-session-keyed',
-        headers: { cookie: `prl_session=${session}` },
+        headers: { cookie: `prl_session=${value}` },
       });
 
-    assert.equal((await probe('session-a')).statusCode, 200);
-    const rotated = await probe('session-b');
-    assert.equal(
-      rotated.statusCode,
-      200,
-      `a rotated session cookie must reach a fresh bucket on a session-keyed route: ${rotated.body}`,
-    );
-    // And the first bucket is still counted, so the 200 above is rotation rather than no limit.
-    assert.equal((await probe('session-a')).statusCode, 429);
+    // The first forged value is allowed through: the limit is one, and this is that one. It also
+    // proves the route is reachable, so the 429s below are the limiter and not a 404.
+    assert.equal((await forged('forged-1')).statusCode, 200);
+    for (const value of ['forged-2', 'forged-3', 'forged-4', 'forged-5']) {
+      const refused = await forged(value);
+      assert.equal(
+        refused.statusCode,
+        429,
+        `an invented session cookie reached a fresh rate-limit bucket (${value}): ${refused.body}`,
+      );
+      assert.equal(errorCode(refused.body), 'rate_limited');
+    }
+    // A cookie whose signature is present but wrong is the same case, and is worth its own
+    // assertion: it is what a caller who has seen a real cookie's SHAPE would send.
+    const tampered = await forged(`${app.signCookie('forged-6').split('.')[0]}.not-a-signature`);
+    assert.equal(tampered.statusCode, 429, `a tampered signature reached a fresh bucket: ${tampered.body}`);
   });
 });

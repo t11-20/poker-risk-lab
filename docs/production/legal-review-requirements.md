@@ -1,7 +1,15 @@
 # Legal review requirements
 
 **Status:** Launch blocker · **Applies to:** every deployment · **Drafted:** 2026-08-22 ·
-**Document revision under review:** `0.1-draft`
+**Revised:** 2026-08-25 · **Page text revision under review:** `0.2-draft`
+(`apps/web/src/lib/legal-config.ts`)
+
+**What the 2026-08-25 revision changed:** entries **10** and **11** are new, added with
+`db/migrations/0006_cohort_enrolments.sql` and the `/terms` §7/§8 rewrite. Entry **5**'s premise
+("…and that the software is offered free of charge") was **withdrawn rather than answered**, because
+this software can no longer establish it. `/terms` section numbers moved: liability §8→§9, regulatory
+status §9→§10, governing law §10→§11. `docs/production/legal-register.md` carries the facts and the
+reasoning; this document remains the machine-checked list of markers.
 
 This is the list of things a lawyer has to decide before this software is offered to the public,
 and the list of settings that have to be decided with them. It exists because the three documents
@@ -79,7 +87,7 @@ identity documents.
 
 ### 3. `play-money-classification` — Whether this is a regulated product anywhere it will be offered
 
-**Appears on:** `/terms` §9, `/responsible-use` §6.
+**Appears on:** `/terms` §10, `/responsible-use` §6.
 
 Does a product with no stake, no purchase, no prize and no cash-out fall within any gambling,
 lottery, skill-gaming or advertising regime in the places this deployment is offered?
@@ -99,7 +107,7 @@ lottery, skill-gaming or advertising regime in the places this deployment is off
 
 ### 4. `governing-law` — Governing law and where a dispute is heard
 
-**Appears on:** `/terms` §10.
+**Appears on:** `/terms` §11.
 
 Which law governs these terms, which forum hears a dispute, and does that choice survive against a
 consumer resident elsewhere? Consumer-protection rules in several jurisdictions override a
@@ -111,11 +119,17 @@ writing one would be exactly the kind of conclusion this document exists to refu
 
 ### 5. `liability-and-warranty` — Warranty disclaimer and limitation of liability
 
-**Appears on:** `/terms` §8.
+**Appears on:** `/terms` §9.
 
 What may this deployment lawfully disclaim and limit, given that parts of a broad exclusion are
-unenforceable against consumers in several jurisdictions, and that the software is offered free of
-charge?
+unenforceable against consumers in several jurisdictions?
+
+**The premise this entry used to carry has been withdrawn, not answered.** It read "…and that the
+software is offered free of charge". That was true when it was written and stopped being a premise
+anybody here can assert on 2026-08-25, when `db/migrations/0006_cohort_enrolments.sql` added a record
+of who holds a place in a course. An enrolment is granted out of band, so this software cannot tell
+whether a place was paid for, and a scholarship cohort and a paid one produce identical rows.
+**Counsel must answer for both, because the code cannot distinguish them.**
 
 *Facts counsel can rely on:* the shipped text says only that the software is provided as it is and
 that the authors make no warranty; it contains no cap, no exclusion list and no indemnity. The
@@ -166,6 +180,16 @@ rather than **detached** from its account?
   privilege at all** on `prl.hands`, `prl.hand_seats` or `prl.hand_actions`. If counsel concludes
   that erasure must remove hand history, that is a migration, a change to the least-privilege
   grants, and a decision about the other players in those hands — not a code change.
+* **Abandoned guest accounts are erased sixty days after they were last seen** (since 2026-08-25;
+  `apps/api/src/maintenance/retention-sweep.ts`). Two things counsel should be told plainly about
+  that number. It is **not stated in any specification** — the four places that documented this
+  sweep before it existed name the mechanism and the column and write the period as `<cutoff>` —
+  so it is **derived**: a guest has no email, no password and no federated identity, its only
+  credential is a session cookie, and a session cannot outlive sixty days from creation, so that
+  is the point at which the account can no longer be reached by anybody. And it is the *floor*
+  rather than the whole rule: no account holding a live session, a table membership, a seat in any
+  hand, or a room of its own is ever removed, at any age. If counsel decides a different period is
+  required, it is one constant.
 
 ### 8. `international-transfer` — Where the data physically sits, and who may reach it
 
@@ -209,6 +233,78 @@ that is supposed to prompt this question.
 * Some of the profiles under consideration are attributed to players who have died. That changes
   nothing about the analysis: being unable to object is not a reason to be less careful.
 
+### 10. `enrolment-and-fees` — What an enrolment record means, and what the operator has sold
+
+**Appears on:** `/terms` §7. **Added 2026-08-25**, with `db/migrations/0006_cohort_enrolments.sql`.
+Corresponds to entry **L10** of [`legal-register.md`](legal-register.md), which carries the facts in
+full.
+
+What, if anything, has the operator sold? Which contract terms and pre-contract disclosures must be
+presented before that sale, on which page and by whom? And do terms displayed here bind a purchase
+completed somewhere this software cannot see? **Counsel must answer for the free case too** — a
+scholarship or employer-funded cohort produces exactly the same rows.
+
+*Facts counsel can rely on,* every one read out of `db/migrations/0006_cohort_enrolments.sql`:
+
+* **This software still cannot take money.** No processor, no dependency that moves money, no
+  checkout route, and **no amount, currency or price column** — in that file or anywhere in the
+  schema (`:25-30`; `0001_initial.sql:4-9` says the same and is still true).
+  `apps/web/test/legal-pages.test.ts` fails the build on a dependency, a table name or a source file
+  that changes this, in every posture the page can be in.
+* **An enrolment record does not establish that money changed hands.** It records that somebody
+  **is** entitled and **who said so**. The `reference` column is an opaque external string the schema
+  never parses — a purchase-order number, a row id in a finance system nobody here can read, a
+  registry entry, or the literal word `scholarship` (`:32-37`, `:333-335`).
+* What is actually stored: cohort key, name and period (`:215-243`); and per enrolment the cohort,
+  the account, when it was granted, `granted_by` as free text naming the authority (`:277-281`), the
+  `reference` (`:285-289`), a start, an optional expiry, and a revocation triple that is either
+  wholly absent or wholly present (`:294-321`).
+* **Entitlement is the intersection of two periods** — the enrolment's and the cohort's (`:83-99`).
+  A cohort that has ended entitles nobody however its enrolments are written.
+* **There is no privileged HTTP surface.** The runtime role holds `SELECT` and nothing else on both
+  tables (`:387-388`); enrolment happens through an operator command connecting as the migrating
+  identity, which no request handler can reach (`:143-162`).
+* Every account is still created automatically for any visitor, so **an unenrolled reader and an
+  enrolled one are the same kind of account**, differing only by the presence of a row.
+
+### 11. `refunds-and-cancellation` — Refunds, cancellation, and what an interruption costs the reader
+
+**Appears on:** `/terms` §8. **Added 2026-08-25.** Corresponds to entry **L11** of
+[`legal-register.md`](legal-register.md).
+
+If a place in a course was paid for, what refund, cancellation or cooling-off right must be offered,
+does it survive the student starting the course, and where must it be stated? What does the operator
+owe a reader whose access ends because the deployment was taken down, reset or changed — which
+`/terms` §8 reserves the right to do? And what should deleting an account do to a place in a course
+that has not expired?
+
+*Facts counsel can rely on:*
+
+* **There is no refund concept at any layer.** No amount, no order, no receipt, and nothing that
+  could record that money went back. Revoking an enrolment ends access and returns nothing.
+* **Revocation is a record, not an erasure.** `revoked_at`, `revoked_by` and `revoked_reason` are
+  written into the row and the row stays; a `CHECK` refuses a partial revocation, so a withdrawal
+  with no stated reason cannot be recorded at all (`0006:294-321`, `:339-342`).
+* **Deleting an account destroys the enrolment.** `user_id` is `ON DELETE CASCADE` (`0006:269-270`,
+  argued at `:168-193`), so `POST /me/delete` removes every place the reader held, live or revoked,
+  with no notion of an outstanding entitlement to preserve, void or refund. That is a deliberate
+  decision, not an oversight, and it is a decision counsel may need to overturn.
+* **It is now recorded when it happens, which it was not before 2026-08-26.** A CASCADE is a
+  referential action and writes no audit row, so a live place ended with nothing saying so and the
+  operator's trail showed an entitlement that was never closed — over-counting for ever, precisely
+  for the readers who exercised erasure. `deleteAccount` now writes an `enrolment.ended_by_erasure`
+  row per enrolment, in the same transaction and before the rows go, detached from the start,
+  carrying the cohort, the authority, the external `reference` and whether the place was still live.
+  **This changes what counsel is deciding.** The question is no longer "can a destroyed entitlement
+  be evidenced at all" — it can, on both sides — but the narrower one: what the operator owes the
+  holder of a live place who erases themselves, given that the record of it now exists and names
+  nobody. The technical half of this entry is closed; the policy half is not, and only the policy
+  half ever needed counsel.
+* **`/terms` §8 no longer disclaims availability on the basis of being free**, because that basis is
+  no longer assertable. It now states the technical facts and says outright that whether the operator
+  may exercise them without owing the reader something is not settled by the page. Replacing that
+  paragraph with real prose is what closes this entry.
+
 ---
 
 ## Configuration that has to be decided before launch
@@ -231,7 +327,13 @@ frozen into an image is that defect wearing a different hat.
 | `PRL_AGE_GATE_JURISDICTION` | The place the threshold is set for | The gate says the threshold is tied to no jurisdiction |
 | `PRL_LEGEND_NAMING` | `archetype` or `attributed` | `archetype`. **Must stay unset until entry 9 is answered.** |
 
-These are not yet in `.env.example`; adding them is listed below.
+**All eleven are now in `.env.example`.** This line used to say they were not, and that was
+true of the change that produced this document — it has since been done. The three age-gate
+variables that ship with a value are set there (`PRL_AGE_GATE=off`,
+`PRL_AGE_GATE_MINIMUM_AGE=18`, `PRL_AGE_GATE_SCOPE=play`); the other eight are present as
+commented placeholders with the reason beside each, because for these the *unset* behaviour is
+the deliberate one. A blank operator name renders as a visible "not configured" marker, while
+a plausible default would read as a reviewed term.
 
 ---
 
@@ -243,20 +345,91 @@ Engineering work that this review unblocks or depends on. None of it closes a re
    deliberately not overridden. Publishing unreviewed placeholder clauses to a search index under a
    real operator's name is a worse failure than being unfindable. Once the register is closed and
    the placeholders are replaced, that decision should be revisited on purpose.
-2. **Schedule the expiry sweeps.** Entry 7 depends on it: today the retention paragraph on
-   `/privacy` is honest only because it says the sweep does not run.
-3. **`.env.example` needs the eleven variables above.** That file is outside the scope of the change
-   that produced this document and was not edited.
-4. **The browser harnesses need `PRL_AGE_GATE=off`** — or a pre-seeded declaration cookie — if a
-   deployment turns the gate on. `scripts/a11y-audit.mjs` crawls from `/` and follows links, so a
-   redirect at `/play` would leave the table screens silently unaudited while the report still says
-   PASS; `scripts/keyboard-audit.mjs` drives `/play` directly and would fail outright. The shipped
-   default (no gate) does not have this problem, which is one of the three reasons it is the
-   default.
-5. **The gate has no browser-level test.** The pure decisions are covered by
-   `apps/web/test/age-gate.test.ts`; that a redirect and a `Set-Cookie` actually reach a browser,
-   and that an in-app router navigation is gated as well as a document navigation, needs a running
-   server and is not covered anywhere yet.
+2. **Done: the expiry sweeps are scheduled.** This read "Entry 7 depends on it: today the
+   retention paragraph on `/privacy` is honest only because it says the sweep does not run."
+   `apps/api/src/maintenance/retention-sweep.ts` now calls `deleteExpired` and
+   `deleteExpiredLoginAttempts` every six hours, in bounded batches, started after `listen` and
+   stopped before the shutdown drain. It runs in the API process rather than as a systemd unit —
+   unlike the backups, it needs exactly the privileges the API already has on exactly the tables
+   the API already owns, and it is meaningless while the API is down; that reasoning is in the
+   file. `apps/api/test/retention-sweep.test.ts` covers the backlog, the pass ceiling and its
+   reporting, a database failure the schedule survives, and the overlap guard.
+
+   What is **not** closed is entry 7 itself, which is a question for counsel: how long each
+   category may be kept, and whether erasure must delete hand history rather than detach it. The
+   sweep enforces the periods the code already implements (14-day session, 24-hour revoked-row
+   grace, 10-minute sign-in attempt); it does not decide them. The `/privacy` §5 wording needs
+   re-reading now that the sweep runs, because the sentence that made it honest was the admission
+   that it did not.
+
+   **Since 2026-08-25 the same schedule also erases abandoned guest accounts**, which is the one
+   period here that the code did *not* already implement and no document stated — see the fact
+   above and `docs/production/legal-register.md` D4 for the derivation. `/privacy` §5 is now
+   inaccurate for that category and says everything except sessions is kept "until you delete your
+   account"; correcting it is E11 in that register.
+3. **Done: `.env.example` carries all eleven variables above.** This follow-up read "needs the
+   eleven variables above … outside the scope of the change that produced this document and was
+   not edited". They are there now — grep it for `PRL_AGE_GATE`, `PRL_LEGAL_` and
+   `PRL_LEGEND_NAMING`. What is *not* done is anything about their values: every legal placeholder
+   is still commented out, which is the register's problem, not the example file's.
+4. **Stale, and worth recording as stale rather than deleting.** This read: "`a11y-audit.mjs`
+   crawls from `/` and follows links, so a redirect at `/play` would leave the table screens
+   silently unaudited while the report still says PASS." That is no longer true and is the more
+   dangerous half of the original claim, so the correction matters. `a11y-audit.mjs` sends a
+   declaration cookie, compares the URL it LANDED on against the one it asked for, and records any
+   route the gate answered as UNAUDITABLE — which fails the run, with the gate named and with
+   `--routes /age-check` offered as the way to audit the interstitial deliberately. An
+   interstitial can no longer be audited under the name of `/play`.
+   `scripts/keyboard-audit.mjs` drives `/play` directly and fails outright, which is the correct
+   behaviour and always was. The shipped default (no gate) still avoids the question entirely,
+   which remains one of the three reasons it is the default.
+5. **Done: the gate has a browser-level test, and it found the gate broken.** This read: "The gate
+   has no browser-level test. The pure decisions are covered by `apps/web/test/age-gate.test.ts`;
+   that a redirect and a `Set-Cookie` actually reach a browser, and that an in-app router
+   navigation is gated as well as a document navigation, needs a running server and is not covered
+   anywhere yet." `scripts/age-gate-audit.mjs` — `pnpm run test:age-gate` — is that test, and the
+   half this follow-up singled out was the half that was wrong.
+
+   **The defect it found.** The proxy decided whether a request was an in-app router navigation by
+   reading the `rsc` header, which is what the App Router sends. Next deletes that header, with the
+   rest of its `FLIGHT_HEADERS`, before middleware runs. So the branch was dead: **with the gate
+   switched on, a reader who clicked "Play" in the site header from any page went straight to the
+   tables, every time.** Only a hard document navigation was ever gated. It found a second one
+   beside it: the proxy matcher excluded `purpose: prefetch` on the reasoning that a prefetch is
+   not a document, and that header changes nothing on the server — such a request was answered with
+   the complete page, ungated and with no Content-Security-Policy on it. Both are fixed
+   (`isRouterNavigation` and `isRouterPrefetch` in `apps/web/src/lib/guest-bootstrap.ts`), and the
+   pure halves of both are now in `apps/web/test/guest-bootstrap.test.ts` so an ordinary `pnpm test`
+   catches a regression without needing a build.
+
+   **What is now covered**, against a production build the harness starts itself, with the gate
+   switched on at a threshold of 21 (deliberately not the built-in default, so a server that
+   ignored its configuration could not pass): a document navigation to a gated route is redirected
+   with a real 303 and a real `Location`; the declaration's `Set-Cookie` is the shape a browser
+   over plain HTTP will keep, records the threshold rather than a flag, is refused when it names a
+   lower one, and is stored and honoured by a real Chrome that pressed the real button; an in-app
+   router navigation is gated, measured both as a request shape and by clicking the real `<Link>`
+   and asserting that the click travelled as a router fetch rather than as a page load; a router
+   prefetch is not gated and its payload carries neither the page nor the interstitial; and
+   `PRL_AGE_GATE_SCOPE=site` gates `/`, `/learn` and `/lab` while leaving `/age-check`, `/terms`,
+   `/privacy` and `/responsible-use` open. Every refusal has a request beside it that must succeed,
+   and the run refuses to pass unless it refused something, allowed something, and used a browser.
+
+   **It is a release gate.** `test:age-gate` sits in the `pnpm run verify` loop directly after
+   `test:csp` — eleventh of the fourteen, in run order. The production build it needs is already
+   guaranteed there — `build` runs ahead of the browser harnesses, and `test:ax` and `test:csp`
+   depend on exactly the same thing — so it costs about twenty seconds and one more Chrome launch
+   and changes nothing else about the gate's shape. The reason it is in the list rather than beside
+   it: this is the only check in the repository that exercises the age gate switched **on**, the
+   gate is off by default so every other gate runs past it, and the defect above survived from the
+   day the gate landed precisely because nothing did this.
+
+   **What is still not covered.** It is one
+   browser: Chrome. It is plain HTTP, so the `__Host-` cookie name and the `x-forwarded-proto` path
+   a TLS deployment takes are untested, and what is asserted instead is the other half — that over
+   http the cookie is *not* `__Host-` and *not* `Secure`, which is the case that would otherwise be
+   a silent redirect loop. And none of it says anything about the shipped configuration, which has
+   no gate: that is entry 1 above, and it is still open.
 
 ---
 

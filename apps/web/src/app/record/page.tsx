@@ -51,7 +51,7 @@ import {
   type RecordFigureName,
 } from '@/lib/record-data.ts';
 import { readerCallOptions } from '@/lib/server-session.ts';
-import { DeleteAccount } from './DeleteAccount.tsx';
+import { AccountDeletion } from './DeleteAccount.tsx';
 import { UnitsReset } from './UnitsReset.tsx';
 import '../../styles/page.css';
 
@@ -89,42 +89,6 @@ function ResetPanel(): ReactElement {
         rewrote a finished table’s numbers would be editing the record instead of clearing the board.
       </p>
       <UnitsReset />
-    </Panel>
-  );
-}
-
-/**
- * The way out, and it is deliberately the last thing on the page.
- *
- * Below the reset rather than beside it, because the two are opposites and a reader skimming for
- * "put my units back" must not land on "erase everything" by muscle memory. The panel index
- * continues the page's numbering so the visual order and the reading order agree.
- *
- * Shown whenever there is an account to delete, which is every state except `signedOut` — a reader
- * whose record could not be FETCHED still has one, and a page that hid the way out whenever it
- * could not draw a figure would make leaving conditional on the API being healthy. The caller
- * below is where that condition lives, with the reasoning next to it.
- *
- * The panel's own copy is the summary; the control expands into the full list of what goes and
- * what stays before anything can be pressed. Everything true about that list is enforced in
- * `db/migrations/0004_account_deletion.sql` and proved in `apps/api/test/account-deletion.test.ts`,
- * which is what stops these sentences from becoming a claim nobody checks.
- */
-function DeletePanel(): ReactElement {
-  return (
-    <Panel title="Delete your account" eyebrow="Irreversible" index={3} headingLevel={2}>
-      <p className="prl-prose">
-        You can close this account and take your record with you. Your sign-ins, the lessons you have marked
-        as read, your quiz answers, your scenario decisions and your seat at every table are deleted outright
-        — there is no recovery and no grace period.
-      </p>
-      <p className="prl-prose">
-        Two things are kept rather than deleted, with your name removed from them: the hands you have played,
-        and any table you created. A hand belongs to everybody who was in it — deleting it would erase it from
-        their history too — so the seat stays and stops naming anybody. Tables you created are closed and
-        detached for the same reason: the hands played at them would go with them.
-      </p>
-      <DeleteAccount />
     </Panel>
   );
 }
@@ -211,14 +175,21 @@ export default async function RecordPage(): Promise<ReactElement> {
       <ResetPanel />
 
       {/*
-        Hidden for a reader with no session, and shown in both of the other states.
+        The way out, and it is deliberately the last thing on the page: below the reset rather than
+        beside it, because the two are opposites and a reader skimming for "put my units back" must
+        not land on "erase everything" by muscle memory.
 
-        Not a tidiness rule: there is no account to delete when nobody is signed in, so the control
-        could only ever produce a 401, and offering an irreversible action that cannot work is worse
-        than not offering it. `unavailable` is a different case and keeps the panel — that reader
-        has an account, and whether they can leave must not depend on whether their figures loaded.
+        Rendered UNCONDITIONALLY, with the condition passed in rather than wrapped around it, and
+        that is a fix rather than a style choice. A successful deletion signs the reader out and
+        this page then re-renders as `signedOut` — so a conditional here would take the deletion
+        receipt off the screen at the exact moment it was produced, and the receipt's counts
+        describe an account that no longer exists to look them up in. The component decides what to
+        draw; `DeleteAccount.tsx`'s header has the measurement and the reasoning.
+
+        It also has to stay in this slot. React reconciles by position, and the refresh below it
+        depends on this element being the same instance across the re-render so its state survives.
       */}
-      {record.state === 'signedOut' ? null : <DeletePanel />}
+      <AccountDeletion deletable={record.state !== 'signedOut'} />
 
       <p className="prl-page-nav">
         <Link href={LEARN_PATH}>Back to the curriculum</Link>

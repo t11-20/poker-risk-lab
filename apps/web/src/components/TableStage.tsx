@@ -23,7 +23,9 @@
  *      query and intrinsic reflow instead — nothing is hidden at any width — and
  *      `packages/ui/test/layout-guarantees.test.ts` asserts `.prl-play__decision` carries no
  *      `position: sticky/fixed/absolute`. **Do not re-pin this band.** If the price seems to scroll
- *      away, the answer is a shorter band, not a pinned one.
+ *      away, the answer is a shorter band, not a pinned one. Below 46rem of column the row of
+ *      buttons sticks INSIDE the ActionBar, whose box bounds how far it can travel, so it can cover
+ *      the bar's own sizer and never the table; `styles/play.css` section 3.1 has the measurements.
  *   2. **The pot** is in that same band, in the ActionBar's price strip ("In the pot"), as well as in
  *      the middle of the table.
  *   3. **Your cards** are in the band's own readout at 900px and above. They also appear on the seat
@@ -70,23 +72,32 @@
  * `stale_action_sequence`, `not_your_turn`, `illegal_action`. The message is passed through rather
  * than written here, so what the reader is told is what the server actually said.
  *
+ * The other two statuses are about frames the server never saw, and they exist because reporting
+ * those as `pending` was a defect: `held` when there is no connection and the caller will replay the
+ * decision on reconnect, `not-sent` when the caller itself refused to send it. See `TableSubmission`.
+ *
  * ## The three things this screen says out loud, and why they are three
  *
  * Every one of them is fed from a diff computed in `lib/use-live-table.ts`, never from a frame: see
  * that file's header for why a whole-state protocol makes that mandatory.
  *
- *  1. **The table's narration** — `announcement`, polite, in `PokerTable`'s single region. Dealt,
- *     bet, called, street, showdown, hand complete, and the echo of the reader's own decision.
+ *  1. **The table's narration** — `announcement`, polite, in the single region `TableRegion` mounts
+ *     unconditionally. Dealt, bet, called, street, showdown, hand complete, and the echo of the
+ *     reader's own decision. It is mounted whether or not there is a table to draw, because the
+ *     frames that start a hand bring the first sentence and the first view in one commit and a
+ *     region that arrives with its text is announced by nothing — see the comment on the region.
  *  2. **Whose decision it is** — `turnAnnouncement`, polite, in its own region beside the controls.
  *     Separate from (1) because the two race: the `state` frame that makes it the reader's turn and
  *     the `event` frame describing the action that got there arrive back to back, and one region
  *     would let either overwrite the other. It carries the pot, the price, the stack and the legal
  *     actions, because that is the whole of the decision.
- *  3. **A refusal** — `role="alert"`, mounted only when the server rejects a decision. Assertive
- *     because the reader has acted and the table did NOT move: they are waiting for something that
- *     is not coming, and every other channel on this screen is polite. The accepted and pending
- *     states are deliberately silent here — (1) already echoes the decision, and "the server applied
- *     it at sequence 41" is a sentence nobody needs read to them.
+ *  3. **A refusal** — `role="alert"`, mounted only when a decision was refused and the reader has to
+ *     act again: the server rejected it, or this page never sent it. Assertive because the reader
+ *     has acted and the table did NOT move: they are waiting for something that is not coming, and
+ *     every other channel on this screen is polite. The accepted, pending and held states are
+ *     deliberately silent here — (1) already echoes the decision, "the server applied it at sequence
+ *     41" is a sentence nobody needs read to them, and a held decision is one the reader can do
+ *     nothing about and does not need to.
  *
  * The error state's own `role="alert"` (see `TableRegion`) is the fourth, and it replaces the table
  * rather than describing it.
@@ -95,6 +106,7 @@
 import type { CoachReport } from '@prl/contracts';
 import {
   ActionBar,
+  browserAbandonedFocus,
   Callout,
   CardRow,
   CoachPanel,
@@ -127,18 +139,39 @@ import { spokenDecision } from '@/lib/use-live-table.ts';
 const SWIPE_SLOP_PX = 6;
 const SWIPE_COMMIT_PX = 28;
 
-export type TableStageStatus = 'loading' | 'ready' | 'error' | 'complete';
+/**
+ * `idle` is "nothing has been asked for", and it is not `loading`. See `IdleTable` for why the two
+ * must never share a rendering.
+ */
+export type TableStageStatus = 'idle' | 'loading' | 'ready' | 'error' | 'complete';
 
 /**
  * A decision the caller has sent to a server, and what became of it.
  *
- * Only meaningful alongside `onAct`. `pending` is the only status that disables the controls: once
- * the server has answered, the next `state` frame decides whether it is this seat's turn again, and
- * that answer is `view.legalActions`, not a flag held here.
+ * Only meaningful alongside `onAct`. `pending` and `held` are the statuses that disable the
+ * controls: once the server has answered, the next `state` frame decides whether it is this seat's
+ * turn again, and that answer is `view.legalActions`, not a flag held here.
+ *
+ * ## Why "sent" and "not sent" are five statuses rather than three
+ *
+ * `pending` used to cover every decision the caller had dispatched, whether or not the frame
+ * actually left the browser, and the caller announced a rate limit separately when it had not. A
+ * reader who pressed Fold during a reconnect therefore got "Decision sent" and "The decision was
+ * not sent" at once, in two different live regions, with the wrong cause attached to the second.
+ * See `SUBMISSION_FOR` in `lib/use-live-table.ts`.
+ *
+ * The two new members are the two honest answers that were missing:
+ *
+ *  - `held` — nothing was sent, and nothing is lost. The connection is down and the decision is
+ *    replayed, unchanged, when it returns. The controls stay disabled, because it IS going to be
+ *    applied.
+ *  - `not-sent` — nothing was sent and nothing is holding it: this page refused it (its own rate
+ *    limiter, or a frame it could not put on the wire). The reader decides again, so the controls
+ *    come back and the message is an alert rather than a status.
  */
 export interface TableSubmission {
   readonly action: TableAction;
-  readonly status: 'pending' | 'accepted' | 'rejected';
+  readonly status: 'pending' | 'held' | 'accepted' | 'rejected' | 'not-sent';
   /** What the reader is told. The server's own wording where the server had any. */
   readonly message: string;
 }
@@ -170,6 +203,11 @@ export interface TableStageProps {
   readonly summary?: readonly string[];
   readonly errorMessage?: string;
   /**
+   * What the empty table says in the `idle` status: what the reader's first press will do. The
+   * caller knows which button that is and what it builds; this component does not.
+   */
+  readonly idleMessage?: string;
+  /**
    * Sends a decision. Omit it and the stage runs from a fixture: acting disables the controls and
    * says so rather than pretending to apply the action.
    */
@@ -198,6 +236,27 @@ function StageSkeleton(): ReactElement {
       <span className="prl-skeleton prl-play__skeleton--header" />
       <span className="prl-skeleton prl-play__skeleton--field" />
       <p className="prl-play__skeleton-note">Loading the table.</p>
+    </div>
+  );
+}
+
+/**
+ * The table before anybody has asked for one. An empty state, never a skeleton.
+ *
+ * `/play` used to open on two large skeleton blocks captioned "Loading the table." and "Waiting for
+ * the table." before the visitor had pressed anything. A skeleton promises content on its way, and
+ * here nothing was on its way: no session, no room, no socket, and nothing would start until the
+ * reader acted. So the first screen of the product's main feature was a loading state that never
+ * resolved by itself. This says what is actually true — no table yet — and what the press does.
+ */
+function IdleTable({ message }: { readonly message: string | undefined }): ReactElement {
+  return (
+    <div className="prl-empty prl-play__idle">
+      <p className="prl-label">No table yet</p>
+      <p>
+        {message ??
+          'Nothing has been dealt and nothing is loading. The table is drawn here once there is one.'}
+      </p>
     </div>
   );
 }
@@ -277,16 +336,44 @@ interface TableRegionProps {
   readonly announcement: string;
   readonly summary: readonly string[] | undefined;
   readonly errorMessage: string | undefined;
+  readonly idleMessage: string | undefined;
 }
 
-/** The table, or the skeleton or the error that stands in for it. Exactly one of the three. */
+/** The table, or the empty state, the skeleton or the error that stands in for it. Exactly one. */
 function TableRegion(props: TableRegionProps): ReactElement {
   const { status, view, turn, seatNames, highlightedCards, highlightLabel } = props;
-  const { announcement, summary, errorMessage } = props;
+  const { announcement, summary, errorMessage, idleMessage } = props;
   const hasSummary = status === 'complete' && summary !== undefined && summary.length > 0;
 
   return (
     <div className="prl-play__table">
+      {/*
+        The table's narration, and it is HERE rather than inside `PokerTable` because of when it has
+        to exist.
+
+        A live region is announced when the platform is told a region it already knows about has
+        changed. One that is inserted already holding its first sentence is silent. `PokerTable` is
+        rendered only once a `view` has arrived — and the frames that start a hand carry the events
+        and the first view in a single React commit, so the region used to be created already
+        carrying "smallBlind 5 from seat 3, bigBlind 10 from seat 4" and a reader heard nothing at
+        all on the first hand of every session. Measured by `scripts/ax-assertions.mjs` at the moment
+        "Deal the next hand" was pressed: the document's live regions were the route announcer, the
+        connection line, the invite and join notes, the decision band's turn region and the footer
+        statement — and no table narration region at all.
+
+        Mounted unconditionally and empty, it is the same rule `RouteAnnouncer`, the quiz and the
+        invite-code copy button already follow. It stays before the table in the DOM so the
+        narration is queued ahead of anything the table itself changes in the same commit.
+
+        The two rules that governed it in `PokerTable` are unchanged: polite, because a new street
+        is not an emergency; and focus is never moved, because yanking the caret on every remote
+        update makes a table unusable from the keyboard.
+      */}
+      <div aria-atomic="true" aria-live="polite" className="prl-live-region" role="status">
+        {announcement}
+      </div>
+
+      {status === 'idle' ? <IdleTable message={idleMessage} /> : null}
       {status === 'loading' ? <StageSkeleton /> : null}
 
       {/*
@@ -324,14 +411,13 @@ function TableRegion(props: TableRegionProps): ReactElement {
         </div>
       ) : null}
 
-      {view === null || status === 'loading' ? null : (
+      {view === null || status === 'loading' || status === 'idle' ? null : (
         <PokerTable
           view={view}
           {...(seatNames === undefined ? {} : { seatNames })}
           {...(highlightedCards === undefined ? {} : { highlightedCards })}
           {...(highlightLabel === undefined ? {} : { highlightLabel })}
           turn={turn}
-          announcement={announcement}
         />
       )}
 
@@ -352,6 +438,13 @@ function TableRegion(props: TableRegionProps): ReactElement {
   );
 }
 
+/** What the decision band says when there is no view to draw controls from. */
+const NO_VIEW_LINE: Readonly<Record<'error' | 'idle' | 'waiting', string>> = {
+  error: 'No controls while the table is unreachable.',
+  idle: 'Nothing to decide until you are dealt in.',
+  waiting: 'Waiting for the table.',
+};
+
 interface DecisionBandProps {
   readonly status: TableStageStatus;
   readonly view: PlayerView | null;
@@ -361,12 +454,40 @@ interface DecisionBandProps {
   readonly onAct: (action: TableAction) => void;
 }
 
-/** The heading and tone for each fate a decision can meet. */
+/**
+ * The heading for each fate a decision can meet.
+ *
+ * Each names WHO decided. "Decision sent" and "The server refused it" are about the server; "Held —
+ * no connection to the table" and "This page did not send it" are about this browser, and saying so
+ * is the difference between a reader waiting for a reconnect and a reader deciding again. A title
+ * that blamed the server for a frame the server never saw was the defect here.
+ */
 const SUBMISSION_TITLE: Readonly<Record<TableSubmission['status'], string>> = {
   pending: 'Decision sent',
+  held: 'Held — no connection to the table',
   accepted: 'Decision applied',
   rejected: 'The server refused it',
+  'not-sent': 'This page did not send it',
 };
+
+/**
+ * The fates that need interrupting for, and the ones that do not.
+ *
+ * A refusal the reader has to act on is an alert; "sent", "held" and "applied" are a polite status,
+ * because the reader has nothing to do about any of them and interrupting to confirm that a fold
+ * worked is how an alert stops meaning anything. `not-sent` is here with `rejected` for one reason:
+ * the controls are live again and nothing else on screen says the decision has gone.
+ */
+const SUBMISSION_ALERTS: ReadonlySet<TableSubmission['status']> = new Set<TableSubmission['status']>([
+  'rejected',
+  'not-sent',
+]);
+
+/** The statuses that keep the controls disabled: something is still going to happen to the decision. */
+const SUBMISSION_IN_FLIGHT: ReadonlySet<TableSubmission['status']> = new Set<TableSubmission['status']>([
+  'pending',
+  'held',
+]);
 
 /**
  * Your own figures, the controls, and the price — the last block in the table column.
@@ -377,8 +498,8 @@ const SUBMISSION_TITLE: Readonly<Record<TableSubmission['status'], string>> = {
  */
 function DecisionBand(props: DecisionBandProps): ReactElement {
   const { status, view, submission, turnAnnouncement, isLive, onAct } = props;
-  const pending = submission?.status === 'pending';
-  const rejected = submission !== null && submission.status === 'rejected';
+  const pending = submission !== null && SUBMISSION_IN_FLIGHT.has(submission.status);
+  const rejected = submission !== null && SUBMISSION_ALERTS.has(submission.status);
 
   /**
    * Where the caret goes the instant a decision is submitted.
@@ -423,10 +544,11 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
 
   useEffect(() => {
     if (submission === null || !hadFocus.current) return;
-    // Chrome 151 after disabling a focused button: `activeElement` can be `<html>`, not
+    // Chrome after disabling a focused button: `activeElement` can be `<html>`, not
     // `document.body`. Both mean the caret is on the document. A real control or panel must win.
-    const active = document.activeElement;
-    if (active !== null && active !== document.body && active !== document.documentElement) return;
+    // Shared with `ActionBar` and `LiveTable` rather than copied — this was right and the copy in
+    // `LiveTable` was a version behind, which is the argument for having one of these.
+    if (!browserAbandonedFocus()) return;
     acknowledgementRef.current?.focus();
     hadFocus.current = false;
   }, [submission]);
@@ -447,7 +569,7 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
 
       {view === null ? (
         <p className="prl-play__decision-idle">
-          {status === 'error' ? 'No controls while the table is unreachable.' : 'Waiting for the table.'}
+          {NO_VIEW_LINE[status === 'error' || status === 'idle' ? status : 'waiting']}
         </p>
       ) : (
         <ActionBar
@@ -476,11 +598,14 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
         block was a `Callout` with no live-region ancestor at all: the whole message existed only as
         pixels, and the polite regions beside it were busy narrating a table that had not moved.
 
-        Mounted ONLY in the rejected state, which is what makes it fire: an alert is announced on
-        insertion, and an always-present node whose text merely changes is announced far less
-        reliably. The accepted and pending states keep the plain `Callout` below, deliberately: the
-        table's own region already echoes the decision, and interrupting a reader to tell them their
-        fold worked is how an alert stops meaning anything.
+        Mounted ONLY in the states that need acting on — `SUBMISSION_ALERTS` — which is what makes it
+        fire: an alert is announced on insertion, and an always-present node whose text merely
+        changes is announced far less reliably. `not-sent` is in that set beside `rejected` because
+        it has the same shape from the reader's side: the controls are live again and nothing was
+        applied. The accepted, pending and held states keep the plain `Callout` below, deliberately:
+        the table's own region already echoes the decision, and interrupting a reader to tell them
+        their fold worked — or that it is queued behind a reconnect they can do nothing about — is
+        how an alert stops meaning anything.
       */}
       {/*
         One wrapper for both fates, so the focus rescue above has a single destination whatever the
@@ -499,13 +624,24 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
         <div aria-label="What happened to your decision" ref={acknowledgementRef} role="status" tabIndex={-1}>
           {rejected ? (
             <div role="alert">
-              <Callout tone="warning" title={isLive ? SUBMISSION_TITLE.rejected : 'Nothing was sent'}>
+              {/*
+                The title is read off the status, not fixed to `rejected`. Two different refusals
+                arrive here — the server's, and this page's own — and a heading that says "The
+                server refused it" about a frame the server never received tells the reader to go
+                and look at the wrong thing.
+              */}
+              <Callout
+                tone="warning"
+                title={isLive ? SUBMISSION_TITLE[submission.status] : 'Nothing was sent'}
+              >
                 {submission.message}
               </Callout>
             </div>
           ) : (
             <Callout
-              tone={isLive ? 'insight' : 'warning'}
+              // `held` is a caveat rather than an insight: nothing is lost, but the table is not
+              // reachable and the reader is entitled to see that at a glance.
+              tone={isLive && submission.status !== 'held' ? 'insight' : 'warning'}
               title={isLive ? SUBMISSION_TITLE[submission.status] : 'Nothing was sent'}
             >
               {submission.message}
@@ -642,6 +778,7 @@ export function TableStage(props: TableStageProps): ReactElement {
     highlightedCards,
     summary,
     errorMessage,
+    idleMessage,
     onAct,
   } = props;
   const highlightLabel = props.highlightLabel;
@@ -701,6 +838,7 @@ export function TableStage(props: TableStageProps): ReactElement {
           announcement={spoken}
           summary={summary}
           errorMessage={errorMessage}
+          idleMessage={idleMessage}
         />
         <DecisionBand
           status={status}

@@ -34,7 +34,7 @@
  */
 
 import type { ActionCandidate, CoachReport } from '@prl/contracts';
-import { judgeConsistency as judgeShared } from '@prl/poker-math';
+import { type ConsistencyPricing, judgeConsistency as judgeShared } from '@prl/poker-math';
 
 /** The action names a learner can commit to. Matches `ScenarioAttemptRequest.action`. */
 export type ScenarioAction = ActionCandidate['action'];
@@ -65,6 +65,37 @@ export interface Consistency {
    * argue with.
    */
   readonly toleranceUnits: number;
+  /**
+   * How far behind the benchmark the chosen action came out, in chips. Zero when it is consistent.
+   *
+   * THIS is the figure the verdict is decided on, and it was not surfaced until 2026-08-27. The
+   * Verdict panel showed the chosen EV, the best row, and the tolerance — three numbers whose only
+   * natural reading is "consistent when best minus mine is inside the tolerance", which is not the
+   * rule. So a learner saw +20.6 against a best row of +51.4, a tolerance of 10, and the words
+   * "consistent with the analysis", and had every reason to think the panel was broken.
+   */
+  readonly shortfallUnits: number;
+  /**
+   * The benchmark the verdict measured against: zero for any action but a fold, because the rule
+   * asks whether the action beats folding. For a fold it is the best row that does NOT rest on an
+   * assumed fold frequency — quoting a bet's fold equity at somebody who folded would be quoting
+   * an assumption at them. `@prl/poker-math` publishes it as `measuredBestEv` for exactly this.
+   */
+  readonly benchmarkEv: number;
+  /**
+   * Whether the analysis priced this decision at all, and if not, which half was missing.
+   *
+   * `@prl/poker-math` carries the warning this field exists for, in as many words: "A caller that
+   * renders the boolean without reading `pricing` will tell somebody their decision disagreed with
+   * an analysis that never looked at it." This layer did not carry the field at all, so
+   * `ScenarioStage` had a binary chip and an unpriced size got "not the line the analysis leans
+   * towards" — a verdict on a decision nothing had judged.
+   *
+   * It happens on ordinary use. The Coach prices discrete rungs while the ActionBar exposes a
+   * continuous range, so a panel reading "Raise — 51 to 95 units" accepts 70 and prices neither 70
+   * nor anything between the two ends.
+   */
+  readonly pricing: ConsistencyPricing;
 }
 
 /**
@@ -108,5 +139,8 @@ export function judgeConsistency(
     bestTo: best === null || best.to === undefined ? null : best.to,
     gapUnits: chosenEv === null ? null : verdict.bestEv - chosenEv,
     toleranceUnits: verdict.marginUnits,
+    shortfallUnits: verdict.shortfallUnits,
+    benchmarkEv: action === 'fold' ? verdict.measuredBestEv : 0,
+    pricing: verdict.pricing,
   };
 }

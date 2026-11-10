@@ -173,6 +173,53 @@ function viewerFor(state: HandState, options: RedactOptions): SeatState | null {
 }
 
 /**
+ * Pot layers as they exist DURING a hand, which is not what `buildPots` answers.
+ *
+ * `buildPots` layers by `committedTotal` and is correct at settlement, the only place it was
+ * designed for. Called on a live state it turns an ordinary uncalled bet into a side pot, because
+ * mid-street the bettor's `committedTotal` genuinely is higher than everybody else's. Nobody is
+ * all in; no side pot exists; the table drew one anyway.
+ *
+ * It fired at the deal of EVERY hand, because the blinds are unequal. Six-handed 5/10 with nothing
+ * but the blinds posted:
+ *
+ *     [{amount:10, eligibleSeats:[2,3], capPerSeat:5,  index:0},
+ *      {amount:5,  eligibleSeats:[3],   capPerSeat:10, index:1}]
+ *
+ * which `PotDisplay` renders as "Main pot 10 units, plus the side pots below / side pot 1: 5 units
+ * — seat 3 eligible". Measured over a live-table fuzz: 947 of 1,446 decision points, 65%, showed a
+ * multi-layer pot with no seat all-in. Every one was a phantom, and it told a learner that seats
+ * still in the hand could not win the main pot.
+ *
+ * That is worse than a cosmetic slip because of what the component is FOR: `PotDisplay`'s header
+ * says the layers are drawn so "a learner needs to see that a side pot is a layer with an
+ * eligibility list rather than a bonus". The concept was being taught with data that was wrong two
+ * thirds of the time. The Coach on the same screen priced the same spot correctly, through
+ * `contestablePotFor`, so the two halves of the play screen disagreed.
+ *
+ * A side pot exists only once a seat is ALL IN for less than the others can still wager. Until
+ * then there is one pot, and everyone still holding cards is eligible for it.
+ */
+function livePots(state: HandState): readonly Pot[] {
+  const contesting = state.seats.filter((seat) => seat.status !== 'folded');
+  const someoneIsAllIn = contesting.some((seat) => seat.stack === 0);
+  if (someoneIsAllIn) return buildPots(state.seats);
+
+  const total = totalPot(state);
+  if (total === 0) return [];
+  let cap = 0;
+  for (const seat of contesting) cap = Math.max(cap, seat.committedTotal);
+  return [
+    {
+      amount: total,
+      eligibleSeats: contesting.map((seat) => seat.seat),
+      capPerSeat: cap,
+      index: 0,
+    },
+  ];
+}
+
+/**
  * Builds the view one recipient is allowed to see.
  *
  * Hole-card visibility, in full:
@@ -242,13 +289,28 @@ export function redactFor(state: HandState, options: RedactOptions): PlayerView 
     minimumRaiseTo: state.betLevel + Math.max(state.lastFullRaiseIncrement, state.config.bigBlind),
     potTotal: totalPot(state),
     // Pot layers are public information: everyone at a real table can see the
-    // side pots forming.
-    pots: buildPots(state.seats),
+    // side pots forming. `livePots` is why this is not `buildPots` directly.
+    pots: livePots(state),
     forcedBets: [...state.forcedBets],
     actions: [...state.actions],
     actionSequence: state.actionSequence,
     legalActions: viewer !== null && state.toAct === viewer.seat ? legalActions(state, viewer.seat) : [],
-    amountToCall: viewer === null ? 0 : amountToCall(state, viewer),
+    // A seat that is not `active` owes nothing, and the field's contract above already says so:
+    // "0 when nothing is owed". `amountToCall` in `betting.ts` is `max(0, min(betLevel -
+    // committedThisStreet, stack))` with no status check — correct for the betting logic, which
+    // only ever asks about the seat to act, and wrong for a VIEW, which is built for every
+    // recipient on every frame. A folded seat keeps its stack and, once the street closes, has
+    // `committedThisStreet: 0`, so it reported the full bet level for the rest of the hand.
+    //
+    // `PokerTable` renders that as a `prl-badge--caution` reading "400 units to call" — the alarm
+    // tone — beside an ActionBar correctly saying "Waiting for another player to act". Measured:
+    // 6,772 occurrences in an engine fuzz, 541 and 427 in two live-table runs. Not exploitable,
+    // since the bet level is public, but it is false information in the alarm colour on the screen
+    // where a learner is working out what "to call" means.
+    //
+    // `contestablePotFor` takes the same view of a folded hero and THROWS: "seat N is folded and
+    // can win nothing; there is no price".
+    amountToCall: viewer === null || viewer.status !== 'active' ? 0 : amountToCall(state, viewer),
     commitmentRoot: state.commitment.root,
     commitmentContext: state.commitment.context,
     // The result carries the revealed deck and salt — but only ever after the

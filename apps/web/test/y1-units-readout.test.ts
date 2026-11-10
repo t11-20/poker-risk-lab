@@ -169,7 +169,7 @@ describe('the units badge shows no figure when it has not been told one', () => 
 
   it('renders a pill with no number in it, rather than a number nobody confirmed', () => {
     assert.match(code, /units\.state === 'unknown' \? \(\s*<UnitsUnknown \/>/u);
-    assert.match(header, /units — not available/u);
+    assert.match(header, /units offline/u);
     // The guardrail is that the word "units" is always present and a currency symbol never is.
     // Dropping the figure satisfies it; dropping the pill would not.
     assert.match(header, /prl-units__word prl-label">units/u);

@@ -39,10 +39,11 @@
  * ## Where the keyboard caret goes when a control disappears
  *
  * Every control in this panel is conditional on a phase or a socket state, so pressing one usually
- * unmounts it: "Open the table" is replaced by "Take seat 1", which is replaced by "Deal the next
- * hand". The browser's only response to the focused node being removed is to drop focus to `<body>`,
- * which puts a keyboard user back at the top of the document after every single step of setting a
- * table up, and tells a screen-reader user nothing at all.
+ * unmounts it: "Deal me in" is gone the moment setup starts, and at a table reached by invite code
+ * "Take seat 2" is replaced by "Deal the next hand". The browser’s only response to the focused
+ * node being removed is to drop focus to `<body>`, which puts a keyboard user back at the top of the
+ * document after every single step of setting a table up, and tells a screen-reader user nothing.
+
  *
  * `ConnectionControls` therefore lands focus on this panel's status line when — and only when — the
  * caret was inside the row and the browser has actually given up on it. That is the same shape, and
@@ -51,7 +52,7 @@
  * somewhere else entirely.
  */
 
-import { Button, Callout, Panel, type TableAction } from '@prl/ui';
+import { Button, browserAbandonedFocus, Callout, Panel, type TableAction } from '@prl/ui';
 import {
   type FocusEvent,
   type FormEvent,
@@ -67,21 +68,97 @@ import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
 import { type LiveTable as LiveTableModel, useLiveTable } from '@/lib/use-live-table.ts';
 
+/**
+ * Why the Coach panel is empty, when it is empty because live Coach is off at this table.
+ *
+ * ## The defect these two exist for
+ *
+ * There was one sentence, and it was printed for both of the ways that happens.
+ * `EXPERT_COACH_REASON` names a difficulty — and the client only knows the difficulty in ONE of
+ * them: when this page opened the match itself, from its own `?difficulty=expert`. The other way
+ * is a `coach_not_available` refusal from the server, which is a fact about whatever table the
+ * reader is at and carries no difficulty this page can read. The refusal's own wording was thrown
+ * away and this sentence printed in its place.
+ *
+ * Measured in Chrome 151 against the built app: play a hand at
+ * `/play?profile=vocal-aggressor&difficulty=expert`, then open plain `/play`. `chooseRoom` reuses
+ * the room the reader already owns, so the second page is headed "Six-handed table", passes no
+ * `legendMatch`, and printed the identical sentence about Expert — a difficulty it had never been
+ * told and the reader had not chosen on that page.
+ *
+ * So: the Expert sentence only where Expert is a thing this page knows, and the server's own
+ * words everywhere else. `useLiveTable` decides which; see `CoachOff`.
+ */
 const EXPERT_COACH_REASON =
   'The Coach is available afterwards in review, not during this hand. Expert keeps the analysis off the table so the style is the thing you are reading.';
+
+/**
+ * The refusal, in the server's words plus what this page can honestly add.
+ *
+ * The added sentence says where the rule lives and where the analysis is instead — both true
+ * whatever produced the refusal — and names no difficulty, because none was observed.
+ */
+function refusedCoachReason(serverReason: string): string {
+  return (
+    `${serverReason} That is a setting of the table you are at rather than anything about this ` +
+    'hand, and the full analysis is on the hand’s review page afterwards.'
+  );
+}
+
+function coachOffReason(off: NonNullable<LiveTableModel['coachOff']>): string {
+  return off.kind === 'expertLegends' ? EXPERT_COACH_REASON : refusedCoachReason(off.serverReason);
+}
+
+/**
+ * The panel's own default sentence is "with no table state there is nothing to price", and it is
+ * TRUE only while there is no table state. These two are the cases where there is one.
+ *
+ * ## The defect
+ *
+ * `CoachUnavailable` in `components/TableStage.tsx` cannot tell "nothing has been asked for" from
+ * "something was asked for and has not come back", because it is handed a report or a null. So the
+ * panel printed a sentence denying the existence of the very table drawn beside it, for the whole
+ * of every round trip. Measured in Chrome 151 at a live table with the API on the same machine:
+ * the request went out at 6,683ms and the report landed at 8,034ms, and for that whole window the
+ * panel read "No analysis — the Coach prices the decision in front of you, so with no table state
+ * there is nothing to price." The server allows the analysis a three-second budget, so a loaded
+ * deployment holds that sentence on screen more than twice as long.
+ *
+ * It was not a flicker in the worst case either: before the `welcome` fix in
+ * `lib/use-live-table.ts`, a request lost with its socket was never re-issued and this sentence
+ * was what the reader was left with permanently.
+ */
+const COACH_IN_FLIGHT_REASON =
+  'The analysis of this decision has been asked for and has not come back yet. It is computed ' +
+  'server-side from your own redacted view, which takes a moment; nothing is estimated here while ' +
+  'you wait.';
+
+const COACH_NOT_ASKED_REASON =
+  'There is no analysis of this spot. The Coach prices a decision, so it is computed when one is ' +
+  'yours to make — use "Refresh the analysis" to ask for it now.';
 
 function coachUnavailableProps(
   live: LiveTableModel,
 ): { readonly coachUnavailableReason: string } | Record<string, never> {
-  if (!live.coachDuringHand) return { coachUnavailableReason: EXPERT_COACH_REASON };
-  if (live.coachProblem === null) return {};
-  return {
-    coachUnavailableReason:
-      `The server sent an analysis this page could not read: ${live.coachProblem}. ` +
-      'It was refused rather than shown in part. The table itself is unaffected — it is drawn ' +
-      'from separate frames.',
-  };
+  if (live.coachOff !== null) return { coachUnavailableReason: coachOffReason(live.coachOff) };
+  if (live.coachProblem !== null) {
+    return {
+      coachUnavailableReason:
+        `The server sent an analysis this page could not read: ${live.coachProblem}. ` +
+        'It was refused rather than shown in part. The table itself is unaffected — it is drawn ' +
+        'from separate frames.',
+    };
+  }
+  if (live.table.coachRequest !== null) return { coachUnavailableReason: COACH_IN_FLIGHT_REASON };
+  // Only when there is genuinely no table state does the panel's own default sentence hold.
+  if (live.table.view !== null) return { coachUnavailableReason: COACH_NOT_ASKED_REASON };
+  return {};
 }
+
+/** What the empty stage says before anything has been asked for: what the one press will do. */
+const IDLE_TABLE_MESSAGE =
+  'Nothing has been dealt and nothing is loading. “Deal me in” opens a table against bots, sits you ' +
+  'down and deals your first hand, and the table is drawn here from the server’s own frames.';
 
 /** One sentence per transport state, in the reader's terms rather than the protocol's. */
 const STATUS_LEDE: Readonly<Record<TableSocketStatus, string>> = {
@@ -95,6 +172,13 @@ const STATUS_LEDE: Readonly<Record<TableSocketStatus, string>> = {
 /**
  * What the stage should be showing.
  *
+ * `idle` is its own status, not `loading`, and the difference is the first thing a visitor sees.
+ * Before anybody pressed anything this returned `loading`, so `/play` opened on two large skeleton
+ * blocks captioned "Loading the table." and "Waiting for the table." — a promise that something was
+ * arriving, on a page where nothing had been asked for and nothing ever would be until the reader
+ * acted. A skeleton that never resolves is the lie `CoachUnavailable` in `TableStage` already refuses
+ * to tell.
+ *
  * `complete` covers both the moment a hand finishes and the gap before the next one, because the
  * server sends `view: null` between hands and the hand that just ended is the honest thing to leave
  * on screen — labelled as finished, with its controls idle.
@@ -102,6 +186,7 @@ const STATUS_LEDE: Readonly<Record<TableSocketStatus, string>> = {
 function stageStatusOf(live: LiveTableModel): TableStageStatus {
   if (live.closed !== null && !live.closed.retryable) return 'error';
   if (live.phase === 'failed') return 'error';
+  if (live.phase === 'idle') return 'idle';
   if (live.table.view === null) return live.status === 'live' ? 'ready' : 'loading';
   if (live.table.betweenHands || live.table.view.street === 'complete') return 'complete';
   return 'ready';
@@ -130,8 +215,8 @@ interface ConnectionPanelProps {
 function statusSentence(live: LiveTableModel): string {
   if (live.phase === 'idle') {
     return (
-      'Not connected yet. Opening the table creates a guest session — no email, no password — and a ' +
-      'private six-handed room with five bots already seated.'
+      'Not connected yet. “Deal me in” creates a guest session — no email, no password — and a private ' +
+      'room with bots already seated, then sits you down and deals your first hand.'
     );
   }
   if (live.phase === 'preparing') {
@@ -144,6 +229,11 @@ function statusSentence(live: LiveTableModel): string {
 /** What the reader should do or expect next, given where the machine is. */
 function hintSentence(live: LiveTableModel): string {
   if (live.phase !== 'ready' || live.status !== 'live') return 'The table opens once the connection is live.';
+  if (live.dealingIn) {
+    return live.table.seat === null && live.readerSeat !== null
+      ? `Taking seat ${String(live.readerSeat + 1)} for you, then dealing your first hand.`
+      : 'Dealing your first hand.';
+  }
   if (live.table.seat === null) {
     // The seat is whichever one is actually free, not a constant. At a room reached by invite code
     // seat 1 is the owner's, so naming it here would send the joiner at a seat they cannot have.
@@ -164,6 +254,27 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
   const { closed, table, setupError } = live;
   return (
     <>
+      {/*
+        First, above every other notice, and with its own heading.
+
+        This is not the server refusing the reader something — it is this page refusing the SERVER
+        something, and it happens for exactly one reason: a `state` frame carried hole cards for a
+        seat that is neither the reader's own nor one that showed down. See
+        `lib/hole-card-entitlement.ts` for why the frame is refused whole rather than stripped of the
+        cards, and `use-live-table.ts` for the sentence.
+
+        `role="alert"` for the same reason the refusals below have one — an assertive region is right
+        when the reader has to stop what they are doing, and a table that has silently stopped
+        dealing is the case that most needs saying out loud. It sits above `closed` because a reader
+        who sees both should read this one first: the disconnection is a consequence of it.
+      */}
+      {table.dataRefusal === null ? null : (
+        <div role="alert">
+          <Callout tone="warning" title="This table stopped: the server sent cards it should not have">
+            {table.dataRefusal}
+          </Callout>
+        </div>
+      )}
       {setupError === null ? null : (
         <Callout tone="warning" title="The table could not be prepared">
           {setupError}
@@ -184,13 +295,44 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
         socket. An alert fires on insertion, which is why the node is conditional rather than
         always-present-and-empty — the opposite of the rule for a polite region.
       */}
-      {table.notice === null ? null : (
+      {/*
+        One refusal gets its own panel, and it is the only one that needs one.
+
+        `enrolment_required` means this deployment serves a taught course and this account is not
+        in one that is running. Every other notice here is a momentary thing the reader can just
+        try again — a seat somebody took first, a hand already started — and the generic panel is
+        the right size for those. This one is permanent until somebody else acts, so the generic
+        heading ("The server refused something") would be the whole of what the reader learns, and
+        the button they pressed would look broken rather than refused.
+
+        The server's own sentence is shown unchanged and unlabelled by a code: it is the one place
+        in this app that already says what to do about it, and repeating "(enrolment_required)"
+        after it — which the generic branch does deliberately, so a reader can quote a code at
+        support — would put a machine token in the middle of the one message written for a person.
+
+        There is no "get access" control here, and there must not be. This software has no way to
+        take money, holds no amount, currency or price anywhere in its schema, and nobody reading
+        this page can enrol themselves: a button here could only lie about what pressing it does.
+        What is offered instead is the true alternative — everything else on the site is open.
+      */}
+      {table.notice !== null && table.noticeCode === 'enrolment_required' ? (
+        <div role="alert">
+          <Callout tone="warning" title="A seat at a table is part of a course">
+            <p>{table.notice}</p>
+            <p>
+              Nothing else on this site is affected. The lessons, the Scenario Lab, the glossary and the
+              Legends pages are open to everybody, and none of them needs a seat at a table.
+            </p>
+          </Callout>
+        </div>
+      ) : null}
+      {table.notice !== null && table.noticeCode !== 'enrolment_required' ? (
         <div role="alert">
           <Callout tone="warning" title="The server refused something">
             {table.notice}
           </Callout>
         </div>
-      )}
+      ) : null}
     </>
   );
 }
@@ -200,8 +342,22 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
  *
  * `signature` is what the focus effect watches: the set of controls currently on screen, as a
  * string. Watching a phase or a status instead would miss the case that actually bites — "Take
- * seat 1" being replaced by "Deal the next hand" happens inside a single `ready`/`live` pair, so
+ * seat 2" being replaced by "Deal the next hand" happens inside a single `ready`/`live` pair, so
  * neither of those values changes at the moment the focused button is removed.
+ *
+ * ## One primary path, and the private tables behind a disclosure
+ *
+ * The bot table is what almost every visitor came for, and it used to share a row, at equal weight,
+ * with "Start a private table to invite somebody to" and a whole join-by-code form — two flows that
+ * need a second person to mean anything. They are behind a `<details>` now: closed by default, a
+ * real `<summary>` so the keyboard and a screen reader get the disclosure for free, and inside the
+ * same focus rescue as the primary row, because pressing "Start a private table…" unmounts it just
+ * as pressing "Deal me in" does.
+ *
+ * The invite code goes in there too. For the bot table it is a code to a table with no free seat
+ * (see `FRIENDS_TABLE_REQUEST`), so showing it at the top was the loudest thing on the page and the
+ * least use; for a private table the reader pressed the button from inside the open disclosure, and
+ * it stays open because nothing here remounts it.
  */
 function ConnectionControls({
   live,
@@ -210,6 +366,7 @@ function ConnectionControls({
   const { phase, closed, table } = live;
   const isLive = live.status === 'live';
   const seated = table.seat !== null;
+  const manual = isLive && !live.dealingIn;
 
   const signature = [
     phase,
@@ -218,7 +375,9 @@ function ConnectionControls({
     seated ? 'seated' : 'standing',
     live.readerSeat === null ? 'full' : 'free',
     table.betweenHands ? 'between' : 'in-hand',
-    live.coachDuringHand ? 'coach' : 'no-coach',
+    live.coachOff === null ? 'coach' : 'no-coach',
+    live.dealingIn ? 'dealing-in' : 'manual',
+    live.join.state,
   ].join('/');
 
   /**
@@ -230,7 +389,7 @@ function ConnectionControls({
   const onFocusCapture = (): void => {
     hadFocus.current = true;
   };
-  const onBlurCapture = (event: FocusEvent<HTMLParagraphElement>): void => {
+  const onBlurCapture = (event: FocusEvent<HTMLDivElement>): void => {
     const next = event.relatedTarget;
     if (next !== null && !event.currentTarget.contains(next)) hadFocus.current = false;
   };
@@ -240,66 +399,103 @@ function ConnectionControls({
     if (!hadFocus.current) return;
     // Only when the browser has actually given up. If anything else legitimately holds focus — the
     // reader tabbed on while the socket was opening — it keeps it.
-    if (document.activeElement !== document.body && document.activeElement !== null) return;
+    //
+    // `browserAbandonedFocus` rather than a local `!== body && !== null`, which is what this was.
+    // `ActionBar` measured Chrome parking the caret on `<html>` after blurring a control, so a test
+    // that knows only `body` never fires — the same shape of stale copy that stopped `HandReplay`'s
+    // rescue from ever running. One definition, in the package that measured it.
+    if (!browserAbandonedFocus()) return;
     fallbackRef.current?.focus();
     hadFocus.current = false;
   }, [signature, fallbackRef]);
 
   return (
-    <p className="prl-btn-row" onBlurCapture={onBlurCapture} onFocusCapture={onFocusCapture}>
-      {phase === 'idle' || phase === 'failed' ? (
-        <Button variant="primary" onClick={live.start}>
-          {phase === 'failed' ? 'Try again' : 'Open the table'}
-        </Button>
-      ) : null}
+    <div className="prl-play__controls" onBlurCapture={onBlurCapture} onFocusCapture={onFocusCapture}>
+      <p className="prl-btn-row">
+        {phase === 'idle' || phase === 'failed' ? (
+          <Button variant="primary" onClick={live.start}>
+            {phase === 'failed' ? 'Try again' : 'Deal me in'}
+          </Button>
+        ) : null}
 
-      {/*
-        A second creation, not a variant of the first. The bot table fills five of its six seats, so
-        its invite code is a code to a table the server refuses everybody at — the private path needs
-        a room with seats left in it. See `FRIENDS_TABLE_REQUEST`.
-      */}
-      {phase === 'idle' || phase === 'ready' || phase === 'failed' ? (
-        <Button variant="secondary" onClick={live.startPrivateTable}>
-          Start a private table to invite somebody to
-        </Button>
-      ) : null}
+        {closed?.action === 'signIn' ? (
+          <Button variant="primary" onClick={live.startFreshTable}>
+            Start a guest session
+          </Button>
+        ) : null}
 
-      {closed?.action === 'signIn' ? (
-        <Button variant="primary" onClick={live.startFreshTable}>
-          Start a guest session
-        </Button>
-      ) : null}
+        {closed?.action === 'reload' ? (
+          <Button variant="primary" onClick={() => window.location.reload()}>
+            Reload this page
+          </Button>
+        ) : null}
 
-      {closed?.action === 'reload' ? (
-        <Button variant="primary" onClick={() => window.location.reload()}>
-          Reload this page
-        </Button>
-      ) : null}
+        {/*
+          Hidden while "Deal me in" is asking for the same things, so they cannot be pressed into a
+          second `sit` or a second deal. `DealIn` ends at `off` on every failure, which is what
+          brings them back.
+        */}
+        {manual && !seated && live.readerSeat !== null ? (
+          <Button variant="primary" onClick={live.sit}>
+            {`Take seat ${String(live.readerSeat + 1)}`}
+          </Button>
+        ) : null}
 
-      {isLive && !seated && live.readerSeat !== null ? (
-        <Button variant="primary" onClick={live.sit}>
-          {`Take seat ${String(live.readerSeat + 1)}`}
-        </Button>
-      ) : null}
+        {manual && seated ? (
+          <Button variant="primary" onClick={live.deal} disabled={!table.betweenHands}>
+            Deal the next hand
+          </Button>
+        ) : null}
 
-      {isLive && seated ? (
-        <Button variant="primary" onClick={live.deal} disabled={!table.betweenHands}>
-          Deal the next hand
-        </Button>
-      ) : null}
+        {isLive && seated ? (
+          <Button variant="secondary" onClick={live.stand}>
+            Stand up
+          </Button>
+        ) : null}
 
-      {isLive && seated ? (
-        <Button variant="secondary" onClick={live.stand}>
-          Stand up
-        </Button>
-      ) : null}
+        {isLive && seated && !table.betweenHands && live.coachOff === null ? (
+          <Button variant="ghost" onClick={live.askCoach}>
+            Refresh the analysis
+          </Button>
+        ) : null}
+      </p>
 
-      {isLive && seated && !table.betweenHands && live.coachDuringHand ? (
-        <Button variant="ghost" onClick={live.askCoach}>
-          Refresh the analysis
-        </Button>
-      ) : null}
-    </p>
+      <PlayWithSomebody live={live} />
+    </div>
+  );
+}
+
+/**
+ * The private-table flows, behind a disclosure. See `ConnectionControls` for why they are here, and
+ * why they stay inside its focus rescue.
+ */
+function PlayWithSomebody({ live }: ConnectionPanelProps): ReactElement {
+  const { phase } = live;
+  return (
+    <details className="prl-disclose">
+      <summary className="prl-disclose__summary">Play with somebody you know</summary>
+      <div className="prl-disclose__body">
+        <p className="prl-note">
+          A private table has seats left free for people rather than bots, and an invite code to share.
+          Nothing is dealt for you there: who sits where, and when a hand starts, is up to the people at the
+          table.
+        </p>
+        {/*
+          A second creation, not a variant of the first. The bot table fills five of its six seats,
+          so its invite code is a code to a table the server refuses everybody at — the private path
+          needs a room with seats left in it. See `FRIENDS_TABLE_REQUEST`.
+        */}
+        {phase === 'idle' || phase === 'ready' || phase === 'failed' ? (
+          <p className="prl-btn-row">
+            <Button variant="secondary" onClick={live.startPrivateTable}>
+              Start a private table to invite somebody to
+            </Button>
+          </p>
+        ) : null}
+        {live.inviteCode === null ? null : <InviteCode code={live.inviteCode} />}
+        <JoinByInviteCode live={live} />
+      </div>
+    </details>
   );
 }
 
@@ -449,7 +645,7 @@ function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
    * Where the caret lands when the control it was on is taken away.
    *
    * The status line, because it is the sentence that says what just changed — a reader who pressed
-   * "Take seat 1" and is put here hears "Live. Everything on this screen is the server's own view…"
+   * "Deal me in" and is put here hears "Live. Everything on this screen is the server's own view…"
    * rather than silence at the top of the document. `tabIndex={-1}` makes it a focus target for
    * script without adding a tab stop that does nothing on the way to the real controls.
    */
@@ -481,7 +677,26 @@ function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
         Nothing is hidden or shortened by that — see section 1.1 there.
       */}
       <div className="prl-play__connection-lines">
-        <p role="status" className="prl-note" ref={statusRef} tabIndex={-1}>
+        {/*
+          `aria-label` because this line is a PLACE THE CARET ARRIVES AT, not only a region that
+          speaks. `ConnectionControls` lands focus here every time a control it was on is removed —
+          "Deal me in", or "Take seat 2" at a table reached by code — and a `role="status"` takes no
+          name from its own contents, so the computed name was the empty string: a reader was moved
+          to a node the tree describes as an unnamed status. Measured by assertion 3.2's check in
+          `scripts/ax-assertions.mjs`, which failed on exactly this the first time it was run against
+          a live table, and it is the same lesson `ActionBar`'s in-flight line and `TableStage`'s
+          acknowledgement each carry a label for.
+
+          The label and the sentence deliberately say different things, as they do there: the label
+          names where the caret now is, and the sentence is what the transport is doing.
+        */}
+        <p
+          aria-label="Where the table has got to"
+          role="status"
+          className="prl-note"
+          ref={statusRef}
+          tabIndex={-1}
+        >
           {statusSentence(live)}
         </p>
 
@@ -500,10 +715,6 @@ function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
 
       <ConnectionNotices live={live} />
       <ConnectionControls live={live} fallbackRef={statusRef} />
-
-      {live.inviteCode === null ? null : <InviteCode code={live.inviteCode} />}
-
-      <JoinByInviteCode live={live} />
 
       {room === null ? null : (
         <dl className="prl-stat__pair prl-play__facts">
@@ -550,6 +761,7 @@ export function LiveTable({
         turnAnnouncement={table.turnAnnouncement}
         submission={table.submission}
         onAct={act}
+        idleMessage={IDLE_TABLE_MESSAGE}
         {...coachUnavailableProps(live)}
         {...(highlighted.length === 0
           ? {}

@@ -137,6 +137,7 @@ function affordableRaiseTask(overrides: Partial<CoachTask> = {}): CoachTask {
     },
     street: 'turn',
     pot: 120,
+    contestablePot: 120,
     toCall: 40,
     heroCommittedThisStreet: 0,
     heroStack: 800,

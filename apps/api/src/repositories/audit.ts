@@ -70,7 +70,11 @@ const EVENT_MAX = 64;
  * `audit_log_detail_has_no_forbidden_keys`, copied from migration 0001 and lower-cased.
  *
  * Copied rather than derived, so that a key added to the CHECK and not added here fails a test
- * instead of failing a live audit write. Held lower-cased because the CHECK's `?|` is exact and
+ * instead of failing a live audit write. **That test did not exist until 2026-08-27** — this
+ * sentence described one for months and nothing compared the two lists, so they could drift in
+ * exactly the way this paragraph promised they could not. `audit-forbidden-keys.test.ts` reads
+ * `pg_get_constraintdef` off the live database and holds this set to what PostgreSQL actually
+ * enforces, which is stronger than parsing a migration and survives any number of them. Held lower-cased because the CHECK's `?|` is exact and
  * this is not: `UserAgent` would satisfy the database and is still the thing we promised not to
  * store.
  */
@@ -89,6 +93,26 @@ const AUDIT_FORBIDDEN_KEYS: ReadonlySet<string> = new Set([
   'salt',
   'salts',
   'holecards',
+  // Widened by db/migrations/0007 to the spellings this codebase actually uses. `holecards` alone
+  // missed `hole_cards` — the column name in `prl.hand_seats`, and the first thing anybody writing
+  // SQL reaches for — as well as the four fields `poker-engine`'s `types.ts` calls the hand's
+  // secrets. Held to the database's own list by `apps/api/test/audit-forbidden-keys.test.ts`.
+  'holecard',
+  'hole_cards',
+  'hole_card',
+  'cards',
+  'holecardpositions',
+  'hole_card_positions',
+  'board',
+  'boardpositions',
+  'board_positions',
+  'decksalts',
+  'deck_salts',
+  'deckcursor',
+  'deck_cursor',
+  'deckorder',
+  'deck_order',
+  'reveal',
 ]);
 
 /**

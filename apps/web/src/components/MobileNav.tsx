@@ -41,6 +41,18 @@
  * system's surface ramp without fighting the UA — for a full-screen opaque sheet that is all
  * cost and no benefit.
  *
+ * ## …and `inert`, because `aria-modal` is a request and this is a fact
+ *
+ * `aria-modal="true"` says the rest of the page is out of scope; whether a reader acts on it is the
+ * reader's business, and a virtual cursor that does not honour it walks out of the sheet into a page
+ * that is not visible. Measured before this, with the sheet open at 390x844 on `/`: of 34
+ * content-bearing elements outside `.prl-sheet`, 29 were still non-ignored nodes in the computed
+ * accessibility tree — the skip link, the wordmark, `main`, its `h1`, every hero link. So while the
+ * sheet is open every subtree that is not the sheet is marked `inert`, which takes those nodes out
+ * of the accessibility tree, out of the tab order and out of pointer events at once. See
+ * `inertBackgroundOf` for which subtrees those are and which one is deliberately spared, and
+ * `scripts/ax-assertions.mjs` (`J7.4`) for the check that keeps it true.
+ *
  * ## Two ways the sheet can be dismissed without being clicked
  *
  * **A route change**, because the browser's back button navigates without telling this component
@@ -122,6 +134,58 @@ function tabbableWithin(root: HTMLElement): readonly HTMLElement[] {
 /** The attribute `globals.css` uses to lock scrolling while the sheet is open. */
 const NAV_OPEN_ATTRIBUTE = 'data-nav-open';
 
+/**
+ * What the background sweep below must NOT make `inert`.
+ *
+ * `script`/`style`/`link` are not content and inerting them means nothing; they are listed so the
+ * sweep's output is a set of real elements rather than a mix.
+ *
+ * `[data-prl-route-announcer]` is the exception that matters, and it is here for one reason: it is
+ * the only live region outside the sheet that still has something to say while the sheet is open,
+ * and an inert live region is a silent one. A reader who opens the menu and then presses the
+ * browser's BACK button gets a route change with the sheet still open — `MobileNav`'s own
+ * `pathname` effect is what closes it — and `RouteAnnouncer` is mounted above `.prl-app` in the
+ * root layout, so its effect runs BEFORE this component's on that commit. Inerting it would mean
+ * the announcement is written into a subtree assistive tech cannot see, and un-inerted a commit
+ * later it would be a region that arrives already holding its text, which announces nothing at all
+ * (assertion 3.3's defect, in a new place). It holds no text except in the instant after a
+ * navigation, so exempting it reveals nothing behind the sheet; `scripts/ax-assertions.mjs` asserts
+ * that this is the ONLY exemption and that the region is empty while the sheet is open.
+ */
+const INERT_EXEMPT = ['script', 'style', 'link', '[data-prl-route-announcer]'].join(',');
+
+/**
+ * Everything that is not the sheet, as the set of subtrees that can be marked `inert`.
+ *
+ * Walk from the sheet up to `<body>` and take every sibling on the way. That is the algorithm
+ * `<dialog>.showModal()` gets for free from the top layer, and it is the one thing this sheet
+ * cannot borrow from `<dialog>` — see the header for why it is not one.
+ *
+ * The sheet's own ANCESTORS are deliberately not in the set: `inert` is inherited and a descendant
+ * cannot opt out of it, so inerting `<header>` — which is where the trigger and the sheet live —
+ * would inert the sheet inside it and leave a modal nobody can operate. What that leaves reachable
+ * is the ancestor chain itself and nothing hanging off it. Measured by `J7.4` in Chrome 151 at
+ * 390x844 on `/` with the sheet open: of 188 content-bearing elements outside `.prl-sheet`, ZERO
+ * are non-ignored nodes in the computed accessibility tree, and the only container left in the tree
+ * is `<header aria-label="Site">` — a banner with no text of its own. Measured by hand in the same
+ * browser, all 28 focusable elements outside the sheet stopped being focusable.
+ */
+function inertBackgroundOf(sheet: HTMLElement): readonly HTMLElement[] {
+  const background: HTMLElement[] = [];
+  for (let node: HTMLElement = sheet; node !== document.body; ) {
+    const parent = node.parentElement;
+    if (parent === null) break;
+    for (const sibling of parent.children) {
+      if (sibling === node) continue;
+      if (!(sibling instanceof HTMLElement)) continue;
+      if (sibling.matches(INERT_EXEMPT)) continue;
+      background.push(sibling);
+    }
+    node = parent;
+  }
+  return background;
+}
+
 export interface MobileNavProps {
   /** The current route, from the header's `usePathname`, so both navs agree on what is current. */
   readonly pathname: string;
@@ -187,7 +251,31 @@ export function MobileNav(props: MobileNavProps): ReactElement {
     if (open) {
       root.setAttribute(NAV_OPEN_ATTRIBUTE, 'true');
       returnFocus.current = true;
+      // Focus first, `inert` second. The trigger is one of the elements about to be inerted and it
+      // is holding the caret right now — the reader just pressed Enter on it — and Chrome blurs a
+      // focused element the moment it becomes inert, which would drop the caret to `<body>` and
+      // leave a modal nobody is standing in.
       closeRef.current?.focus();
+      /**
+       * The background, made structurally unreachable rather than only declared out of scope.
+       *
+       * `aria-modal="true"` on the sheet is an INSTRUCTION to the reader, and whether it is honoured
+       * is the reader's business. Measured with the sheet open at 390x844 on `/`, before this: of 34
+       * content-bearing elements outside `.prl-sheet`, 29 were still non-ignored nodes in the
+       * computed accessibility tree — "Skip to main content", the wordmark, `main`, its `h1`, every
+       * hero link. A virtual cursor that ignores `aria-modal` walks straight into all of them, out
+       * of a surface whose whole point is that there is one way back. `inert` removes them from the
+       * tree, from the tab order and from pointer events, so the claim stops depending on the
+       * reader — which is also what makes certification assertion 7.4 machine-checkable.
+       *
+       * This does not replace the `focusin` trap below. `inert` is the guard for readers and for
+       * every browser that has it; the trap is what still holds if `inert` is unsupported, and it
+       * is the only thing watching the nodes this sweep deliberately leaves alone (see
+       * `INERT_EXEMPT`). They do not fight: an inert element cannot take focus, so the trap simply
+       * never fires for one.
+       */
+      const background = sheetRef.current === null ? [] : inertBackgroundOf(sheetRef.current);
+      for (const element of background) element.setAttribute('inert', '');
       /**
        * The backstop, and the half of the trap that is not about Tab.
        *
@@ -216,6 +304,12 @@ export function MobileNav(props: MobileNavProps): ReactElement {
       return () => {
         root.removeAttribute(NAV_OPEN_ATTRIBUTE);
         document.removeEventListener('focusin', onFocusIn);
+        // The list captured on open, not a fresh sweep: with the sheet closing, a re-derived set
+        // could differ from what was actually marked, and an element left `inert` behind a closed
+        // menu is a page the reader cannot use at all. React runs this cleanup BEFORE the `open ===
+        // false` branch below, so the trigger is focusable again by the time focus is handed back
+        // to it.
+        for (const element of background) element.removeAttribute('inert');
       };
     }
     if (returnFocus.current) {

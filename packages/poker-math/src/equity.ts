@@ -103,7 +103,32 @@ export interface EquityResult {
   readonly players: readonly PlayerEquity[];
   /** Boards enumerated (exact) or trials run (Monte Carlo). */
   readonly trials: number;
-  /** Distinct hand-vs-hand assignments considered. */
+  /**
+   * How many hand-vs-hand assignments this figure stands on — and **the two methods
+   * mean different things by it**, which is why this is not one sentence.
+   *
+   * - `exact-enumeration`: the LEGAL matchups actually enumerated. Every one of them
+   *   was dealt out and scored, so the number is exact and it is a count of work done.
+   * - `monte-carlo`: an UPPER BOUND — the product of the range sizes, `AA` against `AA`
+   *   being 6 x 6 = 36 — taken before card conflicts remove the assignments that cannot
+   *   exist. Only 6 of those 36 are legal (each `AA` combo leaves exactly one disjoint
+   *   `AA` combo), and the sampler never offers an illegal one to the evaluator: it
+   *   rejects and redraws. So on this path the field is neither a count of legal
+   *   matchups nor a count of assignments sampled.
+   *
+   * This comment used to say "distinct hand-vs-hand assignments considered" for both,
+   * and on the Monte Carlo path that was false in the direction that flatters the
+   * result: 36 where 6 is the truth, and a wider gap the more the ranges overlap.
+   * Nothing reads the field today, which is exactly why it was worth writing down
+   * rather than leaving for the first consumer to discover.
+   *
+   * The bound is what the Monte Carlo path publishes rather than the legal count
+   * because counting the legal ones means running `countMatchups`, which enumerates —
+   * and enumerating is the work this path exists to avoid. Paying for an enumeration to
+   * annotate a result that was sampled precisely because enumeration was too expensive
+   * would be the wrong trade for a field with no reader. `countMatchups(spec)` is
+   * exported for a caller that wants the legal figure and is willing to pay for it.
+   */
   readonly matchups: number;
   /** Present only for Monte Carlo. Exact enumeration has no sampling error. */
   readonly confidence: EquityConfidence | null;
@@ -607,6 +632,10 @@ export function monteCarloEquity(spec: EquitySpec, options: EquityOptions = {}):
     method: 'monte-carlo',
     players: tally.toPlayerEquities(spec.players.map((player) => player.label)),
     trials: tally.count,
+    // The UPPER bound on legal matchups, not the legal count: card conflicts between
+    // the ranges are not subtracted here, because subtracting them is `countMatchups`
+    // and that is the enumeration this path exists to avoid. `EquityResult.matchups`
+    // documents the asymmetry with the exact path, which reports what it enumerated.
     matchups: rangeCombos.reduce((product, combos) => product * combos.length, 1),
     confidence: { level: 0.95, halfWidthPoints: halfWidth * 100, samples: tally.count },
     elapsedMs: performance.now() - started,

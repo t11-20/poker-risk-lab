@@ -46,9 +46,11 @@ export {
   CoachError,
   type CoachInput,
   type DescribedSpot,
+  deriveContestablePot,
   deriveLegalActions,
   maximumTo,
   minimumAggressiveTo,
+  type PricedSpot,
   type RuleOfThumbRefusal,
   ruleOfThumbFor,
   ruleOfThumbRefusalFor,
@@ -56,6 +58,17 @@ export {
   type Street,
   summariseCoachReport,
 } from './coach.ts';
+export {
+  type AssumedRange,
+  type CoachPolicy,
+  type CoachRefusal,
+  type CoachSpot,
+  type CoachSpotReading,
+  coachInputFor,
+  coachSpotForView,
+  expandAssumedRange,
+  LIVE_COACH_POLICY,
+} from './coach-view.ts';
 export {
   bestCandidate,
   bestMeasuredCandidate,
@@ -180,6 +193,7 @@ export {
   type SprResult,
   StackError,
   sizingLadder,
+  sprBandFor,
   stackInBigBlinds,
   stackToPotRatio,
 } from './stacks.ts';

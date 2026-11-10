@@ -10,7 +10,8 @@
  * engine's module graph contains the shuffler and the deck commitment. Doing the projection in this
  * server component means the finished `PlayerView` crosses to the client as plain data and the client
  * bundle links against none of it. Same reasoning as the hand replay; the only place the engine is
- * deliberately allowed into the browser is `CommitmentVerifier`.
+ * deliberately allowed into the browser is `lib/deck-proof.ts`, the client-side deck-proof check
+ * behind `CommitmentVerifier`.
  *
  * ## Three different kinds of "not found", and only two of them are 404s
  *
@@ -39,7 +40,7 @@ import { ScenarioStage } from '../../../components/ScenarioStage.tsx';
 import { LAB_SCENARIO_SUMMARIES, scenarioFixture } from '../../../fixtures/scenarios.ts';
 import { API_PATHS, apiGet, isApiUnavailable, isMissingResource, safeFetch } from '../../../lib/api.ts';
 import { difficultyLabel, topicLabel } from '../../../lib/lab-labels.ts';
-import { scenarioToPlayerView } from '../../../lib/scenario-view.ts';
+import { scenarioSeatName, scenarioToPlayerView } from '../../../lib/scenario-view.ts';
 import { NotFoundBody } from '../../not-found.tsx';
 import '../../../styles/page.css';
 import '../../../styles/lab.css';
@@ -187,7 +188,7 @@ export default async function ScenarioPage({
   if (table === null) return <NotFoundBody />;
 
   const seatNames: Record<number, string> = {};
-  for (const seat of scenario.seats) seatNames[seat.seat] = seat.label;
+  for (const seat of scenario.seats) seatNames[seat.seat] = scenarioSeatName(seat);
 
   return (
     <div className="prl-container prl-lab-page">

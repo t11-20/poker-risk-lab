@@ -58,6 +58,12 @@ import {
 } from '@prl/poker-math';
 import type { MetricFormat } from '@prl/ui';
 import { formatChips, formatPoints, formatProbability, formatUnits, NOT_A_PROBABILITY } from '@prl/ui';
+import type { QuizUnit as LeafQuizUnit } from './quiz-tolerance.ts';
+import {
+  toleranceDecimals,
+  QUIZ_UNIT_DECIMALS as UNIT_DECIMALS,
+  QUIZ_UNIT_WORDS as UNIT_WORDS,
+} from './quiz-tolerance.ts';
 
 /** What unit a computed figure is natively in. See the module comment. */
 export type CalculationScale = 'fraction' | 'points' | 'chips' | 'ratio' | 'count' | 'hands';
@@ -817,7 +823,7 @@ export function computeCalculation(calculation: LiveCalculation): CalculationOut
 // Numeric quiz answers
 // ---------------------------------------------------------------------------
 
-type QuizUnit = Extract<QuizQuestion, { kind: 'numeric' }>['unit'];
+type QuizUnit = LeafQuizUnit;
 
 /**
  * Converts a figure from its native scale into the unit a question asks for.
@@ -903,33 +909,51 @@ export function expectedAnswerFor(
   return expectedFromResult(outcome.result, question);
 }
 
-/** Whether an answer falls inside the question's stated tolerance. Inclusive at the boundary. */
-export function withinTolerance(answer: number, expected: ExpectedAnswer): boolean {
-  if (!Number.isFinite(answer)) return false;
-  return Math.abs(answer - expected.value) <= Math.abs(expected.tolerance);
-}
-
-/** The unit word shown beside a numeric input and its expected value. */
-export const QUIZ_UNIT_WORDS: Readonly<Record<QuizUnit, string>> = {
-  percent: '%',
-  chips: 'units',
-  ratio: 'to 1',
-  count: 'cards',
-  hands: 'hands',
-};
-
-/** How many decimals a unit is worth showing. A count is never fractional. */
-export const QUIZ_UNIT_DECIMALS: Readonly<Record<QuizUnit, number>> = {
-  percent: 1,
-  chips: 1,
-  ratio: 1,
-  count: 0,
-  hands: 0,
-};
+/**
+ * Re-exported from `lib/quiz-tolerance.ts` rather than defined here.
+ *
+ * They moved to a leaf module so `formatTolerance` below could be tested: this file imports runtime
+ * values from `@prl/ui`, whose entry point re-exports `.tsx`, and nothing that does can be loaded
+ * by `node --test` in this repository. See that file's header for the defect that made it necessary
+ * — a hint that stated a tolerance twice the size of the one the grader applies.
+ *
+ * `withinTolerance` went the same way and for the same reason, once it turned out to have a defect
+ * of its own: the band it ACCEPTED was narrower than the band the hint STATES, for some magnitudes,
+ * and no test in this app could reach it to say so. `quiz-tolerance.test.ts` now drives the real
+ * function rather than a restatement of it.
+ */
+export { QUIZ_UNIT_DECIMALS, QUIZ_UNIT_WORDS, withinTolerance } from './quiz-tolerance.ts';
 
 /** A figure rendered for reading, in the unit the question declared. */
 export function formatQuizValue(value: number, unit: QuizUnit): string {
-  return `${formatChips(value, { decimals: QUIZ_UNIT_DECIMALS[unit] })} ${QUIZ_UNIT_WORDS[unit]}`;
+  return `${formatChips(value, { decimals: UNIT_DECIMALS[unit] })} ${UNIT_WORDS[unit]}`;
+}
+
+/**
+ * The question's tolerance, at enough precision to be TRUE.
+ *
+ * ## The defect this exists for
+ *
+ * The hint under the numeric field used to render the tolerance with `QUIZ_UNIT_DECIMALS`, which is
+ * the number of decimals a FIGURE in that unit is worth showing. For `count` and `hands` that is
+ * zero, and a tolerance is not a figure of the same size: `counting-outs-q4` declares
+ * `tolerance: 0.5`, `(0.5).toFixed(0)` is `"1"`, and the field said
+ *
+ *     "Anything within 1 cards of the computed figure is accepted."
+ *
+ * Measured on `/learn/counting-outs` in Chrome 151, stepping to the numeric question. The rule
+ * `withinTolerance` actually applies is `|answer − expected| <= 0.5`, so only the exact integer is
+ * accepted: a learner who answered 8 to an answer of 9 did precisely what the hint told them was
+ * allowed and was refused — by a sentence that had rounded its own rule to twice its size.
+ *
+ * So the tolerance is shown with one more decimal than the unit whenever the unit's own precision
+ * cannot represent it. Rounding a figure is a presentation choice; rounding the RULE the figure is
+ * checked against is a false statement about what will be accepted.
+ */
+export function formatTolerance(tolerance: number, unit: QuizUnit): string {
+  return formatChips(tolerance, {
+    decimals: toleranceDecimals(tolerance, UNIT_DECIMALS[unit]),
+  });
 }
 
 /** Metric props for a figure: the one place a scale becomes a rendering. */

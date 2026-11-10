@@ -1,5 +1,20 @@
 # Production-readiness report — Poker Risk Lab
 
+> ## SUPERSEDED — this is a record of 2026-08-20, not a description of the branch
+>
+> It audits `c42486a0`, which is **109 commits behind** the current head, and every verdict below
+> was true of that commit. Read it as history: what was found on that date and what was done about
+> it. Several things it records as open have since been closed, and several gates it names have
+> since grown or been added.
+>
+> **The current state is [`final-readiness-report.md`](production/final-readiness-report.md)**,
+> which is joined to the release manifest by a test and re-frozen when the candidate moves. To
+> review the branch as a whole, start at [`HANDOVER.md`](HANDOVER.md).
+>
+> This file is kept rather than deleted because it is the independent audit that produced a FAIL and
+> the findings that followed it — deleting the record of a failure leaves only the record of the fix.
+> The two file names are confusingly close, which is why this banner exists.
+
 **Auditor:** independent of the agents that built this commit. Prior audit markdown is not evidence.
 
 **SHA reviewed:** `c42486a0b61f1bf034941a6efa68149dd26a6583`

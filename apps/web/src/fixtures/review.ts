@@ -283,7 +283,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           oddsRatio: 1.5,
           equitySurplus: -0.12311666666666654,
           explanation:
-            "Hero risks 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before hero's own 20 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 27.7% equity, a -12.3 point shortfall.",
+            "Hero risks 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before hero's own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.7% equity is 12.3 points short of it.",
         },
         candidates: [
           {
@@ -308,7 +308,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             cost: 45,
             ev: -0.7525833333333249,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2769 x (30 + 20 + 2 x 25) - 45 ] = 10.5 + (-11.25) = -0.75 chips. Risks 45 to win 30. Raising by 25 is half pot of the 50 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 25, and has to continue with 66.7% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2769 x (30 + 20 + 2 x 25) - 45 ] = 10.5 + (-11.25) = -0.75 chips. Risks 45 to win 30. Raising by 25 is half pot of the 50 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 25, and has to continue with 40% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.2768833333333335,
           },
@@ -318,7 +318,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             cost: 57,
             ev: -4.233203333333323,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2769 x (30 + 20 + 2 x 37) - 57 ] = 10.5 + (-14.73) = -4.23 chips. Risks 57 to win 30. Raising by 37 is three quarters pot of the 50 that would be in the middle once you call. A caller needs 29.8% equity to break even on the extra 37, and has to continue with 57.5% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2769 x (30 + 20 + 2 x 37) - 57 ] = 10.5 + (-14.73) = -4.23 chips. Risks 57 to win 30. Raising by 37 is three quarters pot of the 50 that would be in the middle once you call. A caller needs 29.8% equity to break even on the extra 37, and has to continue with 34.5% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.2768833333333335,
           },
@@ -328,7 +328,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             cost: 1000,
             ev: -277.7519249999998,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2769 x (30 + 20 + 2 x 980) - 1000 ] = 10.5 + (-288.25) = -277.75 chips. Risks 1000 to win 30. Raising by 980 puts your whole remaining stack in. A caller needs 48.8% equity to break even on the extra 980, and has to continue with 4.9% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2769 x (30 + 20 + 2 x 980) - 1000 ] = 10.5 + (-288.25) = -277.75 chips. Risks 1000 to win 30. Raising by 980 puts your whole remaining stack in. A caller needs 48.8% equity to break even on the extra 980, and has to continue with 2.9% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.2768833333333335,
           },
@@ -499,7 +499,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             cost: 130,
             ev: 93.57631157388867,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.4332 x (195 + 65 + 2 x 65) - 130 ] = 68.25 + 25.33 = 93.58 chips. Risks 130 to win 195. Raising by 65 is one quarter pot of the 260 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 65, and has to continue with 80% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.4332 x (195 + 65 + 2 x 65) - 130 ] = 68.25 + 25.33 = 93.58 chips. Risks 130 to win 195. Raising by 65 is one quarter pot of the 260 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 65, and has to continue with 60% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.43323988786543854,
           },
@@ -509,7 +509,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             cost: 238,
             ev: 84.20319183019626,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.4332 x (195 + 65 + 2 x 173) - 238 ] = 68.25 + 15.95 = 84.2 chips. Risks 238 to win 195. Raising by 173 is two thirds pot of the 260 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 173, and has to continue with 60% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.4332 x (195 + 65 + 2 x 173) - 238 ] = 68.25 + 15.95 = 84.2 chips. Risks 238 to win 195. Raising by 173 is two thirds pot of the 260 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 173, and has to continue with 45% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.43323988786543854,
           },
@@ -519,7 +519,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             cost: 940,
             ev: 23.27791349619543,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.4332 x (195 + 65 + 2 x 875) - 940 ] = 68.25 + (-44.97) = 23.28 chips. Risks 940 to win 195. Raising by 875 puts your whole remaining stack in. A caller needs 43.5% equity to break even on the extra 875, and has to continue with 22.9% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.4332 x (195 + 65 + 2 x 875) - 940 ] = 68.25 + (-44.97) = 23.28 chips. Risks 940 to win 195. Raising by 875 puts your whole remaining stack in. A caller needs 43.5% equity to break even on the extra 875, and has to continue with 17.2% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.43323988786543854,
           },
@@ -574,7 +574,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           'The pot is laying you 3.0 to 1, so you need 25.0% to break even on a call. That number depends only on the price — not on your cards.',
           'Notice the split: 8 clean and 7 dirty, out of 15 outs in total. A card that improves you is not the same as a card that wins you the hand — an opponent who is behind after it lands can still draw out on the last card.',
           'The rule of 2 and 4 gives 32% on your 8 cards of clean outs, overstating the exact chance of hitting one of them by 0.5 points. Your equity here is 43.3%, which is a different question again: hitting is not the same as winning.',
-          'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
+          'A profitable call can still lose more often than it wins: you are under 50% here and the price is lower than that. Losing this hand would not make the call wrong.',
         ],
       },
     },
@@ -668,7 +668,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             cost: 260,
             ev: 130.44583163473297,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 390 + 0.65 x [ 0.3214 x (390 + 130 + 2 x 130) - 260 ] = 136.5 + (-6.05) = 130.45 chips. Risks 260 to win 390. Raising by 130 is one quarter pot of the 520 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 130, and has to continue with 80% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 390 + 0.65 x [ 0.3214 x (390 + 130 + 2 x 130) - 260 ] = 136.5 + (-6.05) = 130.45 chips. Risks 260 to win 390. Raising by 130 is one quarter pot of the 520 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 130, and has to continue with 60% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.32139217284957194,
           },
@@ -678,7 +678,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             cost: 476,
             ev: 80.2927537708928,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 390 + 0.65 x [ 0.3214 x (390 + 130 + 2 x 346) - 476 ] = 136.5 + (-56.21) = 80.29 chips. Risks 476 to win 390. Raising by 346 is two thirds pot of the 520 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 346, and has to continue with 60% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 390 + 0.65 x [ 0.3214 x (390 + 130 + 2 x 346) - 476 ] = 136.5 + (-56.21) = 80.29 chips. Risks 476 to win 390. Raising by 346 is two thirds pot of the 520 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 346, and has to continue with 45% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.32139217284957194,
           },
@@ -688,7 +688,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             cost: 875,
             ev: -12.35112617203427,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 390 + 0.65 x [ 0.3214 x (390 + 130 + 2 x 745) - 875 ] = 136.5 + (-148.85) = -12.35 chips. Risks 875 to win 390. Raising by 745 puts your whole remaining stack in. A caller needs 37.1% equity to break even on the extra 745, and has to continue with 41.1% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 390 + 0.65 x [ 0.3214 x (390 + 130 + 2 x 745) - 875 ] = 136.5 + (-148.85) = -12.35 chips. Risks 875 to win 390. Raising by 745 puts your whole remaining stack in. A caller needs 37.1% equity to break even on the extra 745, and has to continue with 30.8% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.32139217284957194,
           },
@@ -741,7 +741,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           'The pot is laying you 3.0 to 1, so you need 25.0% to break even on a call. That number depends only on the price — not on your cards.',
           'The rule of 2 and 4 gives 24% on your 12 cards of clean outs, understating the exact chance of hitting one of them by 2.1 points. Your equity here is 32.1%, which is a different question again: hitting is not the same as winning.',
           'At an SPR of 1.9 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
-          'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
+          'A profitable call can still lose more often than it wins: you are under 50% here and the price is lower than that. Losing this hand would not make the call wrong.',
         ],
       },
     },
@@ -823,7 +823,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             cost: 430,
             ev: 856.3731707317073,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 720 + 0.65 x [ 0.9854 x (720 + 200 + 2 x 230) - 430 ] = 252 + 604.37 = 856.37 chips. Risks 430 to win 720. Raising by 230 is one quarter pot of the 920 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 230, and has to continue with 80% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 720 + 0.65 x [ 0.9854 x (720 + 200 + 2 x 230) - 430 ] = 252 + 604.37 = 856.37 chips. Risks 430 to win 720. Raising by 230 is one quarter pot of the 920 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 230, and has to continue with 62.6% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.9853658536585366,
           },
@@ -833,7 +833,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             cost: 506,
             ev: 904.3273170731707,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 720 + 0.65 x [ 0.9854 x (720 + 200 + 2 x 306) - 506 ] = 252 + 652.33 = 904.33 chips. Risks 506 to win 720. Raising by 306 is one third pot of the 920 that would be in the middle once you call. A caller needs 20% equity to break even on the extra 306, and has to continue with 75% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 720 + 0.65 x [ 0.9854 x (720 + 200 + 2 x 306) - 506 ] = 252 + 652.33 = 904.33 chips. Risks 506 to win 720. Raising by 306 is one third pot of the 920 that would be in the middle once you call. A caller needs 20% equity to break even on the extra 306, and has to continue with 58.7% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.9853658536585366,
           },
@@ -843,7 +843,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             cost: 745,
             ev: 1055.130487804878,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 720 + 0.65 x [ 0.9854 x (720 + 200 + 2 x 545) - 745 ] = 252 + 803.13 = 1055.13 chips. Risks 745 to win 720. Raising by 545 puts your whole remaining stack in. A caller needs 27.1% equity to break even on the extra 545, and has to continue with 62.8% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 720 + 0.65 x [ 0.9854 x (720 + 200 + 2 x 545) - 745 ] = 252 + 803.13 = 1055.13 chips. Risks 745 to win 720. Raising by 545 puts your whole remaining stack in. A caller needs 27.1% equity to break even on the extra 545, and has to continue with 49.1% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.9853658536585366,
           },
@@ -894,7 +894,6 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         teachingNotes: [
           'The pot is laying you 3.6 to 1, so you need 21.7% to break even on a call. That number depends only on the price — not on your cards.',
           'At an SPR of 0.8 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later.',
-          'A profitable call still loses more often than it wins whenever the break-even point is under 50%. Losing this hand would not make the call wrong.',
         ],
       },
     },
@@ -1021,7 +1020,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
           oddsRatio: 1.5,
           equitySurplus: -0.12216666666666665,
           explanation:
-            "Hero risks 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before hero's own 20 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 27.8% equity, a -12.2 point shortfall.",
+            "Hero risks 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before hero's own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.8% equity is 12.2 points short of it.",
         },
         candidates: [
           {
@@ -1046,7 +1045,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
             cost: 45,
             ev: -0.6908333333333303,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2778 x (30 + 20 + 2 x 25) - 45 ] = 10.5 + (-11.19) = -0.69 chips. Risks 45 to win 30. Raising by 25 is half pot of the 50 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 25, and has to continue with 66.7% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2778 x (30 + 20 + 2 x 25) - 45 ] = 10.5 + (-11.19) = -0.69 chips. Risks 45 to win 30. Raising by 25 is half pot of the 50 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 25, and has to continue with 40% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.2778333333333334,
           },
@@ -1056,7 +1055,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
             cost: 57,
             ev: -4.15663333333333,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2778 x (30 + 20 + 2 x 37) - 57 ] = 10.5 + (-14.66) = -4.16 chips. Risks 57 to win 30. Raising by 37 is three quarters pot of the 50 that would be in the middle once you call. A caller needs 29.8% equity to break even on the extra 37, and has to continue with 57.5% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2778 x (30 + 20 + 2 x 37) - 57 ] = 10.5 + (-14.66) = -4.16 chips. Risks 57 to win 30. Raising by 37 is three quarters pot of the 50 that would be in the middle once you call. A caller needs 29.8% equity to break even on the extra 37, and has to continue with 34.5% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.2778333333333334,
           },
@@ -1066,7 +1065,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
             cost: 1000,
             ev: -276.51075,
             derivation:
-              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2778 x (30 + 20 + 2 x 980) - 1000 ] = 10.5 + (-287.01) = -276.51 chips. Risks 1000 to win 30. Raising by 980 puts your whole remaining stack in. A caller needs 48.8% equity to break even on the extra 980, and has to continue with 4.9% of their range for a raise of this size not to print automatically.',
+              'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 30 + 0.65 x [ 0.2778 x (30 + 20 + 2 x 980) - 1000 ] = 10.5 + (-287.01) = -276.51 chips. Risks 1000 to win 30. Raising by 980 puts your whole remaining stack in. A caller needs 48.8% equity to break even on the extra 980, and has to continue with 2.9% of their range for a raise of this size not to print automatically.',
             foldEquityAssumed: 0.35,
             potShareIfCalled: 0.2778333333333334,
           },

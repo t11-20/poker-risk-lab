@@ -21,16 +21,18 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { WS_CLOSE, WS_LIMITS } from '@prl/contracts';
+import { type CoachReport, WS_CLOSE, WS_LIMITS } from '@prl/contracts';
 import {
   applyAction,
   createDeterministicRandomForTests,
   createSecureRandom,
   legalActions,
+  type PlayerView,
   parseCards,
   redactFor,
   startHand,
 } from '@prl/poker-engine';
+import { buildCoachReport, coachInputFor, coachSpotForView, LIVE_COACH_POLICY } from '@prl/poker-math';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import { type AppConfig, type EnvRecord, loadConfig } from '../src/config.ts';
@@ -40,7 +42,7 @@ import { buildHypotheticalState } from '../src/rooms/bots.ts';
 import { RoomRegistry } from '../src/rooms/registry.ts';
 import { createManualClock, type ManualClock } from '../src/rooms/timers.ts';
 import { compileFrameValidator, evaluateUpgrade } from '../src/ws/hub.ts';
-import { coachForView, type SocketSink, WsRouter } from '../src/ws/router.ts';
+import { coachTaskForView, type SocketSink, WsRouter } from '../src/ws/router.ts';
 // Shared with `test/ws-socket.test.ts`, which drives the same protocol over a real socket. Two
 // copies of this fake would be two different servers to reason about.
 import { seatingOnlyStore } from './helpers/live-room.ts';
@@ -377,6 +379,84 @@ describe('the handshake', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Membership, after the handshake
+// ---------------------------------------------------------------------------
+
+/**
+ * `hello` checks membership once. Leaving the room has to reach the socket that check let in.
+ *
+ * ## The defect
+ *
+ * `POST /rooms/:roomId/leave` drops the membership durably and in memory, and `registry.require`
+ * then refuses a fresh `hello` with `room_not_found_or_not_permitted` — which is what made this
+ * look closed. The socket the departed learner already held kept receiving the private table.
+ * Measured against the shipped code, over a real socket, after `leaveRoom` for that learner:
+ *
+ *     ex-member's socket      -> {"type":"event","event":{"kind":"playerJoined",…}}
+ *                             -> {"type":"state","room":{…"members":[…]},…}
+ *     ex-member's fresh hello -> {"type":"error","error":{"code":"room_not_found_or_not_permitted"}}
+ *
+ * An invite-only table is invite-only for the duration and not only at the door: those frames
+ * carry the roster, the seats, the stacks, and once a hand is dealt the spectator's view of it.
+ *
+ * ## Both directions
+ *
+ * The second test is the control that matters more than the first. A router that closed every
+ * socket on every broadcast would pass "the ex-member is closed" and destroy the product, so the
+ * member who stayed is asserted to still be there, still receiving state, and never closed.
+ */
+describe('a socket whose membership has ended', () => {
+  it('is closed rather than sent another frame from the table it left', async () => {
+    const test = await harness({ seated: false });
+    const stays = connect(test, 'usr_a', 'Ada');
+    const leaves = connect(test, 'usr_b', 'Bo');
+    const framesAtDeparture = leaves.recorded.frames.length;
+
+    await test.registry.leaveRoom(test.roomId, 'usr_b');
+    // Anything at all that makes the table speak. `sit` is the cheapest.
+    test.router.handleFrame(
+      stays.connection,
+      JSON.stringify({ type: 'sit', seat: 0, requestId: 'req-abcdefgh' }),
+    );
+    await settle();
+
+    assert.deepEqual(
+      leaves.recorded.frames.slice(framesAtDeparture),
+      [],
+      'a learner who has left the table received another frame from it',
+    );
+    assert.equal(
+      leaves.recorded.closes.at(0)?.code,
+      WS_CLOSE.forbidden,
+      'the departed socket must be closed 4403, not left attached to the room',
+    );
+    await test.app.close();
+  });
+
+  it('leaves everybody who is still a member exactly where they were', async () => {
+    const test = await harness({ seated: false });
+    const stays = connect(test, 'usr_a', 'Ada');
+    const leaves = connect(test, 'usr_b', 'Bo');
+    const framesBefore = stays.recorded.frames.length;
+
+    await test.registry.leaveRoom(test.roomId, 'usr_b');
+    test.router.handleFrame(
+      stays.connection,
+      JSON.stringify({ type: 'sit', seat: 0, requestId: 'req-abcdefgh' }),
+    );
+    await settle();
+
+    assert.equal(leaves.recorded.closes.length, 1, 'the departure is the thing under test');
+    assert.equal(stays.recorded.closes.length, 0, 'a member who stayed was closed');
+    assert.ok(stays.recorded.frames.length > framesBefore, 'a member who stayed stopped receiving the table');
+    const state = lastOf(stays.recorded, 'state');
+    assert.ok(state !== null, 'a member who stayed received no state frame');
+    assert.equal((state['room'] as { id: string }).id, test.roomId);
+    await test.app.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Limits
 // ---------------------------------------------------------------------------
 
@@ -633,7 +713,14 @@ describe('per-recipient redaction', () => {
 // The Coach over a socket
 // ---------------------------------------------------------------------------
 
-describe('coachForView', () => {
+/** A report from a seat's own view, on this thread, through the reader both clients share. */
+function coachHere(view: PlayerView, samples: number): CoachReport {
+  const reading = coachSpotForView(view, { ...LIVE_COACH_POLICY, samples });
+  assert.ok(reading.kind === 'spot', `no decision in this view: ${JSON.stringify(reading)}`);
+  return buildCoachReport(coachInputFor(reading.spot));
+}
+
+describe('the Coach read off a view', () => {
   it('builds a report from a seat’s own view, with its assumptions stated', () => {
     // A hypothetical river spot, so the equity is an exact enumeration and this test is fast.
     const state = buildHypotheticalState({
@@ -647,7 +734,7 @@ describe('coachForView', () => {
       bigBlind: 10,
     });
     const view = redactFor(state, { viewerSeat: 0 });
-    const report = coachForView(view, { samples: 200 });
+    const report = coachHere(view, 200);
 
     assert.equal(report.street, 'river');
     assert.equal(report.toCall, 100);
@@ -669,7 +756,7 @@ describe('coachForView', () => {
     });
     const spectator = redactFor(state, { viewerSeat: null });
     assert.throws(
-      () => coachForView(spectator, { samples: 200 }),
+      () => coachTaskForView(spectator, { samples: 200 }),
       (error: unknown) => error instanceof AppError && error.code === 'not_seated',
     );
   });
@@ -705,7 +792,7 @@ describe('coachForView', () => {
     assert.deepEqual([...offered].sort(), ['call', 'fold'], 'the engine offers no aggression here');
 
     const view = redactFor(state, { viewerSeat: 2 });
-    const report = coachForView(view, { samples: 400 });
+    const report = coachHere(view, 400);
 
     // Hero can plainly afford a raise; that was the whole of the old guard.
     const own = view.seats.find((seat) => seat.isSelf);
@@ -731,7 +818,7 @@ describe('coachForView', () => {
     const bystander = redactFor(state, { viewerSeat: 1 });
     assert.deepEqual([...bystander.legalActions], [], 'the seat that is not to act is offered nothing');
     assert.throws(
-      () => coachForView(bystander, { samples: 200 }),
+      () => coachTaskForView(bystander, { samples: 200 }),
       (error: unknown) => error instanceof AppError && error.code === 'hand_not_active',
     );
   });

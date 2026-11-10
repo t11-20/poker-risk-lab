@@ -14,6 +14,50 @@
  * `docs/production/legal-review-requirements.md`. The distinction is the point of the page: a
  * reader must never mistake a placeholder for a reviewed term, and neither must a deployer.
  *
+ * ## Why §7 and §8 are two sections and not the one that used to be here
+ *
+ * §7 read, in full: *"This service is provided free of charge and with no promise that it will be
+ * available, that your data will survive, or that any particular feature will continue to exist. It
+ * may be taken down, reset or changed at any time by whoever runs it."* Every promise it withheld
+ * was withheld **on the basis of the first six words**, and the sentence was true — an exhaustive
+ * search of this repository (`docs/production/legal-register.md` §1) found no route by which money
+ * could be taken and no way to tell a paying reader from any other. (That phrasing is deliberate:
+ * `test/legal-pages.test.ts` sweeps this file for the vocabulary of a money-moving integration, and
+ * this page is not on its reviewed-exemption list. A legal page is a plausible place for somebody to
+ * describe a buying flow in prose, so it is worth a synonym to keep the file in scope.)
+ *
+ * Then the schema grew a record of who is enrolled in a course, on whose authority, against an
+ * external reference. `test/legal-pages.test.ts` fired on it, which is what it was built to do.
+ *
+ * The trap is to treat that as a copy-edit. Swapping "free of charge" for "for a fee" leaves a
+ * document promising a paying student nothing at all — worse than the contradiction it replaces,
+ * because it reads as deliberate. And the subtler trap is to assume the fee: **an enrolment record
+ * does not establish that money changed hands.** A scholarship cohort, an employer-funded class and
+ * a paid course produce identical rows, because the grant happens out of band and nothing in this
+ * schema can hold an amount. So the honest split is by *who is competent to state the thing*:
+ *
+ *  * **§7** is a fact about this software — what an enrolment record contains, and the fact that no
+ *    column here can hold a price. Checkable against `db/migrations`, and checked.
+ *  * **§8** keeps the technical half of the old clause, which is still true and still a description
+ *    of how the thing is built, and then says outright that whether the operator may exercise any of
+ *    it without owing the reader something is *not settled by this page*.
+ *  * Both commercial halves — what the enrolment bought, and what an interruption or a cancellation
+ *    is worth — go to `COUNSEL_CLAUSES` as `enrolment-and-fees` and `refunds-and-cancellation`,
+ *    rather than being asserted by the people who wrote the software. That is the whole mechanism
+ *    this page already had; the change is that it is now pointed at the right two questions.
+ *
+ * `test/legal-pages.test.ts` group *"what /terms says about money"* now reads this page to decide
+ * which of the two postures it is in, and holds the page and `db/migrations` to the same answer in
+ * both directions. Neither can move alone.
+ *
+ * One consequence of that is worth knowing before editing §8, because it looks like timidity and is
+ * not: **§8 describes the clause it replaced instead of quoting it.** The draft did quote it, and the
+ * posture reader — which decides what this page says by looking for that exact sentence — read the
+ * historical quotation as a live claim and reported the page as saying both things at once. A
+ * detector keyed to a sentence cannot tell a claim from a quotation of one, so the sentence must
+ * appear on this page exactly when it is meant, or not at all. The reader loses nothing: they are
+ * still told the clause changed and what it used to rest on.
+ *
  * ## Why it is not in `NAV_DESTINATIONS`
  *
  * `/record` is the precedent and its header states it: the five numbered destinations are an
@@ -242,18 +286,62 @@ export default function TermsPage(): ReactElement {
         </section>
 
         <section className="prl-legal__section">
-          <h2>7. Availability</h2>
+          <h2>7. What access to this costs, and what the software records about it</h2>
           <p>
-            This service is provided free of charge and with no promise that it will be available, that your
-            data will survive, or that any particular feature will continue to exist. It may be taken down,
-            reset or changed at any time by whoever runs it. Practically: keep nothing here that you would
-            mind losing — there is nothing in this product that can be lost except a record of what you have
-            read and the hands you have played.
+            <strong>This software cannot take money, and it cannot tell whether you paid.</strong> Nothing in
+            it can charge a card, and there is no column anywhere in its database that could hold an amount, a
+            currency or a price — not empty ones: no such columns exist, which is something you can check for
+            yourself by reading the migrations in <code>db/migrations</code>. A test in the repository fails
+            the build if one is added.
           </p>
+          <p>
+            What it can record is that whoever operates this instance <em>enrolled</em> you: a place in a
+            named group of learners, granted on a named operator’s stated authority, alongside one opaque
+            reference to whatever arrangement was made outside this system, when the place begins and ends,
+            and — if the place is withdrawn — when, by whom and why. A withdrawal is written down rather than
+            erased, so the record of it survives. Your place also ends when the group’s own period ends,
+            whatever your row says, because the two are read together.{' '}
+            <strong>An enrolment record is not evidence that money changed hands.</strong> A deployment may
+            enrol a scholarship group, a class of employees or a set of friends for nothing at all, and the
+            rows look identical either way — the reference may literally be the word <em>scholarship</em> —
+            because the only thing this software knows is that an operator asserted you have a place.
+          </p>
+          <p>
+            So whether you were charged for that place, what the charge bought, who took the money and what
+            they owe you for it are all outside this software, and this page would be inventing them if it
+            told you. What you were told when you were enrolled is the agreement; this document describes the
+            software.
+          </p>
+          <CounselFlag clause={COUNSEL_CLAUSES['enrolment-and-fees']} />
         </section>
 
         <section className="prl-legal__section">
-          <h2>8. Liability</h2>
+          <h2>8. Availability</h2>
+          <p>
+            There is no promise that it will be available, that your data will survive, or that any particular
+            feature will continue to exist — and as far as the software goes that is a description of how it
+            is built rather than a disclaimer somebody chose. Exactly one server process is authoritative for
+            a table at a time, because two would deal two different hands; there is no undo; and the only
+            copies of your rows are whatever backups the operator takes, which are restored whole or not at
+            all. It may be taken down, reset or changed at any time by whoever runs it. Practically: keep
+            nothing here that you would mind losing.
+          </p>
+          <p>
+            <strong>
+              What that does not decide is whether the operator may do any of it without owing you something.
+            </strong>{' '}
+            Until revision 0.1 of these terms this clause opened by saying the service was given to you for
+            nothing, and every promise it withheld was reasonable on that footing. It is no longer a footing
+            this software can stand on: section 7 explains that an enrolment record says nothing about money,
+            so this page cannot know whether you are reading it as somebody who paid for a course. Withholding
+            availability and data survival from somebody who did is a commercial decision, and it has not been
+            made here.
+          </p>
+          <CounselFlag clause={COUNSEL_CLAUSES['refunds-and-cancellation']} />
+        </section>
+
+        <section className="prl-legal__section">
+          <h2>9. Liability</h2>
           <p>
             The software is provided as it is. The authors publish it under the licence in the repository and
             make no warranty about it.
@@ -262,7 +350,7 @@ export default function TermsPage(): ReactElement {
         </section>
 
         <section className="prl-legal__section">
-          <h2>9. Regulatory status</h2>
+          <h2>10. Regulatory status</h2>
           <p>
             The facts are settled and checkable: no stake, no purchase, no prize, no cash-out, no transfer, no
             ledger of value. What those facts mean under the law of any particular place is not.
@@ -271,12 +359,12 @@ export default function TermsPage(): ReactElement {
         </section>
 
         <section className="prl-legal__section">
-          <h2>10. Governing law</h2>
+          <h2>11. Governing law</h2>
           <CounselFlag clause={COUNSEL_CLAUSES['governing-law']} />
         </section>
 
         <section className="prl-legal__section">
-          <h2>11. Changes</h2>
+          <h2>12. Changes</h2>
           <p>
             {`These terms are revision ${LEGAL_REVISION}, drafted on ${LEGAL_DRAFTED_ON}. When the text changes, the revision changes with it. There is no notification mechanism in this product — no email address is stored to send one to — so the revision line at the top of this page is the whole of how you can tell.`}
           </p>

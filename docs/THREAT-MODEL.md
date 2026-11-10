@@ -119,6 +119,19 @@ Severity is (likelihood × impact) **for this play-money product**.
 **Residual risk.** A logic error inside `redactFor` itself. Mitigated by the runtime
 tests, but this is the function to review most carefully in any change.
 
+Since 2026-08-27 the web client also *notices* one. `apps/web/src/lib/hole-card-entitlement.ts`
+holds every `state` frame to the invariant `redactFor`'s own header states about its output —
+`holeCards` non-null for exactly `isSelf || showed down`, with `viewerSeat`, `isSelf`, `street` and
+`result.showdowns` all published in the same view — and refuses the frame, raises a `console.error`
+and tells the reader when it does not hold. Note what that is and is not, because point 4 above is
+still true and this does not soften it: it is a **smoke detector, not a control**. The bytes have
+already reached the browser by the time it runs and it cannot recall them; the client deliberately
+does not filter the cards out, because filtering would hide a real leak from the honest reader
+while leaving it in the network panel for the dishonest one. What it buys is that the defect stops
+being silent. `apps/web/test/hole-card-entitlement.test.ts` is the gated evidence, with its negative
+control recorded in its header; `scripts/smoke-test.mjs` asks the same question of the API's own
+bytes against a deployment, and is unaffected by anything the client does.
+
 ### T2 — Post-hand verification leaking unshown hands · Severity: High → mitigated by redesign
 
 This one is recorded because it *happened*, and because the fix is the interesting part.
@@ -396,7 +409,7 @@ Stated without hedging.
 | G9 | **No rate limiting on WebSocket reconnection storms** beyond the per-session socket cap | Low impact for the current scale | A backoff requirement enforced server-side |
 | G10 | ~~**Container base images may not be digest-pinned**~~ **Closed 2026-08-19.** Every base image and every GitHub Action is now pinned, and `ci-pinning` fails the release otherwise. Kept in the table, struck through, because a gap that vanishes without a trace teaches nobody anything | — | — |
 | G11 | **A pinned digest is not a vouched-for digest** | Pinning buys immutability: an upstream cannot change what runs here without a diff in this repository. It does not say the artefact was benign when the digest was taken | Verifying the base image and each action against upstream attestation at pin time, and recording the evidence — the release audit did this by hand once |
-| G12 | **Nothing re-checks a pin against new advisories** | The OSV gate queries the `npm` ecosystem only. An advisory against `node:24.18.0-bookworm-slim` or against a pinned action does not reach any gate here | A second advisory source for base images and actions, wired into the daily scheduled audit |
+| G12 | ~~**Nothing re-checks a pin against new advisories**~~ **Mostly closed — 2026-08-26 and 2026-08-27.** The OSV gate does query the `npm` ecosystem only, but two other gates cover the pins it does not. `container-scan` reads the Alpine package database inside the built images and caught CVE-2026-14456 (HIGH, OpenSSL) in the `node:24.18.0-alpine3.24` digest hours after it was built. `action-advisories` resolves each of the 63 pinned action SHAs to its version via `git ls-remote --tags` — not via the trailing comment, which it verifies rather than trusts — and matches it against OSV's `GitHub Actions` corpus, failing rather than passing when the corpus is unreachable, arrives short, or the SHA is a commit no tag names. Both run inside `security:audit`. Until 2026-10-11 `.github/workflows/supply-chain.yml` ran that daily against the unchanged repository; the owner removed it, so between pushes an advisory against an untouched pin reaches the repository only through Dependabot security updates, if enabled in the repository settings — which cover npm and GitHub Actions pins but not `container-scan`'s image packages. Struck through rather than deleted, because the reasoning that left it open ("pinning is the answer") is the part worth keeping visible | What remains: an advisory against a base image's upstream project that is not carried by a distro package still reaches nobody automatically |
 
 ## 10. Review triggers
 

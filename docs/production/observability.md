@@ -88,10 +88,26 @@ Opened against closed is the reconnect-churn signal. The refusal reasons matter 
 | `prl_hands_failed_total` | counter | `reason` |
 | `prl_table_actor_failures_total` | counter | `reason` |
 | `prl_archive_failures_total` | counter | — |
+| `prl_seat_release_failures_total` | counter | — |
+| `prl_room_ownership_refusals_total` | counter | — |
+| `prl_room_fencings_total` | counter | `reason` |
 
 The gap between started and completed is the number that matters most in this application, because a hand that starts and never settles is a table of people whose chips are in an indeterminate state. `prl_hands_failed_total` counts the failures the code *recognised*; the alert on the started-minus-completed difference catches the ones nobody anticipated.
 
 `prl_archive_failures_total` exists because play deliberately continues when an archive write fails — a database hiccup must not stop a hand in progress. Nothing else would ever reveal that hand history was silently becoming incomplete.
+
+`prl_seat_release_failures_total` is the same shape one subsystem over: a chair the database still records a departed player in, which the live table shows as free. Nothing retries it and nothing else surfaces it. See [`runbooks/stuck-seat.md`](runbooks/stuck-seat.md).
+
+The last two are the room lease, and they are a pair rather than one metric with a label because they mean opposite things. `prl_room_ownership_refusals_total` is the guard **working**: a second API process asked for a room this one holds and was refused, so nothing was corrupted — but a deployment with two API processes is one the whole live-table design forbids, because a room being played lives in one process's memory. `prl_room_fencings_total` is the guard **arriving late**: this process was serving a room and lost the lease, so for a window bounded by the heartbeat interval two processes were both authoritative for one room's hand state. Its `reason` label separates `fenced` (somebody took it — a deployment problem) from `lease_expired` (this process could not renew and stepped down — a database problem). Both counters are primed at zero, because both alerts are keyed on the first occurrence. See [`runbooks/room-ownership-contended.md`](runbooks/room-ownership-contended.md).
+
+**Data retention**
+
+| Series | Type | Labels |
+| --- | --- | --- |
+| `prl_retention_rows_deleted_total` | counter | `kind` |
+| `prl_retention_sweep_age_seconds` | gauge | — |
+
+The sweep runs every six hours and removes expired sessions, expired sign-in attempts and abandoned guest accounts — the three `kind` values, all primed at zero. The counter is the evidence that a retention promise is being kept; the gauge is the one that gets alerted on, and the reason the pair exists is worth stating. **A counter cannot tell "removed nothing" from "did not run".** On a deployment of any ordinary size most six-hour windows genuinely have nothing to remove, so the flat line that means healthy and the flat line that means the timer died at the last deploy are the same line — and nothing else moves either: no request fails, no latency changes, no error is logged after the one that stopped it. So the sweep exports the age of its last **successful** run and `RetentionSweepStalled` reads that. The age starts from process start rather than from zero, because a process that has never swept is only as stale as it is old. That substitution means the gauge is reset by every restart, which is why the first sweep is sixty seconds after start and not six hours: at six hours, a deployment redeployed more often than the interval never reached a first sweep at all and the sawtooth never crossed the threshold. See `apps/api/src/maintenance/retention-sweep.ts`. See [`runbooks/retention-sweep-stalled.md`](runbooks/retention-sweep-stalled.md).
 
 **Analysis and the worker pool**
 
@@ -254,6 +270,26 @@ curl -fsS -H "Authorization: Bearer $METRICS_TOKEN" localhost:3001/metrics \
 The last one is also a unit test, asserted over a populated registry, because a grep is only as good as the moment somebody remembered to run it.
 
 `pnpm run test:drills` provokes each alertable condition on purpose; `pnpm run test:load` scrapes `/metrics` before, during and after each concurrency level, so the metrics are read by something other than a human eye.
+
+`pnpm run alerts:verify` closes the loop the other way. It brings a real Prometheus and Alertmanager up beside the staging stack (`docker-compose.observability.yml`, an overlay — the staging manifest has no monitoring in it, because production does not get its monitoring from this repository), asserts that every `prl_*` series the rules in [`alerts.md`](alerts.md) name appears in a live scrape of this exposition, and provokes `ApiDown` through to a receiver. That check is the one that catches a metric renamed here and not there: an alert on a series that stopped existing is syntactically perfect and permanently silent.
+
+### The alerting system is scraped too
+
+Prometheus has a second job, `prl-alertmanager`, which scrapes Alertmanager's own exposition. It exists for one failure that none of the rules above can report: **Alertmanager unable to deliver**. Every rule in `alerts.md` is delivered by it, so if delivery breaks — an expired provider key, a rotated SMTP password, a relay that starts answering `550` — every rule keeps evaluating and firing exactly as designed and nothing arrives. `AlertmanagerNotificationsFailing` and `AlertmanagerDown` read that job; `alerts:verify` grounds their `alertmanager_*` series against a live scrape of Alertmanager *and* asserts `up{job="prl-alertmanager"} == 1`, because a series that exists and is not being scraped grounds a rule that can never fire.
+
+Those two rules catch the partial cases — one receiver of two, one transport of two — which is most of what happens. They cannot catch both paths broken at once, and no in-band rule can: the channel carrying the report is the channel that failed. [`runbooks/alerting-blind.md`](runbooks/alerting-blind.md) states that plainly and names the only two things that close it, both external to this deployment.
+
+### And the destinations are checked before a promotion
+
+### The one failure that cannot be reported by arriving
+
+`AlertmanagerNotificationsFailing` and `AlertmanagerDown` catch the partial cases — one receiver of two, one transport of two. What no rule that reports **by arriving** can catch is both paths broken at once, because the channel carrying the report is the channel that failed. `Watchdog` (`expr: vector(1)`, `severity: heartbeat`) inverts the direction: it fires permanently and is routed to a third receiver whose destination, `PRL_ALERT_HEARTBEAT_WEBHOOK_URL`, is a snitch **outside** this deployment. Nothing is wrong when a ping arrives; everything is wrong when they stop, and the report is then made by a service that did not depend on anything that broke.
+
+It is deliberately not `page` and not `ticket`. A permanently firing alert on a human tier is a notification every interval, forever, and the predictable end of that is a channel nobody reads — which is the harm the two-tier rule exists to prevent, arriving from the inside. `alerts:verify` check 7 proves the emitting half in full: the rule fires, it reaches its own receiver and **neither** human tier, the pings keep arriving with measured gaps inside a three-interval deadline, and with Alertmanager deliberately **stopped** the absence is detected while Prometheus goes on reporting the same alerts firing to nobody. The watching half is irreducibly external — a watcher on this host dies with the host it is watching — and `alerts:preflight` refuses to promote a heartbeat URL that still names this machine, so the emitter cannot ship alone. [`runbooks/heartbeat-missing.md`](runbooks/heartbeat-missing.md) is the runbook, and it is the only one here opened because an alert **stopped**.
+
+`pnpm run alerts:ack` is the last hop after that: a real page through the real route tree carrying a one-time code that is never printed on the passing path, and a bounded window — and a five-attempt cap — in which a person must type it back. It fails, loudly and non-zero, when nobody does. What a pass proves is narrow and worth stating narrowly, and it got narrower once somebody attacked it: the code must travel through Alertmanager, Alertmanager echoes it back on an unauthenticated endpoint, and the caller both chooses the URL and owns the process that mints the code — so there is no construction that keeps this secret from its own caller. A pass is evidence a **cooperating** operator produces for themselves — somebody was at a terminal, at a known time, holding a code this run sent as a page — and it is neither an attestation against a hostile caller nor a promise about 3am next Tuesday.
+
+`pnpm run alerts:preflight` asks a question `alerts:verify` structurally cannot: are the configured destinations ones a stranger would accept? `alerts:verify` renders the destinations it then asserts against, and its defaults are unroutable sinks on this host, so it passes hardest when nothing has been configured. The preflight refuses a rehearsal default, a reserved documentation domain, a name that resolves only on the rehearsal machine, a malformed URL or address, a tier routed to a receiver with nothing in it, a pager and ticket queue that are the same address, a heartbeat pointed at either of them or at this machine, a snitch pinged over plaintext (its ping URL is its credential), an alert body crossing a network in the clear, and a missing SMTP credential. `pnpm run staging promote` runs it and refuses on it. `-- --handshake` additionally speaks TCP, TLS, `EHLO`, `AUTH` and `QUIT` to the configured relay — and nothing else, so it can never deliver a message to a person.
 
 ---
 

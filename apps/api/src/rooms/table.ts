@@ -204,6 +204,18 @@ export interface ActionOutcome {
 export type TableChangeReason = 'seating' | 'handStarted' | 'action' | 'handComplete';
 
 /**
+ * One seat's chips at the instant a hand settled.
+ *
+ * By user id, never by seat index, for the reason the banner at the top of this file gives: these
+ * figures are written to `room_members.stack`, and paying a chair rather than a person is how a
+ * seat that changed hands gets its predecessor's closing stack.
+ */
+export interface SettledStack {
+  readonly userId: string;
+  readonly stack: number;
+}
+
+/**
  * One change, fanned out to whoever is watching.
  *
  * Carries public events and public action facts — never state. A subscriber that wants state
@@ -222,8 +234,40 @@ export interface TableNotice {
    * persistence layer can write directly.
    */
   readonly loggedActions: readonly LoggedAction[];
-  /** True on the one notice that carried a hand to completion. */
+  /** True on the one notice that carried a hand to completion. Exactly `settledStacks !== null`. */
   readonly handCompleted: boolean;
+  /**
+   * Every seat's chips as the hand settled, on the one notice that settled it; null otherwise.
+   *
+   * **Carried on the notice rather than read back off the table, and that is the whole point.**
+   * A subscriber that answered "who settled?" with `table.snapshot().seats` was asking a table
+   * that had already dropped the seats which stood up mid-hand: `settleIfComplete` writes the
+   * final stacks in and then removes the leavers on the next line, so by the time `handComplete`
+   * reached a listener the departing player was gone from the snapshot. A big blind who stood up
+   * and then won the pot uncontested was therefore never written back — `room_members.stack` kept
+   * its pre-hand value and the chips they won were destroyed — and the mirror case, a leaver who
+   * posted a blind and auto-folded, had the blind handed back at their next sit, creating chips.
+   *
+   * The list is taken at the one instant every seat is still present and already final, so a
+   * future edit cannot reintroduce that gap by moving a line: there is no later read to get wrong.
+   *
+   * Includes seats that were not dealt into the hand (somebody who sat down mid-hand), because
+   * they are seats whose stack the archive is equally responsible for.
+   */
+  readonly settledStacks: readonly SettledStack[] | null;
+  /**
+   * The users whose seat this notice released, by id. Empty on every other notice.
+   *
+   * Every seat release travels this way — the immediate one, for a player who was not in the live
+   * hand, and the deferred one, for a player who was and whose chair is freed when the hand
+   * settles. That is what lets the durable seat and the room membership hang off ONE event
+   * instead of off the moment a player asked to leave, which is separated from the release by an
+   * arbitrary amount of play. Before it did, `standFromTable` released `room_members.seat` only
+   * when the table freed the chair synchronously, so a mid-hand stand left the row seated for
+   * good: the summary showed the chair free, the next player to tap it was refused by
+   * `room_members_live_seat_key`, and a restart re-seated somebody who had left.
+   */
+  readonly departed: readonly string[];
   /** The hand this notice belongs to, or null between hands. */
   readonly handId: string | null;
   /** The current street, or `'complete'`. Public. */
@@ -376,6 +420,13 @@ interface LiveHand {
  * Keyed by user id rather than by seat, and deliberately not cleared when they stand up: a debt
  * that lived on the chair would be discharged by the act of leaving it, which is exactly the dodge
  * this exists to close.
+ *
+ * So a departure does NOT remove the entry, and that is not an oversight to tidy up. `blindDebts`
+ * is discharged in exactly two places — being dealt in, and the game restarting (`nextRotation`
+ * clears it wholesale) — and clearing it when somebody stands would reintroduce P1-2, in which
+ * four of fifteen seating combinations bought a completely free hand. What is left over is one
+ * small entry per person who sat down owing a blind at this table and never came back, on a map
+ * that dies with the room: a bound, not a leak.
  */
 interface BlindDebt {
   /** The hand number this table had reached when the obligation was incurred. */
@@ -686,7 +737,7 @@ export class LiveTable {
       this.publish(
         'seating',
         { ...collector(), events: [{ kind: 'playerJoined', displayName: seat.displayName }] },
-        false,
+        null,
       );
       return seat;
     });
@@ -969,6 +1020,13 @@ export class LiveTable {
         event: 'timeout-rejection',
         seat: expiry.seat,
       });
+      // Re-armed, because nothing else will. `TurnTimer.fire` clears `armed` before it calls back,
+      // and `apply` returning null means it never reached `afterMutation` — so the table would be
+      // left waiting on a seat with `deadlineMs: null` and no expiry coming: a permanently frozen
+      // hand that no player and no operator can unstick, for a table whose only fault was one
+      // refused action. A fresh clock on the same seat is the correct outcome — the seat gets
+      // another full turn, and the next expiry either applies or lands here again.
+      this.armTimer();
     }
   }
 
@@ -977,26 +1035,47 @@ export class LiveTable {
   // -------------------------------------------------------------------------
 
   private afterMutation(reason: TableChangeReason, applied: Applied): void {
-    const completed = this.settleIfComplete();
+    const settledStacks = this.settleIfComplete();
     this.armTimer();
-    this.publish(completed ? 'handComplete' : reason, applied, completed);
+    // `handStarted` is NEVER overwritten, and that exception is the fix rather than an oversight.
+    // A hand can be over before anybody acts — two seats both all-in for less than the big blind,
+    // which `startHand` already says exists — and this line used to read
+    // `completed ? 'handComplete' : reason`, which threw the start away. The archive gates
+    // `hands.start` on `reason === 'handStarted'`, so no row was ever written for such a hand;
+    // `handsRepository.complete` then threw `hand_not_active` against a row that did not exist,
+    // which aborted the rest of that archive step and took `stacksSettled` and
+    // `roomStatusChanged` down with it. Both players kept their pre-hand stacks while the winner
+    // actually held the pot. It also made `handsCompleted` climb while `handsStarted` did not.
+    //
+    // The two facts are independent and both now travel: `reason` says what CAUSED the change,
+    // `handCompleted`/`settledStacks` say whether it FINISHED. Anything asking "did this hand
+    // end" must read the flag — the reason cannot answer it, and never could for the hand above.
+    const published = reason === 'handStarted' || settledStacks === null ? reason : 'handComplete';
+    this.publish(published, applied, settledStacks);
   }
 
   /**
-   * Writes a finished hand's stacks back to the seating and drops the deck secret.
+   * Writes a finished hand's stacks back to the seating, drops the deck secret, and hands back
+   * what every seat closed on.
    *
    * The secret goes here rather than at the next deal because this is the moment it stops being
    * needed: the engine has already built the reveal for the cards that legitimately became
    * public, and everything still sealed must stay sealed forever — including from us.
    *
-   * Returns true exactly once per hand, so a subscriber cannot fold the same hand into its
-   * counters twice (which `@prl/poker-ai`'s `observeHandComplete` refuses outright, and rightly:
-   * double counting corrupts every rate at once while looking completely normal).
+   * Returns the settled stacks exactly once per hand, and null every other time, so a subscriber
+   * cannot fold the same hand into its counters twice (which `@prl/poker-ai`'s
+   * `observeHandComplete` refuses outright, and rightly: double counting corrupts every rate at
+   * once while looking completely normal).
+   *
+   * The figures are RETURNED rather than left to be read back off the table, because the very
+   * next thing this method does is remove the seats that stood up mid-hand. See
+   * `TableNotice.settledStacks` for the chips that were destroyed while a subscriber read the
+   * later snapshot instead.
    */
-  private settleIfComplete(): boolean {
+  private settleIfComplete(): readonly SettledStack[] | null {
     const live = this.hand;
-    if (live === null || live.state.street !== 'complete') return false;
-    if (this.settledHandId === live.state.handId) return false;
+    if (live === null || live.state.street !== 'complete') return null;
+    if (this.settledHandId === live.state.handId) return null;
     this.settledHandId = live.state.handId;
 
     // Keyed by player id: chips belong to people, not to chairs. A seat that changed hands would
@@ -1008,9 +1087,17 @@ export class LiveTable {
     });
     live.secret = null;
 
+    // Read HERE, between the write-back and the removal, and nowhere else. Move this line below
+    // `removeSeats` and the departing seats vanish from it, which is exactly the defect this
+    // return value exists to make unrepeatable.
+    const settled: readonly SettledStack[] = this.seats.map((seat) => ({
+      userId: seat.userId,
+      stack: seat.stack,
+    }));
+
     const leaving = this.seats.filter((seat) => seat.leaving);
     if (leaving.length > 0) this.removeSeats(leaving);
-    return true;
+    return settled;
   }
 
   /**
@@ -1092,13 +1179,31 @@ export class LiveTable {
     });
   }
 
-  private publish(reason: TableChangeReason, applied: Applied, handCompleted: boolean): void {
+  /**
+   * Fans one change out.
+   *
+   * `settledStacks` and `departed` are parameters rather than fields a listener could read back,
+   * because both describe an instant that has already passed by the time a listener runs: the
+   * seats that settled are removed inside `settleIfComplete`, and the seats that departed are
+   * gone from `this.seats` before this is called. Anything a subscriber needs about a change has
+   * to travel ON the change.
+   */
+  private publish(
+    reason: TableChangeReason,
+    applied: Applied,
+    settledStacks: readonly SettledStack[] | null,
+    departed: readonly string[] = [],
+  ): void {
     const notice: TableNotice = {
       reason,
       events: applied.events,
       publicActions: applied.publicActions,
       loggedActions: applied.loggedActions,
-      handCompleted,
+      // Derived, never passed separately: the two used to be independent arguments and a caller
+      // that set one without the other would publish a completed hand with nothing to settle.
+      handCompleted: settledStacks !== null,
+      settledStacks,
+      departed,
       handId: this.handId,
       street: this.hand?.state.street ?? null,
       board: this.hand === null ? [] : [...this.hand.state.board],
@@ -1126,6 +1231,17 @@ export class LiveTable {
     if (this.closed) throw new AppError('room_closed', { logDetail: 'this table has been closed' });
   }
 
+  /**
+   * Frees chairs, and says whose they were.
+   *
+   * The `departed` ids on the notice are the ONLY announcement a seat release gets, and both
+   * callers go through here — `stand`, for a player who is not in the live hand and leaves at
+   * once, and `settleIfComplete`, for one who is and whose chair is freed when the hand ends.
+   * A room that has durable state to tidy (`room_members.seat`, the in-memory membership) hangs
+   * it off this notice; hanging it off the moment somebody ASKED to leave is what left a seat
+   * unusable for the rest of the process's life, because that moment and this one are separated
+   * by an arbitrary amount of play. See `TableNotice.departed`.
+   */
   private removeSeats(seats: readonly TableSeat[]): void {
     const removing = new Set(seats.map((seat) => seat.seat));
     this.seats = this.seats.filter((entry) => !removing.has(entry.seat));
@@ -1135,7 +1251,10 @@ export class LiveTable {
         ...collector(),
         events: seats.map((seat) => ({ kind: 'playerLeft', displayName: seat.displayName })),
       },
-      false,
+      null,
+      // By id, like everything else here that is about a person rather than a chair: the listener
+      // uses it to find a `room_members` row, and that row is keyed by user.
+      seats.map((seat) => seat.userId),
     );
   }
 

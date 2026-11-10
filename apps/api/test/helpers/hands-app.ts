@@ -94,7 +94,13 @@ function stubSessionPlugin(
         const unsigned = request.unsignCookie(raw);
         const account = unsigned.valid ? accounts.get(unsigned.value) : undefined;
         if (account === undefined) request.sessionRejection = 'malformed';
-        else request.session = { sessionId: `ses_${account.id.slice(4)}`, user: account };
+        else {
+          request.session = {
+            sessionId: `ses_${account.id.slice(4)}`,
+            user: account,
+            expiresAt: new Date(Date.now() + 3_600_000),
+          };
+        }
       }
       done();
     });

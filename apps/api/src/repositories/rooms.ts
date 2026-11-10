@@ -19,12 +19,27 @@
  * ## Why the failure diagnostics run as a second query
  *
  * `addMember` and `seatMember` do their work in one statement whose WHERE clause carries every
- * precondition — open room, room not full, seat inside `max_seats`. That makes the happy path
- * atomic, and it makes "nothing matched" ambiguous: the room might be closed, or full, or not
- * exist, or the learner might already be in it. Rather than split the write into a
- * check-then-write with a race in the middle, the rare no-match path runs a small diagnostic
- * read to decide which of those it was. Correct answer, correct error code, and the race window
- * stays closed.
+ * precondition — open room, room not full, seat inside `max_seats`. That makes "nothing matched"
+ * ambiguous: the room might be closed, or full, or not exist, or the learner might already be in
+ * it. Rather than split the write into a check-then-write with a round trip in the middle, the
+ * rare no-match path runs a small diagnostic read to decide which of those it was. Correct
+ * answer, correct error code, and nothing between the check and the write.
+ *
+ * ## A precondition in a WHERE clause is not automatically a lock
+ *
+ * This file used to say, flatly, that the single-statement shape left "the race window closed".
+ * That is true of a predicate the database re-evaluates against the row it is writing —
+ * `seatMember`'s `seat < max_seats` against the room row it joins, `users.adjustUnits`'
+ * `m.stack + $delta >= 0` against the member row it updates — because under READ COMMITTED
+ * EvalPlanQual re-checks exactly those against the committed version when a concurrent
+ * transaction has touched the row.
+ *
+ * It was NOT true of `addMember`'s capacity test, which is a correlated `count(*)` over OTHER
+ * rows. There is no row for EvalPlanQual to re-check, the count sees only what was committed
+ * before the statement began, and it takes no lock on anything. Reproduced against a migrated
+ * database: `max_seats = 2`, one live member, two transactions issuing that statement at the same
+ * instant — both counted 1, both inserted, three live members in a two-seat room. `addMember` now
+ * locks the room row first; the comment on it says what that buys and what it costs.
  */
 
 import { AppError } from '../errors.ts';
@@ -474,12 +489,58 @@ export interface AddMemberInput {
  * Bots get real user rows, so a seat is a seat whoever occupies it: the same membership, hand
  * seat and action shapes apply, and no query needs a special case for "this seat has no user".
  *
- * ## The one statement, and what its WHERE clause is doing
+ * ## The one statement, and the lock its WHERE clause cannot take
  *
- * `insert ... select ... from prl.rooms where <preconditions>` inserts zero rows when the room
- * is missing, closed, or already at `max_seats` live members. Doing it that way rather than
- * "read the room, count the members, then insert" matters at a full table: two joins that both
- * read `5 of 6` would both insert, and the sixth seat would be occupied twice.
+ * `insert ... select ... from prl.rooms where <preconditions>` inserts zero rows when the room is
+ * missing, closed, or already at `max_seats` live members. That is still the right shape — "read
+ * the room, count the members, then insert" would put a whole round trip between the check and
+ * the write — but for capacity it is not, on its own, enough.
+ *
+ * ############################################################################
+ * ## THE `count(*)` IN THE WHERE CLAUSE LOCKS NOTHING. THE `for update` ON  ##
+ * ## THE ROOM ROW IS WHAT MAKES THE CAPACITY CHECK ATOMIC. DO NOT DROP IT.  ##
+ * ############################################################################
+ *
+ * `(select count(*) from prl.room_members ...) < r.max_seats` is an aggregate over rows this
+ * statement is not writing. Under READ COMMITTED it reads the snapshot taken when the statement
+ * began and takes no lock, so two joins of a two-seat room holding one live member both counted
+ * 1, both inserted 1, and the room finished with three live members. That is measured, not
+ * feared. (Contrast `users.adjustUnits`, whose `m.stack + $delta >= 0` IS safe unaided: it is a
+ * predicate on the row being updated, which EvalPlanQual re-evaluates against the committed
+ * version before the update goes through.)
+ *
+ * So joins of one room are serialised by locking the room row first, in the same transaction:
+ *
+ *   1. `select id from prl.rooms where id = $1 for update` — the loser of a race blocks here.
+ *   2. the insert above, whose count now runs in a statement that BEGAN after the winner
+ *      committed, and therefore sees the winner's row and refuses.
+ *
+ * Step 2 seeing step 1's winner is READ COMMITTED's per-statement snapshot doing the work: a new
+ * statement takes a new snapshot, so the count taken once the lock is granted is current. A
+ * caller that wrapped this in a REPEATABLE READ transaction would keep one transaction-wide
+ * snapshot and the lock alone would not save it — no caller does, and `withTransaction` in
+ * `db.ts` uses the cluster default.
+ *
+ * Three things here that look simplifiable and are not:
+ *
+ * - **`for update`, not `for share`.** Two share-lockers coexist happily, which is exactly the
+ *   state being prevented. A shared lock passes every test that is not a race and restores the
+ *   defect in full.
+ * - **The lock and the insert must be in ONE transaction.** `rooms/registry.ts` calls this with
+ *   the POOL handle, not inside `withTransaction`, and on the pool every statement is its own
+ *   transaction — the row lock would be released before the insert ran, and the two statements
+ *   would be strictly worse than the one they replaced. `inOneTransaction` below opens one when
+ *   the handle is the pool and reuses the caller's when it is not.
+ * - **The lock is on `prl.rooms`.** There is no `room_members` row to lock for a seat nobody
+ *   holds yet; the room row is the only thing both racers can be made to queue behind. A
+ *   cross-row CHECK ("at most `max_seats` live rows per room") is not something a constraint can
+ *   express, which is why this is not in the schema.
+ *
+ * The cost, stated plainly: joins of the SAME room serialise, and a join now waits behind a
+ * concurrent `setStatus`/`close` of that room, since both are `update prl.rooms`. Joins of
+ * different rooms never meet. At six seats a table, that is not a throughput question — and the
+ * blast radius it removes is real: the surplus member is unseated (`seatMember` still enforces
+ * seat uniqueness and `seat < max_seats`), but they are in the room, counted, and shown.
  */
 export async function addMember(sql: Db, input: AddMemberInput): Promise<RoomMemberRow> {
   const isBot = input.isBot ?? false;
@@ -493,28 +554,42 @@ export async function addMember(sql: Db, input: AddMemberInput): Promise<RoomMem
   }
 
   try {
-    const rows = await sql<{ id: string }[]>`
-      insert into prl.room_members
-             (id, room_id, user_id, seat, stack, is_bot, bot_profile, bot_difficulty, bot_seed)
-      select ${newRoomMemberId()}, r.id, ${input.userId}, null,
-             coalesce(${stack}::int, r.starting_stack), ${isBot},
-             ${bot === null ? null : bot.profileId},
-             ${bot === null ? null : bot.difficulty},
-             ${bot === null ? null : String(bot.seed)}::bigint
-        from prl.rooms r
-       where r.id = ${input.roomId}
-         and r.status <> 'closed'
-         and (
-               select count(*) from prl.room_members m
-                where m.room_id = r.id and m.left_at is null
-             ) < r.max_seats
-      returning id
-    `;
-    if (rows.length > 0) {
-      const member = await memberOf(sql, input.roomId, input.userId);
-      if (member !== null) return member;
-      throw new AppError('internal_error', { logDetail: 'member insert succeeded but read back nothing' });
-    }
+    const member = await inOneTransaction(sql, async (tx) => {
+      // The whole of the fix. Everything below reads the room's live member count, and this is
+      // what stops another join reading the same count. A missing room takes the same no-match
+      // path as a full one, so it is diagnosed below rather than guessed at here.
+      const locked = await tx<{ id: string }[]>`
+        select r.id from prl.rooms r where r.id = ${input.roomId} for update
+      `;
+      if (locked.length === 0) return null;
+
+      const rows = await tx<{ id: string }[]>`
+        insert into prl.room_members
+               (id, room_id, user_id, seat, stack, is_bot, bot_profile, bot_difficulty, bot_seed)
+        select ${newRoomMemberId()}, r.id, ${input.userId}, null,
+               coalesce(${stack}::int, r.starting_stack), ${isBot},
+               ${bot === null ? null : bot.profileId},
+               ${bot === null ? null : bot.difficulty},
+               ${bot === null ? null : String(bot.seed)}::bigint
+          from prl.rooms r
+         where r.id = ${input.roomId}
+           and r.status <> 'closed'
+           and (
+                 select count(*) from prl.room_members m
+                  where m.room_id = r.id and m.left_at is null
+               ) < r.max_seats
+        returning id
+      `;
+      if (rows.length === 0) return null;
+      // Read back on `tx`, not on `sql`: inside a transaction of this function's own making, the
+      // row it just inserted is not visible to any other connection yet.
+      const inserted = await memberOf(tx, input.roomId, input.userId);
+      if (inserted === null) {
+        throw new AppError('internal_error', { logDetail: 'member insert succeeded but read back nothing' });
+      }
+      return inserted;
+    });
+    if (member !== null) return member;
   } catch (error) {
     const mapped = violationError(error, 'joining a room');
     if (mapped !== null) throw mapped;
@@ -698,6 +773,34 @@ export async function close(sql: Db, roomId: string, options: CloseRoomOptions =
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Runs `fn` inside a transaction: the caller's when it passed one, a new one when it passed the
+ * pool.
+ *
+ * `addMember` needs its `for update` on the room and its INSERT to be in the SAME transaction —
+ * a lock taken by one statement and released before the next runs is decoration — and its callers
+ * do not all provide one. `rooms/registry.ts` builds its store as
+ * `addMember: (input) => roomsRepository.addMember(sql(), input)`, i.e. the pool, where every
+ * statement commits on its own. The repository tests pass a `tx`. Both have to work, so the
+ * decision is made here rather than pushed onto the callers, where "remember to wrap this one"
+ * is the kind of rule that holds until somebody adds a caller.
+ *
+ * `'savepoint' in handle` narrows the union exactly as `insideSavepoint` in `sql.ts` does:
+ * `TransactionSql` declares it and `Sql` does not. Reusing the caller's transaction rather than
+ * nesting is not just tidiness — postgres.js has no nested `begin`, and the SAVEPOINT that would
+ * stand in for one adds a round trip while changing nothing about the lock, which is held to the
+ * end of the outermost transaction either way.
+ *
+ * Boxed for the reason `withTransaction` in `db.ts` boxes: postgres.js types `begin` as
+ * `UnwrapPromiseArray<T>`, so an unboxed callback returning an array would come back with a
+ * different type from one returning a row.
+ */
+async function inOneTransaction<T>(handle: Db, fn: (handle: Db) => Promise<T>): Promise<T> {
+  if ('savepoint' in handle) return fn(handle);
+  const boxed = await handle.begin(async (tx) => ({ value: await fn(tx) }));
+  return boxed.value;
+}
 
 /**
  * Refuses a bot seat that could not be put back after a restart, at the moment it is written.

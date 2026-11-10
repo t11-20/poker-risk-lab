@@ -45,6 +45,7 @@ import type { Card } from '@prl/poker-engine';
 import {
   buildCoachReport,
   type CoachAction,
+  EquityError,
   type EquityPlayer,
   type EquityResult,
   type EquitySpec,
@@ -108,6 +109,21 @@ export interface CoachTask {
   readonly spec: WireSpec;
   readonly street: 'preflop' | 'flop' | 'turn' | 'river';
   readonly pot: number;
+  /**
+   * The part of `pot` hero can actually win. **Required, and required for the same reason
+   * `legalActions` is.**
+   *
+   * A learner all-in for less than the bet facing them cannot win the side pot their stack
+   * does not reach, and this type having no field for it is what let every surface behind
+   * this wire price the call against the whole middle. Measured heads-up at 5/10, hero 40
+   * against a 310 shove: "10.7 to 1, you need 8.6%" where the answer is 1.67 to 1 and
+   * 37.5%, and a call worth -4.2 chips published at +82.8. See `CoachInput.contestablePot`.
+   *
+   * Callers with seat states use `contestablePotFor` from `@prl/poker-engine`; callers
+   * describing a spot use `deriveContestablePot`. A task built without one is a compile
+   * error at the caller rather than a mispriced report at a learner.
+   */
+  readonly contestablePot: number;
   readonly toCall: number;
   /** Chips hero has already put out on this street. See `CoachInput`. */
   readonly heroCommittedThisStreet: number;
@@ -199,6 +215,54 @@ function expandRange(range: WireRange, blockers: readonly Card[]): ParsedRange {
   return parseRange(topPercentRange(range.percent).notation, blockers);
 }
 
+/**
+ * The dealability condition, re-checked HERE because here is where the ranges exist.
+ *
+ * `calc/parse.ts :: assertDealable` states the rule — `k` opponents need `2k` distinct cards
+ * between them, or no assignment of two cards each exists — and applies it to the ranges it
+ * expanded. It deliberately expands no `top:NN` range (that needs the preflop strength table,
+ * three seconds, which is the whole reason this file is on a thread), so a `topPercent`
+ * opponent reaches it with an empty support set and is skipped. That is sound and it is also
+ * vacuous when EVERY opponent is a `top:NN`: the check then examines nobody.
+ *
+ * Measured on the reference machine. `topPercentRange(1).notation` is exactly `"AA, KK, QQ"`,
+ * so the two lines below are the SAME range in two spellings; hero's `AhKh` on a board of
+ * `As Ks Qs` leaves seven cards between them, and five opponents need ten:
+ *
+ *     opponents = ["AA, KK, QQ"] x5 -> refused by assertDealable in 0 ms, with a field message
+ *     opponents = ["top:1"]      x5 -> accepted, granted the 15,000 ms top:NN budget, and held
+ *                                      a WARM calculator thread for 9,431 ms before
+ *                                      `monteCarloEquity` gave up — for the same 422
+ *
+ * Nine seconds of the pool's scarcest resource for a request whose answer is "no", on the
+ * bucket a session may hit twenty times a minute, against a pool that is ONE thread on a
+ * one- or two-vCPU host — and the same pool serves hand review, the Legends comparison and
+ * the Scenario Lab. The condition costs one pass over at most 1,326 combinations per
+ * opponent, so checking it after expansion is free and turns the nine seconds into
+ * microseconds. Same outcome for the caller either way: `EquityError` is what the pool maps
+ * to `computation_rejected` (422).
+ *
+ * Hero is not counted. `blockersOf` has already removed hero's and the board's cards from
+ * every opponent range, so the support below is exactly the cards the opponents can be dealt.
+ */
+function assertOpponentsAreDealable(players: readonly EquityPlayer[]): void {
+  const opponents = players.slice(1);
+  if (opponents.length === 0) return;
+  const support = new Set<Card>();
+  for (const opponent of opponents) {
+    for (const combo of opponent.range.combos) {
+      support.add(combo[0]);
+      support.add(combo[1]);
+    }
+  }
+  const needed = opponents.length * 2;
+  if (support.size >= needed) return;
+  throw new EquityError(
+    `these ranges cannot all be dealt at once: ${opponents.length} opponents need ${needed} ` +
+      `distinct cards between them and their ranges only contain ${support.size}`,
+  );
+}
+
 function buildSpec(spec: WireSpec): EquitySpec {
   const blockers = blockersOf(spec);
   const players: EquityPlayer[] = [
@@ -208,6 +272,7 @@ function buildSpec(spec: WireSpec): EquitySpec {
       range: expandRange(opponent, blockers),
     })),
   ];
+  assertOpponentsAreDealable(players);
   return { players, board: spec.board };
 }
 
@@ -243,6 +308,9 @@ function runCoach(task: CoachTask): CoachReport {
     street: task.street,
     opponents,
     pot: task.pot,
+    // Passed straight through for the same reason `legalActions` is: a `?? task.pot` here
+    // would restore the defect the field exists to close, and would do it invisibly.
+    contestablePot: task.contestablePot,
     toCall: task.toCall,
     heroCommittedThisStreet: task.heroCommittedThisStreet,
     heroStack: task.heroStack,

@@ -116,7 +116,8 @@
  *
  * ## Why the harness paces Coach and Hand Review
  *
- * `WS_LIMITS.coachRequestsPerMinute` is 30 per socket and `GET /hands/:handId` sits behind the
+ * `WS_LIMITS.coachRequestsPerMinute` is 30 per SESSION — across every socket that session holds,
+ * which this harness gives one each — and `GET /hands/:handId` sits behind the
  * expensive rate limit (20 per minute per session by default). A harness that ignores both
  * spends the whole run measuring the limiter and reports a capacity number for a server that
  * was refusing most of the offered work. So each socket holds off Coach for
@@ -173,6 +174,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { arch, availableParallelism, loadavg, platform, totalmem } from 'node:os';
 import { performance } from 'node:perf_hooks';
+import { RATE_LIMIT_RESET_PATH } from './smoke-test.mjs';
 
 const NO_COLOR = process.env.NO_COLOR !== undefined || !process.stdout.isTTY;
 const paint = (code, s) => (NO_COLOR ? s : `\u001b[${code}m${s}\u001b[0m`);
@@ -306,7 +308,7 @@ const DEFAULTS = {
    * signal under a one-off. So it is measured deliberately, reported as its own cold-start
    * figure, and kept out of the levels. `--skip-warmup` measures the cold process instead.
    *
-   * It used to block the EVENT LOOP for the whole of that, because `coachForView` ran the Monte
+   * It used to block the EVENT LOOP for the whole of that, because the socket ran the Monte
    * Carlo synchronously on the main thread. It now goes to the worker pool, so the cost is paid
    * by the requester and by nobody else — measured across the same window, event-loop p99 fell
    * from 3028.8 ms to 2.1 ms. One thread warms per level as the pool spins up, so a cold-thread
@@ -957,8 +959,23 @@ export function histogramDelta(before, after) {
  * Deliberately NOT `histogram_quantile`'s linear interpolation. Interpolating inside a bucket
  * asserts the observations were uniformly distributed across it, which they are not, and
  * produces a decimal that reads like a measurement. This returns a BOUND — "99% of probes
- * finished within 0.05 s" — which is a statement the data actually supports. `null` means the
- * quantile fell in the `+Inf` bucket, so all that is known is "above the top bound".
+ * finished within 0.05 s" — which is a statement the data actually supports.
+ *
+ * Three return values, and the distinction between the last two is a defect this function used
+ * to have rather than a nicety:
+ *
+ *   * a finite number — the quantile fell at or below that bound;
+ *   * `Infinity`      — it fell in the `+Inf` bucket, so all that is known is "above the top
+ *                       bound";
+ *   * `null`          — there were no observations at all.
+ *
+ * Both of the last two used to be `null`, on the reasoning that a number for the `+Inf` case
+ * would be an invention. The number would be; the DISTINCTION is not. `null` is read downstream
+ * as "this build does not export the metric", so a database probe slower than the top bucket —
+ * the single most alarming reading the pool can produce — was indistinguishable from no data,
+ * and the saturation signal that exists to name it stayed quiet. `Infinity` is not an invented
+ * measurement, it is the bound itself, and every caller either compares it against a threshold
+ * (where it is correct) or formats it (where it prints as "above the top bucket").
  */
 export function histogramBoundAtQuantile(histogram, quantile) {
   if (histogram === null || histogram.count <= 0) return null;
@@ -966,9 +983,11 @@ export function histogramBoundAtQuantile(histogram, quantile) {
   let seen = 0;
   for (const bucket of histogram.buckets) {
     seen = bucket.cumulative;
-    if (seen >= target) return Number.isFinite(bucket.le) ? bucket.le : null;
+    if (seen >= target) return bucket.le;
   }
-  return null;
+  // Past the last bucket. A well-formed exposition ends with `+Inf`, so this is reached only by
+  // a truncated one — where "above every bound I was given" is the same statement.
+  return Number.POSITIVE_INFINITY;
 }
 
 // ---------------------------------------------------------------------------
@@ -1345,10 +1364,30 @@ function summariseServerSide(readings) {
     if (delta > 0) apiErrors[code] = delta;
   }
 
-  const rateBefore = seriesByLabel(first, SERIES.rateLimitEvents, 'kind') ?? {};
-  const rateAfter = seriesByLabel(last, SERIES.rateLimitEvents, 'kind') ?? {};
-  const rateLimited = (rateAfter.limited ?? 0) - (rateBefore.limited ?? 0);
-  const rateBanned = (rateAfter.banned ?? 0) - (rateBefore.banned ?? 0);
+  /**
+   * The rate-limit counters, or null when the process exports no such series at all.
+   *
+   * `?? {}` on both sides used to swallow the difference: a scrape with no
+   * `prl_rate_limit_events_total` in it produced `0 - 0 = 0`, a NUMBER, so `classifySaturation`
+   * reported `{observed: 0, exported: true, fired: false}` for a series the build had never
+   * rendered — the one shape this file's header promises never to produce ("a metric the scraped
+   * process does not emit reads as `null`, its name goes into `server.missing` … and it can never
+   * fire a saturation signal"). Every other series in `SERIES` obeys that; these two did not.
+   *
+   * It is masked today, not fixed: `metrics.ts` primes `rateLimitEvents` with
+   * `[{kind:'limited'},{kind:'banned'}]`, so both series exist from boot with the value 0 and the
+   * absent case does not arise. Dropping that priming — or renaming the metric — would have made
+   * the `refusal-rate-limited` stop criterion permanently unable to fire while the report went on
+   * saying the signal had been evaluated. That is the same shape as an alert rule that cannot
+   * fire behind checks that all pass.
+   */
+  const rateBefore = seriesByLabel(first, SERIES.rateLimitEvents, 'kind');
+  const rateAfter = seriesByLabel(last, SERIES.rateLimitEvents, 'kind');
+  if (rateAfter === null) missing.add(SERIES.rateLimitEvents);
+  const rateDelta = (kind) =>
+    rateAfter === null ? null : (rateAfter[kind] ?? 0) - (rateBefore?.[kind] ?? 0);
+  const rateLimited = rateDelta('limited');
+  const rateBanned = rateDelta('banned');
 
   return {
     scrapes: good.length,
@@ -1401,6 +1440,12 @@ function summariseServerSide(readings) {
     dbProbeCount: dbProbe === null ? null : dbProbe.count,
     dbProbeMeanMs: dbProbe === null || dbProbe.count <= 0 ? null : (dbProbe.sum / dbProbe.count) * 1000,
     dbProbeP99BoundMs: scaleOrNull(histogramBoundAtQuantile(dbProbe, 0.99), 1000),
+    /**
+     * `JSON.stringify(Infinity)` is `null`, which would put the above-the-top-bucket case back
+     * into the field it was just separated from as soon as the report is written to a file. This
+     * boolean is how the JSON keeps the distinction the number cannot.
+     */
+    dbProbeP99AboveTopBound: histogramBoundAtQuantile(dbProbe, 0.99) === Number.POSITIVE_INFINITY,
     readinessState: sampleValue(last, SERIES.readinessState),
     websocketConnectionsPeak: gaugePeak(SERIES.wsConnections),
     workerPoolBusyPeak: gaugePeak(SERIES.workerPoolBusy),
@@ -2385,6 +2430,40 @@ export function evaluateStopCriteria(level, thresholds) {
       detail: `${client.connectionsAttempted - client.connectionsEstablished} of ${client.connectionsAttempted} sockets never reached welcome`,
     });
   }
+  /**
+   * The level had no usable server-side half at all.
+   *
+   * Before this, an unusable summary made every server-side criterion below unreachable and
+   * produced no breach of its own, so the level PASSED on client timings alone and could become
+   * the capacity figure. Reproduced against this file's own `buildReport`: four levels with
+   * `{usable:false, scrapes:1, scrapeFailures:5}` and healthy client numbers returned
+   * `passed:true`, `failures:[]`, `capacity.concurrentSeatedPlayers: 24` and
+   * `saturation.resource: null` — a published capacity for a run with no server-side evidence
+   * behind any of it.
+   *
+   * That is the exact degradation this file's header forbids ("a refused or unreachable
+   * `/metrics` is a FAILURE, not a warning … a run that silently degrades to client-side timings
+   * is exactly the kind of 'capacity measurement' this file exists to stop"), and the preflight
+   * in `main` enforces it only for the FIRST scrape. A `/metrics` that starts refusing mid-ramp —
+   * a token rotated, a proxy in front of it, the process restarting — lands here instead.
+   *
+   * It matters most for the criterion immediately below. `refusal-rate-limited` exists because a
+   * ramp bounded by the LIMITER rather than by the machine once had its number quoted as a
+   * capacity; a level with no scrapes cannot see a single refusal, so without this the fixed bug
+   * is reachable again through a door nobody was watching.
+   */
+  if (level.server.usable !== true) {
+    breaches.push({
+      criterion: 'server-side-blind',
+      observed: level.server.scrapes ?? 0,
+      limit: 2,
+      detail:
+        `${level.server.scrapes ?? 0} usable /metrics scrape(s) at this level ` +
+        `(${level.server.scrapeFailures ?? 0} failed), so no server-side criterion could be ` +
+        'evaluated — including the rate-limit refusal count, which is what tells a limiter-bound ' +
+        `ramp from a saturated machine${level.server.note == null ? '' : `. ${level.server.note}`}`,
+    });
+  }
   if (level.server.usable === true && level.server.rateLimitLimited > 0) {
     breaches.push({
       criterion: 'refusal-rate-limited',
@@ -2459,7 +2538,28 @@ export function classifySaturation(level, thresholds) {
       observed: server.dbProbeP99BoundMs ?? null,
       limit: thresholds.dbProbeP99Ms,
       unit: 'ms',
-      fired: exported(server.dbProbeP99BoundMs) && server.dbProbeP99BoundMs >= thresholds.dbProbeP99Ms,
+      /**
+       * Strictly greater, and this is the difference between a signal and a coin toss.
+       *
+       * The observed value is a BOUND, not a measurement: `50 ms` here means "99% of probes
+       * finished within 50 ms", which is the threshold being met. Firing on `>=` fired on every
+       * probe set whose p99 landed anywhere in the 25-50 ms bucket — including a three-player
+       * level at 0.4 requests per second, where the reading is the pool's first connection being
+       * opened and nothing is exhausted. It reported `resource: db-pool` for that run.
+       *
+       * `>` fires when 99% of probes did NOT finish within the threshold, which is the claim the
+       * signal's own text makes. `Infinity` — the quantile in the `+Inf` bucket — exceeds every
+       * threshold and fires, which is the case that most needed to.
+       */
+      fired: exported(server.dbProbeP99BoundMs) && server.dbProbeP99BoundMs > thresholds.dbProbeP99Ms,
+      /**
+       * `JSON.stringify(Infinity)` is `null`, and the report is serialised — so without this the
+       * published signal reads `{observed: null, fired: true, exported: true}`, which is "it
+       * fired and there is no observation": exactly the conflation the `Infinity` return value
+       * was introduced to remove, reappearing one field later. `summariseServerSide` got a
+       * boolean for this; the signal record needed its own.
+       */
+      observedAboveTopBound: server.dbProbeP99BoundMs === Number.POSITIVE_INFINITY,
       meaning: 'select 1 waited for a pooled connection, which is pool exhaustion before any query fails',
       /**
        * The probe is timed inside the request handler, so its duration includes any time the
@@ -2690,7 +2790,26 @@ const NOT_MEASURED = [
 ];
 
 const ms = (value) => (value === null || value === undefined ? '    -   ' : `${value.toFixed(1)}ms`);
-const num = (value, digits = 1) => (value === null || value === undefined ? '   -  ' : value.toFixed(digits));
+const num = (value, digits = 1) =>
+  value === null || value === undefined
+    ? '   -  '
+    : Number.isFinite(value)
+      ? value.toFixed(digits)
+      : 'above top bucket';
+
+/**
+ * A histogram bound, which has one more state than a number: `<= 50.0ms`, `above the top
+ * bucket`, or nothing measured. Printed rather than `ms()` wherever the value came from
+ * `histogramBoundAtQuantile`, so the `<=` and the overflow case are never contradicted — the
+ * report used to print `db probe p99 <= 50.0ms` on the same run whose signal table said the
+ * threshold of 50 ms had been exceeded.
+ */
+const boundMs = (value) =>
+  value === null || value === undefined
+    ? '   -  '
+    : Number.isFinite(value)
+      ? `<= ${value.toFixed(1)}ms`
+      : 'above the top bucket';
 const mib = (bytes) =>
   bytes === null || bytes === undefined ? '  -  ' : `${(bytes / 1048576).toFixed(0)}MiB`;
 
@@ -2780,7 +2899,7 @@ export function renderReport(report) {
     if (level.server.usable) {
       detail(
         `         server: CPU ${num(level.server.cpuCores, 2)} cores, RSS ${mib(level.server.residentMemoryPeakBytes)}, ` +
-          `event loop p99 ${ms(level.server.eventLoopP99PeakMs)}, db probe p99 <= ${ms(level.server.dbProbeP99BoundMs)}, ` +
+          `event loop p99 ${ms(level.server.eventLoopP99PeakMs)}, db probe p99 ${boundMs(level.server.dbProbeP99BoundMs)}, ` +
           `${num(level.server.httpRequestsPerSecond)} req/s, ${level.server.scrapes} scrapes`,
       );
     } else {
@@ -2818,6 +2937,24 @@ export function renderReport(report) {
       tone: 'warn',
       text: `  ! resource: ${report.saturation.resource} — ${report.saturation.meaning}`,
     });
+    /**
+     * The sentence above says "saturated at N seated players", and when the limiter is what
+     * stopped the ramp that number is a policy setting rather than a capacity. It has already
+     * been quoted as one: a release review of this project recorded "capacity saturated at 6
+     * seated players, conservative ceiling 3" from a run whose levels ended on rate-limit
+     * refusals, against a harness that had printed "no capacity figure" three lines further down.
+     * Saying it once, next to the number, is cheaper than the correction.
+     */
+    if (report.saturation.stoppedBy.includes('refusal-rate-limited')) {
+      lines.push({
+        tone: 'warn',
+        text:
+          '  ! the RATE LIMITER ended this ramp, so that concurrency is a configured ceiling and not ' +
+          'a capacity. Raise the limits on the measured process (RATE_LIMIT_MAX, ' +
+          'RATE_LIMIT_GUEST_MAX, RATE_LIMIT_EXPENSIVE_MAX) and re-run before quoting any figure ' +
+          'from it, and say beside the figure that you did.',
+      });
+    }
   } else {
     lines.push({ tone: 'warn', text: `  ! ${report.saturation.note}` });
   }
@@ -2827,10 +2964,12 @@ export function renderReport(report) {
       continue;
     }
     const mark = signal.fired ? 'FIRED ' : 'quiet ';
-    detail(
-      `      ${signal.name.padEnd(12)} ${mark} ${num(signal.observed, 2)} ${signal.unit} ` +
-        `(threshold ${signal.limit} ${signal.unit})`,
-    );
+    // A non-finite observation is a histogram bound in the `+Inf` bucket, and "above the top
+    // bucket ms" is not a sentence. The unit belongs to a number.
+    const observed = Number.isFinite(signal.observed)
+      ? `${num(signal.observed, 2)} ${signal.unit}`
+      : num(signal.observed, 2);
+    detail(`      ${signal.name.padEnd(12)} ${mark} ${observed} (threshold ${signal.limit} ${signal.unit})`);
     // A confounded signal is worse than a missing one: it fires, it is true, and it means
     // something other than what its name says. Say so where the number is, not in a footnote.
     const confounder =
@@ -2943,6 +3082,40 @@ function printReport(report) {
  * the exact shape the limiter exists to refuse, and a failure in the middle of a parallel burst
  * is much harder to attribute.
  */
+/**
+ * Empties the API's rate-limit counters before provisioning, when this process holds the token.
+ *
+ * CI runs `test:smoke` and then this against one API from one address, and smoke's section 12
+ * floods `POST /auth/guest` until the first 429 on purpose. So this harness met a spent bucket and
+ * every CI run since at least 2026-10-11 ended "only 0 of 3 guest sessions could be created". The
+ * smoke test already clears the counters with this control; this uses it the same way. The route
+ * exists only on a process started with `RATE_LIMIT_RESET_TOKEN`, which `loadConfig` refuses in
+ * production, so with no token nothing is attempted.
+ *
+ * Returns the number of counters cleared, null when there was no token, or throws: a token the
+ * server refuses or a route it does not serve is a misconfigured run, not something to wait out.
+ */
+export async function resetRateLimits(baseUrl, origin, token) {
+  if (token === '') return null;
+  const headers = { accept: 'application/json', origin };
+  const seed = await fetch(new URL(ROUTES.session, baseUrl), { headers });
+  const cookie = seed.headers
+    .getSetCookie()
+    .map((raw) => raw.split(';', 1)[0])
+    .join('; ');
+  const csrfToken = (await seed.json())?.csrfToken;
+  if (typeof csrfToken !== 'string') throw new Error(`no CSRF token from GET ${ROUTES.session}`);
+  const response = await fetch(new URL(RATE_LIMIT_RESET_PATH, baseUrl), {
+    method: 'POST',
+    headers: { ...headers, cookie, 'x-csrf-token': csrfToken, authorization: `Bearer ${token}` },
+  });
+  const text = await response.text();
+  if (response.status !== 200) {
+    throw new Error(`POST ${RATE_LIMIT_RESET_PATH} answered ${response.status} ${text.slice(0, 160)}`);
+  }
+  return JSON.parse(text).cleared;
+}
+
 async function provisionSessions(count, options, metrics) {
   const sessions = [];
   const failures = [];
@@ -3055,6 +3228,16 @@ async function main() {
         `${firstScrape.snapshot.malformed.length > 0 ? `, ${firstScrape.snapshot.malformed.length} unparseable line(s)` : ''}`,
     ),
   );
+
+  const resetToken = process.env.PRL_RATE_LIMIT_RESET_TOKEN ?? process.env.RATE_LIMIT_RESET_TOKEN ?? '';
+  try {
+    const cleared = await resetRateLimits(options.baseUrl, options.origin, resetToken);
+    if (cleared !== null)
+      console.log(dim(`  reset    ${cleared} rate-limit counter(s) cleared before provisioning`));
+  } catch (error) {
+    console.error(red(`\n  x the rate-limit reset failed: ${error.message}`));
+    process.exit(1);
+  }
 
   const setupMetrics = new LevelMetrics();
   const setupStartedAt = performance.now();

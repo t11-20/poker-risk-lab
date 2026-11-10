@@ -42,19 +42,85 @@ const CHECK_ONLY = process.argv.includes('--check');
 // a workspace project and therefore cannot resolve `@prl/*`. Each package's own directory can, so
 // resolution of their internal imports still works normally.
 const fromRepo = (rel) => import(pathToFileURL(join(REPO, rel)).href);
-const { buildCoachReport } = await fromRepo('packages/poker-math/dist/index.js');
-const { readSituation } = await fromRepo('packages/content/dist/index.js');
+
+//
+// FROM `src/`, NOT `dist/`. These two read `dist/index.js` until 2026-08-27, which made this
+// script answer its question — "are the fixtures what the engine produces today?" — against
+// whatever the engine was the last time somebody ran `tsc`. A fix landed in `coach.ts` (the Coach
+// told a hero with no equity "You clear that with 0.0% equity, a -24.3 point shortfall") and both
+// `fixtures:check` and `fixtures:regenerate` reported the fixtures current while they still
+// carried the wrong sentence. Building the two packages surfaced drift in five places at once.
+//
+// A staleness check was written first and thrown away: `tsc` does not rewrite an output whose
+// content has not changed, so `dist` legitimately stays older than `src` and the guard refused a
+// tree that was perfectly built. Reading the source removes the question instead of policing it —
+// and `build-review.ts` below has always been imported this way, so nothing new is being asked of
+// the runtime.
+const { buildCoachReport, deriveContestablePot, exactRange } = await fromRepo(
+  'packages/poker-math/src/index.ts',
+);
+const { parseCards } = await fromRepo('packages/poker-engine/src/index.ts');
+const { readSituation, SCENARIO_ANALYSIS_SAMPLES, SCENARIO_ANALYSIS_SEED } = await fromRepo(
+  'packages/content/src/index.ts',
+);
 const { buildHandReview } = await fromRepo('apps/api/src/review/build-review.ts');
+
+/**
+ * Refuse a `dist/` that disagrees with the `src/` beside it.
+ *
+ * Reading the engine from `src` above fixes only HALF of this script. `buildHandReview` is a
+ * module, and its own `import { buildCoachReport } from '@prl/poker-math'` resolves through
+ * `node_modules` to `packages/poker-math/dist/index.js` — verified with `createRequire(...).resolve`.
+ * So the two halves of one gate read two different artifacts: the Lab scenarios track `src`, and
+ * the hand-review fixtures track the last `tsc`. A Coach prose fix in `src/coach.ts` without a
+ * rebuild left `review.ts` carrying the old sentence while this script called the fixtures current
+ * — the exact incident the earlier commit said it had removed, still live in the other half.
+ *
+ * A CONTENT comparison, not an mtime one. The first attempt at this class of guard compared
+ * `dist` and `src` timestamps and had to be thrown away: `tsc` does not rewrite an output whose
+ * content has not changed, so `dist` legitimately stays older and the guard refused a correctly
+ * built tree. Running one deterministic report through both and comparing the result asks the
+ * question directly and cannot produce that false positive.
+ */
+// By path, like everything else here: this script sits at the repository root, which is not a
+// workspace project, so a bare `@prl/*` specifier does not resolve. The header says so; I tried it
+// anyway and got ERR_MODULE_NOT_FOUND.
+const distMath = await fromRepo('packages/poker-math/dist/index.js');
+const PROBE = {
+  heroCards: parseCards('Ah 6h'),
+  board: parseCards('Kh 9h 4s 2c'),
+  street: 'turn',
+  opponents: [{ label: 'the opponent', range: exactRange(parseCards('Kd 9c')) }],
+  pot: 220,
+  contestablePot: 220,
+  toCall: 80,
+  heroCommittedThisStreet: 0,
+  heroStack: 300,
+  opponentStacks: [300],
+  bigBlind: 10,
+};
+{
+  const fromSource = JSON.stringify(buildCoachReport(PROBE));
+  const fromBuild = JSON.stringify(distMath.buildCoachReport(PROBE));
+  if (fromSource !== fromBuild) {
+    console.error(
+      'packages/poker-math/dist disagrees with its src, and `buildHandReview` reads the built copy.\n' +
+        'The hand-review fixtures would be compared against a stale engine and called current.\n' +
+        'Run: pnpm --filter ./packages/poker-math build',
+    );
+    process.exit(78);
+  }
+}
 
 const load = (file) => import(pathToFileURL(join(FIXTURES, file)).href);
 
 // --- the Scenario Lab -------------------------------------------------------
 
-// These must equal `routes/content.ts`'s CONTENT_SAMPLES/CONTENT_SEED, because the fixture stands in
-// for what that route serves. The guard asserts the same pair; a mismatch here regenerates figures
-// the running API would never produce.
-const SCENARIO_SAMPLES = 40_000;
-const SCENARIO_SEED = 20_260_817;
+// Imported, not restated. These must equal what `routes/content.ts` serves, because the fixture
+// stands in for that route — and the comment here used to assert that agreement over two literals
+// that nothing joined. `@prl/content` owns the pair now and all four consumers read it from there.
+const SCENARIO_SAMPLES = SCENARIO_ANALYSIS_SAMPLES;
+const SCENARIO_SEED = SCENARIO_ANALYSIS_SEED;
 
 const opponentLabelFor = (scenario) =>
   scenario.opponentRange.kind === 'exact' ? 'the opponent' : scenario.opponentRange.label;
@@ -68,6 +134,17 @@ function reportForScenario(scenario) {
     street: scenario.street,
     opponents: [{ label: opponentLabelFor(scenario), range: situation.opponentRange }],
     pot: situation.pot,
+    // The pot hero can actually win. Below `situation.pot` only when a scenario's hero is all-in
+    // for less than the bet in front of them, which is a side pot hero is not in. Derived rather
+    // than layered because a scenario carries no complete per-seat record of the street — see
+    // `routes/content.ts`, which this mirrors.
+    contestablePot: deriveContestablePot({
+      pot: situation.pot,
+      toCall: situation.toCall,
+      heroCommittedThisStreet: scenario.committedThisStreet?.[heroSeat?.seat ?? -1] ?? 0,
+      heroStack: situation.heroStack,
+      opponentStacks: [...situation.opponentStacks],
+    }),
     toCall: situation.toCall,
     heroCommittedThisStreet: scenario.committedThisStreet?.[heroSeat?.seat ?? -1] ?? 0,
     heroStack: situation.heroStack,

@@ -52,7 +52,7 @@ one that is absent, because it reads as protection.
 
 Banned outright, at every version: `keyv`, `cacheable`, `flat-cache`,
 `file-entry-cache`, `cacheable-request`, `cache-manager`, `@cacheable/*`, `@antv/*`,
-`echarts-for-react`, `size-sensor`, `timeago.js`, `jest-canvas-mock`.
+`echarts-for-react`, `size-sensor`, `timeago.js`, `jest-canvas-mock`. **Banned by scope prefix as well**, which this paragraph omitted until 2026-08-26: `@tanstack/*`, `@mistralai/*` and `@opensearch-project/*`. `scripts/supply-chain/denied-packages.mjs` is the list; a contributor reaching for `@tanstack/react-query` on the strength of this paragraph would have been refused by the gate and surprised.
 
 Also banned: `npx`, `pnpm dlx`, remote installer pipes (`curl … | bash`), and any tool
 fetched at build time rather than pinned.
@@ -63,7 +63,7 @@ fetched at build time rather than pinned.
 pnpm run deps:quarantine      # resolve in a throwaway dir with a scrubbed environment
 git diff -- pnpm-lock.yaml    # review every added line
 pnpm install --frozen-lockfile
-pnpm run security:audit       # all nine gates must pass
+pnpm run security:audit       # all fifteen gates must pass
 ```
 
 `deps:quarantine` resolves in a temporary directory with a throwaway `HOME`, no `.git`, no
@@ -79,6 +79,32 @@ The Mini Shai-Hulud campaign **forges Sigstore attestations**. The audit records
 attestation state for incident response, but no gate relies on it and a missing attestation
 is not a failure. Treating "has provenance" as "is safe" would be exactly the wrong lesson
 from this campaign.
+
+### Release images: two signing postures, and which claim each one supports
+
+A release image is signed one of two ways, and `pnpm run security:image-provenance` verifies
+whichever posture the signature record is actually in. It refuses a record in **neither** —
+that is what an unsigned release looks like, and "absent" must never be read as "the other
+posture, presumably" — and refuses a record claiming both.
+
+| Posture | Signed by | Verified against | What it establishes |
+| --- | --- | --- | --- |
+| **key** | a long-lived cosign key on the release machine | `deploy/signing/cosign.pub` | **possession of a key.** Anybody who can read the key and its passphrase can sign anything. No transparency log, so compromise is not detectable after the fact |
+| **keyless** | `.github/workflows/release-sign.yml`, via a ten-minute Fulcio certificate | the identity and issuer in `deploy/signing/keyless-policy.json`, plus Rekor | **the identity of a builder** — a named workflow file, in a named repository, on a named ref. No long-lived secret exists to steal |
+
+The thing to understand about the keyless posture before quoting it: a keyless signature
+verifies against *some* Fulcio certificate, and **Fulcio issues one to anybody's GitHub
+Actions job.** What makes it provenance is that the verifier demands a specific
+`--certificate-identity` and `--certificate-oidc-issuer`, taken from the committed policy and
+never from the record being checked. A verification that omits them accepts a signature made
+by a workflow in a repository nobody has heard of. `pnpm run security:keyless` holds the
+policy and the workflow to the same answer, so a rename, a retrigger onto another ref, or an
+`id-token: write` grant appearing in any other workflow fails a gate rather than silently
+widening what is accepted.
+
+**Status: the keyless posture is implemented and UNEXERCISED.** Every release image today is
+in the key posture. No run of the signing workflow has happened, so no Fulcio certificate and
+no Rekor entry exist for this repository. `deploy/signing/README.md` is the long form.
 
 ## 3. Secure coding rules
 
@@ -160,42 +186,80 @@ These are the rules a reviewer will actually check.
 ## 4. Running the gates
 
 ```bash
-pnpm run security:audit          # all nine supply-chain gates
-pnpm run security:audit -- --offline   # skip the two network gates — EXITS 2, see below
+pnpm run security:audit          # all fifteen supply-chain gates
+pnpm run security:audit -- --offline   # skip the four network gates — EXITS 2, see below
 
 pnpm run security:policy         # is the policy actually in effect?
 pnpm run security:hygiene        # source encoding, hidden characters
 pnpm run security:denylist       # banned packages
 pnpm run security:shapes         # resolution shapes, install scripts, exact versions
 pnpm run security:ioc            # Shai-Hulud IOC sweep
+pnpm run security:secrets        # committed credentials, and the ignore rules that prevent them
 pnpm run security:pinning        # CI actions by commit SHA, base images by digest
 pnpm run security:provenance     # lockfile ↔ registry integrity, release age
-pnpm run security:osv            # OSV.dev vulnerabilities
+pnpm run security:osv            # OSV.dev vulnerabilities, npm ecosystem
+pnpm run security:actions        # OSV advisories against the pinned GitHub Actions
 pnpm run security:sbom           # CycloneDX 1.6 SBOM
+pnpm run security:containers     # trivy against the built release images
+pnpm run security:image-provenance  # are those images signed — and by WHICH posture?
+pnpm run security:keyless        # does the keyless identity policy match the workflow?
 ```
 
-**`--offline` exits 2, deliberately.** It skips *integrity + release age* and *OSV*, prints
-`2 network gate(s) skipped — NOT a valid release audit`, and then exits non-zero. It used to
-exit 0, which is the defect: an audit that did not run two of its gates is indistinguishable,
-to anything reading only the exit code, from one that ran all nine and passed. Exit 2 rather
-than 1 so a caller can still tell "skipped" from "a gate failed". Verified 2026-08-19:
+**`--offline` exits 2, deliberately.** It skips *integrity + release age*, *OSV*, *pinned
+action advisories* and *container image CVEs*, prints `4 network gate(s) skipped — NOT a valid
+release audit`, and then exits non-zero. It used to exit 0, which is the defect: an audit that
+did not run four of its gates is indistinguishable, to anything reading only the exit code,
+from one that ran all fifteen and passed. Exit 2 rather than 1 so a caller can still tell
+"skipped" from "a gate failed".
+
+This section said *two* network gates and pasted a `2 network gate(s) skipped` transcript,
+which was true when the container scan did not exist; then *three*, until
+`action-advisories` was added on 2026-08-27. There are four, and the container scan
+is skipped by `--offline` even on a machine with no release images: `audit.mjs` evaluates the
+offline branch before the artefact branch, so the gate is reported as **skipped** — which
+exits 2 — rather than as *not applicable*, which would not. The transcript below was captured
+2026-08-25 and predates the fourth gate; read the number off the run:
 
 ```
 $ node scripts/supply-chain/audit.mjs --offline; echo $?
+Summary
+  ✓ pass     policy in effect
+  ✓ pass     source encoding hygiene
+  ✓ pass     denied packages
+  ✓ pass     dependency shapes
+  ✓ pass     Shai-Hulud IOC sweep
+  ✓ pass     committed credentials
+  ✓ pass     CI + container pinning
+  ✓ pass     keyless signing identity
+  ✓ pass     log policy
   ○ skipped  integrity + release age
   ○ skipped  OSV vulnerabilities
-2 network gate(s) skipped — NOT a valid release audit.
+  ✓ pass     SBOM generation
+  ○ skipped  container image CVEs
+  ✓ pass     release image signatures
+
+3 network gate(s) skipped — NOT a valid release audit.
 2
 ```
+
+Re-captured again on 2026-08-25 when the keyless-identity gate was added. Note which
+gates the offline run still executes: *keyless signing identity* reads a committed policy
+and the committed workflows, and *release image signatures* verifies against a loopback
+registry and a committed trust anchor. Neither reaches the network, and both are exactly
+the checks an air-gapped deployer needs.
 
 Artifacts land in `docs/sbom/`: the SBOM, the OSV report and the provenance report. The
 SBOM is content-derived and byte-stable, so `git diff` shows dependency changes rather than
 a fresh timestamp.
 
-`security:audit` and `security:hygiene` are **two of the eleven gates in `pnpm run verify`**, which
+`security:audit` and `security:hygiene` are **two of the sixteen gates in `pnpm run verify`**, which
 is the release gate as a whole (`RUNBOOK.md` §3). They are the first two it runs, and it runs the
-other nine whether or not they pass — a supply-chain failure must not be the reason nobody found out
-that the schema check also fails.
+other fourteen whether or not they pass — a supply-chain failure must not be the reason nobody found out
+that the schema check also fails. (This has said *eleven and nine*, then *thirteen and eleven*, then
+*fourteen and twelve*, and is now sixteen and fourteen: the loop in `package.json` gained `test:ax`
+and `test:csp`, then `test:age-gate`, then `test:layout` and `test:keyboard`. Do not read the fifteen
+inside `security:audit` as the same number — it was the same one by coincidence for a while, and is
+not any more. Read each off its own list.)
 
 Findings are not waived to unblock a release — fix the dependency, pin an older version, or remove
 it. The single escape hatch is an entry in `scripts/supply-chain/osv-allowlist.json`, which requires
@@ -234,6 +298,11 @@ it. The headline items:
   not prove the image or the action was benign when that digest was taken, and it cannot: a
   pinned digest of a compromised artefact is pinned to the compromise. The control it buys is
   that an upstream cannot change what runs here without a diff in this repository.
-* **Nothing re-checks a pin for a newly disclosed advisory.** OSV covers npm packages only.
-  An advisory against `node:24.18.0-bookworm-slim` or a pinned action surfaces through
-  whatever watches those ecosystems, which today is a human.
+* **A pinned reference is re-checked against new advisories, by two different gates, and by
+  neither for the base image's own code.** `container-scan` reads the Alpine package database
+  inside the built images, which is how CVE-2026-14456 reached a gate. `action-advisories`
+  resolves every pinned action SHA to the version it is — by asking GitHub which tags point at
+  that commit, never by reading the trailing comment — and matches it against OSV's published
+  `GitHub Actions` corpus. What still reaches nobody automatically is an advisory against the
+  *upstream project* of a base image where the finding is not in a distro package: that
+  surfaces through whatever watches that ecosystem, which today is a human.

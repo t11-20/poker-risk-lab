@@ -339,12 +339,47 @@ on AhAs vs KdKc (exact 81.255%), 20,000 samples, three seeds: |diff| 0.455 / 0.1
 points against 95% half-widths of ±0.544 / ±0.540 / ±0.538 — inside all three. A single seed
 proves less than it looks like it proves, which is why three are quoted.
 
-> **None of this is reproduced by any gate.** No test in the tree enumerates the 36
-> configurations, and none compares a Monte Carlo result against exact enumeration; the closest
-> is `apps/api/test/calc.test.ts:527`, which checks one configuration lies between 0.80 and 0.84
-> — wide enough to pass on a materially wrong evaluator. The figures above are a result somebody
-> obtained, now obtained a second time and by a different route, which is worth something and is
-> still not the same as a gate. Recorded in §12 with what would close it.
+### And all of it is now reproduced by a gate
+
+`packages/poker-math/test/equity-published-figures.test.ts` — inside `test`, so inside `verify`.
+**Every one of the 132 configurations above is enumerated on every run**, 1,712,304 boards each,
+by a second implementation written for this file: five nested loops over the remaining 48 cards
+and nothing else, deliberately sharing none of `exactEquity`'s machinery. 25 s, measured
+2026-08-26.
+
+What it asserts, beyond the three averages and their extremes:
+
+* **The suit-isomorphism structure.** Suits are interchangeable in hold'em, so configurations
+  that differ by a relabelling of the four suits must have *bit-identical* equity. That forces
+  the multiplicity profile — 6/24/6 for AA-vs-KK, 12/12 for AKs-vs-22, 12/24/24/12 for
+  AKo-vs-QQ — and an evaluator with any suit-dependent behaviour splits a class and changes
+  those counts even if the average survives. Asserted on the raw floats, not on rounded strings.
+* **`exactEquity` agrees with the longhand enumerator to the last bit** on one configuration from
+  each matchup. The two are tied together by equality, not by a tolerance.
+* **Monte Carlo against exact enumeration, with the tolerance derived from the sample size and
+  not chosen.** 200 seeds × 20,000 samples, each bounded by *its own* 95% half-width
+  (1.96·sd/√n, computed by `monteCarloEquity` from the variance it observed): 184 of 200 intervals
+  contained the exact value where ~190 is expected, worst single miss 1.66 half-widths. Then all
+  200 shards pooled through the production `combineMonteCarlo` — 4,000,000 samples against a
+  ±0.038-point interval, landing 0.016 points out. Seeds are fixed, so a 95% interval cannot
+  flake a gate; what the fixed seeds cost is generality, which is why the assertions are about the
+  ensemble rather than about any one run.
+* `apps/api/test/calc.test.ts`'s AA-vs-KK bound, which used to be `> 0.8 && < 0.84`, is now
+  `|x − 0.81255489679402726| < 1e-9`. The old window was four percentage points wide on a figure
+  whose entire spread across all 36 configurations is 1.4.
+
+**Negative controls, each run.** With `popCount13(suitC) >= 5` changed to `>= 6` in the evaluator
+— club flushes silently stop existing — the AA-vs-KK average moves to 82.098% and the test fails;
+**the old 0.80–0.84 bound accepts it**. With ties scored as losses in `Tally.record`, the
+production/longhand equality fails at 0.81065 against 0.81255. With the interval's `1.96` changed
+to `1.0`, coverage falls to 138 of 200. With the Monte Carlo run-out pool short by one card, the
+pooled 4,000,000 samples land 0.1335 points out against their own ±0.0382.
+
+Two things this does *not* prove, recorded because the row above them used to overclaim: the
+longhand enumerator shares `evaluate` with production, so it is independent of the equity code and
+not of the evaluator — what pins the evaluator is the constants, which are published results and
+§2's exhaustive enumeration. And 132 configurations is every configuration of *these three*
+matchups, not of hold'em.
 
 ---
 
@@ -353,9 +388,13 @@ proves less than it looks like it proves, which is why three are quoted.
 `packages/content/test/scenarios.test.ts` — **13 tests, all passing**
 
 ```
-17 lessons · 17 quizzes (80 questions) · 36 scenarios · 90 glossary terms · 11 topics
+17 lessons · 17 quizzes (81 questions) · 36 scenarios · 90 glossary terms · 11 topics
 36/36 scenarios carry claims: 74 independent verification claims, 0 regression locks
 ```
+
+*(This said **80** questions until 2026-08-26. `contentStats()` says 81 and prints it on every run;
+the figure was another one nobody re-derived, which is the whole subject of the note at the top of
+this document.)*
 
 ### What is verified
 
@@ -381,6 +420,82 @@ proves less than it looks like it proves, which is why three are quoted.
   tournaments 2, psychology 1. By difficulty: 6 intro, 16 core, 14 advanced.
 * Analysis is **deterministic for a given seed**, so every learner sees the same numbers.
 
+### The other kind of number, and the gap it sat in
+
+`packages/content/test/taught-figures.test.ts` — **2 tests**, added 2026-08-26.
+
+Everything above is about *computed* figures: an equity, a price, an out count, produced at
+runtime and never stored. That rule left a whole class untouched — the arithmetic a lesson
+**works through**, which a learner is meant to follow line by line. "13 pairs at six each, which
+is 78." "The next raise must therefore reach at least 100, not 80 and not 120." "The short
+stack's chance of finishing first is 100/400 = 25%, so they take 25% of first plus 75% of second:
+0.25×70 + 0.75×30 = 40." None of that is a computed figure dressed as prose; it *is* the
+teaching, and nothing checked it.
+
+Two halves:
+
+* **27 registered claims, recomputed.** Each names a record and quotes the sentence, and each
+  value the entry compares is DERIVED — the 1,326 combinations from `allHandClasses()` and from
+  C(52,2); the minimum raise from a hand actually dealt through `startHand`/`applyAction` and
+  read off `minimumRaiseTo`; the 60/160 side pots from `buildPotLayers`; the 60/40 prize equity
+  from `icmEquity`; the wheel's rank and the category ladder from `evaluate`. A quote that no
+  longer appears **exactly once** fails as loudly as a wrong number, because a registry entry
+  that stops matching is a guard that stopped guarding. 66 derived values are matched back into
+  the prose.
+* **A mechanical sweep of all 61 live calculations and numeric quiz questions**, comparing 112
+  graded inputs against the prose around them. The failure it exists for is an edit to one side
+  only — a prompt reworded to "the pot stands at 120" over the `{ pot: 100 }` the learner is
+  marked against. For the rule of 2 and 4 it compares the *multiplier the prose names* against
+  `cardsToCome`, which is worth more than the digits: a caption reading "the rule of 4" over a
+  one-card calculation teaches the wrong shortcut while every number on the page still agrees.
+
+Prose that deliberately omits a number — "the identical bet", "same edge and same standard
+deviation, but with three times the bankroll" — is an explicit table of exemptions, each naming
+the phrase that earns it and why, and **an exemption that fires for nothing fails the test**.
+
+**Negative controls, each run on 2026-08-26.** `1326` → `1327` in the lesson, `60` → `50` in the
+side-pot answer, `100` → `90` in the minimum-raise chain: all three fail. A quiz prompt changed to
+"the pot now stands at 120" while `potOdds` is still graded on 100: fails. A caption still reading
+"one card left to come" over a `cardsToCome: 2` calculation: fails, naming the multiplier. And in
+the other direction, with the content untouched and `combosOfClass` made to drop one offsuit
+combination, the 1,326 chain fails — the entry is tied to the code, not to a second copy of the
+answer.
+
+### What the audit of 2026-08-26 found
+
+Every numeric claim in `packages/content`, in the Coach's generated prose, and in the
+hand-written prose of `apps/web/src/fixtures/**` was decided against computation. **One was
+wrong**, in the fixture the live table falls back to when the API is unreachable:
+
+> `apps/web/src/fixtures/table.ts`, under "what would change it":
+> *"A cutoff who folds far less often than 35% to a flop raise. **Below roughly 20% the raise
+> and the call are worth about the same.**"*
+
+Measured through `evOfRaise` and `evOfCall` on the report's own inputs — pot 100, 35 to call,
+raise to 105, 54.1% equity — at 20% fold equity the raise is **17.0 chips ahead** of the call,
+not level with it, and solving for the frequency at which they meet gives **−10.2%**: there is
+no fold frequency at or above zero at which the claim is true. With equity above an even share
+the raise beats the call against an opponent who never folds, because more units in the middle
+at better than half the pot is worth more than the folds. The sentence gave a learner a
+threshold that does not exist, and told them to fold out of a line that was ahead by 5.7 chips
+at worst. It now states the real quantities — 0.56 chips per point of fold equity, 5.7 ahead at
+zero, 17.0 ahead at 20% — and the crossover that *does* exist, which is 50% **equity** and not
+a fold frequency at all. `apps/web/test/table-fixture-figures.test.ts` recomputes all of it,
+and asserts the shape too: the fixture may name a fold-equity threshold only if solving for one
+gives a non-negative answer.
+
+The file's own header derives most of its figures by hand, and **every figure it derives is
+right**. The one that was wrong is the one the header does not derive, which is the argument
+for the guard in one line.
+
+Three further figures are rounded teaching approximations and are left, each because the text
+that carries them says so: "a small pair flops a set about one time in eight" (exactly 11.755%,
+one in 8.51, and the same scenario's reasoning states 11.8% two paragraphs later); "each unseen
+card is roughly one in fifty" (47 on the flop, and the lesson names 47 in the sentence before);
+and the rule of 2 and 4 itself, whose inaccuracy is the lesson. One more figure was wrong in
+this document rather than in the product: §9 said 80 quiz questions where `contentStats()` says
+81.
+
 ### Content defects these checks found
 
 Six blocking defects were found and fixed during review, including: a `callEvSign: positive`
@@ -402,8 +517,11 @@ is enforced rather than documented.
 
 ## 10. Supply chain
 
-`pnpm run security:audit` — **9 gates, all passing**. Every figure below is from the run of
-2026-08-19 and was copied out of that run's output, not carried forward:
+`pnpm run security:audit` — **15 gates**. Figures below are from the run of 2026-08-19 and
+were copied out of that run's output, not carried forward, **except the rows that carry their
+own later date**, which were re-captured because the gate list had grown and the pinning
+figures had gone stale. This section said "9 gates" for both reasons at once: `secret-scan` and
+`container-scan` had been added to the `GATES` array and no row here named them.
 
 | Gate | Result |
 | --- | --- |
@@ -412,20 +530,73 @@ is enforced rather than documented.
 | Denied packages | 0 found across **162 resolved package versions** (104 on disk; 58 are platform-skipped optional deps, inspected from the registry by the integrity gate) |
 | Dependency shapes | lockfile v9; 162 resolutions and 49 importer edges; registry-only; **0 install-time lifecycle hooks** across 104 installed manifests; every version exact |
 | IOC sweep | **10,540 files / 125.4 MiB** swept for 9 string markers, 2 hashes, 6 artefact paths — clean |
-| CI + container pinning | 2 workflows, **24 action references** all 40-hex commit SHAs; 2 Dockerfiles with 2 external base images and 1 compose file with 2 image references, all `@sha256:` digests; no undeclared workflow |
+| Committed credentials | *2026-08-25:* **621 tracked files read** of 622 tracked; 7 secret-bearing paths checked against the ignore rules. Working tree only — `--history` is opt-in and is not part of the audit |
+| CI + container pinning | *2026-08-25:* **3 workflows, 46 action references** all 40-hex commit SHAs; 2 Dockerfiles with 2 external base images and **3 compose files with 8 image references**, all `@sha256:` digests; no undeclared workflow. (Was recorded as 2 workflows / 24 actions / 1 compose file / 2 images, measured 2026-08-19) |
 | Integrity + release age | **all 162 lockfile hashes match the registry**; every version clears the 7-day cooldown |
 | OSV | **0 advisories** across 162 versions |
-| SBOM | CycloneDX 1.6, **170 components, 171 dependency records**, content-derived serial |
+| Pinned action advisories | *2026-08-27:* **63 action references over 4 distinct pins in 4 repositories**, each resolved to the version it is by `git ls-remote --tags` — v7.0.1, v7.0.0, v7.0.1, v6.0.0, every one agreeing with its trailing comment — matched against **55** published `GitHub Actions` advisories from OSV: **0 findings**. Its 6 built-in controls behaved on the same run |
+| SBOM | *2026-08-25:* CycloneDX 1.6, **170 components, 171 dependency records**, content-derived serial |
+| Container image CVEs | trivy at the HIGH floor against the built release images. Not run by a commit-time audit — on a checkout with no release images the gate reports **not applicable** and the summary says so. Last measured against the candidate digests 2026-08-24 (trivy 0.72.0): **0 blocking, 60 unfixable, 0 allowed**; see `docs/production/staging-verification.md` for the CRITICAL/HIGH breakdown |
 
-The eight-gate figure this table used to give is what the ninth gate was added to fix: the
+The eight-gate figure this table used to give is what the pinning gate was added to fix: the
 repository's *own* dependencies were held to "no mutable references" by six gates, while the
 **pipeline's** dependencies — GitHub Actions and container base images — were held to it by
 header comments. `uses: actions/cache@v4` added tomorrow would have passed all eight, and that
 is a pointer its owner can repoint at code which then runs here with this repository's secrets.
 
-`--offline` skips *integrity + release age* and *OSV* and then **exits 2** rather than 0, because
-an audit that did not run two of its gates has not passed and a pipeline reading only the exit
-code could not previously tell the difference.
+`--offline` skips *integrity + release age*, *OSV*, *pinned action advisories* and *container
+image CVEs* — **four** gates, not the two this paragraph used to name and not the three it named
+after that — and then **exits 2** rather than 0, because an audit that did not run four of its
+gates has not passed and a pipeline reading only the exit code could not previously tell the
+difference. The advisory gate skips only under that flag: run on its own with no network it
+**fails**, because an advisory database that cannot be reached makes every pinned action unknown,
+and unknown is not clean. The container gate is skipped rather than reported
+not-applicable under `--offline` because `audit.mjs` tests the offline branch first, which is
+what makes the run exit 2 instead of 0 on a machine that has no release images either way.
+
+### Pinning is not safety, and for a while nothing here said so
+
+`ci-pinning.mjs` proves every `uses:` is a full commit SHA, which stops a tag being repointed. It
+says nothing about a pinned SHA of a version an advisory was later published against — that stays
+pinned, and stays vulnerable, silently and for ever. `action-advisories.mjs` closes it, and two
+measurements against the live services on 2026-08-27 decided how:
+
+* OSV's **version-qualified** query returns `{}` for the `GitHub Actions` ecosystem even for a
+  version squarely inside a published range (`canonical/get-workflow-version-action` 1.0.0 against
+  an advisory covering everything below 1.0.1), while the same query with no `version` key returns
+  the advisory and the identical shape against `npm` returns six. The ecosystem is real — a garbage
+  one is rejected with `invalid ecosystem`. A gate built the way `osv-scan.mjs` is built would have
+  queried successfully, matched nothing, ever, and printed a green tick over an empty answer.
+* OSV's **name** query is case-sensitive and GitHub's `uses:` is not: `Azure/setup-kubectl` returns
+  GHSA-p756-rfxh-x63h and `azure/setup-kubectl` returns `{}`.
+
+So the gate downloads the ecosystem's whole published corpus (one request, 55 records) and indexes
+it case-insensitively — which also lets it assert its advisory source is non-empty, something a
+per-name query cannot do.
+
+The version comes from GitHub, never from the `# v7.0.1` comment: a gate whose answer comes from a
+comment is turned green by editing the comment. `git ls-remote --tags` gives the tags at a commit,
+peeled `^{}` line included, and the most specific one is the release — `v7` and `v7.0.1` both point
+at the pinned checkout commit and reading `7` as a version too would make every advisory fixed
+inside the current major fire against a pin that is not affected. The comment is checked *against*
+that answer, so a mislabelled pin is its own failure.
+
+Eight failure modes, each demonstrated by running the real gate against the real repository with one
+deliberate defect at a time on 2026-08-27:
+
+| Defect | What the gate did |
+| --- | --- |
+| one `actions/download-artifact` pin moved to `f44cd7b4…` — real commit, real release v4.1.0, real advisory | ✗ `GHSA-cxww-7g56-2vh6 affects actions/download-artifact@4.1.0 severity=HIGH`, exit 1 |
+| the correct `actions/checkout` SHA relabelled `# v9.9.9` | ✗ *actions/checkout is labelled `# v9.9.9` and GitHub says that commit is v7, v7.0.1*, exit 1 |
+| `actions/checkout` pinned to the head of `main` — a real commit no tag names | ✗ `no tag of actions/checkout points at the pinned commit`, exit 1 |
+| every HTTP request sent to a dead proxy | ✗ `the GitHub Actions advisory corpus could not be read`, exit 1 |
+| `git` alone sent to a dead proxy | ✗ `could not read the tags of actions/download-artifact`, exit 1 |
+| the action-reference floor raised to 64 | ✗ `found 63 action reference(s); this gate refuses to run below 64`, exit 1 |
+| the advisory-corpus floor raised to 999 | ✗ `the advisory corpus holds 55 record(s)`, exit 1 |
+| `actions/upload-artifact` pinned to a real SHA that belongs to `actions/checkout` — a copy-paste swap | ✗ *no tag of actions/upload-artifact points at the pinned commit 3d3c42e5aac5*, exit 1 |
+
+The first is the one that matters: a real, published, HIGH advisory against a real version of an
+action this repository really uses, found from the SHA rather than from the label beside it.
 
 ### A finding worth recording
 
@@ -465,6 +636,10 @@ The honest section.
 | Claim | Status |
 | --- | --- |
 | **The deck is chosen fairly** | **Not verified, and not verifiable by this design.** The commitment proves the deck was *fixed before any action*, not that it was *chosen* honestly. A dishonest operator could grind candidate decks and commit to a favourable one. Closing it needs player-contributed entropy. THREAT-MODEL G1 |
+| **The web app would render a leak** | **Closed 2026-08-27**, and the row is kept because what it said was true for as long as it stood: `isSeatView` accepted `holeCards` on any seat, `Seat.tsx` draws a non-null pair face-up, and the three "a card the server hid stays hidden" tests in `a11y-contracts.test.ts` are regexes over SOURCE TEXT that only ask what happens when `holeCards === null`. What was **not** done is the client-side redaction this row proposed, and the argument against it is in `apps/web/src/lib/hole-card-entitlement.ts`: dropping the cards cannot prevent the disclosure, because on `/play` the frame is already in the browser and on `/review/[handId]` the whole `HandReviewResponse` is a prop of the client component `HandReplay` and so is serialised into the flight payload — a redactor would hide a leak from the honest reader and from nobody else. What went in instead is a **detector that refuses**: `narrowState` holds every `state` frame to the invariant `redactFor`'s own header states about its own output (`holeCards` non-null for exactly `isSelf || showed down`, with `viewerSeat`, `isSelf`, `street` and `result.showdowns` all published in the same view), refuses the frame whole, raises a `console.error` and tells the reader the table stopped and why. It is an assertion about the server's published fields rather than a second policy: the two can disagree only if `redactFor` contradicts itself. `apps/web/test/hole-card-entitlement.test.ts` (15 tests) drives real hands through `startHand`/`applyAction`/`redactFor` and feeds the frames — clean, and leaked by moving a card the same `HandState` really dealt — through the real narrowing; `table-socket.test.ts` pins the wiring. **Negative control, run that day:** with the one line deleted from `narrowState`, 4 of 15 and 1 of 17 fail, and they are exactly the five cases that submit a leaking frame. The review route is covered by test and not at runtime, for three measured reasons in that module's header — the payload is already in the HTML, `findViewerSeat` is a heuristic that can return null, and the live rule genuinely does not fit a replay (it reports the opened seat at all eleven steps of `REVIEW_HAND_SHOWDOWN`, correctly by its own rule and wrongly about the product) |
+| **`audit_log`'s forbidden-key CHECK is narrower than it looks** | ~~`hole_cards`, `cards`, `board` and `reveal` all pass it.~~ **Closed 2026-08-27** by `db/migrations/0007`, which adds a SECOND `?|` CHECK beside 0001's rather than rewriting it — a rewrite means a DROP, and `migrate.mjs` refuses one without an irreversibility marker because roll-forward-only leaves no way back. `NOT VALID`, so it binds every future write without scanning history; measured first on the development database, 3,102 audit rows and zero that would violate. The lower-cased app-layer mirror was widened with it, and `apps/api/test/audit-forbidden-keys.test.ts` now holds the two together by reading `pg_get_constraintdef` off the live database — a pairing test whose *existence* `audit.ts` had claimed in a comment for months and which did not exist |
+| **A card stringified into a log message** | `scrubValue` returns strings verbatim, so `log.info({ note: JSON.stringify(state) })` passes every layer. Not fixable by a key denylist, and not currently done anywhere. Same sweep |
+| **`PostgresError.detail` carries the failing row** | ~~Not pinned.~~ **Closed 2026-08-27.** It arrives as `Failing row contains (…, ["Ah","Ks"], …)` on an enumerable own property, and was safe only because `serializeError` reads a FIXED field set of five and postgres.js `debug` is never enabled — both true by construction and asserted by nothing. `apps/api/test/log-error-fields.test.ts` now pins the field set exactly, pins that the message and code still survive so it is redaction rather than silence, and refuses a `debug:` option in `db.ts` or `sql.ts`, whose callback receives every statement and its parameters |
 | **Bot / profile strength** | Not claimed. The opponent profiles are heuristic teaching styles, explicitly not solver-derived. A strong human should beat all of them |
 | **ICM accuracy** | Malmuth–Harville is an approximation ignoring skill, position and blind pressure. Stated with every figure it produces |
 | **Risk of ruin** | A diffusion approximation assuming constant edge, constant stakes, normal results and an infinite horizon. Stated every time |
@@ -473,32 +648,45 @@ The honest section.
 | **Accessibility, fully** | The audit is static (server-rendered HTML) because a headless browser needs install scripts the supply-chain policy forbids. It reports exactly what it covers. THREAT-MODEL G5 |
 | **Load behaviour at scale** | The harness measures a local dev server, not production capacity, and says so in its output |
 | **Container image digests** | *Presence* is now verified and gated: every base image and every GitHub Action is `@sha256:`/40-hex pinned and `ci-pinning` fails the release otherwise (2026-08-19). What is **not** verified is that any pinned artefact was benign when its digest was taken — a digest pins bytes, not trustworthiness. This row used to say digests were partly absent; that is no longer true, and it is recorded here rather than deleted |
-| **A pinned digest staying safe** | Nothing re-checks it. The OSV gate queries the `npm` ecosystem only, so an advisory against `node:24.18.0-bookworm-slim` or against a pinned action reaches this repository through a human reading an advisory feed |
+| **A pinned digest staying safe** | **Half true, and the half that was wrong was disproved here on 2026-08-26.** The OSV gate does query the `npm` ecosystem only. But the container CVE gate inside `security:audit` runs trivy against the built images, and trivy reads the Alpine package database — so an advisory against the OS packages a pinned base image ships is caught automatically, at the gate, without anybody reading a feed. That is exactly how **CVE-2026-14456** (HIGH, OpenSSL, in the `node:24.18.0-alpine3.24` digest's libcrypto3/libssl3 3.5.7-r0) surfaced: four findings across both images, release-blocking, hours after they were built. The same used to be false of a pinned **GitHub Action**, and since 2026-08-27 it is not: `action-advisories` — gate twelve of `security:audit` — resolves every one of the 63 pinned SHAs to the version it is by asking GitHub which tags point at that commit, and matches those versions against OSV's published `GitHub Actions` advisory corpus. It does not read the `# v7.0.1` trailing comment for the answer; it checks the comment against the answer, so a mislabelled pin fails too. A pinned SHA that no tag names, an unreachable corpus and a corpus that arrives short all fail rather than pass — see `scripts/supply-chain/action-advisories.mjs` for the two measurements that decided the design, and §10 for the eight demonstrated failure modes |
 | **The backup and restore procedure** (`RUNBOOK` §11.4) | Rehearsed by hand on 2026-08-19 — dump, `migrate.mjs roles`, `pg_restore --exit-on-error`, `db:verify` exit 0, `db:migrate:status` exit 0 — and **enforced by nothing**. No gate restores a dump. `db:verify` runs inside `verify` against the *development* database, which proves the checks work, not that a restore produces a database they would pass |
 | **Who owns schema `prl`** | **Now checked.** It was not, and that gap was found by breaking it: `verify-schema.mjs` check 6 asserts `prl_app` owns no relation and holds no `CREATE`, but never asked who *did* own the schema. Restoring a dump as `prl_api` without `--exit-on-error` leaves all relations in `prl` owned by `prl_api` — which then holds `CREATE` and can `DROP` every table it serves — and `db:verify` exited **0** over it. Check 6b now asserts `pg_namespace.nspowner` and every `pg_class.relowner` in `prl` is `prl_migrator`. It earned its place immediately: on first run it failed the shared development database, whose migration ledger was still owned by the bootstrapping superuser, and `pnpm run db:migrate` repaired it. |
 | **That `up` actually calls the destructive-statement gate** | The gate's logic is well covered — `apps/api/scripts/migrate.test.mjs`, 10 tests, run inside `test:scripts`: `down` refuses without a database, the scanner fires on each destructive kind, ignores a `DROP` that is only mentioned in prose, catches one hidden in a `DO` block, and rejects a bare `-- prl:irreversible:` with no reason. What no test covers is the **wiring** — that `up` consults it before applying — because that needs a live database and a deliberately-bad pending migration |
 | **That a test which runs actually asserts anything** | The reachability guard (`apps/api/test/workspace-test-reachability.test.ts`) now proves each package's suite *would execute* tests — a real `node --test` runner, at least one `test()`/`it()` per file, no declaration disabled by a literal skip — but it is a static reader. A test whose body asserts nothing still counts as executing. Closing that needs each package's runner to emit a machine-readable summary a root script asserts on, which is a change to every workspace manifest |
-| **§8's headline equity figures** | Computed, correct, and **reproduced by no test**. Nothing in the tree enumerates the 36 AA-vs-KK suit configurations, and nothing compares a Monte Carlo result against exact enumeration. The closest gated assertion is `apps/api/test/calc.test.ts:527`, which bounds one configuration to 0.80–0.84 — wide enough to pass on a materially wrong evaluator. Closing it is a test in `packages/poker-math/test/equity.test.ts` that enumerates the configurations and asserts the average, which is ~30 s of compute |
+| **§8's headline equity figures** | **Closed 2026-08-26**, and the row is kept rather than deleted because what it said was true for as long as it stood. `packages/poker-math/test/equity-published-figures.test.ts` enumerates all 132 suit configurations of the three published matchups on every `verify`, asserts the averages, the extremes and the suit-isomorphism multiplicities, ties `exactEquity` to a second implementation bit-for-bit, and measures 4,000,000 Monte Carlo samples against exact enumeration inside an interval derived from the sample size. `apps/api/test/calc.test.ts`'s 0.80–0.84 window — the reason this row existed — is now 1e-9. See §8 |
+| **Teaching prose outside the registry** | `packages/content/test/taught-figures.test.ts` recomputes 27 named claims and sweeps all 61 live calculations against the prose around them, which is 112 graded inputs. It cannot decide a sentence nobody registered. The hand-written prose in `apps/web/src/fixtures/table.ts` and `legends.ts` in particular is checked by nothing: unlike `scenarios.ts` and `review.ts`, whose analysis blocks `fixtures:check` regenerates, those two are baked demo copy end to end. Every figure in them was decided by hand on 2026-08-26 and none was wrong; nothing reproduces that |
 | **Everything outside the gate** | See the table below. A ✔ in this document that no gate reproduces is a result somebody obtained once |
 
 ### What the release gate actually enforces
 
-`pnpm run verify` runs eleven gates, reports each, and exits non-zero if any failed. Every section of
-this document is mapped onto it here, because "we check that" and "the release checks that" are
-different sentences and this project has confused them before.
+`pnpm run verify` runs **sixteen** gates, reports each, and exits non-zero if any failed. Every
+section of this document is mapped onto it here, because "we check that" and "the release checks
+that" are different sentences and this project has confused them before. (This said *eleven*, then
+*thirteen*, then *fourteen*, then *fifteen*: eleven was the count before `test:ax` and `test:csp`
+joined the loop in `package.json`, thirteen was right until `test:age-gate` joined it, fourteen until
+`test:layout` did, and fifteen until `test:keyboard` did. Read the count off that loop, not off this
+sentence. Nothing in the table below maps onto
+`test:age-gate` — it enforces a control this document makes no claim about, and
+`docs/production/legal-review-requirements.md` follow-up 5 is where it is described.)
 
 | This document's claim | Enforced by |
 | --- | --- |
 | §2.1 five-card enumeration, §3 betting, §4 side pots, §5 whole-hand invariants, §6 hidden information, §7 randomness and commitment, §8 mathematics, §9 content | `test` (via `test:unit`) |
 | §2.2 the 133,784,560-hand exhaustive check | `test:exhaustive` — **added to the gate 2026-08-18**; it was in neither `test` nor `verify` before that |
 | AI profile axes (`REPORT.md` §7) | `test:simulation` — also added to the gate 2026-08-18 |
-| §10 supply chain | `security:audit` (nine gates, including `ci-pinning` since 2026-08-19), `security:hygiene` |
+| §10 supply chain | `security:audit` (fifteen gates, including `ci-pinning` since 2026-08-19, `secret-scan`/`container-scan` since, `image-provenance`, `log-policy` and `keyless-signing-identity` since 2026-08-25, and `action-advisories` since 2026-08-27), `security:hygiene` |
 | The roll-forward-only migration policy (`RUNBOOK` §11.3) | `test` (via `test:scripts` → `apps/api/scripts/migrate.test.mjs`). The scanner is gated; the wiring into `up` is not — see the table above |
+| The hand-typed Coach report in `apps/web/src/fixtures/table.ts`, which `fixtures:check` does not reach | `test` (via `test:unit` → `apps/web/test/table-fixture-figures.test.ts`). Every figure in it recomputed from `@prl/poker-math` on the report's own inputs: the price, the rule-of-2-and-4 error against `probabilityOfHitting`, the interval against its own trial count, both expected values against `evOfCall`/`evOfRaise`, the SPR, and the out counts. **Added 2026-08-26 because it found a wrong one** — see §9 |
+| The counts the product prints about itself — lessons, topics, glossary terms, scenarios, claims | `test` (via `test:unit` → `apps/web/test/product-counts.test.ts`), against `contentStats()` and the bundle. Added 2026-08-26 for the reason §9 records: the same class of figure had already drifted inside this document |
 | That `apps/web/src/fixtures/**` still equals what the engine computes | `test` (via `test:integration` → `apps/api/test/web-fixture-figures.test.ts`). `pnpm run fixtures:check` is the operator-facing form of the same computation and `pnpm run fixtures:regenerate` is the remedy — which the repository did **not** contain until 2026-08-18, which is how a rule-of-2-and-4 estimate of `1.6` shipped and rendered as "160.0%" |
 | The live schema's security properties | `db:verify` — present in the gate before, but as the last link of a `&&` chain, so a failure anywhere earlier skipped it. It had never run inside `verify` |
-| Contrast ratios, both themes | `design:contrast` |
-| §8's AA-vs-KK / AKs-vs-22 / AKo-vs-QQ figures, and Monte Carlo agreeing with exact enumeration | **Nothing.** See the row in the table above |
+| Contrast ratios, both themes | `design:contrast` — three passes: the token set, the pairings a component may use, and the **composited background of every element carrying text**, walked in real Chrome on every route in both themes (and under `prefers-reduced-transparency` and `prefers-contrast: more`). The third needs the web app **built** and a Chrome on `CHROME_PATH`; without either it fails rather than skipping |
+| §8's AA-vs-KK / AKs-vs-22 / AKo-vs-QQ figures, and Monte Carlo agreeing with exact enumeration | `test` (via `test:unit` → `packages/poker-math/test/equity-published-figures.test.ts`). **This row said "Nothing" until 2026-08-26.** All 132 suit configurations enumerated per run by a second implementation, ~25 s; the averages, the extremes, the multiplicity profile forced by suit isomorphism, `exactEquity` tied to the longhand path by bit equality, and 200 × 20,000 Monte Carlo samples measured against the enumeration inside their own 95% half-widths |
+| §9's teaching prose — the arithmetic a lesson works through, as opposed to a computed figure | `test` (via `test:unit` → `packages/content/test/taught-figures.test.ts`). 27 registered claims, each recomputed from `@prl/poker-engine` or `@prl/poker-math` and required to appear verbatim in the record it names; plus a sweep of all 61 live calculations and numeric quiz questions comparing 112 graded inputs against the prose a learner reads. Deliberate omissions are an explicit table with reasons, and **an exemption that fires for nothing fails the test** |
 | Accessibility, to the extent §12 says it is checked at all | `test:a11y` — **added to the gate 2026-08-18**; it lived only in `test:all`, which is not the gate |
+| §6's hidden-information rule, on the CLIENT side of the wire | `test` (via `test:unit` → `apps/web/test/hole-card-entitlement.test.ts` and `table-socket.test.ts`). **This row said nothing until 2026-08-27**, and §12's "the web app would render a leak" is what it replaces. Real hands from `startHand`/`redactFor`, three endings (checked down, folded out, one seat folded), each fed through the real `readServerMessage`: an honest frame is accepted, a frame carrying a seat's cards that neither `isSelf`+`viewerSeat` nor `result.showdowns` justifies is refused whole, and the rejection carries the seats so the page can raise a `console.error` and say so. The review payload gets the rule its own fields support (`showedDown`, or the recovered viewer seat) and gets it in a test rather than at runtime |
+| That the primary journeys can be driven with a keyboard alone | `test:keyboard` — real `Input.dispatchKeyEvent` through Chrome's own input pipeline on every route: tab order against the focusable set, focus visibility under `:focus-visible` measured focused against blurred, no trap, the skip link, the modal sheet's trap and its Escape, the bet-size slider under the arrow keys, and one whole hand opened, sat down at, dealt and folded from the keyboard at a live socket-backed table. **Added to the gate 2026-08-26**; before that it was in no gate and no workflow, because it had no `--start` and needed a person to bring up two servers first. 146 checks on 2026-08-26 |
+| That the app's text does not paint over itself, escape its column or get cut off | `test:layout` — `Range.getClientRects()` over every text node, every route, both themes, at 360/768/1024/1440/1920, in real Chrome. It measures the GLYPHS: the defect it was written for was a grid track that collapsed to 0px, where the element boxes do not overlap and the text does. Six injected negative controls run before the sweep — one per check it can report, the first of them the offending CSS rule put back verbatim — and each must be caught. This document made no claim about layout before it, which is the point — the defect shipped past every row above |
 | Everything in the "NOT verified" table above | **Nothing.** That is what the table means |
 
 ---
@@ -507,13 +695,14 @@ different sentences and this project has confused them before.
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm run security:audit        # 9 gates
+pnpm run security:audit        # 15 gates
 pnpm run test                  # builds the packages first, then unit + integration + scripts
 pnpm run test:exhaustive       # all 133,784,560 seven-card hands (~7 s)
 pnpm run test:simulation       # AI profile axes (~2 min)
 pnpm run test:a11y
 pnpm run fixtures:check        # web fixtures still equal what the engine computes
-node scripts/check-contrast.mjs   # the design system's contrast claims
+pnpm run build                 # design:contrast measures the BUILT web app, in real Chrome
+pnpm run design:contrast       # the design system's contrast claims, and what a reader sees
 ```
 
 `build:packages` no longer needs to be a separate step before `test`: `dist/` is `.gitignore`d and

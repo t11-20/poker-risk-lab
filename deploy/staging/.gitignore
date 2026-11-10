@@ -7,6 +7,11 @@
 #   .env.staging            the session secret, the database password, the image digests
 #   release-manifest.json   which image digests this machine built, and from what
 #   staging-verified.json   which digests a verified staging run attested to
+#   observability/metrics-token
+#                           the bearer token Prometheus scrapes /metrics with,
+#                           written by scripts/alert-delivery.mjs from
+#                           PRL_STAGING_METRICS_TOKEN because compose does not
+#                           interpolate the files it mounts
 #
 # Committing any of them would put a private key in the repository (tls/), a
 # secret in the repository (.env.staging), or a machine-local record that changes
@@ -18,3 +23,4 @@ tls/
 .env.staging
 release-manifest.json
 staging-verified.json
+observability/metrics-token

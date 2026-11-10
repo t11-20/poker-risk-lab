@@ -20,6 +20,13 @@
  * if you also keep the topic and level you have chosen". A count computed against the unfiltered set
  * would promise results that the combination does not deliver.
  *
+ * ## …and the count of a filtered view lives in the document title
+ *
+ * Because that GET submit is a full document load, and a full document load is announced by its
+ * title and by nothing else this page can reach. `generateMetadata` below has the measurement and
+ * the reasoning; it is the fix for certification assertion 4.2, and `scripts/ax-assertions.mjs`
+ * (`J4.2`) is what keeps it fixed.
+ *
  * ## No progress anywhere
  *
  * A card says whether it has been attempted and nothing more. There is no completion count, no
@@ -30,19 +37,23 @@
 import type { ScenarioListResponse, ScenarioSummary } from '@prl/contracts';
 import { Chip, formatIndex, Reveal } from '@prl/ui';
 import type { Metadata } from 'next';
-import type { ReactElement } from 'react';
-import { FILTER_ANY, type FilterOption, ScenarioFilters } from '../../components/ScenarioFilters.tsx';
+import { cache, type ReactElement } from 'react';
+import {
+  FILTER_ANY,
+  type FilterOption,
+  isFilteredSelection,
+  ScenarioFilters,
+  scenarioCountPhrase,
+} from '../../components/ScenarioFilters.tsx';
 import { scenarioListFixture } from '../../fixtures/scenarios.ts';
 import { API_PATHS, apiGet, isApiUnavailable } from '../../lib/api.ts';
 import { difficultyLabel, streetLabel, topicLabel } from '../../lib/lab-labels.ts';
+import { readerCallOptions } from '../../lib/server-session.ts';
 import '../../styles/page.css';
 import '../../styles/lab.css';
 
-export const metadata: Metadata = {
-  title: 'Scenario Lab',
-  description:
-    'Decision situations with the maths worked out: pot odds, outs, expected value and stack depth, each with its assumptions stated before you decide.',
-};
+const DESCRIPTION =
+  'Decision situations with the maths worked out: pot odds, outs, expected value and stack depth, each with its assumptions stated before you decide.';
 
 /** The route the filter form submits back to. */
 const ROUTE = '/lab';
@@ -57,6 +68,15 @@ interface Selection {
 function readParam(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] ?? FILTER_ANY;
   return value ?? FILTER_ANY;
+}
+
+/** The three filters, read from the query string. One reading, shared by the title and the page. */
+function readSelection(query: Record<string, string | string[] | undefined>): Selection {
+  return {
+    topic: readParam(query['topic']),
+    difficulty: readParam(query['difficulty']),
+    street: readParam(query['street']),
+  };
 }
 
 function matches(scenario: ScenarioSummary, selection: Selection): boolean {
@@ -95,9 +115,36 @@ interface LabData {
   readonly fromFixture: boolean;
 }
 
-async function loadScenarios(): Promise<LabData> {
+/**
+ * The list, with the reader's own attempt marks.
+ *
+ * ## The defect the `readerCallOptions()` is here for
+ *
+ * `ScenarioSummary.attempted` is a PER-READER fact — `content.ts` derives it from
+ * `callerUserId(request)` and answers `false` for everybody when there is none. A server render
+ * carries no cookie unless one is forwarded (see `lib/api.ts` on why), and this call forwarded
+ * none, so the request was anonymous by construction and every one of the thirty-six cards read
+ * "Not yet attempted" for every learner, for ever. `/record` on the same session says "Scenarios
+ * tried: 7" and lists their ids. `/learn`, `/record` and `/review` all already forward it; this
+ * page was the one that did not.
+ *
+ * ## Why it is wrapped in `cache()`
+ *
+ * `generateMetadata` below needs the same list the page body needs, because the title now carries
+ * the filtered count and a title that disagreed with the page would be worse than no title at all.
+ * Next memoises `fetch` across `generateMetadata` and the page for the same request, but this call
+ * also reads the session cookie through `readerCallOptions()`, and relying on the framework's
+ * memoisation of a call it cannot see the arguments of is a bet. `cache()` makes "one list per
+ * request" a property of this file: two callers, one fetch, one answer, and no way for the title
+ * and the body to be computed from different data.
+ */
+const loadScenarios = cache(async (): Promise<LabData> => {
+  const reader = await readerCallOptions();
   try {
-    return { response: await apiGet<ScenarioListResponse>(API_PATHS.scenarios()), fromFixture: false };
+    return {
+      response: await apiGet<ScenarioListResponse>(API_PATHS.scenarios(), reader),
+      fromFixture: false,
+    };
   } catch (error) {
     // Only an absent or broken API selects the fixture. Anything else — an auth failure, a protocol
     // mismatch, a 404 on this collection path — is a real condition the reader should see, so it is
@@ -105,8 +152,75 @@ async function loadScenarios(): Promise<LabData> {
     // does not serve, which is how the whole app came to render six fixture scenarios in place of
     // the thirty-six the API ships.
     if (!isApiUnavailable(error)) throw error;
-    return { response: scenarioListFixture(), fromFixture: true };
+    // The bundled copy's attempt marks are somebody's idea of a plausible session and belong to
+    // nobody: `ATTEMPTED` in `src/fixtures/scenarios.ts` hard-codes two ids to `true`, so a
+    // first-time visitor arriving during an outage was told "You have worked through this one"
+    // about two scenarios they have never opened. They are dropped rather than shown, and the
+    // note below says so — the same answer `LESSONS_FALLBACK` gives for the read/unread marks.
+    const bundled = scenarioListFixture();
+    return {
+      response: {
+        ...bundled,
+        scenarios: bundled.scenarios.map((scenario) => ({ ...scenario, attempted: false })),
+      },
+      fromFixture: true,
+    };
   }
+});
+
+interface LabIndexProps {
+  readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
+}
+
+/**
+ * The title, and why the filtered count is in it.
+ *
+ * ## The defect this closes
+ *
+ * Certification assertion 4.2 asks that the count after a filter is announced. It was not, and it
+ * could not be. `ScenarioFilters` is a plain GET form with no JavaScript on purpose, so a submit is
+ * a FULL DOCUMENT LOAD: measured in Chrome 151 against a production build, a `window` marker set
+ * before the submit was gone afterwards, `document.title` was byte-identical before and after
+ * ("Scenario Lab — Poker Risk Lab", carrying nothing about the filter), and the summary region on
+ * the new document took ZERO mutations because it arrived already holding "Showing 14 of 36
+ * scenarios." A live region that arrives with its text announces nothing — the same fact assertion
+ * 3.3 was fixed for. There the fix was to mount the region empty from first paint and write into it
+ * later; here there is no "later", because the context that would do the writing has been thrown
+ * away by the navigation.
+ *
+ * What a new document DOES announce is its title. That is assertion G1, it needs no JavaScript, and
+ * it is announced on every load whether or not the string changed — unlike `RouteAnnouncer`, which
+ * is deliberately silent on a full load and only speaks on a client navigation. So the count goes
+ * here.
+ *
+ * ## Only a filtered view says it
+ *
+ * An unfiltered `/lab` keeps the plain "Scenario Lab — Poker Risk Lab" exactly as before: the count
+ * is the answer to an action the reader took, and a permanent count in the tab title of the
+ * landing view is noise on arrival. Assertion 4.1 quotes that unfiltered title, so this is also the
+ * boundary that keeps it true.
+ *
+ * ## Failing in the safe direction
+ *
+ * A metadata failure must not be how the reader finds out the API is down. If the list cannot be
+ * loaded this falls back to the bare title and lets the page body decide what to render — the
+ * fixture notice, or the error boundary for a condition that is not an outage. The count is lost in
+ * that case, which is the direction that loses the least: a reader gets the page, and the page says
+ * what happened.
+ */
+export async function generateMetadata({ searchParams }: LabIndexProps): Promise<Metadata> {
+  const selection = readSelection(await searchParams);
+  if (!isFilteredSelection(selection)) return { title: 'Scenario Lab', description: DESCRIPTION };
+  const counted = await loadScenarios().then(
+    (data) => data.response.scenarios,
+    () => null,
+  );
+  if (counted === null) return { title: 'Scenario Lab', description: DESCRIPTION };
+  const matching = counted.filter((scenario) => matches(scenario, selection)).length;
+  return {
+    title: `Scenario Lab — ${scenarioCountPhrase(matching, counted.length)} scenarios`,
+    description: DESCRIPTION,
+  };
 }
 
 function ScenarioCard({
@@ -158,17 +272,8 @@ function ScenarioCard({
   );
 }
 
-export default async function LabIndexPage({
-  searchParams,
-}: {
-  readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
-}): Promise<ReactElement> {
-  const query = await searchParams;
-  const selection: Selection = {
-    topic: readParam(query['topic']),
-    difficulty: readParam(query['difficulty']),
-    street: readParam(query['street']),
-  };
+export default async function LabIndexPage({ searchParams }: LabIndexProps): Promise<ReactElement> {
+  const selection = readSelection(await searchParams);
 
   const { response, fromFixture } = await loadScenarios();
   const all = response.scenarios;
@@ -195,8 +300,10 @@ export default async function LabIndexPage({
         <p className="prl-source-note prl-note">
           <span className="prl-label prl-label--accent">Fixture data</span> The scenario API is not reachable,
           so this list comes from the typed fixture in{' '}
-          <code className="prl-mono">src/fixtures/scenarios.ts</code>. Every figure in it was computed by the
-          real analysis functions, but no server was involved in this page.
+          <code className="prl-mono">src/fixtures/scenarios.ts</code>. The scenarios and their questions are
+          real, and the analysis behind each one was produced by the real functions — but this is a partial
+          copy rather than the full set, and nothing here knows which of them you have attempted, so every
+          card reads as unattempted whatever you have actually done.
         </p>
       ) : null}
 

@@ -31,6 +31,15 @@ pnpm run release:artifacts   # build BOTH images ONCE, record their digests
 pnpm run staging up          # deploy those digests, migrate, verify, smoke
 ```
 
+Optionally, if you want the artefacts to be **fetchable from another machine**
+rather than merely identified — see [`deploy/registry/`](../registry/README.md):
+
+```bash
+docker compose -f deploy/registry/docker-compose.registry.yml up -d
+pnpm run release:artifacts -- --push   # records the registry digest as well
+pnpm run staging up                    # deploys the registry digests, pull_policy always
+```
+
 Then:
 
 ```bash
@@ -88,16 +97,59 @@ passed. Its absence is a refusal, not a warning: nothing has earned a promotion.
 
 ### What "digest" means here, precisely
 
-There is no container registry in this project and nothing is pushed. The digest
-is the one BuildKit's exporter assigns in the local containerd image store — the
-value `--iidfile` writes, the value `docker image inspect --format '{{.Id}}'`
-reports, and the value that appears in `RepoDigests`. It is content-addressed:
-two builds producing different bytes cannot share it.
+By default nothing is pushed. The digest is the one BuildKit's exporter assigns in
+the local containerd image store — the value `--iidfile` writes, the value
+`docker image inspect --format '{{.Id}}'` reports, and the value that appears in
+`RepoDigests`. It is content-addressed: two builds producing different bytes
+cannot share it.
 
-It is **not** registry-attested. Nobody signed it and no registry vouches for it,
-and it exists only on the machine that built it. `promote` says so in its own
-output rather than implying more. When this project gains a registry, the push
-step records the registry digest alongside this one and promotion compares that.
+What that value is not, on its own, is **fetchable**. It names bytes that exist on
+one machine, which is why "the release images are identified only by a local
+BuildKit digest, so they cannot be promoted across machines" was an open residual
+in `docs/production/final-readiness-report.md`.
+
+`pnpm run release:artifacts -- --push` closes that. It publishes both artefacts to
+the registry in [`deploy/registry/`](../registry/README.md) and records the digest
+the **registry** returned beside the local one, after proving they name the same
+artefact: the manifest is re-fetched from the registry and re-hashed in-process,
+and the image is pulled back by digest with every local reference to it removed
+first. `staging up` then deploys the registry references with `pull_policy:
+always` — re-verifying each digest first — and `promote` reports the artefacts as
+promotable across machines.
+
+A push alone does not **sign** anything. A registry is content-addressed storage,
+not a notary: what a push buys is content identity across a push/pull boundary —
+another machine asking for `repo@sha256:X` gets those bytes or an error, never
+different ones.
+
+Since 2026-08-25 the digests **are** signed, by a separate command:
+`pnpm run release:sign` signs each one with cosign and attests a CycloneDX SBOM to
+it, and `pnpm run security:image-provenance` verifies both against the committed
+public key with no private key needed. `promote` does not consult that — it checks
+content identity and says so — which is why the check is a command of its own and
+why it is worth running before promoting anything.
+
+What even a passing signature check does not buy: the key is a long-lived file on
+the release machine with no transparency log behind it, so it establishes
+possession of a key and **not the identity of a builder**. That needs keyless/OIDC
+signing in CI, which is now written and gated
+(`.github/workflows/release-sign.yml`, `deploy/signing/keyless-policy.json`) and
+has never run — so every image here is still in the key posture.
+[`deploy/signing/README.md`](../signing/README.md) is the long form.
+`promote` prints that split rather than letting a green tick imply the larger
+claim. The evidence for the content claim — including a cold pull, on a throwaway
+image, after deleting it locally — is in
+[`deploy/registry/README.md`](../registry/README.md).
+
+### The registry is opt-in, and the no-registry path is the default
+
+With no registry running, everything behaves exactly as it did before: local
+digests, `pull_policy: never`, and a `promote` that states cross-machine promotion
+is unavailable and names the two commands that would change that. The stack does
+not depend on a registry existing, `staging up` falls back (loudly, never
+silently) if a manifest names a registry that does not answer, and
+`scripts/staging.test.mjs` asserts the fallback rather than trusting this
+paragraph.
 
 ---
 
@@ -262,13 +314,98 @@ Not "it started". In order:
    `docker inspect`;
 5. `https://localhost:8443/api/v1/ready` answers 200, with the chain **verified**
    against the local CA rather than waved through;
-6. the proxy sets `Strict-Transport-Security` — the one header neither the app nor
-   the API can set honestly, because only the terminator knows there is TLS;
+6. the proxy is the **only** source of `Strict-Transport-Security` — probed on a
+   path the API does not serve, and asserted to be exactly one header with the
+   value `nginx.conf` sets. This check used to probe `/api/v1/health` and tick as
+   long as *a* header came back, which is why it never noticed that the API also
+   sends one (helmet, whenever `NODE_ENV=production`, which staging is) and that
+   `add_header` appends rather than replaces: every `/api/*` response carried two,
+   and a browser obeys only the first. `proxy_hide_header` in `nginx.conf` now
+   drops the upstream's copy;
 7. the smoke test, `--strict`, over https: guest sessions, CSRF enforcement,
    content, calculation, rooms, the hidden-information property over a **real
-   `wss://` WebSocket**, hand-history isolation, the CSP on the rendered page, and
-   rate limiting;
+   `wss://` WebSocket**, hand-history isolation, the CSP on the rendered page,
+   the **seat guard in both directions** (see below), and rate limiting;
 8. the `X-Forwarded-For` overwrite proof described above.
+
+### The seat guard runs ON here, and that is the whole reason it is not decoration
+
+`PRL_ENROLMENT_REQUIRED` ships defaulting to `off` — an open public instance is a
+legitimate deployment and every deployment that predates the switch is one. A
+default-off guard that nothing exercises is decoration, so this stack sets
+`enforced` in `docker-compose.staging.yml` and `staging up` passes
+`--expect-enrolment enforced` to the smoke test. That run proves all four cells
+over TLS on every deploy:
+
+| | REST `POST /rooms/:roomId/sit` | socket `sit` frame |
+| --- | --- | --- |
+| not enrolled | 403 `enrolment_required` | `error` frame, socket **left open** |
+| enrolled | 200, seated | `ack`, seated |
+
+A run that finds this stack behaving as `off` **fails** rather than reporting the
+open behaviour, so deleting the compose line breaks the gate instead of quietly
+disarming it. The socket half is not optional: a guard on the REST route with the
+frame left open reads as enforced and is not, which is worse than no guard.
+
+The run needs an enrolment to exist, and **the API cannot write one** — migration
+0006 grants `prl_app` SELECT and nothing else on `prl.cohorts` and
+`prl.enrolments`, and there is deliberately no admin route. So `staging.mjs` hands
+the smoke run the same `DATABASE_MIGRATION_URL` it used for the migration step,
+and the run drives `apps/api/scripts/enrolments.mjs` — the operator's own tool — to
+create a reusable `smoke-test` cohort, grant its two throwaway guests, and **revoke
+them at the end of the run**. The cohort stays: `enrolments.cohort_id` is
+`ON DELETE RESTRICT` and no role holds DELETE. The guest accounts are erased by the
+retention sweep after 60 days, and their enrolment rows cascade away with them.
+
+## Alerting, as an overlay
+
+`docker-compose.observability.yml` adds a Prometheus and an Alertmanager beside this
+stack, and `pnpm run alerts:verify` uses them to answer a question staging could not
+answer before: do the **thirty-five** rules in `docs/production/alerts.md` (this said twenty-nine until 2026-08-26; `grep -c '^\s*- alert:' observability/alert-rules.yml` is the reference) load, agree with
+that document, name series that exist, evaluate, and — for three of them, driven for
+real — fire, route by severity and arrive at a receiver.
+
+```bash
+pnpm run staging up          # this stack first; the overlay scrapes it
+pnpm run alerts:verify       # ~10 minutes; STOPS the API for about four of them
+pnpm run alerts:verify -- --skip-provoke     # ~30s, checks 1-4 only, API untouched
+pnpm run alerts:verify -- --only-heartbeat   # ~4 min, checks 1-4 and 7, API untouched
+```
+
+The third of the three is the dead man's switch. `Watchdog` fires permanently and is
+routed to a heartbeat receiver that is neither human tier, and check 7 follows it
+through a rhythm, a deliberate silence — **Alertmanager is stopped**, which is a
+container this script created and removes, never a staging one — and back. That is the
+one check here whose subject is a thing NOT happening.
+
+It is an overlay and not part of `docker-compose.staging.yml` for the same reason that
+file has no `build:` section: that file is a manifest of what production runs, and
+production does not get its monitoring from this repository. `pnpm run staging up` brings
+up no Prometheus, and nothing here depends on one existing.
+
+Two things to know before running it:
+
+- **It stops the API container.** `ApiDown` has `for: 2m` on top of a two-minute
+  `max_over_time` window, so the earliest it can fire is a little over four minutes after
+  the container stops. The script restores the API in a `finally` block, so an interrupted
+  run does not leave staging down — but a `kill -9` of the script will.
+- **It writes `observability/metrics-token`**, the bearer token Prometheus scrapes with,
+  because compose interpolates compose files and not the files they mount. It is
+  gitignored, `scripts/supply-chain/secret-scan.mjs` asserts that rule, and the script
+  deletes it on the way out unless `--keep-up` was passed.
+
+All **three** receivers — page, ticket and heartbeat — are a webhook sink the script runs on this
+host, plus its own SMTP sink. Production replaces **twelve** `PRL_ALERT_*` variables, from which
+`observability/alertmanager.template.yml` is rendered at bring-up:
+`PRL_ALERT_PAGE_WEBHOOK_URL`, `PRL_ALERT_TICKET_WEBHOOK_URL`, `PRL_ALERT_HEARTBEAT_WEBHOOK_URL`,
+`PRL_ALERT_HEARTBEAT_INTERVAL`, `PRL_ALERT_PAGE_EMAIL_TO`, `PRL_ALERT_TICKET_EMAIL_TO`,
+`PRL_ALERT_EMAIL_FROM`, `PRL_ALERT_SMTP_SMARTHOST`, `PRL_ALERT_SMTP_HELLO`,
+`PRL_ALERT_SMTP_USERNAME`, `PRL_ALERT_SMTP_PASSWORD`, `PRL_ALERT_SMTP_REQUIRE_TLS`. This said
+"two" and "both receivers" until 2026-08-26; a deployer who set two shipped a half-configured
+Alertmanager, and only `alerts:preflight` would have caught it. Both tiers are delivered over a webhook and a real SMTP transaction; what is not
+rehearsed is a provider accepting real credentials, and somebody being awake.
+
+---
 
 ## What it does not prove
 
@@ -279,9 +416,22 @@ Not "it started". In order:
   authoritative hand state in process memory, so two processes serving one room
   deal two different hands and nothing detects it (ADR 0001, RUNBOOK §11.1).
   `deploy: replicas: 1` is a correctness constraint.
-- **A deploy identity, a registry, or a rollback.** See
-  `.github/workflows/release.yml`, which is explicit about which of its steps
-  cannot execute today and fails rather than pretending.
+- **A deploy identity, or a rollback.** See `.github/workflows/release.yml`, which
+  is explicit about which of its steps cannot execute today and fails rather than
+  pretending.
+- **Provenance bound to a BUILDER.** The artefacts are now signed — see
+  `pnpm run release:sign` and `deploy/signing/README.md` — so a digest is bound to
+  a key this repository controls, and `pnpm run security:image-provenance` refuses
+  anything else. What is still absent is the part a key cannot supply: the key is a
+  long-lived file on the release machine, there is no transparency log, and the
+  registry in `deploy/registry/` is a container on this host rather than a third
+  party. Keyless/OIDC signing in CI — a short-lived Fulcio certificate bound to a
+  named workflow, with Rekor as the witness — is the missing piece. It is no longer
+  missing as *code*: `.github/workflows/release-sign.yml` signs keylessly,
+  `deploy/signing/keyless-policy.json` is the committed identity a verifier demands,
+  and `pnpm run security:keyless` fails if the two stop agreeing. It is still missing
+  as *fact*: that workflow has never run, so no Fulcio certificate and no Rekor entry
+  exist, and nothing here is yet bound to a builder an outsider can check.
 
 ---
 

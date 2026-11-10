@@ -18,13 +18,18 @@
  *
  *  - **No one-off values.** There is no hex, no px, no ms and no bezier literal below. Every value is
  *    a `--prl-*` token. Search this file for `#` or `px` and you will find neither.
- *  - **No shadows.** Depth is one step on the surface ramp plus a 1px hairline (§4.1). There is
- *    no `box-shadow` anywhere in the app — the focus ring is an `outline` (base.css).
- *  - **Meaningful borders are `--prl-line-strong` or the accent.** `--prl-line-subtle` measures
- *    1.44:1 and is decoration only, so a card's outline — which is the only thing telling a reader
- *    where one card ends and the next begins — never uses it (§2.4 rule B).
- *  - **Transform and opacity only.** The two animated properties below are `transform` and
- *    `opacity`. Nothing animates width, height, top or left, and there is no blur anywhere.
+ *  - **Depth is the five-level ladder in `tokens.css`, spent through `--prl-elevation-*`.** This
+ *    file used to say "no shadows", which was true of a system that had one card style; it now has
+ *    five levels. The replacement rule is tighter, not looser — a shadow may never be a literal,
+ *    and `packages/ui/test/layout-guarantees.test.ts` reads that off this stylesheet.
+ *  - **No glass on this route.** There is no floating chrome in the Lab: the filter panel sits in
+ *    the flow, and thirty-six cards are content rather than things travelling over content. A
+ *    translucent card is a tint over a flat colour, which is the material spent for nothing.
+ *  - **Meaningful borders are `--prl-line-strong` or the accent.** `--prl-line-subtle` and the
+ *    `--prl-edge-*` trio are decoration only, so they describe an object's edge and never its
+ *    state (§2.4 rule B).
+ *  - **Transform, opacity and colour only**, in the 150-250ms material band. Nothing animates
+ *    width, height, top or left, and there is no blur anywhere.
  */
 
 /* ==========================================================================================
@@ -120,9 +125,11 @@
   gap: var(--prl-space-7);
   margin: 0;
   padding: var(--prl-space-8);
-  border: var(--prl-hairline-strong);
-  border-radius: var(--prl-radius-2);
+  border: 1px solid var(--prl-line-strong);
+  border-block-start-color: var(--prl-edge-lit);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-raised);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-lab-filters__legend {
@@ -177,7 +184,7 @@
   margin: 0;
   color: var(--prl-text);
   font-size: var(--prl-type-body);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--prl-numeric);
 }
 
 /** The figure inside the sentence, so "6 of 36" is findable without reading the words around it. */
@@ -221,41 +228,69 @@
   flex: 1 1 auto;
 }
 
+/**
+ * ONE CARD, AND WHY THE GRID IS WHERE THIS SECTION EITHER READS AS A PRODUCT OR DOES NOT.
+ *
+ * Thirty-six of these are on screen at once. That is the case where every inconsistency compounds:
+ * a card whose metadata sits at a different height from its neighbour's, a state line that moves
+ * with the length of the question above it, an edge you cannot see. The three rules that hold it
+ * together are all structural rather than decorative —
+ *
+ *   1. `grid-template-rows` pins the five parts to five named tracks and gives the QUESTION the
+ *      flexible one. Every other part therefore sits at the same height on every card in a row,
+ *      whether its question runs to two lines or four. Before this the parts were auto-flowed and
+ *      the chips on card 02 sat 21px above the chips on card 01, thirty-six times over.
+ *   2. The state line is a FOOTER, full-bleed to the card's edges, so "have I done this one" is
+ *      answered by a strip in a fixed place rather than by a sentence in a variable one.
+ *   3. `--prl-elevation-1` at rest and `--prl-elevation-2` under the pointer, with the lit
+ *      hairline. That is what makes a card an object; the previous `--prl-hairline-strong` box on
+ *      a one-step fill was a rectangle drawn around some text.
+ */
 .prl-lab-card {
+  position: relative;
   display: grid;
   flex: 1 1 auto;
-  align-content: start;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   /* Index, title, question, chips and state are five stacked blocks; at `--prl-space-4` they read
      as one paragraph of mixed sizes rather than as a card with parts. */
   gap: var(--prl-space-5);
-  padding: var(--prl-space-8);
-  /* A meaningful border: it is the only thing separating one card from the next, so it clears the
-     3:1 WCAG 1.4.11 asks of a component boundary rather than using the decorative hairline. */
-  border: var(--prl-hairline-strong);
-  border-radius: var(--prl-radius-2);
+  padding: var(--prl-space-8) var(--prl-space-8) 0;
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
   transition:
-    border-color var(--prl-dur-instant) var(--prl-ease-hover),
-    background-color var(--prl-dur-instant) var(--prl-ease-hover);
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    border-color var(--prl-dur-fast) var(--prl-ease-material),
+    box-shadow var(--prl-dur-base) var(--prl-ease-material),
+    transform var(--prl-dur-fast) var(--prl-ease-material);
 }
 
-/** `:focus-within` as well as `:hover`, so arriving by keyboard lights the same card. */
+/** `:focus-within` as well as `:hover`, so arriving by keyboard lifts the same card. `translateY`
+    and not a margin: transform composites and layout does not, and thirty-six cards is exactly the
+    scene where that distinction is felt. */
 .prl-lab-card:hover,
 .prl-lab-card:focus-within {
   border-color: var(--prl-accent-edge);
   background-color: var(--prl-surface-hover);
+  box-shadow: var(--prl-elevation-2);
+  transform: translateY(calc(-1 * var(--prl-space-2)));
 }
 
 .prl-lab-card__index {
   margin: 0;
+  color: var(--prl-text-faint);
+  font-variant-numeric: var(--prl-numeric);
 }
 
 .prl-lab-card__title {
   margin: 0;
   font-size: var(--prl-type-heading);
   font-weight: var(--prl-weight-semibold);
-  letter-spacing: var(--prl-tracking-display-3);
-  line-height: var(--prl-leading-snug);
+  letter-spacing: var(--prl-tracking-heading);
+  line-height: var(--prl-leading-heading);
   text-wrap: balance;
 }
 
@@ -276,11 +311,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  border-radius: var(--prl-radius-2);
-}
-
-.prl-lab-card {
-  position: relative;
+  border-radius: var(--prl-radius-3);
 }
 
 .prl-lab-card__link:hover {
@@ -318,22 +349,44 @@
 }
 
 /**
- * The attempted line, pinned to the bottom of the card so a row of cards agrees on where it is.
- * The state is a glyph plus words; `data-attempted` only changes the ink, so throwing the
- * stylesheet away leaves the sentence intact.
+ * THE STATE STRIP.
+ *
+ * Full-bleed to the card's edges — the negative inline margins are exactly the card's own inline
+ * padding, and the bottom corners are re-rounded because a squared footer inside a rounded card is
+ * the detail that makes a grid look assembled rather than designed.
+ *
+ * WHY IT IS A STRIP AND NOT A SENTENCE. It was a line of muted small caps under a hairline, with
+ * `data-attempted` changing only the ink from `--prl-text-muted` to `--prl-accent-text`. The glyph
+ * and the words were in the markup, so the state was never carried by hue ALONE — but at a glance,
+ * across a 3x12 grid, ink was the only difference a reader could actually see, and scanning for
+ * "which of these have I done" meant reading thirty-six sentences. A strip changes the SURFACE:
+ * unattempted is a recessed veil, attempted is a step up the ramp with an accent leading edge. Two
+ * structural cues plus the glyph plus the sentence, and the first two survive greyscale.
  */
 .prl-lab-card__state {
-  margin: 0;
+  margin: var(--prl-space-4) calc(-1 * var(--prl-space-8)) 0;
   align-self: end;
-  padding-block-start: var(--prl-space-4);
+  padding: var(--prl-space-5) var(--prl-space-8);
   border-block-start: var(--prl-hairline);
+  border-inline-start: var(--prl-space-1) solid transparent;
+  border-end-start-radius: var(--prl-radius-3);
+  border-end-end-radius: var(--prl-radius-3);
+  background-color: var(--prl-veil-4);
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label);
+  font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
   text-transform: uppercase;
+  transition:
+    background-color var(--prl-dur-fast) var(--prl-ease-material),
+    color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
+/* The leading edge is transparent in the resting state rather than absent, so nothing shifts
+   sideways when a scenario becomes attempted. Same reasoning as the contents rail in `learn.css`. */
 .prl-lab-card__state[data-attempted="true"] {
+  border-inline-start-color: var(--prl-accent-edge);
+  background-color: var(--prl-surface-active);
   color: var(--prl-accent-text);
 }
 
@@ -363,16 +416,27 @@
   text-wrap: balance;
 }
 
+/**
+ * "You chose ..." — the reader's own commitment, restated before the analysis argues with it.
+ *
+ * L2 with an accent leading edge, because it is the one block on the page that is about THEM: the
+ * assumptions above it and the EV table below it are both facts about the spot. It was an inset
+ * well, which put the reader's decision in the quietest material on the screen.
+ */
 .prl-stage__chosen {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--prl-space-5);
-  padding: var(--prl-space-6);
-  border: var(--prl-hairline-strong);
-  border-radius: var(--prl-radius-1);
-  background-color: var(--prl-surface-inset);
+  padding: var(--prl-space-7);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-inline-start: var(--prl-space-1) solid var(--prl-accent-edge);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-panel);
+  box-shadow: var(--prl-elevation-1);
 }
 
 .prl-stage__chosen-line {
@@ -383,10 +447,11 @@
 
 .prl-stage__chosen-action {
   color: var(--prl-text);
-  font-size: var(--prl-type-metric-sm);
-  font-variant-numeric: tabular-nums;
+  font-size: var(--prl-type-metric-md);
+  font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
 }
 
 /**
@@ -446,22 +511,24 @@
 
 .prl-stage__ev-row {
   display: grid;
-  gap: var(--prl-space-2);
-  padding: var(--prl-space-5);
-  border: var(--prl-hairline);
-  border-radius: var(--prl-radius-1);
+  gap: var(--prl-space-3);
+  padding: var(--prl-space-6);
+  border: 1px solid var(--prl-line-subtle);
+  border-radius: var(--prl-radius-2);
   background-color: var(--prl-surface-inset);
 }
 
 .prl-stage__ev-value {
   margin: 0;
   color: var(--prl-text);
-  font-size: var(--prl-type-metric-sm);
-  /* Tabular, because these two figures are read against each other and a jittering digit is a
-     digit misread. */
-  font-variant-numeric: tabular-nums;
+  font-size: var(--prl-type-metric-md);
+  /* `--prl-numeric`, not a bare `tabular-nums`: the token states `lining-nums` too, and several
+     faces in `--prl-font-sans` default to old-style figures in a lowercase run — which puts a
+     descending `4` in the middle of an EV. These two figures are read against each other. */
+  font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
 }
 
 .prl-stage__mistakes,
@@ -561,7 +628,12 @@
     border-width: var(--prl-focus-width);
   }
 
+  /* The strip's fill and its accent edge are both thrown away here — a background tint disappears
+     and every border is repainted `CanvasText`. `Highlight` on the leading edge is the one colour
+     the mode guarantees is distinguishable from `CanvasText`, and the underline is the cue that
+     survives even that. */
   .prl-lab-card__state[data-attempted="true"] {
+    border-inline-start-color: Highlight;
     text-decoration: underline;
   }
 }

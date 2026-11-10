@@ -34,6 +34,19 @@
  *      have: two of these keys were ON DELETE RESTRICT, which made every learner who had ever
  *      created or joined a table permanently undeletable, and nothing anywhere compared the
  *      schema's answer to the policy's requirement.
+ *  10. Every table in the schema holds EXACTLY the verbs the grant matrix in
+ *      db/migrations/0001_initial.sql says it holds, for prl_app, and no table exists that the
+ *      matrix has not decided about. Check 6 asks whether prl_app can do the one thing that is
+ *      never acceptable (TRUNCATE); this asks whether it can do precisely the things it should,
+ *      which is a different and stricter question in both directions — an UPDATE on an
+ *      append-only ledger and a MISSING grant on a new table are both failures, and neither was
+ *      visible before.
+ *
+ * Every one of them reads `pg_catalog` directly, and no check reads `information_schema` at all.
+ * That is a correctness requirement, not a preference: `information_schema` is filtered by the
+ * connecting role's privileges, and a gate that cannot see a table cannot fail on it. The long
+ * comment above the column query has the incident. The single remaining `information_schema`
+ * query in this file measures the size of that filter and prints it as a note.
  */
 
 import { PROFILES } from '@prl/poker-ai';
@@ -104,6 +117,98 @@ const USER_REFERENCE_ACTIONS = [
     'a room cascades to its hands, so CASCADE here would destroy the hand history of everybody ' +
       'who ever played at that table; RESTRICT made every learner who had created one undeletable',
   ],
+  [
+    'enrolments_user_id_fkey',
+    'c',
+    'an enrolment describes one person in one cohort and nobody else, so it goes with the account ' +
+      'exactly as a room membership does. The RECORD that the grant and the revocation happened ' +
+      'survives in prl.audit_log with user_id NULL, which is where an operator can still answer ' +
+      '"on what authority, against which reference" about an account that has been erased ' +
+      '(db/migrations/0006_cohort_enrolments.sql; legal register 3.1)',
+  ],
+];
+
+/**
+ * The verbs checked for every table, in the order a failure message prints them.
+ *
+ * All seven, not just the four DML ones. `REFERENCES` lets a role attach a foreign key to a table
+ * it does not own — which is how a row becomes undeletable by somebody else's constraint — and
+ * `TRIGGER` lets it attach code that runs inside another role's transaction. Both are in 0001's
+ * "never granted, and must never be granted" list, and neither was checked anywhere until this
+ * matrix existed.
+ */
+const TABLE_PRIVILEGES = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'];
+
+/**
+ * What `prl_app` may do to each table, and why — the grant matrix from
+ * `db/migrations/0001_initial.sql`, restated where the database can be asked about it.
+ *
+ * ## Why this is written out rather than derived
+ *
+ * For the same reason `USER_REFERENCE_ACTIONS` is: a list read from the thing it is checking cannot
+ * detect a change to it. Deriving the expectation from the live ACL would make this check assert
+ * that the database agrees with itself.
+ *
+ * ## The failure it exists for, which is the default rather than the exception
+ *
+ * 0001 says in as many words that PostgreSQL's built-in default for a new table is owner-only, "so
+ * a table added by a later migration grants prl_app nothing at all until that migration says so".
+ * That is the right default and it makes a forgotten GRANT invisible: the migration applies, the
+ * schema is correct, `db:verify` passes, and the first anybody hears of it is a runtime
+ * `permission denied` on whatever path the new table serves. `prl.room_ownership` (migration 0005)
+ * is a table whose whole job is to REFUSE to serve a room it cannot read a lease for, so a missing
+ * grant there would have turned a correctness guard into a total refusal of every room, at runtime,
+ * with nothing in this gate to say why.
+ *
+ * The other direction matters just as much and is quieter. An over-grant — DELETE on `prl.hands`,
+ * UPDATE on `prl.audit_log` — is a capability nobody decided to hand the request path, it looks
+ * like nothing in a diff of a migration, and it is exactly what an injection reaching the runtime
+ * role is bounded by.
+ *
+ * A table that is not in this list fails as loudly as one with the wrong verbs, and deliberately:
+ * it is a table whose privileges nobody has reasoned about.
+ */
+const APP_TABLE_GRANTS = [
+  ['users', 'SELECT INSERT UPDATE DELETE', 'sign-up, rename, guest sweep, and a learner leaving'],
+  ['sessions', 'SELECT INSERT UPDATE DELETE', 'login, refresh, revoke, expiry sweep'],
+  ['oidc_login_attempts', 'SELECT INSERT UPDATE DELETE', 'start, single-use consume, sweep'],
+  ['lesson_progress', 'SELECT INSERT UPDATE DELETE', 'a learner may clear their own progress'],
+  ['rooms', 'SELECT INSERT UPDATE', 'create, play, close. No DELETE: closing is a status change'],
+  ['room_members', 'SELECT INSERT UPDATE', 'join, re-seat, leave. Removal happens by CASCADE (0004)'],
+  ['hands', 'SELECT INSERT UPDATE', 'deal, advance, settle. A hand is history and is never deleted'],
+  ['hand_seats', 'SELECT INSERT UPDATE', 'deal, show down, settle. As hands'],
+  ['hand_actions', 'SELECT INSERT', 'append-only: the ledger of what was done in a hand'],
+  ['quiz_attempts', 'SELECT INSERT', 'append-only'],
+  ['scenario_attempts', 'SELECT INSERT', 'append-only'],
+  ['audit_log', 'SELECT INSERT', 'append-only; a role that can edit the audit log has no audit log'],
+  [
+    'room_ownership',
+    'SELECT INSERT UPDATE DELETE',
+    'the room lease (migration 0005). DELETE is the odd one and is argued in that file: a lease row ' +
+      'is a statement about the present rather than history, and releasing it by deleting it is what ' +
+      'lets a deploy hand a room over at once instead of stranding it for a whole lease TTL',
+  ],
+  [
+    'cohorts',
+    'SELECT',
+    'the class list (migration 0006). Read-only for the request path: an entitlement check has to ' +
+      'join it, and nothing a learner can reach may create or re-date a cohort',
+  ],
+  [
+    'enrolments',
+    'SELECT',
+    'who is entitled and until when (migration 0006). The NARROWEST grant in this schema, and ' +
+      'deliberately narrower than the append-only ledgers: the request path must be able to ask ' +
+      'whether somebody is entitled and must not be able to enrol anybody, extend its own access ' +
+      'or erase a revocation. Grant and revoke run from apps/api/scripts/enrolments.mjs as the ' +
+      'migrating identity, which no HTTP handler can reach',
+  ],
+  [
+    'schema_migrations',
+    '',
+    'nothing at all, on purpose: the runtime has no business reading, let alone editing, the ' +
+      'migration ledger',
+  ],
 ];
 
 const url = process.env['DATABASE_URL'];
@@ -131,26 +236,90 @@ try {
   /**
    * Who this run connected as, printed with the counts below.
    *
-   * `information_schema` is FILTERED BY PRIVILEGE: it shows only what the current role may
-   * touch. `prl_app` is granted nothing on `prl.schema_migrations`, so a run as the runtime
-   * login counts 12 tables and 120 columns while a run as the owner counts 13 and 123 — the
-   * same database, two different true answers.
-   *
-   * That cost real time once: two captured transcripts of this script, taken from two different
-   * identities, were read as evidence that a restored database had lost a table. Neither number
-   * was wrong; neither said which role produced it. Printing the role makes two transcripts
-   * comparable, which is the only thing that made the numbers worth printing in the first place.
+   * Two captured transcripts of this script, taken from two different identities, were once read
+   * as evidence that a restored database had lost a table. Neither number was wrong; neither said
+   * which role produced it. Printing the role makes two transcripts comparable — and now that
+   * nothing below reads a privilege-filtered catalogue (see the next comment), two transcripts
+   * that disagree about a count describe two genuinely different databases.
    */
   const [identity] = await sql`select current_user as role`;
   const role = identity?.role ?? 'unknown';
+
   // ---- 1 & 2. Forbidden columns -------------------------------------------------------
+  //
+  // ##########################################################################
+  // ## READ THE COLUMNS FROM pg_catalog. `information_schema` CANNOT SEE A  ##
+  // ## TABLE THE CONNECTING ROLE HAS NO GRANT ON, AND THAT MADE CHECKS 1,   ##
+  // ## 2 AND 7 BLIND TO EXACTLY THE TABLES THEY MOST NEEDED TO SEE.         ##
+  // ##########################################################################
+  //
+  // `information_schema.columns` is FILTERED BY PRIVILEGE — its view definition ends in
+  // `pg_has_role(c.relowner, 'USAGE') OR has_column_privilege(...)` — so a table the current role
+  // may not touch contributes ZERO ROWS and cannot fail a check that iterates them.
+  //
+  // That is the default state of a new table here, not an exotic one. `pnpm run db:verify`
+  // connects as `DATABASE_URL`, which RUNBOOK §5 makes `prl_api` (a member of `prl_app` and
+  // nothing else), and `db/migrations/0001_initial.sql` says in as many words that a table added
+  // by a later migration gets NO grant until somebody writes one. So a new table is invisible to
+  // this script until a GRANT makes it visible, which is backwards: the tables nobody has decided
+  // the grants for are the ones least likely to have been reviewed at all.
+  //
+  // Demonstrated, not theorised. `prl.hand_deck_cache (deck jsonb, deck_salts jsonb,
+  // total_score int)` created by the migrator with no grants: exit 0 as `prl_api`, four
+  // violations as the owner. The same database, and check 1 — this script's single most
+  // important persistence property, that no column may hold the deck or the salts — answering
+  // "fine" for the one table in the schema that held both.
+  //
+  // The asymmetry survived review for as long as it did because every OTHER check in this file
+  // already reads an unfiltered catalogue: `pg_indexes` (3, 4), `pg_constraint` (5, 8, 9),
+  // `pg_class`/`pg_namespace` (6b), `pg_roles` (6). Nothing in the file's shape suggested that
+  // one of the reads was answering a different question from the rest.
+  //
+  // DO NOT "simplify" this back to `information_schema.columns` because that is shorter, or
+  // because `data_type` reads more nicely than `format_type`. The privilege filter is the entire
+  // bug. `pg_attribute` has none, `relkind` here also covers the materialized view that
+  // `information_schema` omits altogether (a matview caching the deck is the same leak with a
+  // different relkind), and `attnum > 0 and not attisdropped` is what drops the system columns
+  // and the tombstones of dropped ones.
+  //
+  // The one thing `information_schema` did for free and this query has to do explicitly: unwrap
+  // the DOMAIN. `sessions.token_hash` is `prl.sha256_hash`, a domain over `bytea` with a length
+  // CHECK, and `format_type` on the column's own type answers `prl.sha256_hash` — which would
+  // fail the "hash columns are bytea" check below on a perfectly correct schema. `typtype = 'd'`
+  // is the domain case and `typbasetype` is what it is a domain over. One level, because every
+  // domain in `0001_initial.sql` is one level over a base type and a domain over a domain would
+  // be a schema decision worth failing on rather than resolving silently.
   const columns = await sql`
-    select table_name, column_name, data_type
-    from information_schema.columns
-    where table_schema = ${SCHEMA}
-    order by table_name, ordinal_position
+    select cls.relname as table_name,
+           att.attname as column_name,
+           format_type(
+             case when typ.typtype = 'd' then typ.typbasetype else att.atttypid end,
+             case when typ.typtype = 'd' then typ.typtypmod else att.atttypmod end
+           ) as data_type
+    from pg_catalog.pg_attribute att
+    join pg_catalog.pg_class cls on cls.oid = att.attrelid
+    join pg_catalog.pg_namespace nsp on nsp.oid = cls.relnamespace
+    join pg_catalog.pg_type typ on typ.oid = att.atttypid
+    where nsp.nspname = ${SCHEMA}
+      and cls.relkind in ('r', 'p', 'v', 'm', 'f')
+      and att.attnum > 0
+      and not att.attisdropped
+    order by cls.relname, att.attnum
   `;
-  note(`${columns.length} columns across the ${SCHEMA} schema, as ${role}`);
+  note(`${columns.length} columns across the ${SCHEMA} schema, read from pg_catalog as ${role}`);
+
+  // How much this run would have missed had it kept reading `information_schema`. Not a failure:
+  // a runtime role that cannot see `prl.schema_migrations` is the privilege model working, and on
+  // a correctly granted database this note reports the three columns of that one table. It is
+  // here so the number above can never quietly become the smaller number again without somebody
+  // noticing that the gap moved.
+  const [visible] = await sql`
+    select count(*)::int as count from information_schema.columns where table_schema = ${SCHEMA}
+  `;
+  const hidden = columns.length - (visible?.count ?? 0);
+  if (hidden > 0) {
+    note(`${hidden} of them are invisible to ${role}; information_schema would not have checked those`);
+  }
 
   // A deck or a salt must not be storable. Matched on the column NAME, because that is what a
   // future maintainer would reach for, and deliberately broad.
@@ -392,9 +561,23 @@ try {
 
     // TRUNCATE is a distinct privilege from DELETE and is worth checking separately: it
     // bypasses row-level rules and cannot be rolled back as cheaply.
+    //
+    // The table list comes from `pg_class` for the same reason the column list above does.
+    //
+    // Honestly stated, because the difference matters to anyone auditing this: unlike the column
+    // read, this one was not actually wrong. `information_schema.tables` counts TRUNCATE among
+    // the privileges its filter tests, so a table `prl_app` could TRUNCATE was always visible to
+    // it. That is soundness by coincidence — it rests on a detail of one view definition, it
+    // would not survive somebody widening the check to a privilege the filter does not list, and
+    // it is not a thing the next reader should have to know. Converting it leaves no CHECK in
+    // this file depending on a privilege-filtered catalogue; the only `information_schema` read
+    // left is the diagnostic count above, which produces a note and never a verdict.
     const tables = await sql`
-      select table_name from information_schema.tables
-      where table_schema = ${SCHEMA} and table_type = 'BASE TABLE'
+      select cls.relname as table_name
+      from pg_catalog.pg_class cls
+      join pg_catalog.pg_namespace nsp on nsp.oid = cls.relnamespace
+      where nsp.nspname = ${SCHEMA} and cls.relkind in ('r', 'p')
+      order by cls.relname
     `;
     for (const { table_name: table } of tables) {
       const [privilege] = await sql`
@@ -402,7 +585,7 @@ try {
       `;
       if (privilege?.can_truncate === true) fail('prl_app', `can TRUNCATE ${table}`);
     }
-    note(`checked ${tables.length} tables for prl_app privileges, as seen by ${role}`);
+    note(`checked ${tables.length} tables for prl_app privileges, run as ${role}`);
   }
 
   // ---- 6b. The schema and everything in it is owned by the migrator ---------------------
@@ -447,6 +630,65 @@ try {
       );
     }
     note(`checked schema and ${misowned.length === 0 ? 'every' : 'each'} relation owner`);
+  }
+
+  // ---- 10. The grant matrix, exactly ---------------------------------------------------
+  //
+  // `has_table_privilege` rather than reading `relacl`, because the ACL array does not account for
+  // privileges reaching the role through membership in another one — and `prl_app` is a privilege
+  // CONTAINER whose members are the login identities, so the question that matters is what the
+  // container effectively holds. `pg_class` supplies the table list for the reason every other list
+  // in this file comes from `pg_catalog`: `information_schema` is filtered by the connecting role's
+  // privileges, and a table this script cannot see is exactly the table whose grants nobody wrote.
+  {
+    const before = failures.length;
+    const declared = new Map(APP_TABLE_GRANTS.map(([table, verbs, why]) => [table, { verbs, why }]));
+    const present = await sql`
+      select cls.relname as table_name
+      from pg_catalog.pg_class cls
+      join pg_catalog.pg_namespace nsp on nsp.oid = cls.relnamespace
+      where nsp.nspname = ${SCHEMA} and cls.relkind in ('r', 'p')
+      order by cls.relname
+    `;
+    for (const { table_name: table } of present) {
+      const [held] = await sql`
+        select coalesce(
+          string_agg(privilege, ' ' order by ordinality),
+          ''
+        ) as verbs
+        from unnest(${TABLE_PRIVILEGES}::text[]) with ordinality as candidate(privilege, ordinality)
+        where has_table_privilege('prl_app', ${`${SCHEMA}.${table}`}, candidate.privilege)
+      `;
+      const actual = held?.verbs ?? '';
+      const expectation = declared.get(table);
+      declared.delete(table);
+      if (expectation === undefined) {
+        fail(
+          'grant matrix',
+          `${table} is not in APP_TABLE_GRANTS, so nobody has decided what prl_app may do to it ` +
+            `(it currently holds: ${actual === '' ? 'nothing' : actual}). Decide, write it into the ` +
+            'migration that created the table, and add it to that list in this script.',
+        );
+        continue;
+      }
+      if (actual !== expectation.verbs) {
+        fail(
+          'grant matrix',
+          `prl_app holds ${actual === '' ? 'nothing' : actual} on ${table}, expected ` +
+            `${expectation.verbs === '' ? 'nothing' : expectation.verbs} — ${expectation.why}`,
+        );
+      }
+    }
+    for (const [table, expectation] of declared) {
+      fail(
+        'grant matrix',
+        `${table} is in APP_TABLE_GRANTS and does not exist in the schema (${expectation.why}). ` +
+          'Either the database is not migrated or a table was removed and the matrix was not.',
+      );
+    }
+    if (failures.length === before) {
+      note(`prl_app holds exactly the declared verbs on all ${present.length} tables`);
+    }
   }
 
   // ---- 7. No aggregate quiz score -----------------------------------------------------

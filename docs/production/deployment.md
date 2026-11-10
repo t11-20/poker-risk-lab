@@ -11,9 +11,10 @@ How a commit becomes a running production deployment: what runs, in what order, 
 ```
 commit
   │
-  ├─ 1  supply-chain gates, lint, typecheck        .github/workflows/release.yml: gates
-  ├─ 2  full test suite against a real database                                 : tests
-  ├─ 3  BUILD ONCE — both images, digests recorded                              : build
+  ├─ 1  supply-chain gates, hygiene, lint, typecheck  .github/workflows/release.yml: gates
+  ├─ 2  full suite + exhaustive + simulation, real database                     : tests
+  ├─ 2b contrast, a11y, ax tree, keyboard, painted text, CSP, age gate, Chrome  : browser-gates
+  ├─ 3  BUILD ONCE — both images, digests recorded (needs 2 AND 2b)             : build
   ├─ 4  container CVE scan of those exact images                                : container-scan
   ├─ 5  staging deploy on those digests + smoke/E2E                             : staging
   ├─ 6  promotion check: same digest, byte for byte                             : promote
@@ -22,7 +23,11 @@ commit
   └─ 9  rollback plan, printed with this release's digests                      : rollback-plan
 ```
 
-Triggered by a `v*` tag, so a release is a deliberate act with a name and never a side effect of a push to a branch. `workflow_dispatch` runs it on demand with `dry_run` defaulting to **true**, so somebody who clicks Run without reading gets a full build, scan and staging verification and no promotion. Concurrency is `cancel-in-progress: false`: unlike CI, an in-flight release must not be cancelled, because a half-finished deploy is worse than a queued one.
+Triggered by a `v*` tag, so a release is a deliberate act with a name and never a side effect of a push to a branch. `workflow_dispatch` runs it on demand with `dry_run` defaulting to **true**, so somebody who clicks Run without reading gets a full build, scan and staging verification and no promotion.
+
+**A rehearsal is not signed, and that took two guards.** A dry run concludes *success* — every job passes, `promote` is skipped — and `release-sign.yml` asked only about the conclusion. So a `workflow_dispatch` against any branch, on the safe default, had its images pushed to GHCR and signed with a Fulcio certificate naming this repository. The signing job now additionally requires `workflow_run.event == 'push'`, which for this workflow means a `v*` tag; and `promote` writes `release-promotable.json` naming the commit, which the signing job downloads from the triggering run and refuses to proceed without. The condition prevents the job existing; the artefact is checked *inside* it, because a condition loosened later skips silently and nobody reads a run that was never created. `scripts/keyless-identity.test.mjs` holds both, and all four of its checks fail against the workflows as they stood.
+
+**The release gate now runs in the release.** `pnpm run verify` is fourteen gates and this workflow ran five of them: `security:hygiene`, `build`, `design:contrast`, `test:a11y`, `test:ax`, `test:csp`, `test:age-gate`, `test:exhaustive` and `test:simulation` ran in `ci.yml` and nowhere here. A commit that failed the contrast budget, shipped an inaccessible control, lost the CSP negative control, broke the age gate — a legal control — or evaluated seven-card hands wrongly was built into an immutable artefact, scanned, staged and offered for signing, with this pipeline green throughout. `scripts/release-gate-coverage.mjs` reads the `for gate in` clause of the `verify` script and this workflow's `needs` graph and fails when they disagree, so a new gate is a two-file change by construction — `test:layout` was the fifteenth and `test:keyboard`, added 2026-08-26, the sixteenth, and this guard is what said where each had to be wired. It runs inside `test:scripts`, which is to say inside this pipeline. Concurrency is `cancel-in-progress: false`: unlike CI, an in-flight release must not be cancelled, because a half-finished deploy is worse than a queued one.
 
 Top-level permissions are `contents: read` and nothing more. No job needs a token today. When a registry appears, the push job — and only the push job — gets `packages: write`, or better `id-token: write` for OIDC-federated credentials, which stores no long-lived secret in the repository at all.
 
@@ -30,7 +35,7 @@ Top-level permissions are `contents: read` and nothing more. No job needs a toke
 
 | Stage | Executes on a runner today? |
 | --- | --- |
-| 1 gates, 2 tests, 3 build, 4 scan, 5 staging, 6 promotion check, 9 rollback plan | **yes** |
+| 1 gates, 2 tests, 2b browser gates, 3 build, 4 scan, 5 staging, 6 promotion check, 9 rollback plan | **yes** |
 | 7 production deploy | **no** — `NOT WIRED` |
 | 8 post-deploy verification | **no** — `NOT WIRED` |
 
@@ -89,9 +94,9 @@ Three independent readings of the digest are taken and compared — `--iidfile`,
 
 ### What "digest" means here, precisely
 
-There is no container registry in this project and nothing is pushed. The digest is the one BuildKit's exporter assigns in the local image store. It is content-addressed: two builds producing different bytes cannot share it, and `image: prl-api@sha256:…` in a compose file resolves to exactly that image or to nothing.
+By default nothing is pushed, and the digest is the one BuildKit's exporter assigns in the local image store. It is content-addressed: two builds producing different bytes cannot share it, and `image: prl-api@sha256:…` in a compose file resolves to exactly that image or to nothing.
 
-It is **not** registry-attested. Nobody signed it and no registry vouches for it, and it exists only on the machine that built it. The manifest says so in its own `digestKind` field:
+**There is a registry now, and this paragraph used to deny it.** `deploy/registry/` runs a loopback registry on `127.0.0.1:5001`; `pnpm run release:artifacts -- --push` pushes both images, re-fetches each manifest and records the registry digest beside the build digest; `pnpm run release:sign` signs by digest and refuses if the two disagree. What stays true is the narrower claim: a loopback registry on the release machine is **not a third party**, so a registry digest from it is not third-party attestation, and it is not resolvable from any other machine. `scripts/release-artifacts.mjs` writes whichever `digestKind` applies — the un-pushed one reads:
 
 > local BuildKit image-store manifest digest (--iidfile). Content-addressed and stable, but not registry-attested: nothing is pushed, so no registry vouches for it.
 
@@ -105,7 +110,7 @@ GitHub gives each job a fresh machine, so the images built in `build` do not exi
 
 ## 3. Stage 1 — gates
 
-`pnpm run security:audit` runs ten gates, each in its own child process so one crashing gate cannot prevent the others reporting: policy in effect, source encoding hygiene, denied packages, dependency shapes, Shai-Hulud IOC sweep, CI + container pinning, integrity + release age, OSV vulnerabilities, SBOM generation, and container image CVEs. Then lint, `build:packages`, typecheck.
+`pnpm run security:audit` runs **fifteen** gates, each in its own child process so one crashing gate cannot prevent the others reporting, in this order: policy in effect, source encoding hygiene, denied packages, dependency shapes, Shai-Hulud IOC sweep, **committed credentials**, CI + container pinning, **keyless signing identity**, **log policy**, integrity + release age, OSV vulnerabilities, **pinned action advisories**, SBOM generation, container image CVEs, and **release image signatures**. Then lint, `build:packages`, typecheck. (This paragraph has said "ten" and then "eleven"; the count and the order are the `GATES` array in `scripts/supply-chain/audit.mjs`, and `security:audit` prints the count on its first line. Three landed on 2026-08-25 and `pinned-action-advisories` on 2026-08-27.)
 
 The install is `pnpm install --frozen-lockfile --ignore-scripts`: this job installs a dependency graph in order to decide whether it is safe, so it must not run that graph's install-time hooks first.
 
@@ -117,11 +122,11 @@ The install is `pnpm install --frozen-lockfile --ignore-scripts`: this job insta
 | no artefacts on this machine — reported `not applicable`, and the summary says the audit did not cover images | 0 |
 | `--skip-containers` with artefacts present — an explicit refusal to run a gate that could have run | **2**, printing `1 network gate(s) skipped — NOT a valid release audit.` |
 
-Measured 2026-08-22: `node scripts/supply-chain/audit.mjs` exit **0**, all ten gates pass including the container gate; `--skip-containers` exit **2** with that message.
+Measured 2026-08-22: `node scripts/supply-chain/audit.mjs` exit **0**, all gates pass including the container gate; `--skip-containers` exit **2** with that message. There were ten gates that day; the secret scan has since made it eleven.
 
-Pinning is enforced, not requested. `node scripts/supply-chain/ci-pinning.mjs` exit **0** over 3 workflows, 46 action references, 2 Dockerfiles with 2 external base images and 2 compose files with 6 image references — all digest-pinned. Every `uses:` is a full 40-character commit SHA with the version in a trailing comment, and every `runs-on` names an explicit runner version. The gate also refuses any workflow file not declared in its `EXPECTED_WORKFLOWS`, so adding a workflow is a two-file diff.
+Pinning is enforced, not requested. Re-measured 2026-08-25: `node scripts/supply-chain/ci-pinning.mjs` exit **0** over **3 workflows, 46 action references, 2 Dockerfiles with 2 external base images and 3 compose files with 8 image references** — all digest-pinned. (The compose figures read "2 compose files with 6 image references"; the observability overlay added a third file and two more pinned images.) Every `uses:` is a full 40-character commit SHA with the version in a trailing comment, and every `runs-on` names an explicit runner version. The gate also refuses any workflow file not declared in its `EXPECTED_WORKFLOWS`, so adding a workflow is a two-file diff.
 
-`--freshness` is a **report, not a gate**: it exits 0 whatever it finds, and its job is to make a base image that has been rebuilt upstream — usually for a security patch — visible in the release log, so refreshing a pinned digest is a decision somebody makes rather than one nobody knows is available. Measured 2026-08-22: exit 0, all three pinned tags re-resolved against `registry-1.docker.io` — `postgres:16-bookworm`, `node:24.18.0-bookworm-slim` and `nginxinc/nginx-unprivileged:1.29.8-alpine` all still resolve to the digests beside them. **drifted 0.**
+`--freshness` is a **report, not a gate**: it exits 0 whatever it finds, and its job is to make a base image that has been rebuilt upstream — usually for a security patch — visible in the release log, so refreshing a pinned digest is a decision somebody makes rather than one nobody knows is available. Measured 2026-08-22: exit 0, all three pinned tags re-resolved against `registry-1.docker.io` — `postgres:16-bookworm`, `node:24.18.0-bookworm-slim` and `nginxinc/nginx-unprivileged:1.29.8-alpine` all still resolve to the digests beside them. **drifted 0.** That capture names the application base this project no longer uses: the runtime base moved to `node:24.18.0-alpine3.24` afterwards, so the next `--freshness` run reports a different set of three.
 
 ---
 
@@ -135,7 +140,9 @@ The job's default `DATABASE_URL` names a **login role that is only a member of `
 
 ## 5. Stage 4 — the container CVE scan
 
-Nine supply-chain gates examined the npm dependency graph in forensic detail and **nothing looked inside the artefact that actually ships**. The images are Debian bookworm-slim with a Node runtime and roughly a hundred OS packages in them, none of which appear in `pnpm-lock.yaml`. A CVE in zlib or perl-base was, as far as this repository's release audit was concerned, not a thing that could exist.
+The other supply-chain gates examine the npm dependency graph and the repository in forensic detail, and until this one existed **nothing looked inside the artefact that actually ships**. The images carry a Node runtime and an OS package set, none of which appears in `pnpm-lock.yaml`. A CVE in zlib or perl-base was, as far as this repository's release audit was concerned, not a thing that could exist.
+
+That gate is also what moved the base image. On Debian bookworm-slim it reported 60 unfixed findings across the two images — 52 HIGH and 8 CRITICAL, 14 distinct CVEs, every one of them from the base's 88 OS packages and none from this project's code. None of them blocked, because the policy is not to block on a finding with no upstream fix; the scanner's own header says the right answer to a growing number is a different base image. The base is now `node:24.18.0-alpine3.24` with 18 OS packages, and the same scan reports **0 findings, blocking or otherwise**, with `--include-unfixed` agreeing.
 
 `trivy` is installed at an exact pinned version and **verified against its published checksum** — a scanner installed from a moving `latest` is a moving dependency in the job that decides whether the release is safe.
 
@@ -276,11 +283,11 @@ Everything below was measured on 2026-08-22. Nothing else here is claimed as ver
 | Command | Exit | Result |
 | --- | --- | --- |
 | `node scripts/release-artifacts.mjs --force` | 0 | built `prl-api` (83 MB) and `prl-web` (171 MB) once each; digests recorded to the manifest |
-| `node scripts/supply-chain/ci-pinning.mjs` | 0 | 3 workflows, 46 action references, 2 Dockerfiles / 2 external base images, 2 compose files / 6 image references — all digest-pinned |
+| `node scripts/supply-chain/ci-pinning.mjs` | 0 | *re-run 2026-08-25:* 3 workflows, 46 action references, 2 Dockerfiles / 2 external base images, **3 compose files / 8 image references** — all digest-pinned. (The row read 2 compose files / 6 images, from the 2026-08-22 run) |
 | `node scripts/supply-chain/ci-pinning.mjs --freshness` | 0 | all 3 pinned tags re-resolved against the registry, drifted 0 |
 | `node scripts/supply-chain/container-scan.mjs` | 0 | trivy 0.72.0, floor HIGH; api and web 30 findings each, all unfixable; 0 blocking, 0 allowed |
 | the same, against the **pre-fix** web image | 1 | 8 blocking findings under `/usr/local/lib/node_modules/npm` |
-| `node scripts/supply-chain/audit.mjs` | 0 | all 10 gates pass, container gate included |
+| `node scripts/supply-chain/audit.mjs` | 0 | all gates pass, container gate included — 10 of them on that date; the array holds **fifteen** today |
 | `node scripts/supply-chain/audit.mjs --skip-containers` | 2 | `1 network gate(s) skipped — NOT a valid release audit.` |
 | `node scripts/staging.mjs up` | 1 | stack verified; the smoke test then found two application defects (53 passed, 2 failed). No attestation written — correct behaviour |
 | `node scripts/staging.mjs status` | 0 | both images match the manifest; `attestation absent — nothing has been verified` |
@@ -289,7 +296,9 @@ Everything below was measured on 2026-08-22. Nothing else here is claimed as ver
 
 The two defects that `staging up` found — Monte Carlo equity throwing under `NODE_ENV=production`, and guest bootstrap being refused behind any reverse proxy — are described in [`staging.md`](staging.md) §8. **Both are now fixed.**
 
-**Outstanding, and stated here so nothing above reads as more than it is: `staging up` has not been re-run since those fixes, so no green attestation exists and no promotion has completed end to end.** The refusal paths are proven by the runs in the table. The success path — a green `up`, an attestation, and `promote` accepting the digest — is implemented and unexercised. There is also no registry, no deploy target and no bot account in this repository, so stages 7 and 8 have never run anywhere.
+**`staging up` has since been re-run, and the success path is no longer unexercised.** This paragraph used to say the opposite — that no green attestation existed and no promotion had completed end to end — and it was true only until the two defects were fixed. `deploy/staging/staging-verified.json` now records a green run at `2026-08-22T18:55:36Z` against commit `b292b2ac234c` with `dirty: false`, all four checks true: running digests match the manifest, the TLS chain verified, the proxy overwrote `X-Forwarded-For`, and the strict smoke test passed (61 checks). `staging promote` on that run reported promotable and byte-identical. The evidence is in [`staging-verification.md`](staging-verification.md).
+
+**What is genuinely still outstanding** is narrower than "unexercised": the digests in that attestation are from the **local BuildKit store and are not registry-attested**, so what has been proven is that this machine deployed and verified the images it built, not that a registry can hand the same digests to somewhere else. There is still no registry, no deploy target and no bot account in this repository, so stages 7 and 8 have never run anywhere.
 
 ---
 
@@ -305,3 +314,13 @@ The two defects that `staging up` found — Monte Carlo equity throwing under `N
 - [ ] the previous release's `release-manifest` artifact is retrievable — **that artifact is the rollback target**, which is why its retention is 90 days
 - [ ] the orchestrator's termination grace is **above** `SHUTDOWN_GRACE_MS`, never equal to it
 - [ ] one replica, or room affinity tested with two players in one room
+- [ ] **if this deployment serves a class**: `COHORT_SIZE` declares how many learners sign in
+      together from one address, `COHORT_ENTRY` names which doors they use, and the API booted —
+      it refuses to start when the sign-in limits cannot serve the declaration. RUNBOOK §7.1 has
+      the arithmetic. Every sign-in limit is keyed on the client address (it has to be: those
+      routes issue the session a session-keyed limit would let the caller rotate), so a campus
+      NAT is one caller. Getting this wrong is not found in a log; it is found by thirty students
+      at once, and it was measured at 15 of 30 refused before the check existed
+- [ ] `RATE_LIMIT_OIDC_FAILURE_MAX` was **not** raised alongside `RATE_LIMIT_OIDC_MAX`. The
+      ceiling is sized for the cohort and that budget is sized for the abuse; raising them
+      together hands a script the classroom's headroom and the boot check will refuse it

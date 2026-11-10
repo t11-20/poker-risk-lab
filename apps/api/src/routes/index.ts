@@ -47,6 +47,8 @@ import { type RouteModule, registerRoutes } from '../app.ts';
 import { sessionPlugin } from '../auth/session.ts';
 import { getSql } from '../db.ts';
 import { recordProblem } from '../observability/telemetry.ts';
+import { postgresSeatEntitlement } from '../rooms/entitlement.ts';
+import { postgresRoomOwnership } from '../rooms/ownership.ts';
 import { postgresArchive, roomRegistry } from '../rooms/registry.ts';
 import wsHub from '../ws/hub.ts';
 import authRoutes, { createAuthStore } from './auth.ts';
@@ -94,6 +96,43 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   roomRegistry({
     metrics,
     archive: postgresArchive(getSql),
+    // ######################################################################
+    // ## THIS LINE IS WHAT MAKES "ONE API PROCESS PER ROOM" REAL.         ##
+    // ######################################################################
+    //
+    // Without it the registry defaults to `ownership: null`, which is the behaviour every
+    // database-free test needs and is exactly what this file's header describes going wrong for the
+    // archive: a permissive default, silently taken by production, and nobody notices for months.
+    // The failure here is worse than an empty `GET /hands`. Two API processes — a second replica, or
+    // the few seconds of a rolling deploy where the new container is healthy and the old one has not
+    // drained — would each hold their own deck and pot for the same room, and whichever settlement
+    // landed second would destroy the chips the other one paid out, with no error anywhere.
+    //
+    // Bound lazily through `getSql`, like the archive, so registering routes still touches no pool.
+    // `test/wiring.test.ts` asserts that the assembled app's registry enforces a lease, because
+    // losing this one line would leave every test green.
+    ownership: postgresRoomOwnership(getSql),
+    // ######################################################################
+    // ## THIS LINE IS WHAT MAKES `PRL_ENROLMENT_REQUIRED` REAL.           ##
+    // ######################################################################
+    //
+    // `enforced` gates taking a seat, and nothing else — `/learn`, the Lab, the glossary, the
+    // Legends pages, creating a room and joining one by invite code all stay open, because that is
+    // the surface somebody deciding whether to enrol is browsing. `off`, the default and the state
+    // of every deployment that predates this, passes null and the registry behaves exactly as it
+    // always did.
+    //
+    // Bound lazily through `getSql` like the archive and the lease, so registering routes still
+    // touches no pool. The read it eventually makes is SELECT-only by GRANT and not by convention:
+    // `prl_app` cannot enrol anybody even if a future handler tried to
+    // (`db/migrations/0006_cohort_enrolments.sql`).
+    //
+    // `test/wiring.test.ts` asserts this correspondence in BOTH directions — enforced binds one,
+    // off binds none — because the failure of losing this line is silent and looks like success:
+    // an enforcing deployment that seats everybody, with every test still green.
+    ...(app.appConfig.enrolmentRequired === 'enforced'
+      ? { entitlement: postgresSeatEntitlement(getSql) }
+      : {}),
     // A lone learner at a table of bots gets this long to act, so the Coach panel can actually be
     // read before the clock folds them. Threaded from config rather than read inside `LiveTable`,
     // so a test constructing a table directly can still vary it.

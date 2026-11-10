@@ -14,6 +14,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { sprBandFor } from '@prl/poker-math';
 import {
   describeSpr,
   FormatError,
@@ -243,17 +244,49 @@ describe('formatConfidenceInterval', () => {
 });
 
 describe('describeSpr', () => {
-  it('bands a ratio and explains what the band means', () => {
+  it('bands a ratio at the shared edges, not its own (REGRESSION)', () => {
+    // These edges are `sprBandFor` in `@prl/poker-math`, and this module no longer has any of its
+    // own. It used to: 1/4/8/15 here against 1/3/6/13 there, while `CoachPanel` renders this
+    // label directly above the sentence that module generates. So one panel read "3.3 — low" over
+    // prose saying 'which is the "medium" band', on five of the thirty-six Lab scenarios, and at
+    // 6.82 the two disagreed about the meaning rather than the word — "roughly two streets of
+    // betting" against "several streets fit".
+    //
+    // The boundary values are asserted on both sides because that is where a re-divergence would
+    // start, and `high` closes INCLUSIVELY at 13, which is the one edge a rewrite gets wrong.
     assert.equal(describeSpr(0.5).band, 'committed');
     assert.equal(describeSpr(0.99).band, 'committed');
     assert.equal(describeSpr(1).band, 'low');
-    assert.equal(describeSpr(3.9).band, 'low');
-    assert.equal(describeSpr(4).band, 'medium');
-    assert.equal(describeSpr(7.9).band, 'medium');
-    assert.equal(describeSpr(8).band, 'high');
-    assert.equal(describeSpr(14.9).band, 'high');
-    assert.equal(describeSpr(15).band, 'deep');
+    assert.equal(describeSpr(2.99).band, 'low');
+    assert.equal(describeSpr(3).band, 'medium');
+    assert.equal(describeSpr(5.99).band, 'medium');
+    assert.equal(describeSpr(6).band, 'high');
+    assert.equal(describeSpr(13).band, 'high');
+    assert.equal(describeSpr(13.01).band, 'deep');
     assert.equal(describeSpr(200).band, 'deep');
+  });
+
+  it('agrees with @prl/poker-math on every band, so the two cannot drift again', () => {
+    // The join itself. Sampling rather than spot-checking, because the defect was an edge that
+    // moved on one side only.
+    const vocabulary: Readonly<Record<string, string>> = {
+      'very-low': 'committed',
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      'very-high': 'deep',
+    };
+    let compared = 0;
+    for (let spr = 0; spr <= 2000; spr += 1) {
+      const ratio = spr / 100;
+      assert.equal(
+        describeSpr(ratio).band,
+        vocabulary[sprBandFor(ratio)],
+        `SPR ${ratio}: the tile and the shared classifier disagree`,
+      );
+      compared += 1;
+    }
+    assert.ok(compared > 100, 'a sweep of nothing is not a pass');
   });
 
   it('labels the value, trimming a pointless decimal', () => {

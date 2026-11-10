@@ -524,9 +524,11 @@ describe('parseExposition, against a real captured scrape', () => {
     assert.equal(histogramBoundAtQuantile({ buckets: [], sum: 0, count: 0 }, 0.99), null);
   });
 
-  it('returns null when the quantile falls in the +Inf bucket', () => {
-    // Everything landed above the top bound, so all that is known is "above 10 s". A number here
-    // would be an invention.
+  it('separates "above the top bound" from "nothing was measured"', () => {
+    // Everything landed above the top bound, so all that is known is "above 10 s". This used to
+    // return null, which is also what no observations returns — so the slowest reading the
+    // histogram can produce was indistinguishable from an absent metric, and the signal that
+    // exists to name it stayed quiet. Infinity is not an invented number: it is the bound.
     const overflowing = {
       buckets: [
         { le: 1, cumulative: 0 },
@@ -536,7 +538,8 @@ describe('parseExposition, against a real captured scrape', () => {
       sum: 400,
       count: 4,
     };
-    assert.equal(histogramBoundAtQuantile(overflowing, 0.99), null);
+    assert.equal(histogramBoundAtQuantile(overflowing, 0.99), Number.POSITIVE_INFINITY);
+    assert.equal(histogramBoundAtQuantile({ buckets: [], sum: 0, count: 0 }, 0.99), null);
   });
 });
 
@@ -771,15 +774,71 @@ describe('evaluateStopCriteria', () => {
     assert.match(verdict.breaches[0].detail, /hole cards changed/);
   });
 
-  it('does not consult the server-side rate limit when the scrapes were unusable', () => {
-    // `rateLimitLimited` is undefined on an unusable server summary. A comparison against
-    // undefined must not become a breach — that would fail every level whose scrapes failed, for
-    // a reason with nothing to do with rate limiting.
+  it('stops when the level had no usable server-side half, rather than passing on client timings', () => {
+    // This test used to assert the OPPOSITE — `verdict.stop === false` — on the reasoning that
+    // `rateLimitLimited` is undefined on an unusable summary and a comparison against undefined
+    // must not become a breach. The first half is true; the conclusion was the defect. Skipping
+    // every server-side criterion left the level passing on client timings alone, and
+    // `buildReport` then published it: four levels of `{usable:false, scrapes:1,
+    // scrapeFailures:5}` with healthy client numbers returned `passed:true`, `failures:[]`,
+    // `capacity.concurrentSeatedPlayers: 24`, `saturation.resource: null`. A capacity figure with
+    // no server-side evidence behind any of it, from a harness whose header says an unreachable
+    // /metrics is a hard failure — and whose preflight only guards the FIRST scrape.
+    //
+    // It matters most for `refusal-rate-limited`: a level with no scrapes cannot see a single
+    // refusal, so a ramp bounded by the LIMITER rather than by the machine — the bug that
+    // criterion exists for — was reachable again through this door.
     const verdict = evaluateStopCriteria(
-      level({ server: { usable: false, note: 'fewer than two successful scrapes' } }),
+      level({
+        server: {
+          usable: false,
+          scrapes: 1,
+          scrapeFailures: 5,
+          note: 'fewer than two successful scrapes',
+        },
+      }),
       THRESHOLDS,
     );
-    assert.equal(verdict.stop, false);
+    assert.equal(verdict.stop, true);
+    assert.deepEqual(
+      verdict.breaches.map((breach) => breach.criterion),
+      ['server-side-blind'],
+      'exactly one breach: the missing evidence, not a guess at what it would have said',
+    );
+    assert.match(verdict.breaches[0].detail, /rate-limit refusal count/);
+    assert.match(verdict.breaches[0].detail, /fewer than two successful scrapes/);
+  });
+
+  it('does not fire server-side-blind on a healthy level, so it cannot fail every run', () => {
+    // The positive control. A criterion that fired unconditionally would satisfy the assertions
+    // above and would make the ramp incapable of producing any capacity figure at all.
+    assert.equal(evaluateStopCriteria(level(), THRESHOLDS).stop, false);
+  });
+
+  it('publishes no capacity from a run whose /metrics scrapes all failed', () => {
+    // The end-to-end shape of the same defect, through the report builder that CI reads.
+    const blind = {
+      scrapes: 1,
+      scrapeFailures: 5,
+      usable: false,
+      missing: [],
+      note: 'fewer than two successful scrapes',
+    };
+    const report = buildReport(
+      reportInput(
+        [1, 2, 4, 8].map((tables, index) => {
+          const built = level();
+          built.level = index + 1;
+          built.tables = tables;
+          built.virtualUsers = tables * 3;
+          built.server = blind;
+          return built;
+        }),
+      ),
+    );
+    assert.equal(report.passed, false);
+    assert.equal(report.capacity, null);
+    assert.ok(report.failures.some((failure) => /server-side-blind|no capacity figure/.test(failure)));
   });
 });
 
@@ -823,6 +882,33 @@ describe('classifySaturation', () => {
     assert.equal(verdict.resource, 'db-pool');
     const probe = verdict.signals.find((signal) => signal.name === 'db-pool');
     assert.equal(probe.confoundedBy, 'event-loop', 'the probe must always declare what confounds it');
+  });
+
+  it('does not blame the pool for a bound that MEETS the threshold (NEGATIVE CONTROL)', () => {
+    // The observed value is a bound: 50 ms means "99% of probes finished within 50 ms", which is
+    // the threshold being met, not exceeded. Firing on `>=` reported `resource: db-pool` for a
+    // three-player level at 0.4 requests per second, where the reading was the pool opening its
+    // first connection. The report printed `db probe p99 <= 50.0ms` and `FIRED 50.00 ms
+    // (threshold 50 ms)` on the same screen.
+    const verdict = classifySaturation(
+      level({ server: { dbProbeP99BoundMs: THRESHOLDS.dbProbeP99Ms } }),
+      THRESHOLDS,
+    );
+    assert.equal(verdict.resource, 'not-identified');
+    assert.equal(verdict.signals.find((signal) => signal.name === 'db-pool').fired, false);
+  });
+
+  it('blames the pool when the probe quantile is above the top bucket', () => {
+    // The worst reading the histogram can give. It must fire, and it must not be mistaken for an
+    // unexported metric.
+    const verdict = classifySaturation(
+      level({ server: { dbProbeP99BoundMs: Number.POSITIVE_INFINITY } }),
+      THRESHOLDS,
+    );
+    assert.equal(verdict.resource, 'db-pool');
+    const probe = verdict.signals.find((signal) => signal.name === 'db-pool');
+    assert.equal(probe.fired, true);
+    assert.equal(probe.exported, true);
   });
 
   it('a signal whose metric is not exported can never fire (NEGATIVE CONTROL)', () => {

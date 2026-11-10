@@ -194,10 +194,15 @@ const CONTROL_PROSE = CONTROL.replace(/\s+/gu, ' ');
 
 describe('the control asks twice, and says what survives before it asks at all', () => {
   it('is reachable from /record', () => {
-    assert.match(PAGE, /import \{ DeleteAccount \} from '\.\/DeleteAccount\.tsx';/u);
-    assert.match(PAGE, /<DeleteAccount \/>/u, 'the component exists but the page never renders it');
-    // And it is not offered to a reader with no account, which could only ever produce a 401.
-    assert.match(PAGE, /record\.state === 'signedOut' \? null : <DeletePanel \/>/u);
+    assert.match(PAGE, /import \{ AccountDeletion \} from '\.\/DeleteAccount\.tsx';/u);
+    assert.match(
+      PAGE,
+      /<AccountDeletion deletable=\{record\.state !== 'signedOut'\} \/>/u,
+      'the component exists but the page never renders it',
+    );
+    // And it is not offered to a reader with no account, which could only ever produce a 401 —
+    // now a prop rather than a wrapper, for the reason the next block measures.
+    assert.match(CONTROL, /if \(!deletable && deletion\.state !== 'done'\) return null;/u);
   });
 
   it('does not act on the first press: the first press reveals the consequences', () => {
@@ -267,8 +272,10 @@ describe('the control asks twice, and says what survives before it asks at all',
     }
     assert.match(CONTROL_PROSE, /no recovery, no undo and no grace period/u);
 
-    // NEGATIVE CONTROL: strip the retained paragraph and the detector must fire.
-    const stripped = CONTROL_PROSE.replace(/A hand belongs to everybody who was in it/u, 'It all goes');
+    // NEGATIVE CONTROL: strip the retained paragraph and the detector must fire. `replaceAll`,
+    // because the sentence is now in this file twice — the panel's summary and the confirmation
+    // panel's full list both make the promise, and stripping one would leave the other matching.
+    const stripped = CONTROL_PROSE.replaceAll('A hand belongs to everybody who was in it', 'It all goes');
     assert.doesNotMatch(
       stripped,
       /A hand belongs to everybody who was in it/u,
@@ -294,6 +301,89 @@ describe('the control asks twice, and says what survives before it asks at all',
     // Nothing here is a clickable div: every interactive element is a native control, so tab
     // order, Enter and Space are the platform's.
     assert.doesNotMatch(CONTROL, /<(?:div|span|p)[^>]*onClick=/u);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Nothing of the deleted account is left on the screen, and the receipt is
+// ---------------------------------------------------------------------------
+
+/**
+ * The shared-machine case, which the control used to fail.
+ *
+ * ## What a reader saw
+ *
+ * `/record` is a per-reader SERVER render: the finished lesson ids, the attempted scenario ids,
+ * the hands played and the lifetime net are drawn by `RecordPage` from the session cookie. The
+ * deletion control swapped only its own subtree, so all of that stayed on the screen after the
+ * account was gone — directly beneath a receipt reading "Nothing on this page refers to you any
+ * more." Measured in Chrome 151 against the built app with the API up: open a table, play one hand
+ * to the end, delete the account. The receipt appeared, and above it the page still read
+ * "Hands played 1", "Units, net, all time 0 units" and all three lists, until the tab was closed.
+ *
+ * ## Why the obvious fix was reverted before this one
+ *
+ * `router.refresh()` on its own re-renders the page with no session and takes the whole deletion
+ * panel with it, because `RecordPage` hid that panel whenever the reader was signed out — which is
+ * the state a successful deletion produces. The receipt names counts for an account that no longer
+ * exists, so it is the one thing on the page that cannot be looked up afterwards.
+ *
+ * So both halves are asserted here, and they are only correct together: the refresh happens, AND
+ * the receipt is on the client side of it.
+ */
+describe('deleting an account clears the record from the screen and keeps the receipt', () => {
+  it('re-renders the server component once the deletion has succeeded', () => {
+    assert.match(CONTROL, /import \{ useRouter \} from 'next\/navigation';/u);
+    assert.match(CONTROL, /const router = useRouter\(\);/u);
+    assert.match(
+      CONTROL,
+      /router\.refresh\(\);/u,
+      'nothing re-runs the server render, so the deleted account’s figures stay on the screen',
+    );
+
+    // Ordering is load-bearing: the receipt is put into state BEFORE the refresh is asked for, or
+    // the reader gets a frame with neither the record nor the receipt on it. Both needles are
+    // written so they match the CODE and not the module header, which discusses both by name.
+    const done = CONTROL.indexOf("state: 'done',");
+    const refreshed = CONTROL.indexOf('router.refresh();');
+    assert.ok(done > 0, 'no `state: done,` assignment found, so the ordering check read nothing');
+    assert.ok(refreshed > done, 'the refresh is fired before the receipt reaches state');
+
+    // NEGATIVE CONTROL: the detector against the source it replaced.
+    assert.doesNotMatch(
+      CONTROL.replace(/router\.refresh\(\);/u, ''),
+      /router\.refresh\(\);/u,
+      'the refresh check cannot fail, so it was proving nothing',
+    );
+  });
+
+  it('does not let the page gate the receipt on a session the deletion has just ended', () => {
+    // The panel must be rendered unconditionally and decide for itself. A conditional in the page
+    // is the exact shape that swallows the receipt, so it is banned by pattern rather than by
+    // convention — and by element rather than by name, because wrapping the island in a local
+    // `DeletePanel` and gating THAT is how it was written before and would read as a tidy-up.
+    const GATED = /\{[^{}]*record\.state[^{}]*\?[^{}]*<(?:AccountDeletion|DeleteAccount|DeletePanel)\b/u;
+    assert.doesNotMatch(
+      PAGE,
+      GATED,
+      'the page wraps the deletion panel in a condition on the session, so a successful deletion ' +
+        'removes the receipt it just produced',
+    );
+
+    // NEGATIVE CONTROL: the detector, fed the exact line this replaced, plus the shape a rename
+    // would produce. Without this the check would have passed unchanged against the old page.
+    for (const gate of [
+      "      {record.state === 'signedOut' ? null : <DeletePanel />}",
+      "      {record.state === 'signedOut' ? null : <AccountDeletion deletable />}",
+      "      {record.state !== 'signedOut' ? <DeleteAccount /> : null}",
+    ]) {
+      assert.match(gate, GATED, `the gate detector does not fire on a real gate: ${gate}`);
+    }
+
+    // And the receipt's own sentences live in the client component, not in the server render —
+    // which is what makes them survive the refresh at all.
+    assert.match(CONTROL_PROSE, /Gone for good:/u);
+    assert.doesNotMatch(PAGE, /Gone for good/u);
   });
 });
 
