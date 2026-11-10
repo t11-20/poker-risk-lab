@@ -72,7 +72,7 @@ const MODULES: readonly CapabilityModule[] = [
     summary:
       'Lessons that build one idea at a time, each ending in a quiz that asks you to reason rather than to recall.',
     points: [
-      '17 lessons across 11 topics',
+      '17 lessons across 10 topics',
       'A glossary of 90 terms, linked from wherever a term first appears',
       'Every worked figure recomputed live, so no example can drift out of date',
     ],

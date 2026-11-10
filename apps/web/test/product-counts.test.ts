@@ -67,10 +67,15 @@ const STATED_COUNTS: readonly StatedCount[] = [
     computed: () => stats.lessons,
   },
   {
-    where: 'home page — topics covered',
+    // The topics the LESSONS span, which is what the sentence says. It was pinned to
+    // `topicsCovered`, which also counts the Lab's scenarios: 11, because `risk-psychology` has
+    // scenarios and no lesson. So the home page said "17 lessons across 11 topics" beside a
+    // /learn index that counts its own topic groups and showed 10, and this check agreed with
+    // the home page.
+    where: 'home page — topics the lessons cover',
     page: HOME,
     phrase: (n) => `lessons across ${n} topics`,
-    computed: () => stats.topicsCovered,
+    computed: () => new Set(bundle.lessons.map((lesson) => lesson.topic)).size,
   },
   {
     where: 'home page — glossary size',

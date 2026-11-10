@@ -1611,8 +1611,11 @@
   scroll-margin-block-start: var(--prl-learn-sticky-top);
 }
 
+/* `start`, not the grid's default stretch: at two columns a card took its row partner's height, and
+   "All-in" carried about 150px of empty panel under its See also at 1440. */
 .prl-learn-glossary__entries {
   display: grid;
+  align-items: start;
   gap: var(--prl-space-5);
 }
 
@@ -1653,13 +1656,41 @@
   color: var(--prl-text-secondary);
 }
 
-.prl-learn-glossary__topics,
-.prl-learn-glossary__related {
+.prl-learn-glossary__topics {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--prl-space-3) var(--prl-space-4);
   margin: 0;
+}
+
+/**
+ * "See also", then the links in a column of their own.
+ *
+ * The label and the links shared one wrapping row, so a second line of links started under the
+ * label rather than under the first link (x=755 against x=832 at 1440), and sat 50px below it: each
+ * link's 44px target plus a 6px row gap, about twice a line. The links now wrap in their own column
+ * with no row gap, so the targets themselves are the spacing, and the label is centred on the first
+ * row by being a target's height too.
+ */
+.prl-learn-glossary__related {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  column-gap: var(--prl-space-3);
+  margin: 0;
+}
+
+.prl-learn-glossary__related > .prl-label {
+  display: flex;
+  align-items: center;
+  min-height: var(--prl-target-min);
+}
+
+.prl-learn-glossary__related-list {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--prl-space-2);
 }
 
 /**
