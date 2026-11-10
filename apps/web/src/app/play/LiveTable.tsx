@@ -766,6 +766,9 @@ export function LiveTable({
         onAct={act}
         idleMessage={IDLE_TABLE_MESSAGE}
         {...coachUnavailableProps(live)}
+        {...(status === 'complete' && table.view !== null
+          ? { reviewHref: `/review/${encodeURIComponent(table.view.handId)}` }
+          : {})}
         {...(highlighted.length === 0
           ? {}
           : { highlightedCards: highlighted, highlightLabel: 'part of the winning hand' })}
