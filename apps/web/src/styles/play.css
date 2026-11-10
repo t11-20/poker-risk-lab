@@ -673,6 +673,16 @@
    assumptions are on screen without anybody having to open anything.
    ========================================================================================== */
 
+/* The footer is outside `.prl-play`, so the padding above never reached it, and at maximum scroll
+   the closed sheet covered the lower 16px of the footer's Appearance toggle at 390. A margin the
+   size of the peek, on phones only, because only phones have the sheet; `--prl-play-sheet-peek` is
+   not in scope out here, so it is the same token written again. */
+@media (width < 600px) {
+  :root:has(.prl-play) .prl-footer {
+    margin-block-end: var(--prl-space-12);
+  }
+}
+
 @media (min-width: 600px) {
   .prl-play {
     --prl-play-sheet-peek: var(--prl-space-0);

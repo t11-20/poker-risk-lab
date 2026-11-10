@@ -1,7 +1,7 @@
 [
   {
     "id": "eq-flush-draw-turn-small-bet",
-    "title": "Flush Draw Facing A Small Bet",
+    "title": "Flush draw facing a small bet",
     "topic": "pot-odds-and-ev",
     "difficulty": "core",
     "question": "Should hero call, fold, or raise?",
@@ -41,7 +41,7 @@
   },
   {
     "id": "eq-flush-draw-turn-overbet",
-    "title": "Same Flush Draw, Huge Overbet",
+    "title": "Same flush draw, huge overbet",
     "topic": "pot-odds-and-ev",
     "difficulty": "core",
     "question": "Should hero call or fold?",
@@ -80,7 +80,7 @@
   },
   {
     "id": "eq-rule-of-four-big-draw-flop",
-    "title": "Where The Rule Of Four Drifts",
+    "title": "Where the rule of four drifts",
     "topic": "probability-and-equity",
     "difficulty": "advanced",
     "question": "Should hero call the all-in or fold?",
@@ -123,7 +123,7 @@
   },
   {
     "id": "eq-break-even-equity-and-bet-size",
-    "title": "Gutshot Against A Pot-Sized Bet",
+    "title": "Gutshot against a pot-sized bet",
     "topic": "pot-odds-and-ev",
     "difficulty": "core",
     "question": "Should hero call or fold?",
@@ -163,7 +163,7 @@
   },
   {
     "id": "eq-second-pair-vs-wide-range",
-    "title": "Second Pair Against A Wide Range",
+    "title": "Second pair against a wide range",
     "topic": "probability-and-equity",
     "difficulty": "core",
     "question": "Should hero call or fold?",
@@ -202,7 +202,7 @@
   },
   {
     "id": "eq-second-pair-vs-narrow-range",
-    "title": "Same Bet, Narrow Range, Different Answer",
+    "title": "Same bet, narrow range, different answer",
     "topic": "pot-odds-and-ev",
     "difficulty": "advanced",
     "question": "Should hero call or fold?",
@@ -242,7 +242,7 @@
   },
   {
     "id": "eq-dominated-flush-draw-turn",
-    "title": "Drawing To A Second-Best Flush",
+    "title": "Drawing to a second-best flush",
     "topic": "probability-and-equity",
     "difficulty": "advanced",
     "question": "Should hero call or fold?",
@@ -290,7 +290,7 @@
   },
   {
     "id": "eq-set-on-connected-flop-jam",
-    "title": "Big Favourite On A Connected Flop",
+    "title": "Big favourite on a connected flop",
     "topic": "probability-and-equity",
     "difficulty": "core",
     "question": "Should hero call the all-in or fold?",
@@ -330,7 +330,7 @@
   },
   {
     "id": "eq-equity-against-one-known-hand",
-    "title": "Equity Against One Known Hand",
+    "title": "Equity against one known hand",
     "topic": "probability-and-equity",
     "difficulty": "core",
     "question": "Should hero call or fold?",
@@ -365,7 +365,7 @@
   },
   {
     "id": "eq-equity-against-the-whole-range",
-    "title": "Equity Against The Whole Range",
+    "title": "Equity against the whole range",
     "topic": "probability-and-equity",
     "difficulty": "advanced",
     "question": "Should hero call or fold?",
@@ -405,7 +405,7 @@
   },
   {
     "id": "eq-implied-odds-deep-stacks-turn",
-    "title": "Implied Odds With Deep Stacks",
+    "title": "Implied odds with deep stacks",
     "topic": "pot-odds-and-ev",
     "difficulty": "advanced",
     "question": "Should hero call or fold?",
@@ -454,7 +454,7 @@
   },
   {
     "id": "eq-reverse-implied-odds-weak-ace",
-    "title": "Weak Ace And Reverse Implied Odds",
+    "title": "Weak ace and reverse implied odds",
     "topic": "pot-odds-and-ev",
     "difficulty": "advanced",
     "question": "Should hero call this bet, and what is the plan for the river?",

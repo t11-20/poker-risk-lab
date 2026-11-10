@@ -126,7 +126,7 @@ export default async function RecordPage(): Promise<ReactElement> {
 
       {record.state === 'ready' ? (
         <Panel title="What you have covered" eyebrow="Counted, not scored" index={1} headingLevel={2}>
-          <div className="prl-metric-row">
+          <div className="prl-metric-row prl-record__figures">
             {RECORD_FIGURES.map((name) => (
               <Metric
                 key={name}

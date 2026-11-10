@@ -474,7 +474,7 @@ function PriceSection({
 }): ReactElement {
   const beyondReach = potTotal - potOdds.pot;
   return (
-    <section className="prl-coach__section">
+    <section className="prl-coach__section prl-coach__section--price">
       <h3 className="prl-coach__section-heading">The price</h3>
 
       {/*

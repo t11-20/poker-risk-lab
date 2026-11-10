@@ -76,8 +76,8 @@
  * many cards happen to clear the thresholds. Applied to a made hand the definitions
  * above degenerate: on a flop with two pair against a range, every one of the 47
  * unseen cards leaves hero at or above `aheadThreshold`, and the module used to
- * publish that as "47 outs in total" while the app's own lesson — *Outs: Clean, Dirty
- * and Imaginary* — teaches the standard meaning. A learner saw a textbook 15 on a real
+ * publish that as "47 outs in total" while the app's own lesson — *Outs: clean, dirty
+ * and imaginary* — teaches the standard meaning. A learner saw a textbook 15 on a real
  * draw and a nonsensical 47 one spot later, from the same panel.
  *
  * So `computeOuts` refuses, the way `coach.ts` already refuses the rule of 2 and 4

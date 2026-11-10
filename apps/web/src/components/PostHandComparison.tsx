@@ -379,10 +379,7 @@ function DecisionBlock({ decision }: { readonly decision: ComparedDecision }): R
           <span className="prl-label">Your action</span>
           <span className="prl-legend-action__value">
             {decision.userAction === null ? (
-              <>
-                <span aria-hidden="true">—</span>
-                <span className="prl-visually-hidden">not your decision</span>
-              </>
+              <span className="prl-legend-action__none">Not your decision</span>
             ) : (
               capitalise(describeTaken(decision.userAction))
             )}
@@ -392,10 +389,7 @@ function DecisionBlock({ decision }: { readonly decision: ComparedDecision }): R
           <span className="prl-label">This model's action</span>
           <span className="prl-legend-action__value">
             {decision.modelAction === null ? (
-              <>
-                <span aria-hidden="true">—</span>
-                <span className="prl-visually-hidden">not the model's decision</span>
-              </>
+              <span className="prl-legend-action__none">Not the model's decision</span>
             ) : (
               capitalise(describeTaken(decision.modelAction))
             )}
