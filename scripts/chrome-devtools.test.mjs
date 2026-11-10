@@ -36,7 +36,8 @@ async function laterServer() {
 /** A port that accepts connections and never answers them. */
 async function stalledServer() {
   const sockets = new Set();
-  const server = createServer(() => {});
+  // No request listener, so a request is accepted and never answered.
+  const server = createServer();
   server.on('connection', (socket) => {
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
