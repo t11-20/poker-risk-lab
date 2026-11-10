@@ -58,6 +58,7 @@ import {
   startHand,
 } from '@prl/poker-engine';
 import { buildCoachReport, type CoachInput } from '../src/coach.ts';
+import { LIVE_COACH_POLICY } from '../src/coach-view.ts';
 import { judgeConsistency } from '../src/consistency.ts';
 import { topPercentRange } from '../src/hand-ranking.ts';
 import { parseRange } from '../src/ranges.ts';
@@ -67,7 +68,7 @@ const SEED = 1;
 const BIG_BLIND = 10;
 
 /** The range the live Coach assumes when nobody names one. */
-const ASSUMED_RANGE_PERCENT = 40;
+const ASSUMED_RANGE_PERCENT = LIVE_COACH_POLICY.range.percent;
 
 interface Spot {
   readonly view: PlayerView;

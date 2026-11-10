@@ -174,6 +174,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { arch, availableParallelism, loadavg, platform, totalmem } from 'node:os';
 import { performance } from 'node:perf_hooks';
+import { RATE_LIMIT_RESET_PATH } from './smoke-test.mjs';
 
 const NO_COLOR = process.env.NO_COLOR !== undefined || !process.stdout.isTTY;
 const paint = (code, s) => (NO_COLOR ? s : `\u001b[${code}m${s}\u001b[0m`);
@@ -307,7 +308,7 @@ const DEFAULTS = {
    * signal under a one-off. So it is measured deliberately, reported as its own cold-start
    * figure, and kept out of the levels. `--skip-warmup` measures the cold process instead.
    *
-   * It used to block the EVENT LOOP for the whole of that, because `coachForView` ran the Monte
+   * It used to block the EVENT LOOP for the whole of that, because the socket ran the Monte
    * Carlo synchronously on the main thread. It now goes to the worker pool, so the cost is paid
    * by the requester and by nobody else — measured across the same window, event-loop p99 fell
    * from 3028.8 ms to 2.1 ms. One thread warms per level as the pool spins up, so a cold-thread
@@ -3081,6 +3082,40 @@ function printReport(report) {
  * the exact shape the limiter exists to refuse, and a failure in the middle of a parallel burst
  * is much harder to attribute.
  */
+/**
+ * Empties the API's rate-limit counters before provisioning, when this process holds the token.
+ *
+ * CI runs `test:smoke` and then this against one API from one address, and smoke's section 12
+ * floods `POST /auth/guest` until the first 429 on purpose. So this harness met a spent bucket and
+ * every CI run since at least 2026-10-11 ended "only 0 of 3 guest sessions could be created". The
+ * smoke test already clears the counters with this control; this uses it the same way. The route
+ * exists only on a process started with `RATE_LIMIT_RESET_TOKEN`, which `loadConfig` refuses in
+ * production, so with no token nothing is attempted.
+ *
+ * Returns the number of counters cleared, null when there was no token, or throws: a token the
+ * server refuses or a route it does not serve is a misconfigured run, not something to wait out.
+ */
+export async function resetRateLimits(baseUrl, origin, token) {
+  if (token === '') return null;
+  const headers = { accept: 'application/json', origin };
+  const seed = await fetch(new URL(ROUTES.session, baseUrl), { headers });
+  const cookie = seed.headers
+    .getSetCookie()
+    .map((raw) => raw.split(';', 1)[0])
+    .join('; ');
+  const csrfToken = (await seed.json())?.csrfToken;
+  if (typeof csrfToken !== 'string') throw new Error(`no CSRF token from GET ${ROUTES.session}`);
+  const response = await fetch(new URL(RATE_LIMIT_RESET_PATH, baseUrl), {
+    method: 'POST',
+    headers: { ...headers, cookie, 'x-csrf-token': csrfToken, authorization: `Bearer ${token}` },
+  });
+  const text = await response.text();
+  if (response.status !== 200) {
+    throw new Error(`POST ${RATE_LIMIT_RESET_PATH} answered ${response.status} ${text.slice(0, 160)}`);
+  }
+  return JSON.parse(text).cleared;
+}
+
 async function provisionSessions(count, options, metrics) {
   const sessions = [];
   const failures = [];
@@ -3193,6 +3228,16 @@ async function main() {
         `${firstScrape.snapshot.malformed.length > 0 ? `, ${firstScrape.snapshot.malformed.length} unparseable line(s)` : ''}`,
     ),
   );
+
+  const resetToken = process.env.PRL_RATE_LIMIT_RESET_TOKEN ?? process.env.RATE_LIMIT_RESET_TOKEN ?? '';
+  try {
+    const cleared = await resetRateLimits(options.baseUrl, options.origin, resetToken);
+    if (cleared !== null)
+      console.log(dim(`  reset    ${cleared} rate-limit counter(s) cleared before provisioning`));
+  } catch (error) {
+    console.error(red(`\n  x the rate-limit reset failed: ${error.message}`));
+    process.exit(1);
+  }
 
   const setupMetrics = new LevelMetrics();
   const setupStartedAt = performance.now();

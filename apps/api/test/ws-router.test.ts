@@ -21,16 +21,18 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { WS_CLOSE, WS_LIMITS } from '@prl/contracts';
+import { type CoachReport, WS_CLOSE, WS_LIMITS } from '@prl/contracts';
 import {
   applyAction,
   createDeterministicRandomForTests,
   createSecureRandom,
   legalActions,
+  type PlayerView,
   parseCards,
   redactFor,
   startHand,
 } from '@prl/poker-engine';
+import { buildCoachReport, coachInputFor, coachSpotForView, LIVE_COACH_POLICY } from '@prl/poker-math';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import { type AppConfig, type EnvRecord, loadConfig } from '../src/config.ts';
@@ -40,7 +42,7 @@ import { buildHypotheticalState } from '../src/rooms/bots.ts';
 import { RoomRegistry } from '../src/rooms/registry.ts';
 import { createManualClock, type ManualClock } from '../src/rooms/timers.ts';
 import { compileFrameValidator, evaluateUpgrade } from '../src/ws/hub.ts';
-import { coachForView, type SocketSink, WsRouter } from '../src/ws/router.ts';
+import { coachTaskForView, type SocketSink, WsRouter } from '../src/ws/router.ts';
 // Shared with `test/ws-socket.test.ts`, which drives the same protocol over a real socket. Two
 // copies of this fake would be two different servers to reason about.
 import { seatingOnlyStore } from './helpers/live-room.ts';
@@ -711,7 +713,14 @@ describe('per-recipient redaction', () => {
 // The Coach over a socket
 // ---------------------------------------------------------------------------
 
-describe('coachForView', () => {
+/** A report from a seat's own view, on this thread, through the reader both clients share. */
+function coachHere(view: PlayerView, samples: number): CoachReport {
+  const reading = coachSpotForView(view, { ...LIVE_COACH_POLICY, samples });
+  assert.ok(reading.kind === 'spot', `no decision in this view: ${JSON.stringify(reading)}`);
+  return buildCoachReport(coachInputFor(reading.spot));
+}
+
+describe('the Coach read off a view', () => {
   it('builds a report from a seat’s own view, with its assumptions stated', () => {
     // A hypothetical river spot, so the equity is an exact enumeration and this test is fast.
     const state = buildHypotheticalState({
@@ -725,7 +734,7 @@ describe('coachForView', () => {
       bigBlind: 10,
     });
     const view = redactFor(state, { viewerSeat: 0 });
-    const report = coachForView(view, { samples: 200 });
+    const report = coachHere(view, 200);
 
     assert.equal(report.street, 'river');
     assert.equal(report.toCall, 100);
@@ -747,7 +756,7 @@ describe('coachForView', () => {
     });
     const spectator = redactFor(state, { viewerSeat: null });
     assert.throws(
-      () => coachForView(spectator, { samples: 200 }),
+      () => coachTaskForView(spectator, { samples: 200 }),
       (error: unknown) => error instanceof AppError && error.code === 'not_seated',
     );
   });
@@ -783,7 +792,7 @@ describe('coachForView', () => {
     assert.deepEqual([...offered].sort(), ['call', 'fold'], 'the engine offers no aggression here');
 
     const view = redactFor(state, { viewerSeat: 2 });
-    const report = coachForView(view, { samples: 400 });
+    const report = coachHere(view, 400);
 
     // Hero can plainly afford a raise; that was the whole of the old guard.
     const own = view.seats.find((seat) => seat.isSelf);
@@ -809,7 +818,7 @@ describe('coachForView', () => {
     const bystander = redactFor(state, { viewerSeat: 1 });
     assert.deepEqual([...bystander.legalActions], [], 'the seat that is not to act is offered nothing');
     assert.throws(
-      () => coachForView(bystander, { samples: 200 }),
+      () => coachTaskForView(bystander, { samples: 200 }),
       (error: unknown) => error instanceof AppError && error.code === 'hand_not_active',
     );
   });

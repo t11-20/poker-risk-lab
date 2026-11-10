@@ -59,6 +59,17 @@ export {
   summariseCoachReport,
 } from './coach.ts';
 export {
+  type AssumedRange,
+  type CoachPolicy,
+  type CoachRefusal,
+  type CoachSpot,
+  type CoachSpotReading,
+  coachInputFor,
+  coachSpotForView,
+  expandAssumedRange,
+  LIVE_COACH_POLICY,
+} from './coach-view.ts';
+export {
   bestCandidate,
   bestMeasuredCandidate,
   CONSISTENCY_MARGIN_BIG_BLINDS,

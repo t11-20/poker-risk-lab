@@ -1042,20 +1042,6 @@ export function runImageProvenanceGate(options) {
   };
 
   return runGate(gate, async () => {
-    const version = cosignVersion();
-    if (version === null) {
-      gate.fail(
-        'cosign is not installed, so no signature was verified',
-        'This REFUSES rather than skipping. An unsigned release image and an unverified one look ' +
-          'identical from the outside, and the whole reason this gate exists is that they were ' +
-          'treated identically. Install it — `brew install cosign`, or ' +
-          'https://docs.sigstore.dev/cosign/system_config/installation/ — and run this again.',
-      );
-      return;
-    }
-    report.cosignVersion = version;
-    gate.note(`cosign ${version}`);
-
     const manifestRead = readJsonFile(options.manifest);
     if ('problem' in manifestRead) {
       gate.fail('the release manifest could not be read', `${manifestRead.problem}`);
@@ -1178,6 +1164,24 @@ export function runImageProvenanceGate(options) {
         'image(s) have a signature record over the exact digest the build recorded: ' +
         `${reconciled.matched.join(', ')}`,
     );
+
+    // cosign is required here, at the first step that needs it, and not first. Every refusal above
+    // is about files and needs no tool: asked first, a machine without cosign answered every one of
+    // them "cosign is not installed", which hid an unsigned release behind a missing binary and
+    // failed all five of `image-provenance.test.mjs`'s refusal tests on CI's runners.
+    const version = cosignVersion();
+    if (version === null) {
+      gate.fail(
+        'cosign is not installed, so no signature was verified',
+        'This REFUSES rather than skipping. An unsigned release image and an unverified one look ' +
+          'identical from the outside, and the whole reason this gate exists is that they were ' +
+          'treated identically. Install it — `brew install cosign`, or ' +
+          'https://docs.sigstore.dev/cosign/system_config/installation/ — and run this again.',
+      );
+      return;
+    }
+    report.cosignVersion = version;
+    gate.note(`cosign ${version}`);
 
     let verified = 0;
     for (const image of images) {

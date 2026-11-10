@@ -2050,6 +2050,17 @@ async function measurePage(page, url, label, theme, failures, tally) {
   // gets, and the media-query scope is asserted against it for drift in passes 1 and 2.
   await page.evaluate(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}`);
   await delay(250);
+  // Then two rendered frames, because 250ms is wall-clock time and the theme lands in frames. Under
+  // the emulated reduced motion, base.css's backstop gives every element `transition-duration: 1ms`
+  // with `transition-property` at its initial `all`, so the theme's colours are 1ms transitions,
+  // and a transition reports its before-change value until a frame starts it. On CI's runners
+  // `/legends`, the heaviest page, had not rendered that frame: its dark sweep walked light-theme
+  // text over dark surfaces, "#10141a on #171b22", 0/4 probes agreed, 340 findings, on every run
+  // since at least 2026-10-11. Reproduced here with Chrome's CPU throttled 6x; with these frames
+  // the same throttled run measures 5.84 with 4/4 probes agreeing.
+  await page.evaluate(
+    'new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))',
+  );
 
   const result = await page.evaluate(walkerSource(true, PROBE_CANDIDATES));
   const fail = (line) => failures.push({ group: 'painted', line: `${label}  ${line}` });

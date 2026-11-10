@@ -79,9 +79,41 @@ describe('refusals — every one of these used to be indistinguishable from a pa
   });
 
   it('FAILS when there is no trust anchor', () => {
-    // A verification step with no key is not a weaker check, it is no check.
+    // A verification step with no key is not a weaker check, it is no check. The record is written
+    // here rather than read from deploy/staging, which holds a release only on a machine that built
+    // one: on CI's runners the default paths do not exist and this asserted against a different
+    // refusal.
     const dir = scratch();
-    const { status, out } = runGate(['--public-key', join(dir, 'absent.pub')]);
+    const manifest = join(dir, 'manifest.json');
+    const signatures = join(dir, 'signatures.json');
+    const digest = `sha256:${'a'.repeat(64)}`;
+    writeFileSync(manifest, JSON.stringify({ images: { api: { digest } } }));
+    writeFileSync(
+      signatures,
+      JSON.stringify({
+        schema: SIGNATURES_SCHEMA,
+        registry: '127.0.0.1:5001',
+        publicKey: { fingerprint: '0'.repeat(64) },
+        images: {
+          api: {
+            service: 'api',
+            repository: 'prl-api',
+            buildDigest: digest,
+            registryDigest: digest,
+            reference: `127.0.0.1:5001/prl-api@${digest}`,
+            signed: true,
+          },
+        },
+      }),
+    );
+    const { status, out } = runGate([
+      '--manifest',
+      manifest,
+      '--signatures',
+      signatures,
+      '--public-key',
+      join(dir, 'absent.pub'),
+    ]);
     assert.equal(status, 1);
     assert.match(out, /there is no trust anchor to verify against/);
   });

@@ -1,0 +1,1800 @@
+[
+  {
+    "name": "preflop, six-handed, big blind facing four limps",
+    "view": {
+      "handId": "pin-101",
+      "roomId": "coach-pin",
+      "handNumber": 1,
+      "config": {
+        "smallBlind": 5,
+        "bigBlind": 10,
+        "ante": 0,
+        "maxSeats": 6,
+        "actionTimeoutSeconds": 30
+      },
+      "street": "preflop",
+      "board": [],
+      "buttonSeat": 0,
+      "seats": [
+        {
+          "seat": 0,
+          "playerId": "p0",
+          "stack": 990,
+          "committedThisStreet": 10,
+          "committedTotal": 10,
+          "status": "active",
+          "position": "BTN",
+          "holeCards": null,
+          "isSelf": false,
+          "isButton": true,
+          "isToAct": false
+        },
+        {
+          "seat": 1,
+          "playerId": "p1",
+          "stack": 990,
+          "committedThisStreet": 10,
+          "committedTotal": 10,
+          "status": "active",
+          "position": "SB",
+          "holeCards": null,
+          "isSelf": false,
+          "isButton": false,
+          "isToAct": false
+        },
+        {
+          "seat": 2,
+          "playerId": "p2",
+          "stack": 990,
+          "committedThisStreet": 10,
+          "committedTotal": 10,
+          "status": "active",
+          "position": "BB",
+          "holeCards": [10, 38],
+          "isSelf": true,
+          "isButton": false,
+          "isToAct": true
+        },
+        {
+          "seat": 3,
+          "playerId": "p3",
+          "stack": 990,
+          "committedThisStreet": 10,
+          "committedTotal": 10,
+          "status": "active",
+          "position": "UTG",
+          "holeCards": null,
+          "isSelf": false,
+          "isButton": false,
+          "isToAct": false
+        },
+        {
+          "seat": 4,
+          "playerId": "p4",
+          "stack": 990,
+          "committedThisStreet": 10,
+          "committedTotal": 10,
+          "status": "active",
+          "position": "HJ",
+          "holeCards": null,
+          "isSelf": false,
+          "isButton": false,
+          "isToAct": false
+        },
+        {
+          "seat": 5,
+          "playerId": "p5",
+          "stack": 1000,
+          "committedThisStreet": 0,
+          "committedTotal": 0,
+          "status": "folded",
+          "position": "CO",
+          "holeCards": null,
+          "isSelf": false,
+          "isButton": false,
+          "isToAct": false
+        }
+      ],
+      "toAct": 2,
+      "betLevel": 10,
+      "minimumRaiseTo": 20,
+      "potTotal": 50,
+      "pots": [
+        {
+          "amount": 50,
+          "eligibleSeats": [0, 1, 2, 3, 4],
+          "capPerSeat": 10,
+          "index": 0
+        }
+      ],
+      "forcedBets": [
+        {
+          "kind": "smallBlind",
+          "seat": 1,
+          "amount": 5,
+          "wasShort": false
+        },
+        {
+          "kind": "bigBlind",
+          "seat": 2,
+          "amount": 10,
+          "wasShort": false
+        }
+      ],
+      "actions": [
+        {
+          "sequence": 1,
+          "street": "preflop",
+          "seat": 3,
+          "playerId": "p3",
+          "action": {
+            "type": "call"
+          },
+          "amountPaid": 10,
+          "betLevelAfter": 10,
+          "potAfter": 25,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 2,
+          "street": "preflop",
+          "seat": 4,
+          "playerId": "p4",
+          "action": {
+            "type": "call"
+          },
+          "amountPaid": 10,
+          "betLevelAfter": 10,
+          "potAfter": 35,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 3,
+          "street": "preflop",
+          "seat": 5,
+          "playerId": "p5",
+          "action": {
+            "type": "fold"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 10,
+          "potAfter": 35,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 4,
+          "street": "preflop",
+          "seat": 0,
+          "playerId": "p0",
+          "action": {
+            "type": "call"
+          },
+          "amountPaid": 10,
+          "betLevelAfter": 10,
+          "potAfter": 45,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 5,
+          "street": "preflop",
+          "seat": 1,
+          "playerId": "p1",
+          "action": {
+            "type": "call"
+          },
+          "amountPaid": 5,
+          "betLevelAfter": 10,
+          "potAfter": 50,
+          "wasAutomatic": false,
+          "actionId": null
+        }
+      ],
+      "actionSequence": 5,
+      "legalActions": [
+        {
+          "type": "fold",
+          "note": "Legal, but checking costs nothing."
+        },
+        {
+          "type": "check",
+          "costAtMin": 0,
+          "note": "Stay in the hand for free."
+        },
+        {
+          "type": "raise",
+          "minTo": 20,
+          "maxTo": 1000,
+          "costAtMin": 10,
+          "allInAtMax": true,
+          "note": "Increase the bet. Opponents must match the new total or fold."
+        }
+      ],
+      "amountToCall": 0,
+      "commitmentRoot": "252f0647b44922fec78be7014f18b56eae575c34e59fc268acaf2ace739824ef",
+      "commitmentContext": "coach-pin:1:pin-101",
+      "result": null,
+      "viewerSeat": 2,
+      "randomSourceKind": "deterministic-test-only"
+    },
+    "options": {
+      "samples": 2000
+    },
+    "report": {
+      "street": "preflop",
+      "potTotal": 50,
+      "toCall": 0,
+      "outs": null,
+      "equity": {
+        "heroEquity": 0.16676666666666667,
+        "method": "monte-carlo",
+        "trials": 2000,
+        "confidenceHalfWidthPoints": 1.6197163323580899,
+        "ruleOfThumb": null,
+        "perPlayer": [
+          {
+            "label": "you",
+            "equity": 0.16676666666666667,
+            "win": 0.162,
+            "tie": 0.01
+          },
+          {
+            "label": "seat 0",
+            "equity": 0.2073916666666666,
+            "win": 0.1965,
+            "tie": 0.023
+          },
+          {
+            "label": "seat 1",
+            "equity": 0.21264166666666665,
+            "win": 0.197,
+            "tie": 0.0325
+          },
+          {
+            "label": "seat 3",
+            "equity": 0.19747499999999998,
+            "win": 0.1865,
+            "tie": 0.0235
+          },
+          {
+            "label": "seat 4",
+            "equity": 0.21572499999999997,
+            "win": 0.204,
+            "tie": 0.025
+          }
+        ]
+      },
+      "potOdds": {
+        "pot": 50,
+        "toCall": 0,
+        "breakEvenEquity": 0,
+        "oddsRatio": null,
+        "equitySurplus": 0.16676666666666667,
+        "explanation": "Nothing to call, so there is no price to beat — checking keeps you in for free."
+      },
+      "candidates": [
+        {
+          "action": "check",
+          "cost": 0,
+          "ev": 8.338333333333333,
+          "derivation": "EV(check) = equity x pot = 0.1668 x 50 = 8.34 chips. Checking costs nothing and keeps the hand, so it is a call priced at zero: it risks nothing and still holds a share of what is already in the middle. That share is what folding gives up, which is why a free check is never worse than a fold."
+        },
+        {
+          "action": "fold",
+          "cost": 0,
+          "ev": 0,
+          "derivation": "EV(fold) = 0 chips. Folding is the baseline every other action is measured against: it costs nothing further and risks nothing further. Everything already in the pot is spent either way, so folding is the zero point every other action is measured against."
+        },
+        {
+          "action": "raise",
+          "to": 22,
+          "cost": 12,
+          "ev": 17.721476666666668,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 50 + 0.65 x [ 0.1668 x (50 + 0 + 2 x 12) - 12 ] = 17.5 + 0.22 = 17.72 chips. Risks 12 to win 50. Raising by 12 is one quarter pot of the 50 that would be in the middle once you call. A caller needs 16.2% equity to break even on the extra 12, and has to continue with 80.6% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.16676666666666667
+        },
+        {
+          "action": "raise",
+          "to": 43,
+          "cost": 33,
+          "ev": 8.624206666666666,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 50 + 0.65 x [ 0.1668 x (50 + 0 + 2 x 33) - 33 ] = 17.5 + (-8.88) = 8.62 chips. Risks 33 to win 50. Raising by 33 is two thirds pot of the 50 that would be in the middle once you call. A caller needs 28.4% equity to break even on the extra 33, and has to continue with 60.2% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.16676666666666667
+        },
+        {
+          "action": "raise",
+          "to": 1000,
+          "cost": 990,
+          "ev": -405.95138333333335,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 50 + 0.65 x [ 0.1668 x (50 + 0 + 2 x 990) - 990 ] = 17.5 + (-423.45) = -405.95 chips. Risks 990 to win 50. Raising by 990 puts your whole remaining stack in. A caller needs 48.8% equity to break even on the extra 990, and has to continue with 4.8% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.16676666666666667
+        }
+      ],
+      "suggestion": {
+        "action": "raise",
+        "sizeRange": {
+          "min": 22,
+          "max": 43
+        },
+        "confidence": "moderate",
+        "reason": "raise has the highest expected value against the stated range, by 9.1 chips over the next-best action.",
+        "whatWouldChangeIt": [
+          "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
+          "Being raised is not modelled here, so treat the figure as optimistic.",
+          "The equity figure is sampled, ±1.62 points at 95% confidence. A close decision could sit either side of that.",
+          "The gap to the next-best action is only 9.1 chips, well under a big blind — this is close to indifferent."
+        ]
+      },
+      "stackContext": {
+        "effectiveStack": 990,
+        "spr": 19.8,
+        "potOddsOfferedByPotSizedBet": 0.3333333333333333,
+        "explanation": "Yours is the shorter stack: you have 990 and the deepest opponent has 990, so at most 990 can change hands. You can neither win nor lose more than you brought to the hand. With 4 opponents each one has its own effective stack, the smaller of yours and theirs. 990 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them. SPR = effective stack / pot = 990 / 50 = 19.8. There are 19.8 pots behind, which is the \"very-high\" band. Almost all of the money is still behind. The pot in front of you is small compared with what can still go in, so the cost of a later error dwarfs what is at stake right now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply."
+      },
+      "assumptions": [
+        "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
+        "you holds exactly Jh4h.",
+        "seat 0 holds any of 500 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "seat 1 holds any of 500 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "seat 3 holds any of 500 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "seat 4 holds any of 500 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
+        "Estimated by sampling 2,000 random run-outs, not by exhaustive enumeration.",
+        "No community cards are known yet, so five more cards are still to come.",
+        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
+        "For a half-pot bet of 25 to break even here it would need to win uncontested 14% of the time.",
+        "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
+      ],
+      "uncertainty": {
+        "method": "monte-carlo",
+        "summary": "Estimated by sampling 2,000 run-outs. The 95% confidence interval is ±1.62 percentage points.",
+        "confidenceInterval": {
+          "level": 0.95,
+          "halfWidthPoints": 1.6197163323580899
+        },
+        "limitations": [
+          "This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.",
+          "Every hand in the opponent range is weighted equally. Real opponents do not play every hand in a range the same way.",
+          "Equity was estimated from 2,000 sampled run-outs, not enumerated exhaustively.",
+          "Against several opponents the analysis assumes all of them see the river, which overstates your risk when some would fold.",
+          "No implied odds, reverse implied odds or future-street play are modelled."
+        ]
+      },
+      "teachingNotes": [
+        "At an SPR of 19.8 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests."
+      ]
+    },
+    "task": {
+      "kind": "coach",
+      "spec": {
+        "heroLabel": "you",
+        "heroCards": [10, 38],
+        "board": [],
+        "opponents": [
+          {
+            "kind": "topPercent",
+            "label": "seat 0",
+            "percent": 40
+          },
+          {
+            "kind": "topPercent",
+            "label": "seat 1",
+            "percent": 40
+          },
+          {
+            "kind": "topPercent",
+            "label": "seat 3",
+            "percent": 40
+          },
+          {
+            "kind": "topPercent",
+            "label": "seat 4",
+            "percent": 40
+          }
+        ]
+      },
+      "street": "preflop",
+      "pot": 50,
+      "contestablePot": 50,
+      "toCall": 0,
+      "heroCommittedThisStreet": 10,
+      "heroStack": 990,
+      "opponentStacks": [990, 990, 990, 990],
+      "bigBlind": 10,
+      "minimumRaiseTo": 20,
+      "legalActions": ["fold", "check", "raise"],
+      "samples": 2000,
+      "seed": 1
+    }
+  },
+  {
+    "name": "flop, heads-up, facing a bet",
+    "view": {
+      "handId": "pin-202",
+      "roomId": "coach-pin",
+      "handNumber": 1,
+      "config": {
+        "smallBlind": 5,
+        "bigBlind": 10,
+        "ante": 0,
+        "maxSeats": 6,
+        "actionTimeoutSeconds": 30
+      },
+      "street": "flop",
+      "board": [22, 41, 28],
+      "buttonSeat": 0,
+      "seats": [
+        {
+          "seat": 0,
+          "playerId": "p0",
+          "stack": 990,
+          "committedThisStreet": 0,
+          "committedTotal": 10,
+          "status": "active",
+          "position": "BTN/SB",
+          "holeCards": [34, 21],
+          "isSelf": true,
+          "isButton": true,
+          "isToAct": true
+        },
+        {
+          "seat": 1,
+          "playerId": "p1",
+          "stack": 975,
+          "committedThisStreet": 15,
+          "committedTotal": 25,
+          "status": "active",
+          "position": "BB",
+          "holeCards": null,
+          "isSelf": false,
+          "isButton": false,
+          "isToAct": false
+        }
+      ],
+      "toAct": 0,
+      "betLevel": 15,
+      "minimumRaiseTo": 30,
+      "potTotal": 35,
+      "pots": [
+        {
+          "amount": 35,
+          "eligibleSeats": [0, 1],
+          "capPerSeat": 25,
+          "index": 0
+        }
+      ],
+      "forcedBets": [
+        {
+          "kind": "smallBlind",
+          "seat": 0,
+          "amount": 5,
+          "wasShort": false
+        },
+        {
+          "kind": "bigBlind",
+          "seat": 1,
+          "amount": 10,
+          "wasShort": false
+        }
+      ],
+      "actions": [
+        {
+          "sequence": 1,
+          "street": "preflop",
+          "seat": 0,
+          "playerId": "p0",
+          "action": {
+            "type": "call"
+          },
+          "amountPaid": 5,
+          "betLevelAfter": 10,
+          "potAfter": 20,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 2,
+          "street": "preflop",
+          "seat": 1,
+          "playerId": "p1",
+          "action": {
+            "type": "check"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 10,
+          "potAfter": 20,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 3,
+          "street": "flop",
+          "seat": 1,
+          "playerId": "p1",
+          "action": {
+            "type": "bet",
+            "to": 15
+          },
+          "amountPaid": 15,
+          "betLevelAfter": 15,
+          "potAfter": 35,
+          "wasAutomatic": false,
+          "actionId": null
+        }
+      ],
+      "actionSequence": 3,
+      "legalActions": [
+        {
+          "type": "fold",
+          "note": "Give up the hand and lose what you have already put in."
+        },
+        {
+          "type": "call",
+          "minTo": 15,
+          "costAtMin": 15,
+          "allInAtMax": false,
+          "note": "Match the bet to see the next card."
+        },
+        {
+          "type": "raise",
+          "minTo": 30,
+          "maxTo": 990,
+          "costAtMin": 30,
+          "allInAtMax": true,
+          "note": "Increase the bet. Opponents must match the new total or fold."
+        }
+      ],
+      "amountToCall": 15,
+      "commitmentRoot": "e86c1eebfb50823a71573d6c6b8d39f257fa648580436c9dd17fe9cb7844744e",
+      "commitmentContext": "coach-pin:1:pin-202",
+      "result": null,
+      "viewerSeat": 0,
+      "randomSourceKind": "deterministic-test-only"
+    },
+    "options": {
+      "samples": 2000
+    },
+    "report": {
+      "street": "flop",
+      "potTotal": 35,
+      "toCall": 15,
+      "outs": {
+        "clean": 2,
+        "dirty": 37,
+        "total": 39,
+        "cleanCards": ["7s", "7c"],
+        "dirtyCards": [
+          "Ts",
+          "Td",
+          "Tc",
+          "6s",
+          "6h",
+          "6d",
+          "2s",
+          "6c",
+          "2h",
+          "2d",
+          "2c",
+          "3s",
+          "8s",
+          "4s",
+          "3h",
+          "3d",
+          "8h",
+          "8d",
+          "Js",
+          "3c",
+          "Qs",
+          "8c",
+          "4h",
+          "4d",
+          "4c",
+          "Jd",
+          "Jh",
+          "Jc",
+          "Qh",
+          "Qc",
+          "5s",
+          "9s",
+          "5h",
+          "5d",
+          "5c",
+          "9h",
+          "9d"
+        ],
+        "explanation": "On 7h Qd 9c hero holds Th 7d — a pair of sevens, queen kicker — for 58% equity against \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\" (444 combinations still possible). Of the 47 cards that can come next, 2 are clean and 37 are dirty — but none of them is an out and there is no outs count here, deliberately: an out is a card that rescues a hand that is behind, and hero is not behind. Clean means hero's equity after that card is at least 90%; dirty means at least 50% but below 90%. Hero is already in front before any card arrives — equity now is above the same threshold a card has to clear to count as an out — so read the counts as cards that keep hero ahead rather than as the size of a draw."
+      },
+      "equity": {
+        "heroEquity": 0.5763490763490764,
+        "method": "exact-enumeration",
+        "trials": 439560,
+        "confidenceHalfWidthPoints": null,
+        "ruleOfThumb": null,
+        "perPlayer": [
+          {
+            "label": "you",
+            "equity": 0.5763490763490764,
+            "win": 0.5734529984529985,
+            "tie": 0.005792155792155793
+          },
+          {
+            "label": "seat 1",
+            "equity": 0.42365092365092366,
+            "win": 0.42075484575484573,
+            "tie": 0.005792155792155793
+          }
+        ]
+      },
+      "potOdds": {
+        "pot": 35,
+        "toCall": 15,
+        "breakEvenEquity": 0.3,
+        "oddsRatio": 2.3333333333333335,
+        "equitySurplus": 0.2763490763490764,
+        "explanation": "Hero risks 15 to win the 35 already in the middle, a price of 2.33 to 1. Calling breaks even at 15 / (35 + 15) = 30.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 35 is what is in the middle before hero's own 15 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 57.6% equity, a 27.6 point surplus."
+      },
+      "candidates": [
+        {
+          "action": "fold",
+          "cost": 0,
+          "ev": 0,
+          "derivation": "EV(fold) = 0 chips. Folding is the baseline every other action is measured against: it costs nothing further and risks nothing further. Everything already in the pot is spent either way, so folding is the zero point every other action is measured against."
+        },
+        {
+          "action": "call",
+          "to": 15,
+          "cost": 15,
+          "ev": 13.81745381745382,
+          "derivation": "EV(call) = equity x (pot + toCall) - toCall = 0.5763 x (35 + 15) - 15 = 13.82 chips.",
+          "potShareIfCalled": 0.5763490763490764
+        },
+        {
+          "action": "raise",
+          "to": 31,
+          "cost": 31,
+          "ev": 22.81940576940577,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 35 + 0.65 x [ 0.5763 x (35 + 15 + 2 x 16) - 31 ] = 12.25 + 10.57 = 22.82 chips. Risks 31 to win 35. Raising by 16 is one third pot of the 50 that would be in the middle once you call. A caller needs 19.5% equity to break even on the extra 16, and has to continue with 53% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.5763490763490764
+        },
+        {
+          "action": "raise",
+          "to": 52,
+          "cost": 52,
+          "ev": 24.90373555373556,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 35 + 0.65 x [ 0.5763 x (35 + 15 + 2 x 37) - 52 ] = 12.25 + 12.65 = 24.9 chips. Risks 52 to win 35. Raising by 37 is three quarters pot of the 50 that would be in the middle once you call. A caller needs 29.8% equity to break even on the extra 37, and has to continue with 40.2% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.5763490763490764
+        },
+        {
+          "action": "raise",
+          "to": 990,
+          "cost": 990,
+          "ev": 118.00379925379936,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 35 + 0.65 x [ 0.5763 x (35 + 15 + 2 x 975) - 990 ] = 12.25 + 105.75 = 118 chips. Risks 990 to win 35. Raising by 975 puts your whole remaining stack in. A caller needs 48.8% equity to break even on the extra 975, and has to continue with 3.4% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.5763490763490764
+        }
+      ],
+      "suggestion": {
+        "action": "raise",
+        "sizeRange": {
+          "min": 990,
+          "max": 990
+        },
+        "confidence": "reasonable",
+        "reason": "raise has the highest expected value against the stated range, by 93.1 chips over the next-best action.",
+        "whatWouldChangeIt": [
+          "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
+          "Being raised is not modelled here, so treat the figure as optimistic.",
+          "37 of the 39 cards that keep you in front leave a way to lose — they are not outs, because you are not drawing, but they are the cards a river can still take the pot back with."
+        ]
+      },
+      "stackContext": {
+        "effectiveStack": 975,
+        "spr": 27.857142857142858,
+        "potOddsOfferedByPotSizedBet": 0.3333333333333333,
+        "explanation": "The deepest opponent has only 975, so at most 975 can change hands even though you have 990. The 15 above that is not in play this hand — nobody can pay you for it and nobody can take it. SPR = effective stack / pot = 975 / 35 = 27.86. There are 27.86 pots behind, which is the \"very-high\" band. Almost all of the money is still behind. The pot in front of you is small compared with what can still go in, so the cost of a later error dwarfs what is at stake right now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply."
+      },
+      "assumptions": [
+        "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
+        "you holds exactly Th7d.",
+        "seat 1 holds any of 444 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
+        "Computed by enumerating every remaining board — there is no sampling error.",
+        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
+        "A half-pot bet of 18 is already break-even or better here purely on the equity you have when called — it does not need to win uncontested at all.",
+        "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
+      ],
+      "uncertainty": {
+        "method": "exact-enumeration",
+        "summary": "Computed exactly by enumerating every remaining board (439,560 run-outs). There is no sampling error.",
+        "confidenceInterval": null,
+        "limitations": [
+          "This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.",
+          "Every hand in the opponent range is weighted equally. Real opponents do not play every hand in a range the same way.",
+          "The clean/dirty split uses documented equity thresholds, and here it is not a count of outs at all — you are already in front of the same bar a card would have to clear. The thresholds are a modelling choice, not a law of the game.",
+          "No implied odds, reverse implied odds or future-street play are modelled."
+        ]
+      },
+      "teachingNotes": [
+        "The pot is laying you 2.3 to 1, so you need 30.0% to break even on a call. That number depends only on the price — not on your cards.",
+        "Notice the split: 2 clean and 37 dirty — and notice that neither figure is a number of outs. You are in front already at 57.6%, so no card here rescues anything: these are the cards that keep you in front, and the 37 dirty ones leave the river a way to take it back.",
+        "No rule-of-2-and-4 figure here, deliberately: at 57.6% you are already ahead, so you are not drawing to anything. The shortcut counts the cards that rescue a hand that is behind; applied to a hand that is already winning it counts cards that change nothing and returns a number that is not a probability of anything.",
+        "At an SPR of 27.9 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests."
+      ]
+    },
+    "task": {
+      "kind": "coach",
+      "spec": {
+        "heroLabel": "you",
+        "heroCards": [34, 21],
+        "board": [22, 41, 28],
+        "opponents": [
+          {
+            "kind": "topPercent",
+            "label": "seat 1",
+            "percent": 40
+          }
+        ]
+      },
+      "street": "flop",
+      "pot": 35,
+      "contestablePot": 35,
+      "toCall": 15,
+      "heroCommittedThisStreet": 0,
+      "heroStack": 990,
+      "opponentStacks": [975],
+      "bigBlind": 10,
+      "minimumRaiseTo": 30,
+      "legalActions": ["fold", "call", "raise"],
+      "samples": 2000,
+      "seed": 1
+    }
+  },
+  {
+    "name": "preflop side pot, the reader is the short stack",
+    "view": {
+      "handId": "pin-303",
+      "roomId": "coach-pin",
+      "handNumber": 1,
+      "config": {
+        "smallBlind": 5,
+        "bigBlind": 10,
+        "ante": 0,
+        "maxSeats": 6,
+        "actionTimeoutSeconds": 30
+      },
+      "street": "preflop",
+      "board": [],
+      "buttonSeat": 0,
+      "seats": [
+        {
+          "seat": 0,
+          "playerId": "p0",
+          "stack": 700,
+          "committedThisStreet": 300,
+          "committedTotal": 300,
+          "status": "active",
+          "position": "BTN",
+          "holeCards": null,
+          "isSelf": false,
+          "isButton": true,
+          "isToAct": false
+        },
+        {
+          "seat": 1,
+          "playerId": "p1",
+          "stack": 995,
+          "committedThisStreet": 5,
+          "committedTotal": 5,
+          "status": "folded",
+          "position": "SB",
+          "holeCards": null,
+          "isSelf": false,
+          "isButton": false,
+          "isToAct": false
+        },
+        {
+          "seat": 2,
+          "playerId": "p2",
+          "stack": 50,
+          "committedThisStreet": 10,
+          "committedTotal": 10,
+          "status": "active",
+          "position": "BB",
+          "holeCards": [40, 14],
+          "isSelf": true,
+          "isButton": false,
+          "isToAct": true
+        },
+        {
+          "seat": 3,
+          "playerId": "p3",
+          "stack": 700,
+          "committedThisStreet": 300,
+          "committedTotal": 300,
+          "status": "active",
+          "position": "CO",
+          "holeCards": null,
+          "isSelf": false,
+          "isButton": false,
+          "isToAct": false
+        }
+      ],
+      "toAct": 2,
+      "betLevel": 300,
+      "minimumRaiseTo": 590,
+      "potTotal": 615,
+      "pots": [
+        {
+          "amount": 615,
+          "eligibleSeats": [0, 2, 3],
+          "capPerSeat": 300,
+          "index": 0
+        }
+      ],
+      "forcedBets": [
+        {
+          "kind": "smallBlind",
+          "seat": 1,
+          "amount": 5,
+          "wasShort": false
+        },
+        {
+          "kind": "bigBlind",
+          "seat": 2,
+          "amount": 10,
+          "wasShort": false
+        }
+      ],
+      "actions": [
+        {
+          "sequence": 1,
+          "street": "preflop",
+          "seat": 3,
+          "playerId": "p3",
+          "action": {
+            "type": "raise",
+            "to": 300
+          },
+          "amountPaid": 300,
+          "betLevelAfter": 300,
+          "potAfter": 315,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 2,
+          "street": "preflop",
+          "seat": 0,
+          "playerId": "p0",
+          "action": {
+            "type": "call"
+          },
+          "amountPaid": 300,
+          "betLevelAfter": 300,
+          "potAfter": 615,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 3,
+          "street": "preflop",
+          "seat": 1,
+          "playerId": "p1",
+          "action": {
+            "type": "fold"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 300,
+          "potAfter": 615,
+          "wasAutomatic": false,
+          "actionId": null
+        }
+      ],
+      "actionSequence": 3,
+      "legalActions": [
+        {
+          "type": "fold",
+          "note": "Give up the hand and lose what you have already put in."
+        },
+        {
+          "type": "call",
+          "minTo": 60,
+          "costAtMin": 50,
+          "allInAtMax": true,
+          "note": "Calling puts your whole remaining stack in."
+        }
+      ],
+      "amountToCall": 50,
+      "commitmentRoot": "8e7c10f707d5c8df8150a0d8047064a481a616828191bf23d678d8f401367d3e",
+      "commitmentContext": "coach-pin:1:pin-303",
+      "result": null,
+      "viewerSeat": 2,
+      "randomSourceKind": "deterministic-test-only"
+    },
+    "options": {
+      "samples": 2000
+    },
+    "report": {
+      "street": "preflop",
+      "potTotal": 615,
+      "toCall": 50,
+      "outs": null,
+      "equity": {
+        "heroEquity": 0.23341666666666663,
+        "method": "monte-carlo",
+        "trials": 2000,
+        "confidenceHalfWidthPoints": 1.832283477638427,
+        "ruleOfThumb": null,
+        "perPlayer": [
+          {
+            "label": "you",
+            "equity": 0.23341666666666663,
+            "win": 0.2255,
+            "tie": 0.0175
+          },
+          {
+            "label": "seat 0",
+            "equity": 0.3731666666666667,
+            "win": 0.3575,
+            "tie": 0.033
+          },
+          {
+            "label": "seat 3",
+            "equity": 0.3934166666666667,
+            "win": 0.376,
+            "tie": 0.0365
+          }
+        ]
+      },
+      "potOdds": {
+        "pot": 135,
+        "toCall": 50,
+        "breakEvenEquity": 0.2702702702702703,
+        "oddsRatio": 2.7,
+        "equitySurplus": -0.03685360360360365,
+        "explanation": "Hero risks 50 to win the 135 already in the middle, a price of 2.70 to 1. Calling breaks even at 50 / (135 + 50) = 27.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 135 is what is in the middle before hero's own 50 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 23.3% equity is 3.7 points short of it. There are 615 in the middle, but you are all-in for less than the bet in front of you: 480 of it is a side pot you are not in, because your 50 does not reach that far. The price above is against the 135 you can actually win. Calling cannot win the rest of the middle no matter which hand is best."
+      },
+      "candidates": [
+        {
+          "action": "fold",
+          "cost": 0,
+          "ev": 0,
+          "derivation": "EV(fold) = 0 chips. Folding is the baseline every other action is measured against: it costs nothing further and risks nothing further. Everything already in the pot is spent either way, so folding is the zero point every other action is measured against."
+        },
+        {
+          "action": "call",
+          "to": 60,
+          "cost": 50,
+          "ev": -6.817916666666676,
+          "derivation": "EV(call) = equity x (pot + toCall) - toCall = 0.2334 x (135 + 50) - 50 = -6.82 chips.",
+          "potShareIfCalled": 0.23341666666666663
+        }
+      ],
+      "suggestion": {
+        "action": "fold",
+        "confidence": "moderate",
+        "reason": "fold has the highest expected value against the stated range, by 6.8 chips over the next-best action.",
+        "whatWouldChangeIt": [
+          "A wider opponent range would raise your equity and can flip a fold into a call.",
+          "A narrower, stronger range does the opposite.",
+          "The equity figure is sampled, ±1.83 points at 95% confidence. A close decision could sit either side of that.",
+          "The gap to the next-best action is only 6.8 chips, well under a big blind — this is close to indifferent."
+        ]
+      },
+      "stackContext": {
+        "effectiveStack": 50,
+        "spr": 0.08130081300813008,
+        "potOddsOfferedByPotSizedBet": 0.3333333333333333,
+        "explanation": "Yours is the shorter stack: you have 50 and the deepest opponent has 700, so at most 50 can change hands. You can neither win nor lose more than you brought to the hand. With 2 opponents each one has its own effective stack, the smaller of yours and theirs. 50 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them. SPR = effective stack / pot = 50 / 615 = 0.08. There are 0.08 pots behind, which is the \"very-low\" band. The pot is already larger than what is behind, so a single bet gets the rest of the stack in. There is no later street to hold chips back for: at this depth the decision is effectively made now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply."
+      },
+      "assumptions": [
+        "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
+        "you holds exactly Qc5h.",
+        "seat 0 holds any of 494 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "seat 3 holds any of 494 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
+        "Estimated by sampling 2,000 random run-outs, not by exhaustive enumeration.",
+        "No community cards are known yet, so five more cards are still to come.",
+        "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
+      ],
+      "uncertainty": {
+        "method": "monte-carlo",
+        "summary": "Estimated by sampling 2,000 run-outs. The 95% confidence interval is ±1.83 percentage points.",
+        "confidenceInterval": {
+          "level": 0.95,
+          "halfWidthPoints": 1.832283477638427
+        },
+        "limitations": [
+          "This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.",
+          "Every hand in the opponent range is weighted equally. Real opponents do not play every hand in a range the same way.",
+          "Equity was estimated from 2,000 sampled run-outs, not enumerated exhaustively.",
+          "Against several opponents the analysis assumes all of them see the river, which overstates your risk when some would fold.",
+          "No implied odds, reverse implied odds or future-street play are modelled."
+        ]
+      },
+      "teachingNotes": [
+        "The pot is laying you 2.7 to 1 on the 135 you can win, so you need 27.0% to break even on a call. That number depends only on the price — not on your cards.",
+        "Do not price this against the 615 you can see. You are all-in for less than the bet, so 480 of the middle is a side pot you are not in — it goes to whoever wins it among the players who covered that bet, whatever you are holding. Being short changes the price you are getting, not just the chips you can lose.",
+        "At an SPR of 0.1 the stacks are shallow enough that one more bet commits them. Decisions like that are effectively made now rather than later."
+      ]
+    },
+    "task": {
+      "kind": "coach",
+      "spec": {
+        "heroLabel": "you",
+        "heroCards": [40, 14],
+        "board": [],
+        "opponents": [
+          {
+            "kind": "topPercent",
+            "label": "seat 0",
+            "percent": 40
+          },
+          {
+            "kind": "topPercent",
+            "label": "seat 3",
+            "percent": 40
+          }
+        ]
+      },
+      "street": "preflop",
+      "pot": 615,
+      "contestablePot": 135,
+      "toCall": 50,
+      "heroCommittedThisStreet": 10,
+      "heroStack": 50,
+      "opponentStacks": [700, 700],
+      "bigBlind": 10,
+      "minimumRaiseTo": 590,
+      "legalActions": ["fold", "call"],
+      "samples": 2000,
+      "seed": 1
+    }
+  },
+  {
+    "name": "river, heads-up, facing a bet",
+    "view": {
+      "handId": "pin-404",
+      "roomId": "coach-pin",
+      "handNumber": 1,
+      "config": {
+        "smallBlind": 5,
+        "bigBlind": 10,
+        "ante": 0,
+        "maxSeats": 6,
+        "actionTimeoutSeconds": 30
+      },
+      "street": "river",
+      "board": [51, 33, 47, 7, 8],
+      "buttonSeat": 0,
+      "seats": [
+        {
+          "seat": 0,
+          "playerId": "p0",
+          "stack": 950,
+          "committedThisStreet": 40,
+          "committedTotal": 50,
+          "status": "active",
+          "position": "BTN/SB",
+          "holeCards": null,
+          "isSelf": false,
+          "isButton": true,
+          "isToAct": false
+        },
+        {
+          "seat": 1,
+          "playerId": "p1",
+          "stack": 990,
+          "committedThisStreet": 0,
+          "committedTotal": 10,
+          "status": "active",
+          "position": "BB",
+          "holeCards": [0, 41],
+          "isSelf": true,
+          "isButton": false,
+          "isToAct": true
+        }
+      ],
+      "toAct": 1,
+      "betLevel": 40,
+      "minimumRaiseTo": 80,
+      "potTotal": 60,
+      "pots": [
+        {
+          "amount": 60,
+          "eligibleSeats": [0, 1],
+          "capPerSeat": 50,
+          "index": 0
+        }
+      ],
+      "forcedBets": [
+        {
+          "kind": "smallBlind",
+          "seat": 0,
+          "amount": 5,
+          "wasShort": false
+        },
+        {
+          "kind": "bigBlind",
+          "seat": 1,
+          "amount": 10,
+          "wasShort": false
+        }
+      ],
+      "actions": [
+        {
+          "sequence": 1,
+          "street": "preflop",
+          "seat": 0,
+          "playerId": "p0",
+          "action": {
+            "type": "call"
+          },
+          "amountPaid": 5,
+          "betLevelAfter": 10,
+          "potAfter": 20,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 2,
+          "street": "preflop",
+          "seat": 1,
+          "playerId": "p1",
+          "action": {
+            "type": "check"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 10,
+          "potAfter": 20,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 3,
+          "street": "flop",
+          "seat": 1,
+          "playerId": "p1",
+          "action": {
+            "type": "check"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 0,
+          "potAfter": 20,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 4,
+          "street": "flop",
+          "seat": 0,
+          "playerId": "p0",
+          "action": {
+            "type": "check"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 0,
+          "potAfter": 20,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 5,
+          "street": "turn",
+          "seat": 1,
+          "playerId": "p1",
+          "action": {
+            "type": "check"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 0,
+          "potAfter": 20,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 6,
+          "street": "turn",
+          "seat": 0,
+          "playerId": "p0",
+          "action": {
+            "type": "check"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 0,
+          "potAfter": 20,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 7,
+          "street": "river",
+          "seat": 1,
+          "playerId": "p1",
+          "action": {
+            "type": "check"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 0,
+          "potAfter": 20,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 8,
+          "street": "river",
+          "seat": 0,
+          "playerId": "p0",
+          "action": {
+            "type": "bet",
+            "to": 40
+          },
+          "amountPaid": 40,
+          "betLevelAfter": 40,
+          "potAfter": 60,
+          "wasAutomatic": false,
+          "actionId": null
+        }
+      ],
+      "actionSequence": 8,
+      "legalActions": [
+        {
+          "type": "fold",
+          "note": "Give up the hand and lose what you have already put in."
+        },
+        {
+          "type": "call",
+          "minTo": 40,
+          "costAtMin": 40,
+          "allInAtMax": false,
+          "note": "Match the bet to see the next card."
+        },
+        {
+          "type": "raise",
+          "minTo": 80,
+          "maxTo": 990,
+          "costAtMin": 80,
+          "allInAtMax": true,
+          "note": "Increase the bet. Opponents must match the new total or fold."
+        }
+      ],
+      "amountToCall": 40,
+      "commitmentRoot": "3a63d4d74fa5435d5743043a8b7426d4b8037c33185c382ee32cb57b10b6751b",
+      "commitmentContext": "coach-pin:1:pin-404",
+      "result": null,
+      "viewerSeat": 1,
+      "randomSourceKind": "deterministic-test-only"
+    },
+    "options": {
+      "samples": 2000
+    },
+    "report": {
+      "street": "river",
+      "potTotal": 60,
+      "toCall": 40,
+      "outs": null,
+      "equity": {
+        "heroEquity": 0.05570291777188329,
+        "method": "exact-enumeration",
+        "trials": 377,
+        "confidenceHalfWidthPoints": null,
+        "ruleOfThumb": null,
+        "perPlayer": [
+          {
+            "label": "you",
+            "equity": 0.05570291777188329,
+            "win": 0.05570291777188329,
+            "tie": 0
+          },
+          {
+            "label": "seat 0",
+            "equity": 0.9442970822281167,
+            "win": 0.9442970822281167,
+            "tie": 0
+          }
+        ]
+      },
+      "potOdds": {
+        "pot": 60,
+        "toCall": 40,
+        "breakEvenEquity": 0.4,
+        "oddsRatio": 1.5,
+        "equitySurplus": -0.3442970822281167,
+        "explanation": "Hero risks 40 to win the 60 already in the middle, a price of 1.50 to 1. Calling breaks even at 40 / (60 + 40) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 60 is what is in the middle before hero's own 40 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 5.6% equity is 34.4 points short of it."
+      },
+      "candidates": [
+        {
+          "action": "fold",
+          "cost": 0,
+          "ev": 0,
+          "derivation": "EV(fold) = 0 chips. Folding is the baseline every other action is measured against: it costs nothing further and risks nothing further. Everything already in the pot is spent either way, so folding is the zero point every other action is measured against."
+        },
+        {
+          "action": "call",
+          "to": 40,
+          "cost": 40,
+          "ev": -34.42970822281167,
+          "derivation": "EV(call) = equity x (pot + toCall) - toCall = 0.0557 x (60 + 40) - 40 = -34.43 chips.",
+          "potShareIfCalled": 0.05570291777188329
+        },
+        {
+          "action": "raise",
+          "to": 90,
+          "cost": 90,
+          "ev": -30.258620689655174,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 60 + 0.65 x [ 0.0557 x (60 + 40 + 2 x 50) - 90 ] = 21 + (-51.26) = -30.26 chips. Risks 90 to win 60. Raising by 50 is half pot of the 100 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 50, and has to continue with 40% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.05570291777188329
+        },
+        {
+          "action": "raise",
+          "to": 115,
+          "cost": 115,
+          "ev": -44.69827586206897,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 60 + 0.65 x [ 0.0557 x (60 + 40 + 2 x 75) - 115 ] = 21 + (-65.7) = -44.7 chips. Risks 115 to win 60. Raising by 75 is three quarters pot of the 100 that would be in the middle once you call. A caller needs 30% equity to break even on the extra 75, and has to continue with 34.3% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.05570291777188329
+        },
+        {
+          "action": "raise",
+          "to": 990,
+          "cost": 990,
+          "ev": -550.0862068965517,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 60 + 0.65 x [ 0.0557 x (60 + 40 + 2 x 950) - 990 ] = 21 + (-571.09) = -550.09 chips. Risks 990 to win 60. Raising by 950 puts your whole remaining stack in. A caller needs 47.5% equity to break even on the extra 950, and has to continue with 5.7% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.05570291777188329
+        }
+      ],
+      "suggestion": {
+        "action": "fold",
+        "confidence": "reasonable",
+        "reason": "fold has the highest expected value against the stated range, by 30.3 chips over the next-best action.",
+        "whatWouldChangeIt": [
+          "A wider opponent range would raise your equity and can flip a fold into a call.",
+          "A narrower, stronger range does the opposite."
+        ]
+      },
+      "stackContext": {
+        "effectiveStack": 950,
+        "spr": 15.833333333333334,
+        "potOddsOfferedByPotSizedBet": 0.3333333333333333,
+        "explanation": "The deepest opponent has only 950, so at most 950 can change hands even though you have 990. The 40 above that is not in play this hand — nobody can pay you for it and nobody can take it. SPR = effective stack / pot = 950 / 60 = 15.83. There are 15.83 pots behind, which is the \"very-high\" band. Almost all of the money is still behind. The pot in front of you is small compared with what can still go in, so the cost of a later error dwarfs what is at stake right now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply."
+      },
+      "assumptions": [
+        "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
+        "you holds exactly Qd2c.",
+        "seat 0 holds any of 377 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
+        "Computed by enumerating every remaining board — there is no sampling error.",
+        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
+        "For a half-pot bet of 30 to break even here it would need to win uncontested 28% of the time.",
+        "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
+      ],
+      "uncertainty": {
+        "method": "exact-enumeration",
+        "summary": "Computed exactly by enumerating every remaining board (377 run-outs). There is no sampling error.",
+        "confidenceInterval": null,
+        "limitations": [
+          "This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.",
+          "Every hand in the opponent range is weighted equally. Real opponents do not play every hand in a range the same way.",
+          "No implied odds, reverse implied odds or future-street play are modelled."
+        ]
+      },
+      "teachingNotes": [
+        "The pot is laying you 1.5 to 1, so you need 40.0% to break even on a call. That number depends only on the price — not on your cards.",
+        "At an SPR of 15.8 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests."
+      ]
+    },
+    "task": {
+      "kind": "coach",
+      "spec": {
+        "heroLabel": "you",
+        "heroCards": [0, 41],
+        "board": [51, 33, 47, 7, 8],
+        "opponents": [
+          {
+            "kind": "topPercent",
+            "label": "seat 0",
+            "percent": 40
+          }
+        ]
+      },
+      "street": "river",
+      "pot": 60,
+      "contestablePot": 60,
+      "toCall": 40,
+      "heroCommittedThisStreet": 0,
+      "heroStack": 990,
+      "opponentStacks": [950],
+      "bigBlind": 10,
+      "minimumRaiseTo": 80,
+      "legalActions": ["fold", "call", "raise"],
+      "samples": 2000,
+      "seed": 1
+    }
+  },
+  {
+    "name": "turn, three-handed, a named notation range",
+    "view": {
+      "handId": "pin-505",
+      "roomId": "coach-pin",
+      "handNumber": 1,
+      "config": {
+        "smallBlind": 5,
+        "bigBlind": 10,
+        "ante": 0,
+        "maxSeats": 6,
+        "actionTimeoutSeconds": 30
+      },
+      "street": "turn",
+      "board": [3, 12, 23, 14],
+      "buttonSeat": 0,
+      "seats": [
+        {
+          "seat": 0,
+          "playerId": "p0",
+          "stack": 990,
+          "committedThisStreet": 0,
+          "committedTotal": 10,
+          "status": "active",
+          "position": "BTN",
+          "holeCards": null,
+          "isSelf": false,
+          "isButton": true,
+          "isToAct": false
+        },
+        {
+          "seat": 1,
+          "playerId": "p1",
+          "stack": 990,
+          "committedThisStreet": 0,
+          "committedTotal": 10,
+          "status": "active",
+          "position": "SB",
+          "holeCards": null,
+          "isSelf": false,
+          "isButton": false,
+          "isToAct": false
+        },
+        {
+          "seat": 2,
+          "playerId": "p2",
+          "stack": 990,
+          "committedThisStreet": 0,
+          "committedTotal": 10,
+          "status": "active",
+          "position": "BB",
+          "holeCards": [34, 1],
+          "isSelf": true,
+          "isButton": false,
+          "isToAct": true
+        }
+      ],
+      "toAct": 2,
+      "betLevel": 0,
+      "minimumRaiseTo": 10,
+      "potTotal": 30,
+      "pots": [
+        {
+          "amount": 30,
+          "eligibleSeats": [0, 1, 2],
+          "capPerSeat": 10,
+          "index": 0
+        }
+      ],
+      "forcedBets": [
+        {
+          "kind": "smallBlind",
+          "seat": 1,
+          "amount": 5,
+          "wasShort": false
+        },
+        {
+          "kind": "bigBlind",
+          "seat": 2,
+          "amount": 10,
+          "wasShort": false
+        }
+      ],
+      "actions": [
+        {
+          "sequence": 1,
+          "street": "preflop",
+          "seat": 0,
+          "playerId": "p0",
+          "action": {
+            "type": "call"
+          },
+          "amountPaid": 10,
+          "betLevelAfter": 10,
+          "potAfter": 25,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 2,
+          "street": "preflop",
+          "seat": 1,
+          "playerId": "p1",
+          "action": {
+            "type": "call"
+          },
+          "amountPaid": 5,
+          "betLevelAfter": 10,
+          "potAfter": 30,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 3,
+          "street": "preflop",
+          "seat": 2,
+          "playerId": "p2",
+          "action": {
+            "type": "check"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 10,
+          "potAfter": 30,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 4,
+          "street": "flop",
+          "seat": 1,
+          "playerId": "p1",
+          "action": {
+            "type": "check"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 0,
+          "potAfter": 30,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 5,
+          "street": "flop",
+          "seat": 2,
+          "playerId": "p2",
+          "action": {
+            "type": "check"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 0,
+          "potAfter": 30,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 6,
+          "street": "flop",
+          "seat": 0,
+          "playerId": "p0",
+          "action": {
+            "type": "check"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 0,
+          "potAfter": 30,
+          "wasAutomatic": false,
+          "actionId": null
+        },
+        {
+          "sequence": 7,
+          "street": "turn",
+          "seat": 1,
+          "playerId": "p1",
+          "action": {
+            "type": "check"
+          },
+          "amountPaid": 0,
+          "betLevelAfter": 0,
+          "potAfter": 30,
+          "wasAutomatic": false,
+          "actionId": null
+        }
+      ],
+      "actionSequence": 7,
+      "legalActions": [
+        {
+          "type": "fold",
+          "note": "Legal, but checking costs nothing."
+        },
+        {
+          "type": "check",
+          "costAtMin": 0,
+          "note": "Stay in the hand for free."
+        },
+        {
+          "type": "bet",
+          "minTo": 10,
+          "maxTo": 990,
+          "costAtMin": 10,
+          "allInAtMax": true,
+          "note": "Open the betting."
+        }
+      ],
+      "amountToCall": 0,
+      "commitmentRoot": "e12b588217b11526d66383133e27d1af184c67fec4c64484faf657869617c475",
+      "commitmentContext": "coach-pin:1:pin-505",
+      "result": null,
+      "viewerSeat": 2,
+      "randomSourceKind": "deterministic-test-only"
+    },
+    "opponentRange": "22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo",
+    "options": {
+      "samples": 2000,
+      "opponentRange": "22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo"
+    },
+    "report": {
+      "street": "turn",
+      "potTotal": 30,
+      "toCall": 0,
+      "outs": null,
+      "equity": {
+        "heroEquity": 0.3509388337565541,
+        "method": "exact-enumeration",
+        "trials": 1935948,
+        "confidenceHalfWidthPoints": null,
+        "ruleOfThumb": null,
+        "perPlayer": [
+          {
+            "label": "you",
+            "equity": 0.3509388337565541,
+            "win": 0.35028213567719796,
+            "tie": 0.0013140848824451897
+          },
+          {
+            "label": "seat 0",
+            "equity": 0.32453058312172295,
+            "win": 0.3159124108705399,
+            "tie": 0.017237033226099048
+          },
+          {
+            "label": "seat 1",
+            "equity": 0.324530583121723,
+            "win": 0.3159124108705399,
+            "tie": 0.017237033226099048
+          }
+        ]
+      },
+      "potOdds": {
+        "pot": 30,
+        "toCall": 0,
+        "breakEvenEquity": 0,
+        "oddsRatio": null,
+        "equitySurplus": 0.3509388337565541,
+        "explanation": "Nothing to call, so there is no price to beat — checking keeps you in for free."
+      },
+      "candidates": [
+        {
+          "action": "check",
+          "cost": 0,
+          "ev": 10.528165012696624,
+          "derivation": "EV(check) = equity x pot = 0.3509 x 30 = 10.53 chips. Checking costs nothing and keeps the hand, so it is a call priced at zero: it risks nothing and still holds a share of what is already in the middle. That share is what folding gives up, which is why a free check is never worse than a fold."
+        },
+        {
+          "action": "fold",
+          "cost": 0,
+          "ev": 0,
+          "derivation": "EV(fold) = 0 chips. Folding is the baseline every other action is measured against: it costs nothing further and risks nothing further. Everything already in the pot is spent either way, so folding is the zero point every other action is measured against."
+        },
+        {
+          "action": "bet",
+          "to": 10,
+          "cost": 10,
+          "ev": 15.405512097088007,
+          "derivation": "EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 30 + 0.65 x [ 0.3509 x (30 + 2 x 10) - 10 ] = 10.5 + 4.91 = 15.41 chips. Risks 10 to win 30. A caller needs 20% equity to break even, and as a pure bluff it would have to work 25% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 75% of their range.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.3509388337565541
+        },
+        {
+          "action": "bet",
+          "to": 22,
+          "cost": 22,
+          "ev": 13.080157903690251,
+          "derivation": "EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 30 + 0.65 x [ 0.3509 x (30 + 2 x 22) - 22 ] = 10.5 + 2.58 = 13.08 chips. Risks 22 to win 30. A caller needs 29.7% equity to break even, and as a pure bluff it would have to work 42.3% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 57.7% of their range.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.3509388337565541
+        },
+        {
+          "action": "bet",
+          "to": 990,
+          "cost": 990,
+          "ev": -174.4984136970621,
+          "derivation": "EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 30 + 0.65 x [ 0.3509 x (30 + 2 x 990) - 990 ] = 10.5 + (-185) = -174.5 chips. Risks 990 to win 30. A caller needs 49.3% equity to break even, and as a pure bluff it would have to work 97.1% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 2.9% of their range. Betting this is your whole stack, so it is also an all-in.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.3509388337565541
+        }
+      ],
+      "suggestion": {
+        "action": "bet",
+        "sizeRange": {
+          "min": 10,
+          "max": 22
+        },
+        "confidence": "low",
+        "reason": "bet comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.",
+        "whatWouldChangeIt": [
+          "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
+          "Being raised is not modelled here, so treat the figure as optimistic.",
+          "The gap to the next-best action is only 2.3 chips, well under a big blind — this is close to indifferent."
+        ]
+      },
+      "stackContext": {
+        "effectiveStack": 990,
+        "spr": 33,
+        "potOddsOfferedByPotSizedBet": 0.3333333333333333,
+        "explanation": "Yours is the shorter stack: you have 990 and the deepest opponent has 990, so at most 990 can change hands. You can neither win nor lose more than you brought to the hand. With 2 opponents each one has its own effective stack, the smaller of yours and theirs. 990 is the largest of them, so it is the most that can move against any single player and not the most you can lose across all of them. SPR = effective stack / pot = 990 / 30 = 33. There are 33 pots behind, which is the \"very-high\" band. Almost all of the money is still behind. The pot in front of you is small compared with what can still go in, so the cost of a later error dwarfs what is at stake right now. SPR describes the shape of the decision, not the answer to it: your hand, their range and position all still apply."
+      },
+      "assumptions": [
+        "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
+        "you holds exactly Th2d.",
+        "seat 0 holds any of 231 combinations from \"22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo\", each equally likely.",
+        "seat 1 holds any of 231 combinations from \"22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo\", each equally likely.",
+        "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
+        "Computed by enumerating every remaining board — there is no sampling error.",
+        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
+        "A half-pot bet of 15 is already break-even or better here purely on the equity you have when called — it does not need to win uncontested at all.",
+        "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
+      ],
+      "uncertainty": {
+        "method": "exact-enumeration",
+        "summary": "Computed exactly by enumerating every remaining board (1,935,948 run-outs). There is no sampling error.",
+        "confidenceInterval": null,
+        "limitations": [
+          "This is raw equity: the hand is treated as running to the river with no further betting. Real hands have more streets and more decisions.",
+          "Every hand in the opponent range is weighted equally. Real opponents do not play every hand in a range the same way.",
+          "Against several opponents the analysis assumes all of them see the river, which overstates your risk when some would fold.",
+          "No implied odds, reverse implied odds or future-street play are modelled."
+        ]
+      },
+      "teachingNotes": [
+        "At an SPR of 33.0 there is a lot of money left behind, so hands that can keep improving are worth more than their current strength suggests."
+      ]
+    },
+    "task": {
+      "kind": "coach",
+      "spec": {
+        "heroLabel": "you",
+        "heroCards": [34, 1],
+        "board": [3, 12, 23, 14],
+        "opponents": [
+          {
+            "kind": "notation",
+            "label": "seat 0",
+            "notation": "22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo"
+          },
+          {
+            "kind": "notation",
+            "label": "seat 1",
+            "notation": "22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo"
+          }
+        ]
+      },
+      "street": "turn",
+      "pot": 30,
+      "contestablePot": 30,
+      "toCall": 0,
+      "heroCommittedThisStreet": 0,
+      "heroStack": 990,
+      "opponentStacks": [990, 990],
+      "bigBlind": 10,
+      "minimumRaiseTo": 10,
+      "legalActions": ["fold", "check", "bet"],
+      "samples": 2000,
+      "seed": 1
+    }
+  }
+]

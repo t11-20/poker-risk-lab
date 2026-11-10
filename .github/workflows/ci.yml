@@ -498,6 +498,11 @@ jobs:
       # refuse it — correctly. Raised here for the harness rather than lowered in the
       # server, and the harness now prints the figure it needs when it sees a 429.
       RATE_LIMIT_MAX: '5000'
+      # Turns on the test-only reset control (`loadConfig` refuses it in production),
+      # which both harnesses read from this variable. Smoke's section 12 drains the
+      # guest bucket on purpose, so without it the load harness that follows got 0
+      # of 3 guests in every run. Not a credential: the API lives and dies with the job.
+      RATE_LIMIT_RESET_TOKEN: ci-rate-limit-reset-9fK2mQ7vT4wZ8bN1 # prl-allow-secret: test-only reset token for a throwaway CI API
       LOG_LEVEL: warn
 
     steps:

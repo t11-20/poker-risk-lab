@@ -30,6 +30,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as coach from '../src/coach.ts';
+import * as coachView from '../src/coach-view.ts';
 import * as consistency from '../src/consistency.ts';
 import * as equity from '../src/equity.ts';
 import * as ev from '../src/ev.ts';
@@ -46,6 +47,7 @@ import * as variance from '../src/variance.ts';
 /** The modules whose exports the index is expected to republish, in its own order. */
 const PUBLIC_MODULES: readonly (readonly [string, Record<string, unknown>])[] = [
   ['coach.ts', coach],
+  ['coach-view.ts', coachView],
   ['consistency.ts', consistency],
   ['equity.ts', equity],
   ['ev.ts', ev],
