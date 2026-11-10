@@ -75,6 +75,7 @@ import { AppError } from '../errors.ts';
 import { durableProfile } from '../rooms/bot-profile.ts';
 import {
   botDisplayName,
+  botDisplayNames,
   compareProfilesOnSpot,
   type HypotheticalSpot,
   MAX_COMPARE_TRIALS,
@@ -596,37 +597,37 @@ async function seatRequestedBots(
   room: LiveRoom,
   requested: readonly { readonly profile: string; readonly count: number }[],
 ): Promise<void> {
-  let seat = 1;
-  for (const entry of requested) {
-    for (let index = 0; index < entry.count; index += 1) {
-      if (seat >= room.record.config.maxSeats) {
-        throw new AppError('room_full', {
-          logDetail: `more bots requested than seats at ${room.record.id}`,
-        });
-      }
-      const profile = resolveProfile(entry.profile);
-      const displayName = botDisplayName(profile.naming.id);
-      const user = await registry.store.createBotUser(displayName);
-      // A table created through `POST /rooms` has no difficulty field, so its bots play the
-      // middle setting: the style as designed, with the sizing variation a real opponent shows.
-      const durable = {
-        profileId: durableProfile(profile.naming.id),
-        difficulty: 'realistic' as const,
-        seed: seedFor(room.record.id, seat, undefined),
-      };
-      // Persisted before the runner is told, and persisted in FULL: the durable row is what a
-      // restart reads, so a seat the row cannot describe is a seat the next process cannot put
-      // back. See `rooms/bot-profile.ts`.
-      await registry.store.addMember({
-        roomId: room.record.id,
-        userId: user.id,
-        isBot: true,
-        bot: durable,
+  const profiles = requested.flatMap((entry) =>
+    Array.from({ length: entry.count }, () => resolveProfile(entry.profile)),
+  );
+  const names = botDisplayNames(profiles.map((profile) => profile.naming.id));
+  for (const [index, profile] of profiles.entries()) {
+    const seat = index + 1;
+    if (seat >= room.record.config.maxSeats) {
+      throw new AppError('room_full', {
+        logDetail: `more bots requested than seats at ${room.record.id}`,
       });
-      await registry.store.seatMember(room.record.id, user.id, seat);
-      await registry.seatBot(room.record.id, { userId: user.id, displayName, seat, ...durable });
-      seat += 1;
     }
+    const displayName = names[index] ?? botDisplayName(profile.naming.id);
+    const user = await registry.store.createBotUser(displayName);
+    // A table created through `POST /rooms` has no difficulty field, so its bots play the
+    // middle setting: the style as designed, with the sizing variation a real opponent shows.
+    const durable = {
+      profileId: durableProfile(profile.naming.id),
+      difficulty: 'realistic' as const,
+      seed: seedFor(room.record.id, seat, undefined),
+    };
+    // Persisted before the runner is told, and persisted in FULL: the durable row is what a
+    // restart reads, so a seat the row cannot describe is a seat the next process cannot put
+    // back. See `rooms/bot-profile.ts`.
+    await registry.store.addMember({
+      roomId: room.record.id,
+      userId: user.id,
+      isBot: true,
+      bot: durable,
+    });
+    await registry.store.seatMember(room.record.id, user.id, seat);
+    await registry.seatBot(room.record.id, { userId: user.id, displayName, seat, ...durable });
   }
 }
 

@@ -577,7 +577,11 @@ export function ActionBar(props: ActionBarProps): ReactElement {
           <ActionButton
             label="Fold"
             cost={formatUnits(0)}
-            spoken={`fold, costs ${formatUnits(0)}, gives up the hand and any claim on the pot`}
+            spoken={
+              canCheck
+                ? `fold, costs ${formatUnits(0)}, gives up the hand and any claim on the pot; checking also costs ${formatUnits(0)}`
+                : `fold, costs ${formatUnits(0)}, gives up the hand and any claim on the pot`
+            }
             disabled={disabled}
             onClick={() => actFromBar({ type: 'fold' })}
           />
@@ -659,7 +663,13 @@ export function ActionBar(props: ActionBarProps): ReactElement {
       ) : null}
 
       <p className="prl-action-bar__note">
-        {'Folding costs nothing and gives up any claim on the pot. '}
+        {/* The engine offers Fold where Check is free, with the note "Legal, but checking costs
+            nothing.", and this line used to drop it: "Folding costs nothing" was the only sentence
+            beside a free check, which reads as no reason not to. Stated as the two prices, not as
+            advice. */}
+        {canCheck
+          ? 'Checking costs nothing here; folding gives up any claim on the pot for no saving. '
+          : 'Folding costs nothing and gives up any claim on the pot. '}
         {call?.allInAtMax === true ? `${call.note} ` : ''}
         {sized?.note ?? ''}
       </p>

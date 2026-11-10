@@ -40,7 +40,7 @@ import { ScenarioStage } from '../../../components/ScenarioStage.tsx';
 import { LAB_SCENARIO_SUMMARIES, scenarioFixture } from '../../../fixtures/scenarios.ts';
 import { API_PATHS, apiGet, isApiUnavailable, isMissingResource, safeFetch } from '../../../lib/api.ts';
 import { difficultyLabel, topicLabel } from '../../../lib/lab-labels.ts';
-import { scenarioToPlayerView } from '../../../lib/scenario-view.ts';
+import { scenarioSeatName, scenarioToPlayerView } from '../../../lib/scenario-view.ts';
 import { NotFoundBody } from '../../not-found.tsx';
 import '../../../styles/page.css';
 import '../../../styles/lab.css';
@@ -188,7 +188,7 @@ export default async function ScenarioPage({
   if (table === null) return <NotFoundBody />;
 
   const seatNames: Record<number, string> = {};
-  for (const seat of scenario.seats) seatNames[seat.seat] = seat.label;
+  for (const seat of scenario.seats) seatNames[seat.seat] = scenarioSeatName(seat);
 
   return (
     <div className="prl-container prl-lab-page">

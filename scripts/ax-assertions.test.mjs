@@ -179,7 +179,6 @@ describe('NEGATIVE CONTROL — every check refuses a page that produced nothing'
     mutations: [],
     steps: [],
     opened: null,
-    sat: null,
     dealt: null,
     socketLive: false,
     reachedTurn: false,
@@ -1054,9 +1053,8 @@ const TURN = regionKey('prl-play__main', 'prl-play__decision', 'prl-live-region'
 
 /** A healthy hand, as measured: connect, blinds, a bot, the turn, the Coach, a fold, the end. */
 const HEALTHY_HAND = () => ({
-  opened: 'Open the table',
-  sat: 'Take seat 1',
-  dealt: 'Deal the next hand',
+  opened: 'Deal me in',
+  dealt: 'Deal me in',
   socketLive: true,
   reachedTurn: true,
   complete: true,
@@ -1065,12 +1063,12 @@ const HEALTHY_HAND = () => ({
   turnOpenedAt: 3069,
   steps: [
     {
-      control: 'Open the table',
+      control: 'Deal me in',
       gone: true,
       focus: { onDocument: false, role: 'status', name: 'Where the table has got to' },
     },
     {
-      control: 'Take seat 1',
+      control: 'the seat and the deal "Deal me in" sent',
       gone: true,
       focus: { onDocument: false, role: 'status', name: 'Where the table has got to' },
     },
@@ -1148,7 +1146,7 @@ describe('NEGATIVE CONTROL — 3.2, the caret dropped while setting the table up
     assert.ok(refuses(check, evidence));
   });
 
-  it('fires when only one of the two controls was reached', () => {
+  it('fires when the press was made and the seat and deal it sends were never reached', () => {
     const evidence = HEALTHY_HAND();
     evidence.steps = [evidence.steps[0]];
     assert.ok(refuses(check, evidence));
@@ -1495,7 +1493,7 @@ describe('NEGATIVE CONTROL — 3.19, a refusal nobody is interrupted for', () =>
 describe('NEGATIVE CONTROL — 3.20, an outage the status line talks over', () => {
   const check = checkFor('J3.20');
   const OUTAGE = () => ({
-    opened: 'Open the table',
+    opened: 'Deal me in',
     log: [
       wrote(CONNECTION, 'Preparing: reading your session, then finding or creating your private room.', 500),
       wrote(CONNECTION, 'The table could not be prepared. The reason is below.', 620),

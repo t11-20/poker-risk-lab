@@ -884,6 +884,86 @@ export type SetupPhase =
   /** Setup failed for a reason the reader is told about. */
   | 'failed';
 
+/**
+ * How far "Deal me in" has got: the seat and the first deal, asked for on the reader's behalf.
+ *
+ * ## Why this exists
+ *
+ * Reaching a first decision took three presses — "Open the table", "Take seat 1", "Deal the next
+ * hand" — with an empty "Waiting for the table." block between each, and the second and third are
+ * not choices at the bot table this page builds: seat 1 is the one `BOT_TABLE_REQUEST` leaves free
+ * and nobody else can deal there. So `start` asks for both, once each, each only after the server
+ * has confirmed the step before it.
+ *
+ * ## Why a sent step is a state of its own
+ *
+ * `wantSeat` and `sitSent` differ only in whether the frame has left, and that difference is the
+ * whole guarantee: every render, every whole-state frame and every reconnect `welcome` re-runs the
+ * effect that reads this, so "seat is null, ask for it" would ask again on each one. A step is sent
+ * on the transition OUT of `wantSeat`, so it can be sent at most once per press.
+ *
+ * ## Every in-flight state has an exit, and every exit is towards the manual buttons
+ *
+ * While this is not `off` the manual "Take seat" and "Deal the next hand" are hidden, so a state
+ * that could wait for ever would leave a reader with no control at all. A refusal (`notice`), a
+ * send that did not go out, and the socket leaving `live` mid-chain all end it at `off`. A reconnect
+ * therefore never re-sends: the chain stops and the reader finishes by hand.
+ *
+ * Only `start` sets it. A table reached by invite code, or one built for friends, is somebody's to
+ * sit down at and deal on purpose, so those keep the manual steps.
+ */
+export type DealIn = 'off' | 'wantSeat' | 'sitSent' | 'dealSent';
+
+/** What the next step of "Deal me in" depends on, as the hook last saw it. */
+export interface DealInSnapshot {
+  /** Setup is `ready` and the socket is `live`. */
+  readonly live: boolean;
+  /** The reducer's state. `notice` set means the server refused something that was not a decision. */
+  readonly table: Pick<TableState, 'seat' | 'betweenHands' | 'notice' | 'revision'>;
+  readonly readerSeat: number | null;
+}
+
+export type DealInSend = { readonly kind: 'sit'; readonly seat: number } | { readonly kind: 'deal' } | null;
+
+const STAY = (next: DealIn): { readonly next: DealIn; readonly send: DealInSend } => ({ next, send: null });
+
+/**
+ * One step of "Deal me in". Pure, so `test/deal-me-in.test.ts` drives it through the reducer's real
+ * frames: there is no renderer in this repository (ADR 0008) to drive the hook with.
+ *
+ * A seat the reader already holds is a seat taken — `chooseRoom` can hand back a room they are
+ * sitting at — and a hand already in progress is a hand dealt. Both converge on the same end state
+ * as a fresh table, without sending anything.
+ */
+export function dealInStep(
+  step: DealIn,
+  seen: DealInSnapshot,
+): { readonly next: DealIn; readonly send: DealInSend } {
+  const { table } = seen;
+  if (step === 'off') return STAY('off');
+  if (table.notice !== null) return STAY('off');
+  if (step === 'wantSeat') {
+    if (!seen.live) return STAY('wantSeat');
+    // `welcome` carries the seat and no view, so until a `state` frame lands on this socket
+    // (`revision` restarts at zero on every `welcome`) `betweenHands` is whatever `reset` left —
+    // true. Read then, a reused room where the reader is mid-hand looked like "seated, nothing
+    // dealt", and `test/deal-me-in.test.ts` caught this sending a deal into a hand in progress.
+    if (table.revision === 0) return STAY('wantSeat');
+    if (table.seat === null) {
+      return seen.readerSeat === null
+        ? STAY('off')
+        : { next: 'sitSent', send: { kind: 'sit', seat: seen.readerSeat } };
+    }
+    return table.betweenHands ? { next: 'dealSent', send: { kind: 'deal' } } : STAY('off');
+  }
+  if (!seen.live) return STAY('off');
+  if (step === 'sitSent') {
+    if (table.seat === null) return STAY('sitSent');
+    return table.betweenHands ? { next: 'dealSent', send: { kind: 'deal' } } : STAY('off');
+  }
+  return table.betweenHands ? STAY('dealSent') : STAY('off');
+}
+
 /** Where a join-by-invite-code attempt has got to. */
 export type JoinPhase =
   | { readonly state: 'idle' }
@@ -952,7 +1032,9 @@ export interface LiveTable {
   readonly isMyTurn: boolean;
   /** The seat `sit()` will ask for, or null when every seat is taken. */
   readonly readerSeat: number | null;
-  /** Opts in: session, room, socket. Safe to call twice. */
+  /** True while "Deal me in" is still taking the seat or dealing on the reader's behalf. */
+  readonly dealingIn: boolean;
+  /** Opts in: session, room, socket, then the seat and the first deal. Safe to call twice. */
   readonly start: () => void;
   /** Abandons the remembered room and builds a fresh bot table. */
   readonly startFreshTable: () => void;
@@ -1061,6 +1143,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const [closed, setClosed] = useState<CloseMeaning | null>(null);
   const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [join, setJoin] = useState<JoinPhase>({ state: 'idle' });
+  const [dealIn, setDealIn] = useState<DealIn>('off');
 
   const socketRef = useRef<TableSocketHandle | null>(null);
   const pendingRef = useRef<PendingDecision | null>(null);
@@ -1116,6 +1199,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
 
   const start = useCallback((): void => {
     if (phase === 'preparing' || phase === 'ready') return;
+    setDealIn('wantSeat');
     prepare(false);
   }, [phase, prepare]);
 
@@ -1124,6 +1208,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     (request: CreateRoomRequest): void => {
       socketRef.current?.dispose();
       socketRef.current = null;
+      setDealIn('off');
       setRoomId(null);
       setStatus(null);
       setClosed(null);
@@ -1178,6 +1263,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     setupRef.current?.abort();
     const controller = new AbortController();
     setupRef.current = controller;
+    setDealIn('off');
     setJoin({ state: 'joining' });
     setSetupError(null);
     setPhase('preparing');
@@ -1329,6 +1415,36 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     socketRef.current?.startHand(newRequestId('deal'));
   }, []);
 
+  const dealInLive = phase === 'ready' && status === 'live';
+  const { seat: dealInSeat, betweenHands, notice, revision } = table;
+  /**
+   * Advances "Deal me in" one step per commit. See `DealIn` for why each step is sent at most once
+   * and why every way out lands on the manual buttons.
+   *
+   * The send's own outcome is read, not assumed: a seat request this page refused to put on the
+   * wire (`rate-limited`, `undeliverable`, no socket) is never going to be confirmed, and waiting for
+   * it would hide the manual buttons for good.
+   */
+  useEffect(() => {
+    const { next, send } = dealInStep(dealIn, {
+      live: dealInLive,
+      table: { seat: dealInSeat, betweenHands, notice, revision },
+      readerSeat,
+    });
+    let after = next;
+    if (send !== null) {
+      const handle = socketRef.current;
+      const outcome =
+        handle === null
+          ? null
+          : send.kind === 'sit'
+            ? handle.sit(send.seat, newRequestId('sit'))
+            : handle.startHand(newRequestId('deal'));
+      if (outcome !== 'sent') after = 'off';
+    }
+    if (after !== dealIn) setDealIn(after);
+  }, [dealIn, dealInLive, dealInSeat, betweenHands, notice, revision, readerSeat]);
+
   const act = useCallback((action: TableAction): void => {
     const view = viewRef.current;
     const handle = socketRef.current;
@@ -1455,6 +1571,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     highlightedCards,
     isMyTurn,
     readerSeat,
+    dealingIn: dealIn !== 'off',
     start,
     startFreshTable,
     startPrivateTable,

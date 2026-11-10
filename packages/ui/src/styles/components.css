@@ -2976,7 +2976,9 @@
  * all (WCAG 2.1.1), and giving it `tabindex="0"` to fix that adds an unnamed tab stop for every
  * table on the page. Wrapping has neither problem and clips nothing.
  *
- * 13rem is the plate's width in both layouts, so a seat is the same object whichever one is active.
+ * Both container queries below replace this grid: under 46rem it is one full-width row per seat
+ * (the compact rows after the oval block), and from 46rem the seats leave it for the ring. What is
+ * left here is the layout before container queries apply, and the reason no scroller replaces it.
  */
 .prl-table__opponents {
   order: 1;
@@ -3133,6 +3135,91 @@
      costs 2.5rem of field height through the `H = 5 h` relation above. */
   .prl-turn-timer {
     --prl-turn-size: var(--prl-space-9);
+  }
+}
+
+/**
+ * The stacked layout's opponents, as rows rather than cards.
+ *
+ * Below 46rem every field of an opponent's plate was its own line - position, name, stack, street
+ * commitment, status, then a 49px card slot - so five folded bots stood between the reader and their
+ * own hand. Measured with `getBoundingClientRect` in Chrome at 390px on `/play?state=decision`: plates
+ * of 197-201px, the five running from 713px to 1,767px down the page, and Fold at 2,725px. As rows
+ * they are 80-81px, end at 1,162px, and Fold is at 2,120px.
+ *
+ * The same fields, reflowed into the compacted plate's shape - cards beside the text, as the oval
+ * layout already does - with the status beside the position and the two figures side by side.
+ *
+ * One row per opponent, at every width this layout covers. The list's own `auto-fit` grid puts
+ * three 13rem plates side by side once the container passes about 42rem, and a row plate laid into a
+ * 220px column is not a row: `test:layout` caught it at 768px on the settled fixture, with the name
+ * squeezed to a 4.5px track and painted one letter per line. Full-width rows are also simply
+ * shorter - five rows of about 80px against two lines of 280px cards.
+ * Nothing is removed. The viewer's own plate in `.prl-table__hero` keeps the full card, because it is
+ * the one plate a reader is actually looking at.
+ *
+ * `.prl-table__field` in the selector is specificity, not scope: `styles/play.css` pads every
+ * `.prl-play .prl-seat` for the ring, and this padding has to win in the stacked layout without the
+ * shared package knowing that the play stylesheet exists.
+ */
+@container prl-table (width < 46rem) {
+  .prl-table__opponents {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--prl-space-4);
+  }
+
+  /* The position's track is sized to the position and the status takes what is left, wrapping if it
+     must. It was the other way round - `minmax(0, 1fr) auto auto` - and an `auto` track is floored at
+     max-content, so at 360px on the settled fixture "still in at the end" took the row and squeezed
+     "CO" under it: `test:layout` reported a 211px² collision on one sweep and none on the next,
+     which is what a few pixels of margin looks like when a web font swaps in mid-measurement. */
+  .prl-table__field .prl-table__opponents > .prl-seat {
+    grid-template-columns: auto minmax(min-content, 1fr) auto;
+    grid-template-areas:
+      "head status cards"
+      "name name cards"
+      "stats stats cards";
+    align-items: baseline;
+    gap: var(--prl-space-1) var(--prl-space-4);
+    padding: var(--prl-space-4) var(--prl-space-5);
+  }
+
+  /* Start-aligned: `space-between` pushed the dealer badge away from the position it belongs to,
+     to float in the middle of the row attached to nothing. Beside the position it names the seat. */
+  .prl-table__opponents > .prl-seat .prl-seat__top {
+    grid-area: head;
+    justify-content: flex-start;
+  }
+
+  .prl-table__opponents > .prl-seat .prl-seat__name {
+    grid-area: name;
+    font-size: var(--prl-type-body-sm);
+  }
+
+  .prl-table__opponents > .prl-seat .prl-seat__status {
+    grid-area: status;
+    justify-self: end;
+    text-align: end;
+  }
+
+  /* The pair as one line - `STACK 1,000   IN FRONT 0` - instead of a two-column grid that gave each
+     figure its own row. `nowrap` is already on both halves; the row wraps between pairs, never
+     inside one, on the narrowest phone. */
+  .prl-table__opponents > .prl-seat .prl-seat__stats {
+    grid-area: stats;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--prl-space-1) var(--prl-space-3);
+  }
+
+  .prl-table__opponents > .prl-seat .prl-seat__stat-value {
+    margin-inline-end: var(--prl-space-4);
+  }
+
+  .prl-table__opponents > .prl-seat .prl-seat__cards {
+    grid-area: cards;
+    align-self: center;
   }
 }
 

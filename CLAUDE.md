@@ -86,7 +86,7 @@ nothing and `verify` did not list it, for one mechanical reason — it had no `-
 `docs/RUNBOOK.md` told a person to bring up a production build and an API by hand first. A gate that
 needs somebody to remember is not a gate. It now starts its own servers (web on **3464**, API on
 **3001** — the API port is not a free choice, see the script's header on the frozen `/api/*` rewrite)
-and reports 146 checks.
+and reports 147 checks.
 
 `pnpm run test:ax` runs **three web apps** off one build, and the second and third are fixtures
 rather than duplication. 8.2 needs the WEB SERVER's own fetch to fail, so one runs on :3459 with

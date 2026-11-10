@@ -136,6 +136,7 @@
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { connect } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // The gate's own constants rather than copies of them. `age-gate.ts` imports nothing and says in
@@ -1263,6 +1264,53 @@ function portFromOrigin(origin, fallback) {
 }
 
 /**
+ * Refuses to start a server on a port something else already holds.
+ *
+ * `waitUntilReady` accepts the first 200 from its URL, and it cannot tell its own child's answer
+ * from a stranger's. With another process on the port, the audit scores whatever IS there.
+ * Reproduced: a twelve-line `node:http` server on 127.0.0.1:3472, then
+ * `node scripts/a11y-audit.mjs --base-url http://127.0.0.1:3472` printed "starting the web app...",
+ * "ready at http://127.0.0.1:3472", audited one route of the stranger's page and exited 0 with
+ * "PASS". A delegate's log on this machine shows the same sequence on :3000 while another
+ * project's container held that port, and its PASS was reported as this gate's. The same check as
+ * `refuseOccupiedPort` in `scripts/age-gate-audit.mjs`.
+ *
+ * It CONNECTS to 127.0.0.1, where the poll will go. The first version BOUND 127.0.0.1 instead, and
+ * that missed the commonest stranger: on macOS a bind of 127.0.0.1 succeeds beside a listener on the
+ * wildcard address, which is where `next start` listens (`TCP *:3521`). Measured on 2026-11-10 with
+ * a production `next start` from this checkout started by hand on :3521, that version printed
+ * "starting the web app...", "ready at http://127.0.0.1:3521", "PASS — no violation of the checked
+ * rules." and exited 0. The bind also called a `node:http` server free on its default address, on
+ * `0.0.0.0` and on `::`, and refused only one bound to 127.0.0.1; a connect reached all four. Only
+ * ECONNREFUSED counts as free, so a probe that cannot decide refuses.
+ */
+async function refuseOccupiedPort(port) {
+  const outcome = await new Promise((done) => {
+    const socket = connect({ host: '127.0.0.1', port: Number(port) });
+    socket.setTimeout(2000);
+    socket.once('connect', () => {
+      socket.destroy();
+      done('accepted');
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      done('was neither accepted nor refused within 2s');
+    });
+    socket.once('error', (error) =>
+      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
+    );
+  });
+  if (outcome !== 'refused') {
+    const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
+    throw new Error(
+      `${seen} on 127.0.0.1:${port}. --start audits a server this run ` +
+        'started, so it will not score one it did not. Stop it, pass another --base-url/--api-url, ' +
+        'or pass --no-start to audit that server on purpose.',
+    );
+  }
+}
+
+/**
  * A child server this script owns and must clean up.
  *
  * Detached, and signalled by process group, for the same reason as
@@ -1454,6 +1502,7 @@ try {
         },
       );
       servers.push(api);
+      await refuseOccupiedPort(portFromOrigin(options.apiUrl, '3001'));
       console.log(dim('  starting the API...'));
       api.start();
       await api.waitUntilReady(options.readyTimeoutSeconds);
@@ -1466,6 +1515,7 @@ try {
       PORT: portFromOrigin(options.baseUrl, '3000'),
     });
     servers.push(web);
+    await refuseOccupiedPort(portFromOrigin(options.baseUrl, '3000'));
     console.log(dim('  starting the web app...'));
     web.start();
     await web.waitUntilReady(options.readyTimeoutSeconds);

@@ -173,6 +173,11 @@ export function seatRingPosition(index: number, count: number): StyleWithVars {
   return { '--prl-seat-x': `${x.toFixed(2)}%`, '--prl-seat-y': `${y.toFixed(2)}%` };
 }
 
+/** Not after a name that already says it: every fixture names the reader "You", which read "You (you)". */
+function needsSelfMarker(isSelf: boolean, name: string): boolean {
+  return isSelf && name !== 'You';
+}
+
 export function Seat(props: SeatProps): ReactElement {
   const { seat, street, name, ringIndex, ringCount, turn = null, highlightedCards, highlightLabel } = props;
   const { as = 'li', className } = props;
@@ -259,7 +264,7 @@ export function Seat(props: SeatProps): ReactElement {
 
       <p className="prl-seat__name">
         {name}
-        {seat.isSelf ? <span className="prl-seat__you">{' (you)'}</span> : null}
+        {needsSelfMarker(seat.isSelf, name) ? <span className="prl-seat__you">{' (you)'}</span> : null}
       </p>
 
       <dl className="prl-seat__stats">

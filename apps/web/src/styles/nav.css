@@ -475,6 +475,11 @@
   color: var(--prl-text-muted);
 }
 
+/** No figure to share a baseline with: the word alone sits in the middle of the pill. */
+.prl-pillbar .prl-units__value--unknown {
+  align-items: center;
+}
+
 /**
  * The circle. `UnitsBadge` gives it a 44px round button with a real accessible name ("What
  * “units” means"), which is precisely the icon-only circle this bar wants — so it is used as

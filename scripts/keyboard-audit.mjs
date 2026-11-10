@@ -165,6 +165,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -1502,8 +1503,10 @@ async function auditStickyBarOcclusion(page) {
  * is one of the things the audit specifically asked for, and the second half of it needs a table
  * that is really dealing.
  *
- * So this walks the product's own path with the keyboard only: open the table, take the seat, deal,
- * and then act — each step by tabbing to a control and pressing Enter, never by clicking. If any
+ * So this walks the product's own path with the keyboard only: "Deal me in", which opens the table,
+ * takes the seat and deals by itself, and then act — each press by tabbing to a control and pressing
+ * Enter, never by clicking. Then the manual controls that "Deal me in" no longer needs for the first
+ * hand, because every later hand still does: stand up, take the seat back, deal the next hand. If any
  * step does not arrive, the journey reports that it could not be completed rather than passing.
  *
  * ## What it needs
@@ -1541,12 +1544,12 @@ async function playOneHandByKeyboard(page) {
     return false;
   };
 
-  const opened = await activateByLabel(/^open the table$/i);
+  const opened = await activateByLabel(/^deal me in$/i);
   if (!opened.activated) {
-    unproven('Private table', 'could not reach "Open the table" by keyboard; is the API running?');
+    unproven('Private table', 'could not reach "Deal me in" by keyboard; is the API running?');
     return;
   }
-  ok('Private table: "Open the table" reached and activated by keyboard');
+  ok('Private table: "Deal me in" reached and activated by keyboard');
 
   const liveSocket = await waitFor(
     '/Take seat|Deal the next hand|Stand up/.test(document.body.innerText)',
@@ -1557,18 +1560,6 @@ async function playOneHandByKeyboard(page) {
     return;
   }
   ok('Private table: the socket went live');
-
-  const seated = await activateByLabel(/take seat/i);
-  if (seated.activated) ok(`Private table: "${seated.name.trim()}" reached and activated by keyboard`);
-  else unproven('Private table', 'no free seat to take by keyboard');
-
-  await waitFor('/Deal the next hand/.test(document.body.innerText)', 20);
-  const dealt = await activateByLabel(/deal the next hand/i);
-  if (!dealt.activated) {
-    unproven('Private table', 'could not reach "Deal the next hand" by keyboard');
-    return;
-  }
-  ok('Private table: "Deal the next hand" reached and activated by keyboard');
 
   // The same two matchers the per-route check uses, for the same reason: a hand-rolled regex in a
   // template literal here is where the `\b`-as-BACKSPACE half of the original defect lived, and a
@@ -1686,6 +1677,59 @@ async function playOneHandByKeyboard(page) {
   );
   if (!survived.isBody) ok('Private table: focus survived the table update the action caused');
   else warn('Private table', 'acting dropped focus to <body>; a keyboard user restarts from the top');
+
+  await playManualStepsByKeyboard(activateByLabel, waitFor);
+}
+
+/**
+ * Stand up, take the seat back and deal the next hand — by keyboard, between hands.
+ *
+ * These three used to be proven on the way IN, because a first hand needed all of them. "Deal me in"
+ * now sends the seat and the deal itself, so without this they would be proven nowhere — and they
+ * are the only way to every hand after the first, and to any hand at a table reached by invite code.
+ *
+ * Done after the fold so the table is between hands, which is the one state where all three are
+ * offered. The hand it deals is left to the server's turn timer: every run of this journey opens a
+ * fresh Legends match (`openPracticeRoom` never reuses one), so no later run sits down at it.
+ */
+async function playManualStepsByKeyboard(activateByLabel, waitFor) {
+  const between = await waitFor(
+    `[...document.querySelectorAll('button')].some((b) => /^Deal the next hand$/.test(b.textContent.trim()) && !b.disabled)`,
+    90,
+  );
+  if (!between) {
+    unproven(
+      'Private table',
+      'the folded hand never finished, so the between-hands controls were not reached',
+    );
+    return;
+  }
+
+  const stood = await activateByLabel(/^stand up$/i);
+  if (!stood.activated) {
+    bad('Private table: manual steps', 'could not reach and activate "Stand up" by keyboard');
+    return;
+  }
+  ok('Private table: "Stand up" reached and activated by keyboard');
+
+  await waitFor('/Take seat \\d+/.test(document.body.innerText)', 20);
+  const seated = await activateByLabel(/^take seat \d+$/i);
+  if (!seated.activated) {
+    bad('Private table: manual steps', 'could not reach and activate "Take seat" by keyboard');
+    return;
+  }
+  ok(`Private table: "${seated.name.trim()}" reached and activated by keyboard`);
+
+  await waitFor('/Deal the next hand/.test(document.body.innerText)', 20);
+  const dealt = await activateByLabel(/^deal the next hand$/i);
+  if (!dealt.activated) {
+    bad('Private table: manual steps', 'could not reach and activate "Deal the next hand" by keyboard');
+    return;
+  }
+  const started = await waitFor('/A hand is in progress/.test(document.body.innerText)', 20);
+  if (started) ok('Private table: "Deal the next hand", pressed with Enter, dealt a hand');
+  else
+    bad('Private table: manual steps', '"Deal the next hand" was activated by keyboard and no hand started');
 }
 
 // ---------------------------------------------------------------------------
@@ -1720,7 +1764,7 @@ export const ROUTES = [
     extra: checkPokerActions,
     actionControls: 'required',
   },
-  // The live table before anybody sits down: "Open the table", and nothing to decide. Declared
+  // The live table before anybody sits down: "Deal me in", and nothing to decide. Declared
   // `until-seated` so that finding no actions is recorded as not-applicable instead of passing
   // quietly — and so that it can never stand in for the seated case, which `playOneHandByKeyboard`
   // is the only thing here that reaches.
@@ -1735,6 +1779,56 @@ export const ROUTES = [
 // ---------------------------------------------------------------------------
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * Refuses to go on when something already answers where a server this run starts will be polled.
+ *
+ * `waitUntilReady` accepts the first 200 from its URL and cannot tell its own child's answer from a
+ * stranger's. The `prl-app` marker check below catches a stranger that is not this app, and that is
+ * all it can catch: a sibling checkout's `next start` carries the same shell class. Measured on
+ * 2026-11-10 with a production `next start` from this checkout started by hand on :3521 and a
+ * `node:http` page answering 200 on :3529: `--start --with-api --web http://127.0.0.1:3521 --api
+ * http://127.0.0.1:3529` printed "starting the API on http://127.0.0.1:3529..." and "starting the web
+ * app on http://127.0.0.1:3521...", passed 133 checks against servers it did not start, and failed one
+ * with "this run started the API itself, so there is nothing else to blame" while the API it blamed
+ * was the `node:http` page.
+ *
+ * It CONNECTS to where the poll will go, rather than binding 127.0.0.1 as `scripts/a11y-audit.mjs`
+ * first did. Measured on macOS with Node 24.18: a bind of 127.0.0.1 succeeds beside a listener on
+ * the wildcard address, so it called a `node:http` server free on its default address, on `0.0.0.0`
+ * and on `::` (`lsof`: `TCP *:3533`), and refused only one bound to 127.0.0.1; a connect to
+ * 127.0.0.1 reached all four. `next start` listens on the wildcard (`TCP *:3521`). A second `next
+ * start` there exits `EADDRINUSE :::3521`; beside a stranger on 127.0.0.1 alone it binds `*:3522` and
+ * stays up while the poll reaches the stranger. Only ECONNREFUSED counts as free, so a probe that
+ * cannot decide refuses.
+ */
+async function refuseOccupiedPort(url) {
+  const { hostname, port, protocol } = new URL(url);
+  const host = hostname.replace(/^\[(.*)\]$/, '$1');
+  const target = { host, port: Number(port || (protocol === 'https:' ? 443 : 80)) };
+  const outcome = await new Promise((done) => {
+    const socket = connect(target);
+    socket.setTimeout(2000);
+    socket.once('connect', () => {
+      socket.destroy();
+      done('accepted');
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      done('was neither accepted nor refused within 2s');
+    });
+    socket.once('error', (error) =>
+      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
+    );
+  });
+  if (outcome === 'refused') return;
+  const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
+  throw new Error(
+    `${seen} on ${host}:${String(target.port)}. --start drives a server this run started, so it ` +
+      'will not score one it did not. Stop it, pass another --web/--api, or leave out --start to ' +
+      'drive that server on purpose.',
+  );
+}
 
 /** The port `next start` should bind, taken from the origin this audit will drive. */
 function portFromOrigin(origin) {
@@ -1957,6 +2051,7 @@ async function main() {
 
   try {
     if (START) {
+      for (const url of WITH_API ? [WEB_ORIGIN, API_ORIGIN] : [WEB_ORIGIN]) await refuseOccupiedPort(url);
       if (WITH_API) {
         // Inherit `DATABASE_URL` and the rest from the parent, exactly as `ax-tree-audit.mjs`
         // does, and do NOT force `NODE_ENV=production`: that refuses the development secrets in

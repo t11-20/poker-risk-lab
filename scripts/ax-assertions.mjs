@@ -1923,7 +1923,7 @@ const TABLE_NARROW_CHECKS = [
 //     browser-side call from `127.0.0.1:3456` with `forbidden` and the table never opens.
 //     `ax-tree-audit.mjs` sets it on the API it starts; with `--no-start` it is the operator's.
 //   - The reader must be new. Chrome keeps its profile between runs, so a second run reuses the
-//     room the first left the reader seated in and "Take seat 1" is never offered.
+//     room the first left the reader seated in, and "Deal me in" finds a seat already held.
 // ---------------------------------------------------------------------------
 
 /** Where each of the three regions this journey listens to lives, as a `SPEECH_PROBE` key. */
@@ -2022,9 +2022,9 @@ async function waitInPage(page, expression, seconds) {
 const ENABLED_ACTION = `[...document.querySelectorAll('button.prl-action-btn')].some((b) => !b.disabled)`;
 
 /**
- * Open a table, sit down, deal, fold when the decision arrives, and let the hand finish.
+ * Press "Deal me in", let it sit and deal, fold when the decision arrives, and let the hand finish.
  *
- * The product's own path, pressed one control at a time — the same journey `scripts/smoke-test.mjs`
+ * The product's own path, pressed the way a reader presses it — the same journey `scripts/smoke-test.mjs`
  * drives over a bare socket, driven here through the screen instead, because what is being asserted
  * is what the screen said while it happened.
  *
@@ -2041,12 +2041,21 @@ async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0, decide
   await page.goto(`${baseUrl}/play`);
   await page.evaluate('window.__prlSpeechReset && window.__prlSpeechReset()');
 
-  evidence.opened = await pressControl(page, /^Open the table$/iu);
+  // Read BEFORE the press, because that is the last moment a reader can be the one who starts the
+  // hand: "Deal me in" sits and deals by itself, and on a machine with the API beside it the whole
+  // chain finishes inside one `settle`. See 3.3 — the narration region has to already be in the
+  // document when the hand starts, or the sentence arrives with the region that holds it and no
+  // assistive technology is notified of a change. Reading it in the idle state also holds the
+  // region to existing before anything has been asked for, which is stricter than the old read.
+  evidence.regionsBeforeDeal = await page.evaluate(
+    'window.__prlSpeechRegions ? window.__prlSpeechRegions() : []',
+  );
+  evidence.opened = await pressControl(page, /^Deal me in$/iu);
   if (evidence.opened === null) return { ...evidence, ...(await speechSoFar(page)) };
   await page.settle(700);
   evidence.steps.push({
     control: evidence.opened,
-    gone: await controlGone(page, /^Open the table$/iu),
+    gone: await controlGone(page, /^Deal me in$/iu),
     focus: await focusedAx(page),
   });
 
@@ -2057,28 +2066,19 @@ async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0, decide
   );
   if (!evidence.socketLive) return { ...evidence, ...(await speechSoFar(page)) };
 
-  // Only when a seat is on offer. A session that is already seated at its own room — which is what
-  // the replay route finds when it has to play a hand of its own — is a legitimate state, not a
-  // failure, and the seat step is simply not part of that run.
-  evidence.sat = await pressControl(page, /^Take seat \d+$/iu);
-  if (evidence.sat !== null) {
-    await page.settle(900);
-    evidence.steps.push({
-      control: evidence.sat,
-      gone: await controlGone(page, /^Take seat \d+$/iu),
-      focus: await focusedAx(page),
-    });
-  }
-
-  await waitInPage(page, '/Deal the next hand/u.test(document.body.innerText)', 25);
-  // Read BEFORE the deal, because that is when it decides anything: see 3.3. The narration region
-  // has to already be in the document when the hand starts, or the sentence arrives with the region
-  // that holds it and no assistive technology is notified of a change.
-  evidence.regionsBeforeDeal = await page.evaluate(
-    'window.__prlSpeechRegions ? window.__prlSpeechRegions() : []',
-  );
-  evidence.dealt = await pressControl(page, /^Deal the next hand$/iu);
+  // The seat and the deal are this page's to send now, not the reader's — but they still unmount
+  // and remount controls under a caret that was put on the status line, so the end of the chain is
+  // a step of its own for 3.2: nothing left to press, and the caret not dropped on the way. A
+  // session already seated at its own room (the replay route's) converges on the same state, which
+  // is the point of `DealIn` taking a held seat or a hand in progress as already done.
+  const handInProgress = await waitInPage(page, '/A hand is in progress/u.test(document.body.innerText)', 45);
+  evidence.dealt = handInProgress ? evidence.opened : null;
   if (evidence.dealt === null) return { ...evidence, ...(await speechSoFar(page)) };
+  evidence.steps.push({
+    control: 'the seat and the deal "Deal me in" sent',
+    gone: await controlGone(page, /^(Deal me in|Take seat \d+)$/iu),
+    focus: await focusedAx(page),
+  });
 
   evidence.reachedTurn = await waitInPage(page, ENABLED_ACTION, 60);
   if (!evidence.reachedTurn) return { ...evidence, ...(await speechSoFar(page)) };
@@ -2164,8 +2164,7 @@ const LIVE_TABLE_CHECKS = [
     id: 'J3.1',
     what: 'the connection status is announced politely as it changes, preparing then live',
     decide: (e) => {
-      if (e.opened === null)
-        return fail('no "Open the table" control on /play; the live table did not render');
+      if (e.opened === null) return fail('no "Deal me in" control on /play; the live table did not render');
       const status = entriesFrom(e.log, CONNECTION_REGION);
       if (status.length === 0) {
         return fail('the connection panel wrote nothing into any live region, so the transport is silent');
@@ -2176,7 +2175,7 @@ const LIVE_TABLE_CHECKS = [
         return fail(
           `the status region never said it was preparing; it held ${JSON.stringify(
             status.map((entry) => entry.text.slice(0, 40)),
-          )}. A reader presses "Open the table" and is told nothing until it works`,
+          )}. A reader presses "Deal me in" and is told nothing until it works`,
         );
       }
       if (live < 0) {
@@ -2213,13 +2212,14 @@ const LIVE_TABLE_CHECKS = [
   },
   {
     id: 'J3.2',
-    what: 'after opening the table and taking a seat, the caret lands on the status line',
+    what: 'after "Deal me in", and after the seat and deal it sends, the caret is on the status line',
     decide: (e) => {
       if (e.steps.length < 2) {
         return fail(
-          `only ${e.steps.length} of the two setup controls were reached ` +
-            `(opened ${JSON.stringify(e.opened)}, seated ${JSON.stringify(e.sat ?? null)}); ` +
-            'the seat step is where the caret is most often dropped, so a run without it proves nothing',
+          `only ${e.steps.length} of the two setup steps were reached ` +
+            `(pressed ${JSON.stringify(e.opened)}, dealt ${JSON.stringify(e.dealt ?? null)}); ` +
+            'the seat and the deal unmount the controls under the caret, which is where it is most ' +
+            'often dropped, so a run that never reached them proves nothing',
         );
       }
       for (const step of e.steps) {
@@ -2634,7 +2634,7 @@ async function gatherTableOffline(page, baseUrl) {
     await page.blockUrls(['*/api/*']);
     await page.goto(`${baseUrl}/play`);
     await page.evaluate('window.__prlSpeechReset && window.__prlSpeechReset()');
-    evidence.opened = await pressControl(page, /^Open the table$/iu);
+    evidence.opened = await pressControl(page, /^Deal me in$/iu);
     await page.settle(4000);
     Object.assign(evidence, await speechSoFar(page));
   } finally {
@@ -2652,7 +2652,7 @@ const TABLE_OFFLINE_CHECKS = [
     id: 'J3.20',
     what: 'with the API unreachable the error interrupts, and the status line does not claim the table is ready',
     decide: (e) => {
-      if (e.opened === null) return fail('no "Open the table" control on /play; the page did not render');
+      if (e.opened === null) return fail('no "Deal me in" control on /play; the page did not render');
       const alerts = (e.log ?? []).filter((entry) => entry.live === 'assertive' || entry.role === 'alert');
       const failure = alerts.find((entry) => /Error — table unavailable/u.test(entry.text));
       if (failure === undefined) {
