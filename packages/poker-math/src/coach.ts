@@ -1264,17 +1264,21 @@ function buildSuggestion(
   }
   if (marginInBigBlinds < 1) {
     whatWouldChangeIt.push(
-      `The gap to the next-best action is only ${margin.toFixed(1)} chips, well under a big blind — this is close to indifferent.`,
+      `The gap to the next-best action is only ${margin.toFixed(1)} units, well under a big blind — this is close to indifferent.`,
     );
   }
   if (whatWouldChangeIt.length === 0) {
     whatWouldChangeIt.push('A different assumption about the opponent range would change the numbers.');
   }
 
+  // The action word opens the sentence, so it is capitalised, and the margin is in units, which is
+  // what every figure beside it on the panel says. Both read "raise has ... by 45.2 chips" under
+  // "225.1 UNITS" on /legends/compare.
+  const actionWord = `${best.action.charAt(0).toUpperCase()}${best.action.slice(1)}`;
   const reason =
     confidence === 'low'
-      ? `${best.action} comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.`
-      : `${best.action} has the highest expected value against the stated range, by ${margin.toFixed(1)} chips over the next-best action.`;
+      ? `${actionWord} comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.`
+      : `${actionWord} has the highest expected value against the stated range, by ${margin.toFixed(1)} units over the next-best action.`;
 
   return {
     action: best.action,

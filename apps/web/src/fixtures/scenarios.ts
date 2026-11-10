@@ -578,11 +578,11 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       confidence: 'moderate',
       reason:
-        'raise has the highest expected value against the stated range, by 16.2 chips over the next-best action.',
+        'Raise has the highest expected value against the stated range, by 16.2 units over the next-best action.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
-        'The gap to the next-best action is only 16.2 chips, well under a big blind — this is close to indifferent.',
+        'The gap to the next-best action is only 16.2 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
@@ -594,8 +594,8 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     assumptions: [
       'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
-      'you holds exactly 9h8h.',
-      'the opponent holds exactly AsKd.',
+      'You hold exactly 9h8h.',
+      'The opponent holds exactly AsKd.',
       'Computed by enumerating every remaining board — there is no sampling error.',
       'Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.',
       'A half-pot bet of 98 is already break-even or better here purely on the equity you have when called — it does not need to win uncontested at all.',
@@ -722,11 +722,11 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       confidence: 'moderate',
       reason:
-        'raise has the highest expected value against the stated range, by 10.5 chips over the next-best action.',
+        'Raise has the highest expected value against the stated range, by 10.5 units over the next-best action.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
-        'The gap to the next-best action is only 10.5 chips, well under a big blind — this is close to indifferent.',
+        'The gap to the next-best action is only 10.5 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
@@ -738,8 +738,8 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     assumptions: [
       'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
-      'you holds exactly 8h7h.',
-      'the opponent holds exactly AcJd.',
+      'You hold exactly 8h7h.',
+      'The opponent holds exactly AcJd.',
       'Computed by enumerating every remaining board — there is no sampling error.',
       'Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.',
       'For a half-pot bet of 150 to break even here it would need to win uncontested 24% of the time.',
@@ -853,12 +853,12 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       confidence: 'moderate',
       reason:
-        'raise has the highest expected value against the stated range, by 5.5 chips over the next-best action.',
+        'Raise has the highest expected value against the stated range, by 5.5 units over the next-best action.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
         'The equity figure is sampled, ±0.48 points at 95% confidence. A close decision could sit either side of that.',
-        'The gap to the next-best action is only 5.5 chips, well under a big blind — this is close to indifferent.',
+        'The gap to the next-best action is only 5.5 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
@@ -870,8 +870,8 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     assumptions: [
       'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
-      'you holds exactly 5c5d.',
-      'a tight early-position opening range holds any of 70 combinations from "TT+, AJs+, KQs, AQo+", each equally likely.',
+      'You hold exactly 5c5d.',
+      'A tight early-position opening range holds any of 70 combinations from "TT+, AJs+, KQs, AQo+", each equally likely.',
       'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
       'Estimated by sampling 40,000 random run-outs, not by exhaustive enumeration.',
       'No community cards are known yet, so five more cards are still to come.',
@@ -1034,7 +1034,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       confidence: 'reasonable',
       reason:
-        'bet has the highest expected value against the stated range, by 63.0 chips over the next-best action.',
+        'Bet has the highest expected value against the stated range, by 63.0 units over the next-best action.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
@@ -1050,8 +1050,8 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     assumptions: [
       'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
-      'you holds exactly QsQd.',
-      'a loose continuing range on this board holds any of 46 combinations from "JJ, 77, 44, AJ, KJs, QJs, JTs, 98s, 65s, A5s, KQo", each equally likely.',
+      'You hold exactly QsQd.',
+      'A loose continuing range on this board holds any of 46 combinations from "JJ, 77, 44, AJ, KJs, QJs, JTs, 98s, 65s, A5s, KQo", each equally likely.',
       'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
       'Computed by enumerating every remaining board — there is no sampling error.',
       'Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.',
@@ -1147,7 +1147,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       confidence: 'reasonable',
       reason:
-        'raise has the highest expected value against the stated range, by 71.5 chips over the next-best action.',
+        'Raise has the highest expected value against the stated range, by 71.5 units over the next-best action.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
@@ -1162,8 +1162,8 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     assumptions: [
       'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
-      'you holds exactly 9h9c.',
-      'the value hands and missed draws that get here betting holds any of 37 combinations from "JJ, 66, 33, AJs, KJs, QJs, JTs, T9s, 88, 76s, 54s, A5s", each equally likely.',
+      'You hold exactly 9h9c.',
+      'The value hands and missed draws that get here betting holds any of 37 combinations from "JJ, 66, 33, AJs, KJs, QJs, JTs, T9s, 88, 76s, 54s, A5s", each equally likely.',
       'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
       'Computed by enumerating every remaining board — there is no sampling error.',
       'Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.',
@@ -1276,12 +1276,12 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       confidence: 'moderate',
       reason:
-        'raise has the highest expected value against the stated range, by 5.6 chips over the next-best action.',
+        'Raise has the highest expected value against the stated range, by 5.6 units over the next-best action.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
         'The equity figure is sampled, ±0.47 points at 95% confidence. A close decision could sit either side of that.',
-        'The gap to the next-best action is only 5.6 chips, well under a big blind — this is close to indifferent.',
+        'The gap to the next-best action is only 5.6 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
@@ -1293,8 +1293,8 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     },
     assumptions: [
       'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
-      'you holds exactly As5s.',
-      'the top 22% of hands holds any of 255 combinations from "AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o", each equally likely.',
+      'You hold exactly As5s.',
+      'The top 22% of hands holds any of 255 combinations from "AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o", each equally likely.',
       'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
       'Estimated by sampling 40,000 random run-outs, not by exhaustive enumeration.',
       'No community cards are known yet, so five more cards are still to come.',

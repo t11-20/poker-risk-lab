@@ -3,7 +3,7 @@
 import { topPercentRange } from '@prl/poker-math';
 import { EXIT_CONFIG_INVALID, readBotConfig } from './config.ts';
 import { productionDeps } from './deps.ts';
-import { poll, telegramApi } from './telegram.ts';
+import { poll, registerCommands, telegramApi } from './telegram.ts';
 
 const config = readBotConfig(process.env);
 if (!config.ok) {
@@ -24,8 +24,11 @@ log(`coach range table ready in ${Date.now() - warmStart} ms`);
 process.on('SIGINT', () => process.exit(0));
 process.on('SIGTERM', () => process.exit(0));
 
+const api = telegramApi(token, fetch);
+await registerCommands(api, log);
+
 const exit = await poll({
-  api: telegramApi(token, fetch),
+  api,
   deps: productionDeps(),
   log,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),

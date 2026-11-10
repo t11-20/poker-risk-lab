@@ -128,7 +128,7 @@ export const LEARN_LESSON_SUMMARIES: readonly LessonSummary[] = [
   },
   {
     id: 'hand-flow',
-    title: "How a Hand of Hold'em Runs",
+    title: "How a hand of Hold'em runs",
     summary:
       'Follow one hand from the posted blinds to the showdown: what gets dealt, who acts when, and the four chances to bet.',
     topic: 'rules-and-flow',
@@ -140,7 +140,7 @@ export const LEARN_LESSON_SUMMARIES: readonly LessonSummary[] = [
   },
   {
     id: 'betting-actions',
-    title: 'Actions, and What Each One Commits You To',
+    title: 'Actions, and what each one commits you to',
     summary:
       'Check, call, bet, raise, fold and all-in — what each one costs, the minimum-raise rule, and why every raise should be stated as a total.',
     topic: 'rules-and-flow',
@@ -152,7 +152,7 @@ export const LEARN_LESSON_SUMMARIES: readonly LessonSummary[] = [
   },
   {
     id: 'all-ins-and-side-pots',
-    title: 'All-Ins and Side Pots',
+    title: 'All-ins and side pots',
     summary:
       "Why a short stack can never win more than it risked, how pot layers are built from each player's commitment, and the all-in that does not reopen the betting.",
     topic: 'rules-and-flow',
@@ -164,7 +164,7 @@ export const LEARN_LESSON_SUMMARIES: readonly LessonSummary[] = [
   },
   {
     id: 'position-basics',
-    title: 'Position: The Value of Acting Last',
+    title: 'Position: the value of acting last',
     summary:
       'Position is a count of how many players act after you — and it changes what a hand is worth without changing what the cards are worth.',
     topic: 'positions-and-blinds',
@@ -176,7 +176,7 @@ export const LEARN_LESSON_SUMMARIES: readonly LessonSummary[] = [
   },
   {
     id: 'blinds-and-the-option',
-    title: 'Blinds, the Option, and the Heads-Up Reversal',
+    title: 'Blinds, the option, and the heads-up reversal',
     summary:
       'What the blinds actually buy, why the big blind still has an action left, and the rule inversion that catches almost everybody heads-up.',
     topic: 'positions-and-blinds',
@@ -188,7 +188,7 @@ export const LEARN_LESSON_SUMMARIES: readonly LessonSummary[] = [
   },
   {
     id: 'reading-the-board',
-    title: 'Reading the Board',
+    title: 'Reading the board',
     summary:
       'How to find your actual best five cards, what beats what, and the traps that make a strong-looking hand worth nothing.',
     topic: 'hand-reading-and-outs',
@@ -200,7 +200,7 @@ export const LEARN_LESSON_SUMMARIES: readonly LessonSummary[] = [
   },
   {
     id: 'counting-outs',
-    title: 'Outs: Clean, Dirty and Imaginary',
+    title: 'Outs: clean, dirty and imaginary',
     summary:
       'Counting the cards that improve you, and the difference between an out that wins the pot and one that merely improves your hand.',
     topic: 'hand-reading-and-outs',
@@ -212,7 +212,7 @@ export const LEARN_LESSON_SUMMARIES: readonly LessonSummary[] = [
   },
   {
     id: 'rule-of-2-and-4',
-    title: 'The Rule of 2 and 4',
+    title: 'The rule of 2 and 4',
     summary:
       'The table-friendly shortcut from outs to a percentage: what it approximates, why it works, and where it drifts.',
     topic: 'probability-and-equity',

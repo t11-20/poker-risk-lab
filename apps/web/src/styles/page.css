@@ -244,3 +244,14 @@
 .prl-page-nav a:hover {
   text-decoration: underline;
 }
+
+/**
+ * /record's figures, one to a row on a phone. Each carries a note several lines long, and the shared
+ * row's 8rem tracks made two columns of about 140px at 390: the notes wrapped to as many as 13
+ * lines, and the fifth figure stood alone with 392px of empty cell beside it.
+ */
+@media (width < 600px) {
+  .prl-record__figures {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -204,20 +204,22 @@ export function GlossaryBrowser(props: GlossaryBrowserProps): ReactElement {
                     {entry.seeAlso === undefined || entry.seeAlso.length === 0 ? null : (
                       <p className="prl-learn-glossary__related">
                         <span className="prl-label">See also</span>
-                        {entry.seeAlso.map((id) => {
-                          const related = byId.get(id);
-                          if (related === undefined) return null;
-                          return (
-                            <button
-                              className="prl-learn-glossary__related-btn"
-                              key={id}
-                              type="button"
-                              onClick={() => jumpTo(id)}
-                            >
-                              {related.term}
-                            </button>
-                          );
-                        })}
+                        <span className="prl-learn-glossary__related-list">
+                          {entry.seeAlso.map((id) => {
+                            const related = byId.get(id);
+                            if (related === undefined) return null;
+                            return (
+                              <button
+                                className="prl-learn-glossary__related-btn"
+                                key={id}
+                                type="button"
+                                onClick={() => jumpTo(id)}
+                              >
+                                {related.term}
+                              </button>
+                            );
+                          })}
+                        </span>
                       </p>
                     )}
                   </article>

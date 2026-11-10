@@ -11,6 +11,10 @@
  * already put in, which actions the engine allows, which range each opponent is assumed to hold,
  * how many samples and which seed — is answered here once, and both clients call it.
  *
+ * The API's `seat N` was kept at first, so that the move changed no byte. It was the wrong one to
+ * keep: every other place a learner sees a seat number counts from one ("Take seat 1", "Seat 2 ran
+ * out of time"), so the assumptions list named a "seat 0" that appears nowhere else on screen.
+ *
  * ## Why the ranges come back described, not expanded
  *
  * `top:NN` can only be expanded by building the preflop strength ordering, about three seconds
@@ -116,7 +120,9 @@ export function coachSpotForView(view: PlayerView, policy: CoachPolicy): CoachSp
       board: view.board,
       street,
       // Five is `buildCoachReport`'s ceiling, and a six-max table cannot exceed it.
-      opponents: opponents.slice(0, 5).map((seat) => ({ label: `seat ${seat.seat}`, range: policy.range })),
+      opponents: opponents
+        .slice(0, 5)
+        .map((seat) => ({ label: `seat ${seat.seat + 1}`, range: policy.range })),
       pot: view.potTotal,
       contestablePot: contestable,
       toCall: view.amountToCall,

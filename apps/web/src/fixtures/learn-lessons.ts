@@ -28,7 +28,7 @@ import type { Lesson } from '@prl/contracts';
 export const LEARN_LESSONS: readonly Lesson[] = [
   {
     id: 'hand-flow',
-    title: "How a Hand of Hold'em Runs",
+    title: "How a hand of Hold'em runs",
     summary:
       'Follow one hand from the posted blinds to the showdown: what gets dealt, who acts when, and the four chances to bet.',
     topic: 'rules-and-flow',
@@ -147,7 +147,7 @@ export const LEARN_LESSONS: readonly Lesson[] = [
   },
   {
     id: 'counting-outs',
-    title: 'Outs: Clean, Dirty and Imaginary',
+    title: 'Outs: clean, dirty and imaginary',
     summary:
       'Counting the cards that improve you, and the difference between an out that wins the pot and one that merely improves your hand.',
     topic: 'hand-reading-and-outs',
@@ -299,7 +299,7 @@ export const LEARN_LESSONS: readonly Lesson[] = [
   },
   {
     id: 'rule-of-2-and-4',
-    title: 'The Rule of 2 and 4',
+    title: 'The rule of 2 and 4',
     summary:
       'The table-friendly shortcut from outs to a percentage: what it approximates, why it works, and where it drifts.',
     topic: 'probability-and-equity',

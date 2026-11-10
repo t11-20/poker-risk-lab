@@ -27,6 +27,7 @@
  */
 
 import {
+  COMMANDS,
   type Deps,
   type Event,
   eventOfText,
@@ -89,6 +90,19 @@ export function telegramApi(token: string, fetchFn: Fetch): TelegramApi {
       return payload.result;
     },
   };
+}
+
+/**
+ * Fills Telegram's "/" menu from `COMMANDS`, once at start-up. A menu is a convenience: a refusal
+ * is logged and polling goes ahead, and a token Telegram rejects is still caught by `poll`.
+ */
+export async function registerCommands(api: TelegramApi, log: (line: string) => void): Promise<void> {
+  const commands = Object.entries(COMMANDS).map(([command, { description }]) => ({ command, description }));
+  try {
+    await api.call('setMyCommands', { commands });
+  } catch (error) {
+    log(`setMyCommands failed (${errorText(error)}); the "/" menu is unchanged`);
+  }
 }
 
 /** The parts of a Telegram `Update` this adapter reads. Anything else is ignored. */

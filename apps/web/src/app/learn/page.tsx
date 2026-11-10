@@ -122,9 +122,11 @@ function EntryCard({
                 about prerequisites nobody had checked. */}
             {entry.unlocked === false ? (
               <span className="prl-learn-entry__prereq-note">
-                {entry.outstandingPrerequisites.length === 1
-                  ? ' — one of those is not marked read. Nothing stops you reading this one now.'
-                  : ` — ${entry.outstandingPrerequisites.length} of those are not marked read. Nothing stops you reading this one now.`}
+                {entry.prerequisites.length === 1
+                  ? ' — not marked read yet. Nothing stops you reading this one now.'
+                  : entry.outstandingPrerequisites.length === 1
+                    ? ' — one of those is not marked read. Nothing stops you reading this one now.'
+                    : ` — ${entry.outstandingPrerequisites.length} of those are not marked read. Nothing stops you reading this one now.`}
               </span>
             ) : null}
           </p>

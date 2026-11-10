@@ -14,8 +14,8 @@
  * "qualifies", because hero needs none of them.
  *
  * A learner met a textbook **15** on a real flush-plus-straight draw and a nonsensical
- * **47** one spot later, from a panel whose own lesson — *Outs: Clean, Dirty and
- * Imaginary* — teaches that an out is a card that rescues a hand that is behind. The
+ * **47** one spot later, from a panel whose own lesson — *Outs: clean, dirty and
+ * imaginary* — teaches that an out is a card that rescues a hand that is behind. The
  * paragraph underneath did explain itself, honestly, in its last sentence. That is not
  * enough: a caveat at the end of a paragraph does not undo a number set in the section
  * title.

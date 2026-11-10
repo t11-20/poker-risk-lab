@@ -615,3 +615,18 @@ test('explanatory prose under outs and stack is behind a disclosure, and the fig
   assert.ok(!inDisclosure('Risking 50 to win 100'), 'the price explanation stays visible');
   assert.ok(!inDisclosure('One reading of this spot'), 'and so does the suggestion');
 });
+
+test('a size range whose two ends are one figure prints it once', async () => {
+  // "Raise — 700 units to 700 units" on /legends/compare, where every raise size was the all-in.
+  const single = await render({
+    ...NINE_OUT_DRAW,
+    suggestion: { ...NINE_OUT_DRAW.suggestion, sizeRange: { min: 50, max: 50 } },
+  });
+  assert.match(single, /Call — 50 units</u);
+  assert.doesNotMatch(single, /50 units to 50 units/u);
+  const spread = await render({
+    ...NINE_OUT_DRAW,
+    suggestion: { ...NINE_OUT_DRAW.suggestion, sizeRange: { min: 50, max: 80 } },
+  });
+  assert.match(spread, /Call — 50 units to 80 units</u);
+});

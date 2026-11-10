@@ -8,6 +8,7 @@
  */
 
 import {
+  COMMANDS,
   type Deps,
   type Event,
   eventOfText,
@@ -31,8 +32,11 @@ export async function runTerminal(io: TerminalIo, deps: Deps): Promise<Session> 
     session = result.session;
     for (const out of result.out) live = render(io, out, live);
   };
+  const commands = Object.keys(COMMANDS)
+    .map((name) => `/${name}`)
+    .join(', ');
   io.write(
-    'Type a number to press a button, /start for the menu, /define <term>, /about, or /quit. ' +
+    `Type a number to press a button, or a command: ${commands}, or /quit. ` +
       "To send a number as a message instead, as a quiz answer, start it with a quote: '2\n",
   );
   apply({ kind: 'command', name: 'start', args: '' });

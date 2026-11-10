@@ -986,15 +986,17 @@
   align-content: center;
   gap: var(--prl-space-4);
   grid-area: wall;
-  max-inline-size: var(--prl-legend-column-min);
   padding-block: var(--prl-space-5);
   border-block-start: var(--prl-hairline-strong);
   color: var(--prl-text-muted);
   font-size: var(--prl-type-body-sm);
 }
 
+/* The column cap belongs to the side-by-side layout only. Applied at every width it held the
+   stacked wall to 240px of a 358px column at 390, six short lines between two full-width panels. */
 @media (min-width: 900px) {
   .prl-legend-outcome__wall {
+    max-inline-size: var(--prl-legend-column-min);
     padding-block: 0;
     padding-inline: var(--prl-space-7);
     border-block-start: 0;
@@ -1087,6 +1089,17 @@
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-metric);
   line-height: var(--prl-leading-tight);
+}
+
+/**
+ * Whose decision it was not, said in words. It was a bare "—" with the sentence visually hidden,
+ * so a sighted reader saw an empty metric on every decision card of a hand review.
+ */
+.prl-legend-action__none {
+  color: var(--prl-text-muted);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-regular);
+  letter-spacing: normal;
 }
 
 .prl-legend-maths {

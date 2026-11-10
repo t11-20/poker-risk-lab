@@ -3736,8 +3736,13 @@
   letter-spacing: normal;
 }
 
-/** The equity block is the panel's subject, so it gets the full width of a two-track grid. */
-.prl-coach__section--equity {
+/**
+ * The equity block is the panel's subject, so it gets the full width of a two-track grid. So does
+ * the price, which shares that grid with nothing else: in a page-wide panel the grid has three
+ * tracks, and the price sat alone in the first, 389px of a 1,200px row, on /legends/compare at 1440.
+ */
+.prl-coach__section--equity,
+.prl-coach__section--price {
   grid-column: 1 / -1;
 }
 
@@ -3806,7 +3811,12 @@
   display: grid;
   gap: var(--prl-space-5);
   margin: 0;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-space-15)), 1fr));
+  /* 12rem, not 8: at 8 the clean and dirty buckets sat side by side at 390, each with about 110px of
+     text column, and "Clean" ran nine lines on /legends/compare. They now stack below about 420px. */
+  grid-template-columns: repeat(
+      auto-fit,
+      minmax(min(100%, calc(var(--prl-space-16) + var(--prl-space-8))), 1fr)
+    );
 }
 
 .prl-outs__bucket {
@@ -4453,6 +4463,12 @@ td.prl-candidates__ev,
 .prl-assumptions__item {
   margin: 0;
   max-width: var(--prl-measure);
+}
+
+/* The number and its sentence were two inline spans with nothing between them: "01The hand is
+   played to the river" on every Coach panel. */
+.prl-assumptions__index {
+  margin-inline-end: var(--prl-space-3);
 }
 
 .prl-uncertainty {
