@@ -653,14 +653,16 @@ arrives.
 This is the largest surface and the one with the most live-region traffic. Run it twice: once with
 the reader's verbosity at its default, and once with live regions at their most verbose.
 
-Set up: load `/play`, activate **"Open the table"**, wait for the connection, activate **"Take seat
-1"**, then **"Deal the next hand"**.
+Set up: load `/play` and activate **"Deal me in"**. That one control opens the bot table, takes
+your seat and deals the first hand; until 2026-11-10 they were three separate presses ("Open the
+table", "Take seat 1", "Deal the next hand"), and those controls remain for later hands and for
+invite-code rooms.
 
 | # | Checked by | Step (keys) | Assertion | Result |
 |---|---|---|---|---|
-| 3.1 | auto | Activate "Open the table" | The connection status is announced politely as it changes — "Preparing: reading your session…", then "Live. Everything on this screen is the server's own view of the table, redacted for you." | |
-| 3.2 | auto | After each of "Open the table" / "Take seat 1" | The control that was activated has disappeared. The reading cursor is **not** dumped at the top of the document: the reader is placed on the status line and hears it. Silence plus a cursor at `<body>` is a FAIL. | |
-| 3.3 | auto | Activate "Deal the next hand" | **"A new hand was dealt."** is announced politely, once, at the front of the forced bets that arrive with it — "A new hand was dealt. smallBlind 5 from seat 3, bigBlind 10 from seat 4." Hearing the deal on its own and then again in front of the blinds is a FAIL; so is hearing only the blinds. | |
+| 3.1 | auto | Activate "Deal me in" | The connection status is announced politely as it changes — "Preparing: reading your session…", then "Live. Everything on this screen is the server's own view of the table, redacted for you." | |
+| 3.2 | auto | After "Deal me in", and after the seat and the deal it sends | The control that was activated has disappeared. The reading cursor is **not** dumped at the top of the document: the reader is placed on the status line and hears it. Silence plus a cursor at `<body>` is a FAIL. | |
+| 3.3 | auto | Wait for the first hand "Deal me in" deals | **"A new hand was dealt."** is announced politely, once, at the front of the forced bets that arrive with it — "A new hand was dealt. smallBlind 5 from seat 3, bigBlind 10 from seat 4." Hearing the deal on its own and then again in front of the blinds is a FAIL; so is hearing only the blinds. | |
 | 3.4 | auto | Wait for the blinds and the bots | Each table event is announced politely and **in order**: the forced bets, then each seat's action in the server's own words ("The balanced bot bet 35 units on the flop"). Nothing interrupts. | |
 | 3.5 | auto | **When the decision reaches your seat** | A single polite announcement of the form **"Your turn on the flop. 35 units to call. Pot 100 units, your stack 970 units. You can fold, call or raise."** It must contain: that it is your turn, the street, the price, the pot, your stack, and the legal actions. | |
 | 3.6 | auto | Stay on your turn without acting for ten seconds | The turn sentence is announced **once**, not repeatedly. This app pushes whole-state frames several times a second; hearing the turn sentence more than once per turn is a FAIL. | |

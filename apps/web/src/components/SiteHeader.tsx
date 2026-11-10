@@ -186,6 +186,12 @@ type UnitsReadout =
  * placeholder digit or a dash that could be mistaken for one: the whole point is that this
  * component knows nothing and says so.
  *
+ * Two words, because the bar has no room for more: "units — not available" made a 211px pill at
+ * 360px wide, which pushed Menu onto a second row and the header to 129px tall, on every page, for
+ * as long as the API was down. "offline" is the visible half; the hidden sentence says it in full.
+ * The pill's own `align-items: baseline` suits a figure beside a word and left a word on its own at
+ * the top of a 44px pill, hence `prl-units__value--unknown`.
+ *
  * No `i` disclosure here. That button explains what a unit is, and it is attached to a figure —
  * `SiteFooter` carries the same `UNITS_EXPLANATION` on every page and at every width, so nothing
  * about what units ARE is lost while the API is unreachable.
@@ -193,8 +199,8 @@ type UnitsReadout =
 function UnitsUnknown(): ReactElement {
   return (
     <span className="prl-units prl-shell__units">
-      <span className="prl-units__value">
-        <span className="prl-units__word prl-label">units — not available</span>
+      <span className="prl-units__value prl-units__value--unknown">
+        <span className="prl-units__word prl-label">units offline</span>
         <span className="prl-visually-hidden">
           Your practice units could not be fetched, so no figure is shown here. Nothing about your units has
           changed.

@@ -128,7 +128,14 @@ WORKDIR /app
 # In `base`, so every stage derived from it — toolchain, build and runtime —
 # carries the fix. The runtime filesystem is read-only and the process is uid
 # 1000, so nothing can undo it later.
-RUN apk add --no-cache --upgrade libcrypto3=3.5.8-r0 libssl3=3.5.8-r0
+#
+# That happened on 2026-11-10: `apk policy` in this base offered 3.5.9-r0 and no
+# 3.5.8-r0, so neither image built. The same scan then found musl 1.2.6-r2
+# (CVE-2026-107891, fixed in 1.2.6-r3) and zlib 1.3.2-r0 (CVE-2026-85091, fixed
+# in 1.3.2-r1; v3.24/main now carries 1.4-r0) in this base, so they are pinned
+# here on the same terms.
+RUN apk add --no-cache --upgrade libcrypto3=3.5.9-r0 libssl3=3.5.9-r0 \
+      musl=1.2.6-r3 musl-utils=1.2.6-r3 zlib=1.4-r0
 
 FROM base AS toolchain
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \

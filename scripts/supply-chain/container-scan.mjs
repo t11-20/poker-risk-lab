@@ -89,7 +89,8 @@
  * vuln` only: no secret scanning, no misconfiguration scanning, no licence
  * checking. It says nothing about this project's own code, which is what the
  * other nine gates and the test suite are for. And a clean run tomorrow is not a
- * clean run today — this is why the scheduled workflow re-runs it.
+ * clean run today. Nothing re-runs it on a schedule any more (`supply-chain.yml` was removed on
+ * 2026-10-11), so scan again before a release.
  *
  * Usage:
  *     node scripts/supply-chain/container-scan.mjs [--manifest <path>]
@@ -649,7 +650,7 @@ export function runContainerScanGate(options) {
         '\n  This reports what a vulnerability database knew at the moment it ran, about packages a\n' +
           '  scanner could identify, with --scanners vuln only: no secrets, no misconfiguration, no\n' +
           "  licences, and nothing at all about this project's own code. A clean run today is not a\n" +
-          '  clean run tomorrow, which is why the scheduled workflow runs it again.\n',
+          '  clean run tomorrow, and nothing re-runs it on a schedule: scan again before a release.\n',
       ),
     );
     return code;
