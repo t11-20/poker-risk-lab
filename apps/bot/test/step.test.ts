@@ -16,12 +16,12 @@ import {
 } from './helpers.ts';
 
 function start(deps: ReturnType<typeof testDeps>): StepResult {
-  const menu = step(NEW_SESSION, { kind: 'command', name: 'start' }, deps);
+  const menu = step(NEW_SESSION, { kind: 'command', name: 'start', args: '' }, deps);
   return press(menu.session, find(buttonsOf(menu), /^Play a hand$/), deps);
 }
 
 function stateOf(session: Session): HandState {
-  if (session.phase.kind === 'idle') throw new Error('no hand');
+  if (session.phase.kind !== 'deciding' && session.phase.kind !== 'over') throw new Error('no hand');
   return session.phase.state;
 }
 

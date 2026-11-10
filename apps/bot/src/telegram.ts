@@ -26,7 +26,15 @@
  * are lost on restart, which `/about` tells the reader.
  */
 
-import { type Deps, type Event, NEW_SESSION, type Outgoing, type Session, step } from './step.ts';
+import {
+  type Deps,
+  type Event,
+  eventOfText,
+  NEW_SESSION,
+  type Outgoing,
+  type Session,
+  step,
+} from './step.ts';
 import type { Button } from './view.ts';
 
 type Fetch = (
@@ -131,12 +139,6 @@ export async function handleUpdate(
     queryId: query.id,
     messageId: anchor.message_id,
   });
-}
-
-export function eventOfText(text: string): Event {
-  const command = /^\/([A-Za-z]+)(?:@\w+)?(?:\s|$)/.exec(text.trim());
-  if (command !== null) return { kind: 'command', name: (command[1] ?? '').toLowerCase() };
-  return { kind: 'text', text };
 }
 
 async function run(
