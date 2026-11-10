@@ -267,16 +267,22 @@ export function Seat(props: SeatProps): ReactElement {
         {needsSelfMarker(seat.isSelf, name) ? <span className="prl-seat__you">{' (you)'}</span> : null}
       </p>
 
+      {/* Each pair in its own `div`, which `<dl>` allows, so a wrapping row can break between
+          pairs and never between a label and its figure. */}
       <dl className="prl-seat__stats">
-        <dt className="prl-seat__stat-label">Stack</dt>
-        <dd className="prl-seat__stat-value">{formatChips(seat.stack)}</dd>
-        <dt className="prl-seat__stat-label">
-          {'In front'}
-          {/* Compact on screen, unambiguous read aloud: "in front" is the table term for exactly
-              this street's commitment, and a learner should not have to already know that. */}
-          <span className="prl-visually-hidden">{' this street'}</span>
-        </dt>
-        <dd className="prl-seat__stat-value">{formatChips(seat.committedThisStreet)}</dd>
+        <div className="prl-seat__stat">
+          <dt className="prl-seat__stat-label">Stack</dt>
+          <dd className="prl-seat__stat-value">{formatChips(seat.stack)}</dd>
+        </div>
+        <div className="prl-seat__stat">
+          <dt className="prl-seat__stat-label">
+            {'In front'}
+            {/* Compact on screen, unambiguous read aloud: "in front" is the table term for exactly
+                this street's commitment, and a learner should not have to already know that. */}
+            <span className="prl-visually-hidden">{' this street'}</span>
+          </dt>
+          <dd className="prl-seat__stat-value">{formatChips(seat.committedThisStreet)}</dd>
+        </div>
       </dl>
 
       <p className="prl-seat__status">{(settled ? SETTLED_STATUS_TEXT : STATUS_TEXT)[seat.status]}</p>

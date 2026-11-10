@@ -26,7 +26,7 @@
  * they are the same ids the sticky contents links to.
  */
 
-import type { GlossaryEntry, LessonBlock } from '@prl/contracts';
+import type { GlossaryEntry, LessonBlock, LiveCalculation as LessonCalculationSpec } from '@prl/contracts';
 import { Callout, Chip, Formula, formatIndex, withKeys } from '@prl/ui';
 import Link from 'next/link';
 import type { ReactElement, ReactNode } from 'react';
@@ -86,6 +86,8 @@ interface KeyedBlock {
   /** Position among `heading` blocks, 1-based. */
   readonly headingIndex: number;
   readonly blockIndex: number;
+  /** The `liveCalculation` blocks of the same kind before this one, in lesson order. */
+  readonly earlierOfKind: readonly LessonCalculationSpec[];
 }
 
 function keyBlocks(blocks: readonly LessonBlock[]): readonly KeyedBlock[] {
@@ -93,12 +95,19 @@ function keyBlocks(blocks: readonly LessonBlock[]): readonly KeyedBlock[] {
   const out: KeyedBlock[] = [];
   let calculations = 0;
   let headings = 0;
+  const byKind = new Map<string, LessonCalculationSpec[]>();
 
   blocks.forEach((block, blockIndex) => {
     const digest = digestOf(block);
     const count = seen.get(digest) ?? 0;
     seen.set(digest, count + 1);
-    if (block.kind === 'liveCalculation') calculations += 1;
+    let earlierOfKind: readonly LessonCalculationSpec[] = [];
+    if (block.kind === 'liveCalculation') {
+      calculations += 1;
+      const seenOfKind = byKind.get(block.calculation.kind) ?? [];
+      earlierOfKind = [...seenOfKind];
+      byKind.set(block.calculation.kind, [...seenOfKind, block.calculation]);
+    }
     if (block.kind === 'heading') headings += 1;
     out.push({
       key: `${digest}#${count}`,
@@ -106,6 +115,7 @@ function keyBlocks(blocks: readonly LessonBlock[]): readonly KeyedBlock[] {
       calculationIndex: calculations,
       headingIndex: headings,
       blockIndex,
+      earlierOfKind,
     });
   });
 
@@ -278,6 +288,8 @@ export function LessonBlockRenderer(props: LessonBlockRendererProps): ReactEleme
               key={key}
               calculation={block.calculation}
               caption={block.caption}
+              {...(block.title === undefined ? {} : { title: block.title })}
+              earlier={keyed.earlierOfKind}
               index={keyed.calculationIndex}
               headingLevel={keyed.headingIndex === 0 ? 2 : 3}
             />

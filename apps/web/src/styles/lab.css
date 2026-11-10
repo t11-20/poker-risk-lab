@@ -132,6 +132,19 @@
   box-shadow: var(--prl-elevation-1);
 }
 
+/* One step tighter on a phone, where the first scenario card sat 40px below an 844px fold at 390:
+   the first screen was the heading and three selects, and no scenario. */
+@media (width < 600px) {
+  .prl-lab-filters {
+    margin-block: var(--prl-space-7);
+  }
+
+  .prl-lab-filters__set {
+    gap: var(--prl-space-6);
+    padding: var(--prl-space-7);
+  }
+}
+
 .prl-lab-filters__legend {
   padding-inline: var(--prl-space-3);
   color: var(--prl-text);
@@ -403,17 +416,6 @@
   display: grid;
   gap: var(--prl-space-9);
   margin-block: var(--prl-space-9);
-}
-
-.prl-stage__question {
-  margin: 0;
-  max-width: var(--prl-measure);
-  color: var(--prl-text);
-  font-size: var(--prl-type-display-3);
-  font-weight: var(--prl-weight-semibold);
-  letter-spacing: var(--prl-tracking-display-3);
-  line-height: var(--prl-leading-snug);
-  text-wrap: balance;
 }
 
 /**

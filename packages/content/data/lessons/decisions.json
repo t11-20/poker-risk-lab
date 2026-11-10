@@ -32,6 +32,7 @@
       },
       {
         "kind": "liveCalculation",
+        "title": "A pot-sized bet",
         "calculation": {
           "kind": "potOdds",
           "pot": 120,
@@ -41,6 +42,7 @@
       },
       {
         "kind": "liveCalculation",
+        "title": "A half-pot bet",
         "calculation": {
           "kind": "potOdds",
           "pot": 90,
@@ -50,6 +52,7 @@
       },
       {
         "kind": "liveCalculation",
+        "title": "An overbet",
         "calculation": {
           "kind": "potOdds",
           "pot": 180,

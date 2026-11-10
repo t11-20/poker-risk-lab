@@ -1746,6 +1746,12 @@
   font-size: var(--prl-type-body-sm);
 }
 
+/* Out of the layout everywhere but the compact row, so the two-column grid above still places the
+   four cells exactly as it did before the pairs were grouped. */
+.prl-seat__stat {
+  display: contents;
+}
+
 .prl-seat__stat-label {
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label-sm);
@@ -3175,10 +3181,13 @@
      which is what a few pixels of margin looks like when a web font swaps in mid-measurement. */
   .prl-table__field .prl-table__opponents > .prl-seat {
     grid-template-columns: auto minmax(min-content, 1fr) auto;
+    /* The stats line runs under the cards. Beside them it had the plate's width less 68px of cards,
+       which at the Lab's 282px plate was 182px, and the two pairs need 195: "IN FRONT 0" took a line
+       of its own and every row was 103px where /play's were 80. */
     grid-template-areas:
       "head status cards"
       "name name cards"
-      "stats stats cards";
+      "stats stats stats";
     align-items: baseline;
     gap: var(--prl-space-1) var(--prl-space-4);
     padding: var(--prl-space-4) var(--prl-space-5);
@@ -3203,18 +3212,22 @@
   }
 
   /* The pair as one line - `STACK 1,000   IN FRONT 0` - instead of a two-column grid that gave each
-     figure its own row. `nowrap` is already on both halves; the row wraps between pairs, never
-     inside one, on the narrowest phone. */
+     figure its own row. The row wraps between pairs, never inside one: each pair is one flex item.
+     It said so before the pairs were grouped and was not true, because a label and its figure were
+     separate items: in the Lab's narrower table at 390, "IN FRONT" ended a line and its "0" began
+     the next, 103px rows where /play's were 80px. */
   .prl-table__opponents > .prl-seat .prl-seat__stats {
     grid-area: stats;
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
-    gap: var(--prl-space-1) var(--prl-space-3);
+    gap: var(--prl-space-1) var(--prl-space-6);
   }
 
-  .prl-table__opponents > .prl-seat .prl-seat__stat-value {
-    margin-inline-end: var(--prl-space-4);
+  .prl-table__opponents > .prl-seat .prl-seat__stat {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--prl-space-3);
   }
 
   .prl-table__opponents > .prl-seat .prl-seat__cards {
@@ -4542,7 +4555,14 @@ td.prl-candidates__ev,
 }
 
 .prl-units__value {
-  display: inline-flex;
+  /* One row of a grid, so it cannot wrap: baseline so the figure and the word share one, and
+     `align-content` to centre that row in the pill. As an `inline-flex` aligned on baselines the
+     line sat at the pill's top edge: in the header's 44px pill "1,000 UNITS" was 1px from the top,
+     on every page. */
+  display: inline-grid;
+  grid-auto-flow: column;
+  justify-content: center;
+  align-content: center;
   align-items: baseline;
   gap: var(--prl-space-2);
   min-height: var(--prl-space-9);

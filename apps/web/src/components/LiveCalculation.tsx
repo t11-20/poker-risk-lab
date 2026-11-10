@@ -64,6 +64,7 @@ import {
   pluralise,
 } from '@prl/ui';
 import { type ReactElement, useEffect, useMemo, useState } from 'react';
+import { type Definition, shownAbove } from '@/lib/definition-repeats.ts';
 import {
   type CalculationDetail,
   type CalculationFigure,
@@ -75,6 +76,24 @@ import {
 } from '@/lib/learn-calculations.ts';
 
 type HeadingLevel = 2 | 3 | 4 | 5 | 6;
+
+const NO_EARLIER: readonly LiveCalculationSpec[] = [];
+
+/**
+ * Whether an earlier calculation in the lesson already showed this exact definition. Only a
+ * closed-form kind has one, so recomputing an earlier calculation is arithmetic; a deferred kind
+ * (preflop equity) is skipped rather than computed here, and it has no definition box anyway.
+ */
+function definedAbove(definition: Definition, earlier: readonly LiveCalculationSpec[]): boolean {
+  return shownAbove(
+    definition,
+    earlier.map((spec) => {
+      if (isDeferred(spec)) return null;
+      const outcome = computeCalculation(spec);
+      return outcome.ok ? outcome.result.formula : null;
+    }),
+  );
+}
 
 /**
  * One step down the outline, as a table rather than arithmetic on the level.
@@ -92,6 +111,20 @@ export interface LiveCalculationProps {
   /** Position within the lesson, for the `01 02 03` motif. */
   readonly index?: number;
   readonly headingLevel?: HeadingLevel;
+  /**
+   * The lesson's own name for this instance. Without one the heading is the calculation kind's,
+   * and /learn/pot-odds showed three calculators in a row all called "The price of this call".
+   */
+  readonly title?: string;
+  /**
+   * The calculations of the same kind earlier in the lesson. The "How it is defined" box is left
+   * out when one of them already showed an identical one: the three pot-odds calculators each
+   * repeated the same box, part of about 3,160px at 390 before the paragraph that compares them.
+   * Identical, not merely the same kind, because a kind may write the example's own numbers into
+   * its definition: risk of ruin does, and review on #13 caught its second and third examples
+   * losing their working when the rule was "same kind".
+   */
+  readonly earlier?: readonly LiveCalculationSpec[];
 }
 
 /**
@@ -332,7 +365,7 @@ function CalculationSkeleton(): ReactElement {
 }
 
 export function LiveCalculation(props: LiveCalculationProps): ReactElement {
-  const { calculation, caption, index, headingLevel = 3 } = props;
+  const { calculation, caption, index, headingLevel = 3, earlier = NO_EARLIER } = props;
   const { outcome, pending } = useCalculationOutcome(calculation);
 
   const body = (): ReactElement => {
@@ -376,7 +409,7 @@ export function LiveCalculation(props: LiveCalculationProps): ReactElement {
           <Chip glyph={result.method.glyph}>{result.method.label}</Chip>
           <span className="prl-note">{result.method.note}</span>
         </p>
-        {result.formula === null ? null : (
+        {result.formula === null || definedAbove(result.formula, earlier) ? null : (
           <Formula
             eyebrow="How it is defined"
             expression={result.formula.expression}
@@ -408,7 +441,7 @@ export function LiveCalculation(props: LiveCalculationProps): ReactElement {
     );
   };
 
-  const title = outcome?.ok === true ? outcome.result.title : 'Computed live';
+  const title = props.title ?? (outcome?.ok === true ? outcome.result.title : 'Computed live');
 
   return (
     /*

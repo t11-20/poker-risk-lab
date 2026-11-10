@@ -367,18 +367,18 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
       {/* 1. The assumptions. Before the decision, unconditionally, never collapsed. */}
       <Panel title="What this analysis assumes" eyebrow="Read first" index={1} tone="inset" headingLevel={2}>
         <p className="prl-prose">
-          Every number in this scenario depends on the statements below. They are here before the decision
-          rather than after it because deciding without knowing the range assumption is not a fair question —
-          and because a figure whose assumptions you have not read is a figure you cannot disagree with.
+          Every number in this scenario depends on the statements below, so they come before the decision: a
+          figure whose assumptions you have not read is one you cannot disagree with.
         </p>
         <AssumptionList items={scenario.assumptions} headingLevel={3} />
       </Panel>
 
-      {/* 2. The question and the situation. */}
+      {/* 2. The situation. The question is the page's standfirst and the title its heading, and
+          both were printed again here, the question in a larger face than the heading above it: at
+          390 that was about 250px of repetition before the table. */}
       <Panel title="The situation" eyebrow="Scenario" index={2} headingLevel={2}>
-        <p className="prl-stage__question">{scenario.question}</p>
         <p className="prl-note">{scenario.facingAction}</p>
-        <PokerTable view={view} seatNames={seatNames} title={`${scenario.title} — ${scenario.street}`} />
+        <PokerTable view={view} seatNames={seatNames} title={`The table, ${scenario.street}`} />
         <p className="prl-note">
           This table is read-only and the cards are fixed: a scenario is a stated situation, not a dealt hand,
           so there is no deck behind it and nothing to prove about one.
@@ -390,10 +390,9 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
         {committed === null ? (
           <>
             <p className="prl-prose">
-              Choose the action you would take. Nothing is scored — the point of committing first is that
-              reading an analysis before you have decided teaches you very little about your own reasoning. If
-              you are signed in, the scenario is marked as attempted so the list can show you where you have
-              been; there is no mark, no total and no streak anywhere in this app.
+              {scenario.question} Choose before you read the analysis: nothing is scored, and deciding first
+              is what lets the analysis tell you something about your own reasoning. Signed in, the scenario
+              is marked as attempted; there is no mark, total or streak.
             </p>
             <ActionBar
               legalActions={legalActions}

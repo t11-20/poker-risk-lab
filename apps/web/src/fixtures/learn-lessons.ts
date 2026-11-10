@@ -473,6 +473,7 @@ export const LEARN_LESSONS: readonly Lesson[] = [
       },
       {
         kind: 'liveCalculation',
+        title: 'A pot-sized bet',
         calculation: {
           kind: 'potOdds',
           pot: 120,
@@ -483,6 +484,7 @@ export const LEARN_LESSONS: readonly Lesson[] = [
       },
       {
         kind: 'liveCalculation',
+        title: 'A half-pot bet',
         calculation: {
           kind: 'potOdds',
           pot: 90,
@@ -493,6 +495,7 @@ export const LEARN_LESSONS: readonly Lesson[] = [
       },
       {
         kind: 'liveCalculation',
+        title: 'An overbet',
         calculation: {
           kind: 'potOdds',
           pot: 180,

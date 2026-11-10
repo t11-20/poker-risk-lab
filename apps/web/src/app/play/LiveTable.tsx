@@ -156,9 +156,12 @@ function coachUnavailableProps(
 }
 
 /** What the empty stage says before anything has been asked for: what the one press will do. */
-const IDLE_TABLE_MESSAGE =
-  'Nothing has been dealt and nothing is loading. “Deal me in” opens a table against bots, sits you ' +
-  'down and deals your first hand, and the table is drawn here from the server’s own frames.';
+/**
+ * One line. The connection card directly above already says what "Deal me in" does, and this used
+ * to say it again, so a phone at 390 read the same explanation twice in a row before a third line
+ * said there was nothing to decide.
+ */
+const IDLE_TABLE_MESSAGE = 'Your table is drawn here, from the server’s own frames, once you are dealt in.';
 
 /** One sentence per transport state, in the reader's terms rather than the protocol's. */
 const STATUS_LEDE: Readonly<Record<TableSocketStatus, string>> = {
