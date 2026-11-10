@@ -212,16 +212,45 @@ function toastsAsMessages(result: StepResult): StepResult {
   };
 }
 
+interface Command {
+  /** What Telegram shows beside the command in its "/" menu: 3 to 256 characters. */
+  readonly description: string;
+  readonly run: (session: Session, args: string) => StepResult;
+}
+
+const menu = (session: Session): StepResult => ({
+  session,
+  out: [{ kind: 'send', text: MENU_TEXT, buttons: menuButtons() }],
+});
+const about = (session: Session): StepResult => ({
+  session,
+  out: [{ kind: 'send', text: ABOUT_TEXT, buttons: [] }],
+});
+
+/**
+ * Every command, in the order Telegram's "/" menu lists them. The same table answers a command,
+ * registers the menu (`registerCommands` in `telegram.ts`) and writes the terminal's intro, so a
+ * command cannot be answered and missing from the menu, or listed and answered with "Use the
+ * buttons". `/learn` shipped answered and unlisted, which is how this table came about.
+ */
+export const COMMANDS: Readonly<Record<string, Command>> = {
+  start: { description: 'The menu: play a hand, read a lesson, practise a quiz', run: menu },
+  learn: { description: 'Read a lesson, a page at a time', run: (session) => onLessons(session, 0) },
+  quiz: { description: 'Practise a quiz (never scored)', run: onQuizzes },
+  define: {
+    description: 'Look a term up, e.g. /define pot odds',
+    run: (session, args) => ({ session, out: [args === '' ? glossaryHelp() : defineMessage(args)] }),
+  },
+  about: { description: 'What this bot is, and what units are', run: about },
+};
+
+/** Spellings people type that are not worth a line in the menu. */
+const ALIASES: Readonly<Record<string, string>> = { help: 'about', menu: 'start' };
+
 function onCommand(session: Session, name: string, args: string): StepResult {
-  if (name === 'about' || name === 'help')
-    return { session, out: [{ kind: 'send', text: ABOUT_TEXT, buttons: [] }] };
-  if (name === 'start' || name === 'menu') {
-    return { session, out: [{ kind: 'send', text: MENU_TEXT, buttons: menuButtons() }] };
-  }
-  if (name === 'define') return { session, out: [args === '' ? glossaryHelp() : defineMessage(args)] };
-  if (name === 'quiz') return onQuizzes(session);
-  if (name === 'learn') return onLessons(session, 0);
-  return { session, out: [{ kind: 'send', text: UNKNOWN, buttons: [] }] };
+  const command = COMMANDS[ALIASES[name] ?? name];
+  if (command === undefined) return { session, out: [{ kind: 'send', text: UNKNOWN, buttons: [] }] };
+  return command.run(session, args);
 }
 
 function glossaryHelp(): Outgoing {
