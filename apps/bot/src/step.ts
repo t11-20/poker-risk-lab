@@ -247,8 +247,15 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
 /** Spellings people type that are not worth a line in the menu. */
 const ALIASES: Readonly<Record<string, string>> = { help: 'about', menu: 'start' };
 
+/**
+ * Own keys only. Both tables are plain objects, so `/constructor` reaches `Object.prototype`, and a
+ * throw from `step` is how the Telegram adapter knows to close a chat's table. It was refused only
+ * because the inherited `ALIASES.constructor` is a function, which then missed in `COMMANDS`: by
+ * luck, not by design. Raised in review on #12.
+ */
 function onCommand(session: Session, name: string, args: string): StepResult {
-  const command = COMMANDS[ALIASES[name] ?? name];
+  const key = Object.hasOwn(ALIASES, name) ? (ALIASES[name] ?? name) : name;
+  const command = Object.hasOwn(COMMANDS, key) ? COMMANDS[key] : undefined;
   if (command === undefined) return { session, out: [{ kind: 'send', text: UNKNOWN, buttons: [] }] };
   return command.run(session, args);
 }

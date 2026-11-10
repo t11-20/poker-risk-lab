@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { COMMANDS, NEW_SESSION, step } from '../src/step.ts';
 import { registerCommands, type TelegramApi, TelegramError } from '../src/telegram.ts';
+import { encodePress } from '../src/view.ts';
 import { testDeps } from './helpers.ts';
 
 const UNKNOWN = 'Use the buttons, or send /start for the menu.';
@@ -37,6 +38,19 @@ describe('the command table', () => {
       const viaAlias = step(NEW_SESSION, { kind: 'command', name: alias, args: '' }, testDeps(1)).out;
       const direct = step(NEW_SESSION, { kind: 'command', name: target, args: '' }, testDeps(1)).out;
       assert.deepEqual(viaAlias, direct, `/${alias}`);
+    }
+  });
+
+  test('refuses a name it only inherits, and keeps a hand in progress (REGRESSION)', () => {
+    // From review on #12: the table was a plain object, so `/constructor` found
+    // Object.prototype.constructor, `.run` threw, and the Telegram adapter treats any throw from
+    // `step` as a broken table and deletes the chat's session mid-hand.
+    const dealt = step(NEW_SESSION, { kind: 'button', data: encodePress({ kind: 'play' }) }, testDeps(1));
+    assert.ok(dealt.session.table !== null, 'the fixture deals a hand');
+    for (const name of ['constructor', 'tostring', 'valueof', 'hasownproperty']) {
+      const { session, out } = step(dealt.session, { kind: 'command', name, args: '' }, testDeps(1));
+      assert.deepEqual(out, [{ kind: 'send', text: UNKNOWN, buttons: [] }], `/${name}`);
+      assert.equal(session, dealt.session, `/${name} changed the session`);
     }
   });
 
