@@ -81,8 +81,8 @@ const STATE_LEDE: Readonly<Record<TableStateName, string>> = {
   loading: 'Waiting for the table. The blocks below are the size of the content that will replace them.',
   error: 'The table is unreachable. Nothing was staked and nothing was sent.',
   complete:
-    'The hand is over, with three hands shown and the pot split into two layers. The analysis beside it ' +
-    'is where the useful feedback is, not the result.',
+    'The hand is over, with three hands shown and the pot split into two layers. There is no decision ' +
+    'left for the Coach to price; the useful feedback is in the hand’s review, not in the result.',
 };
 
 const LIVE_LEDE =
@@ -99,7 +99,8 @@ function stagePropsFor(state: TableStateName): {
   if (state === 'loading') return { status: 'loading', view: null, report: null };
   if (state === 'error') return { status: 'error', view: null, report: null };
   if (state === 'complete') {
-    return { status: 'complete', view: COMPLETED_HAND_VIEW, report: FLOP_DECISION_REPORT };
+    // No report: a finished hand has no decision to price, and the stage says so on its own.
+    return { status: 'complete', view: COMPLETED_HAND_VIEW, report: null };
   }
   return { status: 'ready', view: FLOP_DECISION_VIEW, report: FLOP_DECISION_REPORT };
 }

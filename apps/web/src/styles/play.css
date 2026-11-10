@@ -605,6 +605,15 @@
   min-height: 0;
 }
 
+/* The rail is sticky from the rail breakpoint up, so whatever is in it can come to rest over the
+   table column's content. The report is opaque (`.prl-coach`), and `.prl-empty` is not, being a
+   hairline box. The first empty state left in the rail beside a page long enough to scroll was
+   the finished hand's, and `design:contrast` bounded its text at 1.53:1 over whatever might be
+   under it. The same surface the report sits on. */
+.prl-play__coach-body > .prl-empty {
+  background-color: var(--prl-surface-panel);
+}
+
 /* ==========================================================================================
    5. LOADING
    ==========================================================================================

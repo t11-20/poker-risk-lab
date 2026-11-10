@@ -117,7 +117,9 @@ import {
   type TableAction,
   type TurnClock,
 } from '@prl/ui';
+import Link from 'next/link';
 import { type FocusEvent, type PointerEvent, type ReactElement, useEffect, useRef, useState } from 'react';
+import { coachBodyFor } from '@/lib/coach-body.ts';
 // A value import from the module that holds this file's `TableSubmission` type. It is not a cycle:
 // that import is `import type`, which is erased before anything runs, and the sentence a decision
 // is announced with has to have exactly one definition or the live path and the fixture path drift.
@@ -227,6 +229,11 @@ export interface TableStageProps {
    * and they are not the same thing to a reader waiting for one.
    */
   readonly coachUnavailableReason?: string;
+  /**
+   * Where this hand's review is, once it is over. The live table knows the hand's id; a fixture
+   * whose hand was never recorded has no review to point at and leaves it out.
+   */
+  readonly reviewHref?: string | undefined;
 }
 
 /** Skeletons at the real content's dimensions, so nothing reflows when the data lands. */
@@ -291,6 +298,22 @@ function CoachUnavailable({ reason }: { readonly reason: string | undefined }): 
         Nothing is estimated from a partial view — a figure without the spot it came from cannot be checked,
         and an unverifiable figure is worse than none.
       </p>
+    </div>
+  );
+}
+
+/** What the panel says once the hand is over, in place of any analysis. See `lib/coach-body.ts`. */
+function CoachHandOver({ reviewHref }: { readonly reviewHref: string | undefined }): ReactElement {
+  return (
+    <div className="prl-empty">
+      <p className="prl-label">Hand over</p>
+      <p>There is no decision left to price, so there is no analysis beside a finished hand.</p>
+      {reviewHref === undefined ? null : (
+        <p>
+          <Link href={reviewHref}>Review this hand</Link>
+          {': every decision you made in it, priced against the cards that were dealt.'}
+        </p>
+      )}
     </div>
   );
 }
@@ -429,8 +452,8 @@ function TableRegion(props: TableRegionProps): ReactElement {
             ))}
           </ul>
           <p className="prl-play__summary-note">
-            The result of one hand says almost nothing about the decision that produced it. The analysis
-            beside this table is where the useful feedback is.
+            The result of one hand says almost nothing about the decision that produced it. The hand’s review,
+            which prices each decision in it, is where the useful feedback is.
           </p>
         </Callout>
       ) : null}
@@ -665,9 +688,10 @@ interface CoachSheetProps {
   readonly status: TableStageStatus;
   /** Why there is no report, when the caller knows something better than "there is none". */
   readonly coachUnavailableReason: string | undefined;
+  readonly reviewHref: string | undefined;
 }
 
-function CoachSheet({ report, status, coachUnavailableReason }: CoachSheetProps): ReactElement {
+function CoachSheet({ report, status, coachUnavailableReason, reviewHref }: CoachSheetProps): ReactElement {
   const [open, setOpen] = useState(false);
   const [dragPx, setDragPx] = useState<number | null>(null);
   const dragStart = useRef<number | null>(null);
@@ -721,6 +745,7 @@ function CoachSheet({ report, status, coachUnavailableReason }: CoachSheetProps)
     setOpen(true);
   };
 
+  const body = coachBodyFor(status, report !== null);
   const style: StyleWithVars | undefined =
     dragPx === null ? undefined : { '--prl-play-sheet-drag': `${dragPx}px` };
 
@@ -754,9 +779,11 @@ function CoachSheet({ report, status, coachUnavailableReason }: CoachSheetProps)
       </div>
 
       <div className="prl-play__coach-body">
-        {report !== null ? (
+        {body === 'hand-over' ? (
+          <CoachHandOver reviewHref={reviewHref} />
+        ) : body === 'report' && report !== null ? (
           <CoachPanel report={report} />
-        ) : status === 'loading' ? (
+        ) : body === 'skeleton' ? (
           <CoachSkeleton />
         ) : (
           <CoachUnavailable reason={coachUnavailableReason} />
@@ -850,7 +877,12 @@ export function TableStage(props: TableStageProps): ReactElement {
         />
       </div>
 
-      <CoachSheet report={report} status={status} coachUnavailableReason={props.coachUnavailableReason} />
+      <CoachSheet
+        report={report}
+        status={status}
+        coachUnavailableReason={props.coachUnavailableReason}
+        reviewHref={props.reviewHref}
+      />
     </div>
   );
 }
