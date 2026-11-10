@@ -3168,8 +3168,13 @@
     gap: var(--prl-space-4);
   }
 
+  /* The position's track is sized to the position and the status takes what is left, wrapping if it
+     must. It was the other way round - `minmax(0, 1fr) auto auto` - and an `auto` track is floored at
+     max-content, so at 360px on the settled fixture "still in at the end" took the row and squeezed
+     "CO" under it: `test:layout` reported a 211px² collision on one sweep and none on the next,
+     which is what a few pixels of margin looks like when a web font swaps in mid-measurement. */
   .prl-table__field .prl-table__opponents > .prl-seat {
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: auto minmax(min-content, 1fr) auto;
     grid-template-areas:
       "head status cards"
       "name name cards"
@@ -3193,6 +3198,8 @@
 
   .prl-table__opponents > .prl-seat .prl-seat__status {
     grid-area: status;
+    justify-self: end;
+    text-align: end;
   }
 
   /* The pair as one line - `STACK 1,000   IN FRONT 0` - instead of a two-column grid that gave each
