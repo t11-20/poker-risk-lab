@@ -181,6 +181,7 @@ import {
   AGE_GATE_MINIMUM_CEILING,
   AGE_GATE_PATH,
 } from '../apps/web/src/lib/age-gate.ts';
+import { waitForDevtools } from './chrome-devtools.mjs';
 
 // ---------------------------------------------------------------------------
 // Arguments
@@ -1962,14 +1963,7 @@ async function withChrome(run) {
   );
 
   try {
-    let version = null;
-    for (let attempt = 0; attempt < 60 && version === null; attempt += 1) {
-      await delay(150);
-      version = await fetch(`http://127.0.0.1:${port}/json/version`)
-        .then((r) => r.json())
-        .catch(() => null);
-    }
-    if (version === null) throw new Error(`Chrome did not open a debugging port on ${port}`);
+    const version = await waitForDevtools(child, port);
     console.log(`${DIM}  ${version.Browser} — ${HEADFUL ? 'headful' : 'headless'}${RESET}`);
 
     const target = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' }).then((r) =>
