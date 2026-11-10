@@ -4555,7 +4555,14 @@ td.prl-candidates__ev,
 }
 
 .prl-units__value {
-  display: inline-flex;
+  /* One row of a grid, so it cannot wrap: baseline so the figure and the word share one, and
+     `align-content` to centre that row in the pill. As an `inline-flex` aligned on baselines the
+     line sat at the pill's top edge: in the header's 44px pill "1,000 UNITS" was 1px from the top,
+     on every page. */
+  display: inline-grid;
+  grid-auto-flow: column;
+  justify-content: center;
+  align-content: center;
   align-items: baseline;
   gap: var(--prl-space-2);
   min-height: var(--prl-space-9);
