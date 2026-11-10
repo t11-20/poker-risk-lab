@@ -77,6 +77,7 @@ import type {
   ScenarioResponse,
   ScenarioSummary,
 } from '@prl/contracts';
+import { withinTolerance } from '@prl/contracts';
 import { type Card, parseCards } from '@prl/poker-engine';
 import {
   computeOuts,
@@ -970,7 +971,9 @@ async function gradeQuestion(
     if (answer.kind !== 'number') throw wrongAnswerKind('number', answer.kind);
     const computed = await expectedValueFor(question, deps.pool, deps.limits);
     return {
-      correct: Math.abs(answer.value - computed.value) <= question.tolerance,
+      // The shared rule, not a plain `<=`: |3.2 - 3| is 0.20000000000000018, so `spr-q2` marked an
+      // answer at exactly its stated 0.2 wrong. See packages/contracts/src/quiz-tolerance.ts.
+      correct: withinTolerance(answer.value, { value: computed.value, tolerance: question.tolerance }),
       // The question's own explanation, then the arithmetic that produced the figure the answer
       // was measured against. The contract has one `explanation` field, and a learner who was
       // marked wrong needs both halves of it.

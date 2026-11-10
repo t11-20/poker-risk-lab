@@ -224,6 +224,33 @@ export function botDisplayName(profileId: string): string {
   return name.length < 2 ? 'Bot' : name;
 }
 
+/**
+ * The plates for a table's bots, in seat order, with a profile that sits more than once numbered.
+ *
+ * The bot table seats two `tight-aggressive` bots on purpose (`BOT_TABLE` in
+ * `apps/web/src/lib/table-rooms.ts`: one style watched twice is a policy, not a personality), and
+ * both were plated "Patient Technician". The plate's position told them apart on screen, but the
+ * table's narration names a seat by its display name alone, so a screen-reader user heard "Patient
+ * Technician raises to 40" with no way to know which one. Seen at a live table on `/play` at 1440.
+ *
+ * The number is taken from the name's own 24-character allowance rather than appended past it, so a
+ * long archetype loses a trailing word before it loses its number.
+ */
+export function botDisplayNames(profileIds: readonly string[]): readonly string[] {
+  const total = new Map<string, number>();
+  for (const id of profileIds) total.set(id, (total.get(id) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  return profileIds.map((id) => {
+    if ((total.get(id) ?? 0) < 2) return botDisplayName(id);
+    const ordinal = (seen.get(id) ?? 0) + 1;
+    seen.set(id, ordinal);
+    const suffix = ` ${String(ordinal)}`;
+    const words = botDisplayName(id).split(' ');
+    while (words.length > 1 && `${words.join(' ')}${suffix}`.length > MAX_BOT_NAME) words.pop();
+    return `${words.join(' ').slice(0, MAX_BOT_NAME - suffix.length)}${suffix}`;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // The one place a PolicyInput is built
 // ---------------------------------------------------------------------------
@@ -568,12 +595,13 @@ export function planLegendSeats(
       logDetail: `${profileIds.length} profiles exceed ${maxSeats} seats`,
     });
   }
-  return profileIds.map((profileId, index) => {
-    const profile = resolveProfile(profileId);
+  const profiles = profileIds.map(resolveProfile);
+  const names = botDisplayNames(profiles.map((profile) => profile.naming.id));
+  return profiles.map((profile, index) => {
     return {
       seat: index + 1,
       profileId: profile.naming.id,
-      displayName: botDisplayName(profile.naming.id),
+      displayName: names[index] ?? botDisplayName(profile.naming.id),
       disclosure: profileDisclosure(profile.naming, mode),
     };
   });

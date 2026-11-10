@@ -102,7 +102,8 @@ const DECISION_ROW_UNLABELLED = DECISION_ROW.map((control) => button(null, contr
 /** Buttons and prose on the same screens that must not be taken for a decision. */
 const NOT_ACTIONS = [
   'Folding costs nothing and gives up any claim on the pot.',
-  'Open the table',
+  'Deal me in',
+  'Play with somebody you know',
   'Deal the next hand',
   'Take seat 3',
   'Stand up',
@@ -209,7 +210,7 @@ describe('the matcher survives being stringified into the page', () => {
        return prlIsAction(prlActionName(arguments[0]));`,
     );
     assert.equal(injected(DECISION_ROW[0]), true);
-    assert.equal(injected(button(null, 'Open the table')), false);
+    assert.equal(injected(button(null, 'Deal me in')), false);
   });
 });
 

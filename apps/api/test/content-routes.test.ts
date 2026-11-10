@@ -403,6 +403,56 @@ describe('POST /content/quizzes/:id/attempt', () => {
     }
   });
 
+  /**
+   * The stated tolerance is the band, inclusively, for every numeric question.
+   *
+   * The grader used `Math.abs(answer - value) <= tolerance`, and `Math.abs(3.2 - 3)` is
+   * 0.20000000000000018: `spr-q2` marked 3.2 against 3 with a stated tolerance of 0.2 wrong, and the
+   * server's verdict is the one a learner sees. The answers are written the way a learner types
+   * them, as short decimals, because that is where the binary representation bites.
+   */
+  it('accepts an answer at exactly the stated tolerance, and refuses one past it', async () => {
+    const app = await contentApp();
+    try {
+      const csrf = await csrfPair(app);
+      const attempt = async (quizId: string, questionId: string, value: number) =>
+        post(
+          app,
+          `/api/v1/content/quizzes/${quizId}/attempt`,
+          { questionId, answer: { kind: 'number', value } },
+          csrf,
+        );
+      const refusedAtTheEdge: string[] = [];
+      let checked = 0;
+      for (const quiz of content().quizzes) {
+        for (const question of quiz.questions) {
+          if (question.kind !== 'numeric') continue;
+          checked += 1;
+          const probe = await attempt(quiz.id, question.id, 0);
+          const value = Number(objectAt(probe.body, 'expected')['value']);
+          // Six decimals, as a learner would type them, rounded TOWARD the expected value: rounding a
+          // repeating decimal outward (30.769230… + 2 to 32.769231) leaves the band for real.
+          const typed = (x: number): number => {
+            const rounded = Number(x.toFixed(6));
+            if (Math.abs(rounded - value) <= Math.abs(x - value)) return rounded;
+            return Number((rounded + (x > value ? -1e-6 : 1e-6)).toFixed(6));
+          };
+          for (const edge of [typed(value + question.tolerance), typed(value - question.tolerance)]) {
+            const graded = await attempt(quiz.id, question.id, edge);
+            if (graded.body['correct'] !== true)
+              refusedAtTheEdge.push(`${question.id}: ${String(edge)} vs ${String(value)}`);
+          }
+          const past = await attempt(quiz.id, question.id, typed(value + question.tolerance * 1.5));
+          assert.equal(past.body['correct'], false, `${question.id} accepted an answer past its tolerance`);
+        }
+      }
+      assert.ok(checked >= 10, `expected the bundle to contain numeric questions, found ${checked}`);
+      assert.deepEqual(refusedAtTheEdge, [], 'answers at exactly the stated tolerance were marked wrong');
+    } finally {
+      await app.close();
+    }
+  });
+
   it('grades a numeric answer against a value it computed, and returns no score', async () => {
     const app = await contentApp();
     try {

@@ -134,7 +134,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -841,17 +841,35 @@ function serverEnv(port, scope) {
  * configuration and reporting the result under this script's name. That is the failure the a11y
  * audit's `landedOnAgeGate` exists for, one level up: not "the wrong page under the right name" but
  * "the wrong server under the right port".
+ *
+ * It CONNECTS to 127.0.0.1, where the poll will go. The first version BOUND 127.0.0.1 instead, and on
+ * macOS that bind succeeds beside a listener on the wildcard address, which is where `next start` and
+ * a default `node:http` server listen. Measured on 2026-11-10 with a `node:http` page on `*:3534`,
+ * `--port 3534 --site-port 3535` printed "starting web (scope=play) on 3534...", then scored the
+ * stranger ("GET /terms is served, gate or no gate 200, 107 bytes of HTML") and exited 1 only
+ * because the stranger has no gate. Only ECONNREFUSED counts as free, so a probe that cannot decide
+ * refuses.
  */
 async function refuseOccupiedPort(port) {
-  const free = await new Promise((done) => {
-    const probe = createServer();
-    probe.once('error', () => done(false));
-    probe.once('listening', () => probe.close(() => done(true)));
-    probe.listen(port, '127.0.0.1');
+  const outcome = await new Promise((done) => {
+    const socket = connect({ host: '127.0.0.1', port });
+    socket.setTimeout(2000);
+    socket.once('connect', () => {
+      socket.destroy();
+      done('accepted');
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      done('was neither accepted nor refused within 2s');
+    });
+    socket.once('error', (error) =>
+      done(error.code === 'ECONNREFUSED' ? 'refused' : `failed (${error.code})`),
+    );
   });
-  if (!free) {
+  if (outcome !== 'refused') {
+    const seen = outcome === 'accepted' ? 'something is already listening' : `a probe connection ${outcome}`;
     throw new Error(
-      `something is already listening on 127.0.0.1:${port}. This harness starts the servers it ` +
+      `${seen} on 127.0.0.1:${port}. This harness starts the servers it ` +
         'measures, so it will not reuse one it did not configure. Stop it, or pass --port/--site-port.',
     );
   }
