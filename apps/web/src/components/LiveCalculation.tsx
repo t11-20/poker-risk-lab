@@ -76,6 +76,28 @@ import {
 
 type HeadingLevel = 2 | 3 | 4 | 5 | 6;
 
+type Definition = { readonly expression: string; readonly explanation: string };
+
+const NO_EARLIER: readonly LiveCalculationSpec[] = [];
+
+/**
+ * Whether an earlier calculation already showed this exact definition. Only a closed-form kind has
+ * a definition, so recomputing an earlier one is arithmetic; a deferred kind (preflop equity) is
+ * skipped rather than computed here, and it has no definition box to repeat anyway.
+ */
+function definedAbove(definition: Definition, earlier: readonly LiveCalculationSpec[]): boolean {
+  return earlier.some((spec) => {
+    if (isDeferred(spec)) return false;
+    const outcome = computeCalculation(spec);
+    const shown = outcome.ok ? outcome.result.formula : null;
+    return (
+      shown !== null &&
+      shown.expression === definition.expression &&
+      shown.explanation === definition.explanation
+    );
+  });
+}
+
 /**
  * One step down the outline, as a table rather than arithmetic on the level.
  *
@@ -98,11 +120,14 @@ export interface LiveCalculationProps {
    */
   readonly title?: string;
   /**
-   * False when an earlier calculation in the same lesson already showed this kind's definition.
-   * The three pot-odds calculators each repeated the same "How it is defined" box, part of about
-   * 3,160px at 390 before the paragraph that compares them.
+   * The calculations of the same kind earlier in the lesson. The "How it is defined" box is left
+   * out when one of them already showed an identical one: the three pot-odds calculators each
+   * repeated the same box, part of about 3,160px at 390 before the paragraph that compares them.
+   * Identical, not merely the same kind, because a kind may write the example's own numbers into
+   * its definition: risk of ruin does, and review on #13 caught its second and third examples
+   * losing their working when the rule was "same kind".
    */
-  readonly showDefinition?: boolean;
+  readonly earlier?: readonly LiveCalculationSpec[];
 }
 
 /**
@@ -343,7 +368,7 @@ function CalculationSkeleton(): ReactElement {
 }
 
 export function LiveCalculation(props: LiveCalculationProps): ReactElement {
-  const { calculation, caption, index, headingLevel = 3, showDefinition = true } = props;
+  const { calculation, caption, index, headingLevel = 3, earlier = NO_EARLIER } = props;
   const { outcome, pending } = useCalculationOutcome(calculation);
 
   const body = (): ReactElement => {
@@ -387,7 +412,7 @@ export function LiveCalculation(props: LiveCalculationProps): ReactElement {
           <Chip glyph={result.method.glyph}>{result.method.label}</Chip>
           <span className="prl-note">{result.method.note}</span>
         </p>
-        {result.formula === null || !showDefinition ? null : (
+        {result.formula === null || definedAbove(result.formula, earlier) ? null : (
           <Formula
             eyebrow="How it is defined"
             expression={result.formula.expression}

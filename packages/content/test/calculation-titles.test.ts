@@ -11,11 +11,15 @@ import { describe, it } from 'node:test';
 import type { RawContent } from '../src/index.ts';
 import { collectContentProblems, content, readRawContent } from '../src/index.ts';
 
+interface RawLesson {
+  readonly id: string;
+  readonly blocks: Record<string, unknown>[];
+}
+
 function withPotOddsTitle(title: unknown): RawContent {
-  const raw = structuredClone(readRawContent()) as RawContent & {
-    lessons: { id: string; blocks: Record<string, unknown>[] }[];
-  };
-  const lesson = raw.lessons.find((entry) => entry.id === 'pot-odds');
+  const raw = structuredClone(readRawContent());
+  const lessons = raw.lessons as unknown as RawLesson[];
+  const lesson = lessons.find((entry) => entry.id === 'pot-odds');
   assert.ok(lesson !== undefined, 'the pot-odds lesson is in the bundle');
   const block = lesson.blocks.find((entry) => entry['kind'] === 'liveCalculation');
   assert.ok(block !== undefined, 'the pot-odds lesson has a live calculation');

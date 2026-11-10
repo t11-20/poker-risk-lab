@@ -26,7 +26,7 @@
  * they are the same ids the sticky contents links to.
  */
 
-import type { GlossaryEntry, LessonBlock } from '@prl/contracts';
+import type { GlossaryEntry, LessonBlock, LiveCalculation as LessonCalculationSpec } from '@prl/contracts';
 import { Callout, Chip, Formula, formatIndex, withKeys } from '@prl/ui';
 import Link from 'next/link';
 import type { ReactElement, ReactNode } from 'react';
@@ -86,8 +86,8 @@ interface KeyedBlock {
   /** Position among `heading` blocks, 1-based. */
   readonly headingIndex: number;
   readonly blockIndex: number;
-  /** A `liveCalculation` whose kind an earlier block in this lesson already defined. */
-  readonly repeatsKind: boolean;
+  /** The `liveCalculation` blocks of the same kind before this one, in lesson order. */
+  readonly earlierOfKind: readonly LessonCalculationSpec[];
 }
 
 function keyBlocks(blocks: readonly LessonBlock[]): readonly KeyedBlock[] {
@@ -95,17 +95,18 @@ function keyBlocks(blocks: readonly LessonBlock[]): readonly KeyedBlock[] {
   const out: KeyedBlock[] = [];
   let calculations = 0;
   let headings = 0;
-  const definedKinds = new Set<string>();
+  const byKind = new Map<string, LessonCalculationSpec[]>();
 
   blocks.forEach((block, blockIndex) => {
     const digest = digestOf(block);
     const count = seen.get(digest) ?? 0;
     seen.set(digest, count + 1);
-    let repeatsKind = false;
+    let earlierOfKind: readonly LessonCalculationSpec[] = [];
     if (block.kind === 'liveCalculation') {
       calculations += 1;
-      repeatsKind = definedKinds.has(block.calculation.kind);
-      definedKinds.add(block.calculation.kind);
+      const seenOfKind = byKind.get(block.calculation.kind) ?? [];
+      earlierOfKind = [...seenOfKind];
+      byKind.set(block.calculation.kind, [...seenOfKind, block.calculation]);
     }
     if (block.kind === 'heading') headings += 1;
     out.push({
@@ -114,7 +115,7 @@ function keyBlocks(blocks: readonly LessonBlock[]): readonly KeyedBlock[] {
       calculationIndex: calculations,
       headingIndex: headings,
       blockIndex,
-      repeatsKind,
+      earlierOfKind,
     });
   });
 
@@ -288,7 +289,7 @@ export function LessonBlockRenderer(props: LessonBlockRendererProps): ReactEleme
               calculation={block.calculation}
               caption={block.caption}
               {...(block.title === undefined ? {} : { title: block.title })}
-              showDefinition={!keyed.repeatsKind}
+              earlier={keyed.earlierOfKind}
               index={keyed.calculationIndex}
               headingLevel={keyed.headingIndex === 0 ? 2 : 3}
             />
