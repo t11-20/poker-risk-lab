@@ -374,6 +374,18 @@ export function estimateExactWork(spec: EquitySpec): {
   return { matchups, boardsPerMatchup, total: matchups * boardsPerMatchup };
 }
 
+/**
+ * A player's label as the subject of a sentence that starts an assumption.
+ *
+ * The label went in as it came, so the Coach's assumptions read "you holds exactly AhJh." and
+ * "the profile holds any of 404 combinations": the reader's own label takes the plural verb, and
+ * every assumption started in lower case. Seen on /legends/compare in both themes.
+ */
+function holdsClause(label: string): string {
+  if (label.toLowerCase() === 'you') return 'You hold';
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)} holds`;
+}
+
 function assumptionsFor(spec: EquitySpec, method: EquityResult['method'], samples: number): string[] {
   const notes: string[] = [];
   notes.push(
@@ -381,10 +393,11 @@ function assumptionsFor(spec: EquitySpec, method: EquityResult['method'], sample
   );
   for (const player of spec.players) {
     const combos = player.range.combos.length;
+    const holds = holdsClause(player.label);
     notes.push(
       combos === 1
-        ? `${player.label} holds exactly ${player.range.notation}.`
-        : `${player.label} holds any of ${combos} combinations from "${player.range.notation}", each equally likely.`,
+        ? `${holds} exactly ${player.range.notation}.`
+        : `${holds} any of ${combos} combinations from "${player.range.notation}", each equally likely.`,
     );
   }
   const multiCombo = spec.players.filter((player) => player.range.combos.length > 1);

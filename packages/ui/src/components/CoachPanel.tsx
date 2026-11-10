@@ -679,8 +679,14 @@ function SuggestionBlock({ suggestion, candidate }: SuggestionBlockProps): React
         <p className="prl-suggestion__action">
           {ACTION_WORD[suggestion.action]}
           {/* A RANGE, not a single number: sizing is not that precise, and printing one figure
-              would claim a precision the analysis does not have. */}
-          {range === undefined ? '' : ` — ${formatUnits(range.min)} to ${formatUnits(range.max)}`}
+              would claim a precision the analysis does not have. Unless every size of the action
+              is the same one, an all-in being the usual case: then "700 units to 700 units" said
+              nothing a single figure does not, and read as a mistake on /legends/compare. */}
+          {range === undefined
+            ? ''
+            : range.min === range.max
+              ? ` — ${formatUnits(range.min)}`
+              : ` — ${formatUnits(range.min)} to ${formatUnits(range.max)}`}
         </p>
         <span className="prl-suggestion__confidence" data-confidence={suggestion.confidence}>
           {CONFIDENCE_WORD[suggestion.confidence]}

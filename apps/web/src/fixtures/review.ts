@@ -337,12 +337,12 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           action: 'fold',
           confidence: 'low',
           reason:
-            'fold comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.',
+            'Fold comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.',
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
             'The equity figure is sampled, ±0.87 points at 95% confidence. A close decision could sit either side of that.',
-            'The gap to the next-best action is only 0.8 chips, well under a big blind — this is close to indifferent.',
+            'The gap to the next-best action is only 0.8 units, well under a big blind — this is close to indifferent.',
           ],
         },
         stackContext: {
@@ -354,9 +354,9 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         },
         assumptions: [
           'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
-          'you holds exactly 9h8h.',
-          'opponent 1 holds any of 262 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
-          'opponent 2 holds any of 262 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
+          'You hold exactly 9h8h.',
+          'Opponent 1 holds any of 262 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
+          'Opponent 2 holds any of 262 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
           'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
           'Estimated by sampling 10,000 random run-outs, not by exhaustive enumeration.',
           'No community cards are known yet, so five more cards are still to come.',
@@ -532,12 +532,12 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'moderate',
           reason:
-            'raise has the highest expected value against the stated range, by 9.4 chips over the next-best action.',
+            'Raise has the highest expected value against the stated range, by 9.4 units over the next-best action.',
           whatWouldChangeIt: [
             'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
             'Being raised is not modelled here, so treat the figure as optimistic.',
             '7 of your 15 outs are dirty — they improve you without making you safe, so counting all of them would overstate your chances.',
-            'The gap to the next-best action is only 9.4 chips, well under a big blind — this is close to indifferent.',
+            'The gap to the next-best action is only 9.4 units, well under a big blind — this is close to indifferent.',
           ],
         },
         stackContext: {
@@ -549,8 +549,8 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         },
         assumptions: [
           'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
-          'you holds exactly 9h8h.',
-          'opponent 1 holds any of 227 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
+          'You hold exactly 9h8h.',
+          'Opponent 1 holds any of 227 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
           'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
           'Computed by enumerating every remaining board — there is no sampling error.',
           'Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.',
@@ -701,7 +701,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'reasonable',
           reason:
-            'raise has the highest expected value against the stated range, by 50.2 chips over the next-best action.',
+            'Raise has the highest expected value against the stated range, by 50.2 units over the next-best action.',
           whatWouldChangeIt: [
             'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
             'Being raised is not modelled here, so treat the figure as optimistic.',
@@ -716,8 +716,8 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         },
         assumptions: [
           'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
-          'you holds exactly 9h8h.',
-          'opponent 1 holds any of 223 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
+          'You hold exactly 9h8h.',
+          'Opponent 1 holds any of 223 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
           'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
           'Computed by enumerating every remaining board — there is no sampling error.',
           'Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.',
@@ -856,7 +856,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'reasonable',
           reason:
-            'raise has the highest expected value against the stated range, by 150.8 chips over the next-best action.',
+            'Raise has the highest expected value against the stated range, by 150.8 units over the next-best action.',
           whatWouldChangeIt: [
             'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
             'Being raised is not modelled here, so treat the figure as optimistic.',
@@ -871,8 +871,8 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
         },
         assumptions: [
           'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
-          'you holds exactly 9h8h.',
-          'opponent 1 holds any of 205 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
+          'You hold exactly 9h8h.',
+          'Opponent 1 holds any of 205 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
           'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
           'Computed by enumerating every remaining board — there is no sampling error.',
           'Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.',
@@ -1074,12 +1074,12 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
           action: 'fold',
           confidence: 'low',
           reason:
-            'fold comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.',
+            'Fold comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.',
           whatWouldChangeIt: [
             'A wider opponent range would raise your equity and can flip a fold into a call.',
             'A narrower, stronger range does the opposite.',
             'The equity figure is sampled, ±0.87 points at 95% confidence. A close decision could sit either side of that.',
-            'The gap to the next-best action is only 0.7 chips, well under a big blind — this is close to indifferent.',
+            'The gap to the next-best action is only 0.7 units, well under a big blind — this is close to indifferent.',
           ],
         },
         stackContext: {
@@ -1091,9 +1091,9 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
         },
         assumptions: [
           'The hand is played to the river with no further betting — this is raw equity, not the value of the spot.',
-          'you holds exactly 9h8h.',
-          'opponent 1 holds any of 262 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
-          'opponent 2 holds any of 262 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
+          'You hold exactly 9h8h.',
+          'Opponent 1 holds any of 262 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
+          'Opponent 2 holds any of 262 combinations from "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo", each equally likely.',
           'Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.',
           'Estimated by sampling 10,000 random run-outs, not by exhaustive enumeration.',
           'No community cards are known yet, so five more cards are still to come.',

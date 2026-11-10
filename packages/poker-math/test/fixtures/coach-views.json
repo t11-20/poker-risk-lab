@@ -242,25 +242,25 @@
             "tie": 0.01
           },
           {
-            "label": "seat 0",
+            "label": "seat 1",
             "equity": 0.2073916666666666,
             "win": 0.1965,
             "tie": 0.023
           },
           {
-            "label": "seat 1",
+            "label": "seat 2",
             "equity": 0.21264166666666665,
             "win": 0.197,
             "tie": 0.0325
           },
           {
-            "label": "seat 3",
+            "label": "seat 4",
             "equity": 0.19747499999999998,
             "win": 0.1865,
             "tie": 0.0235
           },
           {
-            "label": "seat 4",
+            "label": "seat 5",
             "equity": 0.21572499999999997,
             "win": 0.204,
             "tie": 0.025
@@ -323,12 +323,12 @@
           "max": 43
         },
         "confidence": "moderate",
-        "reason": "raise has the highest expected value against the stated range, by 9.1 chips over the next-best action.",
+        "reason": "Raise has the highest expected value against the stated range, by 9.1 units over the next-best action.",
         "whatWouldChangeIt": [
           "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
           "Being raised is not modelled here, so treat the figure as optimistic.",
           "The equity figure is sampled, ±1.62 points at 95% confidence. A close decision could sit either side of that.",
-          "The gap to the next-best action is only 9.1 chips, well under a big blind — this is close to indifferent."
+          "The gap to the next-best action is only 9.1 units, well under a big blind — this is close to indifferent."
         ]
       },
       "stackContext": {
@@ -339,11 +339,11 @@
       },
       "assumptions": [
         "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
-        "you holds exactly Jh4h.",
-        "seat 0 holds any of 500 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
-        "seat 1 holds any of 500 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
-        "seat 3 holds any of 500 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
-        "seat 4 holds any of 500 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "You hold exactly Jh4h.",
+        "Seat 1 holds any of 500 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "Seat 2 holds any of 500 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "Seat 4 holds any of 500 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "Seat 5 holds any of 500 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Estimated by sampling 2,000 random run-outs, not by exhaustive enumeration.",
         "No community cards are known yet, so five more cards are still to come.",
@@ -379,22 +379,22 @@
         "opponents": [
           {
             "kind": "topPercent",
-            "label": "seat 0",
-            "percent": 40
-          },
-          {
-            "kind": "topPercent",
             "label": "seat 1",
             "percent": 40
           },
           {
             "kind": "topPercent",
-            "label": "seat 3",
+            "label": "seat 2",
             "percent": 40
           },
           {
             "kind": "topPercent",
             "label": "seat 4",
+            "percent": 40
+          },
+          {
+            "kind": "topPercent",
+            "label": "seat 5",
             "percent": 40
           }
         ]
@@ -624,7 +624,7 @@
             "tie": 0.005792155792155793
           },
           {
-            "label": "seat 1",
+            "label": "seat 2",
             "equity": 0.42365092365092366,
             "win": 0.42075484575484573,
             "tie": 0.005792155792155793
@@ -689,7 +689,7 @@
           "max": 990
         },
         "confidence": "reasonable",
-        "reason": "raise has the highest expected value against the stated range, by 93.1 chips over the next-best action.",
+        "reason": "Raise has the highest expected value against the stated range, by 93.1 units over the next-best action.",
         "whatWouldChangeIt": [
           "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
           "Being raised is not modelled here, so treat the figure as optimistic.",
@@ -704,8 +704,8 @@
       },
       "assumptions": [
         "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
-        "you holds exactly Th7d.",
-        "seat 1 holds any of 444 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "You hold exactly Th7d.",
+        "Seat 2 holds any of 444 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
         "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
@@ -739,7 +739,7 @@
         "opponents": [
           {
             "kind": "topPercent",
-            "label": "seat 1",
+            "label": "seat 2",
             "percent": 40
           }
         ]
@@ -942,13 +942,13 @@
             "tie": 0.0175
           },
           {
-            "label": "seat 0",
+            "label": "seat 1",
             "equity": 0.3731666666666667,
             "win": 0.3575,
             "tie": 0.033
           },
           {
-            "label": "seat 3",
+            "label": "seat 4",
             "equity": 0.3934166666666667,
             "win": 0.376,
             "tie": 0.0365
@@ -982,12 +982,12 @@
       "suggestion": {
         "action": "fold",
         "confidence": "moderate",
-        "reason": "fold has the highest expected value against the stated range, by 6.8 chips over the next-best action.",
+        "reason": "Fold has the highest expected value against the stated range, by 6.8 units over the next-best action.",
         "whatWouldChangeIt": [
           "A wider opponent range would raise your equity and can flip a fold into a call.",
           "A narrower, stronger range does the opposite.",
           "The equity figure is sampled, ±1.83 points at 95% confidence. A close decision could sit either side of that.",
-          "The gap to the next-best action is only 6.8 chips, well under a big blind — this is close to indifferent."
+          "The gap to the next-best action is only 6.8 units, well under a big blind — this is close to indifferent."
         ]
       },
       "stackContext": {
@@ -998,9 +998,9 @@
       },
       "assumptions": [
         "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
-        "you holds exactly Qc5h.",
-        "seat 0 holds any of 494 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
-        "seat 3 holds any of 494 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "You hold exactly Qc5h.",
+        "Seat 1 holds any of 494 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "Seat 4 holds any of 494 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Estimated by sampling 2,000 random run-outs, not by exhaustive enumeration.",
         "No community cards are known yet, so five more cards are still to come.",
@@ -1036,12 +1036,12 @@
         "opponents": [
           {
             "kind": "topPercent",
-            "label": "seat 0",
+            "label": "seat 1",
             "percent": 40
           },
           {
             "kind": "topPercent",
-            "label": "seat 3",
+            "label": "seat 4",
             "percent": 40
           }
         ]
@@ -1296,7 +1296,7 @@
             "tie": 0
           },
           {
-            "label": "seat 0",
+            "label": "seat 1",
             "equity": 0.9442970822281167,
             "win": 0.9442970822281167,
             "tie": 0
@@ -1357,7 +1357,7 @@
       "suggestion": {
         "action": "fold",
         "confidence": "reasonable",
-        "reason": "fold has the highest expected value against the stated range, by 30.3 chips over the next-best action.",
+        "reason": "Fold has the highest expected value against the stated range, by 30.3 units over the next-best action.",
         "whatWouldChangeIt": [
           "A wider opponent range would raise your equity and can flip a fold into a call.",
           "A narrower, stronger range does the opposite."
@@ -1371,8 +1371,8 @@
       },
       "assumptions": [
         "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
-        "you holds exactly Qd2c.",
-        "seat 0 holds any of 377 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
+        "You hold exactly Qd2c.",
+        "Seat 1 holds any of 377 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
         "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
@@ -1403,7 +1403,7 @@
         "opponents": [
           {
             "kind": "topPercent",
-            "label": "seat 0",
+            "label": "seat 1",
             "percent": 40
           }
         ]
@@ -1656,13 +1656,13 @@
             "tie": 0.0013140848824451897
           },
           {
-            "label": "seat 0",
+            "label": "seat 1",
             "equity": 0.32453058312172295,
             "win": 0.3159124108705399,
             "tie": 0.017237033226099048
           },
           {
-            "label": "seat 1",
+            "label": "seat 2",
             "equity": 0.324530583121723,
             "win": 0.3159124108705399,
             "tie": 0.017237033226099048
@@ -1725,11 +1725,11 @@
           "max": 22
         },
         "confidence": "low",
-        "reason": "bet comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.",
+        "reason": "Bet comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.",
         "whatWouldChangeIt": [
           "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
           "Being raised is not modelled here, so treat the figure as optimistic.",
-          "The gap to the next-best action is only 2.3 chips, well under a big blind — this is close to indifferent."
+          "The gap to the next-best action is only 2.3 units, well under a big blind — this is close to indifferent."
         ]
       },
       "stackContext": {
@@ -1740,9 +1740,9 @@
       },
       "assumptions": [
         "The hand is played to the river with no further betting — this is raw equity, not the value of the spot.",
-        "you holds exactly Th2d.",
-        "seat 0 holds any of 231 combinations from \"22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo\", each equally likely.",
-        "seat 1 holds any of 231 combinations from \"22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo\", each equally likely.",
+        "You hold exactly Th2d.",
+        "Seat 1 holds any of 231 combinations from \"22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo\", each equally likely.",
+        "Seat 2 holds any of 231 combinations from \"22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo\", each equally likely.",
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
         "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
@@ -1773,12 +1773,12 @@
         "opponents": [
           {
             "kind": "notation",
-            "label": "seat 0",
+            "label": "seat 1",
             "notation": "22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo"
           },
           {
             "kind": "notation",
-            "label": "seat 1",
+            "label": "seat 2",
             "notation": "22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo"
           }
         ]
