@@ -64,6 +64,7 @@ import {
   pluralise,
 } from '@prl/ui';
 import { type ReactElement, useEffect, useMemo, useState } from 'react';
+import { type Definition, shownAbove } from '@/lib/definition-repeats.ts';
 import {
   type CalculationDetail,
   type CalculationFigure,
@@ -76,26 +77,22 @@ import {
 
 type HeadingLevel = 2 | 3 | 4 | 5 | 6;
 
-type Definition = { readonly expression: string; readonly explanation: string };
-
 const NO_EARLIER: readonly LiveCalculationSpec[] = [];
 
 /**
- * Whether an earlier calculation already showed this exact definition. Only a closed-form kind has
- * a definition, so recomputing an earlier one is arithmetic; a deferred kind (preflop equity) is
- * skipped rather than computed here, and it has no definition box to repeat anyway.
+ * Whether an earlier calculation in the lesson already showed this exact definition. Only a
+ * closed-form kind has one, so recomputing an earlier calculation is arithmetic; a deferred kind
+ * (preflop equity) is skipped rather than computed here, and it has no definition box anyway.
  */
 function definedAbove(definition: Definition, earlier: readonly LiveCalculationSpec[]): boolean {
-  return earlier.some((spec) => {
-    if (isDeferred(spec)) return false;
-    const outcome = computeCalculation(spec);
-    const shown = outcome.ok ? outcome.result.formula : null;
-    return (
-      shown !== null &&
-      shown.expression === definition.expression &&
-      shown.explanation === definition.explanation
-    );
-  });
+  return shownAbove(
+    definition,
+    earlier.map((spec) => {
+      if (isDeferred(spec)) return null;
+      const outcome = computeCalculation(spec);
+      return outcome.ok ? outcome.result.formula : null;
+    }),
+  );
 }
 
 /**
