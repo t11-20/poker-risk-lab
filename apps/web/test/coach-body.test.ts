@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { type CoachBodyStatus, coachBodyFor } from '../src/lib/coach-body.ts';
+import type { PlayerView } from '@prl/poker-engine';
+import { type CoachBodyStatus, coachBodyFor, reviewHrefFor } from '../src/lib/coach-body.ts';
 
 const STATUSES: readonly CoachBodyStatus[] = ['idle', 'loading', 'ready', 'error', 'complete'];
 
@@ -22,5 +23,23 @@ describe('what the Coach panel holds', () => {
       STATUSES.map((status) => coachBodyFor(status, false)),
       ['unavailable', 'skeleton', 'unavailable', 'unavailable', 'hand-over'],
     );
+  });
+});
+
+/** The two fields the rule reads. `fixtures/table.ts` imports `@prl/ui`, which this runner cannot load. */
+function finished(viewerSeat: number | null): PlayerView {
+  return { handId: 'hand_abc', street: 'complete', viewerSeat } as unknown as PlayerView;
+}
+
+describe('the review a finished hand links to', () => {
+  it('links a reader who was dealt into the hand', () => {
+    assert.equal(reviewHrefFor(finished(2)), '/review/hand_abc');
+    assert.equal(reviewHrefFor(finished(0)), '/review/hand_abc', 'seat 0 is a seat');
+  });
+
+  it('links nobody who watched it (REGRESSION: a spectator was sent to a 404)', () => {
+    const watched = finished(null);
+    assert.equal(reviewHrefFor(watched), undefined);
+    assert.equal(reviewHrefFor(null), undefined);
   });
 });

@@ -64,6 +64,7 @@ import {
   useState,
 } from 'react';
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
+import { reviewHrefFor } from '@/lib/coach-body.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
 import { type LiveTable as LiveTableModel, useLiveTable } from '@/lib/use-live-table.ts';
@@ -766,9 +767,7 @@ export function LiveTable({
         onAct={act}
         idleMessage={IDLE_TABLE_MESSAGE}
         {...coachUnavailableProps(live)}
-        {...(status === 'complete' && table.view !== null
-          ? { reviewHref: `/review/${encodeURIComponent(table.view.handId)}` }
-          : {})}
+        {...(status === 'complete' ? { reviewHref: reviewHrefFor(table.view) } : {})}
         {...(highlighted.length === 0
           ? {}
           : { highlightedCards: highlighted, highlightLabel: 'part of the winning hand' })}

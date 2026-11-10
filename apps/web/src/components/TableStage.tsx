@@ -233,7 +233,7 @@ export interface TableStageProps {
    * Where this hand's review is, once it is over. The live table knows the hand's id; a fixture
    * whose hand was never recorded has no review to point at and leaves it out.
    */
-  readonly reviewHref?: string;
+  readonly reviewHref?: string | undefined;
 }
 
 /** Skeletons at the real content's dimensions, so nothing reflows when the data lands. */
@@ -308,16 +308,12 @@ function CoachHandOver({ reviewHref }: { readonly reviewHref: string | undefined
     <div className="prl-empty">
       <p className="prl-label">Hand over</p>
       <p>There is no decision left to price, so there is no analysis beside a finished hand.</p>
-      <p>
-        {reviewHref === undefined ? (
-          'Its review prices every decision you made in it, against the cards that were dealt.'
-        ) : (
-          <>
-            <Link href={reviewHref}>Review this hand</Link>
-            {': every decision you made in it, priced against the cards that were dealt.'}
-          </>
-        )}
-      </p>
+      {reviewHref === undefined ? null : (
+        <p>
+          <Link href={reviewHref}>Review this hand</Link>
+          {': every decision you made in it, priced against the cards that were dealt.'}
+        </p>
+      )}
     </div>
   );
 }
