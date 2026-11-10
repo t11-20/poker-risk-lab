@@ -296,7 +296,8 @@
    3. THE DECISION BAND
    ==========================================================================================
    Your figures, the controls, and the price — the last block in the table column, IN FLOW at every
-   width.
+   width. Below 46rem of column the row of buttons inside it sticks within the ActionBar, which is a
+   different thing from pinning the band; section 3.1 has the arithmetic.
 
    ## Why it is not pinned, when it used to be
 
@@ -391,6 +392,77 @@
   font-variant-numeric: tabular-nums;
   letter-spacing: var(--prl-tracking-metric);
   line-height: var(--prl-leading-tight);
+}
+
+/* ==========================================================================================
+   3.1  UNDER 46rem OF COLUMN — THE BUTTONS STICK INSIDE THEIR OWN BAR
+   ==========================================================================================
+   Measured at 390x844 on `/play?state=decision` before this rule: Fold was 2,107px down the page.
+   With the reader's own plate just on screen it was still 555px below the Coach's peek, and the
+   whole row took 636px more scroll, past the price strip and the sizer, by which point the plate,
+   the board and the pot were off the top. The reader scrolled down to act and back up to watch, on
+   every street.
+
+   ## Why this is not the pin section 3 forbids
+
+   Section 3's arithmetic is about a band whose containing block is the COLUMN: stuck to the bottom
+   edge, the block above it in flow is the table, so the table ends underneath it. A sticky box only
+   travels inside its containing block, and this row's is `.prl-action-bar`, which stays in flow
+   (`packages/ui/test/layout-guarantees.test.ts` holds it there). So the row starts sticking when the
+   bar's top edge comes into view and stops at the bar's own bottom. The table is above the bar, and
+   the row is never over it. What it does cover is the bar's own price strip and sizer, which scroll
+   out from under it as the reader goes on. Measured after, both themes, at 360, 390, 768 and 1024:
+   no point of `.prl-play__table` hit-tests to the row at any scroll position. At 360 and 390, from
+   the plate being on screen, 216px of scroll (was 636) brings up the whole row with the plate, the
+   board and the pot still above it. At 1280 and up the column is wide enough for section 8.1, and
+   nothing here applies.
+
+   Two other shapes were sketched and measured. `position: fixed` never sticks: the bar's
+   `backdrop-filter` makes it the containing block for fixed descendants, so the row is laid out
+   inside the bar. Lifting the row out into a docked strip by script did reach the screen, and it
+   covered 51,300px² of the table at 390, which is the old failure.
+
+   The row is the bar's own glass, opaque enough that the sizer scrolling under it does not read
+   through. The negative margin and the equal padding stretch that glass to the bar's edges without
+   moving anything in flow. It sits flush on the Coach's peek, which is `--prl-space-0` from 600px
+   up: a gap between the two showed a strip of half-cut sizer text, and `calc()` around the peek is
+   not an option, because that `0` is unitless and a number plus a length is invalid (measured: the
+   inset computed to `auto` at 768px and the row never stuck). The row exists only while there is a
+   decision: the idle and complete states render no `__actions`, so nothing on the route sticks then.
+
+   ## Nothing the keyboard reaches lands under it
+
+   A control the caret moves to must not be left behind the row (WCAG 2.4.11), and the root's scroll
+   padding cannot say so because the row is not the root's. Each sizer control carries a scroll
+   margin of the row's height instead: two rows of 4.5rem buttons at phone widths (Fold and Call
+   share one, a raise takes the next), the row's gap and padding, and a step of air. Chrome scrolls
+   a control that is inside the viewport but inside that margin, which is the case that matters:
+   measured by putting each sizer control behind the stuck row, parking the caret on its neighbour
+   and pressing Tab or Shift+Tab for real, 0px of the focused control was left under the row, in 13
+   arrivals at each of 360, 390, 768 and 1024, both themes. With the margin removed, every one
+   stayed 44px under it, which is the whole control.
+   ========================================================================================== */
+
+@container prl-play-column (width < 46rem) {
+  .prl-play .prl-action-bar__actions {
+    position: sticky;
+    z-index: var(--prl-z-raised);
+    inset-block-end: var(--prl-play-sheet-peek);
+    margin: calc(-1 * var(--prl-space-4)) calc(-1 * var(--prl-space-7));
+    padding: var(--prl-space-4) var(--prl-space-7);
+    border-block-start: var(--prl-hairline);
+    border-block-start-color: var(--prl-edge-lit);
+    background-color: var(--prl-glass-floating);
+    -webkit-backdrop-filter: var(--prl-glass-filter);
+    backdrop-filter: var(--prl-glass-filter);
+  }
+
+  .prl-play .prl-sizer button,
+  .prl-play .prl-sizer input {
+    /* 11.5rem: two 4.5rem rows of buttons, the 0.5rem gap between them, 0.5rem of padding above
+       and below, and 1rem of air. */
+    scroll-margin-block-end: calc(var(--prl-space-12) * 2 + var(--prl-space-4) * 5 + var(--prl-space-6));
+  }
 }
 
 /* ==========================================================================================
@@ -609,9 +681,9 @@
   }
 
   /* The sheet is gone from here up, so nothing is pinned over the bottom edge and the scroll padding
-     goes with it. Reset beside the peek it mirrors, so the two cannot drift. Above 600px nothing on
-     this route is pinned to the bottom edge at all — the decision band is in flow at every width
-     (section 3) — so there is no second element for a focused control to be delivered underneath. */
+     goes with it. Reset beside the peek it mirrors, so the two cannot drift. The one other thing
+     that can sit on the bottom edge is the action row inside its own bar (section 3.1), and the
+     controls that scroll under it carry their own scroll margin there, at every width it sticks. */
   :root:has(.prl-play) {
     scroll-padding-block-end: var(--prl-space-0);
   }
@@ -1818,6 +1890,12 @@
      separating the controls from the table above them. */
   .prl-play__decision > .prl-action-bar {
     border-color: CanvasText;
+  }
+
+  /* The stuck row lies over the sizer, and forced-colors keeps the alpha of the colour it replaces:
+     measured, the glass became `rgba(0, 0, 0, 0.9)`, so a tenth of the sizer showed through. */
+  .prl-play .prl-action-bar__actions {
+    background-color: Canvas;
   }
 
   .prl-play__handle-grip {

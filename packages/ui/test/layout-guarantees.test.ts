@@ -93,9 +93,15 @@ describe('the play screen never pins a surface over the table', () => {
   });
 
   it('does not set `display` on the plate readout inside that container query', () => {
-    const query = /@container\s+prl-play-column[^{]*\{([\s\S]*?)\n\}/.exec(playCss)?.[1];
-    assert.ok(query !== undefined, 'expected the prl-play-column container query block');
-    const hud = /\.prl-play__hud\s*\{([^}]*)\}/.exec(query)?.[1] ?? '';
+    // Named by its condition: `prl-play-column` has a `width < 46rem` query too (section 3.1), and
+    // it comes first in the file, so an unqualified match read a block with no HUD rule in it and
+    // passed over nothing.
+    const query = /@container\s+prl-play-column\s*\(min-width:\s*46rem\)[^{]*\{([\s\S]*?)\n\}/.exec(
+      playCss,
+    )?.[1];
+    assert.ok(query !== undefined, 'expected the prl-play-column (min-width: 46rem) container query block');
+    const hud = /\.prl-play__hud\s*\{([^}]*)\}/.exec(query)?.[1];
+    assert.ok(hud !== undefined, 'expected a .prl-play__hud rule inside that query');
     assert.doesNotMatch(
       hud,
       /display\s*:/,
@@ -103,6 +109,41 @@ describe('the play screen never pins a surface over the table', () => {
         'own plate above the band. A column between 860 and 899px matches this query, so setting ' +
         'display here would resurrect the duplicate plate at exactly those widths.',
     );
+  });
+});
+
+describe('the sticky action row is bounded by a bar that stays in flow', () => {
+  // `play.css` section 3.1 makes `.prl-action-bar__actions` sticky below 46rem of column. That is
+  // safe only because a sticky box travels inside its containing block, and the row's is the
+  // ActionBar, which sits below the table. Pin the bar, or dissolve it or the band with
+  // `display: contents`, and the row's travel reaches the table: the R7 failure again.
+  it('never pins or dissolves the ActionBar or the band around it', () => {
+    const blocks = [
+      ...declarationsFor(componentsCss, '.prl-action-bar'),
+      ...declarationsFor(playCss, '.prl-action-bar'),
+      ...declarationsFor(playCss, '.prl-play__decision'),
+    ];
+    assert.ok(
+      blocks.length >= 3,
+      `expected the bar and the band to be styled, found ${blocks.length} rule(s)`,
+    );
+    for (const block of blocks) {
+      assert.doesNotMatch(block, /position\s*:\s*(sticky|fixed|absolute)/);
+      assert.doesNotMatch(block, /display\s*:\s*contents/);
+    }
+  });
+
+  it('gives the sizer controls a scroll margin wherever the row sticks', () => {
+    const sticky = declarationsFor(playCss, '.prl-action-bar__actions').some((block) =>
+      /position\s*:\s*sticky/.test(block),
+    );
+    assert.ok(sticky, 'expected section 3.1 to make the action row sticky');
+    for (const control of ['.prl-sizer button', '.prl-sizer input']) {
+      assert.ok(
+        declarationsFor(playCss, control).some((block) => /scroll-margin-block-end\s*:/.test(block)),
+        `a ${control} the caret moves to would be delivered behind the stuck row (WCAG 2.4.11)`,
+      );
+    }
   });
 });
 
