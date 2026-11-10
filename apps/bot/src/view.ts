@@ -20,6 +20,7 @@
  * Telegram reject the whole message.
  */
 
+import type { GlossaryEntry } from '@prl/contracts';
 import type { Action, LegalAction, PlayerView, SeatIndex, SeatView } from '@prl/poker-engine';
 import { rankIndexOf, suitIndexOf } from '@prl/poker-engine';
 import { type CoachReading, coachLine, units } from './coach.ts';
@@ -51,6 +52,12 @@ export type Press =
   /** Shows a numeric question's computed figure without an answer. */
   | { readonly kind: 'reveal'; readonly at: QuizMoment }
   | { readonly kind: 'onward'; readonly at: QuizMoment }
+  /** A page of the lesson list, in reading order. */
+  | { readonly kind: 'lessons'; readonly page: number }
+  /** Opens a lesson at its first page, as a new message. */
+  | { readonly kind: 'lesson'; readonly lessonId: string }
+  /** Another page of a lesson, in the same message. Numbered from 0; the last is the key takeaways. */
+  | { readonly kind: 'lessonPage'; readonly lessonId: string; readonly page: number }
   /** How to use `/define`. */
   | { readonly kind: 'glossary' }
   | { readonly kind: 'term'; readonly id: string };
@@ -66,6 +73,17 @@ export interface QuizMoment {
 }
 
 export const CALLBACK_DATA_MAX_BYTES = 64;
+
+export function termButton(entry: GlossaryEntry): Button {
+  return { label: entry.term, data: encodePress({ kind: 'term', id: entry.id }) };
+}
+
+/** Two to a row: a term can be thirty characters, and a phone shows about two of those across. */
+export function inPairs(buttons: readonly Button[]): Button[][] {
+  const rows: Button[][] = [];
+  for (let index = 0; index < buttons.length; index += 2) rows.push(buttons.slice(index, index + 2));
+  return rows;
+}
 
 export function encodePress(press: Press): string {
   const data = wireOf(press);
@@ -97,6 +115,7 @@ function wireOf(press: Press): string {
     // Content ids on the presses that start something, because those carry no run tag: an index
     // would silently name a different quiz or term after a deploy that reordered the content.
     // In-run presses use positions, which the run tag scopes. The longest id ships at 33 bytes.
+    // A lesson page names its lesson by id for the same reason, and needs no run tag: see `lesson.ts`.
     case 'topic':
       return `qt:${press.topic}`;
     case 'quiz':
@@ -109,6 +128,12 @@ function wireOf(press: Press): string {
       return `qr:${momentCode(press.at)}`;
     case 'onward':
       return `qn:${momentCode(press.at)}`;
+    case 'lessons':
+      return `ll:${press.page}`;
+    case 'lesson':
+      return `lo:${press.lessonId}`;
+    case 'lessonPage':
+      return `lp:${press.lessonId}:${press.page}`;
     case 'glossary':
       return 'd';
     case 'term':
@@ -148,6 +173,11 @@ const PATTERNS = {
   reveal: new RegExp(`^qr:${MOMENT}$`),
   onward: new RegExp(`^qn:${MOMENT}$`),
   term: /^g:([a-z0-9-]{1,60})$/,
+  lessons: /^ll:(\d{1,2})$/,
+  // 57 is the longest id whose `lp:<id>:<two digits>` still fits in 64 bytes, so anything this
+  // decodes, `encodePress` can write back.
+  lesson: /^lo:([a-z0-9-]{1,57})$/,
+  lessonPage: /^lp:([a-z0-9-]{1,57}):(\d{1,2})$/,
 };
 
 function momentOf(match: RegExpExecArray): QuizMoment {
@@ -191,6 +221,16 @@ export function decodePress(data: string): Press | null {
   if (onward !== null) return { kind: 'onward', at: momentOf(onward) };
   const term = PATTERNS.term.exec(data);
   if (term !== null) return { kind: 'term', id: term[1] ?? '' };
+  return decodeLessonPress(data);
+}
+
+function decodeLessonPress(data: string): Press | null {
+  const lessons = PATTERNS.lessons.exec(data);
+  if (lessons !== null) return { kind: 'lessons', page: Number(lessons[1]) };
+  const lesson = PATTERNS.lesson.exec(data);
+  if (lesson !== null) return { kind: 'lesson', lessonId: lesson[1] ?? '' };
+  const page = PATTERNS.lessonPage.exec(data);
+  if (page !== null) return { kind: 'lessonPage', lessonId: page[1] ?? '', page: Number(page[2]) };
   return null;
 }
 

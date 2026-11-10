@@ -31,6 +31,7 @@ import { UNIVERSAL_DISCLAIMER } from '@prl/poker-ai';
 import { BettingRuleError, type HandState, validateAction } from '@prl/poker-engine';
 import { type CoachFn, type CoachReading, coachWhy, readCoach } from './coach.ts';
 import { entryById, entryText, lookup, normalise, seeAlsoOf } from './define.ts';
+import { onLesson, onLessonPage, onLessons } from './lesson.ts';
 import { GONE, onQuizPress, onQuizText, onQuizzes, onTopic, startQuiz } from './quiz.ts';
 import {
   canDeal,
@@ -50,9 +51,11 @@ import {
   type Button,
   decodePress,
   encodePress,
+  inPairs,
   type Press,
   resultText,
   tableText,
+  termButton,
 } from './view.ts';
 
 export type Event =
@@ -114,7 +117,7 @@ export const STALE = 'That button is from an earlier moment in the hand.';
 const MENU_TEXT =
   'Poker Risk Lab: a play-money No-Limit Hold’em table for learning probability, risk and expected ' +
   'value. Six-handed, you against five bots, with the Coach beside every decision. Between hands, ' +
-  'practise a quiz, or look a term up with /define.\n\n' +
+  'read a lesson, practise a quiz, or look a term up with /define.\n\n' +
   'Units are free and have no value anywhere. The opponents are modelled styles, not real people: ' +
   'see About.';
 
@@ -133,8 +136,9 @@ const ABOUT_TEXT = [
   'The Coach line under the table is a computed estimate with its method and interval. Why? shows ' +
     'one reading of the spot, the assumptions it rests on, and what would change it.',
   '',
-  'Quizzes and the glossary are the same material as the web app’s lessons. A quiz is not scored: ' +
-    'each answer opens the reasoning, and nothing you answer is kept.',
+  'Lessons, quizzes and the glossary are the web app’s own course, with every figure in a lesson ' +
+    'computed here rather than stored. A quiz is not scored: each answer opens the reasoning, and ' +
+    'nothing you answer is kept.',
   '',
   'This bot only answers you: it never messages first and sends no reminders. It plays one-on-one ' +
     'only and ignores group chats. Your table lives in memory, so a restart of the bot ends it and ' +
@@ -154,13 +158,16 @@ function menuButtons(): Button[][] {
   return [
     [
       { label: 'Play a hand', data: encodePress({ kind: 'play' }) },
-      { label: 'Practise a quiz', data: encodePress({ kind: 'quizzes' }) },
+      { label: 'Read a lesson', data: encodePress({ kind: 'lessons', page: 0 }) },
     ],
     [
+      { label: 'Practise a quiz', data: encodePress({ kind: 'quizzes' }) },
       { label: 'Glossary', data: encodePress({ kind: 'glossary' }) },
-      { label: 'About', data: encodePress({ kind: 'about' }) },
     ],
-    [{ label: 'Reset units', data: encodePress({ kind: 'reset' }) }],
+    [
+      { label: 'About', data: encodePress({ kind: 'about' }) },
+      { label: 'Reset units', data: encodePress({ kind: 'reset' }) },
+    ],
   ];
 }
 
@@ -179,7 +186,7 @@ export function eventOfText(text: string): Event {
 export function step(session: Session, event: Event, deps: Deps): StepResult {
   switch (event.kind) {
     case 'command':
-      return onCommand(session, event.name, event.args);
+      return toastsAsMessages(onCommand(session, event.name, event.args));
     case 'text':
       return (
         onQuizText(session, event.text) ?? { session, out: [{ kind: 'send', text: UNKNOWN, buttons: [] }] }
@@ -192,6 +199,19 @@ export function step(session: Session, event: Event, deps: Deps): StepResult {
   }
 }
 
+/**
+ * A command has no press to answer, and Telegram shows a toast only as the answer to a press, so a
+ * toast from a command reached nobody: `/quiz` in the middle of a hand used to get no reply at all.
+ */
+function toastsAsMessages(result: StepResult): StepResult {
+  return {
+    session: result.session,
+    out: result.out.map((out) =>
+      out.kind === 'toast' ? { kind: 'send', text: out.text, buttons: [] } : out,
+    ),
+  };
+}
+
 function onCommand(session: Session, name: string, args: string): StepResult {
   if (name === 'about' || name === 'help')
     return { session, out: [{ kind: 'send', text: ABOUT_TEXT, buttons: [] }] };
@@ -200,18 +220,8 @@ function onCommand(session: Session, name: string, args: string): StepResult {
   }
   if (name === 'define') return { session, out: [args === '' ? glossaryHelp() : defineMessage(args)] };
   if (name === 'quiz') return onQuizzes(session);
+  if (name === 'learn') return onLessons(session, 0);
   return { session, out: [{ kind: 'send', text: UNKNOWN, buttons: [] }] };
-}
-
-function termButton(entry: GlossaryEntry): Button {
-  return { label: entry.term, data: encodePress({ kind: 'term', id: entry.id }) };
-}
-
-/** Two to a row: a term can be thirty characters, and a phone shows about two of those across. */
-function inPairs(buttons: readonly Button[]): Button[][] {
-  const rows: Button[][] = [];
-  for (let index = 0; index < buttons.length; index += 2) rows.push(buttons.slice(index, index + 2));
-  return rows;
 }
 
 function glossaryHelp(): Outgoing {
@@ -284,6 +294,12 @@ function onPress(session: Session, press: Press, deps: Deps): StepResult {
     case 'reveal':
     case 'onward':
       return onQuizPress(session, press);
+    case 'lessons':
+      return onLessons(session, press.page);
+    case 'lesson':
+      return onLesson(session, press.lessonId);
+    case 'lessonPage':
+      return onLessonPage(session, press.lessonId, press.page);
     case 'glossary':
       return { session, out: [glossaryHelp()] };
     case 'term': {

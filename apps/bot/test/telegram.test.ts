@@ -100,8 +100,30 @@ describe('requests', () => {
       keyboardOf(calls[0])
         .flat()
         .map((button) => button.text),
-      ['Play a hand', 'Practise a quiz', 'Glossary', 'About', 'Reset units'],
+      ['Play a hand', 'Read a lesson', 'Practise a quiz', 'Glossary', 'About', 'Reset units'],
     );
+  });
+
+  test('/quiz and /learn in the middle of a hand are answered with a message, not a toast with no press', async () => {
+    const { api, calls } = fakeApi();
+    const chats = newChats();
+    const deps = testDeps(4);
+    await handleUpdate(text(1, '/start'), chats, api, deps);
+    await handleUpdate(tap(2, dataFor(calls[0], /^Play a hand$/), 101), chats, api, deps);
+    for (const [update, body] of [
+      [3, '/quiz'],
+      [4, '/learn'],
+    ] as const) {
+      const before = calls.length;
+      await handleUpdate(text(update, body), chats, api, deps);
+      const sent = calls.slice(before);
+      assert.deepEqual(
+        sent.map((call) => call.method),
+        ['sendMessage'],
+        body,
+      );
+      assert.match(String(sent[0]?.body['text']), /^Finish this hand first/, body);
+    }
   });
 
   test('a press is answered first, then edits the message it was pressed on', async () => {
