@@ -11,5 +11,6 @@ export * from './api-types.ts';
 export * from './content-types.ts';
 export * from './errors.ts';
 export * from './legends.ts';
+export * from './quiz-tolerance.ts';
 export * from './schemas.ts';
 export * from './ws-protocol.ts';
