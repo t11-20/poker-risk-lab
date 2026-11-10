@@ -23,7 +23,9 @@
  *      query and intrinsic reflow instead — nothing is hidden at any width — and
  *      `packages/ui/test/layout-guarantees.test.ts` asserts `.prl-play__decision` carries no
  *      `position: sticky/fixed/absolute`. **Do not re-pin this band.** If the price seems to scroll
- *      away, the answer is a shorter band, not a pinned one.
+ *      away, the answer is a shorter band, not a pinned one. Below 46rem of column the row of
+ *      buttons sticks INSIDE the ActionBar, whose box bounds how far it can travel, so it can cover
+ *      the bar's own sizer and never the table; `styles/play.css` section 3.1 has the measurements.
  *   2. **The pot** is in that same band, in the ActionBar's price strip ("In the pot"), as well as in
  *      the middle of the table.
  *   3. **Your cards** are in the band's own readout at 900px and above. They also appear on the seat
