@@ -393,8 +393,11 @@ and both are application defects rather than certification limits:
    mounted the gate could see it happen — "A new hand was dealt.", then "smallBlind 5 from seat 3,
    bigBlind 10 from seat 4" — which is the same silence, now visible.
 
-**What a reader hears now is one polite sentence: "A new hand was dealt. smallBlind 5 from seat 3,
-bigBlind 10 from seat 4."** The reducer does not write the deal and then extend it; `handStarted`
+**What a reader hears now is one polite announcement: "A new hand was dealt. Nit bot posts the
+small blind, 5. Ada posts the big blind, 10."** The blinds, every action and the result name the
+player dealt into the seat; they used to read "smallBlind 5 from seat 3", a bare "folds", and
+"seat 4 wins 259 from pot 0", counting seats from zero and never saying who acted. See
+`apps/api/src/rooms/narration.ts`. The reducer does not write the deal and then extend it; `handStarted`
 writes nothing at all and leaves a sentence to be *carried* onto the front of the first thing the
 hand says. That is exactly one write into the region however the frames arrive, so there is no
 timing under which the deal is heard twice — which is the defect on the other side, and the one
@@ -662,7 +665,7 @@ invite-code rooms.
 |---|---|---|---|---|
 | 3.1 | auto | Activate "Deal me in" | The connection status is announced politely as it changes — "Preparing: reading your session…", then "Live. Everything on this screen is the server's own view of the table, redacted for you." | |
 | 3.2 | auto | After "Deal me in", and after the seat and the deal it sends | The control that was activated has disappeared. The reading cursor is **not** dumped at the top of the document: the reader is placed on the status line and hears it. Silence plus a cursor at `<body>` is a FAIL. | |
-| 3.3 | auto | Wait for the first hand "Deal me in" deals | **"A new hand was dealt."** is announced politely, once, at the front of the forced bets that arrive with it — "A new hand was dealt. smallBlind 5 from seat 3, bigBlind 10 from seat 4." Hearing the deal on its own and then again in front of the blinds is a FAIL; so is hearing only the blinds. | |
+| 3.3 | auto | Wait for the first hand "Deal me in" deals | **"A new hand was dealt."** is announced politely, once, at the front of the forced bets that arrive with it — "A new hand was dealt. Nit bot posts the small blind, 5. Ada posts the big blind, 10." Hearing the deal on its own and then again in front of the blinds is a FAIL; so is hearing only the blinds. | |
 | 3.4 | auto | Wait for the blinds and the bots | Each table event is announced politely and **in order**: the forced bets, then each seat's action in the server's own words ("The balanced bot bet 35 units on the flop"). Nothing interrupts. | |
 | 3.5 | auto | **When the decision reaches your seat** | A single polite announcement of the form **"Your turn on the flop. 35 units to call. Pot 100 units, your stack 970 units. You can fold, call or raise."** It must contain: that it is your turn, the street, the price, the pot, your stack, and the legal actions. | |
 | 3.6 | auto | Stay on your turn without acting for ten seconds | The turn sentence is announced **once**, not repeatedly. This app pushes whole-state frames several times a second; hearing the turn sentence more than once per turn is a FAIL. | |
