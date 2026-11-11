@@ -264,6 +264,11 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
       async (request, reply): Promise<CreateRoomResponse> => {
         const principal = principalOf(request);
         const body = request.body;
+        // A table whose bots fill every chair but the owner's is a practice table, and a learner
+        // holds one of those at a time — see `RoomRegistry.retirePracticeTables` for the units it
+        // used to mint. A table with a free chair is for people and is never retired by this.
+        const bots = (body.bots ?? []).reduce((total, entry) => total + entry.count, 0);
+        if (bots > 0 && bots + 1 === body.maxSeats) await registry.retirePracticeTables(principal.userId);
         const created = await registry.createRoom(principal, {
           name: body.name,
           maxSeats: body.maxSeats,
@@ -460,6 +465,10 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
         }
         const plan = planLegendSeats(body.profileIds, mode, maxSeats);
 
+        // Before the new room exists, so it cannot retire itself. Every match the web client starts
+        // used to leave the previous one open with a 1,000-unit membership in it, and the header
+        // grew by that much per match — see `RoomRegistry.retirePracticeTables`.
+        await registry.retirePracticeTables(principal.userId);
         const created = await registry.createRoom(principal, {
           name: 'Legends practice',
           maxSeats,

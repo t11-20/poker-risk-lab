@@ -908,23 +908,6 @@ describe('the Legends endpoints', () => {
     assert.equal(body.difficulty.id, 'educational');
     assert.equal(body.difficulty.coachAvailable, true);
 
-    const expert = await test.app.inject({
-      method: 'POST',
-      url: '/api/v1/legends/matches',
-      payload: {
-        profileIds: ['adaptive-exploiter'],
-        difficulty: 'expert',
-        startingStack: 1_000,
-        smallBlind: 5,
-        bigBlind: 10,
-      },
-      cookies: { ...learner.cookies, prl_csrf: cookie },
-      headers: { 'x-csrf-token': token, origin: ALLOWED_ORIGIN },
-    });
-    assert.equal(expert.statusCode, 201, expert.payload);
-    const expertBody = expert.json() as { difficulty: { id: string; coachAvailable: boolean } };
-    assert.equal(expertBody.difficulty.id, 'expert');
-    assert.equal(expertBody.difficulty.coachAvailable, false);
     assert.deepEqual(
       body.seats.map((seat) => seat.seat),
       [1, 2],
@@ -944,6 +927,37 @@ describe('the Legends endpoints', () => {
     assert.equal(read.statusCode, 200, read.payload);
     const summary = read.json() as { room: { members: readonly { isBot: boolean }[] } };
     assert.equal(summary.room.members.filter((member) => member.isBot).length, 2);
+
+    // A second match retires the first: a learner holds one practice table at a time, and every
+    // match used to leave the previous one open with a stack in it. See `retirePracticeTables`.
+    // The hub closes the old match's sockets off this notification; without it a second tab would
+    // sit on a table that never sends another frame.
+    const notified: string[] = [];
+    test.registry.onRetirement((roomId) => notified.push(roomId));
+    const expert = await test.app.inject({
+      method: 'POST',
+      url: '/api/v1/legends/matches',
+      payload: {
+        profileIds: ['adaptive-exploiter'],
+        difficulty: 'expert',
+        startingStack: 1_000,
+        smallBlind: 5,
+        bigBlind: 10,
+      },
+      cookies: { ...learner.cookies, prl_csrf: cookie },
+      headers: { 'x-csrf-token': token, origin: ALLOWED_ORIGIN },
+    });
+    assert.equal(expert.statusCode, 201, expert.payload);
+    const expertBody = expert.json() as { difficulty: { id: string; coachAvailable: boolean } };
+    assert.equal(expertBody.difficulty.id, 'expert');
+    assert.equal(expertBody.difficulty.coachAvailable, false);
+    const retired = await test.app.inject({
+      method: 'GET',
+      url: `/api/v1/rooms/${body.roomId}`,
+      cookies: learner.cookies,
+    });
+    assert.equal(retired.statusCode, 404, 'the first match closed when the second began');
+    assert.deepEqual(notified, [body.roomId]);
     await test.app.close();
   });
 

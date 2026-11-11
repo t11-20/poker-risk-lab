@@ -23,8 +23,8 @@
  *
  * So units are **derived**, from the two chip quantities the schema really does hold:
  *
- *   units       = SUM(prl.room_members.stack) over the learner's live memberships,
- *                 or DEFAULT_UNIT_ALLOWANCE when they are not at any table.
+ *   units       = SUM(prl.room_members.stack) over the learner's live memberships of rooms
+ *                 that are not closed, or DEFAULT_UNIT_ALLOWANCE when they are at no table.
  *   netLifetime = SUM(prl.hand_seats.net_result) over their seats in completed hands.
  *
  * That is not a workaround, it is the model the schema describes. A learner's units are the
@@ -854,6 +854,12 @@ interface UnitsRow {
  * allowance, while a learner who is at a table and has been felted gets 0, and those must not
  * look the same. `filter (where ...)` on the sum would have collapsed them.
  *
+ * Closed rooms are excluded, exactly as `resetUnits` below excludes them, and the asymmetry was
+ * a defect rather than a choice: closing a room leaves its memberships as they are (the roster of
+ * a closed table is history — see `rooms.close`), so a sum over `left_at is null` alone kept
+ * counting the chips of every table that had stopped existing. The chips at a closed table cannot
+ * be played, reset or sat back down with; they are not in front of anybody.
+ *
  * `net_lifetime` counts only completed hands. A hand in progress has `net_result` NULL by
  * design — the migration is explicit that writing a placeholder 0 would make an unfinished
  * hand indistinguishable from a break-even one — so there is nothing to add for it anyway,
@@ -868,7 +874,8 @@ export async function readUnits(sql: Db, userId: string): Promise<UnitsSnapshot>
     select
       (select sum(m.stack)::int
          from prl.room_members m
-        where m.user_id = ${userId} and m.left_at is null) as live_stack,
+         join prl.rooms r on r.id = m.room_id
+        where m.user_id = ${userId} and m.left_at is null and r.status <> 'closed') as live_stack,
       coalesce(
         (select sum(s.net_result)::int
            from prl.hand_seats s

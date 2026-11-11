@@ -426,6 +426,18 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
       router.closeRoom(roomId, WS_CLOSE.serverShuttingDown, 'this table moved to another server');
     });
 
+    /**
+     * Sockets watching a practice table the learner replaced by starting another one.
+     *
+     * The table is closed and gone, so these would be the same healthy-and-silent sockets as the
+     * eviction case above — a second tab left on the old match, say. `normal` (1000), because it is
+     * the truth: the table closed and nothing was lost. A reconnect is refused for a closed room,
+     * which is the right answer to a tab that is still pointing at it.
+     */
+    const stopWatchingRetirements = registry.onRetirement((roomId) => {
+      router.closeRoom(roomId, WS_CLOSE.normal, 'this practice table was replaced by a new one');
+    });
+
     /** Sockets per session, for `maxSocketsPerSession`. */
     const bySession = new Map<string, number>();
     /**
@@ -580,6 +592,7 @@ export function createWsHub(options: WsHubOptions = {}): FastifyPluginAsync {
       // left behind would hold a closed router alive and, on the next eviction, close sockets
       // through it: the same shape as the room subscription `handleClose` is careful to drop.
       stopWatchingEvictions();
+      stopWatchingRetirements();
       // Same reason, same shape: the revocation bus is module scope in `auth/session.ts` and
       // outlives this hub in any process that builds more than one app. A listener left behind
       // would hold a closed router alive and close sockets through it on the next sign-out.

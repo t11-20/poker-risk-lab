@@ -147,7 +147,11 @@ export interface HandArchive {
    * A hand interrupted by a restart is unrecoverable by design — the deck and the salts are never
    * persisted — so the row has to be settled by somebody, and nobody was doing it.
    */
-  readonly abandonInterruptedHands: (roomId: string) => Promise<readonly handsRepository.AbandonedHand[]>;
+  readonly abandonInterruptedHands: (
+    roomId: string,
+    /** Recorded on the abandoned result. Defaults to the restart case, which is the common one. */
+    reason?: string,
+  ) => Promise<readonly handsRepository.AbandonedHand[]>;
   readonly handStarted: (deal: ArchivedDeal) => Promise<void>;
   readonly actionsApplied: (handId: string, actions: readonly LoggedAction[]) => Promise<void>;
   readonly streetAdvanced: (
@@ -184,7 +188,8 @@ export function postgresArchive(sql: () => Db): HandArchive {
   return {
     nextHandNumber: (roomId) => handsRepository.nextHandNumber(sql(), roomId),
     lastDealtHand: (roomId) => handsRepository.lastDealtHand(sql(), roomId),
-    abandonInterruptedHands: (roomId) => handsRepository.abandonInterruptedHands(sql(), roomId),
+    abandonInterruptedHands: (roomId, reason) =>
+      handsRepository.abandonInterruptedHands(sql(), roomId, ...(reason === undefined ? [] : [reason])),
     handStarted: async (deal) => {
       await handsRepository.start(sql(), {
         handId: deal.handId,
@@ -457,6 +462,17 @@ export class LiveRoom {
    */
   settleSeatReleases(): Promise<void> {
     return this.releaseQueue;
+  }
+
+  /**
+   * Resolves once every archive write queued so far has landed (or failed and been reported).
+   *
+   * Never rejects: the chain ends in a `catch`. Exists for a caller that writes a hand row OUTSIDE
+   * this chain and must not be overtaken by a write still inside it — the retirement of a practice
+   * table, which settles the hand rows a queued `handStarted` would otherwise re-open behind it.
+   */
+  archiveSettled(): Promise<void> {
+    return this.archiveQueue;
   }
 
   /**
@@ -754,6 +770,8 @@ export class RoomRegistry {
   private releaseQueue: Promise<void> = Promise.resolve();
   /** Who wants to know that a room was taken away. `ws/hub.ts` registers one, to close sockets. */
   private readonly evictionListeners = new Set<(roomId: string, reason: EvictionReason) => void>();
+  /** Who wants to know that a practice table was retired. `ws/hub.ts` registers one, to close sockets. */
+  private readonly retirementListeners = new Set<(roomId: string) => void>();
 
   constructor(options: RoomRegistryOptions = {}) {
     this.clock = options.clock ?? systemClock;
@@ -1394,6 +1412,96 @@ export class RoomRegistry {
     await room.settleSeatReleases();
   }
 
+  /**
+   * Closes the learner's previous practice tables, so that starting a new one does not mint a stack.
+   *
+   * ## The defect
+   *
+   * Every room a learner creates gives them a membership holding the room's `starting_stack` before
+   * they have sat anywhere (`createRoom` → `addMember`, which defaults the stack), and units are the
+   * sum of the stacks of every live membership (`users.readUnits`). Nothing ever closed a practice
+   * table: `POST /legends/matches` discards the invite code, so nobody else can join it, and the web
+   * client creates a new match every time a reader picks a Legend. Measured through the routes
+   * against the real store: a fresh guest reads 1,000; after three matches, 3,000; the UI audit saw
+   * the header go 1,000 → 2,000 → 3,000 → 3,960 with 995 on the screen. Each abandoned row was a real
+   * 1,000-chip stack the reader could go back and sit down with, so a reader grew their units by
+   * clicking, without playing a hand. Nothing transferable was created (there is no pool, and reset
+   * is free), but the figure on the badge stopped being the chips in front of anybody.
+   *
+   * ## The rule: one practice table at a time
+   *
+   * A practice table is a room this learner OWNS, that is open, and that has no chair for another
+   * person: every other live member is a bot, at least one is, and the bots fill every seat but one.
+   * That last clause is the safety property. A Legends match (one seat per profile, plus the
+   * learner's) and the six-handed bot table both match it; the private table for friends — six seats
+   * and two bots, with an invite code that may be in somebody's hand — does not, and neither does
+   * any room another person has joined, seated or not. Matching on `name` would close a friend's
+   * table that happened to share a label.
+   *
+   * ## A hand in progress is closed with its table, not waited for
+   *
+   * Skipping a room with a hand in progress would leave the reported sequence exactly as it was: the
+   * audit started its second match while the first was dealt and waiting on the reader. The hand is
+   * against bots only, the deck and salts die with the table (the same trade a restart makes), and
+   * the row is settled as abandoned with a net of zero by the same repository call a restart uses —
+   * after this room's archive chain has drained, so a queued `handStarted` cannot re-open it.
+   *
+   * Durable first: the room row is closed before the live table, so a concurrent `ensureOpen` reads
+   * `closed` and refuses rather than rebuilding the table this is tearing down.
+   *
+   * Returns the ids it closed, for the caller's tests and logs.
+   */
+  async retirePracticeTables(userId: string): Promise<readonly string[]> {
+    const owned = (await this.store.listForUser(userId)).filter(
+      (row) => row.owner_user_id === userId && row.status !== 'closed',
+    );
+    if (owned.length === 0) return [];
+    const roster = await this.store.membersOfRooms(owned.map((row) => row.id));
+    const retired: string[] = [];
+    for (const row of owned) {
+      const members = roster.filter((member) => member.room_id === row.id);
+      const bots = members.filter((member) => member.is_bot).length;
+      const anotherPerson = members.some((member) => !member.is_bot && member.user_id !== userId);
+      if (anotherPerson || bots === 0 || row.max_seats !== bots + 1) continue;
+      if (await this.retire(row.id, userId)) retired.push(row.id);
+    }
+    return retired;
+  }
+
+  /** One practice table, closed durably and then live. See `retirePracticeTables`. */
+  private async retire(roomId: string, ownerUserId: string): Promise<boolean> {
+    // A build in flight would publish its room AFTER the lookup below and outlive the close.
+    await this.opening.get(roomId)?.catch(() => undefined);
+    if (!(await this.store.close(roomId, ownerUserId))) return false;
+    const live = this.rooms.get(roomId);
+    if (live === undefined) return true;
+    // Not `this.close(roomId)`: that releases the lease at once, and the hand rows below are only
+    // ours to settle while we still hold it.
+    live.close();
+    this.rooms.delete(roomId);
+    try {
+      await live.archiveSettled();
+      // Counted already, as `room_closed`, by `live.close()` — so this does not count again.
+      await this.archive.abandonInterruptedHands(roomId, 'replaced-by-a-new-practice-table');
+    } catch (error) {
+      this.onProblem('could not settle the hands of a retired practice table', {
+        event: 'reconcile-read',
+        roomId,
+        error: String(error),
+      });
+    } finally {
+      this.releaseLeaseSoon(roomId);
+    }
+    for (const listener of [...this.retirementListeners]) {
+      try {
+        listener(roomId);
+      } catch {
+        // The room is closed, which is the property; a listener that threw is the listener's bug.
+      }
+    }
+    return true;
+  }
+
   /** Seats a bot and registers it with the runner. Both, or neither. */
   async seatBot(
     roomId: string,
@@ -1559,6 +1667,21 @@ export class RoomRegistry {
     this.evictionListeners.add(listener);
     return () => {
       this.evictionListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Registers a listener for "this practice table was retired", and returns its unsubscribe.
+   *
+   * Separate from `onEviction` because nothing was taken away from this process — the room is
+   * closed everywhere — and because `EvictionReason` is a metric label for fencing, which a learner
+   * starting a new match is not. A socket left open on a retired table is the silent-table failure
+   * `ws/hub.ts` describes for eviction, so the hub closes them.
+   */
+  onRetirement(listener: (roomId: string) => void): () => void {
+    this.retirementListeners.add(listener);
+    return () => {
+      this.retirementListeners.delete(listener);
     };
   }
 
