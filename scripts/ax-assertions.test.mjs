@@ -38,6 +38,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { numericVerdictSentence } from '../apps/web/src/lib/quiz-verdict.ts';
 import {
   ASSERTION_IDS,
   ASSERTION_ROUTES,
@@ -46,6 +47,8 @@ import {
   CARD_VALUE_WORDS,
   figureDefect,
   isBareName,
+  NUMERIC_VERDICT_OPENING,
+  QUIZ_VERDICT_OPENING,
   SPEECH_PROBE,
   skippedHeadingLevel,
 } from './ax-assertions.mjs';
@@ -2094,5 +2097,31 @@ describe('NEGATIVE CONTROL — 3.6, ten seconds of state frames on one turn', ()
     };
     assert.equal(check.decide(churned).ok, false);
     assert.match(check.decide(churned).detail, /DOM mutation/u);
+  });
+});
+
+/**
+ * J2.5 and J2.7 find the quiz's verdict by the opening of its sentence, so the opening they look for
+ * has to be the one the app writes. The numeric sentence was reworded — "35.0 % is outside the
+ * tolerance of 33.3 %" named the target as the tolerance — and an opening pattern left on the old
+ * wording finds no region, which J2.7 reports as "checking a numeric answer wrote no comparison".
+ * So the pattern is driven by the app's own sentence-builder rather than by a copy of its output.
+ */
+describe('the quiz verdict openings match what the app writes', () => {
+  const tail = ' The server could not be reached, so this comparison was made in your browser.';
+
+  it('finds both numeric verdicts, with the recording sentence left after the opening', () => {
+    for (const matched of [true, false]) {
+      const sentence =
+        numericVerdictSentence({ yours: '33.0 %', computed: '33.3 %', tolerance: '1.5 %', matched }) + tail;
+      assert.match(sentence, NUMERIC_VERDICT_OPENING, `matched=${String(matched)}`);
+      assert.ok(sentence.replace(NUMERIC_VERDICT_OPENING, '').trim().length >= 20);
+    }
+  });
+
+  it('does not take a multiple-choice verdict for a numeric one, or the reverse', () => {
+    const numeric = numericVerdictSentence({ yours: '3', computed: '4', tolerance: '0.5', matched: false });
+    assert.doesNotMatch(numeric, QUIZ_VERDICT_OPENING);
+    assert.doesNotMatch('That matches the answer this lesson gives.' + tail, NUMERIC_VERDICT_OPENING);
   });
 });

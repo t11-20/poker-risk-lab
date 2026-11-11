@@ -1469,13 +1469,15 @@
   border-inline-start-color: var(--prl-accent-edge);
 }
 
-.prl-learn-quiz__verdict-mark {
+.prl-learn-quiz__verdict[data-mark]::before {
+  /* `/ ""` is the alternative text: drawn, never announced. See `verdictMarkAttributes`. */
+  content: attr(data-mark) / "";
   margin-inline-end: var(--prl-space-4);
   color: var(--prl-text-secondary);
   font-weight: var(--prl-weight-semibold);
 }
 
-.prl-learn-quiz__verdict[data-matched="true"] .prl-learn-quiz__verdict-mark {
+.prl-learn-quiz__verdict[data-matched="true"]::before {
   color: var(--prl-accent-text);
 }
 

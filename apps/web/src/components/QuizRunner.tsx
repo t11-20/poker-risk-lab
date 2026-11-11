@@ -157,6 +157,19 @@ function ReReadLink(props: {
   );
 }
 
+/**
+ * The verdict's mark, as attributes the stylesheet draws — not as a child of the live region.
+ *
+ * The mark is `::before { content: attr(data-mark) / "" }`, so it is painted and never spoken, and
+ * it is not in the region's `textContent`. A child `<span aria-hidden>` was tried first and is
+ * silent too, but it puts "◆" at the front of the region's text, and `test:ax` reads a live region
+ * by its `textContent` and anchors on the sentence's first word ("That matches…"), as a reader's
+ * announcement does. The region also stays `:empty` until answered, which its box depends on.
+ */
+function verdictMarkAttributes(matched: boolean): { 'data-matched': string; 'data-mark': string } {
+  return { 'data-matched': String(matched), 'data-mark': verdictMarker(matched) };
+}
+
 // ---------------------------------------------------------------------------
 // Multiple choice
 // ---------------------------------------------------------------------------
@@ -240,14 +253,8 @@ function MultipleChoice(props: {
         aria-live="polite"
         className="prl-learn-quiz__verdict"
         role="status"
-        {...(answered ? { 'data-matched': String(resolved.matched) } : {})}
+        {...(answered ? verdictMarkAttributes(resolved.matched) : {})}
       >
-        {/* Only once answered, so the region is still `:empty` before then. See `verdictMarker`. */}
-        {answered ? (
-          <span className="prl-learn-quiz__verdict-mark" aria-hidden="true">
-            {verdictMarker(resolved.matched)}
-          </span>
-        ) : null}
         {verdict}
         {answered ? ` ${VERDICT_SOURCE_NOTE[resolved.source]}` : ''}
       </p>
@@ -498,13 +505,8 @@ function NumericQuestion(props: {
         aria-live="polite"
         className="prl-learn-quiz__verdict"
         role="status"
-        {...(submitted === null ? {} : { 'data-matched': String(resolved.matched) })}
+        {...(submitted === null ? {} : verdictMarkAttributes(resolved.matched))}
       >
-        {submitted === null ? null : (
-          <span className="prl-learn-quiz__verdict-mark" aria-hidden="true">
-            {verdictMarker(resolved.matched)}
-          </span>
-        )}
         {verdict}
         {submitted === null ? '' : ` ${VERDICT_SOURCE_NOTE[resolved.source]}`}
       </p>
