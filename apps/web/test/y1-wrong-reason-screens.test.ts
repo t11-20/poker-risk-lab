@@ -169,12 +169,14 @@ describe('/lab/[scenarioId] answers 404 only when the API said 404', () => {
     assert.match(page, /state: 'unavailable'/u);
   });
 
-  it('still names the scenario it could not stage, from the bundled index', () => {
-    // The index of all thirty-six titles ships even though only six bodies do, so this page can say
-    // WHICH scenario failed to load. "Rule of 4: a big draw on the flop could not be loaded" and
-    // "there is nothing at this address" are not the same message.
+  it('still names the scenario it could not stage, from the bundled content', () => {
+    // Every scenario's title ships in `@prl/content` even though only six analyses do, so this page
+    // can say WHICH scenario failed to load. "Rule of 4: a big draw on the flop could not be loaded"
+    // and "there is nothing at this address" are not the same message. This used to pin a lookup in
+    // `LAB_SCENARIO_SUMMARIES`, which is the six fixtures and named none of the 36 real ids; see
+    // `lab-scenario-titles.test.ts`.
     assert.match(page, /function ScenarioUnavailable/u);
-    assert.match(page, /LAB_SCENARIO_SUMMARIES\.find\(\(candidate\) => candidate\.id === scenarioId\)/u);
+    assert.match(page, /const summary = bundledScenarioTitle\(scenarioId\);/u);
     assert.match(page, /not one of the six carried in the\s*\n?\s*bundled copy/u);
   });
 
