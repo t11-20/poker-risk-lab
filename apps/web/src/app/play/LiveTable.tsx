@@ -789,9 +789,27 @@ function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
  *
  * Twice, both edges the reader is waiting for: a hand is dealt with the reader in it, and a
  * decision becomes theirs. Never on a frame that merely re-describes a spot already on screen, and
- * never when the band is already in view — so a reader who is looking at the table is not moved by
- * a pixel. Not while they are typing somewhere else on the page either: pulling a half-typed invite
- * code out from under the caret would be worse than the defect.
+ * never when the target is already in view — so a reader who is looking at the table is not moved
+ * by a pixel. Not while they are typing somewhere else on the page either: pulling a half-typed
+ * invite code out from under the caret would be worse than the defect.
+ *
+ * ## What it brings into view: the buttons, by the nearest edge
+ *
+ * The action row when there is one (it is the thing the reader has to reach), the band when there
+ * is not, and `block: 'nearest'` — never the band by its bottom edge. Measured on
+ * `/play?state=decision` from scrollY 0, rects as viewport y:
+ *
+ *     390x844   band, block 'end'          plate -209..12, board -342..-242, buttons 499..668
+ *               buttons, block 'nearest'   plate  316..537, board  183..283,  buttons 611..780
+ *     1440x900  buttons, block 'nearest'   plate  146..465, board  118..230,  buttons 828..900
+ *     768x1024  buttons, block 'nearest'   plate  656..877, board  511..623,  buttons 935..1024
+ *     1024x768  buttons, block 'nearest'   plate  321..542, board  176..288,  buttons 679..768
+ *
+ * The first line is why: below 900px the band is ~715px against ~620px of viewport between the
+ * header's and the Coach sheet's scroll padding, so the band can never be "in view" and aligning its
+ * bottom put the reader's own plate — the only place their cards are shown at that width — under the
+ * header. The row is sticky inside its bar there, so bringing it in by the nearest edge stops as soon
+ * as it can stick, with the plate and the board still above it.
  *
  * This moves the viewport only. Focus is the business of the rescues in `ActionBar` and
  * `TableStage`, which now all pass `preventScroll` so the two cannot fight; nothing here moves the
@@ -827,8 +845,10 @@ function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement 
   useEffect(() => {
     if (handId === null && turnEdge === '') return;
     const element = band.current;
-    if (element === null || inView(element) || typingElsewhere(element)) return;
-    element.scrollIntoView({ block: 'end', behavior: reduced ? 'auto' : 'smooth' });
+    if (element === null || typingElsewhere(element)) return;
+    const target = element.querySelector<HTMLElement>('.prl-action-bar__actions') ?? element;
+    if (inView(target)) return;
+    target.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
   }, [handId, turnEdge, band, reduced]);
 }
 

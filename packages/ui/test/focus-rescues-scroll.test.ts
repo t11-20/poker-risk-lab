@@ -126,6 +126,20 @@ describe('the caret lands where it can be seen', () => {
     assert.doesNotMatch(actionRow(old), IN_FLIGHT);
   });
 
+  it('follows the table by bringing the buttons in by the nearest edge, never the band by its bottom', () => {
+    // At 390x844 the band is taller than the space between the header's and the sheet's scroll
+    // padding, and `block: 'end'` on it put the reader's own plate at viewport y -209..12, under the
+    // header. The buttons by 'nearest' left the plate at 316..537 and the board at 183..283.
+    const follow = (source: string): boolean =>
+      /querySelector<HTMLElement>\('\.prl-action-bar__actions'\) \?\? element/u.test(source) &&
+      /target\.scrollIntoView\(\{ block: 'nearest'/u.test(source) &&
+      !/scrollIntoView\(\{ block: 'end'/u.test(source);
+    const live = readFileSync(join(WEB_SRC, 'app', 'play', 'LiveTable.tsx'), 'utf8');
+    assert.ok(follow(live), 'useFollowTheTable no longer brings the action row in by its nearest edge');
+    const old = "element.scrollIntoView({ block: 'end', behavior: reduced ? 'auto' : 'smooth' });";
+    assert.equal(follow(old), false, 'NEGATIVE CONTROL: the detector passed the band-by-its-bottom version');
+  });
+
   it('spans the acknowledgement across the band, so it cannot squeeze the controls', () => {
     // The wrapper was auto-placed in the plate's `auto` column from 46rem of column up, widened it to
     // the callout's width and wrapped the buttons: at 1440x900 the row went from 72px to 232px tall

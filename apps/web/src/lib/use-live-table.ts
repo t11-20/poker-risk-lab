@@ -676,7 +676,7 @@ function onAckFrame(state: TableState, frame: Extract<WsServerMessage, { type: '
     frame.deduplicated === true
       ? 'This decision had already been applied, so the server counted the retry as the same one. ' +
         'Nothing was staked twice.'
-      : 'The table has it. The next decision appears here when it is yours.';
+      : 'The table has it. The controls come back when the next decision is yours.';
   return {
     ...state,
     pending: null,
