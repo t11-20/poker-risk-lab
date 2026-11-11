@@ -39,14 +39,20 @@ import { Chip, formatIndex, Reveal } from '@prl/ui';
 import type { Metadata } from 'next';
 import { cache, type ReactElement } from 'react';
 import {
-  FILTER_ANY,
-  type FilterOption,
   isFilteredSelection,
   ScenarioFilters,
   scenarioCountPhrase,
 } from '../../components/ScenarioFilters.tsx';
 import { scenarioListFixture } from '../../fixtures/scenarios.ts';
 import { API_PATHS, apiGet, isApiUnavailable } from '../../lib/api.ts';
+import {
+  anyCountFor,
+  FILTER_ANY,
+  LAB_RESULTS_ID,
+  type LabSelection,
+  matchesSelection,
+  optionsFor,
+} from '../../lib/lab-filters.ts';
 import { difficultyLabel, streetLabel, topicLabel } from '../../lib/lab-labels.ts';
 import { readerCallOptions } from '../../lib/server-session.ts';
 import '../../styles/page.css';
@@ -58,12 +64,6 @@ const DESCRIPTION =
 /** The route the filter form submits back to. */
 const ROUTE = '/lab';
 
-interface Selection {
-  readonly topic: string;
-  readonly difficulty: string;
-  readonly street: string;
-}
-
 /** One query value, or the "any" sentinel. Arrays (`?topic=a&topic=b`) take the first entry. */
 function readParam(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] ?? FILTER_ANY;
@@ -71,43 +71,12 @@ function readParam(value: string | string[] | undefined): string {
 }
 
 /** The three filters, read from the query string. One reading, shared by the title and the page. */
-function readSelection(query: Record<string, string | string[] | undefined>): Selection {
+function readSelection(query: Record<string, string | string[] | undefined>): LabSelection {
   return {
     topic: readParam(query['topic']),
     difficulty: readParam(query['difficulty']),
     street: readParam(query['street']),
   };
-}
-
-function matches(scenario: ScenarioSummary, selection: Selection): boolean {
-  if (selection.topic !== FILTER_ANY && scenario.topic !== selection.topic) return false;
-  if (selection.difficulty !== FILTER_ANY && scenario.difficulty !== selection.difficulty) return false;
-  if (selection.street !== FILTER_ANY && scenario.street !== selection.street) return false;
-  return true;
-}
-
-/**
- * Options for one facet, counted against the other two.
- *
- * The facet being built is set to `any` inside its own count, which is what makes the number a
- * prediction of "if I pick this" rather than of "if I pick this and nothing else".
- */
-function optionsFor(
-  scenarios: readonly ScenarioSummary[],
-  selection: Selection,
-  facet: keyof Selection,
-  label: (id: string) => string,
-): readonly FilterOption[] {
-  const relaxed: Selection = { ...selection, [facet]: FILTER_ANY };
-  const counts = new Map<string, number>();
-  for (const scenario of scenarios) {
-    const value = scenario[facet];
-    if (!counts.has(value)) counts.set(value, 0);
-    if (matches(scenario, relaxed)) counts.set(value, (counts.get(value) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([value, count]) => ({ value, label: label(value), count }))
-    .sort((a, b) => a.label.localeCompare(b.label, 'en'));
 }
 
 interface LabData {
@@ -216,7 +185,7 @@ export async function generateMetadata({ searchParams }: LabIndexProps): Promise
     () => null,
   );
   if (counted === null) return { title: 'Scenario Lab', description: DESCRIPTION };
-  const matching = counted.filter((scenario) => matches(scenario, selection)).length;
+  const matching = counted.filter((scenario) => matchesSelection(scenario, selection)).length;
   return {
     title: `Scenario Lab — ${scenarioCountPhrase(matching, counted.length)} scenarios`,
     description: DESCRIPTION,
@@ -277,7 +246,8 @@ export default async function LabIndexPage({ searchParams }: LabIndexProps): Pro
 
   const { response, fromFixture } = await loadScenarios();
   const all = response.scenarios;
-  const shown = all.filter((scenario) => matches(scenario, selection));
+  const shown = all.filter((scenario) => matchesSelection(scenario, selection));
+  const introCount = all.filter((scenario) => scenario.difficulty === 'intro').length;
 
   return (
     <div className="prl-container prl-lab-page">
@@ -307,6 +277,26 @@ export default async function LabIndexPage({ searchParams }: LabIndexProps): Pro
         </p>
       ) : null}
 
+      {/*
+        A way in for a first visit, rather than re-sorting the list.
+
+        The list is in the API's order, which is the content bundle's file order, and the first Intro
+        card in it is #14 — measured at 360x640, 4,574px down the page. Sorting the list by level
+        would have fixed that and cost two things this page relies on: every card's number is its
+        place in the full list ("a scenario that is 03 unfiltered must not become 01"), so a re-sort
+        renumbers all of them, and "Next scenario" on a scenario page walks the same order. A link
+        changes neither, says out loud what the reorder would only have implied, and lands on the
+        result count through the same fragment the filter form uses. Unfiltered views only: once a
+        reader has chosen a filter, they have found the control this points at.
+      */}
+      {isFilteredSelection(selection) || introCount === 0 ? null : (
+        <p className="prl-note">
+          <a href={`${ROUTE}?difficulty=intro#${LAB_RESULTS_ID}`}>
+            {`New here? Start with the ${introCount} Intro scenarios`}
+          </a>
+        </p>
+      )}
+
       <ScenarioFilters
         topics={optionsFor(all, selection, 'topic', topicLabel)}
         difficulties={optionsFor(all, selection, 'difficulty', difficultyLabel)}
@@ -314,6 +304,11 @@ export default async function LabIndexPage({ searchParams }: LabIndexProps): Pro
         selected={selection}
         matching={shown.length}
         totalAvailable={all.length}
+        anyCounts={{
+          topic: anyCountFor(all, selection, 'topic'),
+          difficulty: anyCountFor(all, selection, 'difficulty'),
+          street: anyCountFor(all, selection, 'street'),
+        }}
         action={ROUTE}
       />
 

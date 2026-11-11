@@ -43,6 +43,17 @@ const STREET_LABELS: Readonly<Record<string, string>> = {
   complete: 'Complete',
 };
 
+/**
+ * The order a learner meets the levels in, and the order the streets are dealt.
+ *
+ * Both maps above are written in that order, and these are their keys rather than a second list, so
+ * a level or street added to a map is ranked by being added. The Lab's filter options used to be
+ * sorted with `localeCompare` on the label, which read "Advanced, Core, Intro" and "Flop, Preflop,
+ * River, Turn" — alphabetical, which is no order anybody learns or plays in.
+ */
+export const DIFFICULTY_ORDER: readonly string[] = Object.keys(DIFFICULTY_LABELS);
+export const STREET_ORDER: readonly string[] = Object.keys(STREET_LABELS);
+
 function fallback(id: string): string {
   const spaced = id.replace(/-/g, ' ');
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
