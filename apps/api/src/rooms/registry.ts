@@ -467,9 +467,11 @@ export class LiveRoom {
   /**
    * Resolves once every archive write queued so far has landed (or failed and been reported).
    *
-   * Never rejects: the chain ends in a `catch`. Exists for a caller that writes a hand row OUTSIDE
-   * this chain and must not be overtaken by a write still inside it — the retirement of a practice
-   * table, which settles the hand rows a queued `handStarted` would otherwise re-open behind it.
+   * Never rejects: the chain ends in a `catch`. Exists for the two callers that write a stack or a
+   * hand row OUTSIDE this chain and must not be overtaken by a write still inside it — a units
+   * reset, whose `room_members.stack` update a queued `stacksSettled` from the hand before would
+   * otherwise overwrite, and the retirement of a practice table, which settles the hand rows a
+   * queued `handStarted` would otherwise re-open behind it.
    */
   archiveSettled(): Promise<void> {
     return this.archiveQueue;
@@ -1500,6 +1502,40 @@ export class RoomRegistry {
       }
     }
     return true;
+  }
+
+  /**
+   * Puts a learner's chips back to the starting stack at every live table they are seated at.
+   *
+   * ## The defect
+   *
+   * `POST /me/units/reset` used to write `room_members.stack` and nothing else, while the live table
+   * kept the stack it had in memory — and the live table is authoritative between hands. Measured
+   * from the UI audit: a seated reader busted to 0, reset ("Your units are back to 1000"), came back
+   * to the same room and was welcomed with a stack of 0, so `startHand` never dealt them in; the next
+   * bots-only hand then settled every seat, including theirs, and wrote the 0 BACK over the 1,000
+   * (`TableNotice.settledStacks` includes seats not dealt in). Stand up, take the seat, and the buy-in
+   * check refused it with `insufficient_units` — "reset your units and try again" — a moment after
+   * they had. Only a second reset, made while standing, stuck.
+   *
+   * ## Why the table moves first, and the archive is drained before the caller writes
+   *
+   * The caller writes the durable reset after this resolves. A settlement already queued on a room's
+   * archive chain would otherwise land after that write and undo it, which is the same clobber by a
+   * different route. `restack` is enqueued on the table, so every notice before it has already been
+   * appended to the chain by the time it returns; waiting for the chain then means the only writes
+   * that can follow the reset are ones the restacked table produced.
+   *
+   * A learner in a live hand is restacked when that hand settles — see `LiveTable.restack` — because
+   * reset is "always available and never penalised" (`docs/PRODUCT-GUARDRAILS.md` §1) and a reset
+   * refused for being mid-hand would be exactly the friction that forbids.
+   */
+  async restackForUnitsReset(userId: string): Promise<void> {
+    for (const room of [...this.rooms.values()]) {
+      if (room.record.closed || room.table.seatOf(userId) === null) continue;
+      await room.table.restack(userId, room.record.startingStack);
+      await room.archiveSettled();
+    }
   }
 
   /** Seats a bot and registers it with the runner. Both, or neither. */
