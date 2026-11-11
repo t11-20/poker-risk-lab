@@ -702,6 +702,187 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
     });
   });
 
+  /**
+   * The same transaction, with `inTheGap` run once between `rooms.seatMember`'s UPDATE and its
+   * read back. A store wrapper cannot reach inside that call, so this wraps the connection instead:
+   * every other statement passes through untouched, and so does the UPDATE's own result.
+   */
+  function gateSeatReadback(tx: TransactionSql): {
+    readonly tx: TransactionSql;
+    arm: (inTheGap: () => Promise<void>) => void;
+    readonly armed: () => boolean;
+  } {
+    let pending: (() => Promise<void>) | null = null;
+    const isSeatUpdate = (first: unknown): boolean => {
+      if (!Array.isArray(first) || !('raw' in first)) return false;
+      const text = first.join('?');
+      return text.includes('update prl.room_members m') && text.includes('set seat = ?');
+    };
+    const gated = new Proxy(tx, {
+      apply: (target, self, args: unknown[]) => {
+        const inTheGap = pending;
+        if (inTheGap === null || !isSeatUpdate(args[0])) return Reflect.apply(target, self, args);
+        pending = null;
+        return (async () => {
+          const rows: unknown = await Reflect.apply(target, self, args);
+          await inTheGap();
+          return rows;
+        })();
+      },
+    });
+    return {
+      tx: gated,
+      arm: (inTheGap) => {
+        pending = inTheGap;
+      },
+      armed: () => pending !== null,
+    };
+  }
+
+  /** What a learner who left during their own sit must find: no seat, no roster, no room. */
+  async function assertLeftDuringSit(
+    test: Harness,
+    tx: TransactionSql,
+    tableId: string,
+    friendId: string,
+  ): Promise<void> {
+    const room = test.registry.get(tableId);
+    assert.ok(room !== null);
+    assert.equal(room.member(friendId), null, 'the learner who left used to be put back on the roster');
+    assert.equal(room.table.seatOf(friendId), null, 'and seated at the live table');
+    assert.throws(
+      () => test.registry.require(tableId, friendId),
+      (error: unknown) => error instanceof AppError && error.code === 'room_not_found_or_not_permitted',
+      'require let a learner who had left into the room',
+    );
+    const rows = await tx<{ left: boolean; sat: boolean }[]>`
+      select left_at is not null as left, first_seated_at is not null as sat
+        from prl.room_members
+       where room_id = ${tableId} and user_id = ${friendId}
+    `;
+    assert.deepEqual(
+      rows.map((row) => ({ ...row })),
+      [{ left: true, sat: false }],
+      'one membership, left, never sat',
+    );
+    assert.equal(await units(tx, friendId), 1_000, 'the allowance, and nothing from a table they left');
+    assert.deepEqual(test.problems, [], 'a refused sit is not a problem to report');
+    // The chair holds nothing: the departed row keeps its seat number, outside both partial indexes.
+    await test.registry.sitAtTable(tableId, { userId: test.userId, displayName: 'Reader' }, 3);
+    assert.equal(room.table.seatOf(test.userId), 3, 'the owner takes the chair the leaver was refused');
+  }
+
+  it('a leave between taking the durable seat and reading it back refuses the sit', async () => {
+    await inRollback(async (rawTx) => {
+      // Devin Review on PR #25: `seatMember` read its result back by id, "left or not". A leave in
+      // that gap was answered with the departed row as a seat taken; `sitAtTable` sat the learner at
+      // the live table and put them back on the roster, and `require` let them into the room.
+      const gate = gateSeatReadback(rawTx);
+      const tx = gate.tx;
+      const test = await harness(tx);
+      const table = await createTable(test, { ...FRIENDS_TABLE, bots: undefined });
+      const friend = await usersRepository.createGuest(tx, { displayName: 'Friend' });
+      const principal = { userId: friend.id, displayName: 'Friend' };
+      await test.registry.joinByInviteCode(principal, table.inviteCode);
+      gate.arm(() => test.registry.leaveRoom(table.id, friend.id));
+      await assert.rejects(test.registry.sitAtTable(table.id, principal, 3), (error: unknown) => {
+        assert.ok(error instanceof AppError);
+        assert.equal(error.code, 'not_room_member', 'a sit by somebody who left is a non-member sit');
+        return true;
+      });
+      assert.equal(gate.armed(), false, 'the leave never ran in the gap, so this proved nothing');
+      await assertLeftDuringSit(test, tx, table.id, friend.id);
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('rooms.seatMember answers a membership that left before its read back as not a member', async () => {
+    await inRollback(async (rawTx) => {
+      // The repository on its own: `sitAtTable` now also refuses a leave it can see on the roster,
+      // so the test above passes with either fix, and this one is what holds `seatMember` to it.
+      const gate = gateSeatReadback(rawTx);
+      const tx = gate.tx;
+      const owner = await usersRepository.createGuest(tx, { displayName: 'Owner' });
+      const friend = await usersRepository.createGuest(tx, { displayName: 'Friend' });
+      const { room } = await roomsRepository.create(tx, {
+        name: 'Private table',
+        ownerUserId: owner.id,
+        maxSeats: 6,
+        smallBlind: 5,
+        bigBlind: 10,
+        startingStack: 1_000,
+      });
+      const notAMember = (error: unknown): boolean => {
+        assert.ok(error instanceof AppError);
+        assert.equal(error.code, 'not_room_member', 'a seat taken by a membership that has left');
+        return true;
+      };
+
+      await roomsRepository.addMember(tx, { roomId: room.id, userId: friend.id });
+      gate.arm(async () => {
+        await roomsRepository.unseatMember(tx, room.id, friend.id);
+        await roomsRepository.removeMember(tx, room.id, friend.id);
+      });
+      await assert.rejects(roomsRepository.seatMember(tx, room.id, friend.id, 3), notAMember);
+      assert.equal(gate.armed(), false, 'the leave never ran in the gap, so this proved nothing');
+
+      // Left and rejoined: the live membership is a new one, unseated. `diagnoseMembershipFailure`
+      // would find it and answer `invalid_request` about a seat number nobody got wrong.
+      await roomsRepository.addMember(tx, { roomId: room.id, userId: friend.id });
+      gate.arm(async () => {
+        await roomsRepository.removeMember(tx, room.id, friend.id);
+        await roomsRepository.addMember(tx, { roomId: room.id, userId: friend.id });
+      });
+      await assert.rejects(roomsRepository.seatMember(tx, room.id, friend.id, 3), notAMember);
+      assert.equal(gate.armed(), false, 'the leave and rejoin never ran in the gap, so this proved nothing');
+      assert.equal(
+        (await roomsRepository.memberOf(tx, room.id, friend.id))?.seat,
+        null,
+        'rejoined, unseated',
+      );
+
+      // The control: with nobody leaving, the same call takes the seat.
+      assert.equal((await roomsRepository.seatMember(tx, room.id, friend.id, 3)).seat, 3);
+    });
+  });
+
+  it('a leave while the live table takes the seat refuses the sit', async () => {
+    await inRollback(async (tx) => {
+      // The sibling gap: `seatMember` answered a live row, then a leave from another tab landed
+      // before `addMember`. It dropped the learner from the roster, and `addMember` put them back.
+      let inTheGap: (() => Promise<void>) | null = null;
+      const test = await harness(tx, {
+        wrap: (store) => ({
+          ...store,
+          seatMember: async (...args: Parameters<RoomStore['seatMember']>) => {
+            const id = await store.seatMember(...args);
+            const gap = inTheGap;
+            inTheGap = null;
+            if (gap !== null) await gap();
+            return id;
+          },
+        }),
+      });
+      const table = await createTable(test, { ...FRIENDS_TABLE, bots: undefined });
+      const friend = await usersRepository.createGuest(tx, { displayName: 'Friend' });
+      const principal = { userId: friend.id, displayName: 'Friend' };
+      await test.registry.joinByInviteCode(principal, table.inviteCode);
+      inTheGap = () => test.registry.leaveRoom(table.id, friend.id);
+      await assert.rejects(test.registry.sitAtTable(table.id, principal, 3), (error: unknown) => {
+        assert.ok(error instanceof AppError);
+        assert.equal(error.code, 'not_room_member', 'a sit by somebody who left is a non-member sit');
+        return true;
+      });
+      assert.equal(inTheGap, null, 'the leave never ran in the gap, so this proved nothing');
+      await assertLeftDuringSit(test, tx, table.id, friend.id);
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
   it('a row with no first sit recorded still counts by the old evidence', async () => {
     await inRollback(async (tx) => {
       // Rows written before migration 0008, or seated by the previous build between the migration

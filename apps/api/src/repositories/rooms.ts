@@ -445,14 +445,21 @@ export async function membersOfRooms(
   return rows.map(toMemberRow);
 }
 
-/** One membership by its id, left or not. */
-async function memberById(sql: Db, memberId: string): Promise<RoomMemberRow | null> {
+/**
+ * One LIVE membership by its id, or null once it has left.
+ *
+ * `left_at is null` is the point of it. Devin Review on PR #25: this read "left or not", and
+ * `seatMember` returns what it reads. A leave between its UPDATE and this read handed the departed
+ * row back as a seat taken, `sitAtTable` put the learner back on the live roster, and `require`
+ * let them into a room they had left. A membership that has left is not a member of anything.
+ */
+async function liveMemberById(sql: Db, memberId: string): Promise<RoomMemberRow | null> {
   const rows = await sql<RoomMemberRowRaw[]>`
     select m.id, m.room_id, m.user_id, u.display_name, m.seat, m.stack, m.is_bot, m.bot_profile,
            m.bot_difficulty, m.bot_seed, m.joined_at, m.left_at
       from prl.room_members m
       join prl.users u on u.id = m.user_id
-     where m.id = ${memberId}
+     where m.id = ${memberId} and m.left_at is null
   `;
   const raw = rows[0];
   return raw === undefined ? null : toMemberRow(raw);
@@ -654,9 +661,14 @@ export async function seatMember(
     if (seated !== undefined) {
       // Read back by the id the UPDATE returned, not by (room, user, live): a leave and rejoin in
       // between would answer with the new membership, and the caller records the first sit on this id.
-      const member = await memberById(sql, seated.id);
+      const member = await liveMemberById(sql, seated.id);
       if (member !== null) return member;
-      throw new AppError('internal_error', { logDetail: 'seat update succeeded but read back nothing' });
+      // It left in between. Not a seat taken: `sitAtTable` must not put the learner back at a table
+      // they left. Fails toward refusing the sit. Thrown here, not diagnosed: after a leave AND a
+      // rejoin, `diagnoseMembershipFailure` finds a live member and answers a bad seat number. The
+      // departed row keeps the seat the UPDATE wrote, which holds nothing: both unique indexes are
+      // partial on `left_at is null`, so there is nothing to give back.
+      throw new AppError('not_room_member', { logDetail: `left ${roomId} while taking a seat` });
     }
   } catch (error) {
     const mapped = violationError(error, 'taking a seat');

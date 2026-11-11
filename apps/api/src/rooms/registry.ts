@@ -1344,6 +1344,8 @@ export class RoomRegistry {
       });
     }
 
+    // Read before the awaits below, so a leave from another tab during them shows after the live sit.
+    const liveMember = room.member(principal.userId);
     const memberId = await this.store.seatMember(roomId, principal.userId, seat);
     try {
       await room.table.sit({
@@ -1355,6 +1357,18 @@ export class RoomRegistry {
     } catch (error) {
       await this.store.unseatMember(roomId, principal.userId).catch(() => undefined);
       throw error;
+    }
+    // Devin Review on PR #25: a leave from another tab while the live table was taking this seat
+    // has already dropped the learner from the roster and written `left_at`. `addMember` below would
+    // put them back, and `require` would let them into a room they left. So the sit is undone and
+    // refused, as `seatMember` refuses a leave in its own gap. A changed record is a leave too: a
+    // rejoin made a new membership, which has not sat. This fails toward refusing a sit, never
+    // toward a member who has left. `liveMember` null (an owner not on the roster) is unchanged
+    // by this and is still added.
+    if (room.member(principal.userId) !== liveMember) {
+      await room.table.stand(principal.userId);
+      await room.settleSeatReleases();
+      throw new AppError('not_room_member', { logDetail: `left ${roomId} while taking a seat` });
     }
     room.addMember({
       userId: principal.userId,
