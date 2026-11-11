@@ -110,13 +110,17 @@ function cards(text: string): readonly number[] {
  * be read — a reader who ticked seven boxes and sees five columns needs to know which two went
  * before they look for them.
  */
-function selectionNotices(selection: CompareSelection, shown: readonly string[]): readonly string[] {
+function selectionNotices(
+  selection: CompareSelection,
+  shown: readonly string[],
+  nameOf: (id: string) => string,
+): readonly string[] {
   const notices: string[] = [];
   if (selection.dropped.length > 0) {
     notices.push(
       `This page compares two to five styles at a time, and ${String(shown.length + selection.dropped.length)} were picked. ` +
         `It is showing the first ${String(MAX_COMPARE_PROFILES)} in the order they were named; ` +
-        `${selection.dropped.join(', ')} ${selection.dropped.length === 1 ? 'was' : 'were'} left out. ` +
+        `${selection.dropped.map(nameOf).join(', ')} ${selection.dropped.length === 1 ? 'was' : 'were'} left out. ` +
         'Untick some below to choose which five.',
     );
   }
@@ -151,7 +155,9 @@ export default async function ComparePage({
     profiles.data.profiles.map((profile) => profile.id),
   );
   const profileIds = selection.ids.length === 0 ? DEFAULT_COMPARE_PROFILE_IDS : selection.ids;
-  const notices = selectionNotices(selection, profileIds);
+  const nameOf = (id: string): string =>
+    profiles.data.profiles.find((profile) => profile.id === id)?.disclosure.archetypeName ?? id;
+  const notices = selectionNotices(selection, profileIds, nameOf);
 
   const comparison = await loadProfileComparison({
     profileIds,
