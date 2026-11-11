@@ -170,3 +170,21 @@ export function judgeConsistency(
     withinAllowance: chosenEv === null ? null : verdict.consistent,
   };
 }
+
+/**
+ * The actions whose rows rest on an assumed fold frequency, in table order, each named once.
+ *
+ * For the Lab's insight callout, which used to say "the row it moves is the raise row" under every
+ * verdict. The bundled `flop-spr-commitment` prices BET rows, and a spot where every opponent is
+ * already all in has no aggressive row and no fold assumption at all — the sentence pointed at a
+ * row that was not on the table. A row carries `foldEquityAssumed` exactly when its figure depends
+ * on one, so that field, not the action name, is the test.
+ */
+export function foldAssumingActions(report: CoachReport): readonly ScenarioAction[] {
+  const actions: ScenarioAction[] = [];
+  for (const candidate of report.candidates) {
+    const assumesFolds = candidate.foldEquityAssumed !== undefined && candidate.foldEquityAssumed > 0;
+    if (assumesFolds && !actions.includes(candidate.action)) actions.push(candidate.action);
+  }
+  return actions;
+}

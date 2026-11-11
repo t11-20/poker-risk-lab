@@ -97,7 +97,12 @@ import {
 } from '@prl/ui';
 import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
 import { API_PATHS, apiSend, fetchSession, safeFetch } from '../lib/api.ts';
-import { type Consistency, judgeConsistency, type ScenarioAction } from '../lib/consistency.ts';
+import {
+  type Consistency,
+  foldAssumingActions,
+  judgeConsistency,
+  type ScenarioAction,
+} from '../lib/consistency.ts';
 
 export interface ScenarioStageProps {
   readonly scenario: Scenario;
@@ -306,6 +311,22 @@ function Verdict({
   );
 }
 
+/**
+ * The callout's sentence about the fold assumption, naming the rows it actually moves.
+ *
+ * It used to say "the row it moves is the raise row" on every scenario — wrong on a table of bet
+ * rows, and wrong on a table with no fold assumption at all. `foldAssumingActions` reads the rows.
+ */
+function foldAssumptionSentence(actions: readonly ScenarioAction[]): string {
+  const opening =
+    'Both figures come from the candidate table further down, and both rest on the assumptions you read at the top';
+  if (actions.length === 0) {
+    return `${opening}. No row in this table assumes the opponent folds, so its figures move with the range and the price: if you think either is wrong, disagreeing with them on those grounds is exactly the reasoning this scenario is for.`;
+  }
+  const rows = actions.map((action) => ACTION_WORD[action].toLowerCase()).join(' and ');
+  return `${opening} — including the assumed fold frequency, which somebody chose. If you think that fold assumption is too generous, the rows it moves are the ${rows} rows, and disagreeing with it on those grounds is exactly the reasoning this scenario is for.`;
+}
+
 /** One glossary term, with its formula beneath the definition where it has one. */
 function GlossaryRow({ entry }: { readonly entry: GlossaryEntry }): ReactElement {
   return (
@@ -404,7 +425,13 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
           Every number in this scenario depends on the statements below, so they come before the decision: a
           figure whose assumptions you have not read is one you cannot disagree with.
         </p>
-        <AssumptionList items={scenario.assumptions} headingLevel={3} />
+        {/* The intro is stated because the list's default — "the figures above" — is written for a list
+            that follows its figures, and this one comes before every figure on the page. */}
+        <AssumptionList
+          items={scenario.assumptions}
+          headingLevel={3}
+          intro="Change any of these and the figures in the analysis below change with it."
+        />
       </Panel>
 
       {/* 2. The situation. The question is the page's standfirst and the title its heading, and
@@ -488,10 +515,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
             <Verdict judgement={judgement} server={server} />
 
             <Callout tone="insight" title="This is a comparison, not a mark">
-              Both figures come from the candidate table further down, and both rest on the assumptions you
-              read at the top — including the assumed fold frequency, which somebody chose. If you think that
-              fold assumption is too generous, the row it moves is the raise row, and disagreeing with it on
-              those grounds is exactly the reasoning this scenario is for.
+              {foldAssumptionSentence(foldAssumingActions(analysis))}
               {server.state === 'live' ? (
                 <>
                   {' '}

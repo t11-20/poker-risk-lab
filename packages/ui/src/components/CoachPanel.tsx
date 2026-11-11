@@ -397,6 +397,20 @@ interface EquitySectionProps {
   readonly surplus: number;
 }
 
+/**
+ * Which side of break-even the margin is on, in the word the delta prints after its figure.
+ *
+ * It was always "over", so a call that is not priced in read "▼ −27.0 points over the break-even
+ * equity" — measured on the Lab at 308fadf — with the glyph and the sign saying under and the words
+ * saying over. The word is decided at the precision `Metric` shows the figure (one decimal of a
+ * point, the `percent` default), so a margin `Metric` renders flat because it rounds to 0.0 reads
+ * "at", never "0.0 points under".
+ */
+function surplusPreposition(surplus: number): 'over' | 'under' | 'at' {
+  if (Number((Math.abs(surplus) * 100).toFixed(1)) === 0) return 'at';
+  return surplus > 0 ? 'over' : 'under';
+}
+
 function EquitySection({ equity, interval, surplus }: EquitySectionProps): ReactElement {
   const method = METHOD_CHIP[equity.method];
   // `exactOptionalPropertyTypes`: an absent `interval` and `interval: undefined` are different
@@ -413,7 +427,7 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
    * good headline figure down with it.
    */
   const deltaProps = isProbabilityDifference(surplus)
-    ? { delta: { value: surplus, label: 'over the break-even equity' } }
+    ? { delta: { value: surplus, label: `${surplusPreposition(surplus)} the break-even equity` } }
     : {};
 
   return (
