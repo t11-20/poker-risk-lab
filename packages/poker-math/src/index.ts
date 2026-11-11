@@ -184,6 +184,7 @@ export {
   parseRange,
   RangeParseError,
 } from './ranges.ts';
+export { type FoldEquityRepricing, type RepricedRow, repriceAtFoldEquity } from './reprice.ts';
 export {
   commitmentThreshold,
   effectiveStack,

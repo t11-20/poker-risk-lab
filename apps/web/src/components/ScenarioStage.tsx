@@ -104,6 +104,7 @@ import {
   nearestPricedSentence,
   type ScenarioAction,
 } from '../lib/consistency.ts';
+import { FoldEquityControl } from './FoldEquityControl.tsx';
 
 export interface ScenarioStageProps {
   readonly scenario: Scenario;
@@ -343,7 +344,7 @@ function foldAssumptionSentence(actions: readonly ScenarioAction[]): string {
     return `${opening}. No row in this table assumes the opponent folds, so its figures move with the range and the price: if you think either is wrong, disagreeing with them on those grounds is exactly the reasoning this scenario is for.`;
   }
   const rows = actions.map((action) => ACTION_WORD[action].toLowerCase()).join(' and ');
-  return `${opening} — including the assumed fold frequency, which somebody chose. If you think that fold assumption is too generous, the rows it moves are the ${rows} rows, and disagreeing with it on those grounds is exactly the reasoning this scenario is for.`;
+  return `${opening} — including the assumed fold frequency, which somebody chose. If you think that fold assumption is too generous, the rows it moves are the ${rows} rows: change it in the next panel and watch them move. Disagreeing with it on those grounds is exactly the reasoning this scenario is for.`;
 }
 
 /** One glossary term, with its formula beneath the definition where it has one. */
@@ -589,7 +590,11 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
             </Callout>
           </Panel>
 
-          <Panel title="The reasoning" eyebrow="Why" index={5} headingLevel={2}>
+          {/* The input the Lab promises. After the verdict, so the decision is judged before the
+              assumption is moved, and before the reasoning, which is written at the analysed one. */}
+          <FoldEquityControl report={analysis} />
+
+          <Panel title="The reasoning" eyebrow="Why" index={6} headingLevel={2}>
             {scenario.reasoning.split('\n\n').map((paragraph) => (
               <p className="prl-prose" key={paragraph.slice(0, 48)}>
                 {paragraph}
@@ -597,7 +602,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
             ))}
           </Panel>
 
-          <Panel title="Ways this spot is commonly misread" eyebrow="Mistakes" index={6} headingLevel={2}>
+          <Panel title="Ways this spot is commonly misread" eyebrow="Mistakes" index={7} headingLevel={2}>
             <ul className="prl-stage__mistakes">
               {scenario.commonMistakes.map((mistake) => (
                 <li key={mistake.slice(0, 48)}>{mistake}</li>
@@ -608,7 +613,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
           <CoachPanel report={analysis} title="The analysis in full" />
 
           {glossary.length === 0 ? null : (
-            <Panel title="Terms used here" eyebrow="Glossary" index={7} headingLevel={2}>
+            <Panel title="Terms used here" eyebrow="Glossary" index={8} headingLevel={2}>
               <dl className="prl-stage__glossary">
                 {glossary.map((entry) => (
                   <GlossaryRow key={entry.id} entry={entry} />

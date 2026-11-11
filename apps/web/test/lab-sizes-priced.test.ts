@@ -23,46 +23,19 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { content, readSituation } from '@prl/content';
-import type { CoachReport, Scenario } from '@prl/contracts';
+import { content } from '@prl/content';
+import type { CoachReport } from '@prl/contracts';
 import {
   buildCoachReport,
-  deriveContestablePot,
-  deriveLegalActions,
   maximumTo,
   minimumAggressiveTo,
   offeredSizes,
   pricedSizesFor,
 } from '@prl/poker-math';
 import { scenarioToPlayerView } from '../src/lib/scenario-view.ts';
+import { coachInputFor } from './lab-coach-input.ts';
 
 const AGGRESSIVE = new Set(['bet', 'raise']);
-
-/** The input `coachTaskFor` builds, as a `CoachInput`. Mirrors it field for field. */
-function coachInputFor(scenario: Scenario) {
-  const situation = readSituation(scenario);
-  const heroSeat = scenario.seats.find((seat) => seat.isHero === true);
-  const heroCommittedThisStreet = scenario.committedThisStreet?.[heroSeat?.seat ?? -1] ?? 0;
-  const spot = {
-    pot: situation.pot,
-    toCall: situation.toCall,
-    heroCommittedThisStreet,
-    heroStack: situation.heroStack,
-    opponentStacks: situation.opponentStacks,
-  };
-  return {
-    heroCards: situation.heroCards,
-    board: situation.board,
-    street: scenario.street,
-    opponents: [{ label: 'the opponent', range: situation.opponentRange }],
-    ...spot,
-    contestablePot: deriveContestablePot(spot),
-    bigBlind: scenario.bigBlind,
-    legalActions: deriveLegalActions(spot),
-    samples: 2_000,
-    seed: 1,
-  };
-}
 
 interface Sweep {
   readonly withAggression: number;
