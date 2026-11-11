@@ -887,6 +887,34 @@
   font-size: var(--prl-type-body-sm);
 }
 
+/**
+ * On a phone the dot sits on the name's line and the description runs the full width under both.
+ *
+ * Below 600 the three options stack, and each kept the desktop shape: the dot in its own column
+ * with every line of text indented past it. Measured at 390x844, that indent cost a line of
+ * description per option, and the picker was 888px tall. With the options laid out as below it is
+ * 785 (360: 962 to 848), nothing scrolls sideways, and every word and both chips are still there.
+ */
+@media (width < 600px) {
+  .prl-legend-difficulty {
+    padding: var(--prl-space-6);
+  }
+
+  .prl-legend-difficulty__option {
+    column-gap: var(--prl-space-5);
+    padding: var(--prl-space-5) var(--prl-space-6);
+  }
+
+  .prl-legend-difficulty__control {
+    grid-row: 1;
+  }
+
+  .prl-legend-difficulty__description,
+  .prl-legend-difficulty__coach {
+    grid-column: 1 / -1;
+  }
+}
+
 /* ==========================================================================================
    9. THE PROFILE PICKER ON THE COMPARE PAGE
    ========================================================================================== */
