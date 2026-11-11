@@ -31,7 +31,7 @@
  */
 
 import { API_PATHS, type ResetUnitsResponse } from '@prl/contracts';
-import { Button } from '@prl/ui';
+import { Button, formatUnits } from '@prl/ui';
 import { type ReactElement, useState } from 'react';
 import { apiSend, fetchSession, safeFetch } from '@/lib/api.ts';
 
@@ -84,7 +84,9 @@ export function UnitsReset(): ReactElement {
       */}
       <p className="prl-note" role="status">
         {reset.state === 'done'
-          ? `Done. Your units are back to ${String(reset.units)}. Nothing else changed: the hands you have played, and every figure on this page derived from them, are exactly as they were.`
+          ? // `formatUnits`, not `String()`: the audit at 308fadf read "back to 1000" here while the
+            // footer, the header badge and the home page all say "1,000 units" for the same amount.
+            `Done. You are back to ${formatUnits(reset.units)}. Nothing else changed: the hands you have played, and every figure on this page derived from them, are exactly as they were.`
           : reset.state === 'failed'
             ? reset.message
             : ''}

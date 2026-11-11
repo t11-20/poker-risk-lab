@@ -274,3 +274,12 @@
 .prl-record__lists dd + dt {
   margin-block-start: var(--prl-space-5);
 }
+
+/* The markers are kept: `reset.css` keeps list semantics by leaving `list-style` alone, and a
+   bulleted column is what separates one title from the next when the titles contain commas. */
+.prl-record__list {
+  display: grid;
+  gap: var(--prl-space-2);
+  margin: 0;
+  padding-inline-start: var(--prl-space-8);
+}
