@@ -30,12 +30,13 @@ import { buildApp } from '../src/app.ts';
 import { loadConfig } from '../src/config.ts';
 import { createDatabaseClient, type Sql, type TransactionSql } from '../src/db.ts';
 import { AppError } from '../src/errors.ts';
+import { AppMetrics } from '../src/observability/metrics.ts';
 import type { ProblemDetail } from '../src/observability/telemetry.ts';
 import * as roomsRepository from '../src/repositories/rooms.ts';
 import * as usersRepository from '../src/repositories/users.ts';
 import { postgresArchive, postgresRoomStore, RoomRegistry } from '../src/rooms/registry.ts';
 import { LiveTable, type SettledStack } from '../src/rooms/table.ts';
-import { createManualClock } from '../src/rooms/timers.ts';
+import { createManualClock, type ManualClock } from '../src/rooms/timers.ts';
 import { type AuthStore, createAuthRoutes } from '../src/routes/auth.ts';
 import { createRoomRoutes } from '../src/routes/rooms.ts';
 import { databaseSkip, TEST_DATABASE_URL } from './helpers/database.ts';
@@ -92,6 +93,8 @@ async function inRollback(fn: (tx: TransactionSql) => Promise<void>): Promise<vo
 interface Harness {
   readonly app: FastifyInstance;
   readonly registry: RoomRegistry;
+  readonly clock: ManualClock;
+  readonly metrics: AppMetrics;
   readonly userId: string;
   readonly problems: { message: string; detail: ProblemDetail }[];
   /** A request as the browser sends it: the signed session cookie, a CSRF pair, the origin. */
@@ -109,8 +112,11 @@ interface Harness {
 async function harness(tx: TransactionSql): Promise<Harness> {
   const user = await usersRepository.createGuest(tx, { displayName: 'Reader' });
   const problems: { message: string; detail: ProblemDetail }[] = [];
+  const clock = createManualClock();
+  const metrics = new AppMetrics();
   const registry = new RoomRegistry({
-    clock: createManualClock(),
+    clock,
+    metrics,
     random: createSecureRandom(),
     store: postgresRoomStore(() => tx),
     archive: postgresArchive(() => tx),
@@ -155,7 +161,7 @@ async function harness(tx: TransactionSql): Promise<Harness> {
     });
     return { status: response.statusCode, body: response.json() };
   };
-  return { app, registry, userId: user.id, problems, send };
+  return { app, registry, clock, metrics, userId: user.id, problems, send };
 }
 
 /** What the web client sends for a Legends match: `openPracticeRoom` in `use-live-table.ts`. */
@@ -210,9 +216,9 @@ describe('units across practice tables', dbOptions, () => {
       const sat = await test.send('POST', `/api/v1/rooms/${first}/sit`, { seat: 0 });
       assert.equal(sat.status, 200, JSON.stringify(sat.body));
       // The audit's sequence had a hand dealt and waiting on the reader when the next match began.
-      // Its archive writes are drained by the retirement itself, which the hand assertions below
-      // depend on — nothing here waits for them.
-      await test.registry.get(first)?.table.startHand();
+      const firstRoom = test.registry.get(first);
+      assert.ok(firstRoom !== null);
+      await firstRoom.table.startHand();
       assert.equal(await units(tx, test.userId), 1_000);
 
       const second = await startMatch(test, 'vocal-aggressor');
@@ -223,25 +229,35 @@ describe('units across practice tables', dbOptions, () => {
         'each match used to add a 1,000-unit membership: 1,000 → 2,000 → 3,000',
       );
 
+      // The reader was stood up, so they fold at their turn; the bot finishes the hand on the clock.
+      test.clock.advance(60_000);
+      await new Promise((resolve) => setImmediate(resolve));
+      await firstRoom.archiveSettled();
+
       for (const retired of [first, second]) {
         assert.equal((await roomsRepository.byId(tx, retired))?.status, 'closed');
         assert.equal(test.registry.get(retired), null, 'the live table went with the row');
       }
       assert.equal((await roomsRepository.byId(tx, third))?.status, 'open');
 
-      // The hand the reader walked away from is settled, not left open in their history forever.
-      // Asserted over a non-empty set: a sweep of nothing would pass this whether or not the hand was
-      // ever written.
-      const hands = await tx<{ completed: boolean; reason: string | null }[]>`
-        select completed_at is not null as completed, result ->> 'abandonedReason' as reason
-          from prl.hands where room_id = ${first}
+      // The hand the reader walked away from is PLAYED OUT, as leaving mid-hand always is: they
+      // folded, it settled, and it is in their history as a hand. Not abandoned at a net of zero —
+      // that would void a losing hand — and not counted as failed, which `HandsFailing` pages on.
+      // Asserted over a non-empty set: a sweep of nothing would pass whether or not it was written.
+      const hands = await tx<{ completed: boolean; abandoned: string | null; status: string }[]>`
+        select h.completed_at is not null as completed, h.result ->> 'abandoned' as abandoned, s.status
+          from prl.hands h
+          join prl.hand_seats s on s.hand_id = h.id and s.user_id = ${test.userId}
+         where h.room_id = ${first}
       `;
       assert.equal(hands.length, 1, 'the dealt hand was archived');
       assert.deepEqual(
         hands.map((hand) => ({ ...hand })),
-        [{ completed: true, reason: 'replaced-by-a-new-practice-table' }],
-        'no hand of a retired table is left in progress',
+        [{ completed: true, abandoned: null, status: 'folded' }],
+        'the hand the reader left settled as a fold',
       );
+      assert.equal(test.metrics.handsFailed.get({ reason: 'room_closed' }), 0, 'nobody is paged for it');
+      assert.equal(test.metrics.handsCompleted.get(), 1);
       assert.deepEqual(test.problems, [], 'retiring wrote everything it meant to');
 
       await test.registry.shutdown();

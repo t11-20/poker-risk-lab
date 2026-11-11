@@ -147,11 +147,7 @@ export interface HandArchive {
    * A hand interrupted by a restart is unrecoverable by design — the deck and the salts are never
    * persisted — so the row has to be settled by somebody, and nobody was doing it.
    */
-  readonly abandonInterruptedHands: (
-    roomId: string,
-    /** Recorded on the abandoned result. Defaults to the restart case, which is the common one. */
-    reason?: string,
-  ) => Promise<readonly handsRepository.AbandonedHand[]>;
+  readonly abandonInterruptedHands: (roomId: string) => Promise<readonly handsRepository.AbandonedHand[]>;
   readonly handStarted: (deal: ArchivedDeal) => Promise<void>;
   readonly actionsApplied: (handId: string, actions: readonly LoggedAction[]) => Promise<void>;
   readonly streetAdvanced: (
@@ -188,8 +184,7 @@ export function postgresArchive(sql: () => Db): HandArchive {
   return {
     nextHandNumber: (roomId) => handsRepository.nextHandNumber(sql(), roomId),
     lastDealtHand: (roomId) => handsRepository.lastDealtHand(sql(), roomId),
-    abandonInterruptedHands: (roomId, reason) =>
-      handsRepository.abandonInterruptedHands(sql(), roomId, ...(reason === undefined ? [] : [reason])),
+    abandonInterruptedHands: (roomId) => handsRepository.abandonInterruptedHands(sql(), roomId),
     handStarted: async (deal) => {
       await handsRepository.start(sql(), {
         handId: deal.handId,
@@ -467,11 +462,10 @@ export class LiveRoom {
   /**
    * Resolves once every archive write queued so far has landed (or failed and been reported).
    *
-   * Never rejects: the chain ends in a `catch`. Exists for the two callers that write a stack or a
-   * hand row OUTSIDE this chain and must not be overtaken by a write still inside it — a units
-   * reset, whose `room_members.stack` update a queued `stacksSettled` from the hand before would
-   * otherwise overwrite, and the retirement of a practice table, which settles the hand rows a
-   * queued `handStarted` would otherwise re-open behind it.
+   * Never rejects: the chain ends in a `catch`. Exists for a caller that writes a stack OUTSIDE this
+   * chain and must not be overtaken by a write still inside it — a units reset, whose
+   * `room_members.stack` update a queued `stacksSettled` from the hand before would otherwise
+   * overwrite.
    */
   archiveSettled(): Promise<void> {
     return this.archiveQueue;
@@ -1440,13 +1434,25 @@ export class RoomRegistry {
    * any room another person has joined, seated or not. Matching on `name` would close a friend's
    * table that happened to share a label.
    *
-   * ## A hand in progress is closed with its table, not waited for
+   * ## A hand in progress is played out, not failed
    *
    * Skipping a room with a hand in progress would leave the reported sequence exactly as it was: the
-   * audit started its second match while the first was dealt and waiting on the reader. The hand is
-   * against bots only, the deck and salts die with the table (the same trade a restart makes), and
-   * the row is settled as abandoned with a net of zero by the same repository call a restart uses —
-   * after this room's archive chain has drained, so a queued `handStarted` cannot re-open it.
+   * audit started its second match while the first was dealt and waiting on the reader. Closing the
+   * table under the hand was the first version of this, and it was wrong twice over:
+   *
+   *   - `LiveRoom.close` counts a hand it interrupts as `prl_hands_failed_total{reason=room_closed}`,
+   *     and `HandsFailing` pages on the first increase (`deploy/staging/observability/
+   *     alert-rules.yml`: "there is no acceptable background rate"). Every reader who picked a new
+   *     Legend mid-hand would have paged somebody.
+   *   - An abandoned hand settles at a net of zero, so starting a new match would have been a way to
+   *     void a hand you were losing — and `leaveRoom` is explicit that leaving mid-hand "is not a way
+   *     to avoid a bet".
+   *
+   * So the reader is stood up exactly as `leaveRoom` stands them — they fold at their turn — the
+   * bots finish the hand, it settles and is archived like any other, and the live table is closed
+   * on the notice that settles it. The ROW is closed first and at once, which is what the units
+   * figure reads, and `record.closed` is set at once, so `require()` refuses the room to every
+   * request in the meantime and nobody can deal another hand at it.
    *
    * Durable first: the room row is closed before the live table, so a concurrent `ensureOpen` reads
    * `closed` and refuses rather than rebuilding the table this is tearing down.
@@ -1477,22 +1483,20 @@ export class RoomRegistry {
     if (!(await this.store.close(roomId, ownerUserId))) return false;
     const live = this.rooms.get(roomId);
     if (live === undefined) return true;
-    // Not `this.close(roomId)`: that releases the lease at once, and the hand rows below are only
-    // ours to settle while we still hold it.
-    live.close();
-    this.rooms.delete(roomId);
-    try {
-      await live.archiveSettled();
-      // Counted already, as `room_closed`, by `live.close()` — so this does not count again.
-      await this.archive.abandonInterruptedHands(roomId, 'replaced-by-a-new-practice-table');
-    } catch (error) {
-      this.onProblem('could not settle the hands of a retired practice table', {
-        event: 'reconcile-read',
-        roomId,
-        error: String(error),
+    live.record.closed = true;
+    if (live.table.handInProgress) {
+      // Subscribed BEFORE the stand: a reader whose turn it is folds inside `stand`, and in a
+      // heads-up match that fold is the notice that settles the hand.
+      const stop = live.table.subscribe((notice) => {
+        if (!notice.handCompleted) return;
+        stop();
+        // After the notice has reached every subscriber — the archive's included — and after the
+        // table's own queued work has returned, never from inside it.
+        queueMicrotask(() => this.close(roomId));
       });
-    } finally {
-      this.releaseLeaseSoon(roomId);
+      if (live.table.seatOf(ownerUserId) !== null) await live.table.stand(ownerUserId);
+    } else {
+      this.close(roomId);
     }
     for (const listener of [...this.retirementListeners]) {
       try {
