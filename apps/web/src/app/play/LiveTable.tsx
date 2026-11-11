@@ -765,6 +765,7 @@ export function LiveTable({
         turnAnnouncement={table.turnAnnouncement}
         submission={table.submission}
         onAct={act}
+        autoActed={table.autoActed}
         idleMessage={IDLE_TABLE_MESSAGE}
         {...coachUnavailableProps(live)}
         {...(status === 'complete' ? { reviewHref: reviewHrefFor(table.view) } : {})}

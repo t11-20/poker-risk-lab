@@ -234,6 +234,12 @@ export interface TableStageProps {
    * whose hand was never recorded has no review to point at and leaves it out.
    */
   readonly reviewHref?: string | undefined;
+  /**
+   * Set when the server acted for the reader because their clock ran out. Shown as a plain callout
+   * in the decision band — see `autoActed` in `lib/use-live-table.ts` for why it cannot be a
+   * `submission` and why the live region alone was not enough.
+   */
+  readonly autoActed?: string | null;
 }
 
 /** Skeletons at the real content's dimensions, so nothing reflows when the data lands. */
@@ -478,6 +484,7 @@ interface DecisionBandProps {
   readonly turnAnnouncement: string;
   readonly isLive: boolean;
   readonly onAct: (action: TableAction) => void;
+  readonly autoActed: string | null;
 }
 
 /**
@@ -523,7 +530,7 @@ const SUBMISSION_IN_FLIGHT: ReadonlySet<TableSubmission['status']> = new Set<Tab
  * rather than the feature, and for the test that now holds that line.
  */
 function DecisionBand(props: DecisionBandProps): ReactElement {
-  const { status, view, submission, turnAnnouncement, isLive, onAct } = props;
+  const { status, view, submission, turnAnnouncement, isLive, onAct, autoActed } = props;
   const pending = submission !== null && SUBMISSION_IN_FLIGHT.has(submission.status);
   const rejected = submission !== null && SUBMISSION_ALERTS.has(submission.status);
 
@@ -614,6 +621,17 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
               : 'Waiting for another player to act.'
           }
         />
+      )}
+
+      {/*
+        Not a live region: the table's narration already said "(the clock ran out, so the server
+        acted)" as it happened. This is the same fact for the eye, and it stays until the next deal —
+        a reader who looked away for four minutes is exactly the reader who missed the sentence.
+      */}
+      {autoActed === null ? null : (
+        <Callout tone="warning" title="The clock ran out">
+          {autoActed}
+        </Callout>
       )}
 
       {/*
@@ -877,6 +895,7 @@ export function TableStage(props: TableStageProps): ReactElement {
           turnAnnouncement={turnAnnouncement}
           isLive={isLive}
           onAct={act}
+          autoActed={props.autoActed ?? null}
         />
       </div>
 

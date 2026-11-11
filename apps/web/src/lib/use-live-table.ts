@@ -137,6 +137,37 @@ export interface TableState {
   readonly betweenHands: boolean;
   readonly deadlineMs: number | null;
   readonly serverTimeMs: number;
+  /**
+   * How long the server gave THIS turn, in milliseconds: `deadlineMs - serverTimeMs` read off the
+   * first frame that carried this deadline, and carried unchanged while the deadline stays the same.
+   *
+   * ## The defect this exists for
+   *
+   * The ring used to be told the turn lasted `room.actionTimeoutSeconds` — 60 at the bot table —
+   * and `TurnTimer` clamps what is left to the budget it is given. But the server does not always
+   * use the room's clock: `LiveTable.turnSecondsFor` in `apps/api/src/rooms/table.ts` gives a
+   * person alone with bots `max(room clock, learnerTurnSeconds)`, 240 by default. Measured against
+   * the running stack: the first `state` frame of the reader's turn carried
+   * `deadlineMs - serverTimeMs = 239999`; the ring said 60s, reached 0s a minute later and then sat
+   * at 0s for three more minutes before the server folded the hand — a clock that told the reader
+   * they had run out of time three minutes before they had.
+   *
+   * The deadline is the server's statement of the budget, so the budget is read off it. A page that
+   * arrives mid-turn (a reload, a reconnect) can only see what is LEFT, which is why the room's
+   * clock stays a floor in `turnClockFor`: a bot's 60-second turn seen 15 seconds in is still drawn
+   * as a 60-second ring.
+   */
+  readonly turnBudgetMs: number | null;
+  /**
+   * Set when the server acted for the reader because their clock ran out; null otherwise.
+   *
+   * The polite table region already says it ("… (the clock ran out, so the server acted)"), but
+   * that sentence lives in a 1x1 live region and the `submission` panel cannot carry it — the
+   * reader never submitted anything, and the `state` frame that follows the timeout moves the spot
+   * on. So a sighted reader came back to a folded hand with nothing on screen saying why. Cleared
+   * when the next hand is dealt.
+   */
+  readonly autoActed: string | null;
   /** Monotonic per socket; resets on `welcome`. */
   readonly revision: number;
   readonly announcement: string;
@@ -252,6 +283,8 @@ export const EMPTY_TABLE_STATE: TableState = {
   betweenHands: true,
   deadlineMs: null,
   serverTimeMs: 0,
+  turnBudgetMs: null,
+  autoActed: null,
   revision: 0,
   announcement: '',
   carried: '',
@@ -532,15 +565,38 @@ function onEventFrame(state: TableState, frame: Extract<WsServerMessage, { type:
     // No `announcement` here on purpose: leaving the region exactly as it is means this dispatch
     // mutates nothing, so a `handStarted` that did arrive in a commit of its own cannot re-announce
     // the previous hand's last sentence either.
-    return { ...state, carried: announce(frame.event), summary: [] };
+    return { ...state, carried: announce(frame.event), summary: [], autoActed: null };
   }
   const sentence = announce(frame.event);
   const announcement = state.carried === '' ? sentence : `${state.carried} ${sentence}`;
-  if (frame.event.kind === 'showdown' || frame.event.kind === 'handComplete') {
+  if (frame.event.kind === 'showdown') {
     return { ...state, announcement, carried: '', summary: frame.event.summaries };
+  }
+  if (frame.event.kind === 'handComplete') {
+    // APPENDED to the showdown's lines, never written over them. Both events arrive at the end of
+    // a contested hand and each carries different sentences: `showdown` says what each seat showed
+    // ("Patient Technician 1 shows three of a kind, sixes"), `handComplete` who was paid. This used
+    // to assign `summaries` for both, so the second always replaced the first and "How the hand
+    // ended" listed a winner with no word of what they won with. `handStarted` empties the list,
+    // so nothing carries into the next hand.
+    return { ...state, announcement, carried: '', summary: [...state.summary, ...frame.event.summaries] };
+  }
+  if (frame.event.kind === 'action' && frame.event.wasAutomatic && frame.event.seat === state.seat) {
+    return { ...state, announcement, carried: '', autoActed: AUTO_ACTED_NOTICE };
   }
   return { ...state, announcement, carried: '' };
 }
+
+/**
+ * What the reader is shown when the server acted for them. See `autoActed` on `TableState`.
+ *
+ * The rule rather than the action: the event carries the server's prose ("Guest 12D91B folds") and
+ * no structured verb, and parsing a sentence meant for a person is how a client breaks the first
+ * time somebody rewords it. The rule is `timeoutAction` in `packages/poker-engine`, and it is short.
+ */
+export const AUTO_ACTED_NOTICE =
+  'Your clock ran out, so the server acted for you. A seat whose time runs out checks when checking ' +
+  'is free and folds otherwise — it never puts more units in.';
 
 function onStateFrame(state: TableState, frame: Extract<WsServerMessage, { type: 'state' }>): TableState {
   // Monotonic per socket. A frame that arrived out of order describes a table that has already
@@ -562,6 +618,14 @@ function onStateFrame(state: TableState, frame: Extract<WsServerMessage, { type:
   const nowTurn = isViewersTurn(view, betweenHands);
   const turnAnnouncement =
     nowTurn && view !== null ? (wasTurn ? state.turnAnnouncement : turnAnnouncementFor(view)) : '';
+  // A new deadline is a new turn, and the first frame that carries it says how long the server
+  // gave it. See `turnBudgetMs` on `TableState`.
+  const turnBudgetMs =
+    frame.deadlineMs === null
+      ? null
+      : frame.deadlineMs === state.deadlineMs && state.turnBudgetMs !== null
+        ? state.turnBudgetMs
+        : Math.max(frame.deadlineMs - frame.serverTimeMs, 0);
   return {
     ...state,
     revision: frame.revision,
@@ -572,6 +636,7 @@ function onStateFrame(state: TableState, frame: Extract<WsServerMessage, { type:
     betweenHands,
     deadlineMs: frame.deadlineMs,
     serverTimeMs: frame.serverTimeMs,
+    turnBudgetMs,
     // An analysis belongs to the spot it was computed for. The moment the spot changes it is
     // dropped rather than left on screen beside different numbers — and so is the reason the last
     // one could not be shown, which described a different spot too.
@@ -868,6 +933,31 @@ export function tableReducer(state: TableState, event: TableEvent): TableState {
     default:
       return state;
   }
+}
+
+/**
+ * The clock the ring draws, from the deadline the server actually set for this turn.
+ *
+ * `budgetSeconds` is the server's own budget for the turn — `turnBudgetMs`, read off the frame that
+ * started it — and never the room's `actionTimeoutSeconds` alone, which is what it used to be and
+ * is only right for a seat the server does not give a learner's clock to. See `turnBudgetMs` on
+ * `TableState` for the measurement. The room's clock stays as a floor for a page that arrived
+ * mid-turn and can only see what was left. Whole seconds, rounded UP: the server arms
+ * `now + 240 * 1000` and the first frame is a millisecond later, so the figure that reaches here
+ * is 239,999 — and "239.999 seconds to act" is not a sentence anybody should be read.
+ *
+ * Exported and pure so a test drives it with the frame the auditor captured, rather than a copy.
+ */
+export function turnClockFor(
+  state: Pick<TableState, 'deadlineMs' | 'serverTimeMs' | 'turnBudgetMs' | 'room' | 'betweenHands'>,
+): TurnClock | null {
+  if (state.deadlineMs === null || state.room === null || state.betweenHands) return null;
+  const served = state.turnBudgetMs === null ? 0 : Math.ceil(state.turnBudgetMs / 1000);
+  return {
+    deadlineMs: state.deadlineMs,
+    serverTimeMs: state.serverTimeMs,
+    budgetSeconds: Math.max(served, state.room.actionTimeoutSeconds),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1541,14 +1631,11 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     askCoach();
   }, [coachDuringHand, isMyTurn, key, coachOutstanding, askCoach]);
 
-  const turn = useMemo<TurnClock | null>(() => {
-    if (table.deadlineMs === null || table.room === null || table.betweenHands) return null;
-    return {
-      deadlineMs: table.deadlineMs,
-      serverTimeMs: table.serverTimeMs,
-      budgetSeconds: table.room.actionTimeoutSeconds,
-    };
-  }, [table.deadlineMs, table.serverTimeMs, table.room, table.betweenHands]);
+  const { deadlineMs, serverTimeMs, turnBudgetMs, room } = table;
+  const turn = useMemo<TurnClock | null>(
+    () => turnClockFor({ deadlineMs, serverTimeMs, turnBudgetMs, room, betweenHands }),
+    [deadlineMs, serverTimeMs, turnBudgetMs, room, betweenHands],
+  );
 
   const seatNames = useMemo(() => namesFor(table.room), [table.room]);
   const highlightedCards = useMemo(() => winningCards(view), [view]);
