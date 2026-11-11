@@ -31,6 +31,7 @@ import {
   HSTS_EXPECTED,
   HSTS_PROBE_PATH,
   hstsFromRawHeaders,
+  manifestMatchesCheckout,
   PROXY_REFRESH_COMPOSE_ARGS,
   refreshStagingProxy,
 } from './staging.mjs';
@@ -399,4 +400,92 @@ test('the staging compose file takes its pull policy from PRL_PULL_POLICY and de
       `deploymentPlan produced ${pullPolicy}, which compose would reject`,
     );
   }
+});
+
+// --- the manifest must be this checkout -------------------------------------
+//
+// The incident: a gitignored manifest from 0b01f90ce510 (2026-08-26) sat in the main checkout while
+// main was 161 commits past it, with a new migration, and `staging up` would have deployed it after
+// printing the sha on a line nobody had to read. These pin the refusal, and pin what is deliberately NOT refused.
+
+const HEAD = 'a'.repeat(40);
+const OLD = '0b01f90ce510759ccc253692a11b179787e9e0db';
+const cleanCheckout = (overrides = {}) => ({
+  headSha: HEAD,
+  behind: 0,
+  ahead: 0,
+  trackedChanges: 0,
+  ...overrides,
+});
+
+test('manifestMatchesCheckout accepts a clean manifest built from HEAD on an unedited checkout', () => {
+  assert.deepEqual(manifestMatchesCheckout({ sha: HEAD, dirty: false }, cleanCheckout()), { ok: true });
+});
+
+test('manifestMatchesCheckout refuses a manifest from another commit, with the arithmetic', () => {
+  const result = manifestMatchesCheckout(
+    { sha: OLD, dirty: false },
+    cleanCheckout({ behind: 161, ahead: 0 }),
+  );
+  assert.ok('problem' in result, 'the 2026-11-11 shape: a clean manifest 161 commits stale');
+  assert.match(result.problem, /0b01f90ce510/, 'names the commit the images are');
+  assert.match(result.problem, /aaaaaaaaaaaa/, 'names the commit the checkout is');
+  assert.match(result.problem, /161 commit\(s\) past it/, 'says how far apart they are');
+  assert.match(result.problem, /pnpm run release:artifacts/, 'says how to fix it');
+});
+
+test('manifestMatchesCheckout refuses a commit it cannot count, and says it cannot', () => {
+  const result = manifestMatchesCheckout(
+    { sha: OLD, dirty: false },
+    cleanCheckout({ behind: null, ahead: null }),
+  );
+  assert.ok('problem' in result);
+  assert.match(result.problem, /not in this clone's history/);
+});
+
+test('manifestMatchesCheckout refuses a branch the checkout has diverged from, naming both sides', () => {
+  const result = manifestMatchesCheckout({ sha: OLD, dirty: false }, cleanCheckout({ behind: 3, ahead: 2 }));
+  assert.ok('problem' in result);
+  assert.match(result.problem, /3 commit\(s\) past it and it is 2 commit\(s\) HEAD does not have/);
+});
+
+test('manifestMatchesCheckout refuses a manifest that names no commit', () => {
+  for (const commit of [null, undefined, {}, { sha: null }, { sha: '' }]) {
+    const result = manifestMatchesCheckout(commit, cleanCheckout());
+    assert.ok('problem' in result, `${JSON.stringify(commit)} cannot be shown to describe HEAD`);
+  }
+});
+
+test('manifestMatchesCheckout refuses when git cannot say what HEAD is', () => {
+  const result = manifestMatchesCheckout({ sha: HEAD, dirty: false }, cleanCheckout({ headSha: null }));
+  assert.ok('problem' in result, 'an unknown HEAD is not a match, it is the absence of a check');
+});
+
+test('manifestMatchesCheckout refuses a clean manifest once tracked files have been edited', () => {
+  const result = manifestMatchesCheckout({ sha: HEAD, dirty: false }, cleanCheckout({ trackedChanges: 2 }));
+  assert.ok('problem' in result, 'the edits postdate the build, so the images do not contain them');
+  assert.match(result.problem, /2 tracked file\(s\)/);
+});
+
+test('manifestMatchesCheckout still lets a dirty build of HEAD be rehearsed', () => {
+  // release-artifacts.mjs records dirty rather than refusing it, and `promote` is where it is
+  // refused. Refusing it at `up` would contradict that decision, so the posture is pinned here.
+  assert.deepEqual(
+    manifestMatchesCheckout({ sha: HEAD, dirty: true }, cleanCheckout({ trackedChanges: 4 })),
+    { ok: true },
+  );
+});
+
+test('staging up asks manifestMatchesCheckout before it touches the registry or .env.staging', () => {
+  const source = readFileSync(new URL('./staging.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf('async function commandUp(');
+  assert.ok(start > 0, 'commandUp must exist for this ordering check to mean anything');
+  const body = source.slice(start, source.indexOf('\n}\n', start));
+  const read = body.indexOf('readManifest(');
+  const check = body.indexOf('manifestMatchesCheckout(');
+  const registry = body.indexOf('verifyRegistryCopies(');
+  const write = body.indexOf('writeEnvFile(');
+  assert.ok(read > 0 && registry > 0 && write > 0, 'the landmarks this test orders against are present');
+  assert.ok(check > read, 'commandUp calls manifestMatchesCheckout after reading the manifest');
+  assert.ok(check < registry && check < write, 'and refuses before the network or the env file');
 });

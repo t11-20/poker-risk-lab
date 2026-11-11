@@ -849,6 +849,109 @@ function readManifest(path) {
 }
 
 /**
+ * Whether the manifest was built from the checkout `staging up` is running in.
+ *
+ * ## The incident
+ *
+ * `deploy/staging/release-manifest.json` is gitignored, so it survives every `git pull`. On
+ * 2026-11-11 the one in the main checkout still recorded `0b01f90ce510` from 2026-08-26 while `main`
+ * was 161 commits past it — including `db/migrations/0007` — and `docs/production/go-live.md` told
+ * the reader to skip the rebuild and "Start at 2.3". Nothing in `staging up` compared the two: it
+ * would have printed "built … from 0b01f90…" and deployed three-month-old images, migrated by THIS
+ * checkout's migration runner to a schema the API inside them had never seen, then run this
+ * checkout's smoke test against them. A line of output nobody is obliged to read is not a check.
+ *
+ * ## What is refused, and what is deliberately not
+ *
+ *   - **A different commit.** The images describe `manifest.commit.sha`, the migrations, the smoke
+ *     test and the compose file describe HEAD. Refused, with the distance between them.
+ *   - **No commit at all.** A manifest that names none cannot be shown to describe this one.
+ *   - **A clean manifest over an edited checkout.** `dirty: false` and tracked files modified now
+ *     means the edits postdate the build, so the images provably do not contain them.
+ *   - **NOT a manifest that says `dirty: true`.** `release-artifacts.mjs` records a dirty build
+ *     rather than refusing it, because rehearsing an uncommitted change on staging is the normal
+ *     case; `promote` is where a dirty manifest is refused. Refusing it here would contradict that
+ *     decision and teach people a flag. It stays a printed warning.
+ *
+ * `trackedChanges` is the count from `git status --porcelain --untracked-files=no`, not the plain
+ * `--porcelain` `release-artifacts.mjs` uses. The release workflow's staging job `docker load`s the
+ * images from `release-images/*.tar` inside the checkout and nothing ignores that path, so an
+ * untracked-inclusive probe would refuse every release run on a tree nobody edited. An untracked
+ * file is not in the build context's tracked sources either way.
+ *
+ * Pure, so the arithmetic is tested without git or docker; `commandUp` does the probing.
+ *
+ * @param {{ sha?: string | null, dirty?: boolean | null } | null | undefined} manifestCommit
+ * @param {{ headSha: string | null, behind: number | null, ahead: number | null, trackedChanges: number | null }} checkout
+ *   `behind` is `git rev-list --count <manifest>..HEAD`, `ahead` is `HEAD..<manifest>`; `null` when
+ *   git could not answer (most often: the manifest's commit is not in this clone at all).
+ * @returns {{ ok: true } | { problem: string }}
+ */
+export function manifestMatchesCheckout(manifestCommit, checkout) {
+  const rebuild = 'Rebuild for this commit, then run this again:\n      pnpm run release:artifacts';
+  const built = manifestCommit?.sha ?? null;
+  if (checkout.headSha === null) {
+    return {
+      problem:
+        '`git rev-parse HEAD` gave no answer, so nothing can show the manifest describes this checkout. ' +
+        'staging deploys from a git checkout; run it from one.',
+    };
+  }
+  if (typeof built !== 'string' || built === '') {
+    return {
+      problem:
+        'the manifest records no commit, so nothing can show its images were built from HEAD ' +
+        `(${checkout.headSha.slice(0, 12)}). ${rebuild}`,
+    };
+  }
+  if (built !== checkout.headSha) {
+    const distance =
+      checkout.behind === null
+        ? `${built.slice(0, 12)} is not in this clone's history, so the distance cannot be counted`
+        : `HEAD is ${checkout.behind} commit(s) past it` +
+          (checkout.ahead !== null && checkout.ahead > 0
+            ? ` and it is ${checkout.ahead} commit(s) HEAD does not have`
+            : '');
+    return {
+      problem:
+        `the manifest was built from ${built.slice(0, 12)}, and HEAD is ${checkout.headSha.slice(0, 12)}: ` +
+        `${distance}. The images would be that commit's code, migrated and smoke-tested by this ` +
+        `one's. ${rebuild}`,
+    };
+  }
+  if (manifestCommit?.dirty === false && checkout.trackedChanges !== null && checkout.trackedChanges > 0) {
+    return {
+      problem:
+        `the manifest was built from a clean ${built.slice(0, 12)}, and ${checkout.trackedChanges} ` +
+        'tracked file(s) have been modified since, so the images do not contain them. Commit or ' +
+        `discard the edits. ${rebuild}`,
+    };
+  }
+  return { ok: true };
+}
+
+/** `git rev-list --count` output as a number, or `null` when git gave no answer. */
+function countOf(output) {
+  if (output === null) return null;
+  const number = Number(output);
+  return Number.isInteger(number) ? number : null;
+}
+
+/** Probes the checkout for `manifestMatchesCheckout`. */
+function probeCheckout(builtSha) {
+  const headSha = capture('git', ['rev-parse', 'HEAD']);
+  // Only a full sha is handed to rev-list: anything else in a hand-edited manifest could be an option.
+  const known = typeof builtSha === 'string' && /^[0-9a-f]{40}$/.test(builtSha);
+  const porcelain = capture('git', ['status', '--porcelain', '--untracked-files=no']);
+  return {
+    headSha,
+    behind: known ? countOf(capture('git', ['rev-list', '--count', `${builtSha}..HEAD`])) : null,
+    ahead: known ? countOf(capture('git', ['rev-list', '--count', `HEAD..${builtSha}`])) : null,
+    trackedChanges: porcelain === null ? null : porcelain.split('\n').filter((line) => line !== '').length,
+  };
+}
+
+/**
  * Which reference each service is deployed by, and the resulting `pull_policy`.
  *
  * ## Why `pull_policy` is a decision and not a constant
@@ -1194,6 +1297,13 @@ async function commandUp(options) {
     return;
   }
   const manifest = read.manifest;
+  // Before the registry probe and before anything is written to .env.staging, so a manifest from
+  // another commit is refused while nothing has been touched. See `manifestMatchesCheckout`.
+  const matches = manifestMatchesCheckout(manifest.commit, probeCheckout(manifest.commit?.sha));
+  if ('problem' in matches) {
+    cross('the release manifest is not this checkout', matches.problem);
+    return;
+  }
 
   const registryVerified = await verifyRegistryCopies(manifest, (service, registry, result) => {
     if (result.ok === true) {
