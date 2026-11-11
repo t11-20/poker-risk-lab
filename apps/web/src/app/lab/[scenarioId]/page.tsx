@@ -33,13 +33,14 @@
  */
 
 import { scenarios } from '@prl/content';
-import type { ScenarioResponse } from '@prl/contracts';
+import type { ScenarioListResponse, ScenarioResponse } from '@prl/contracts';
 import type { Metadata } from 'next';
 import type { ReactElement } from 'react';
 import { ScenarioStage } from '../../../components/ScenarioStage.tsx';
 import { LAB_SCENARIO_SUMMARIES, scenarioFixture } from '../../../fixtures/scenarios.ts';
 import { API_PATHS, apiGet, isApiUnavailable, isMissingResource, safeFetch } from '../../../lib/api.ts';
 import { difficultyLabel, topicLabel } from '../../../lib/lab-labels.ts';
+import { nextScenarioHref } from '../../../lib/lab-next.ts';
 import { scenarioSeatName, scenarioToPlayerView } from '../../../lib/scenario-view.ts';
 import { NotFoundBody } from '../../not-found.tsx';
 import '../../../styles/page.css';
@@ -93,12 +94,24 @@ export async function generateMetadata({
   };
 }
 
-/** The next scenario in list order, so "next" is a stable route rather than a guess. */
-function nextHrefAfter(id: string): string | null {
-  const at = LAB_SCENARIO_SUMMARIES.findIndex((candidate) => candidate.id === id);
-  if (at < 0) return null;
-  const next = LAB_SCENARIO_SUMMARIES[at + 1];
-  return next === undefined ? null : `/lab/${next.id}`;
+/**
+ * The next scenario in the Lab index's own order, so "next" is a stable route rather than a guess.
+ *
+ * `lib/lab-next.ts` has the defect this replaced. The list is asked for anonymously: the order is
+ * the same for everybody and only the attempt marks are per-reader, so forwarding the session
+ * cookie would buy nothing. ANY failure falls back to the bundle rather than to no button — the
+ * scenario itself has already loaded, and a missing "next" is not worth an error page.
+ *
+ * A page rendered from the fixture walks the fixture: those six ids are the only ones that can be
+ * staged while the API is away, so a "next" into the bundle would mostly lead to the unavailable
+ * screen.
+ */
+async function nextHrefAfter(id: string, state: 'live' | 'sampled'): Promise<string | null> {
+  if (state === 'sampled') return nextScenarioHref(id, LAB_SCENARIO_SUMMARIES);
+  const list = await safeFetch<ScenarioListResponse>(() =>
+    apiGet<ScenarioListResponse>(API_PATHS.scenarios()),
+  );
+  return nextScenarioHref(id, list.ok ? list.data.scenarios : null);
 }
 
 /**
@@ -233,7 +246,7 @@ export default async function ScenarioPage({
         legalActions={table.legalActions}
         seatNames={seatNames}
         glossary={glossary}
-        nextHref={nextHrefAfter(scenario.id)}
+        nextHref={await nextHrefAfter(scenario.id, data.state)}
         compareHref={`/legends/compare?scenario=${encodeURIComponent(scenario.id)}`}
       />
 
