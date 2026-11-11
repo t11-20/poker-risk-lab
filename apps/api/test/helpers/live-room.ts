@@ -58,6 +58,7 @@ export function seatingOnlyStore(units = 10_000): RoomStore {
     },
     removeMember: () => Promise.resolve(),
     close: () => Promise.resolve(true),
+    closePracticeTable: () => refuse('closePracticeTable'),
     createBotUser: () => refuse('createBotUser'),
     readUnits: () => Promise.resolve(units),
   };

@@ -169,6 +169,7 @@ function fakeStore(): {
       return Promise.resolve();
     },
     close: () => Promise.resolve(true),
+    closePracticeTable: () => refuse('closePracticeTable'),
     createBotUser: () => refuse('createBotUser'),
     readUnits: () => Promise.resolve(100_000),
   };

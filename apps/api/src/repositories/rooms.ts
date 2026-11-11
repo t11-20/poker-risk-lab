@@ -770,6 +770,63 @@ export async function close(sql: Db, roomId: string, options: CloseRoomOptions =
   return rows.length > 0;
 }
 
+/**
+ * Closes a room the owner is retiring as a practice table, unless another person is a member.
+ *
+ * ## The defect
+ *
+ * `RoomRegistry.retirePracticeTables` read the roster, decided "nobody else is here", and then
+ * called `close`, which does not look at the roster at all. A join that landed between the two was
+ * closed under the person who made it. Reachable through the routes: the owner of a two-seat table
+ * with one bot leaves it (nothing stops an owner leaving), which frees a membership; a friend
+ * holding the invite code joins; the owner starts a Legends match; the match's retire had read the
+ * roster before the join committed. Found by review on PR #25, and reproduced in
+ * `test/practice-table-units.test.ts` by joining inside the gap.
+ *
+ * ## Why two statements and not `update ... where not exists (...)`
+ *
+ * The same reason `addMember` takes its lock first. A `not exists` over `prl.room_members` is a
+ * subquery on rows this statement does not write, so it is answered from the statement's own
+ * snapshot. `addMember` only LOCKS the room row and never modifies it, so this UPDATE has no newer
+ * row version to re-check against (EvalPlanQual never fires) and the subquery would not see the
+ * join it waited for. So:
+ *
+ *   1. `select ... for update` on the room row — the lock `addMember` takes, so a join of this
+ *      room in flight finishes first and a join that starts after waits for this to commit;
+ *   2. a NEW statement, whose snapshot is taken once the lock is granted, and so sees every
+ *      committed join, decides and writes.
+ *
+ * Only "another person" is re-decided here. A room's bots and `max_seats` do not change after it
+ * is built, so the rest of the practice-table shape the registry checked still holds.
+ *
+ * Returns false when the room is missing, already closed, not this owner's, or has another person
+ * in it — the caller treats all four as "not retired".
+ */
+export function closePracticeTable(sql: Db, roomId: string, ownerUserId: string): Promise<boolean> {
+  return inOneTransaction(sql, async (tx) => {
+    const locked = await tx<{ id: string }[]>`
+      select r.id from prl.rooms r where r.id = ${roomId} for update
+    `;
+    if (locked.length === 0) return false;
+    const rows = await tx<{ id: string }[]>`
+      update prl.rooms r
+         set status = 'closed', closed_at = now()
+       where r.id = ${roomId}
+         and r.status <> 'closed'
+         and r.owner_user_id = ${ownerUserId}
+         and not exists (
+               select 1 from prl.room_members m
+                where m.room_id = r.id
+                  and m.left_at is null
+                  and not m.is_bot
+                  and m.user_id <> ${ownerUserId}
+             )
+      returning r.id
+    `;
+    return rows.length > 0;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

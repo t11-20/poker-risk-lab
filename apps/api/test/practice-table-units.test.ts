@@ -541,10 +541,9 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
       const test = await harness(tx);
       const shared = await createTable(test, HEADS_UP_TABLE);
       const friend = await usersRepository.createGuest(tx, { displayName: 'Friend' });
-      // Not through `joinByInviteCode`, which refuses: the owner and the bot already fill both
-      // memberships, and `addMember` counts members against `max_seats`. So today this guard is
-      // reachable only if that capacity rule changes — a spectator membership, say — and it is
-      // asserted here so that the day it does, a friend's table is still not closed under them.
+      // Inserted directly, so the owner stays a member: while they are, the owner and the bot fill
+      // both memberships and `joinByInviteCode` is refused `room_full`. A friend CAN join once the
+      // owner leaves — the next test does it through the registry, inside the retire's window.
       await tx`
         insert into prl.room_members (id, room_id, user_id, seat, stack)
         values (${newRoomMemberId()}, ${shared.id}, ${friend.id}, null, 1000)
@@ -555,6 +554,47 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
       await startMatch(test, 'calling-station');
       assert.equal(await statusOf(tx, shared.id), 'open', 'and survives a match');
       assert.equal(await statusOf(tx, alone.id), 'closed', 'the control: the same shape with nobody else');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('a friend who joins after the retire read the roster keeps their table', async () => {
+    await inRollback(async (tx) => {
+      // Devin Review on PR #25: the retire read the roster, decided nobody else was there, and then
+      // closed the row with a statement that does not look at the roster. A join in that gap lost
+      // its table. The join is made in the gap here, through the registry, the way a friend makes it.
+      let gate: string | null = null;
+      let joinInTheGap: () => Promise<void> = () => Promise.resolve();
+      const test = await harness(tx, {
+        wrap: (store) => ({
+          ...store,
+          membersOfRooms: async (ids) => {
+            const roster = await store.membersOfRooms(ids);
+            if (gate !== null && ids.includes(gate)) {
+              gate = null;
+              await joinInTheGap();
+            }
+            return roster; // read before the join, as the retire's read was
+          },
+        }),
+      });
+      const shared = await createTable(test, HEADS_UP_TABLE);
+      // An owner may leave their own table. That frees the membership a friend's join needs.
+      await test.registry.leaveRoom(shared.id, test.userId);
+      const friend = await usersRepository.createGuest(tx, { displayName: 'Friend' });
+      const principal = { userId: friend.id, displayName: 'Friend' };
+      joinInTheGap = async () => {
+        await test.registry.joinByInviteCode(principal, shared.inviteCode);
+      };
+      gate = shared.id;
+
+      await startMatch(test, 'calling-station');
+      assert.equal(gate, null, 'the join was never made in the gap, so this proved nothing');
+      assert.ok(await roomsRepository.memberOf(tx, shared.id, friend.id), 'the friend joined');
+      assert.equal(await statusOf(tx, shared.id), 'open', "the friend's table was closed under them");
+      assert.ok(test.registry.get(shared.id) !== null, 'and its live table with it');
 
       await test.registry.shutdown();
       await test.app.close();
@@ -641,16 +681,16 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
 
   it('a hand that ends under a retire does not fail the request or skip the listeners', async () => {
     await inRollback(async (tx) => {
-      // Fired inside `store.close`, i.e. after `retire` has decided to close the room and before it
-      // asks whether the reader is seated: the bot's fold that ends the hand is already QUEUED on
-      // the table, behind some no-ops, when that question is asked — and has run by the time the
-      // `stand` queued after it does.
+      // Fired inside `store.closePracticeTable`, i.e. after `retire` has decided to close the room
+      // and before it asks whether the reader is seated: the bot's fold that ends the hand is
+      // already QUEUED on the table, behind some no-ops, when that question is asked — and has run
+      // by the time the `stand` queued after it does.
       let race: (() => void) | null = null;
       const test = await harness(tx, {
         wrap: (store) => ({
           ...store,
-          close: async (roomId, ownerUserId) => {
-            const closed = await store.close(roomId, ownerUserId);
+          closePracticeTable: async (roomId, ownerUserId) => {
+            const closed = await store.closePracticeTable(roomId, ownerUserId);
             race?.();
             race = null;
             return closed;

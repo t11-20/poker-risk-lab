@@ -492,6 +492,7 @@ function rosterStore(
     },
     removeMember: () => Promise.resolve(),
     close: () => Promise.resolve(true),
+    closePracticeTable: () => refuse('closePracticeTable'),
     createBotUser: () => refuse('createBotUser'),
     readUnits: () => Promise.resolve(10_000),
   };

@@ -455,6 +455,32 @@ describe('postgresRoomStore — rosters, listing and closing', dbOptions, () => 
       assert.equal(await store.close(generateId('room'), owner), false, 'an unknown room is false');
     });
   });
+
+  it('closes a practice table only while no other person is a member', async () => {
+    await inRollback(async (tx) => {
+      const store = storeOn(tx);
+      const owner = await makeGuest(tx, 'Owner');
+      const friend = await makeGuest(tx, 'Friend');
+      const bot = await store.createBotUser('Bot');
+      const { room } = await store.create({ ...ROOM_SPEC, ownerUserId: owner });
+      await store.addMember({
+        roomId: room.id,
+        userId: bot.id,
+        isBot: true,
+        bot: { profileId: 'calling-station', difficulty: 'educational', seed: 7 },
+      });
+      await store.addMember({ roomId: room.id, userId: friend });
+
+      assert.equal(await store.closePracticeTable(room.id, owner), false, 'a friend is a member');
+      assert.equal(await store.closePracticeTable(room.id, friend), false, 'only for the owner');
+      assert.equal((await store.byId(room.id))?.status, 'open');
+      await store.removeMember(room.id, friend);
+      assert.equal(await store.closePracticeTable(room.id, owner), true, 'the owner and a bot only');
+      assert.equal((await store.byId(room.id))?.status, 'closed');
+      assert.equal(await store.closePracticeTable(room.id, owner), false, 'twice is not two closures');
+      assert.equal(await store.closePracticeTable(generateId('room'), owner), false, 'an unknown room');
+    });
+  });
 });
 
 describe('postgresRoomStore — units', dbOptions, () => {

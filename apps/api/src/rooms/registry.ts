@@ -298,6 +298,8 @@ export interface RoomStore {
   readonly unseatMember: (roomId: string, userId: string) => Promise<void>;
   readonly removeMember: (roomId: string, userId: string) => Promise<void>;
   readonly close: (roomId: string, ownerUserId: string) => Promise<boolean>;
+  /** `close`, refused when another person is a member at the moment of closing. See `retire`. */
+  readonly closePracticeTable: (roomId: string, ownerUserId: string) => Promise<boolean>;
   /** Bots get real user rows, so a seat is a seat whoever occupies it. */
   readonly createBotUser: (
     displayName: string,
@@ -332,6 +334,8 @@ export function postgresRoomStore(sql: () => Db): RoomStore {
       await roomsRepository.removeMember(sql(), roomId, userId);
     },
     close: (roomId, ownerUserId) => roomsRepository.close(sql(), roomId, { ownerUserId }),
+    closePracticeTable: (roomId, ownerUserId) =>
+      roomsRepository.closePracticeTable(sql(), roomId, ownerUserId),
     createBotUser: async (displayName) => {
       const row = await usersRepository.createGuest(sql(), { displayName });
       return { id: row.id, displayName: row.display_name };
@@ -1545,7 +1549,11 @@ export class RoomRegistry {
   private async retire(roomId: string, ownerUserId: string): Promise<boolean> {
     // A build in flight would publish its room AFTER the lookup below and outlive the close.
     await this.opening.get(roomId)?.catch(() => undefined);
-    if (!(await this.store.close(roomId, ownerUserId))) return false;
+    // Not `store.close`: the roster `retirePracticeTables` read is already old by now, and a friend
+    // who joined since (the owner can leave, which frees their membership) had their table closed
+    // under them. `closePracticeTable` re-decides "nobody else is here" under the room-row lock a
+    // join takes. Refused means not retired: the room stays open and live, untouched.
+    if (!(await this.store.closePracticeTable(roomId, ownerUserId))) return false;
     // And again after the close: a build that began while the close was in flight may have read
     // the row before the close committed. One that reads it after is refused by `buildOwnedRoom`;
     // this is the other half, waiting for one that read it before and closing what it published.

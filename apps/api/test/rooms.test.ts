@@ -224,6 +224,19 @@ function fakeRoomStore(): FakeRoomStore {
       rows.set(roomId, { ...row, status: 'closed', closed_at: new Date() });
       return Promise.resolve(true);
     },
+    // `rooms.closePracticeTable`: refused while another person is a member at the moment of closing.
+    closePracticeTable: (roomId, ownerUserId) => {
+      const row = rows.get(roomId);
+      if (row === undefined || row.status === 'closed' || row.owner_user_id !== ownerUserId) {
+        return Promise.resolve(false);
+      }
+      const others = [...members.values()].some(
+        (member) => member.room_id === roomId && !member.is_bot && member.user_id !== ownerUserId,
+      );
+      if (others) return Promise.resolve(false);
+      rows.set(roomId, { ...row, status: 'closed', closed_at: new Date() });
+      return Promise.resolve(true);
+    },
     createBotUser: (displayName) => {
       counter += 1;
       return Promise.resolve({ id: `usr_bot${counter}`, displayName });
