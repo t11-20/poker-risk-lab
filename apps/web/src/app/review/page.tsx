@@ -79,8 +79,12 @@ const ROUTE = '/review';
  * be keyboard-reachable (axe `scrollable-region-focusable`, WCAG 2.1.1) and an unnamed tab stop is a
  * silent one. The name stays when the stop goes, so a screen reader still finds the table as a
  * named region. Same problem as the EV table in `@prl/ui`'s CoachPanel, which is always a table.
+ *
+ * The name says nothing about scrolling: below 1024px the rows are cards and the region never
+ * scrolls, so "scrolls sideways when the window is too narrow" was read out as a false sentence on
+ * every phone.
  */
-const TABLE_LABEL = 'Hand history table. Scrolls sideways when the window is too narrow for every column.';
+const TABLE_LABEL = 'Hand history table';
 
 /** The narrow layout's sort `<select>`, for its `<label>`. One per page, so a constant is enough. */
 const SORT_SELECT_ID = 'prl-review-sort';
