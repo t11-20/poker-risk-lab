@@ -350,10 +350,45 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
   const revealRef = useRef<HTMLDivElement>(null);
   const revealId = useId();
 
+  const decisionId = useId();
+  /** Set by "Choose again" and nothing else, so a first render never moves focus. */
+  const choseAgain = useRef(false);
+
   useEffect(() => {
     // Only ever after the reader's own commit — `committed` cannot become non-null any other way.
-    if (committed !== null) revealRef.current?.focus();
-  }, [committed]);
+    if (committed !== null) {
+      // Focus without the browser's own scroll, then align the START of the reveal.
+      //
+      // A bare `focus()` scrolls only when the target is out of view, and the reveal never is: it
+      // mounts directly under the decision the reader just made, so its top edge was already on
+      // screen, under the sticky bar. Measured at 360x640 on the production build: reveal top 60px
+      // against a bar whose bottom is 77px. The audit saw the panel's heading at -1..51px on a live
+      // scenario. A `scroll-margin-block-start` on the reveal was measured too, and it does not
+      // help: at 360 it changed nothing, because nothing scrolled, and at 1440 it stacked on the
+      // root's `scroll-padding` and pushed the reveal to 172px. `scrollIntoView({ block: 'start' })`
+      // always aligns, and alignment honours the root `scroll-padding-block-start` that nav.css
+      // derives from `--prl-pillbar-h`. So the clearance comes from the bar's own token, not from
+      // a literal here. Measured after: reveal top 132px at 360x640 and 80px at 1440x900, both
+      // clear of the 77px bar. The root's `scroll-behavior` still decides whether the scroll is
+      // smooth, so reduced motion is respected.
+      const reveal = revealRef.current;
+      reveal?.focus({ preventScroll: true });
+      reveal?.scrollIntoView({ block: 'start' });
+      return;
+    }
+    // "Choose again" unmounts the button that was just pressed, along with the whole reveal, and a
+    // focused element that leaves the DOM drops focus to <body> — measured at 308fadf,
+    // `document.activeElement` was BODY after pressing it, so a keyboard reader's next Tab started
+    // from the top of the page, several screens above the decision they had asked to retake. Focus
+    // goes to the first action the ActionBar offers instead: the control the button promised.
+    if (!choseAgain.current) return;
+    choseAgain.current = false;
+    const decision = document.getElementById(decisionId);
+    const first =
+      decision?.querySelector<HTMLElement>('.prl-action-bar__actions button:not(:disabled)') ??
+      decision?.querySelector<HTMLElement>('button:not(:disabled)');
+    first?.focus();
+  }, [committed, decisionId]);
 
   /**
    * Asks the server to grade the committed action, and abandons the request on unmount or on a
@@ -447,7 +482,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
       </Panel>
 
       {/* 3. The decision. */}
-      <Panel title="Your decision" eyebrow="Decide" index={3} headingLevel={2}>
+      <Panel title="Your decision" eyebrow="Decide" index={3} headingLevel={2} id={decisionId}>
         {committed === null ? (
           <>
             <p className="prl-prose">
@@ -473,7 +508,14 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
                 {committed.to === null ? '' : ` to ${formatUnits(committed.to)}`}
               </span>
             </p>
-            <Button variant="secondary" size="sm" onClick={() => setCommitted(null)}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                choseAgain.current = true;
+                setCommitted(null);
+              }}
+            >
               Choose again and compare the other line
             </Button>
           </div>
