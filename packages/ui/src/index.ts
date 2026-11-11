@@ -33,7 +33,9 @@
 export {
   type BetBounds,
   clampBetTo,
+  clampedFrom,
   presetTotal,
+  pressedPreset,
   resolveDraft,
   resolveSizedAction,
   SIZING_PRESETS,
@@ -199,6 +201,8 @@ export {
   roundCoordinate,
   summariseAxes,
 } from './radar.ts';
+// What each seat did on the street in progress, for the plate's status line.
+export { lastActionsThisStreet } from './seat-actions.ts';
 // -- Table types, projected out of the wire contract -------------------------
 export type {
   ActionName,

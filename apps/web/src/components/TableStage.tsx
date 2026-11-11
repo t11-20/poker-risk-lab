@@ -441,6 +441,9 @@ function TableRegion(props: TableRegionProps): ReactElement {
           {...(highlightedCards === undefined ? {} : { highlightedCards })}
           {...(highlightLabel === undefined ? {} : { highlightLabel })}
           turn={turn}
+          // Each plate says what that seat did on this street. The server's own sentence for it only
+          // ever reached the 1x1 narration region above; see `seat-actions.ts` in `@prl/ui`.
+          showLastActions
         />
       )}
 

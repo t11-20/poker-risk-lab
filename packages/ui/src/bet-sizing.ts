@@ -257,6 +257,45 @@ export function draftForBounds(draft: StampedDraft | null, bounds: BetBounds): B
   return sameBounds(draft.bounds, bounds) ? draft : null;
 }
 
+/**
+ * The typed amount, when the field is holding a number that is NOT the amount that will be sent.
+ *
+ * ## The defect this exists for
+ *
+ * The field is allowed to disagree with the clamp while it has focus — the reader is mid-edit, and
+ * rewriting their digits under the caret is worse — and blur puts the two back together. But
+ * nothing said they disagreed in the meantime: typing `2000` against a 1,050 maximum left `2000`
+ * in the field beside a button reading "Raise to 1,050", and a reader who pressed the button
+ * without leaving the field sent an amount they had not typed and had not been told about.
+ *
+ * Null when there is nothing to say: no draft, an empty field, text that is malformed (that has its
+ * own message, see `isDraftMalformed`), or a number that is already the one being sent.
+ */
+export function clampedFrom(draft: BetDraft | null, to: number): number | null {
+  if (draft === null || isDraftMalformed(draft)) return null;
+  const text = draft.text.trim();
+  if (text === '') return null;
+  const typed = parseAmount(text);
+  return Number.isFinite(typed) && typed !== to ? typed : null;
+}
+
+/**
+ * Which ONE preset the current amount corresponds to, or null.
+ *
+ * Presets clamp into the legal range, so on a short stack or a minimum-only raise several of them
+ * resolve to the same total — and every one whose total matched used to be marked pressed, so
+ * "Pot" and "All in" were both ticked at once, which reads as two choices made. The LAST match is
+ * the one: the list runs from the smallest fraction to all in, and when "Pot" and "All in" are the
+ * same amount, "All in" is the truer name for it.
+ */
+export function pressedPreset(context: SizingContext, to: number): SizingPreset['id'] | null {
+  let pressed: SizingPreset['id'] | null = null;
+  for (const preset of SIZING_PRESETS) {
+    if (presetTotal(preset, context) === to) pressed = preset.id;
+  }
+  return pressed;
+}
+
 /** The total a preset resolves to, already clamped into the legal range. */
 export function presetTotal(preset: SizingPreset, context: SizingContext): number {
   const { bounds, pot, toCall, committedThisStreet } = context;

@@ -100,9 +100,11 @@ import {
 import {
   type BetDraft,
   clampBetTo,
+  clampedFrom,
   draftForBounds,
   isDraftMalformed,
   presetTotal,
+  pressedPreset,
   resolveDraft,
   resolveSizedAction,
   SIZING_PRESETS,
@@ -183,6 +185,7 @@ function BetSizer(props: BetSizerProps): ReactElement {
   const numberId = useId();
   const boundsId = useId();
   const invalidId = useId();
+  const clampedId = useId();
 
   const { bounds } = sized;
   const isBet = sized.kind === 'bet';
@@ -205,7 +208,16 @@ function BetSizer(props: BetSizerProps): ReactElement {
    * is read out on every visit to the field.
    */
   const malformed = isDraftMalformed(draft);
-  const describedBy = malformed ? `${invalidId} ${boundsId}` : boundsId;
+  // A number the clamp has replaced. Said beside the field, and first in its description, for the
+  // same reason the malformed correction is: the reader is in the field when it matters.
+  const clamped = clampedFrom(draft, to);
+  const describedBy = malformed
+    ? `${invalidId} ${boundsId}`
+    : clamped !== null
+      ? `${clampedId} ${boundsId}`
+      : boundsId;
+  const context = { bounds, pot, toCall, committedThisStreet };
+  const pressed = pressedPreset(context, to);
 
   return (
     <fieldset className="prl-sizer" disabled={disabled}>
@@ -216,13 +228,14 @@ function BetSizer(props: BetSizerProps): ReactElement {
           // Derived from the engine's own bounds, never from an invented maximum: `presetTotal`
           // clamps into `[minTo, maxTo]`, so a preset can never propose an amount the server did
           // not offer. On a short stack several presets collapse onto all-in, which is correct.
-          const target = presetTotal(preset, { bounds, pot, toCall, committedThisStreet });
+          const target = presetTotal(preset, context);
           return (
             <button
               key={preset.id}
               type="button"
               className="prl-preset"
-              aria-pressed={target === to}
+              // One pressed preset at most — see `pressedPreset`.
+              aria-pressed={preset.id === pressed}
               onClick={() => onDraft({ text: String(target), badInput: false })}
             >
               <span aria-hidden="true" className="prl-preset__mark">
@@ -291,6 +304,12 @@ function BetSizer(props: BetSizerProps): ReactElement {
           }
         </p>
       ) : null}
+
+      {clamped === null ? null : (
+        <p className="prl-field__hint prl-sizer__clamped" id={clampedId}>
+          {`${clamped > bounds.max ? `${formatChips(clamped)} is above the most you can put in` : clamped < bounds.min ? `${formatChips(clamped)} is below the minimum` : 'Units are whole'}, so the ${isBet ? 'bet' : 'raise'} will be to ${formatChips(to)}${isAllIn ? ' — all in' : ''}.`}
+        </p>
+      )}
 
       <p className="prl-sizer__bounds" id={boundsId}>
         {`Allowed range ${formatChips(bounds.min)} to ${formatChips(bounds.max)} units. Presets are a fraction of the pot after your call.`}
