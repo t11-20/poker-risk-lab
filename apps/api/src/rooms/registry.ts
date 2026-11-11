@@ -719,6 +719,11 @@ export interface OpenRoomRequest {
   readonly record: RoomRecord;
   /** Members already known from the database, for a room being re-opened after a restart. */
   readonly members?: readonly Omit<RoomMemberRecord, 'sockets'>[];
+  /**
+   * Read the row again under the lease and refuse to build a closed room. Set by `ensureOpen`,
+   * whose record comes from a read that may be stale by then; see `buildOwnedRoom`.
+   */
+  readonly recheckClosed?: boolean;
 }
 
 /**
@@ -768,6 +773,8 @@ export class RoomRegistry {
   private readonly evictionListeners = new Set<(roomId: string, reason: EvictionReason) => void>();
   /** Who wants to know that a practice table was retired. `ws/hub.ts` registers one, to close sockets. */
   private readonly retirementListeners = new Set<(roomId: string) => void>();
+  /** The tail of each learner's queue of "replace my practice table". See `replacePracticeTable`. */
+  private readonly practiceTableTurns = new Map<string, Promise<void>>();
 
   constructor(options: RoomRegistryOptions = {}) {
     this.clock = options.clock ?? systemClock;
@@ -885,6 +892,19 @@ export class RoomRegistry {
   }
 
   private async buildOwnedRoom(request: OpenRoomRequest): Promise<LiveRoom> {
+    // For a re-open, the row is read again here, under the lease and inside the `opening` entry,
+    // because the read that decided to open it may be stale by now. Measured: `ensureOpen` read the
+    // room as open and was loading its roster when `retirePracticeTables` closed the row; the
+    // retire found nothing live and nothing opening, returned, and this build then published a
+    // live table for a closed room — `GET /rooms/:id` answered 200 and a hand was dealt at it. A
+    // closer that runs after this read finds the build in `opening` and waits for it (see
+    // `retire`); one that ran before it is seen here. Only for `ensureOpen`: `createRoom` has just
+    // written the row, and a caller that opens from a record it holds has no row to be stale.
+    if (request.recheckClosed === true && (await this.store.byId(request.record.id))?.status === 'closed') {
+      throw new AppError('room_closed', {
+        logDetail: `room ${request.record.id} closed while it was opening`,
+      });
+    }
     // Nothing in this process holds a table for this room yet, so any hand still open in the
     // database belongs to a process that is gone and can never finish it. Closed here, before the
     // table exists, so the reconciliation can never race a hand this process is about to deal.
@@ -1022,15 +1042,24 @@ export class RoomRegistry {
     const row = await this.store.byId(roomId);
     if (row === null || row.status === 'closed') return null;
     const members = await this.store.membersOfRooms([roomId]);
-    const room = await this.open({
-      record: recordFromRow(row),
-      members: members.map((member) => ({
-        userId: member.user_id,
-        displayName: member.display_name,
-        isBot: member.is_bot,
-        botProfile: member.bot_profile,
-      })),
-    });
+    let room: LiveRoom;
+    try {
+      room = await this.open({
+        record: recordFromRow(row),
+        recheckClosed: true,
+        members: members.map((member) => ({
+          userId: member.user_id,
+          displayName: member.display_name,
+          isBot: member.is_bot,
+          botProfile: member.bot_profile,
+        })),
+      });
+    } catch (error) {
+      // Closed between the read above and the build's own read of the row: the same answer as a
+      // room that was closed before this was called. See `buildOwnedRoom`.
+      if (error instanceof AppError && error.code === 'room_closed') return null;
+      throw error;
+    }
     // Seats recorded in the database are re-taken at the live table, so a room re-opened after a
     // restart looks the way the roster says it does — and a bot seat is re-registered with the
     // runner, so it plays instead of sitting there until the turn clock folds it.
@@ -1481,11 +1510,46 @@ export class RoomRegistry {
     return retired;
   }
 
+  /**
+   * Retires the learner's practice tables and then runs `create`, one learner's calls at a time.
+   *
+   * `create` must build the whole new table — the room AND its bots — because a room is only a
+   * practice table once its bots fill it, and `retirePracticeTables` cannot see one that is
+   * half-built. Measured without this: two `POST /legends/matches` from one learner at once (two
+   * tabs) each retired the first match, then each created a room, and both stayed open. With it,
+   * the second waits for the first and retires the table the first made.
+   *
+   * Per learner and in process memory, which is enough because a learner's rooms are served by
+   * the one API process (`replicas: 1`, ADR 0001 and ADR 0013). A failed turn does not block the
+   * next one: the queue carries on from its settlement, not its result.
+   */
+  replacePracticeTable<T>(userId: string, create: () => Promise<T>): Promise<T> {
+    const before = this.practiceTableTurns.get(userId) ?? Promise.resolve();
+    const turn = before.then(async () => {
+      await this.retirePracticeTables(userId);
+      return create();
+    });
+    const settled = turn.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.practiceTableTurns.set(userId, settled);
+    void settled.then(() => {
+      // The last turn out removes the entry, so the map holds only learners with a turn pending.
+      if (this.practiceTableTurns.get(userId) === settled) this.practiceTableTurns.delete(userId);
+    });
+    return turn;
+  }
+
   /** One practice table, closed durably and then live. See `retirePracticeTables`. */
   private async retire(roomId: string, ownerUserId: string): Promise<boolean> {
     // A build in flight would publish its room AFTER the lookup below and outlive the close.
     await this.opening.get(roomId)?.catch(() => undefined);
     if (!(await this.store.close(roomId, ownerUserId))) return false;
+    // And again after the close: a build that began while the close was in flight may have read
+    // the row before the close committed. One that reads it after is refused by `buildOwnedRoom`;
+    // this is the other half, waiting for one that read it before and closing what it published.
+    await this.opening.get(roomId)?.catch(() => undefined);
     const live = this.rooms.get(roomId);
     if (live === undefined) return true;
     live.record.closed = true;
@@ -1499,10 +1563,25 @@ export class RoomRegistry {
         // table's own queued work has returned, never from inside it.
         queueMicrotask(() => this.close(roomId));
       });
-      if (live.table.seatOf(ownerUserId) !== null) await live.table.stand(ownerUserId);
+      try {
+        if (live.table.seatOf(ownerUserId) !== null) await live.table.stand(ownerUserId);
+      } catch (error) {
+        // `seatOf` is read now and `stand` runs later, behind whatever is already queued at the
+        // table. Measured: a reader who had already stood (flagged, still in the hand) with the
+        // bot's hand-ending fold queued ahead of this `stand` — the fold settled the hand and freed
+        // the chair, `stand` threw `not_seated`, `POST /legends/matches` answered 409 for a room it
+        // had already closed, and the listeners below never ran. Not seated is the outcome this
+        // wanted; the settling notice it subscribed to above closes the table either way.
+        if (!(error instanceof AppError && error.code === 'not_seated')) throw error;
+      }
     } else {
       this.close(roomId);
     }
+    this.notifyRetired(roomId);
+    return true;
+  }
+
+  private notifyRetired(roomId: string): void {
     for (const listener of [...this.retirementListeners]) {
       try {
         listener(roomId);
@@ -1510,7 +1589,6 @@ export class RoomRegistry {
         // The room is closed, which is the property; a listener that threw is the listener's bug.
       }
     }
-    return true;
   }
 
   /**

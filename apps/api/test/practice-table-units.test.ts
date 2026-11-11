@@ -530,6 +530,130 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
       await test.app.close();
     });
   });
+
+  it('a retire racing a re-open of the same table does not leave it live', async () => {
+    await inRollback(async (tx) => {
+      // Holds `ensureOpen` after it has read the row as open, while the retire runs to completion.
+      let gate: string | null = null;
+      let release: () => void = () => undefined;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let reached: () => void = () => undefined;
+      const atGate = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const test = await harness(tx, {
+        wrap: (store) => ({
+          ...store,
+          membersOfRooms: async (ids) => {
+            if (gate !== null && ids.length === 1 && ids[0] === gate) {
+              gate = null;
+              reached();
+              await released;
+            }
+            return store.membersOfRooms(ids);
+          },
+        }),
+      });
+      const match = await startMatch(test, 'calling-station');
+      assert.equal((await test.send('POST', `/api/v1/rooms/${match}/sit`, { seat: 0 })).status, 200);
+      test.registry.close(match); // the process restarted: the row is open and nothing is live
+      gate = match;
+      const reopening = test.send('GET', `/api/v1/rooms/${match}`); // tab A reconnects
+      await atGate;
+      assert.deepEqual(await test.registry.retirePracticeTables(test.userId), [match]); // tab B
+      release();
+
+      const read = await reopening;
+      assert.equal(read.status, 404, `a closed room was served: ${JSON.stringify(read.body)}`);
+      assert.equal(test.registry.get(match), null, 'the re-open published a live table for a closed row');
+      assert.equal(await statusOf(tx, match), 'closed');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('two matches started at once leave one practice table', async () => {
+    await inRollback(async (tx) => {
+      const test = await harness(tx);
+      const first = await startMatch(test, 'calling-station');
+      const [a, b] = await Promise.all([
+        startMatch(test, 'vocal-aggressor'),
+        startMatch(test, 'patient-technician'),
+      ]);
+      const open = [];
+      for (const id of [first, a, b]) if ((await statusOf(tx, id)) === 'open') open.push(id);
+      assert.equal(open.length, 1, `two tabs each kept a table: ${open.join(', ')}`);
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('a hand that ends under a retire does not fail the request or skip the listeners', async () => {
+    await inRollback(async (tx) => {
+      // Fired inside `store.close`, i.e. after `retire` has decided to close the room and before it
+      // asks whether the reader is seated: the bot's fold that ends the hand is already QUEUED on
+      // the table, behind some no-ops, when that question is asked — and has run by the time the
+      // `stand` queued after it does.
+      let race: (() => void) | null = null;
+      const test = await harness(tx, {
+        wrap: (store) => ({
+          ...store,
+          close: async (roomId, ownerUserId) => {
+            const closed = await store.close(roomId, ownerUserId);
+            race?.();
+            race = null;
+            return closed;
+          },
+        }),
+      });
+      const retired: string[] = [];
+      test.registry.onRetirement((roomId) => retired.push(roomId));
+      const first = await startMatch(test, 'calling-station');
+      assert.equal((await test.send('POST', `/api/v1/rooms/${first}/sit`, { seat: 0 })).status, 200);
+      const room = test.registry.get(first);
+      assert.ok(room !== null);
+      await room.table.startHand();
+      let view = room.table.viewFor(test.userId);
+      assert.ok(view !== null && view.toAct !== null);
+      if (view.toAct === view.viewerSeat) {
+        await room.table.submitAction(test.userId, {
+          action: { type: 'call' },
+          actionId: 'act-racecall01',
+          expectedSequence: view.actionSequence,
+        });
+        view = room.table.viewFor(test.userId);
+        assert.ok(view !== null && view.toAct !== null);
+      }
+      // Already on the way out: flagged, still in the hand, and not the one to act.
+      await test.registry.standFromTable(first, test.userId);
+      const toAct = view.toAct;
+      const actor = view.seats.find((seat) => seat.seat === toAct);
+      assert.ok(actor !== undefined && actor.playerId !== test.userId);
+      const sequence = view.actionSequence;
+      race = () => {
+        for (let i = 0; i < 8; i += 1) void room.table.restack('usr_nobody', 1);
+        void room.table.submitAction(actor.playerId, {
+          action: { type: 'fold' },
+          actionId: 'act-racefold01',
+          expectedSequence: sequence,
+        });
+      };
+
+      const second = await test.send('POST', '/api/v1/legends/matches', matchAgainst('vocal-aggressor'));
+      assert.equal(second.status, 201, JSON.stringify(second.body));
+      assert.deepEqual(retired, [first], 'the sockets on the retired table are told');
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(test.registry.get(first), null, 'the live table closed on the settling notice');
+      assert.equal(await statusOf(tx, first), 'closed');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
 });
 
 describe('a reset made during a hand', () => {

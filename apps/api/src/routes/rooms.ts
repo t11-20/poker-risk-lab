@@ -264,24 +264,29 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
       async (request, reply): Promise<CreateRoomResponse> => {
         const principal = principalOf(request);
         const body = request.body;
+        const build = async (): Promise<{ readonly room: LiveRoom; readonly inviteCode: string }> => {
+          const made = await registry.createRoom(principal, {
+            name: body.name,
+            maxSeats: body.maxSeats,
+            smallBlind: body.smallBlind,
+            bigBlind: body.bigBlind,
+            ...(body.ante === undefined ? {} : { ante: body.ante }),
+            startingStack: body.startingStack,
+            ...(body.actionTimeoutSeconds === undefined
+              ? {}
+              : { actionTimeoutSeconds: body.actionTimeoutSeconds }),
+          });
+          await seatRequestedBots(registry, made.room, body.bots ?? []);
+          return made;
+        };
         // A table whose bots fill every chair but the owner's is a practice table, and a learner
         // holds one of those at a time — see `RoomRegistry.retirePracticeTables` for the units it
         // used to mint. A table with a free chair is for people and is never retired by this.
         const bots = (body.bots ?? []).reduce((total, entry) => total + entry.count, 0);
-        if (bots > 0 && bots + 1 === body.maxSeats) await registry.retirePracticeTables(principal.userId);
-        const created = await registry.createRoom(principal, {
-          name: body.name,
-          maxSeats: body.maxSeats,
-          smallBlind: body.smallBlind,
-          bigBlind: body.bigBlind,
-          ...(body.ante === undefined ? {} : { ante: body.ante }),
-          startingStack: body.startingStack,
-          ...(body.actionTimeoutSeconds === undefined
-            ? {}
-            : { actionTimeoutSeconds: body.actionTimeoutSeconds }),
-        });
-
-        await seatRequestedBots(registry, created.room, body.bots ?? []);
+        const created =
+          bots > 0 && bots + 1 === body.maxSeats
+            ? await registry.replacePracticeTable(principal.userId, build)
+            : await build();
         reply.status(201);
         return { room: toRoomSummary(created.room), inviteCode: created.inviteCode };
       },
@@ -465,46 +470,49 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
         }
         const plan = planLegendSeats(body.profileIds, mode, maxSeats);
 
-        // Before the new room exists, so it cannot retire itself. Every match the web client starts
-        // used to leave the previous one open with a 1,000-unit membership in it, and the header
-        // grew by that much per match — see `RoomRegistry.retirePracticeTables`.
-        await registry.retirePracticeTables(principal.userId);
-        const created = await registry.createRoom(principal, {
-          name: 'Legends practice',
-          maxSeats,
-          smallBlind: body.smallBlind,
-          bigBlind: body.bigBlind,
-          ...(body.ante === undefined ? {} : { ante: body.ante }),
-          startingStack: body.startingStack,
+        // The previous practice table is retired before the new room exists, so it cannot retire
+        // itself, and the whole build — room and bots — runs as one turn per learner, so two tabs
+        // cannot each keep one. Every match the web client starts used to leave the previous one
+        // open, and the header grew by 1,000 per match — see `RoomRegistry.retirePracticeTables`.
+        const created = await registry.replacePracticeTable(principal.userId, async () => {
+          const made = await registry.createRoom(principal, {
+            name: 'Legends practice',
+            maxSeats,
+            smallBlind: body.smallBlind,
+            bigBlind: body.bigBlind,
+            ...(body.ante === undefined ? {} : { ante: body.ante }),
+            startingStack: body.startingStack,
+          });
+          const roomId = made.room.record.id;
+          for (const seat of plan) {
+            const user = await registry.store.createBotUser(seat.displayName);
+            const durable = {
+              profileId: durableProfile(seat.profileId),
+              difficulty: body.difficulty,
+              // Seeds the opponent's decisions, never the deal. See the file comment. The RESOLVED
+              // seed is what is stored, not `body.deterministicSeed`: it is the value the runner is
+              // given below, so a rehydrated seat reproduces this exact decision stream.
+              seed: seedFor(roomId, seat.seat, body.deterministicSeed),
+            };
+            // The full seat, durably. This used to write `persistableProfile(...)`, which answered
+            // `unknown` for seven of the twelve profiles — so a restart forgot which Legend the
+            // learner had chosen to play. Migration 0003 widened the column; this writes to it.
+            await registry.store.addMember({
+              roomId,
+              userId: user.id,
+              isBot: true,
+              bot: durable,
+            });
+            await registry.store.seatMember(roomId, user.id, seat.seat);
+            await registry.seatBot(roomId, {
+              userId: user.id,
+              displayName: seat.displayName,
+              seat: seat.seat,
+              ...durable,
+            });
+          }
+          return made;
         });
-
-        for (const seat of plan) {
-          const user = await registry.store.createBotUser(seat.displayName);
-          const durable = {
-            profileId: durableProfile(seat.profileId),
-            difficulty: body.difficulty,
-            // Seeds the opponent's decisions, never the deal. See the file comment. The RESOLVED
-            // seed is what is stored, not `body.deterministicSeed`: it is the value the runner is
-            // given below, so a rehydrated seat reproduces this exact decision stream.
-            seed: seedFor(created.room.record.id, seat.seat, body.deterministicSeed),
-          };
-          // The full seat, durably. This used to write `persistableProfile(...)`, which answered
-          // `unknown` for seven of the twelve profiles — so a restart forgot which Legend the
-          // learner had chosen to play. Migration 0003 widened the column; this writes to it.
-          await registry.store.addMember({
-            roomId: created.room.record.id,
-            userId: user.id,
-            isBot: true,
-            bot: durable,
-          });
-          await registry.store.seatMember(created.room.record.id, user.id, seat.seat);
-          await registry.seatBot(created.room.record.id, {
-            userId: user.id,
-            displayName: seat.displayName,
-            seat: seat.seat,
-            ...durable,
-          });
-        }
 
         reply.status(201);
         return {
