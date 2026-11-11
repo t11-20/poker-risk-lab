@@ -1320,9 +1320,13 @@
   font-variant-numeric: var(--prl-numeric);
 }
 
+/* `min-inline-size: 0` because a `<fieldset>` defaults to `min-content`, and once a question is
+   answered its min-content includes the nowrap chip below. Measured at 360: the options overflowed
+   the panel's inner edge by ~15px, the chip being 233px wide plus the feedback's inset. */
 .prl-learn-quiz__options {
   display: grid;
   gap: var(--prl-space-5);
+  min-inline-size: 0;
   margin: 0;
   padding: 0;
   border: 0;
@@ -1401,6 +1405,12 @@
   padding: var(--prl-space-5) var(--prl-space-6) var(--prl-space-6);
   padding-inline-start: calc(var(--prl-space-6) + var(--prl-space-7) + var(--prl-space-5));
   border-block-start: var(--prl-hairline);
+}
+
+/* The other half of the 360px overflow above: "◆ the answer this lesson gives" is a sentence, and a
+   chip is `nowrap`. Here it may wrap, so it can never be wider than the column it is in. */
+.prl-learn-quiz__option-feedback .prl-chip {
+  white-space: normal;
 }
 
 /**
