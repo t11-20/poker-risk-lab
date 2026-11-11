@@ -127,6 +127,14 @@
 }
 
 /**
+ * `LegendDifficultyScope`'s wrapper is a listener, not a layout box. `contents` keeps the picker and
+ * the card section as direct grid items of the page, so the gap above sits between them as before.
+ */
+.prl-legend-scope {
+  display: contents;
+}
+
+/**
  * The masthead.
  *
  * `--prl-line-strong` under it rather than the decorative hairline: this rule is the boundary

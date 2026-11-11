@@ -29,6 +29,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 import { DifficultyPicker } from '@/components/DifficultyPicker.tsx';
 import { LegendCard } from '@/components/LegendCard.tsx';
+import { LegendDifficultyScope } from '@/components/LegendDifficultyScope.tsx';
 import {
   compareHref,
   DEFAULT_COMPARE_PROFILE_IDS,
@@ -108,22 +109,28 @@ export default async function LegendsPage({
         </ul>
       </div>
 
-      <DifficultyPicker action={LEGENDS_PATH} difficulties={difficulties} selected={difficulty} />
+      {/*
+        One scope around the picker and the cards, so every Play link follows the ticked option
+        before "Apply setting" is pressed. See `LegendDifficultyScope.tsx` for the measurement.
+      */}
+      <LegendDifficultyScope>
+        <DifficultyPicker action={LEGENDS_PATH} difficulties={difficulties} selected={difficulty} />
 
-      <section className="prl-legend-section">
-        <h2>The profiles</h2>
-        <p className="prl-prose">
-          Three signature axes are called out on each card so it is readable at a glance; the radar behind
-          them is all sixteen, numbered 01 to 16, with the full table of values available to a screen reader.
-          No axis is ranked and no value is a score — a high figure on "folds under pressure" is a different
-          opponent, not a worse one.
-        </p>
-        <div className="prl-legend-grid">
-          {profiles.data.profiles.map((profile) => (
-            <LegendCard difficulty={difficulty} key={profile.id} profile={profile} />
-          ))}
-        </div>
-      </section>
+        <section className="prl-legend-section">
+          <h2>The profiles</h2>
+          <p className="prl-prose">
+            Three signature axes are called out on each card so it is readable at a glance; the radar behind
+            them is all sixteen, numbered 01 to 16, with the full table of values available to a screen
+            reader. No axis is ranked and no value is a score — a high figure on "folds under pressure" is a
+            different opponent, not a worse one.
+          </p>
+          <div className="prl-legend-grid">
+            {profiles.data.profiles.map((profile) => (
+              <LegendCard difficulty={difficulty} key={profile.id} profile={profile} />
+            ))}
+          </div>
+        </section>
+      </LegendDifficultyScope>
     </div>
   );
 }
