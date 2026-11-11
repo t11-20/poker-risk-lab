@@ -295,6 +295,8 @@ export interface RoomStore {
     readonly bot?: DurableBotSeat | null;
   }) => Promise<roomsRepository.RoomMemberRow>;
   readonly seatMember: (roomId: string, userId: string, seat: number) => Promise<void>;
+  /** Once the LIVE table has accepted the seat, never before. See `rooms.recordFirstSit`. */
+  readonly recordFirstSit: (roomId: string, userId: string) => Promise<boolean>;
   readonly unseatMember: (roomId: string, userId: string) => Promise<void>;
   readonly removeMember: (roomId: string, userId: string) => Promise<void>;
   readonly close: (roomId: string, ownerUserId: string) => Promise<boolean>;
@@ -327,6 +329,7 @@ export function postgresRoomStore(sql: () => Db): RoomStore {
     seatMember: async (roomId, userId, seat) => {
       await roomsRepository.seatMember(sql(), roomId, userId, seat);
     },
+    recordFirstSit: (roomId, userId) => roomsRepository.recordFirstSit(sql(), roomId, userId),
     unseatMember: async (roomId, userId) => {
       await roomsRepository.unseatMember(sql(), roomId, userId);
     },
@@ -1356,6 +1359,33 @@ export class RoomRegistry {
       isBot: false,
       botProfile: null,
     });
+    // After the live sit, not inside `seatMember`: the live table can still refuse a chair the
+    // database granted, and a first sit written before that refusal counted a membership nobody had
+    // sat at toward units for as long as it lived. See `rooms.recordFirstSit`.
+    await this.recordFirstSit(roomId, principal.userId);
+  }
+
+  /**
+   * Writes the first sit, and does not fail a sit that has already happened if it cannot.
+   *
+   * The live table and the durable seat both hold the learner by now, so throwing would answer an
+   * error for a seat they are sitting in. Failing to record errs in the safe direction, and only
+   * after a stand: while seated the row counts by `seat is not null` (`users.readUnits`), and a
+   * learner who stands before the first deal reads the allowance until they sit again — less than
+   * the room holds for them, never more. Reported, because a quiet gap here is the hole migration
+   * 0008 was written to close.
+   */
+  private async recordFirstSit(roomId: string, userId: string): Promise<void> {
+    try {
+      await this.store.recordFirstSit(roomId, userId);
+    } catch (error) {
+      this.onProblem('a first sit could not be recorded', {
+        event: 'first-sit-record',
+        roomId,
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -1651,12 +1681,16 @@ export class RoomRegistry {
       botProfile: spec.profileId,
     });
     room.bots.add(spec);
-    return room.addMember({
+    const member = room.addMember({
       userId: spec.userId,
       displayName: spec.displayName,
       isBot: true,
       botProfile: spec.profileId,
     });
+    // A bot's units are never read, but the column says when this membership first sat, and it
+    // should say so for every row rather than only for the ones somebody reads.
+    await this.recordFirstSit(roomId, spec.userId);
+    return member;
   }
 
   subscribe(roomId: string, listener: TableListener): () => void {

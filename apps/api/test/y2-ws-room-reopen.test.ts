@@ -187,6 +187,7 @@ function persistedStore(
     addMember: () => refuse('addMember'),
     seatMember: () => Promise.resolve(),
     unseatMember: () => Promise.resolve(),
+    recordFirstSit: () => Promise.resolve(true),
     removeMember: () => Promise.resolve(),
     close: () => Promise.resolve(true),
     closePracticeTable: () => refuse('closePracticeTable'),

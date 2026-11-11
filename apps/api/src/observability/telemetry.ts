@@ -70,6 +70,7 @@ export type ProblemEvent =
   | 'room-fenced'
   | 'room-lease-release'
   | 'seat-entitlement'
+  | 'first-sit-record'
   // rooms/table.ts
   | 'turn-timeout'
   | 'engine-rejection'
@@ -106,6 +107,7 @@ export const PROBLEM_EVENTS: readonly ProblemEvent[] = [
   'room-fenced',
   'room-lease-release',
   'seat-entitlement',
+  'first-sit-record',
   'turn-timeout',
   'engine-rejection',
   'departed-seat-fold',
@@ -216,6 +218,10 @@ export function classifyProblem(event: ProblemEvent): ProblemClass {
     // unopenable for up to that long — and the two events that matter, being refused and being
     // fenced, are counted above.
     case 'room-lease-release':
+    // A first sit `rooms.recordFirstSit` could not write. A line and not a series: the learner is
+    // seated, the row counts by `seat is not null` while they are, and the cost is the allowance
+    // shown instead of the room's stack after a stand before the first deal — less, never more.
+    case 'first-sit-record':
     case 'socket-intent':
     case 'socket-send':
     case 'socket-close':

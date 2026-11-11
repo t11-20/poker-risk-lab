@@ -871,7 +871,8 @@ interface UnitsRow {
  * friends table must not be closed and a table nobody has sat at is not a practice table yet.
  *
  * So a membership counts once the learner has sat at it: `room_members.first_seated_at`, which
- * `rooms.seatMember` writes on the first sit and nothing clears. Per row, so a learner who leaves and
+ * `rooms.recordFirstSit` writes once the live table has accepted the first sit — not `seatMember`,
+ * whose seat the live table can still refuse — and nothing clears. Per row, so a learner who leaves and
  * rejoins starts uncounted on the new membership. Measured against what it replaced:
  *
  *   - seated NOW alone would drop a winner who stood up to the allowance, and

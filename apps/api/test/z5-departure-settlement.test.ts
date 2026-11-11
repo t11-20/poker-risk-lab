@@ -164,6 +164,7 @@ function fakeStore(): {
       if (!left.has(userId)) seats.set(userId, null);
       return Promise.resolve();
     },
+    recordFirstSit: (_roomId, userId) => Promise.resolve(!left.has(userId)),
     removeMember: (_roomId, userId) => {
       left.add(userId);
       return Promise.resolve();

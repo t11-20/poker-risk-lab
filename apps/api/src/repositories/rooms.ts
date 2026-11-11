@@ -627,10 +627,7 @@ export async function seatMember(
   try {
     const rows = await sql<{ id: string }[]>`
       update prl.room_members m
-         set seat = ${seat},
-             -- What users.readUnits counts a membership by. Kept once set: standing up leaves the
-             -- chips this membership holds in front of the learner. See migration 0008.
-             first_seated_at = coalesce(m.first_seated_at, now())
+         set seat = ${seat}
         from prl.rooms r
        where r.id = m.room_id
          and m.room_id = ${roomId}
@@ -651,6 +648,34 @@ export async function seatMember(
     throw error;
   }
   throw await diagnoseMembershipFailure(sql, roomId, userId, 'invalid_request');
+}
+
+/**
+ * Records that this membership has sat at its table: `room_members.first_seated_at`, what
+ * `users.readUnits` counts a membership by (migration 0008). Kept once set, so standing up leaves the
+ * chips this membership holds in front of the learner. Returns false when there is no live
+ * membership to record it on — one that left in between, which `readUnits` does not count anyway.
+ *
+ * ## Why this is not part of `seatMember`
+ *
+ * It was, and Devin Review on PR #25 found what that cost. `RoomRegistry.sitAtTable` takes the
+ * durable seat FIRST — the database is what refuses a contested chair — and then the live table,
+ * which can still refuse: a leaver mid-hand is durably gone (`left_at`) while their live chair holds
+ * the cards. In a two-seat room the next member was given that chair by the database, refused it by
+ * the live table (`room_full`), and stood back up by the failure path, which gives back `seat` and
+ * nothing else. The row then carried a first sit that never happened, and a membership nobody had
+ * sat at counted its whole `starting_stack` toward units for as long as it lived: `2000 !== 1000`
+ * in `practice-table-units.test.ts`. So the fact is written only once the live table has accepted
+ * the seat, and nothing ever has to clear it — the column's comment says it is never cleared.
+ */
+export async function recordFirstSit(sql: Db, roomId: string, userId: string): Promise<boolean> {
+  const rows = await sql<{ id: string }[]>`
+    update prl.room_members
+       set first_seated_at = coalesce(first_seated_at, now())
+     where room_id = ${roomId} and user_id = ${userId} and left_at is null
+    returning id
+  `;
+  return rows.length > 0;
 }
 
 /** Stands up without leaving the table. Frees the seat for somebody else immediately. */

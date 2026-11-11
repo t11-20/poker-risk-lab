@@ -56,6 +56,7 @@ export function seatingOnlyStore(units = 10_000): RoomStore {
       seats.set(userId, null);
       return Promise.resolve();
     },
+    recordFirstSit: () => Promise.resolve(true),
     removeMember: () => Promise.resolve(),
     close: () => Promise.resolve(true),
     closePracticeTable: () => refuse('closePracticeTable'),

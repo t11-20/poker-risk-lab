@@ -214,6 +214,7 @@ function fakeRoomStore(): FakeRoomStore {
       if (member !== undefined) members.set(key(roomId, userId), { ...member, seat: null });
       return Promise.resolve();
     },
+    recordFirstSit: (roomId, userId) => Promise.resolve(members.has(key(roomId, userId))),
     removeMember: (roomId, userId) => {
       members.delete(key(roomId, userId));
       return Promise.resolve();

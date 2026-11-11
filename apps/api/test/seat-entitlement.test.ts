@@ -490,6 +490,7 @@ function rosterStore(
       unseated.push(userId);
       return Promise.resolve();
     },
+    recordFirstSit: () => Promise.resolve(true),
     removeMember: () => Promise.resolve(),
     close: () => Promise.resolve(true),
     closePracticeTable: () => refuse('closePracticeTable'),

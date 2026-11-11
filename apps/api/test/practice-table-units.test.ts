@@ -528,6 +528,86 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
     });
   });
 
+  it('a sit the live table refuses is not a first sit', async () => {
+    await inRollback(async (tx) => {
+      // Devin Review on PR #25: `seatMember` wrote `first_seated_at` in the statement that takes the
+      // durable seat, and `sitAtTable`'s failure path only gave the seat back. A leaver mid-hand is
+      // durably gone while their live chair holds cards, so the database grants that chair to the
+      // next member and the live table refuses it — and the membership was counted for ever.
+      const test = await harness(tx);
+      // 2,000, so a counted never-sat membership and the allowance differ in the figure.
+      const table = await createTable(test, { ...HEADS_UP_TABLE, startingStack: 2_000 });
+      assert.equal((await test.send('POST', `/api/v1/rooms/${table.id}/sit`, { seat: 0 })).status, 200);
+      const room = test.registry.get(table.id);
+      assert.ok(room !== null);
+      await room.table.startHand();
+      // Not the one to act, so leaving folds nothing yet: the bot's turn is on the manual clock.
+      const view = room.table.viewFor(test.userId);
+      assert.ok(view !== null && view.toAct !== null);
+      if (view.toAct === view.viewerSeat) {
+        await room.table.submitAction(test.userId, {
+          action: { type: 'call' },
+          actionId: 'act-refusedsit1',
+          expectedSequence: view.actionSequence,
+        });
+      }
+      // An owner may leave their own table mid-hand: flagged, folded at their turn, chair held.
+      await test.registry.leaveRoom(table.id, test.userId);
+      assert.equal(room.table.seatOf(test.userId), 0, 'precondition: the live chair still holds the hand');
+
+      const friend = await usersRepository.createGuest(tx, { displayName: 'Friend' });
+      const principal = { userId: friend.id, displayName: 'Friend' };
+      await test.registry.joinByInviteCode(principal, table.inviteCode);
+      await assert.rejects(test.registry.sitAtTable(table.id, principal, 0), (error: unknown) => {
+        assert.ok(error instanceof AppError);
+        // `LiveTable.sit`'s refusal: both live chairs are held. The database took the seat first —
+        // the leaver's row has `left_at` — and a refusal from `seatMember` would be `seat_taken`.
+        assert.equal(error.code, 'room_full', 'the live table, not the database, refused the chair');
+        return true;
+      });
+      assert.equal(await units(tx, friend.id), 1_000, 'a refused sit used to count 2,000 for ever');
+      const [row] = await tx<{ seat: number | null; sat: boolean }[]>`
+        select seat, first_seated_at is not null as sat from prl.room_members
+         where room_id = ${table.id} and user_id = ${friend.id} and left_at is null
+      `;
+      assert.deepEqual({ ...row }, { seat: null, sat: false }, 'the seat given back, and no first sit');
+
+      // The chair frees when the hand settles, and the next sit is a real first sit.
+      await playOut(test, table.id);
+      await test.registry.sitAtTable(table.id, principal, 0);
+      assert.equal(await units(tx, friend.id), 2_000, 'seated: the chips in front of them');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('a first sit that cannot be recorded leaves the sit standing, and says so', async () => {
+    await inRollback(async (tx) => {
+      // The write comes after the live sit, so failing the request would answer an error for a seat
+      // the learner is sitting in. The row still counts by `seat is not null` while they are.
+      const test = await harness(tx, {
+        wrap: (store) => ({
+          ...store,
+          recordFirstSit: () => Promise.reject(new Error('first sit refused by this test')),
+        }),
+      });
+      const table = await createTable(test, { ...FRIENDS_TABLE, startingStack: 2_000, bots: undefined });
+      const sat = await test.send('POST', `/api/v1/rooms/${table.id}/sit`, { seat: 0 });
+      assert.equal(sat.status, 200, JSON.stringify(sat.body));
+      assert.equal(test.registry.get(table.id)?.table.seatOf(test.userId), 0, 'seated at the live table');
+      assert.equal(await units(tx, test.userId), 2_000, 'seated: counted without the column');
+      assert.deepEqual(
+        test.problems.map((problem) => problem.detail.event),
+        ['first-sit-record'],
+        'the unrecorded first sit was reported',
+      );
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
   it('a row with no first sit recorded still counts by the old evidence', async () => {
     await inRollback(async (tx) => {
       // Rows written before migration 0008, or seated by the previous build between the migration
