@@ -25,15 +25,17 @@
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { after, describe, it } from 'node:test';
-import { API_PATHS } from '@prl/contracts';
+import { API_PATHS, WS_CLOSE } from '@prl/contracts';
 import { createSecureRandom } from '@prl/poker-engine';
 import type { FastifyInstance } from 'fastify';
+import WebSocket from 'ws';
 import { buildApp } from '../src/app.ts';
 import { loadConfig } from '../src/config.ts';
 import { createDatabaseClient, type Sql, type TransactionSql } from '../src/db.ts';
 import { AppError } from '../src/errors.ts';
 import { AppMetrics } from '../src/observability/metrics.ts';
 import type { ProblemDetail } from '../src/observability/telemetry.ts';
+import { newRoomMemberId } from '../src/repositories/ids.ts';
 import * as roomsRepository from '../src/repositories/rooms.ts';
 import * as usersRepository from '../src/repositories/users.ts';
 import { postgresArchive, postgresRoomStore, RoomRegistry, type RoomStore } from '../src/rooms/registry.ts';
@@ -371,6 +373,9 @@ const FRIENDS_TABLE = {
   ],
 };
 
+/** Two seats and one bot: the shape `retirePracticeTables` treats as a practice table. */
+const HEADS_UP_TABLE = { ...FRIENDS_TABLE, maxSeats: 2, bots: [{ profile: 'nit', count: 1 }] };
+
 async function createTable(test: Harness, body: object): Promise<{ id: string; inviteCode: string }> {
   const created = await test.send('POST', '/api/v1/rooms', body);
   assert.equal(created.status, 201, JSON.stringify(created.body));
@@ -531,6 +536,48 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
     });
   });
 
+  it('a table another person has joined is never retired, even when it has a practice shape', async () => {
+    await inRollback(async (tx) => {
+      const test = await harness(tx);
+      const shared = await createTable(test, HEADS_UP_TABLE);
+      const friend = await usersRepository.createGuest(tx, { displayName: 'Friend' });
+      // Not through `joinByInviteCode`, which refuses: the owner and the bot already fill both
+      // memberships, and `addMember` counts members against `max_seats`. So today this guard is
+      // reachable only if that capacity rule changes — a spectator membership, say — and it is
+      // asserted here so that the day it does, a friend's table is still not closed under them.
+      await tx`
+        insert into prl.room_members (id, room_id, user_id, seat, stack)
+        values (${newRoomMemberId()}, ${shared.id}, ${friend.id}, null, 1000)
+      `;
+      const alone = await createTable(test, HEADS_UP_TABLE);
+      assert.equal(await statusOf(tx, shared.id), 'open', 'a joined table survives a bot-filled create');
+
+      await startMatch(test, 'calling-station');
+      assert.equal(await statusOf(tx, shared.id), 'open', 'and survives a match');
+      assert.equal(await statusOf(tx, alone.id), 'closed', 'the control: the same shape with nobody else');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('POST /rooms retires the previous practice table only when its bots fill every other chair', async () => {
+    await inRollback(async (tx) => {
+      const test = await harness(tx);
+      const match = await startMatch(test, 'calling-station');
+      await createTable(test, FRIENDS_TABLE);
+      assert.equal(await statusOf(tx, match), 'open', 'a table with a free chair retires nothing');
+      await createTable(test, { ...FRIENDS_TABLE, bots: undefined });
+      assert.equal(await statusOf(tx, match), 'open', 'nor does a table with no bots');
+      const headsUp = await createTable(test, HEADS_UP_TABLE);
+      assert.equal(await statusOf(tx, match), 'closed', 'a bot-filled table replaces the match');
+      assert.equal(await statusOf(tx, headsUp.id), 'open');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
   it('a retire racing a re-open of the same table does not leave it live', async () => {
     await inRollback(async (tx) => {
       // Holds `ensureOpen` after it has read the row as open, while the retire runs to completion.
@@ -649,6 +696,42 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(test.registry.get(first), null, 'the live table closed on the settling notice');
       assert.equal(await statusOf(tx, first), 'closed');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('a socket watching a retired table is closed with 1000', { timeout: 15_000 }, async () => {
+    await inRollback(async (tx) => {
+      const test = await harness(tx, { hub: true });
+      const first = await startMatch(test, 'calling-station');
+      assert.ok(test.wsUrl !== null);
+      const socket = new WebSocket(test.wsUrl, {
+        headers: { cookie: `prl_session=${test.app.signCookie(TOKEN)}`, origin: ALLOWED_ORIGIN },
+      });
+      const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+        socket.on('close', (code: number, reason: Buffer) =>
+          resolve({ code, reason: reason.toString('utf8') }),
+        );
+      });
+      const welcomed = new Promise<void>((resolve) => {
+        socket.on('message', (data: Buffer) => {
+          if (Reflect.get(JSON.parse(data.toString('utf8')) as object, 'type') === 'welcome') resolve();
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        socket.once('open', () => resolve());
+        socket.once('error', reject);
+      });
+      socket.send(
+        JSON.stringify({ type: 'hello', protocolVersion: 1, roomId: first, clientNonce: 'nonce-retire001' }),
+      );
+      await welcomed;
+
+      await startMatch(test, 'vocal-aggressor');
+      const close = await closed;
+      assert.equal(close.code, WS_CLOSE.normal, JSON.stringify(close));
 
       await test.registry.shutdown();
       await test.app.close();
