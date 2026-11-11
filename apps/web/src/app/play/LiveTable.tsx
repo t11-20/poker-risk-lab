@@ -480,7 +480,21 @@ function ConnectionControls({
         ) : null}
       </p>
 
-      <PlayWithSomebody live={live} />
+      {/*
+        Not in a legend match. Both flows inside it switch this page's room without changing its URL,
+        and the heading, the setting and the Coach rule above are rendered from that URL: joining a
+        friend's table here left "Heads-up against <archetype>, Expert" over somebody else's table
+        (Devin Review on #24). The bot table at /play is where they belong, so a legend match links
+        there instead.
+      */}
+      {inLegendMatch ? (
+        <p className="prl-note">
+          To play with somebody you know, <Link href="/play">open the bot table</Link> and start or join a
+          private table from there.
+        </p>
+      ) : (
+        <PlayWithSomebody live={live} />
+      )}
     </div>
   );
 }

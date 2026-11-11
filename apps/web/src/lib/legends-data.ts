@@ -95,6 +95,7 @@ export {
   parseProfileIds,
   profileHref,
   type SearchParams,
+  selectionNotices,
 } from './legend-links.ts';
 
 // ---------------------------------------------------------------------------

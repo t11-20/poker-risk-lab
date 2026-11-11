@@ -29,6 +29,7 @@ import {
   MIN_COMPARE_PROFILES,
   parseCompareSelection,
   parseProfileIds,
+  selectionNotices,
 } from '../src/lib/legend-links.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -118,6 +119,67 @@ describe('parseCompareSelection', () => {
 
   it('parseProfileIds still de-duplicates and splits, as the compare form and hidden fields rely on', () => {
     assert.deepEqual(parseProfileIds(['a,b', 'b', ' c ']), ['a', 'b', 'c']);
+  });
+});
+
+/**
+ * Over the bundled sample the page still names what it threw away.
+ *
+ * The first fix for the notices contradicting a fallback ("showing the first five" over four
+ * unrelated sample columns) hid every notice whenever the comparison was not live. That also hid
+ * the two that describe the reader's INPUT rather than the columns: with the API down,
+ * `?profiles=nope,calling-station` rendered the sample and a form with only Calling Station ticked,
+ * and nothing anywhere said `nope` had been discarded (Devin Review on #24). An unknown id and a
+ * style past the fifth are facts about the request, true whatever answered it; "showing", "its
+ * column is below" and "the default three" are facts about the columns, true only when live.
+ */
+describe('selectionNotices', () => {
+  const nameOf = (id: string): string => `Name of ${id}`;
+  const seven = parseCompareSelection(['nope', ...KNOWN.slice(0, 7), 'also-nope'], KNOWN);
+  const onlyUnknown = parseCompareSelection('nope', KNOWN);
+  const one = parseCompareSelection('calling-station', KNOWN);
+  const DESCRIBES_COLUMNS = /showing|column is below|default three/u;
+
+  it('in fallback, still names every unknown id and every style past the fifth', () => {
+    const notices = selectionNotices(seven, seven.ids, nameOf, false).join(' ');
+    assert.ok(notices.length > 0, 'the discarded choices vanished');
+    for (const id of ['nope', 'also-nope']) assert.match(notices, new RegExp(`"${id}"`, 'u'));
+    for (const id of KNOWN.slice(5, 7)) assert.ok(notices.includes(nameOf(id)), id);
+    assert.ok(notices.includes('7 were picked'), notices);
+  });
+
+  it('in fallback, says nothing about which columns are on the page', () => {
+    const cases = [seven, onlyUnknown, one];
+    for (const selection of cases) {
+      for (const notice of selectionNotices(selection, selection.ids, nameOf, false)) {
+        assert.doesNotMatch(notice, DESCRIBES_COLUMNS);
+      }
+    }
+    // One known style discards nothing; the sentence about it is about its column and takeaway.
+    assert.deepEqual(selectionNotices(one, one.ids, nameOf, false), []);
+    assert.equal(selectionNotices(onlyUnknown, [], nameOf, false).length, 1);
+  });
+
+  it('over live columns, says what is shown as before', () => {
+    const live = selectionNotices(seven, seven.ids, nameOf, true).join(' ');
+    assert.match(live, /It is showing the first 5 in the order they were named/u);
+    assert.match(
+      selectionNotices(onlyUnknown, [], nameOf, true).join(' '),
+      /showing its default three styles instead/u,
+    );
+    assert.match(selectionNotices(one, one.ids, nameOf, true).join(' '), /Its column is below/u);
+  });
+
+  it('a selection with nothing left out has nothing to say in either mode', () => {
+    const fine = parseCompareSelection(KNOWN.slice(0, 3).join(','), KNOWN);
+    assert.deepEqual(selectionNotices(fine, fine.ids, nameOf, true), []);
+    assert.deepEqual(selectionNotices(fine, fine.ids, nameOf, false), []);
+  });
+
+  it('the page asks for the notices in both modes and says which one it is in', () => {
+    const page = readFileSync(join(HERE, '..', 'src', 'app', 'legends', 'compare', 'page.tsx'), 'utf8');
+    assert.match(page, /selectionNotices\(selection, profileIds, nameOf, comparison\.source === 'api'\)/u);
+    assert.doesNotMatch(page, /\? selectionNotices\([^)]*\) : \[\]/u);
   });
 });
 

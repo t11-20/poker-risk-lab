@@ -261,6 +261,13 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
     profile !== undefined && isMatchDifficulty(difficulty) ? { profileId: profile, difficulty } : undefined;
   const legend =
     legendMatch === undefined ? null : await legendHead(legendMatch.profileId, legendMatch.difficulty);
+  // One live table per match. `/play?profile=…` and `/play` are the same route, so a client-side
+  // navigation between them re-renders this page and React keeps `<LiveTable>` mounted: the legend
+  // match's "open the bot table" link changed the heading to "Six-handed table" while
+  // `useLiveTable` kept the match's room and its socket (Devin Review on #24). A new key unmounts
+  // it, which closes the socket and aborts any setup in flight, and the next start chooses afresh.
+  const tableKey =
+    legendMatch === undefined ? 'bot-table' : `legend:${legendMatch.profileId}:${legendMatch.difficulty}`;
 
   return (
     <div className="prl-play">
@@ -289,7 +296,7 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
         )}
       </header>
 
-      <LiveTable {...(legendMatch === undefined ? {} : { legendMatch })} />
+      <LiveTable key={tableKey} {...(legendMatch === undefined ? {} : { legendMatch })} />
 
       {/*
         Deliberately public, and deliberately below the table with a rule above it. The four fixture
