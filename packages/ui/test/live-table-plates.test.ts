@@ -123,7 +123,7 @@ describe('each seat says what it did on the street being played', () => {
     const flop = lastActionsThisStreet({ street: 'flop', actions: TURN_LOG, seats: flopSeats });
     assert.deepEqual(flop, { 5: 'folded', 2: 'bet 27', 0: 'called 27' });
     const turn = lastActionsThisStreet({ street: 'turn', actions: TURN_LOG, seats: [] });
-    assert.deepEqual(turn, { 2: 'raised to 1,240', 0: 'checked, timed out' });
+    assert.deepEqual(turn, { 2: 'raised to 1,240', 0: 'checked by the server' });
   });
 
   it('says nothing once the betting is over', () => {
@@ -207,8 +207,8 @@ describe('the plates, rendered', () => {
     assert.ok(lines.length === 4, `expected four plates, read ${lines.length}`);
     assert.ok(lines.includes('raised to 1,240'), `no raise on any plate: ${lines.join(' | ')}`);
     assert.ok(
-      lines.includes('checked, timed out'),
-      `the timeout is not on the hero plate: ${lines.join(' | ')}`,
+      lines.includes('checked by the server'),
+      `the automatic check is not on the hero plate: ${lines.join(' | ')}`,
     );
     // Seat 6 folded on the flop: its status says so, and nothing from the flop leaks onto the turn.
     assert.equal(lines.filter((line) => line === 'folded').length, 2);

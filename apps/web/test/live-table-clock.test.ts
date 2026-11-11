@@ -179,6 +179,40 @@ describe('a fold the server made for the reader stays on screen', () => {
     ]);
     assert.equal(mine.autoActed, null);
   });
+
+  // Review on PR #27. "Stand up" while holding cards flags the seat, and `runAutomaticActions` folds
+  // it with `{ automatic: true }` — the same flag as a timeout, and with no `seatTimedOut` before it.
+  // These frames are that notice: the action event alone, then the state that moved on.
+  const stoodUp = [event({ kind: 'action', seat: 0, description: 'Guest 12D91B folds', wasAutomatic: true })];
+
+  it('is not set by the fold the server makes for a reader who stood up', () => {
+    const table = drive([
+      welcome(),
+      state(1, READER_DEADLINE, SERVER_TIME),
+      ...stoodUp,
+      state(2, BOT_DEADLINE, SERVER_TIME),
+    ]);
+    assert.equal(table.autoActed, null, 'a reader who pressed "Stand up" was told their clock ran out');
+  });
+
+  it('does not narrate that fold as a clock running out, and still narrates a real one that way', () => {
+    const left = drive([welcome(), state(1, READER_DEADLINE, SERVER_TIME), ...stoodUp]);
+    assert.doesNotMatch(left.announcement, /clock|time/u);
+    assert.match(left.announcement, /^Guest 12D91B folds \(the server acted for this seat\)$/u);
+    const expired = drive([welcome(), state(1, READER_DEADLINE, SERVER_TIME), ...timedOut]);
+    assert.match(expired.announcement, /the clock ran out/u);
+  });
+
+  it('is not set by another seat’s expiry followed by the reader’s own automatic fold', () => {
+    // The marker belongs to the seat the event named, and to the one event after it.
+    const table = drive([
+      welcome(),
+      event({ kind: 'seatTimedOut', seat: 1 }),
+      event({ kind: 'action', seat: 1, description: 'x checks', wasAutomatic: true }),
+      ...stoodUp,
+    ]);
+    assert.equal(table.autoActed, null);
+  });
 });
 
 describe('how the hand ended keeps the showdown', () => {

@@ -67,9 +67,14 @@ function wordsFor(entry: LoggedAction, seat: SeatView | undefined): string {
   // Said, because it is why a call can be smaller than the price: the seat had nothing more to put in.
   const putChipsIn = action.type === 'call' || action.type === 'bet' || action.type === 'raise';
   if (putChipsIn && seat?.status === 'allIn') words = `${words}, all in`;
-  // A timeout is the server's act, not the player's, and the plate says so — it is the only
-  // visible trace of a clock running out at somebody else's seat.
-  return entry.wasAutomatic && words !== '' ? `${words}, timed out` : words;
+  // The server's act, not the player's, and the plate says so — without naming a cause, because the
+  // log cannot. `wasAutomatic` is set both for a clock that ran out and for the fold the server makes
+  // for a seat whose player stood up mid-hand (`runAutomaticActions` in `apps/api/src/rooms/table.ts`),
+  // and this said "folded, timed out" about a reader who had pressed "Stand up" (review on PR #27).
+  // Only the `seatTimedOut` event tells the two apart, and a plate drawn from the view must read the
+  // same after a reload, when no event is there to ask. The narration and the reader's own notice,
+  // which do see the events, say "the clock ran out" when it did.
+  return entry.wasAutomatic && words !== '' ? `${words} by the server` : words;
 }
 
 /** Seat index to its last action this street. Seats that have not acted this street are absent. */

@@ -166,8 +166,25 @@ export interface TableState {
    * reader never submitted anything, and the `state` frame that follows the timeout moves the spot
    * on. So a sighted reader came back to a folded hand with nothing on screen saying why. Cleared
    * when the next hand is dealt.
+   *
+   * Only for a clock that really ran out, which `wasAutomatic` alone cannot say: the server also
+   * folds automatically for a seat whose player stood up mid-hand (`runAutomaticActions` in
+   * `apps/api/src/rooms/table.ts`), and this used to tell a reader who pressed "Stand up" that their
+   * clock had run out. Found in review on PR #27. See `clockExpiredSeat`.
    */
   readonly autoActed: string | null;
+  /**
+   * The seat a `seatTimedOut` event has just named, until the automatic action it announces arrives.
+   *
+   * The one thing in the frames that tells a clock expiry from a stand-up. `applyTimeout` sends
+   * `seatTimedOut` immediately before the action it applied, in the same notice (`extraEvents` are
+   * pushed ahead of the engine's own in `LiveTable.apply`); the fold for a seat that stood up comes
+   * with no `seatTimedOut` at all. An automatic action is therefore a timeout exactly when the event
+   * before it named its seat. Unknown is never reported as a timeout — the safe direction, because
+   * a reader told they were too slow when they chose to leave is told something false about
+   * themselves.
+   */
+  readonly clockExpiredSeat: number | null;
   /** Monotonic per socket; resets on `welcome`. */
   readonly revision: number;
   readonly announcement: string;
@@ -285,6 +302,7 @@ export const EMPTY_TABLE_STATE: TableState = {
   serverTimeMs: 0,
   turnBudgetMs: null,
   autoActed: null,
+  clockExpiredSeat: null,
   revision: 0,
   announcement: '',
   carried: '',
@@ -504,15 +522,24 @@ const COACH_NOT_SENT: Readonly<Record<'rate-limited' | 'undeliverable', string>>
  */
 export const DEAL_ANNOUNCEMENT = 'A new hand was dealt.';
 
-/** One sentence for the table's single polite live region. */
-function announce(event: Extract<WsServerMessage, { type: 'event' }>['event']): string {
+/**
+ * One sentence for the table's single polite live region.
+ *
+ * `clockExpired` says whether the `seatTimedOut` just before this event named its seat — see
+ * `clockExpiredSeat` on `TableState`. Without it an automatic action is the server folding for a
+ * player who stood up, and the sentence says the server acted without naming a cause.
+ */
+function announce(event: Extract<WsServerMessage, { type: 'event' }>['event'], clockExpired = false): string {
   switch (event.kind) {
     case 'handStarted':
       return DEAL_ANNOUNCEMENT;
     case 'forcedBets':
       return event.detail;
     case 'action':
-      return `${event.description}${event.wasAutomatic ? ' (the clock ran out, so the server acted)' : ''}`;
+      if (!event.wasAutomatic) return event.description;
+      return clockExpired
+        ? `${event.description} (the clock ran out, so the server acted)`
+        : `${event.description} (the server acted for this seat)`;
     case 'street':
       return event.newCards.length === 0
         ? `The ${event.street}.`
@@ -572,12 +599,18 @@ function onEventFrame(state: TableState, frame: Extract<WsServerMessage, { type:
     // No `announcement` here on purpose: leaving the region exactly as it is means this dispatch
     // mutates nothing, so a `handStarted` that did arrive in a commit of its own cannot re-announce
     // the previous hand's last sentence either.
-    return { ...state, carried: announce(frame.event), summary: [], autoActed: null };
+    return { ...state, carried: announce(frame.event), summary: [], autoActed: null, clockExpiredSeat: null };
   }
-  const sentence = announce(frame.event);
+  // Consumed by the very next event, whatever it is: `seatTimedOut` and its action are adjacent in
+  // one notice, so a marker that outlived the event after it could only ever describe something else.
+  const clockExpired =
+    frame.event.kind === 'action' && frame.event.wasAutomatic && frame.event.seat === state.clockExpiredSeat;
+  const clockExpiredSeat = frame.event.kind === 'seatTimedOut' ? frame.event.seat : null;
+  const sentence = announce(frame.event, clockExpired);
   const announcement = state.carried === '' ? sentence : `${state.carried} ${sentence}`;
+  const next: TableState = { ...state, announcement, carried: '', clockExpiredSeat };
   if (frame.event.kind === 'showdown') {
-    return { ...state, announcement, carried: '', summary: frame.event.summaries };
+    return { ...next, summary: frame.event.summaries };
   }
   if (frame.event.kind === 'handComplete') {
     // APPENDED to the showdown's lines, never written over them. Both events arrive at the end of
@@ -586,12 +619,14 @@ function onEventFrame(state: TableState, frame: Extract<WsServerMessage, { type:
     // to assign `summaries` for both, so the second always replaced the first and "How the hand
     // ended" listed a winner with no word of what they won with. `handStarted` empties the list,
     // so nothing carries into the next hand.
-    return { ...state, announcement, carried: '', summary: [...state.summary, ...frame.event.summaries] };
+    return { ...next, summary: [...state.summary, ...frame.event.summaries] };
   }
-  if (frame.event.kind === 'action' && frame.event.wasAutomatic && frame.event.seat === state.seat) {
-    return { ...state, announcement, carried: '', autoActed: AUTO_ACTED_NOTICE };
+  // A clock expiry at the reader's own seat, and nothing else: an automatic fold after "Stand up"
+  // is the reader's own choice and has no `seatTimedOut` before it.
+  if (clockExpired && frame.event.kind === 'action' && frame.event.seat === state.seat) {
+    return { ...next, autoActed: AUTO_ACTED_NOTICE };
   }
-  return { ...state, announcement, carried: '' };
+  return next;
 }
 
 /**
