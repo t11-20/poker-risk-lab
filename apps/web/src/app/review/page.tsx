@@ -79,7 +79,10 @@ const ROUTE = '/review';
  * be keyboard-reachable (axe `scrollable-region-focusable`, WCAG 2.1.1) and an unnamed tab stop is a
  * silent one. Same problem and the same resolution as the EV table in `@prl/ui`'s CoachPanel.
  */
-const TABLE_LABEL = 'Hand history table. Scrolls sideways on a narrow screen.';
+const TABLE_LABEL = 'Hand history table. Scrolls sideways when the window is too narrow for every column.';
+
+/** The narrow layout's sort `<select>`, for its `<label>`. One per page, so a constant is enough. */
+const SORT_SELECT_ID = 'prl-review-sort';
 
 /**
  * The orderings the page offers — the contract's list, not a second copy of it.
@@ -271,6 +274,22 @@ function NetCell({ net }: { readonly net: number | null }): ReactElement {
   );
 }
 
+/**
+ * A column's name, printed inside the cell for the narrow layout only.
+ *
+ * Below 600px the header row is visually hidden and each row is drawn as a card, so a bare
+ * "1,520 units" no longer sits under a "Pot" a reader can see. `aria-hidden`, because the header
+ * row is still in the accessibility tree and a screen reader already announces each cell with its
+ * column header — "Pot" twice is noise. `review.css` hides it from 600px up.
+ */
+function CellLabel({ children }: { readonly children: string }): ReactElement {
+  return (
+    <span className="prl-review-table__cell-label" aria-hidden="true">
+      {children}
+    </span>
+  );
+}
+
 function sortHref(sort: Sort): string {
   return `${ROUTE}?sort=${sort}`;
 }
@@ -343,10 +362,15 @@ export default async function ReviewIndexPage({
         </div>
       ) : (
         <>
+          {/* Two forms of one control, and only one is rendered at a time: the other is
+              `display: none`, so it is out of the tab order and the accessibility tree, not merely out
+              of sight. The links are one press per ordering and fit one row from 600px up. Below that
+              they wrapped to five rows — measured at 360x640 on the fixture history, 247px of control,
+              and the first hand started at y=931 under a 640px fold. The select is one row and still
+              needs no script: a GET form, so the ordering stays a link a reader can share and the
+              server still applies it to the whole history. */}
           <nav className="prl-review-sorts" aria-label="Sort hand history">
-            <p className="prl-label" id="prl-review-sort-label">
-              Order
-            </p>
+            <p className="prl-label prl-review-sorts__heading">Order</p>
             <ul className="prl-review-sorts__list">
               {SORTS.map((candidate) => (
                 <li key={candidate}>
@@ -360,6 +384,21 @@ export default async function ReviewIndexPage({
                 </li>
               ))}
             </ul>
+            <form className="prl-review-sorts__form" method="get" action={ROUTE}>
+              <label className="prl-label" htmlFor={SORT_SELECT_ID}>
+                Order
+              </label>
+              <select className="prl-select" id={SORT_SELECT_ID} name="sort" defaultValue={sort}>
+                {SORTS.map((candidate) => (
+                  <option key={candidate} value={candidate}>
+                    {SORT_LABEL[candidate]}
+                  </option>
+                ))}
+              </select>
+              <button className="prl-btn prl-btn--secondary" type="submit">
+                Sort
+              </button>
+            </form>
           </nav>
 
           {/* biome-ignore lint/a11y/noNoninteractiveTabindex: axe scrollable-region-focusable (WCAG 2.1.1) requires it; see TABLE_LABEL */}
@@ -389,20 +428,27 @@ export default async function ReviewIndexPage({
                 {hands.map((hand) => (
                   <tr key={hand.id}>
                     <th className="prl-review-table__hand" scope="row">
+                      {/* The words are visible and the link covers the whole row — `review.css`, "THE
+                          ROW IS THE TARGET". Measured before: the way into a hand was its number, a
+                          21x44px target at every width, while the rest of the row did nothing and
+                          still lit up on hover as though it would. */}
                       <a className="prl-review-table__link" href={`${ROUTE}/${hand.id}`}>
-                        <span className="prl-visually-hidden">Replay hand </span>
-                        {hand.handNumber}
+                        {`Replay hand ${hand.handNumber}`}
                       </a>
                     </th>
                     <td className="prl-review-table__when">{formatTimestamp(hand.startedAt)}</td>
-                    <td>
+                    <td className="prl-review-table__board">
                       <BoardCells board={hand.board} />
                     </td>
-                    <td className="prl-review-table__pot">{formatUnits(hand.potTotal)}</td>
-                    <td>
+                    <td className="prl-review-table__pot">
+                      <CellLabel>Pot</CellLabel>
+                      {formatUnits(hand.potTotal)}
+                    </td>
+                    <td className="prl-review-table__net">
+                      <CellLabel>Net to you</CellLabel>
                       <NetCell net={hand.heroNet} />
                     </td>
-                    <td>
+                    <td className="prl-review-table__ending">
                       <Chip tone={hand.endedByFold ? 'neutral' : 'info'} glyph={hand.endedByFold ? '⤶' : '⇄'}>
                         {hand.endedByFold ? 'folded out' : 'showdown'}
                       </Chip>
