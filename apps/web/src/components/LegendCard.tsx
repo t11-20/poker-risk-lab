@@ -16,6 +16,9 @@
  *     builds that suffix itself, so it cannot forget it.
  *  2. **The disclaimers are in the body**, rendered by `ProfileDisclaimers`, which renders the whole
  *     array as visible text. Not a tooltip, not an icon, not a `<details>`.
+ *     On `/legends` the one
+ *     entry the page already printed in full above the grid is a visible one-line pointer instead
+ *     (`lib/disclaimer-framing.ts`); every entry specific to this card is still printed in full.
  *  3. **No image of a person, ever.** The visual identity is `LegendSigil`, a mark generated from
  *     the profile id. There is no `src` anywhere in this file.
  *
@@ -67,6 +70,11 @@ export interface LegendCardProps {
   /** Defaults to 3: a page owns its `h1` and the grid's section owns the `h2`. Never 1. */
   readonly headingLevel?: HeadingLevel;
   readonly className?: string;
+  /**
+   * The universal disclaimer as the page printed it above the grid, and where. Passed through to
+   * `ProfileDisclaimers`, which then prints a one-line pointer for that entry only.
+   */
+  readonly shownAbove?: { readonly text: string; readonly href: string };
 }
 
 /** The signature axes, in the order the profile declares them, skipping any the axes list lacks. */
@@ -81,7 +89,7 @@ function signatureAxes(profile: LegendProfileCardDto): readonly LegendTraitAxis[
 }
 
 export function LegendCard(props: LegendCardProps): ReactElement {
-  const { profile, difficulty, headingLevel = 3, className } = props;
+  const { profile, difficulty, headingLevel = 3, className, shownAbove } = props;
   const { disclosure } = profile;
   const Heading = `h${headingLevel}` as const;
   const signature = signatureAxes(profile);
@@ -133,7 +141,7 @@ export function LegendCard(props: LegendCardProps): ReactElement {
         label={`${disclosure.archetypeName}, sixteen trait axes`}
       />
 
-      <ProfileDisclaimers disclosure={disclosure} />
+      <ProfileDisclaimers disclosure={disclosure} {...(shownAbove === undefined ? {} : { shownAbove })} />
 
       {/*
         Client links inside a server card: they start at the setting this page was rendered with and

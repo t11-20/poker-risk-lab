@@ -12,8 +12,10 @@
  * ## What it says out loud, every time
  *
  *  - **The universal disclaimer, at the top, in the body.** `LegendProfilesResponse` carries it as
- *    its own field precisely so it is shown once above the grid as well as per-card, and it is
- *    rendered as visible prose rather than as a footer nobody reads.
+ *    its own field precisely so it is shown once above the grid, and it is rendered as visible
+ *    prose rather than as a footer nobody reads. Each card then carries a visible one-line
+ *    statement of it with a link back here, plus every disclaimer specific to that card in full —
+ *    see `lib/disclaimer-framing.ts` for why the full text is no longer printed thirteen times.
  *  - **Which naming mode is in force.** If a deployment has opted into attributed names, the page
  *    says so and says what those names are: a mnemonic for a modelled style, beneath the archetype.
  *  - **Where the data came from.** When the API is unreachable the page renders from a typed
@@ -58,6 +60,9 @@ const NAMING_NOTE: Readonly<Record<'archetype' | 'attributed', string>> = {
     'the attributed name is only a mnemonic for it. No profile reproduces how any person plays.',
 };
 
+/** The page-level framing block's fragment, which every card's one-line pointer links to. */
+const FRAMING_ID = 'what-these-profiles-are';
+
 export default async function LegendsPage({
   searchParams,
 }: {
@@ -101,7 +106,7 @@ export default async function LegendsPage({
         body-sm, never collapsed — so a reader meets it before the first profile rather than after
         the last one.
       */}
-      <div className="prl-legend-disclaimers prl-legend-disclaimers--wide">
+      <div className="prl-legend-disclaimers prl-legend-disclaimers--wide" id={FRAMING_ID}>
         <span className="prl-legend-disclaimers__title prl-label">What these profiles are</span>
         <ul className="prl-legend-disclaimers__list">
           <li className="prl-legend-disclaimers__item">{universalDisclaimer}</li>
@@ -126,7 +131,12 @@ export default async function LegendsPage({
           </p>
           <div className="prl-legend-grid">
             {profiles.data.profiles.map((profile) => (
-              <LegendCard difficulty={difficulty} key={profile.id} profile={profile} />
+              <LegendCard
+                difficulty={difficulty}
+                key={profile.id}
+                profile={profile}
+                shownAbove={{ text: universalDisclaimer, href: `#${FRAMING_ID}` }}
+              />
             ))}
           </div>
         </section>

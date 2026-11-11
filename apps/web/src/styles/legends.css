@@ -470,6 +470,22 @@
 }
 
 /**
+ * Two columns from 720px, below the width at which the 24rem floor allows them.
+ *
+ * Two 24rem cards and the gap need 792px of grid, which a 768px tablet does not have (706px), so it
+ * got a single column of twelve 795px-tall cards. Most of that height was the universal disclaimer,
+ * repeated in every card at roughly 70 characters a line; with it printed once above the grid and a
+ * one-line pointer per card (`lib/disclaimer-framing.ts`), a card is a sigil, three figures, a radar
+ * and two buttons, and ~337px holds that: the radar keeps its 15rem cap and the figures stack. The
+ * floor still governs from 900px, where it was chosen (three columns at 1440, not four).
+ */
+@media (720px <= width < 900px) {
+  .prl-legend-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/**
  * A PROFILE CARD — level 2, and the object the whole section is about.
  *
  * Twelve of these are the page. They were `--prl-hairline` boxes on a one-step fill, which in dark

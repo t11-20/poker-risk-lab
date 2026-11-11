@@ -367,6 +367,23 @@ export default async function ProfilePage({
           <Chip>{BEST_FOR_WORD[profile.bestFor]}</Chip>
           <Chip tone="accent">{`Setting: ${difficulty}`}</Chip>
         </div>
+        {/*
+          The page's primary action, in the masthead. It used to exist only at the very bottom: measured
+          at 360px, y=11,328 of a 13,883px page (y=8,083 at 768, 7,249 at 1440), below sixteen trait
+          rows, three prose sections, two tables and the contrasts. A reader who came here to decide
+          had to read everything to act on the decision. The bottom one stays, for the reader who did.
+        */}
+        <div className="prl-legend-card__actions">
+          <Link
+            className="prl-btn prl-btn--primary prl-btn--md"
+            href={legendMatchHref(profile.id, difficulty)}
+          >
+            Play this style
+            <span className="prl-visually-hidden">
+              {`: ${disclosure.archetypeName}, ${difficulty} setting`}
+            </span>
+          </Link>
+        </div>
         <nav className="prl-legend-nav" aria-label="Legends navigation">
           <Link href={LEGENDS_PATH}>All profiles</Link>
           <Link href={compareHref([profile.id], difficulty)}>Compare this style with others</Link>
