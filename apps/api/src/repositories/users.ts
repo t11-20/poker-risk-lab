@@ -880,6 +880,11 @@ interface UnitsRow {
  *   - dealt alone would leave a learner who has just sat down, before the first deal, reading the
  *     allowance and not the chips in front of them.
  *
+ * `>=` and not `>`, on purpose. Both columns default to `now()`, which on a server is the start of
+ * two different transactions, so a hand dealt after a join is later anyway; but inside one
+ * transaction `now()` is a single instant, and every rollback-transaction test that sits, deals and
+ * reads units in one transaction (`test/practice-table-units.test.ts`) sees the two as equal.
+ *
  * A membership that counts for neither reason still holds exactly `starting_stack` — nothing but a
  * deal or a reset changes it — so leaving it out loses nothing and the room grants that stack when
  * the learner first sits. A `sittingOut` hand seat was never dealt cards and is not a hand played.
