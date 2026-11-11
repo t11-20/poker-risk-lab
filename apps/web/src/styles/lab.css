@@ -133,7 +133,13 @@
 }
 
 /* One step tighter on a phone, where the first scenario card sat 40px below an 844px fold at 390:
-   the first screen was the heading and three selects, and no scenario. */
+   the first screen was the heading and three selects, and no scenario.
+
+   It still starts at 848, and no further shave of this panel brings a card on screen. 844 is the
+   phone's height, not the page's: the browser's own bars leave roughly 650 to 750 of it. Two things
+   were measured and dropped. Difficulty and Street side by side clip at 360, because "Advanced (14)"
+   is 107px of text in a 107px box that also holds the arrow. Collapsing the panel would bring a card
+   up, and would hide the only way from thirty-six cards to the two a reader wants. */
 @media (width < 600px) {
   .prl-lab-filters {
     margin-block: var(--prl-space-7);
