@@ -55,6 +55,7 @@ import { DEFAULT_HAND_SORT, HAND_SORTS } from '@prl/contracts';
 import { Chip, formatSignedUnits, formatUnits, PlayingCard, parseCardText } from '@prl/ui';
 import type { Metadata } from 'next';
 import type { ReactElement } from 'react';
+import { ScrollRegion } from '../../components/ScrollRegion.tsx';
 import { emptyHandListFixture, HAND_PAGE_SIZE, REVIEW_HAND_SUMMARIES } from '../../fixtures/review.ts';
 import { API_PATHS, apiGet, isApiUnavailable, isRejectedCursor, isSignedOut } from '../../lib/api.ts';
 import { formatTimestamp } from '../../lib/lab-labels.ts';
@@ -73,11 +74,11 @@ const ROUTE = '/review';
 /**
  * The scroll container's accessible name.
  *
- * A const rather than an inline string for two reasons. It keeps the element on one line, which is
- * what lets a `biome-ignore` attach to it — a suppression on a multi-line JSX element anchors to the
- * wrong line and silently stops working. And the tab stop needs a name: a scrollable region has to
+ * The region is a tab stop only while it scrolls sideways (`ScrollRegion`, and the 360px finding in
+ * `../../lib/scroll-region.ts`), and whenever it is one it needs a name: a scrollable region has to
  * be keyboard-reachable (axe `scrollable-region-focusable`, WCAG 2.1.1) and an unnamed tab stop is a
- * silent one. Same problem and the same resolution as the EV table in `@prl/ui`'s CoachPanel.
+ * silent one. The name stays when the stop goes, so a screen reader still finds the table as a
+ * named region. Same problem as the EV table in `@prl/ui`'s CoachPanel, which is always a table.
  */
 const TABLE_LABEL = 'Hand history table. Scrolls sideways when the window is too narrow for every column.';
 
@@ -401,8 +402,7 @@ export default async function ReviewIndexPage({
             </form>
           </nav>
 
-          {/* biome-ignore lint/a11y/noNoninteractiveTabindex: axe scrollable-region-focusable (WCAG 2.1.1) requires it; see TABLE_LABEL */}
-          <section className="prl-review-scroll" tabIndex={0} aria-label={TABLE_LABEL}>
+          <ScrollRegion className="prl-review-scroll" label={TABLE_LABEL}>
             <table className="prl-review-table">
               <caption>
                 {`${hands.length === 1 ? '1 hand' : `${hands.length} hands`}, ordered by ${SORT_LABEL[sort].toLowerCase()}. Net is the change across the whole hand, blinds included.`}
@@ -457,7 +457,7 @@ export default async function ReviewIndexPage({
                 ))}
               </tbody>
             </table>
-          </section>
+          </ScrollRegion>
 
           <nav className="prl-review-paging" aria-label="Hand history pages">
             {cursor === null ? (

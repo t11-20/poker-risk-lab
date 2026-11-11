@@ -212,10 +212,14 @@
 }
 
 /**
- * The scroll container. A table's columns cannot wrap, so between 600px and the width at which all
- * six fit this scrolls sideways, and axe's `scrollable-region-focusable` (WCAG 2.1.1) requires a
- * scrollable region with no focusable content to be reachable by keyboard — hence the `tabindex` in
- * the markup. Below 600px the rows become cards instead (section 1b) and nothing scrolls.
+ * The scroll container. A table's columns cannot wrap, so from 1024px up — where the rows are a
+ * table again (section 1b) — anything that makes the six columns wider than the window (a larger
+ * text size, a longer timestamp) makes this scroll sideways. axe's `scrollable-region-focusable`
+ * (WCAG 2.1.1) requires a scrollable region with no focusable content to be reachable by keyboard,
+ * so `ScrollRegion` makes it a tab stop exactly while `scrollWidth > clientWidth`, and not otherwise.
+ * Below 1024px the cards never scroll, and a stop that stayed anyway cost `test:keyboard` its 360x640
+ * sticky-bar walk: the region is 1,549px tall there, and focusing it backwards left its top at
+ * y=-134 with 263px of it behind a bar ending at 129.
  */
 .prl-review-scroll {
   overflow-x: auto;

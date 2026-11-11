@@ -27,9 +27,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
+import { scrollRegionTabIndex, scrollsSideways } from '../src/lib/scroll-region.ts';
 
 const css = readFileSync(new URL('../src/styles/review.css', import.meta.url), 'utf8');
 const page = readFileSync(new URL('../src/app/review/page.tsx', import.meta.url), 'utf8');
+const region = readFileSync(new URL('../src/components/ScrollRegion.tsx', import.meta.url), 'utf8');
 
 /** Comments out, so a selector quoted in prose cannot satisfy an assertion about a rule. */
 const code = css.replace(/\/\*[\s\S]*?\*\//gu, '');
@@ -104,5 +106,51 @@ describe('/review at every width', () => {
     // test:layout, CI run 43044654587, /review at 360px: "the column is 16.02px and the word
     // "Sort" needs 29.34px". The glyph measurement is that gate's; this pins the rule behind it.
     assert.match(rule(code, '.prl-review-sorts__form .prl-btn'), /flex:\s*none/u);
+  });
+});
+
+/**
+ * The table's scroll region is a tab stop exactly when it scrolls sideways.
+ *
+ * `test:keyboard` on this branch, the 360x640 sticky-bar walk: "6 hands, ordered by most recent
+ * first. Net i" top=-134, bar ends at 129 (263.0px of a 1549.2px control behind it). Below 1024px
+ * the rows are cards and the region cannot scroll, so the stop did nothing and was 1,549px tall.
+ * Which way the default leans, and why, is in `src/lib/scroll-region.ts`.
+ */
+describe('/review scroll region', () => {
+  it('is a tab stop when the table is wider than the region', () => {
+    // 768 before the cards: a 928px table in a 707px scroller.
+    assert.equal(scrollsSideways({ scrollWidth: 928, clientWidth: 707 }), true);
+    assert.equal(scrollRegionTabIndex({ scrollWidth: 928, clientWidth: 707 }), 0);
+  });
+
+  it('is not a tab stop when the table fits, including exactly (REGRESSION)', () => {
+    // A region whose content fits has scrollWidth === clientWidth; then one pixel short of it.
+    for (const box of [
+      { scrollWidth: 328, clientWidth: 328 },
+      { scrollWidth: 944, clientWidth: 944 },
+      { scrollWidth: 943, clientWidth: 944 },
+    ]) {
+      assert.equal(scrollsSideways(box), false, JSON.stringify(box));
+      // Absent, not -1: -1 is still click-focusable and still matches every gate's `[tabindex]`.
+      assert.equal(scrollRegionTabIndex(box), undefined, JSON.stringify(box));
+    }
+  });
+
+  it('wraps the table in the measuring region instead of a fixed tab stop (REGRESSION)', () => {
+    assert.doesNotMatch(page, /className="prl-review-scroll" tabIndex=\{0\}/u);
+    assert.match(page, /<ScrollRegion className="prl-review-scroll" label=\{TABLE_LABEL\}>/u);
+  });
+
+  it('server-renders the stop, and keeps the name whether or not it is one', () => {
+    // The safe default: a region the server cannot measure is focusable until a browser says not.
+    assert.match(region, /useState<0 \| undefined>\(0\)/u);
+    assert.match(
+      region,
+      /<section ref=\{region\} className=\{className\} tabIndex=\{tabIndex\} aria-label=\{label\}>/u,
+    );
+    // A font swap widens the table without resizing the section, so both are observed.
+    assert.match(region, /observer\.observe\(element\);/u);
+    assert.match(region, /observer\.observe\(element\.firstElementChild\)/u);
   });
 });
