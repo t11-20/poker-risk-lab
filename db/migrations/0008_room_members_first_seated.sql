@@ -21,8 +21,10 @@
 --
 -- ## What it is
 --
--- The first time THIS membership took a seat. Written once by `rooms.seatMember`
--- (`coalesce(first_seated_at, now())`) and never cleared: standing up, being
+-- The first time THIS membership took a seat. Written once by `rooms.recordFirstSit`
+-- (`coalesce(first_seated_at, now())`), which the registry calls only after the
+-- live table has accepted the sit, so a sit the table refuses is never recorded
+-- (Devin Review on #25). Never cleared: standing up, being
 -- busted and resetting all leave it as it is. Per row, so a learner who leaves
 -- and rejoins gets a new membership with no first sit - the boundary the
 -- dealt-in evidence has to draw by hand with `hands.started_at >= joined_at`.
