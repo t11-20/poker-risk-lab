@@ -113,9 +113,13 @@
    * breakpoint the bar is a wordmark beside `.prl-shell__header-tools`, which is `flex-wrap:
    * wrap` — so the units readout and the menu trigger take a row each as soon as they do not fit
    * side by side. Measured against the production build with scripting disabled, so this is the
-   * server's own markup and not an outage state: the bar is 129px at every width up to 381px and
-   * 77px from 382px up. In the units-unavailable state the readout is the longer string
-   * `units — not available`, and the wrap starts at 412px instead.
+   * server's own markup and not an outage state: the bar was 129px at every width up to 381px and
+   * 77px from 382px up.
+   *
+   * Since 2026-11-11 the trigger drops its word below 412px (section 8), and the bar measures one
+   * 77px row at every width from 320 to 411 with the API up ("1,000 units") or down ("units
+   * offline"). This default stays two rows, and the rule below narrows it from 360px up: the
+   * readout grows about 9px a digit, and at 320 a five-figure balance still wraps.
    *
    * 129px is `2 * 44 + 8 + 2 * 16` plus the 1px bottom edge — two pill rows, the tools row-gap
    * (`--prl-space-4`, from `.prl-shell__header-tools`) and the block padding. The one-row value
@@ -126,14 +130,19 @@
 }
 
 /**
- * From the nav breakpoint up the bar cannot wrap: the tools sit in their own `auto` column beside
- * a centred navigation pill, and every width from 382px was measured at one row anyway. Narrowing
- * the token here rather than widening it in a `max-width` query keeps this file on the two
- * breakpoints section 9 already owns, and keeps the DEFAULT on the safe side — a bar that is
- * shorter than the padding reserved for it costs a reader some air above an anchor; a bar that is
- * taller than it hides the thing they were sent to.
+ * From 360px up the bar is one row. At 860 and above it cannot wrap: the tools sit in their own
+ * `auto` column beside a centred navigation pill. Between 360 and 860 it is one row because the
+ * menu trigger is a 44px circle below 412px (section 8), which leaves 43px spare at 360 with
+ * "1,000 units" showing: about four more digits, a balance in the tens of millions, before it
+ * wraps again. Holding two rows of padding against that cost every anchor on a phone 67px of
+ * empty air (scroll-padding 144px over a 77px bar, measured by `test:keyboard` at 360x640).
+ *
+ * The DEFAULT, below 360, stays on the safe side: a bar that is shorter than the padding reserved
+ * for it costs a reader some air above an anchor; a bar that is taller than it hides the thing they
+ * were sent to. `test:keyboard` walks four routes backwards at 360x640 and fails if any control
+ * lands under the bar, so a trigger that grows its word back fails there.
  */
-@media (min-width: 860px) {
+@media (min-width: 360px) {
   :root {
     --prl-pillbar-h: calc(var(--prl-pill-h) + 2 * var(--prl-pillbar-pad-block));
   }
@@ -728,6 +737,39 @@
   color: var(--prl-text-secondary);
   font-size: var(--prl-type-body-sm);
   letter-spacing: var(--prl-tracking-label);
+}
+
+/**
+ * Below 412px the trigger is the bars alone, in a 44px circle like the units `i` beside it, and the
+ * word stays in the accessibility tree as the button's name (the declarations are
+ * `.prl-visually-hidden`'s, which cannot be applied from a media query).
+ *
+ * The word cost the bar a second row. At 360 the units readout (173px at "1,000 units") and a
+ * 103px labelled trigger need 288px with the gap, and the bar had 272: the tools wrapped, and the
+ * sticky bar was 129px — a fifth of a 360x640 screen, on every page. As a circle the trigger is
+ * 44px and the bar is one 77px row at every width from 320 to 411, with the API up or down.
+ *
+ * 412 rather than the 382 where "1,000 units" stops wrapping: the readout grows with the figure,
+ * about 9px a digit, and 412 keeps a six-figure balance on one row with the word showing above it.
+ */
+@media (width < 412px) {
+  .prl-nav-trigger {
+    justify-content: center;
+    inline-size: var(--prl-pill-h);
+    padding-inline: 0;
+  }
+
+  .prl-nav-trigger .prl-nav-trigger__word {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    border: 0;
+    white-space: nowrap;
+  }
 }
 
 /**
