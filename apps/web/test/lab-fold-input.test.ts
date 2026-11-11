@@ -126,5 +126,7 @@ describe('the fold-frequency control', () => {
     assert.match(control, /aria-valuetext=\{`\$\{percent\}% fold frequency`\}/u);
     assert.match(control, /role="status" aria-live="polite"/u);
     assert.match(control, /repriceAtFoldEquity\(report, percent \/ 100\)/u);
+    // The reset disables itself on the render it causes; focus has to be moved off it first.
+    assert.match(control, /sliderRef\.current\?\.focus\(\);\s*setPercent\(analysedPercent\);/u);
   });
 });

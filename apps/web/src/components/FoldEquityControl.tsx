@@ -34,13 +34,15 @@
  * A native range input, so arrows, Page Up/Down and Home/End work and are announced by the
  * platform; `aria-valuetext` makes the announcement "20% fold frequency" rather than a bare
  * number. The summary of what moved is a polite status region, so it is read once the reader
- * pauses rather than interrupting each step. The reset is a real button.
+ * pauses rather than interrupting each step. The reset is a real button, disabled at the analysed
+ * value, and it moves focus to the slider before it disables itself: a focused control that becomes
+ * disabled leaves the caret on `<html>` (measured in Chrome 151 for `ActionBar`'s Fold).
  */
 
 import type { CoachReport } from '@prl/contracts';
 import { repriceAtFoldEquity } from '@prl/poker-math';
 import { Button, formatSignedUnits, formatUnits, Panel } from '@prl/ui';
-import { type ReactElement, useId, useState } from 'react';
+import { type ReactElement, useId, useRef, useState } from 'react';
 import {
   type Formatters,
   percentText,
@@ -60,6 +62,7 @@ export function FoldEquityControl({ report }: { readonly report: CoachReport }):
   const [percent, setPercent] = useState(analysedPercent);
   const sliderId = useId();
   const hintId = useId();
+  const sliderRef = useRef<HTMLInputElement>(null);
 
   if (analysed.kind === 'unavailable') {
     return (
@@ -90,6 +93,7 @@ export function FoldEquityControl({ report }: { readonly report: CoachReport }):
         </label>
         <input
           id={sliderId}
+          ref={sliderRef}
           className="prl-range prl-fold-input__slider"
           type="range"
           min={0}
@@ -108,7 +112,13 @@ export function FoldEquityControl({ report }: { readonly report: CoachReport }):
           variant="secondary"
           size="sm"
           disabled={percent === analysedPercent}
-          onClick={() => setPercent(analysedPercent)}
+          onClick={() => {
+            // Focus first, then disable. The button disables itself on the render this click causes,
+            // and a focused control that becomes disabled drops the caret to <html> in Chrome — the
+            // defect ActionBar and "Choose again" were both fixed for. The slider is what was reset.
+            sliderRef.current?.focus();
+            setPercent(analysedPercent);
+          }}
         >
           {`Back to the analysed ${analysedPercent}%`}
         </Button>
