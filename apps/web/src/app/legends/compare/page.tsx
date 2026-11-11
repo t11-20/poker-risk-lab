@@ -43,19 +43,23 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Fragment, type ReactElement } from 'react';
 import { ActionDistribution } from '@/components/ActionDistribution.tsx';
+import { CompareChoiceLimit } from '@/components/CompareChoiceLimit.tsx';
 import { DifficultyPicker } from '@/components/DifficultyPicker.tsx';
 import { LegendSigil } from '@/components/LegendSigil.tsx';
 import { ProfileDisclaimers } from '@/components/ProfileDisclaimers.tsx';
 import {
   COMPARE_SITUATION,
+  type CompareSelection,
   DEFAULT_COMPARE_PROFILE_IDS,
   LEGENDS_COMPARE_PATH,
   LEGENDS_HAND_REVIEW_PATH,
   LEGENDS_PATH,
   loadLegendProfiles,
   loadProfileComparison,
+  MAX_COMPARE_PROFILES,
+  MIN_COMPARE_PROFILES,
+  parseCompareSelection,
   parseDifficulty,
-  parseProfileIds,
   profileHref,
   type SearchParams,
 } from '@/lib/legends-data.ts';
@@ -99,6 +103,39 @@ function cards(text: string): readonly number[] {
   return parsed;
 }
 
+/**
+ * One sentence per id the page did not compare, and one if it compared too few.
+ *
+ * Said above the comparison rather than below it, because each one changes how the columns should
+ * be read — a reader who ticked seven boxes and sees five columns needs to know which two went
+ * before they look for them.
+ */
+function selectionNotices(selection: CompareSelection, shown: readonly string[]): readonly string[] {
+  const notices: string[] = [];
+  if (selection.dropped.length > 0) {
+    notices.push(
+      `This page compares two to five styles at a time, and ${String(shown.length + selection.dropped.length)} were picked. ` +
+        `It is showing the first ${String(MAX_COMPARE_PROFILES)} in the order they were named; ` +
+        `${selection.dropped.join(', ')} ${selection.dropped.length === 1 ? 'was' : 'were'} left out. ` +
+        'Untick some below to choose which five.',
+    );
+  }
+  if (selection.unknown.length > 0) {
+    notices.push(
+      `${selection.unknown.map((id) => `"${id}"`).join(', ')} ${selection.unknown.length === 1 ? 'is' : 'are'} not ` +
+        `one of the profiles, so ${selection.unknown.length === 1 ? 'it was' : 'they were'} left out` +
+        (selection.ids.length === 0 ? ' and the page is showing its default three styles instead.' : '.'),
+    );
+  }
+  if (selection.tooFew) {
+    notices.push(
+      `Only one style was picked. Its column is below, but a comparison needs at least ${String(MIN_COMPARE_PROFILES)}: ` +
+        'with one there is nothing for it to disagree with, so there is no takeaway. Tick another below.',
+    );
+  }
+  return notices;
+}
+
 export default async function ComparePage({
   searchParams,
 }: {
@@ -106,10 +143,16 @@ export default async function ComparePage({
 }): Promise<ReactElement> {
   const query = await searchParams;
   const difficulty = parseDifficulty(query['difficulty']);
-  const requested = parseProfileIds(query['profiles']);
-  const profileIds = requested.length === 0 ? DEFAULT_COMPARE_PROFILE_IDS : requested;
-
+  // The profile list first, because it is what decides which of the requested ids are real. See
+  // `parseCompareSelection` for what happened to an unknown id, or a sixth, before this order.
   const profiles = await loadLegendProfiles();
+  const selection = parseCompareSelection(
+    query['profiles'],
+    profiles.data.profiles.map((profile) => profile.id),
+  );
+  const profileIds = selection.ids.length === 0 ? DEFAULT_COMPARE_PROFILE_IDS : selection.ids;
+  const notices = selectionNotices(selection, profileIds);
+
   const comparison = await loadProfileComparison({
     profileIds,
     difficulty,
@@ -139,6 +182,14 @@ export default async function ComparePage({
           <Link href={LEGENDS_HAND_REVIEW_PATH}>A finished hand, reviewed</Link>
         </nav>
       </div>
+
+      {notices.length === 0 ? null : (
+        <Callout tone="warning" title="Not exactly the styles you picked">
+          {notices.map((notice) => (
+            <p key={notice}>{notice}</p>
+          ))}
+        </Callout>
+      )}
 
       {comparison.fallbackReason === null ? null : (
         <Callout tone="warning" title="This comparison is a bundled sample spot">
@@ -250,9 +301,12 @@ export default async function ComparePage({
         </div>
       </section>
 
-      <Callout tone="insight" title="What the disagreement is telling you">
-        <p>{takeaway}</p>
-      </Callout>
+      {/* One column has no disagreement to describe; `selectionNotices` says so above instead. */}
+      {entries.length < MIN_COMPARE_PROFILES ? null : (
+        <Callout tone="insight" title="What the disagreement is telling you">
+          <p>{takeaway}</p>
+        </Callout>
+      )}
 
       <section className="prl-legend-section">
         <h2>Change the comparison</h2>
@@ -269,7 +323,7 @@ export default async function ComparePage({
           <input name="difficulty" type="hidden" value={difficulty} />
           <fieldset>
             <legend className="prl-legend-difficulty__legend prl-label">Styles to put side by side</legend>
-            <div className="prl-legend-picker__options">
+            <CompareChoiceLimit className="prl-legend-picker__options" max={MAX_COMPARE_PROFILES}>
               {profiles.data.profiles.map((profile) => (
                 <label className="prl-legend-picker__option" key={profile.id}>
                   <input
@@ -282,15 +336,16 @@ export default async function ComparePage({
                   {profile.disclosure.archetypeName}
                 </label>
               ))}
-            </div>
+            </CompareChoiceLimit>
           </fieldset>
           <div className="prl-legend-difficulty__actions">
             <Button type="submit" variant="secondary">
               Compare these styles
             </Button>
             <p className="prl-legend-difficulty__note">
-              Pick at least two: a comparison with one column has nothing to disagree with. The choice stays
-              in the address bar, so a spot can be shared exactly as it was read.
+              Pick two to five: one column has nothing to disagree with, and more than five is more than one
+              request can price. The choice stays in the address bar, so a spot can be shared exactly as it
+              was read.
             </p>
           </div>
         </form>

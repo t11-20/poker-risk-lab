@@ -965,6 +965,21 @@
   margin: 0;
 }
 
+/**
+ * Five are ticked, so this one cannot be (`CompareChoiceLimit.tsx`). Muted text and the not-allowed
+ * cursor rather than opacity, so the name stays legible: the reader still needs to read it to decide
+ * which ticked one to swap out. The hover lift is withdrawn because the box will not respond to it.
+ */
+.prl-legend-picker__option:has(input:disabled) {
+  color: var(--prl-text-muted);
+  cursor: not-allowed;
+}
+
+.prl-legend-picker__option:has(input:disabled):hover {
+  border-color: var(--prl-line);
+  background-color: var(--prl-surface-inset);
+}
+
 /* ==========================================================================================
    10. THE POST-HAND COMPARISON
    ==========================================================================================
