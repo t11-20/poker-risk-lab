@@ -231,6 +231,13 @@ export interface SeatSimulationCounts {
   readonly facingBetDecisions: number;
   /** Of those, turns on which it folded. */
   readonly foldsFacingBet: number;
+  /**
+   * Turns facing a bet OTHER than the preflop entry decision: the ones `scoreFold` prices, and so
+   * the only ones `foldToPressure` can move. See `pricedFoldToBetFrequency`.
+   */
+  readonly pricedFacingBetDecisions: number;
+  /** Of those, turns on which it folded. */
+  readonly pricedFoldsFacingBet: number;
   /** Hands in which it still held cards when the flop was dealt. */
   readonly flopsSeen: number;
   /** Hands in which it actually showed its hand at showdown. */
@@ -271,6 +278,8 @@ export interface SeatSimulationCounts {
  * | bluffFrequency               | aggressive actions holding air   | those turns, holding air     |
  * | wentToShowdown               | hands shown down                 | hands that saw a flop        |
  * | foldToBetFrequency           | folds facing a bet               | turns facing a bet           |
+ * | pricedFoldToBetFrequency     | folds facing a bet               | those turns, less the        |
+ *                                                                     preflop entry decision      |
  * | averageBetSizeAsPotFraction  | Σ (chips added / pot before)     | postflop bets and raises     |
  * | averageOpeningBetAsPotFraction | Σ (chips added / pot before)   | postflop OPENING bets only   |
  */
@@ -303,6 +312,18 @@ export interface SeatSimulationStats {
   readonly bluffFrequency: number;
   readonly wentToShowdown: number;
   readonly foldToBetFrequency: number;
+  /**
+   * Folds facing a bet, over the turns facing a bet that the policy PRICES — every one except the
+   * preflop entry decision, which `decide` hands to the `vpip` entry plan instead of `scoreFold`.
+   *
+   * `foldToBetFrequency` counts that entry decision, every hand has one, and folding there is what
+   * `vpip` declares. Measured 2026-11-11 on the simulation suite's own sweep (8,000 hands per
+   * profile against reading-pressure-specialist at realistic, seed 20260817): the twelve profiles'
+   * `foldToBetFrequency` came out in exactly the reverse order of their observed `vpip`, rho -1.000, so the axis compared against
+   * `foldToPressure` was ranking hand selection. This rate is the one the trait acts on. It is
+   * printed by the simulation suite and asserted on by nothing: see the `foldToPressure` axis below.
+   */
+  readonly pricedFoldToBetFrequency: number;
   readonly averageBetSizeAsPotFraction: number;
   /**
    * The same average over OPENING bets only, which is the quantity `betSizingPreference`
@@ -395,6 +416,8 @@ export class SeatObservations {
   airAggressiveActions = 0;
   facingBetDecisions = 0;
   foldsFacingBet = 0;
+  pricedFacingBetDecisions = 0;
+  pricedFoldsFacingBet = 0;
   flopsSeen = 0;
   showdownsReached = 0;
   sizedActions = 0;
@@ -437,6 +460,8 @@ export class SeatObservations {
     if (!this.handOpen) throw new StatsError(`seat ${this.seat}: noteDecision outside a hand`);
     this.decisions += 1;
     const aggressive = observation.action === 'bet' || observation.action === 'raise';
+    // Read before `notePreflop`, whose latch ends the entry decision.
+    const isEntryDecision = observation.street === 'preflop' && !this.enteredVoluntarily;
 
     if (observation.street === 'preflop') this.notePreflop(observation, aggressive);
     else this.notePostflop(observation, aggressive);
@@ -445,6 +470,10 @@ export class SeatObservations {
     if (observation.toCall > 0) {
       this.facingBetDecisions += 1;
       if (observation.action === 'fold') this.foldsFacingBet += 1;
+      if (!isEntryDecision) {
+        this.pricedFacingBetDecisions += 1;
+        if (observation.action === 'fold') this.pricedFoldsFacingBet += 1;
+      }
     }
   }
 
@@ -540,6 +569,7 @@ export class SeatObservations {
       bluffFrequency: ratio(this.airAggressiveActions, this.airAggressionOpportunities),
       wentToShowdown: ratio(this.showdownsReached, this.flopsSeen),
       foldToBetFrequency: ratio(this.foldsFacingBet, this.facingBetDecisions),
+      pricedFoldToBetFrequency: ratio(this.pricedFoldsFacingBet, this.pricedFacingBetDecisions),
       averageBetSizeAsPotFraction: ratio(this.potFractionSum, this.sizedActions),
       averageOpeningBetAsPotFraction: ratio(this.openingBetPotFractionSum, this.openingBets),
       netChips: this.netChips,
@@ -563,6 +593,8 @@ export class SeatObservations {
         airAggressiveActions: this.airAggressiveActions,
         facingBetDecisions: this.facingBetDecisions,
         foldsFacingBet: this.foldsFacingBet,
+        pricedFacingBetDecisions: this.pricedFacingBetDecisions,
+        pricedFoldsFacingBet: this.pricedFoldsFacingBet,
         flopsSeen: this.flopsSeen,
         showdownsReached: this.showdownsReached,
         sizedActions: this.sizedActions,
@@ -782,7 +814,7 @@ export const OBSERVABLE_AXES: readonly ObservableAxis[] = [
     observedFrom: (stats) => stats.foldToBetFrequency,
     quantity: 'the share of the turns facing a bet, on any street, that it folded',
     tolerance: 0.25,
-    why: 'the trait is about giving up a made hand; the observed rate includes every fold to a bet, most of which are hands that never had value. MEASURED 2026-08-27, so the reach of this row is not overstated: across the twelve profiles the declared values span 0.14-0.76 while the observed rate spans only 0.37-0.69, and the 0.25 tolerance is 78% of that observed range — so this row catches a profile that folds wildly unlike its card and very little else. Spearman rho between declared and observed is 0.601, against 1.000 for vpip and 0.937 for aggressionFrequency on the same runs. It is a bound, not a demonstration that the trait drives the behaviour, and it is listed beside two axes that do discriminate',
+    why: 'a bound on hand selection, not a measurement of this trait. MEASURED 2026-11-11 on the simulation suite’s 8,000-hand sweep: the observed rate ranks the twelve profiles in exactly the reverse order of their observed vpip, because every hand has a preflop entry decision facing a bet, the policy decides it from vpip, and foldToPressure never touches it. Spearman rho against the declared trait is 0.599. On the turns the trait does act on (pricedFoldToBetFrequency) rho is 0.361 and the observed rates span 0.165-0.301 against declared 0.14-0.76, so the trait is a weight on folding rather than a frequency, and the 0.25 band could not hold on that rate. calling-station, declared lowest at 0.14, folds the second-most there, at 0.275: continueAppetite is the same function of equity for every profile, so a hand below the price folds whatever this trait says, and the profiles that fold least are the aggressive ones, which raise instead. The row is kept so a profile folding wildly unlike every other still fails',
   },
   {
     key: 'betSizingPreference',
@@ -1101,6 +1133,8 @@ export function combineCounts(counts: readonly SeatSimulationCounts[]): SeatSimu
     airAggressiveActions: 0,
     facingBetDecisions: 0,
     foldsFacingBet: 0,
+    pricedFacingBetDecisions: 0,
+    pricedFoldsFacingBet: 0,
     flopsSeen: 0,
     showdownsReached: 0,
     sizedActions: 0,
@@ -1131,6 +1165,8 @@ const COUNT_KEYS = [
   'airAggressiveActions',
   'facingBetDecisions',
   'foldsFacingBet',
+  'pricedFacingBetDecisions',
+  'pricedFoldsFacingBet',
   'flopsSeen',
   'showdownsReached',
   'sizedActions',

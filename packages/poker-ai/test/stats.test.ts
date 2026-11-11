@@ -404,6 +404,42 @@ test('aggression and bluff frequencies are postflop only, over turns where aggre
   assert.equal(stats.counts.foldsFacingBet, 0);
 });
 
+test('the priced fold rate leaves out the preflop entry decision, which vpip decides', () => {
+  // The defect: `foldToBetFrequency` counts the entry decision every hand has, so over twelve
+  // profiles it ranked them in exactly the reverse order of their vpip. `foldToPressure` acts only
+  // on the turns after it, and those are what the priced rate counts.
+  const seat = new SeatObservations(0, 'calling-station');
+
+  // Hand one: folds its entry decision to the big blind. Facing a bet, not priced.
+  seat.beginHand();
+  seat.noteDecision(decision({ action: 'fold', toCall: 100 }));
+  seat.endHand({ sawFlop: false, showedDown: false, netChips: 0 });
+
+  // Hand two: calls to enter, then folds to a re-raise. Only the second turn is priced.
+  seat.beginHand();
+  seat.noteDecision(decision({ action: 'call', toCall: 100, cost: 100 }));
+  seat.noteDecision(decision({ action: 'fold', toCall: 400, facingPreflopRaise: true }));
+  seat.endHand({ sawFlop: false, showedDown: false, netChips: -100 });
+
+  // Hand three: raises to enter, then calls a flop bet. Priced.
+  seat.beginHand();
+  seat.noteDecision(decision({ action: 'raise', toCall: 100, cost: 300 }));
+  seat.noteDecision(decision({ street: 'flop', action: 'call', toCall: 200, potBefore: 800, cost: 200 }));
+  seat.endHand({ sawFlop: true, showedDown: false, netChips: -500 });
+
+  const stats = seat.finalise(100);
+  assert.equal(stats.counts.facingBetDecisions, 5, 'every turn facing a bet');
+  assert.equal(stats.counts.foldsFacingBet, 2);
+  assert.equal(stats.foldToBetFrequency, 0.4);
+  assert.equal(
+    stats.counts.pricedFacingBetDecisions,
+    2,
+    'the re-raise and the flop bet, not the three entries',
+  );
+  assert.equal(stats.counts.pricedFoldsFacingBet, 1);
+  assert.equal(stats.pricedFoldToBetFrequency, 0.5);
+});
+
 test('the neutral-assessment denominator counts only the band the trait is declared on', () => {
   const seat = new SeatObservations(0, 'patient-technician');
   const { low, high } = NEUTRAL_ASSESSMENT_BAND;
