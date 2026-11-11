@@ -52,7 +52,14 @@
  * somewhere else entirely.
  */
 
-import { Button, browserAbandonedFocus, Callout, Panel, type TableAction } from '@prl/ui';
+import {
+  Button,
+  browserAbandonedFocus,
+  Callout,
+  Panel,
+  type TableAction,
+  usePrefersReducedMotion,
+} from '@prl/ui';
 import {
   type FocusEvent,
   type FormEvent,
@@ -409,7 +416,12 @@ function ConnectionControls({
     // that knows only `body` never fires — the same shape of stale copy that stopped `HandReplay`'s
     // rescue from ever running. One definition, in the package that measured it.
     if (!browserAbandonedFocus()) return;
-    fallbackRef.current?.focus();
+    // `preventScroll`, because this line is at the TOP of the page and the control that vanished
+    // usually was not: when a hand ends the in-hand controls go and the caret is put here, and a plain
+    // `.focus()` scrolled a reader who was looking at the result of the hand back to scrollY 0, with
+    // the showdown and the result below the fold. The move is for the caret and the screen reader —
+    // the next Tab is "Deal the next hand" either way.
+    fallbackRef.current?.focus({ preventScroll: true });
     hadFocus.current = false;
   }, [signature, fallbackRef]);
 
@@ -736,6 +748,65 @@ function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
   );
 }
 
+/**
+ * Keeps the decision band on screen when the table has something new for the reader.
+ *
+ * ## The defect this exists for
+ *
+ * The connection card is above the table, and it is tall — ~560px at 1440 once the room facts and
+ * the private-table disclosure are in it — so `styles/play.css` section 3's promise that the table
+ * and the band fit one viewport held only for a reader who had already scrolled past it. Measured
+ * at 1440x900 on the live table: "Deal me in" at docY 360, and after it the first decision's Fold
+ * at docY 1746, two screens down with nothing on screen saying a decision was waiting; at 390x844
+ * Fold at docY ~1904, on every hand. Meanwhile the clock was running.
+ *
+ * ## When it scrolls, and when it does not
+ *
+ * Twice, both edges the reader is waiting for: a hand is dealt with the reader in it, and a
+ * decision becomes theirs. Never on a frame that merely re-describes a spot already on screen, and
+ * never when the band is already in view — so a reader who is looking at the table is not moved by
+ * a pixel. Not while they are typing somewhere else on the page either: pulling a half-typed invite
+ * code out from under the caret would be worse than the defect.
+ *
+ * This moves the viewport only. Focus is the business of the rescues in `ActionBar` and
+ * `TableStage`, which now all pass `preventScroll` so the two cannot fight; nothing here moves the
+ * caret, so a screen-reader user's position is untouched. `scrollIntoView` honours the root's
+ * `scroll-padding` (the sticky header above, the phone's Coach sheet peek below), and the reduced
+ * motion preference decides between a smooth scroll and a jump.
+ */
+function inView(element: HTMLElement): boolean {
+  const box = element.getBoundingClientRect();
+  const root = window.getComputedStyle(document.documentElement);
+  const top = Number.parseFloat(root.scrollPaddingBlockStart) || 0;
+  const bottom = Number.parseFloat(root.scrollPaddingBlockEnd) || 0;
+  return box.top >= top && box.bottom <= window.innerHeight - bottom;
+}
+
+function typingElsewhere(band: HTMLElement): boolean {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || band.contains(active)) return false;
+  return (
+    active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active.isContentEditable
+  );
+}
+
+function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement | null>): void {
+  const reduced = usePrefersReducedMotion();
+  const view = live.table.view;
+  const dealtHand = view !== null && !live.table.betweenHands && view.seats.some((seat) => seat.isSelf);
+  const handId = dealtHand ? view.handId : null;
+  // Non-empty exactly while the decision is the reader's, and set on the edge — see
+  // `turnAnnouncement` in `lib/use-live-table.ts` — so it changes once per turn, not per frame.
+  const turnEdge = live.table.turnAnnouncement;
+
+  useEffect(() => {
+    if (handId === null && turnEdge === '') return;
+    const element = band.current;
+    if (element === null || inView(element) || typingElsewhere(element)) return;
+    element.scrollIntoView({ block: 'end', behavior: reduced ? 'auto' : 'smooth' });
+  }, [handId, turnEdge, band, reduced]);
+}
+
 export function LiveTable({
   legendMatch,
 }: {
@@ -750,6 +821,8 @@ export function LiveTable({
   const highlighted = live.highlightedCards;
 
   const act = (action: TableAction): void => live.act(action);
+  const decisionRef = useRef<HTMLDivElement | null>(null);
+  useFollowTheTable(live, decisionRef);
 
   return (
     <>
@@ -766,6 +839,7 @@ export function LiveTable({
         submission={table.submission}
         onAct={act}
         autoActed={table.autoActed}
+        decisionRef={decisionRef}
         idleMessage={IDLE_TABLE_MESSAGE}
         {...coachUnavailableProps(live)}
         {...(status === 'complete' ? { reviewHref: reviewHrefFor(table.view) } : {})}

@@ -568,7 +568,7 @@ describe('a refusal interrupts, and everything else is polite', () => {
     assert.match(stage, /const acknowledgementRef = useRef<HTMLDivElement \| null>\(null\);/u);
     assert.match(
       stage,
-      /acknowledgementRef\.current\?\.focus\(\);/u,
+      /acknowledgementRef\.current\?\.focus\(\{ preventScroll: true \}\);/u,
       'nothing moves the caret after a decision, so it is left on the document',
     );
     // Both guards, and both are load-bearing. Without the first, a table that updates while the

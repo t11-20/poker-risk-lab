@@ -231,14 +231,16 @@ describe('where the caret is actually moved', () => {
   // source, and every predicate is proved able to fail by running it over `WITHOUT_THE_FIX`.
 
   const rescuesOnDisable = (source: string): boolean =>
-    /useLayoutEffect\(\(\) => \{/u.test(source) && /inFlightRef\.current\?\.focus\(\);/u.test(source);
+    /useLayoutEffect\(\(\) => \{/u.test(source) &&
+    /inFlightRef\.current\?\.focus\(\{ preventScroll: true \}\);/u.test(source);
 
   const yieldsToAnOuterRescue = (source: string): boolean =>
     /layout effects run child-then-parent/u.test(source) &&
-    /inFlightRef\.current\?\.focus\(\);/u.test(source);
+    /inFlightRef\.current\?\.focus\(\{ preventScroll: true \}\);/u.test(source);
 
   const returnsTheCaret = (source: string): boolean =>
-    /if \(!returned \|\| !parked\.current\) return;/u.test(source) && /control\.focus\(\);/u.test(source);
+    /if \(!returned \|\| !parked\.current\) return;/u.test(source) &&
+    /control\.focus\(\{ preventScroll: true \}\);/u.test(source);
 
   it('moves it to the landing place when the controls are disabled under it', () => {
     assert.ok(

@@ -118,7 +118,15 @@ import {
   type TurnClock,
 } from '@prl/ui';
 import Link from 'next/link';
-import { type FocusEvent, type PointerEvent, type ReactElement, useEffect, useRef, useState } from 'react';
+import {
+  type FocusEvent,
+  type PointerEvent,
+  type ReactElement,
+  type RefObject,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { coachBodyFor } from '@/lib/coach-body.ts';
 // A value import from the module that holds this file's `TableSubmission` type. It is not a cycle:
 // that import is `import type`, which is erased before anything runs, and the sentence a decision
@@ -240,6 +248,12 @@ export interface TableStageProps {
    * `submission` and why the live region alone was not enough.
    */
   readonly autoActed?: string | null;
+  /**
+   * The decision band's element, for a caller that keeps it in view. The stage itself never
+   * scrolls: on the fixture path nothing is arriving to scroll for. See `useFollowTheTable` in
+   * `app/play/LiveTable.tsx`.
+   */
+  readonly decisionRef?: RefObject<HTMLDivElement | null>;
 }
 
 /** Skeletons at the real content's dimensions, so nothing reflows when the data lands. */
@@ -485,6 +499,7 @@ interface DecisionBandProps {
   readonly isLive: boolean;
   readonly onAct: (action: TableAction) => void;
   readonly autoActed: string | null;
+  readonly decisionRef: RefObject<HTMLDivElement | null> | undefined;
 }
 
 /**
@@ -530,7 +545,7 @@ const SUBMISSION_IN_FLIGHT: ReadonlySet<TableSubmission['status']> = new Set<Tab
  * rather than the feature, and for the test that now holds that line.
  */
 function DecisionBand(props: DecisionBandProps): ReactElement {
-  const { status, view, submission, turnAnnouncement, isLive, onAct, autoActed } = props;
+  const { status, view, submission, turnAnnouncement, isLive, onAct, autoActed, decisionRef } = props;
   const pending = submission !== null && SUBMISSION_IN_FLIGHT.has(submission.status);
   const rejected = submission !== null && SUBMISSION_ALERTS.has(submission.status);
 
@@ -582,12 +597,23 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
     // Shared with `ActionBar` and `LiveTable` rather than copied — this was right and the copy in
     // `LiveTable` was a version behind, which is the argument for having one of these.
     if (!browserAbandonedFocus()) return;
-    acknowledgementRef.current?.focus();
+    // `preventScroll`: this move is for the caret and the screen reader, not for the eye. Without it
+    // the browser scrolled the acknowledgement — which sits BELOW the controls — into view on every
+    // decision, and the band shrinking as the buttons went pushed the page further still. Measured at
+    // 1440x900 on the live table: a Call pressed at scrollY 1286 left the page at 1851, the footer,
+    // with the next decision's buttons at viewport y -261. What the eye follows is the table, and
+    // `LiveTable` keeps the table in view when it has something new to show.
+    acknowledgementRef.current?.focus({ preventScroll: true });
     hadFocus.current = false;
   }, [submission]);
 
   return (
-    <div className="prl-play__decision" onBlurCapture={onBlurCapture} onFocusCapture={onFocusCapture}>
+    <div
+      className="prl-play__decision"
+      onBlurCapture={onBlurCapture}
+      onFocusCapture={onFocusCapture}
+      ref={decisionRef}
+    >
       {/*
         Announcement 2 of 3 (see the module comment). In the DOM from the first render and empty,
         never conditionally mounted, because a polite region that arrives with its text is missed by
@@ -896,6 +922,7 @@ export function TableStage(props: TableStageProps): ReactElement {
           isLive={isLive}
           onAct={act}
           autoActed={props.autoActed ?? null}
+          decisionRef={props.decisionRef}
         />
       </div>
 

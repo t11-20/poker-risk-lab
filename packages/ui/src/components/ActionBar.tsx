@@ -434,6 +434,17 @@ export function ActionBar(props: ActionBarProps): ReactElement {
    * `hadFocus` stays true through a disable or an unmount on purpose. `focusout` fires with a null
    * `relatedTarget` in both cases, and treating that as "focus left the bar" would clear the flag a
    * moment before the effect needs to read it.
+   *
+   * ## Every move here is `preventScroll`
+   *
+   * Each of these moves is for the caret and for a screen reader, and none of them is a reason to
+   * move the page. A plain `.focus()` scrolls its target into view, and these targets are lines
+   * that appear and disappear as the bar changes shape — so every decision scrolled the page by
+   * however far the new line was from the old button. Measured at 1440x900 on the live table: a
+   * Call pressed at scrollY 1286 ended at 1851, the footer, with the next decision's buttons at
+   * viewport y -261; at 390x844 every action jumped the page 566 to 2,073px. Every target is inside
+   * this bar, which is where the reader's eyes already were, so nothing lands off-screen that was
+   * on-screen a moment before.
    */
   const idleRef = useRef<HTMLParagraphElement>(null);
   const inFlightRef = useRef<HTMLParagraphElement>(null);
@@ -470,7 +481,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     // Only when the browser has actually given up on focus. If something else legitimately took it
     // — a Coach panel that re-rendered and restored its own — leave it alone.
     if (!browserAbandonedFocus()) return;
-    idleRef.current?.focus();
+    idleRef.current?.focus({ preventScroll: true });
     hadFocus.current = false;
   }, [acting]);
 
@@ -485,7 +496,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
       // delayed rescue can lose to Chrome parking the caret on `<html>` with nobody watching.
       // A parent (TableStage) that wants a better destination runs its own layout effect after
       // this one, because layout effects run child-then-parent, and overwrites the caret.
-      inFlightRef.current?.focus();
+      inFlightRef.current?.focus({ preventScroll: true });
       parked.current = document.activeElement === inFlightRef.current;
       return;
     }
@@ -498,7 +509,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     // check because a control that came back still disabled is not somewhere to leave a reader.
     if (control === null || !control.isConnected) return;
     if (control instanceof HTMLButtonElement && control.disabled) return;
-    control.focus();
+    control.focus({ preventScroll: true });
   }, [disabled]);
 
   const sized = resolveSizedAction(legalActions);
