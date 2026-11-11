@@ -247,6 +247,32 @@ export function isSignedOut(error: unknown): boolean {
   return error.code === 'not_authenticated' || error.code === 'session_expired';
 }
 
+/**
+ * True when the API refused a hand-history request because of its `cursor` and nothing else.
+ *
+ * A cursor is an opaque token the API minted, so one it will not accept is a link somebody edited,
+ * pasted a hand id into, or kept across an ordering change — `decodeCursor` and `cursorFor` in
+ * `apps/api/src/routes/hands.ts` both answer `400 invalid_request` with `fields['query.cursor']`.
+ * `/review` rethrew that, so `/review?cursor=zzz` with a session was the error boundary and an HTTP
+ * 500 (measured by the audit at 308fadf). The reader is owed page one and a sentence, and the
+ * predicate is this narrow so every OTHER refusal still reaches the boundary: a 400 on `sort` would
+ * mean this client sent a name the API does not know, which is a bug to see, not to paper over.
+ */
+export function isRejectedCursor(error: unknown): boolean {
+  if (!(error instanceof ApiRequestError)) return false;
+  if (error.status !== 400 || error.code !== 'invalid_request') return false;
+  const fields = error.fields;
+  return fields !== null && CURSOR_FIELDS.some((field) => Object.hasOwn(fields, field));
+}
+
+/**
+ * The two spellings a cursor refusal arrives under. `query.cursor` is the route's own refusal of a
+ * cursor that parses but was not minted (`AppError` in `hands.ts`); `querystring.cursor` is the
+ * schema's, for one that fails `handListQuerySchema`'s `^[A-Za-z0-9_:.-]{1,128}$` before the route
+ * runs — `fieldsFromValidation` prefixes Fastify's `validationContext`, which is `querystring`.
+ */
+const CURSOR_FIELDS: readonly string[] = ['query.cursor', 'querystring.cursor'];
+
 /** Narrows an unknown parsed body to the contract's error envelope. */
 function readApiError(body: unknown): ApiError['error'] | null {
   if (typeof body !== 'object' || body === null) return null;
