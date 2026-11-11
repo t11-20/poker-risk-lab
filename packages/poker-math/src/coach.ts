@@ -1568,7 +1568,7 @@ export function buildCoachReport(input: CoachInput): CoachReport {
   const assumptions = [...equityResult.assumptions];
   if (candidates.some((candidate) => candidate.action === 'bet' || candidate.action === 'raise')) {
     assumptions.push(
-      `Bet and raise figures assume the line wins uncontested ${(foldEquity * 100).toFixed(0)}% of the time. That is an input you can change, not something measured.`,
+      `Bet and raise figures assume the line wins uncontested ${(foldEquity * 100).toFixed(0)}% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.`,
     );
     // `contestablePot`, like every other figure in a bet's arithmetic: a bet is priced into
     // the pot it can win. The two are equal wherever a bet is on offer at all — hero has to

@@ -373,7 +373,7 @@
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Estimated by sampling 2,000 random run-outs, not by exhaustive enumeration.",
         "No community cards are known yet, so five more cards are still to come.",
-        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
+        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
         "For a half-pot bet of 25 to break even here it would need to win uncontested 14% of the time.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
@@ -761,7 +761,7 @@
         "Seat 2 holds any of 444 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
-        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
+        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
         "A half-pot bet of 18 is already break-even or better here purely on the equity you have when called — it does not need to win uncontested at all.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
@@ -1446,7 +1446,7 @@
         "Seat 1 holds any of 377 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
-        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
+        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
         "For a half-pot bet of 30 to break even here it would need to win uncontested 28% of the time.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
@@ -1834,7 +1834,7 @@
         "Seat 2 holds any of 231 combinations from \"22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo\", each equally likely.",
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
-        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
+        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
         "A half-pot bet of 15 is already break-even or better here purely on the equity you have when called — it does not need to win uncontested at all.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
