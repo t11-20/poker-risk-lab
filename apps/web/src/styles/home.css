@@ -493,7 +493,10 @@
     forced-colors because it is a border rather than a character. */
 .prl-home__module-point::before {
   content: "";
-  align-self: center;
+  /* On the first line, not the middle of the item. `center` put the dash between the lines of
+     any point that wrapped, so a card's bullets stood at two different heights at 360. */
+  align-self: start;
+  margin-block-start: calc(0.5lh - 0.5px);
   width: var(--prl-space-5);
   border-block-start: 1px solid var(--prl-accent-edge);
 }

@@ -97,7 +97,7 @@ export default async function RecordPage(): Promise<ReactElement> {
   const record = await loadRecord(await readerCallOptions());
 
   return (
-    <div className="prl-container">
+    <div className="prl-container prl-record">
       <header className="prl-page-head">
         <p className="prl-label">Your record</p>
         <h1 className="prl-page-head__title prl-display-2">What you have actually done</h1>
@@ -145,7 +145,7 @@ export default async function RecordPage(): Promise<ReactElement> {
             ))}
           </div>
 
-          <dl className="prl-stat__pair">
+          <dl className="prl-stat__pair prl-record__lists">
             <dt className="prl-label">Topics touched</dt>
             <dd>
               {record.progress.topicsTouched.length === 0
