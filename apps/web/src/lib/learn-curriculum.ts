@@ -399,7 +399,7 @@ export function nextLesson(order: readonly LessonStep[], currentId: ContentId): 
   return next === undefined ? null : { id: next.id, title: next.title };
 }
 
-/** What a lesson's foot offers after it: a link, the title of a lesson this build cannot show, or nothing. */
+/** Offline, hand-flow's Next opened an unbundled body; this tells that gap apart from a link or the last lesson. */
 export type NextLessonStep =
   | { readonly kind: 'link'; readonly id: ContentId; readonly title: string }
   | { readonly kind: 'unavailable'; readonly title: string }
