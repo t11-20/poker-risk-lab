@@ -414,7 +414,7 @@ const cleanCheckout = (overrides = {}) => ({
   headSha: HEAD,
   behind: 0,
   ahead: 0,
-  trackedChanges: 0,
+  changedPaths: [],
   ...overrides,
 });
 
@@ -461,17 +461,59 @@ test('manifestMatchesCheckout refuses when git cannot say what HEAD is', () => {
   assert.ok('problem' in result, 'an unknown HEAD is not a match, it is the absence of a check');
 });
 
-test('manifestMatchesCheckout refuses a clean manifest once tracked files have been edited', () => {
-  const result = manifestMatchesCheckout({ sha: HEAD, dirty: false }, cleanCheckout({ trackedChanges: 2 }));
+test('manifestMatchesCheckout refuses a clean manifest once files have been edited', () => {
+  const result = manifestMatchesCheckout(
+    { sha: HEAD, dirty: false },
+    cleanCheckout({ changedPaths: ['apps/api/src/config.ts', 'README.md'] }),
+  );
   assert.ok('problem' in result, 'the edits postdate the build, so the images do not contain them');
-  assert.match(result.problem, /2 tracked file\(s\)/);
+  assert.match(
+    result.problem,
+    /2 file\(s\) are uncommitted since \(apps\/api\/src\/config\.ts, README\.md\)/,
+  );
+});
+
+test('manifestMatchesCheckout refuses a clean manifest beside an untracked migration (REGRESSION)', () => {
+  // Devin Review on #20: the first probe passed --untracked-files=no, so a migration written after
+  // the build and not yet committed reported zero changes, and migrate.mjs would have applied it to
+  // staging under images that predate it.
+  const result = manifestMatchesCheckout(
+    { sha: HEAD, dirty: false },
+    cleanCheckout({ changedPaths: ['db/migrations/0008_new.sql'] }),
+  );
+  assert.ok('problem' in result, 'an uncommitted migration is a change the images do not contain');
+  assert.match(result.problem, /db\/migrations\/0008_new\.sql/);
+});
+
+test('manifestMatchesCheckout refuses a clean manifest when git status gave no answer (REGRESSION)', () => {
+  // Devin Review on #20: an unknown change count was accepted, which is the absence of a check.
+  const result = manifestMatchesCheckout({ sha: HEAD, dirty: false }, cleanCheckout({ changedPaths: null }));
+  assert.ok('problem' in result, 'unknown is not clean');
+  assert.match(result.problem, /`git status` gave no answer/);
+});
+
+test('the checkout probe counts untracked files and leaves out only release-images/', () => {
+  const source = readFileSync(new URL('./staging.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf('function probeCheckout(');
+  assert.ok(start > 0, 'probeCheckout must exist for this check to mean anything');
+  const body = source.slice(start, source.indexOf('\n}\n', start));
+  assert.match(body, /'--untracked-files=all'/, 'untracked files are counted');
+  assert.doesNotMatch(body, /untracked-files=no/, 'and not switched off');
+  assert.match(
+    body,
+    /':\(exclude\)release-images'/,
+    'the release workflow image tarballs are the one exception',
+  );
 });
 
 test('manifestMatchesCheckout still lets a dirty build of HEAD be rehearsed', () => {
   // release-artifacts.mjs records dirty rather than refusing it, and `promote` is where it is
   // refused. Refusing it at `up` would contradict that decision, so the posture is pinned here.
   assert.deepEqual(
-    manifestMatchesCheckout({ sha: HEAD, dirty: true }, cleanCheckout({ trackedChanges: 4 })),
+    manifestMatchesCheckout(
+      { sha: HEAD, dirty: true },
+      cleanCheckout({ changedPaths: ['a', 'b', 'c', 'd'] }),
+    ),
     { ok: true },
   );
 });

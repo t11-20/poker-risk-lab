@@ -866,25 +866,30 @@ function readManifest(path) {
  *   - **A different commit.** The images describe `manifest.commit.sha`, the migrations, the smoke
  *     test and the compose file describe HEAD. Refused, with the distance between them.
  *   - **No commit at all.** A manifest that names none cannot be shown to describe this one.
- *   - **A clean manifest over an edited checkout.** `dirty: false` and tracked files modified now
- *     means the edits postdate the build, so the images provably do not contain them.
+ *   - **A clean manifest over an edited checkout.** `dirty: false` and uncommitted files now means
+ *     the edits postdate the build, so the images provably do not contain them. Untracked files
+ *     count: a new migration nobody has committed yet is exactly a file `migrate.mjs` applies to
+ *     staging while the API image predates it (Devin Review on #20).
+ *   - **A checkout whose state git would not report.** `git status` failing is the absence of a
+ *     check, so a clean manifest is refused rather than waved through (Devin Review on #20).
  *   - **NOT a manifest that says `dirty: true`.** `release-artifacts.mjs` records a dirty build
  *     rather than refusing it, because rehearsing an uncommitted change on staging is the normal
  *     case; `promote` is where a dirty manifest is refused. Refusing it here would contradict that
  *     decision and teach people a flag. It stays a printed warning.
  *
- * `trackedChanges` is the count from `git status --porcelain --untracked-files=no`, not the plain
- * `--porcelain` `release-artifacts.mjs` uses. The release workflow's staging job `docker load`s the
- * images from `release-images/*.tar` inside the checkout and nothing ignores that path, so an
- * untracked-inclusive probe would refuse every release run on a tree nobody edited. An untracked
- * file is not in the build context's tracked sources either way.
+ * `changedPaths` is `git status --porcelain --untracked-files=all` with ONE path excluded,
+ * `release-images/`: the release workflow's staging job `docker load`s the images from
+ * `release-images/*.tar` inside the checkout and nothing ignores that path, so counting it would
+ * refuse every release run on a tree nobody edited. Everything else untracked counts, the same
+ * definition of "uncommitted" `release-artifacts.mjs` uses when it records `dirty`.
  *
  * Pure, so the arithmetic is tested without git or docker; `commandUp` does the probing.
  *
  * @param {{ sha?: string | null, dirty?: boolean | null } | null | undefined} manifestCommit
- * @param {{ headSha: string | null, behind: number | null, ahead: number | null, trackedChanges: number | null }} checkout
+ * @param {{ headSha: string | null, behind: number | null, ahead: number | null, changedPaths: string[] | null }} checkout
  *   `behind` is `git rev-list --count <manifest>..HEAD`, `ahead` is `HEAD..<manifest>`; `null` when
  *   git could not answer (most often: the manifest's commit is not in this clone at all).
+ *   `changedPaths` is `null` when `git status` gave no answer.
  * @returns {{ ok: true } | { problem: string }}
  */
 export function manifestMatchesCheckout(manifestCommit, checkout) {
@@ -919,13 +924,24 @@ export function manifestMatchesCheckout(manifestCommit, checkout) {
         `one's. ${rebuild}`,
     };
   }
-  if (manifestCommit?.dirty === false && checkout.trackedChanges !== null && checkout.trackedChanges > 0) {
-    return {
-      problem:
-        `the manifest was built from a clean ${built.slice(0, 12)}, and ${checkout.trackedChanges} ` +
-        'tracked file(s) have been modified since, so the images do not contain them. Commit or ' +
-        `discard the edits. ${rebuild}`,
-    };
+  if (manifestCommit?.dirty === false) {
+    if (checkout.changedPaths === null) {
+      return {
+        problem:
+          '`git status` gave no answer, so nothing can show this checkout is still the clean ' +
+          `${built.slice(0, 12)} the images were built from. Run it from a working git checkout.`,
+      };
+    }
+    if (checkout.changedPaths.length > 0) {
+      const shown = checkout.changedPaths.slice(0, 3).join(', ');
+      const more = checkout.changedPaths.length > 3 ? `, and ${checkout.changedPaths.length - 3} more` : '';
+      return {
+        problem:
+          `the manifest was built from a clean ${built.slice(0, 12)}, and ${checkout.changedPaths.length} ` +
+          `file(s) are uncommitted since (${shown}${more}), so the images do not contain them. Commit ` +
+          `or remove them. ${rebuild}`,
+      };
+    }
   }
   return { ok: true };
 }
@@ -942,12 +958,25 @@ function probeCheckout(builtSha) {
   const headSha = capture('git', ['rev-parse', 'HEAD']);
   // Only a full sha is handed to rev-list: anything else in a hand-edited manifest could be an option.
   const known = typeof builtSha === 'string' && /^[0-9a-f]{40}$/.test(builtSha);
-  const porcelain = capture('git', ['status', '--porcelain', '--untracked-files=no']);
+  const porcelain = capture('git', [
+    'status',
+    '--porcelain',
+    '--untracked-files=all',
+    '--',
+    '.',
+    ':(exclude)release-images',
+  ]);
   return {
     headSha,
     behind: known ? countOf(capture('git', ['rev-list', '--count', `${builtSha}..HEAD`])) : null,
     ahead: known ? countOf(capture('git', ['rev-list', '--count', `HEAD..${builtSha}`])) : null,
-    trackedChanges: porcelain === null ? null : porcelain.split('\n').filter((line) => line !== '').length,
+    changedPaths:
+      porcelain === null
+        ? null
+        : porcelain
+            .split('\n')
+            .filter((line) => line !== '')
+            .map((line) => line.slice(3)),
   };
 }
 
