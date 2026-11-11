@@ -118,28 +118,31 @@ const TURN_LOG: readonly Logged[] = [
 
 describe('each seat says what it did on the street being played', () => {
   it('names the action, with the amount, for the current street only', () => {
-    const flop = lastActionsThisStreet({ street: 'flop', actions: TURN_LOG });
+    // The flop frame's seat 1 has the 27 it called in front of it; the call is read off that.
+    const flopSeats = [{ ...seatView(0, 'active', true), committedThisStreet: 27 }];
+    const flop = lastActionsThisStreet({ street: 'flop', actions: TURN_LOG, seats: flopSeats });
     assert.deepEqual(flop, { 5: 'folded', 2: 'bet 27', 0: 'called 27' });
-    const turn = lastActionsThisStreet({ street: 'turn', actions: TURN_LOG });
+    const turn = lastActionsThisStreet({ street: 'turn', actions: TURN_LOG, seats: [] });
     assert.deepEqual(turn, { 2: 'raised to 1,240', 0: 'checked, timed out' });
   });
 
   it('says nothing once the betting is over', () => {
-    assert.deepEqual(lastActionsThisStreet({ street: 'complete', actions: TURN_LOG }), {});
-    assert.deepEqual(lastActionsThisStreet({ street: 'showdown', actions: TURN_LOG }), {});
+    assert.deepEqual(lastActionsThisStreet({ street: 'complete', actions: TURN_LOG, seats: [] }), {});
+    assert.deepEqual(lastActionsThisStreet({ street: 'showdown', actions: TURN_LOG, seats: [] }), {});
   });
 
   it('NEGATIVE CONTROL: without the street filter, the turn would still show the flop call', () => {
     const unfiltered = lastActionsThisStreet({
       street: 'turn',
       actions: TURN_LOG.map((a) => ({ ...a, street: 'turn' })),
+      seats: [],
     });
     assert.equal(
       unfiltered[5],
       'folded',
       'seat 6 folded on the flop and would still be labelled on the turn',
     );
-    assert.equal(lastActionsThisStreet({ street: 'turn', actions: TURN_LOG })[5], undefined);
+    assert.equal(lastActionsThisStreet({ street: 'turn', actions: TURN_LOG, seats: [] })[5], undefined);
   });
 });
 
