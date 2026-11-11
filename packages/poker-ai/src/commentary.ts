@@ -970,9 +970,9 @@ export function commentOnDecision(input: {
  * a simulation harness produces, and what arrives here is the wire's `ProfileObservedStats`,
  * which does not. Two shapes, one meaning, so the mapping is written out once here.
  *
- * ## Two axes are deliberately absent, and the absence is the honest answer
+ * ## Three axes are deliberately absent, and the absence is the honest answer
  *
- * `Partial` is load-bearing: `observedGaps` skips any axis with no entry here, and two axes
+ * `Partial` is load-bearing: `observedGaps` skips any axis with no entry here, and three axes
  * have none because the wire type cannot express the quantity they declare.
  *
  * `aggressionFrequency` is declared as the rate on a NEUTRAL hand assessment. The wire's
@@ -988,15 +988,26 @@ export function commentOnDecision(input: {
  * unconditional 3-bet frequency instead, which is capped by how often the model enters a pot
  * at all. Same mismatch, same false accusation.
  *
- * Adding the two conditional figures to `ProfileObservedStats` would let both axes come back.
- * Until then, saying nothing about an axis is better than saying something untrue about it —
- * and `learnFrom` already carries the profile's authored material on both.
+ * `foldToPressure` failed the other way: it was mapped, and the agreement it reported was not
+ * about the trait. The wire's `foldToBetFrequency` counts the preflop entry decision, which every
+ * hand has and which the policy decides from `vpip`. Measured 2026-11-11 on the simulation suite's
+ * 8,000-hand sweep, the twelve rates came out in exactly the reverse order of observed `vpip`. So calling-station's
+ * line read "the card declares folds under pressure 0.14 … so the card and the play agree so far"
+ * because it plays half its hands, while on the turns the trait acts on it folds the second-most
+ * of the twelve (`pricedFoldToBetFrequency` in `stats.ts`). That is a false reassurance rather than
+ * a false accusation, and it is the same units error.
+ *
+ * Adding the conditional figures to `ProfileObservedStats` would let the first two axes come back.
+ * `foldToPressure` would not come back that way: on the priced turns its observed rates span
+ * 0.165-0.301 against declared 0.14-0.76, so the trait is a weight rather than a frequency, and no
+ * figure a learner can watch is the number on the card. Until one is, saying nothing about an
+ * axis is better than saying something untrue about it — and `learnFrom` already carries the
+ * profile's authored material on all three.
  */
 const OBSERVED_FROM_WIRE: Readonly<Partial<Record<TraitKey, (observed: ProfileObservedStats) => number>>> = {
   vpip: (observed) => observed.vpip,
   pfrShareOfVpip: (observed) => (observed.vpip === 0 ? 0 : observed.pfr / observed.vpip),
   bluffFrequency: (observed) => observed.bluffFrequency,
-  foldToPressure: (observed) => observed.foldToBetFrequency,
   betSizingPreference: (observed) => inversePreferredPotFraction(observed.averageBetSizeAsPotFraction),
 };
 

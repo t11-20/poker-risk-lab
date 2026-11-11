@@ -789,7 +789,7 @@ export const LEGEND_PROFILE_FIXTURES: readonly LegendProfileCardDto[] = [
     learnFrom: [
       'That the adjustment against a wide, passive caller is to value-bet thinner than usual, because far more of what calls you is worse.',
       'How to recognise a passive opponent from their actions within a handful of hands.',
-      'Why fold equity is worth naming as a separate concept: it is the half of a bluff that has nothing to do with your cards, and it is the half a wide, passive caller takes away from you most.',
+      'Why fold equity is worth naming as a separate concept: it is the half of a bluff that has nothing to do with your cards, and it is worth measuring rather than assuming. This profile calls more than any other here, and it still folds its weakest hands to a bet about as often as the rest of the field does.',
     ],
     styleNotes: [
       'Calls with almost anything and rarely raises.',

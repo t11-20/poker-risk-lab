@@ -580,6 +580,49 @@ test('the same holds for PFR and for aggression frequency', () => {
   );
 });
 
+test('foldToPressure is printed against the turns it acts on, and its ordering is not asserted', () => {
+  // Not asserted, on purpose, and the reason is the finding. `foldToBetFrequency` counts the
+  // preflop entry decision, which `vpip` decides, so its ordering is hand selection (rho against
+  // observed vpip printed below). On the priced turns the trait does act on, the rates are a
+  // narrow band nowhere near the declared values, and calling-station, declared lowest, is not
+  // the profile that folds least. A floor on either rho would be a number fitted to today's
+  // value. `stats.ts` has the measurement on the `foldToPressure` axis.
+  const sweep = primarySweep();
+  assert.equal(sweep.length, PROFILES.length, 'a sweep of nothing is not a pass');
+  for (const { profile, stats } of sweep) {
+    assert.ok(
+      stats.counts.pricedFacingBetDecisions > 0,
+      `${profile.naming.id} faced no priced bet, so its priced fold rate is not a measurement`,
+    );
+  }
+  const declared = sweep.map((entry) => entry.profile.traits.foldToPressure);
+  const allTurns = spearmanRho(
+    declared,
+    sweep.map((entry) => entry.stats.foldToBetFrequency),
+  );
+  const priced = spearmanRho(
+    declared,
+    sweep.map((entry) => entry.stats.pricedFoldToBetFrequency),
+  );
+  const handSelection = spearmanRho(
+    sweep.map((entry) => entry.stats.vpip),
+    sweep.map((entry) => entry.stats.foldToBetFrequency),
+  );
+  console.log(
+    `      Spearman rho foldToPressure vs fold-to-bet = ${allTurns.toFixed(4)}, ` +
+      `vs priced fold-to-bet = ${priced.toFixed(4)}; observed vpip vs fold-to-bet = ${handSelection.toFixed(4)}`,
+  );
+  for (const { profile, stats } of [...sweep].sort(
+    (left, right) => left.stats.pricedFoldToBetFrequency - right.stats.pricedFoldToBetFrequency,
+  )) {
+    console.log(
+      `      | ${profile.naming.id} | declared ${profile.traits.foldToPressure.toFixed(2)} | ` +
+        `fold-to-bet ${stats.foldToBetFrequency.toFixed(3)} | priced ${stats.pricedFoldToBetFrequency.toFixed(3)} ` +
+        `of ${stats.counts.pricedFacingBetDecisions} | vpip ${stats.vpip.toFixed(3)} |`,
+    );
+  }
+});
+
 // ---------------------------------------------------------------------------
 // 4. Determinism
 // ---------------------------------------------------------------------------

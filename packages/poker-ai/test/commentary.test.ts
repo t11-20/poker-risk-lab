@@ -831,6 +831,28 @@ test('learnFromSummary separates sampling error from a model that does not match
   assert.ok(!narrow.learnFrom.some((line) => line.includes('not behaving the way its card describes')));
 });
 
+test('learnFromSummary never compares folds under pressure with the observed fold-to-bet rate (REGRESSION)', () => {
+  // That rate counts the preflop entry decision, which `vpip` decides, so it agreed with
+  // calling-station's 0.14 because the profile plays half its hands. Both directions are tried:
+  // the rate the app measured for it, and one far enough off to have been called a defect.
+  const profile = requireProfile('calling-station');
+  const disclosure = profileDisclosure(profile.naming, 'archetype');
+  const foldTrait = /folds under pressure/i;
+  let lines = 0;
+  for (const foldToBetFrequency of [0.373, 0.99]) {
+    const summary = learnFromSummary({
+      profile,
+      disclosure,
+      observed: observedStats({ handsObserved: 8000, foldToBetFrequency, confidenceHalfWidth: 0.01 }),
+      others: [],
+    });
+    const generated = summary.learnFrom.slice(profile.learnFrom.length);
+    lines += generated.length;
+    for (const line of generated) assert.doesNotMatch(line, foldTrait, line);
+  }
+  assert.ok(lines >= 4, `only ${lines} generated line(s); a sweep of nothing is not a pass`);
+});
+
 test('learnFromSummary drops the profile from its own contrast list', () => {
   const profile = requireProfile('range-narrator');
   const summary = learnFromSummary({
