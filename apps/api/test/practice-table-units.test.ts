@@ -23,7 +23,9 @@
  */
 
 import assert from 'node:assert/strict';
+import type { AddressInfo } from 'node:net';
 import { after, describe, it } from 'node:test';
+import { API_PATHS } from '@prl/contracts';
 import { createSecureRandom } from '@prl/poker-engine';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
@@ -34,11 +36,12 @@ import { AppMetrics } from '../src/observability/metrics.ts';
 import type { ProblemDetail } from '../src/observability/telemetry.ts';
 import * as roomsRepository from '../src/repositories/rooms.ts';
 import * as usersRepository from '../src/repositories/users.ts';
-import { postgresArchive, postgresRoomStore, RoomRegistry } from '../src/rooms/registry.ts';
+import { postgresArchive, postgresRoomStore, RoomRegistry, type RoomStore } from '../src/rooms/registry.ts';
 import { LiveTable, type SettledStack } from '../src/rooms/table.ts';
 import { createManualClock, type ManualClock } from '../src/rooms/timers.ts';
 import { type AuthStore, createAuthRoutes } from '../src/routes/auth.ts';
 import { createRoomRoutes } from '../src/routes/rooms.ts';
+import { createWsHub } from '../src/ws/hub.ts';
 import { databaseSkip, TEST_DATABASE_URL } from './helpers/database.ts';
 import { stubDatabase, testConfig } from './helpers/hands-app.ts';
 import { accountFor, fixedSessionStore } from './helpers/live-room.ts';
@@ -97,6 +100,8 @@ interface Harness {
   readonly metrics: AppMetrics;
   readonly userId: string;
   readonly problems: { message: string; detail: ProblemDetail }[];
+  /** The hub's address when the harness was asked for one, so a real socket can watch a table. */
+  readonly wsUrl: string | null;
   /** A request as the browser sends it: the signed session cookie, a CSRF pair, the origin. */
   readonly send: (
     method: 'GET' | 'POST',
@@ -105,11 +110,19 @@ interface Harness {
   ) => Promise<{ status: number; body: unknown }>;
 }
 
+interface HarnessOptions {
+  /** Wraps the real store, for a test that has to hold one call open while another runs. */
+  readonly wrap?: (store: RoomStore) => RoomStore;
+  /** Registers the real WebSocket hub and listens on an ephemeral loopback port. */
+  readonly hub?: boolean;
+}
+
 /**
  * The room routes and the auth routes over one transaction, sharing one registry — the way
  * `routes/index.ts` assembles them, with only the session lookup replaced.
  */
-async function harness(tx: TransactionSql): Promise<Harness> {
+async function harness(tx: TransactionSql, options: HarnessOptions = {}): Promise<Harness> {
+  const wrap = options.wrap ?? ((store: RoomStore) => store);
   const user = await usersRepository.createGuest(tx, { displayName: 'Reader' });
   const problems: { message: string; detail: ProblemDetail }[] = [];
   const clock = createManualClock();
@@ -118,7 +131,7 @@ async function harness(tx: TransactionSql): Promise<Harness> {
     clock,
     metrics,
     random: createSecureRandom(),
-    store: postgresRoomStore(() => tx),
+    store: wrap(postgresRoomStore(() => tx)),
     archive: postgresArchive(() => tx),
     botThinkingDelayMs: 5,
     onProblem: (message, detail) => problems.push({ message, detail }),
@@ -145,7 +158,15 @@ async function harness(tx: TransactionSql): Promise<Harness> {
   app.get(CSRF_ROUTE, async (_request, reply) => ({ token: reply.generateCsrf() }));
   await app.register(createAuthRoutes({ store: authStore, tables: registry }), { prefix: '/api/v1' });
   await app.register(createRoomRoutes({ registry, sessionStore: sessions }), { prefix: '/api/v1' });
-  await app.ready();
+  let wsUrl: string | null = null;
+  if (options.hub === true) {
+    await app.register(createWsHub({ registry, sessionStore: sessions }), { prefix: '/api/v1' });
+    // Port 0: the kernel picks a free one, so this never contends with a server a person is running.
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    wsUrl = `ws://127.0.0.1:${(app.server.address() as AddressInfo).port}${API_PATHS.ws()}`;
+  } else {
+    await app.ready();
+  }
 
   const send: Harness['send'] = async (method, url, payload) => {
     const seed = await app.inject({ method: 'GET', url: CSRF_ROUTE });
@@ -161,7 +182,7 @@ async function harness(tx: TransactionSql): Promise<Harness> {
     });
     return { status: response.statusCode, body: response.json() };
   };
-  return { app, registry, clock, metrics, userId: user.id, problems, send };
+  return { app, registry, clock, metrics, userId: user.id, problems, wsUrl, send };
 }
 
 /** What the web client sends for a Legends match: `openPracticeRoom` in `use-live-table.ts`. */
@@ -198,6 +219,8 @@ describe('units across practice tables', dbOptions, () => {
         startingStack: 1_000,
       });
       await roomsRepository.addMember(tx, { roomId: room.id, userId: owner.id, stack: 400 });
+      // Seated, because only a table the learner has sat at holds units — see `users.readUnits`.
+      await roomsRepository.seatMember(tx, room.id, owner.id, 0);
       assert.equal(await units(tx, owner.id), 400, 'the chips in front of them');
 
       // Not 1,000 by coincidence: 400 is what the old sum reported after the close, and the
@@ -289,7 +312,9 @@ describe('units across practice tables', dbOptions, () => {
       await startMatch(test, 'patient-technician');
       assert.equal((await roomsRepository.byId(tx, friendsId))?.status, 'open');
       assert.ok(test.registry.get(friendsId) !== null);
-      assert.equal(await units(tx, test.userId), 2_000, 'two open tables, two stacks — and no more');
+      // 1,000, not 2,000. This line used to assert 2,000 — "two open tables, two stacks" — and that
+      // was the mint written down as the expected answer: the reader has sat at neither table.
+      assert.equal(await units(tx, test.userId), 1_000, 'no table the reader has sat at holds units');
 
       await test.registry.shutdown();
       await test.app.close();
@@ -325,6 +350,181 @@ describe('units across practice tables', dbOptions, () => {
       assert.equal(room.table.viewFor(test.userId)?.viewerSeat, 0, 'the reader is dealt in');
       await room.archiveSettled();
       assert.equal(await units(tx, test.userId), 1_000);
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+});
+
+/** `FRIENDS_TABLE_REQUEST` in `apps/web/src/lib/table-rooms.ts`: six seats, two bots, a free chair. */
+const FRIENDS_TABLE = {
+  name: 'Private table',
+  maxSeats: 6,
+  smallBlind: 5,
+  bigBlind: 10,
+  startingStack: 1_000,
+  actionTimeoutSeconds: 60,
+  bots: [
+    { profile: 'tight-aggressive', count: 1 },
+    { profile: 'calling-station', count: 1 },
+  ],
+};
+
+async function createTable(test: Harness, body: object): Promise<{ id: string; inviteCode: string }> {
+  const created = await test.send('POST', '/api/v1/rooms', body);
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const room = Reflect.get(created.body as object, 'room') as object;
+  return {
+    id: String(Reflect.get(room, 'id')),
+    inviteCode: String(Reflect.get(created.body as object, 'inviteCode')),
+  };
+}
+
+async function statusOf(tx: TransactionSql, roomId: string): Promise<string | undefined> {
+  return (await roomsRepository.byId(tx, roomId))?.status;
+}
+
+/** Lets the bots' clock-driven turns and the archive chain run, so a hand can settle. */
+async function playOut(test: Harness, roomId: string): Promise<void> {
+  for (let i = 0; i < 20; i += 1) {
+    test.clock.advance(60_000);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await test.registry.get(roomId)?.archiveSettled();
+}
+
+describe('only a table the reader has sat at holds units', dbOptions, () => {
+  it('starting private tables and a match leaves the allowance, not a stack per table', async () => {
+    await inRollback(async (tx) => {
+      const test = await harness(tx);
+      // The reviewer's probe: "start a private table" three times, then a Legends match. None of
+      // these is a practice table by shape, so nothing retires them, and the old sum read 4,000.
+      const friends = [];
+      for (let i = 0; i < 3; i += 1) friends.push(await createTable(test, FRIENDS_TABLE));
+      await startMatch(test, 'calling-station');
+      assert.equal(await units(tx, test.userId), 1_000, 'four rooms created, none sat at');
+      for (const table of friends)
+        assert.equal(await statusOf(tx, table.id), 'open', 'a friends table stays');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('a table with no bots is never retired and holds nothing until the reader sits', async () => {
+    await inRollback(async (tx) => {
+      const test = await harness(tx);
+      const bare = await createTable(test, { ...FRIENDS_TABLE, bots: undefined });
+      assert.equal(await units(tx, test.userId), 1_000, 'the old sum counted the empty table as 1,000 more');
+      await startMatch(test, 'calling-station');
+      await startMatch(test, 'calling-station');
+      assert.equal(await units(tx, test.userId), 1_000);
+      assert.equal(await statusOf(tx, bare.id), 'open', 'bots === 0 is never a practice table');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('a played table keeps its chips when the reader stands, and a busted one still asks for a reset', async () => {
+    await inRollback(async (tx) => {
+      const test = await harness(tx);
+      const table = await createTable(test, FRIENDS_TABLE);
+      const sit = (): Promise<{ status: number; body: unknown }> =>
+        test.send('POST', `/api/v1/rooms/${table.id}/sit`, { seat: 0 });
+      // There is no REST stand; the socket's `stand` frame calls exactly this.
+      const stand = (): Promise<void> => test.registry.standFromTable(table.id, test.userId);
+      const seatStack = (): number | undefined =>
+        test.registry
+          .get(table.id)
+          ?.table.snapshot()
+          .seats.find((seat) => seat.userId === test.userId)?.stack;
+
+      assert.equal((await sit()).status, 200);
+      const room = test.registry.get(table.id);
+      assert.ok(room !== null);
+      await room.table.startHand();
+      await stand();
+      await playOut(test, table.id);
+      const settled = (await roomsRepository.memberOf(tx, table.id, test.userId))?.stack;
+      assert.ok(settled !== undefined);
+      assert.equal(seatStack(), undefined, 'precondition: the reader has left the chair');
+      // Standing up is not leaving: a reader who was dealt in here still has these chips in front
+      // of them, and a filter on `seat is not null` alone would have dropped them to the allowance.
+      assert.equal(await units(tx, test.userId), settled, 'the chips of a table the reader played at');
+
+      // A winner who stood up sits back down with their winnings: `buyIn = member.stack`.
+      await roomsRepository.updateMemberStack(tx, table.id, test.userId, 1_500);
+      assert.equal(await units(tx, test.userId), 1_500);
+      assert.equal((await sit()).status, 200, 'the standing winner is not refused their own chips');
+      assert.equal(seatStack(), 1_500);
+      // Seated here, a new match the reader has not sat at adds nothing.
+      await startMatch(test, 'calling-station');
+      assert.equal(await units(tx, test.userId), 1_500, 'the old sum read 2,500');
+
+      // Busted and standing: still 0, and still refused until they reset. A seat-only filter would
+      // have quietly handed them the allowance for standing up.
+      await stand();
+      await roomsRepository.updateMemberStack(tx, table.id, test.userId, 0);
+      assert.equal(await units(tx, test.userId), 0);
+      const refused = await sit();
+      assert.equal(refused.status, 409, JSON.stringify(refused.body));
+      const code = Reflect.get(Reflect.get(refused.body as object, 'error') as object, 'code');
+      assert.equal(code, 'insufficient_units');
+      assert.equal((await test.send('POST', '/api/v1/me/units/reset')).status, 200);
+      assert.equal(await units(tx, test.userId), 1_000);
+      assert.equal((await sit()).status, 200);
+      assert.equal(seatStack(), 1_000);
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it("a first sit is drawn from the room, whatever the size of the room's stack", async () => {
+    await inRollback(async (tx) => {
+      const test = await harness(tx);
+      // `prl:createRoomBody` allows a starting stack up to 1,000,000. The old `units < buyIn` held
+      // only because `readUnits` counted this membership; with it no longer counted before the
+      // first sit, the same comparison refuses this seat, and no reset could ever make it pass.
+      const deep = await createTable(test, { ...FRIENDS_TABLE, startingStack: 5_000, bots: undefined });
+      const sat = await test.send('POST', `/api/v1/rooms/${deep.id}/sit`, { seat: 0 });
+      assert.equal(sat.status, 200, JSON.stringify(sat.body));
+      assert.equal(await units(tx, test.userId), 5_000, 'seated: the chips in front of them');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('a learner who left and rejoined a table starts uncounted there again', async () => {
+    await inRollback(async (tx) => {
+      const test = await harness(tx);
+      // 2,000, so an uncounted membership (the allowance) and a counted one differ in the figure.
+      const table = await createTable(test, { ...FRIENDS_TABLE, startingStack: 2_000 });
+      const friend = await usersRepository.createGuest(tx, { displayName: 'Friend' });
+      const principal = { userId: friend.id, displayName: 'Friend' };
+      await test.registry.joinByInviteCode(principal, table.inviteCode);
+      await test.registry.sitAtTable(table.id, principal, 3);
+      const room = test.registry.get(table.id);
+      assert.ok(room !== null);
+      await room.table.startHand();
+      await test.registry.standFromTable(table.id, friend.id);
+      await playOut(test, table.id);
+      const played = (await roomsRepository.memberOf(tx, table.id, friend.id))?.stack;
+      assert.equal(await units(tx, friend.id), played, 'dealt in here: counted');
+
+      await test.registry.leaveRoom(table.id, friend.id);
+      await test.registry.joinByInviteCode(principal, table.inviteCode);
+      // Inside one transaction `now()` is the transaction's start, so the rejoin's `joined_at` equals
+      // the old hand's `started_at` here; on a real server it is later. Moved to say so.
+      await tx`
+        update prl.room_members set joined_at = joined_at + interval '1 minute'
+         where room_id = ${table.id} and user_id = ${friend.id} and left_at is null
+      `;
+      // The hands they played belong to the membership they left; this one has not been sat at.
+      assert.equal(await units(tx, friend.id), 1_000, 'the new membership was counted by the old hands');
 
       await test.registry.shutdown();
       await test.app.close();

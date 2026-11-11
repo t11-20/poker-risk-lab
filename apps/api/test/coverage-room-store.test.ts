@@ -471,6 +471,8 @@ describe('postgresRoomStore — units', dbOptions, () => {
 
       const { room } = await store.create({ ...ROOM_SPEC, ownerUserId: owner });
       await store.addMember({ roomId: room.id, userId: owner, stack: 175 });
+      // Seated: a membership counts only once the learner has sat at it (`users.readUnits`).
+      await store.seatMember(room.id, owner, 0);
       assert.equal(await store.readUnits(owner), 175, 'units are the chips in front of them');
 
       // There is no `units` column — the figure is derived from live seats — so a member who

@@ -24,7 +24,8 @@
  * So units are **derived**, from the two chip quantities the schema really does hold:
  *
  *   units       = SUM(prl.room_members.stack) over the learner's live memberships of rooms
- *                 that are not closed, or DEFAULT_UNIT_ALLOWANCE when they are at no table.
+ *                 that are not closed AND that they have sat at — seated now, or dealt into a
+ *                 hand there since they joined — or DEFAULT_UNIT_ALLOWANCE when there are none.
  *   netLifetime = SUM(prl.hand_seats.net_result) over their seats in completed hands.
  *
  * That is not a workaround, it is the model the schema describes. A learner's units are the
@@ -860,6 +861,29 @@ interface UnitsRow {
  * counting the chips of every table that had stopped existing. The chips at a closed table cannot
  * be played, reset or sat back down with; they are not in front of anybody.
  *
+ * ## Only a membership the learner has sat at counts
+ *
+ * A membership is created holding the room's `starting_stack` (`rooms.addMember` defaults it) the
+ * moment a learner creates or joins a room, before they have taken a seat. Summing those minted a
+ * stack per room for clicking: measured through the routes against the real store, three "Start a
+ * private table" and one Legends match read 4,000; an empty room with no bots read 1,000 more for
+ * ever. Closing practice tables (`RoomRegistry.retirePracticeTables`) cannot fix that, because a
+ * friends table must not be closed and a table nobody has sat at is not a practice table yet.
+ *
+ * So a membership counts when the learner is seated at it, or has been dealt into a hand at that
+ * room since the membership began (`joined_at`, so a rejoin starts uncounted). Both halves are
+ * needed, and each was measured against the cases that separate them:
+ *
+ *   - seated alone would drop a winner who stood up to the allowance, and `RoomRegistry.sitAtTable`
+ *     would then refuse them their own 1,500 — and it would hand a busted learner a fresh 1,000 for
+ *     standing up, where they are owed 0 until they reset;
+ *   - dealt alone would leave a learner who has just sat down, before the first deal, reading the
+ *     allowance and not the chips in front of them.
+ *
+ * A membership that counts for neither reason still holds exactly `starting_stack` — nothing but a
+ * deal or a reset changes it — so leaving it out loses nothing and the room grants that stack when
+ * the learner first sits. A `sittingOut` hand seat was never dealt cards and is not a hand played.
+ *
  * `net_lifetime` counts only completed hands. A hand in progress has `net_result` NULL by
  * design — the migration is explicit that writing a placeholder 0 would make an unfinished
  * hand indistinguishable from a break-even one — so there is nothing to add for it anyway,
@@ -875,7 +899,21 @@ export async function readUnits(sql: Db, userId: string): Promise<UnitsSnapshot>
       (select sum(m.stack)::int
          from prl.room_members m
          join prl.rooms r on r.id = m.room_id
-        where m.user_id = ${userId} and m.left_at is null and r.status <> 'closed') as live_stack,
+        where m.user_id = ${userId}
+          and m.left_at is null
+          and r.status <> 'closed'
+          and (
+                m.seat is not null
+                or exists (
+                     select 1
+                       from prl.hand_seats s
+                       join prl.hands h on h.id = s.hand_id
+                      where s.user_id = m.user_id
+                        and h.room_id = m.room_id
+                        and h.started_at >= m.joined_at
+                        and s.status <> 'sittingOut'
+                   )
+              )) as live_stack,
       coalesce(
         (select sum(s.net_result)::int
            from prl.hand_seats s

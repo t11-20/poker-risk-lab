@@ -1290,11 +1290,16 @@ export class RoomRegistry {
     if (member === null) {
       throw new AppError('not_room_member', { logDetail: `not a live member of ${roomId}` });
     }
-    const units = await this.store.readUnits(principal.userId);
     // A returning occupant keeps the stack the last settled hand left them. Inventing
     // `startingStack` here is how a winning session vanished on stand/sit.
     const buyIn = member.stack > 0 ? member.stack : room.record.startingStack;
-    if (units < buyIn) {
+    // Only a rebuy is drawn against units: a membership holding chips is sat down with its own.
+    // That is what `units < buyIn` always meant, because `readUnits` used to include this very
+    // membership's stack — and since it counts only tables the learner has sat at, a room's first
+    // sit is no longer included, so the old comparison would refuse a fresh learner a room whose
+    // starting stack exceeds the allowance. A stack of 0 is only reached by playing here, so the
+    // membership is counted, and the refusal is exactly the one the header shows: 0 means reset.
+    if (member.stack === 0 && (await this.store.readUnits(principal.userId)) < buyIn) {
       throw new AppError('insufficient_units', {
         logDetail: `buy-in ${buyIn} exceeds available units`,
       });

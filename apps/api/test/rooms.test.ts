@@ -118,6 +118,8 @@ interface FakeRoomStore extends RoomStore {
   readonly codes: Map<string, string>;
   readonly units: Map<string, number>;
   readonly rows: Map<string, RoomRow>;
+  /** Memberships by `roomId:userId`, so a test can put one in the state a hand would leave it. */
+  readonly members: Map<string, RoomMemberRow>;
 }
 
 /**
@@ -138,6 +140,7 @@ function fakeRoomStore(): FakeRoomStore {
     codes,
     units,
     rows,
+    members,
     create: (spec) => {
       counter += 1;
       const id = `room_test${counter}`;
@@ -797,7 +800,13 @@ describe('joining and sitting', () => {
     assert.equal(clash.statusCode, 409);
     assert.equal((clash.json() as { error: { code: string } }).error.code, 'seat_taken');
 
-    // The same learner, now short of units for the buy-in.
+    // The same learner, busted here and short of units for a rebuy. Their membership has to hold 0
+    // for this to be reachable: a membership with chips in it is sat down with its own, which is
+    // what the real `readUnits` always implied (it used to include this membership's stack, so the
+    // comparison could not refuse it) and what `sitAtTable` now says outright.
+    const membership = test.store.members.get(`${roomId}:usr_guest`);
+    assert.ok(membership !== undefined);
+    test.store.members.set(`${roomId}:usr_guest`, { ...membership, stack: 0 });
     test.store.units.set('usr_guest', 10);
     const broke = await test.app.inject({
       method: 'POST',
