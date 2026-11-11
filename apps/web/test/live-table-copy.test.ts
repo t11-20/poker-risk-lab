@@ -52,6 +52,46 @@ describe('a seated reader with nothing left is out of units', () => {
     assert.equal(outOfUnits(at(0, null)), false, 'a reader who is not seated is not dealt out of anything');
     assert.equal(outOfUnits({ room: null, userId: ME, seat: 0 }), false);
   });
+
+  // Review on PR #27: after a units reset the notice stayed and Deal stayed disabled. The client half
+  // of the answer is that nothing here remembers the bust — it is re-read from every frame — so the
+  // `seating` frame PR #25's `LiveTable.restack` publishes clears it. That frame still carries the
+  // finished hand, whose view says 0 at the reader's seat; only the roster has the reset figure. This
+  // held before the review too: it guards the property the fix relies on, and is not a regression
+  // demonstration.
+  it('clears on the frame that shows the reset stack at the seat, though the last hand said 0', () => {
+    const finished = { handId: 'hand-9', street: 'complete', seats: [{ seat: 0, isSelf: true, stack: 0 }] };
+    const frame = (revision: number, stack: number): WsServerMessage =>
+      ({
+        type: 'state',
+        view: finished,
+        room: room(stack, 0),
+        deadlineMs: null,
+        serverTimeMs: 0,
+        revision,
+      }) as unknown as WsServerMessage;
+    const welcomed = tableReducer(EMPTY_TABLE_STATE, {
+      kind: 'frame',
+      frame: { type: 'welcome', userId: ME, room: room(0, 0), seat: 0, serverTimeMs: 0 } as WsServerMessage,
+    });
+    const busted = tableReducer(welcomed, { kind: 'frame', frame: frame(1, 0) });
+    assert.equal(outOfUnits(busted), true);
+    const restacked = tableReducer(busted, { kind: 'frame', frame: frame(2, 1000) });
+    assert.equal(outOfUnits(restacked), false);
+  });
+
+  it('offers a way on that works when a reset does not reach the seat', () => {
+    // Before PR #25 a reset left the live seat at 0, and a reset made while standing, then a seat,
+    // was the way to the reset units. The notice used to end at "reset them … to play on".
+    const source = readFileSync(
+      join(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src'), 'app', 'play', 'LiveTable.tsx'),
+      'utf8',
+    );
+    const notice = /title="You are out of units">([\s\S]*?)<\/Callout>/u.exec(source)?.[1];
+    assert.ok(notice !== undefined, 'the out-of-units notice was not found in LiveTable.tsx');
+    const words = notice.replace(/\s+/gu, ' ');
+    assert.match(words, /stand up, reset once more, then take your seat again/u);
+  });
 });
 
 describe('the sentences say true things in the reader’s words', () => {

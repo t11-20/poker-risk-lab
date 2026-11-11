@@ -34,18 +34,18 @@ import {
 
 const ME = 'user-reader';
 
-function member(userId: string, seat: number | null): Record<string, unknown> {
-  return { userId, displayName: userId, seat, isBot: userId !== ME };
+function member(userId: string, seat: number | null, stack = 1000): Record<string, unknown> {
+  return { userId, displayName: userId, seat, stack, isBot: userId !== ME };
 }
 
 /** The bot table `BOT_TABLE_REQUEST` builds: five bots from seat 2 up, seat 1 left for the reader. */
-function room(readerSeat: number | null): unknown {
+function room(readerSeat: number | null, readerStack = 1000): unknown {
   return {
     id: 'room-1',
     name: 'Bot table',
     maxSeats: 6,
     members: [
-      member(ME, readerSeat),
+      member(ME, readerSeat, readerStack),
       member('bot-1', 1),
       member('bot-2', 2),
       member('bot-3', 3),
@@ -78,11 +78,16 @@ const DEALT = {
   seats: [],
 } as unknown as PlayerView;
 
-function state(revision: number, seat: number | null, view: PlayerView | null): WsServerMessage {
+function state(
+  revision: number,
+  seat: number | null,
+  view: PlayerView | null,
+  stack = 1000,
+): WsServerMessage {
   return {
     type: 'state',
     view,
-    room: room(seat),
+    room: room(seat, stack),
     deadlineMs: null,
     serverTimeMs: 0,
     revision,
@@ -212,6 +217,19 @@ describe('Deal me in, at the bot table `start` builds', () => {
     const table = new Table('wantSeat');
     table.frame(welcome(0)).frame(state(1, 0, null));
     assert.deepEqual(table.sent, [{ kind: 'deal' }]);
+  });
+
+  // Review on PR #27. A reader busted at this room, reset their units on /record and came back to
+  // "Deal me in", which reuses the room they are seated at. Until the server restacked a live seat
+  // on reset (PR #25) the roster still said 0 there, and this chain dealt a hand between the bots,
+  // whose settlement wrote the 0 back over the reset.
+  it('does not deal for a reader the roster shows seated with nothing in front of them', () => {
+    const table = new Table('wantSeat');
+    table.frame(welcome(0)).frame(state(1, 0, null, 0));
+    assert.deepEqual(table.sent, [], 'a deal here deals only the bots');
+    assert.equal(table.step, 'off', 'the chain ends, so the manual buttons and the notice come back');
+    // The test above is the same room with 1,000 at the seat — what the frame says once a reset
+    // has reached it — and there the chain deals.
   });
 
   it('waits for the socket instead of sending into a connection that is not live', () => {

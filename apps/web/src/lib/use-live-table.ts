@@ -1054,7 +1054,7 @@ export interface DealInSnapshot {
   /** Setup is `ready` and the socket is `live`. */
   readonly live: boolean;
   /** The reducer's state. `notice` set means the server refused something that was not a decision. */
-  readonly table: Pick<TableState, 'seat' | 'betweenHands' | 'notice' | 'revision'>;
+  readonly table: Pick<TableState, 'seat' | 'betweenHands' | 'notice' | 'revision' | 'room' | 'userId'>;
   readonly readerSeat: number | null;
 }
 
@@ -1077,6 +1077,18 @@ export function dealInStep(
   const { table } = seen;
   if (step === 'off') return STAY('off');
   if (table.notice !== null) return STAY('off');
+  // Never a deal for a reader the latest roster shows with nothing in front of them: the server
+  // deals them out, so all it would deal is a hand between the bots. Worse than useless on a server
+  // without PR #25, which leaves a live seat at 0 after a units reset: a reader who reset on /record
+  // and came back to "Deal me in" (which reuses the room they sit at) would have this deal into it,
+  // and that bots-only hand settling the 0 back over the reset is the clobber PR #25's
+  // `restackForUnitsReset` header measured — after it, the stand-and-sit that would have bought them
+  // in at the reset figure is refused with `insufficient_units`. Read off the same frame as the seat,
+  // so a restack the server has published lets the chain deal as usual. Ends at `off`, which brings
+  // back the manual buttons and the out-of-units notice beside them.
+  const deal: ReturnType<typeof STAY> = outOfUnits(table)
+    ? STAY('off')
+    : { next: 'dealSent', send: { kind: 'deal' } };
   if (step === 'wantSeat') {
     if (!seen.live) return STAY('wantSeat');
     // `welcome` carries the seat and no view, so until a `state` frame lands on this socket
@@ -1089,12 +1101,12 @@ export function dealInStep(
         ? STAY('off')
         : { next: 'sitSent', send: { kind: 'sit', seat: seen.readerSeat } };
     }
-    return table.betweenHands ? { next: 'dealSent', send: { kind: 'deal' } } : STAY('off');
+    return table.betweenHands ? deal : STAY('off');
   }
   if (!seen.live) return STAY('off');
   if (step === 'sitSent') {
     if (table.seat === null) return STAY('sitSent');
-    return table.betweenHands ? { next: 'dealSent', send: { kind: 'deal' } } : STAY('off');
+    return table.betweenHands ? deal : STAY('off');
   }
   return table.betweenHands ? STAY('dealSent') : STAY('off');
 }
@@ -1587,7 +1599,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   }, []);
 
   const dealInLive = phase === 'ready' && status === 'live';
-  const { seat: dealInSeat, betweenHands, notice, revision } = table;
+  const { seat: dealInSeat, betweenHands, notice, revision, room: dealInRoom, userId: dealInUser } = table;
   /**
    * Advances "Deal me in" one step per commit. See `DealIn` for why each step is sent at most once
    * and why every way out lands on the manual buttons.
@@ -1599,7 +1611,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   useEffect(() => {
     const { next, send } = dealInStep(dealIn, {
       live: dealInLive,
-      table: { seat: dealInSeat, betweenHands, notice, revision },
+      table: { seat: dealInSeat, betweenHands, notice, revision, room: dealInRoom, userId: dealInUser },
       readerSeat,
     });
     let after = next;
@@ -1614,7 +1626,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
       if (outcome !== 'sent') after = 'off';
     }
     if (after !== dealIn) setDealIn(after);
-  }, [dealIn, dealInLive, dealInSeat, betweenHands, notice, revision, readerSeat]);
+  }, [dealIn, dealInLive, dealInSeat, betweenHands, notice, revision, dealInRoom, dealInUser, readerSeat]);
 
   const act = useCallback((action: TableAction): void => {
     const view = viewRef.current;

@@ -345,6 +345,13 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
         Not an alert. Nothing was refused and nothing interrupted the reader: the hand that took the
         last unit was narrated as it happened, and this is the standing state that follows it. It
         sits beside the control it disables, so the reason is where the reader goes to press it.
+
+        It goes when the server's next frame shows chips at the reader's seat — `outOfUnits` is read
+        off every frame's roster, nothing remembers it. Whether a reset reaches a seat already taken is
+        the server's to decide, and without PR #25 it does not: a reset writes the durable stack and
+        leaves the live seat at 0, so the reader comes back to this notice and a disabled Deal (review
+        on PR #27). The last paragraph is the way on that works against either server — a seat taken after
+        a reset made while standing is bought in at the reset figure — so it is never a dead end.
       */}
       {live.outOfUnits ? (
         <Callout tone="warning" title="You are out of units">
@@ -355,6 +362,10 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
           </p>
           <p>
             <Link href="/record">Reset your units on your record page</Link>
+          </p>
+          <p>
+            This notice goes once the table shows units at your seat. If it is still here after a reset, stand
+            up, reset once more, then take your seat again: you sit down with the reset units.
           </p>
         </Callout>
       ) : null}
