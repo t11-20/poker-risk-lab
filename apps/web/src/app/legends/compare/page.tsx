@@ -122,8 +122,8 @@ function selectionNotices(selection: CompareSelection, shown: readonly string[])
   }
   if (selection.unknown.length > 0) {
     notices.push(
-      `${selection.unknown.map((id) => `"${id}"`).join(', ')} ${selection.unknown.length === 1 ? 'is' : 'are'} not ` +
-        `one of the profiles, so ${selection.unknown.length === 1 ? 'it was' : 'they were'} left out` +
+      `${selection.unknown.map((id) => `"${id}"`).join(', ')} ${selection.unknown.length === 1 ? 'is not one of' : 'are not among'} ` +
+        `the profiles, so ${selection.unknown.length === 1 ? 'it was' : 'they were'} left out` +
         (selection.ids.length === 0 ? ' and the page is showing its default three styles instead.' : '.'),
     );
   }

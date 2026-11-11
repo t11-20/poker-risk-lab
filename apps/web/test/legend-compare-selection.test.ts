@@ -44,10 +44,10 @@ const KNOWN = [
   'fundamentals-coach',
   'adaptive-exploiter',
   'old-school-pressure',
-  'nit',
-  'maniac',
-  'tight-aggressive',
-  'loose-aggressive',
+  'mixed-game-generalist',
+  'volume-grinder',
+  'foundational-reader',
+  'range-narrator',
 ] as const;
 
 describe('parseCompareSelection', () => {
