@@ -21,6 +21,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import type { LegalAction, TableAction } from '../src/view-types.ts';
+import { loadComponent } from './support/render-component.ts';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const WEB_SRC = resolve(SRC, '..', '..', '..', 'apps', 'web', 'src');
@@ -59,5 +63,79 @@ describe('the live table’s focus rescues pass preventScroll', () => {
     const bare = [...'idleRef.current?.focus();'.matchAll(/\.focus\(([^)]*)\)/gu)].map((m) => m[1] ?? '');
     assert.equal(bare.length, 1);
     assert.doesNotMatch(bare[0] ?? '', /preventScroll:\s*true/u);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A move that does not scroll has to land somewhere already on screen
+// ---------------------------------------------------------------------------
+
+interface ActionBarProps {
+  readonly legalActions: readonly LegalAction[];
+  readonly onAct: (action: TableAction) => void;
+  readonly pot: number;
+  readonly toCall: number;
+  readonly committedThisStreet: number;
+  readonly disabled?: boolean;
+}
+
+/** The markup of the action row: from its opening tag to the `</div>` that closes it. */
+function actionRow(markup: string): string {
+  const start = markup.indexOf('<div class="prl-action-bar__actions">');
+  assert.ok(start >= 0, `no action row rendered:\n${markup}`);
+  let depth = 0;
+  const tags = /<\/?div\b[^>]*>/gu;
+  tags.lastIndex = start;
+  for (let match = tags.exec(markup); match !== null; match = tags.exec(markup)) {
+    depth += match[0].startsWith('</') ? -1 : 1;
+    if (depth === 0) return markup.slice(start, match.index + match[0].length);
+  }
+  return assert.fail('the action row never closed');
+}
+
+const IN_FLIGHT = /<p[^>]*aria-label="Your decision is with the server"/u;
+
+describe('the caret lands where it can be seen', () => {
+  it('puts the in-flight line inside the action row, which is what sticks on a narrow column', async () => {
+    // Measured at 390x844 on `/play?state=decision`, pressing Fold: as the bar's next block the line
+    // sat at viewport y 1,099 under a sticky row painted at 620, so a non-scrolling focus move left
+    // the caret off the screen. Inside the row it measured 751, with the buttons it replaced.
+    const ActionBar = await loadComponent<ActionBarProps>('components/ActionBar', 'ActionBar');
+    const markup = renderToStaticMarkup(
+      createElement(ActionBar, {
+        legalActions: [
+          { type: 'fold' },
+          { type: 'call', minTo: 100, costAtMin: 100 },
+        ] as unknown as readonly LegalAction[],
+        onAct: () => undefined,
+        pot: 300,
+        toCall: 100,
+        committedThisStreet: 0,
+        disabled: true,
+      }),
+    );
+    assert.match(markup, IN_FLIGHT, 'no in-flight line rendered while disabled; the sweep is over nothing');
+    assert.match(actionRow(markup), IN_FLIGHT, 'the in-flight line is outside the row that sticks');
+  });
+
+  it('NEGATIVE CONTROL: the detector fails the old placement, after the row', () => {
+    const old =
+      '<div class="prl-action-bar__actions"><button>Fold</button></div>' +
+      '<p aria-label="Your decision is with the server" class="prl-action-bar__idle">Waiting</p>';
+    assert.match(old, IN_FLIGHT);
+    assert.doesNotMatch(actionRow(old), IN_FLIGHT);
+  });
+
+  it('spans the acknowledgement across the band, so it cannot squeeze the controls', () => {
+    // The wrapper was auto-placed in the plate's `auto` column from 46rem of column up, widened it to
+    // the callout's width and wrapped the buttons: at 1440x900 the row went from 72px to 232px tall
+    // and Fold moved 347px down the page the moment it was pressed.
+    const stage = readFileSync(join(WEB_SRC, 'components', 'TableStage.tsx'), 'utf8');
+    const css = readFileSync(join(WEB_SRC, 'styles', 'play.css'), 'utf8');
+    assert.match(stage, /aria-label="What happened to your decision"\s+className="prl-play__ack"/u);
+    assert.match(
+      css,
+      /\.prl-play__decision > \.prl-callout,\s*\.prl-play__decision > \.prl-play__ack \{\s*grid-column: 1 \/ -1;/u,
+    );
   });
 });

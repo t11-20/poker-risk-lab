@@ -857,8 +857,17 @@
     grid-column: 2;
   }
 
-  /* The confirmation callout is prose about the whole decision, so it spans the band. */
-  .prl-play__decision > .prl-callout {
+  /* The confirmation callout is prose about the whole decision, so it spans the band.
+
+     So does the acknowledgement's wrapper, and it was the one that did not. The `Callout` inside it
+     is not a child of the band, so the rule above never reached it: the wrapper was auto-placed in
+     the plate's `auto` column, widened that column to the callout's own width, and squeezed the
+     controls beside it until the buttons wrapped. Measured at 1440x900 on `/play?state=decision`,
+     pressing Fold: the action row went from 72px to 232px tall and the bar from 441px to 1,107px,
+     pushing Fold 347px down the page under the reader's pointer — which is most of what "every
+     action scrolls the page away" looked like once the focus moves stopped scrolling. */
+  .prl-play__decision > .prl-callout,
+  .prl-play__decision > .prl-play__ack {
     grid-column: 1 / -1;
   }
 }

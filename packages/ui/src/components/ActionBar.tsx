@@ -661,36 +661,43 @@ export function ActionBar(props: ActionBarProps): ReactElement {
             onClick={commitSized}
           />
         )}
+        {/*
+          The caret's home for the length of the round trip, mounted only while there is one.
+
+          Not always present: a labelled status that is always there sits in every reader's rotor
+          announcing an empty container on a table where nothing has been sent. `TableStage` reached
+          the same conclusion about its acknowledgement for the same reason.
+
+          It borrows `prl-action-bar__idle`, which is the other line in this bar that exists to be
+          landed on and is the one place in `components.css` with a `:focus-visible` ring drawn for
+          exactly that — "unlike <main>, this is a place focus arrives at unexpectedly, and a reader
+          who has just folded needs to see where they now are". Sharing it means the two lines cannot
+          drift apart visually; it costs a class name that says `idle` on a line that is not idle at
+          all, and this comment is the whole of the mitigation for that.
+
+          The label and the sentence deliberately do not say the same thing: the label is announced as
+          the name of the place the caret arrived at, and the sentence is what is on the screen.
+
+          INSIDE the action row, as its last line, and that placement is what lets the caret move
+          here with `preventScroll` and still be seen. Below 46rem of column the row is sticky
+          (`styles/play.css` section 3.1) and paints at the bottom of the viewport while its place in
+          flow is further down, past the sizer. As the bar's next block the line sat at its flow
+          position: measured at 390x844 on `/play?state=decision`, Fold at viewport y 620 and this
+          line at 1,099, off the screen, so a focus move that no longer scrolls left the caret where
+          nobody could see it. In the row it rides with the buttons it replaced.
+        */}
+        {disabled ? (
+          <p
+            aria-label="Your decision is with the server"
+            className="prl-action-bar__idle"
+            ref={inFlightRef}
+            role="status"
+            tabIndex={-1}
+          >
+            {'Waiting for the server.'}
+          </p>
+        ) : null}
       </div>
-
-      {/*
-        The caret's home for the length of the round trip, mounted only while there is one.
-
-        Not always present: a labelled status that is always there sits in every reader's rotor
-        announcing an empty container on a table where nothing has been sent. `TableStage` reached
-        the same conclusion about its acknowledgement for the same reason.
-
-        It borrows `prl-action-bar__idle`, which is the other line in this bar that exists to be
-        landed on and is the one place in `components.css` with a `:focus-visible` ring drawn for
-        exactly that — "unlike <main>, this is a place focus arrives at unexpectedly, and a reader
-        who has just folded needs to see where they now are". Sharing it means the two lines cannot
-        drift apart visually; it costs a class name that says `idle` on a line that is not idle at
-        all, and this comment is the whole of the mitigation for that.
-
-        The label and the sentence deliberately do not say the same thing: the label is announced as
-        the name of the place the caret arrived at, and the sentence is what is on the screen.
-      */}
-      {disabled ? (
-        <p
-          aria-label="Your decision is with the server"
-          className="prl-action-bar__idle"
-          ref={inFlightRef}
-          role="status"
-          tabIndex={-1}
-        >
-          {'Waiting for the server.'}
-        </p>
-      ) : null}
 
       <p className="prl-action-bar__note">
         {/* The engine offers Fold where Check is free, with the note "Legal, but checking costs

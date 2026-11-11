@@ -691,7 +691,13 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
         every reader's rotor announcing an empty container on a table where nothing has been decided.
       */}
       {submission === null ? null : (
-        <div aria-label="What happened to your decision" ref={acknowledgementRef} role="status" tabIndex={-1}>
+        <div
+          aria-label="What happened to your decision"
+          className="prl-play__ack"
+          ref={acknowledgementRef}
+          role="status"
+          tabIndex={-1}
+        >
           {rejected ? (
             <div role="alert">
               {/*

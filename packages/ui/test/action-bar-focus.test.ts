@@ -126,7 +126,7 @@ const SOURCE = readFileSync(SOURCE_PATH, 'utf8');
  * below has to come back false for this string, or it is not testing what it claims to test.
  */
 const WITHOUT_THE_FIX = SOURCE.replace(/useLayoutEffect\(\(\) => \{[\s\S]*?\}, \[disabled\]\);/u, '').replace(
-  /\{disabled \? \(\n {8}<p[\s\S]*?<\/p>\n {6}\) : null\}/u,
+  /\{disabled \? \(\n {10}<p[\s\S]*?<\/p>\n {8}\) : null\}/u,
   '',
 );
 const WITHOUT_ACTIVATION_MARK = SOURCE.replace(

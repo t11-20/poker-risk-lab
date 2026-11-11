@@ -609,7 +609,7 @@ describe('a refusal interrupts, and everything else is polite', () => {
     const stage = withoutComments(read('components', 'TableStage.tsx'));
     assert.match(
       stage,
-      /aria-label="What happened to your decision" ref=\{acknowledgementRef\} role="status" tabIndex=\{-1\}/u,
+      /aria-label="What happened to your decision"\s+className="prl-play__ack"\s+ref=\{acknowledgementRef\}\s+role="status"\s+tabIndex=\{-1\}/u,
     );
   });
 
