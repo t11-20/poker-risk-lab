@@ -180,7 +180,13 @@ function distanceText(behind: number): string {
 }
 
 /** The benchmark rows of the Verdict panel, or nothing for an unpriced action. See the comment at the call. */
-function BenchmarkRows({ judgement }: { readonly judgement: Consistency }): ReactElement | null {
+function BenchmarkRows({
+  judgement,
+  action,
+}: {
+  readonly judgement: Consistency;
+  readonly action: ScenarioAction;
+}): ReactElement | null {
   const { behindBenchmarkUnits: behind, withinAllowance: within } = judgement;
   if (behind === null || within === null) return null;
   return (
@@ -188,9 +194,13 @@ function BenchmarkRows({ judgement }: { readonly judgement: Consistency }): Reac
       <div className="prl-stage__ev-row">
         <dt className="prl-label">Judged against</dt>
         <dd className="prl-stage__ev-value">
-          {judgement.benchmarkEv === 0
-            ? 'folding, worth 0'
-            : `${formatSignedUnits(judgement.benchmarkEv, { decimals: 1 })}, the best row that assumes no folds`}
+          {/* Keyed on the ACTION, not on the benchmark's value. A fold is judged against the best
+              row that assumes no folds, which is floored at 0 — so keying on `benchmarkEv === 0`
+              printed "folding, worth 0" under a fold whose best no-fold row was negative, measured
+              on the fixture's river-bluff-catch-range: a fold judged against folding. */}
+          {action === 'fold'
+            ? `the best row that assumes no folds, worth ${formatSignedUnits(judgement.benchmarkEv, { decimals: 1 })}`
+            : 'folding, worth 0'}
         </dd>
       </div>
       <div className="prl-stage__ev-row">
@@ -217,9 +227,11 @@ function BenchmarkRows({ judgement }: { readonly judgement: Consistency }): Reac
  */
 function Verdict({
   judgement,
+  action,
   server,
 }: {
   readonly judgement: Consistency;
+  readonly action: ScenarioAction;
   readonly server: ServerVerdict;
 }): ReactElement {
   const best =
@@ -305,7 +317,7 @@ function Verdict({
           folding" is not true of a decision nothing judged, and a distance from a figure the action
           has none of is not a number.
         */}
-        <BenchmarkRows judgement={judgement} />
+        <BenchmarkRows judgement={judgement} action={action} />
       </dl>
     </>
   );
@@ -554,7 +566,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
             index={4}
             headingLevel={2}
           >
-            <Verdict judgement={judgement} server={server} />
+            <Verdict judgement={judgement} action={committed.action} server={server} />
 
             <Callout tone="insight" title="This is a comparison, not a mark">
               {foldAssumptionSentence(foldAssumingActions(analysis))}
