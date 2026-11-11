@@ -503,6 +503,61 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
     });
   });
 
+  it('standing up before the first deal keeps the chips the room gave the first sit', async () => {
+    await inRollback(async (tx) => {
+      // Devin Review on PR #25: sit at a 5,000-stack room, stand before a hand is dealt, and the
+      // header read the 1,000 allowance — while sitting again gave 5,000 back. Seated-now and
+      // dealt-in-since-joining are both false for that row, and it is otherwise a never-sat one.
+      const test = await harness(tx);
+      const deep = await createTable(test, { ...FRIENDS_TABLE, startingStack: 5_000, bots: undefined });
+      const sit = (): Promise<{ status: number; body: unknown }> =>
+        test.send('POST', `/api/v1/rooms/${deep.id}/sit`, { seat: 0 });
+      assert.equal(await units(tx, test.userId), 1_000, 'not sat at yet: the allowance');
+      assert.equal((await sit()).status, 200);
+      await test.registry.standFromTable(deep.id, test.userId);
+      assert.equal(await units(tx, test.userId), 5_000, 'stood before a deal: the room still holds 5,000');
+      assert.equal((await sit()).status, 200);
+      assert.equal(await units(tx, test.userId), 5_000, 'and sitting again gives exactly that');
+
+      // The mint stays shut: three private tables nobody sat at add nothing to it.
+      for (let i = 0; i < 3; i += 1) await createTable(test, FRIENDS_TABLE);
+      assert.equal(await units(tx, test.userId), 5_000, 'each unsat table used to add 1,000');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('a row with no first sit recorded still counts by the old evidence', async () => {
+    await inRollback(async (tx) => {
+      // Rows written before migration 0008, or seated by the previous build between the migration
+      // and the API roll, carry no `first_seated_at`. Cleared here to make one of each.
+      const test = await harness(tx);
+      const table = await createTable(test, { ...FRIENDS_TABLE, startingStack: 2_000 });
+      const forget = async (): Promise<void> => {
+        await tx`
+          update prl.room_members set first_seated_at = null
+           where room_id = ${table.id} and user_id = ${test.userId} and left_at is null
+        `;
+      };
+      assert.equal((await test.send('POST', `/api/v1/rooms/${table.id}/sit`, { seat: 0 })).status, 200);
+      await forget();
+      assert.equal(await units(tx, test.userId), 2_000, 'seated now, by a build that wrote no first sit');
+
+      const room = test.registry.get(table.id);
+      assert.ok(room !== null);
+      await room.table.startHand();
+      await test.registry.standFromTable(table.id, test.userId);
+      await playOut(test, table.id);
+      await forget();
+      const played = (await roomsRepository.memberOf(tx, table.id, test.userId))?.stack;
+      assert.equal(await units(tx, test.userId), played, 'dealt in here since joining');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
   it('a learner who left and rejoined a table starts uncounted there again', async () => {
     await inRollback(async (tx) => {
       const test = await harness(tx);

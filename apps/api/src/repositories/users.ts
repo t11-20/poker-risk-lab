@@ -24,8 +24,8 @@
  * So units are **derived**, from the two chip quantities the schema really does hold:
  *
  *   units       = SUM(prl.room_members.stack) over the learner's live memberships of rooms
- *                 that are not closed AND that they have sat at — seated now, or dealt into a
- *                 hand there since they joined — or DEFAULT_UNIT_ALLOWANCE when there are none.
+ *                 that are not closed AND that they have sat at (`first_seated_at`, see
+ *                 `readUnits`) — or DEFAULT_UNIT_ALLOWANCE when there are none.
  *   netLifetime = SUM(prl.hand_seats.net_result) over their seats in completed hands.
  *
  * That is not a workaround, it is the model the schema describes. A learner's units are the
@@ -870,24 +870,29 @@ interface UnitsRow {
  * ever. Closing practice tables (`RoomRegistry.retirePracticeTables`) cannot fix that, because a
  * friends table must not be closed and a table nobody has sat at is not a practice table yet.
  *
- * So a membership counts when the learner is seated at it, or has been dealt into a hand at that
- * room since the membership began (`joined_at`, so a rejoin starts uncounted). Both halves are
- * needed, and each was measured against the cases that separate them:
+ * So a membership counts once the learner has sat at it: `room_members.first_seated_at`, which
+ * `rooms.seatMember` writes on the first sit and nothing clears. Per row, so a learner who leaves and
+ * rejoins starts uncounted on the new membership. Measured against what it replaced:
  *
- *   - seated alone would drop a winner who stood up to the allowance, and `RoomRegistry.sitAtTable`
- *     would then refuse them their own 1,500 — and it would hand a busted learner a fresh 1,000 for
- *     standing up, where they are owed 0 until they reset;
- *   - dealt alone would leave a learner who has just sat down, before the first deal, reading the
- *     allowance and not the chips in front of them.
+ *   - seated NOW alone would drop a winner who stood up to the allowance, and
+ *     `RoomRegistry.sitAtTable` would then refuse them their own 1,500 — and it would hand a busted
+ *     learner a fresh 1,000 for standing up, where they are owed 0 until they reset;
+ *   - "seated now, or dealt in since joining" (the first version of this, PR #25) left a hole that
+ *     Devin Review found: sit at a 5,000-stack room, stand before the first deal, and the header read
+ *     the 1,000 allowance while sitting again gave 5,000. Standing before a deal leaves a row no
+ *     other column can tell from a never-sat one, which is why migration 0008 records the fact.
  *
- * `>=` and not `>`, on purpose. Both columns default to `now()`, which on a server is the start of
- * two different transactions, so a hand dealt after a join is later anyway; but inside one
- * transaction `now()` is a single instant, and every rollback-transaction test that sits, deals and
- * reads units in one transaction (`test/practice-table-units.test.ts`) sees the two as equal.
+ * A membership that has never been sat at still holds exactly `starting_stack` — only a deal moves a
+ * stack off it, and a deal needs a seat — so leaving it out loses nothing, and the room
+ * grants that stack at the first sit. Counting it is the mint: three "Start a private table" and a
+ * Legends match read 4,000.
  *
- * A membership that counts for neither reason still holds exactly `starting_stack` — nothing but a
- * deal or a reset changes it — so leaving it out loses nothing and the room grants that stack when
- * the learner first sits. A `sittingOut` hand seat was never dealt cards and is not a hand played.
+ * The old evidence — seated now, or dealt into a hand at that room since `joined_at` — still counts
+ * beside the column, for rows that do not carry it: every row from before migration 0008, and any
+ * row the previous build seats between the migration and the API roll (the RUNBOOK's order). For a
+ * row this build seats it adds nothing: both kinds of evidence imply the column is set. `>=` and not
+ * `>` because inside one transaction `now()` is one instant, so a rollback test that joins and deals
+ * in one transaction sees the two as equal; on a server the deal is later anyway.
  *
  * `net_lifetime` counts only completed hands. A hand in progress has `net_result` NULL by
  * design — the migration is explicit that writing a placeholder 0 would make an unfinished
@@ -908,7 +913,10 @@ export async function readUnits(sql: Db, userId: string): Promise<UnitsSnapshot>
           and m.left_at is null
           and r.status <> 'closed'
           and (
-                m.seat is not null
+                m.first_seated_at is not null
+                -- The evidence a row carries without that column: one written before migration
+                -- 0008, or seated by the previous build between the migration and the API roll.
+                or m.seat is not null
                 or exists (
                      select 1
                        from prl.hand_seats s

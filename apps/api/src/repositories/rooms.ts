@@ -627,7 +627,10 @@ export async function seatMember(
   try {
     const rows = await sql<{ id: string }[]>`
       update prl.room_members m
-         set seat = ${seat}
+         set seat = ${seat},
+             -- What users.readUnits counts a membership by. Kept once set: standing up leaves the
+             -- chips this membership holds in front of the learner. See migration 0008.
+             first_seated_at = coalesce(m.first_seated_at, now())
         from prl.rooms r
        where r.id = m.room_id
          and m.room_id = ${roomId}
