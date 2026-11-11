@@ -183,6 +183,19 @@
   min-width: 0;
 }
 
+/**
+ * The submit keeps its own width; the select is the one that gives.
+ *
+ * `.prl-btn` sets an explicit `min-width`, and an explicit `min-width` on a flex item replaces the
+ * automatic min-content floor, so with the default `flex-shrink: 1` the button shrank alongside the
+ * select's long option text. `test:layout` caught it in CI run 43044654587, at 360px in both themes:
+ * "the column is 16.02px and the word "Sort" needs 29.34px". The select already has `min-width: 0`
+ * and ellipsises an option; a button word cut in half is just wrong.
+ */
+.prl-review-sorts__form .prl-btn {
+  flex: none;
+}
+
 @media (width < 600px) {
   .prl-review-sorts {
     margin-block: var(--prl-space-8) var(--prl-space-6);

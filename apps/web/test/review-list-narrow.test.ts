@@ -99,4 +99,10 @@ describe('/review at every width', () => {
     assert.match(rule(phone, '.prl-review-sorts__heading,\n  .prl-review-sorts__list'), /display:\s*none/u);
     assert.match(rule(code, '.prl-review-sorts__form'), /display:\s*none/u);
   });
+
+  it('does not let the select squeeze the submit button below its word (REGRESSION)', () => {
+    // test:layout, CI run 43044654587, /review at 360px: "the column is 16.02px and the word
+    // "Sort" needs 29.34px". The glyph measurement is that gate's; this pins the rule behind it.
+    assert.match(rule(code, '.prl-review-sorts__form .prl-btn'), /flex:\s*none/u);
+  });
 });
