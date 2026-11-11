@@ -122,11 +122,13 @@ export function SiteFooter(): ReactElement {
               right on every page of the product and there was no control anywhere that exercised it.
               `POST /me/units/reset` had worked from the beginning. If this link is ever removed, the
               claim it points at has to go with it.
+
+              A plain link, not `prl-footer__link`: that class is the nav rows' 44px inline-flex
+              target, and inside a sentence it made the link one box, so on a phone the full stop
+              after it started a line of its own.
             */}
-            <Link className="prl-footer__link" href={RECORD_PATH}>
-              reset to the starting amount whenever you like
-            </Link>
-            . Nothing here is a recommendation, and no figure is presented as the one correct play.
+            <Link href={RECORD_PATH}>reset to the starting amount whenever you like</Link>. Nothing here is a
+            recommendation, and no figure is presented as the one correct play.
           </p>
         </div>
 

@@ -1724,6 +1724,20 @@
    nothing is hidden at any width.
    ========================================================================================== */
 
+/**
+ * A phone gets a 16px sheet, not a 32px one. At 360 the 32px padding sat inside the 16px page
+ * gutter and left the prose 262px wide and a worked example inside it 220px. Measured on
+ * /learn/pot-odds: 294px and 252px at 360, and the page 653px shorter (13,405 → 12,752).
+ * Taking the example panels' own 20px padding down too bought another 24px of height and nothing
+ * a reader would notice, so they keep it. The width arithmetic above 1280 and the gutter index at
+ * 900 never see this value.
+ */
+@media (width < 600px) {
+  .prl-learn-lesson {
+    --prl-learn-sheet-x: var(--prl-space-6);
+  }
+}
+
 @media (min-width: 600px) {
   .prl-learn-entry {
     padding: var(--prl-space-7);

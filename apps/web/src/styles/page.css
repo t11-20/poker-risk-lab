@@ -255,3 +255,22 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/**
+ * /record stacks its panels directly in the container, and nothing spaced them: covered, reset
+ * and delete met edge to edge at every width (0px measured at 360 and 1440). The page-head above
+ * is a hairline the first panel sits against, which is how every route opens, so only a panel
+ * that follows a panel gets the gap.
+ */
+.prl-record > .prl-panel + .prl-panel {
+  margin-block-start: var(--prl-space-8);
+}
+
+/**
+ * `.prl-stat__pair` is one label and one value, 4px apart. /record puts three pairs in it, so the
+ * 4px also fell between "…try a scenario in it." and the next label, and the three lists read as
+ * one block. Each label after the first opens a group.
+ */
+.prl-record__lists dd + dt {
+  margin-block-start: var(--prl-space-5);
+}
