@@ -134,9 +134,24 @@ function signJwt(parts: TokenParts, nonce: string, nowSeconds: number): string {
           dsaEncoding: 'ieee-p1363',
         });
   const encoded = parts.breakSignature
-    ? base64url(Buffer.concat([signature.subarray(0, signature.length - 1), Buffer.from([0x00])]))
+    ? base64url(corruptLastByte(signature))
     : signature.toString('base64url');
   return `${signingInput}.${encoded}`;
+}
+
+/**
+ * The signature with its last byte changed, always.
+ *
+ * It used to SET that byte to 0x00, and the keys above are generated on every run, so the last byte
+ * of a real signature is uniform: on one run in 256 it was already 0x00, the "broken" token was the
+ * valid one, and "a bad signature" failed with "nothing was thrown" (CI run 42929633672). Flipping
+ * every bit cannot leave a byte as it was.
+ */
+function corruptLastByte(signature: Buffer): Buffer {
+  const corrupted = Buffer.from(signature);
+  const last = corrupted.length - 1;
+  corrupted[last] = (corrupted[last] ?? 0) ^ 0xff;
+  return corrupted;
 }
 
 interface ProviderOptions {
@@ -630,6 +645,14 @@ describe('ID token verification rejects', () => {
   it('a bad signature', async () => {
     const detail = await rejectsWith('oidc_exchange_failed', () => verify({ breakSignature: true }));
     assert.match(detail, /signature did not verify/);
+  });
+
+  it('a bad signature is bad whatever its last byte was', () => {
+    // The one in 256 that the old corruption missed: a signature that already ends in 0x00.
+    for (const last of [0x00, 0x01, 0x7f, 0xff]) {
+      const signature = Buffer.from([0x12, 0x34, last]);
+      assert.notDeepEqual(corruptLastByte(signature), signature, `last byte 0x${last.toString(16)}`);
+    }
   });
 
   it('a token signed by a key the provider does not publish', async () => {
