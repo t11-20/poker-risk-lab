@@ -130,19 +130,22 @@
 }
 
 /**
- * From 360px up the bar is one row. At 860 and above it cannot wrap: the tools sit in their own
- * `auto` column beside a centred navigation pill. Between 360 and 860 it is one row because the
- * menu trigger is a 44px circle below 412px (section 8), which leaves 43px spare at 360 with
- * "1,000 units" showing: about four more digits, a balance in the tens of millions, before it
- * wraps again. Holding two rows of padding against that cost every anchor on a phone 67px of
- * empty air (scroll-padding 144px over a 77px bar, measured by `test:keyboard` at 360x640).
+ * One row, in two bands. At 860 and above the bar cannot wrap: the tools sit in their own `auto`
+ * column beside a centred navigation pill. From 360 to 411 the menu trigger is a 44px circle
+ * (section 8), and the bar measured one row with balances up to 10,000,000 units; it first wraps
+ * at 100,000,000. Holding two rows of padding there cost every anchor on a phone 67px of empty air
+ * (scroll-padding 144px over a 77px bar, measured by `test:keyboard` at 360x640).
  *
- * The DEFAULT, below 360, stays on the safe side: a bar that is shorter than the padding reserved
- * for it costs a reader some air above an anchor; a bar that is taller than it hides the thing they
- * were sent to. `test:keyboard` walks four routes backwards at 360x640 and fails if any control
- * lands under the bar, so a trigger that grows its word back fails there.
+ * Nothing caps a balance, so that band is a trade, not a proof: a wrap needs 100,000 times the
+ * 1,000-unit starting allowance, against 67px on every anchor on the most common phone width.
+ * From 412 to 859 the trigger shows its word and the bar wraps at 10,000,000 (measured at 412),
+ * a hundredth of that, on tablet widths where 67px buys much less; that band keeps the default,
+ * as does everything below 360. The default is the safe side: a bar that is shorter than the padding reserved for it costs a
+ * reader some air above an anchor; a bar that is taller than it hides the thing they were sent to.
+ * `test:keyboard` walks four routes backwards at 360x640 and fails if any control lands under the
+ * bar, so a trigger that grows its word back fails there.
  */
-@media (min-width: 360px) {
+@media (360px <= width < 412px), (min-width: 860px) {
   :root {
     --prl-pillbar-h: calc(var(--prl-pill-h) + 2 * var(--prl-pillbar-pad-block));
   }

@@ -1339,8 +1339,8 @@ async function auditNarrowViewport(page) {
  * sheet journey above keeps 390 so the two are not testing the same width.
  *
  * Since 2026-11-11 the bar is one row at 360 too (the menu trigger drops its word below 412px),
- * and `--prl-pillbar-h` reserves one row from 360px up. 360 is that rule's lowest width, so this
- * is the check that fails if the bar ever wraps back to two rows under a one-row padding.
+ * and `--prl-pillbar-h` reserves one row from 360 to 411px. 360 is that band's lowest width, so
+ * this is the check that fails if the bar ever wraps back to two rows under a one-row padding.
  *
  * ## Why backwards
  *
