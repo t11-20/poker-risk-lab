@@ -164,6 +164,45 @@ function toCommitted(action: TableAction): Committed {
 }
 
 /**
+ * How far behind the benchmark, in words that carry the direction: "2.9 units behind it", "4.1 units
+ * ahead of it", or "level with it" when the figure rounds to nothing at the precision shown — so the
+ * panel never prints "0.0 units behind" beside a nonzero EV.
+ */
+function distanceText(behind: number): string {
+  const shown = Number(Math.abs(behind).toFixed(1));
+  if (shown === 0) return 'level with it';
+  return `${formatUnits(shown, { decimals: 1 })} ${behind > 0 ? 'behind it' : 'ahead of it'}`;
+}
+
+/** The benchmark rows of the Verdict panel, or nothing for an unpriced action. See the comment at the call. */
+function BenchmarkRows({ judgement }: { readonly judgement: Consistency }): ReactElement | null {
+  const { behindBenchmarkUnits: behind, withinAllowance: within } = judgement;
+  if (behind === null || within === null) return null;
+  return (
+    <>
+      <div className="prl-stage__ev-row">
+        <dt className="prl-label">Judged against</dt>
+        <dd className="prl-stage__ev-value">
+          {judgement.benchmarkEv === 0
+            ? 'folding, worth 0'
+            : `${formatSignedUnits(judgement.benchmarkEv, { decimals: 1 })}, the best row that assumes no folds`}
+        </dd>
+      </div>
+      <div className="prl-stage__ev-row">
+        <dt className="prl-label">Distance from that</dt>
+        <dd className="prl-stage__ev-value">{distanceText(behind)}</dd>
+      </div>
+      <div className="prl-stage__ev-row">
+        <dt className="prl-label">Allowance</dt>
+        <dd className="prl-stage__ev-value">
+          {`${within ? 'within' : 'outside'} the allowance of ${formatUnits(judgement.toleranceUnits)}`}
+        </dd>
+      </div>
+    </>
+  );
+}
+
+/**
  * The comparison, and the three numbers behind it.
  *
  * All three are on screen together on purpose. A chip on its own would be a verdict; a chip beside
@@ -242,31 +281,26 @@ function Verdict({
           </dd>
         </div>
         {/*
-          The benchmark, and the distance from it.
+          The benchmark, the distance from it, and whether that distance fits the allowance.
 
-          Without these two rows the panel showed the chosen EV, the best row and the tolerance —
+          Without the benchmark rows the panel showed the chosen EV, the best row and the tolerance —
           three numbers whose only natural reading is "consistent when the best row minus mine fits
           inside the tolerance". That is not the rule. The rule asks whether the action beats
           FOLDING, so a learner could see +20.6 against a best row of +51.4, a tolerance of 10, and
           the words "consistent with the analysis", with no way to tell that the panel was right.
-          `@prl/poker-math` publishes `measuredBestEv` and `shortfallUnits` precisely so a caller
-          can show the reader the number the verdict used rather than a different one; this one
-          dropped both.
+
+          The distance and the allowance are two rows because they are two facts. They used to be one
+          — "Shortfall against that: 0.0 units, against an allowance of 10 units" — printing
+          `shortfallUnits`, which the shared rule zeroes for a consistent action on purpose. Measured
+          at commit 308fadf, a call worth −2.9 against folding worth 0 read "0.0" there: a figure
+          that is right for "how far outside the allowance" printed under a label that says "how far
+          behind". `behindBenchmarkUnits` is the distance; `withinAllowance` is the verdict restated.
+
+          None of the three render for an action the analysis did not price: "judged against
+          folding" is not true of a decision nothing judged, and a distance from a figure the action
+          has none of is not a number.
         */}
-        <div className="prl-stage__ev-row">
-          <dt className="prl-label">Judged against</dt>
-          <dd className="prl-stage__ev-value">
-            {judgement.benchmarkEv === 0
-              ? 'folding, worth 0'
-              : `${formatSignedUnits(judgement.benchmarkEv, { decimals: 1 })}, the best row that assumes no folds`}
-          </dd>
-        </div>
-        <div className="prl-stage__ev-row">
-          <dt className="prl-label">Shortfall against that</dt>
-          <dd className="prl-stage__ev-value">
-            {`${formatSignedUnits(-judgement.shortfallUnits, { decimals: 1 })}, against an allowance of ${formatUnits(judgement.toleranceUnits)}`}
-          </dd>
-        </div>
+        <BenchmarkRows judgement={judgement} />
       </dl>
     </>
   );
