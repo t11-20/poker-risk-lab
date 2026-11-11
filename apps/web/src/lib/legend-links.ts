@@ -112,6 +112,60 @@ export function parseCompareSelection(
   };
 }
 
+/**
+ * One sentence per id the page did not compare, and one if it compared too few.
+ *
+ * Said above the comparison rather than below it, because each one changes how the columns should
+ * be read — a reader who ticked seven boxes and sees five columns needs to know which two went
+ * before they look for them.
+ *
+ * `live` is whether the columns came from the API. Over the bundled sample (four columns of its
+ * own, with its own takeaway) a sentence about which of the PICKED styles are shown contradicts the
+ * page under it — "showing the first five" over four unrelated columns — so those clauses go. What
+ * the reader's input lost stays: hiding every notice in fallback made `?profiles=nope,…` with the
+ * API down discard `nope` without a word (both Devin Review on #24). An unknown id or a sixth style
+ * is a fact about the request whatever answered it. One style discards nothing, and its sentence is
+ * about its column and the missing takeaway, so in fallback it has nothing true to say.
+ */
+export function selectionNotices(
+  selection: CompareSelection,
+  shown: readonly string[],
+  nameOf: (id: string) => string,
+  live: boolean,
+): readonly string[] {
+  const notices: string[] = [];
+  if (selection.dropped.length > 0) {
+    const picked = String(shown.length + selection.dropped.length);
+    const first = String(MAX_COMPARE_PROFILES);
+    const leftOut =
+      `${selection.dropped.map(nameOf).join(', ')} ` +
+      `${selection.dropped.length === 1 ? 'was' : 'were'} left out`;
+    notices.push(
+      `This page compares two to five styles at a time, and ${picked} were picked. ` +
+        (live
+          ? `It is showing the first ${first} in the order they were named; ${leftOut}. `
+          : `Only the first ${first} in the order they were named were asked for; ${leftOut}. `) +
+        'Untick some below to choose which five.',
+    );
+  }
+  if (selection.unknown.length > 0) {
+    notices.push(
+      `${selection.unknown.map((id) => `"${id}"`).join(', ')} ${selection.unknown.length === 1 ? 'is not one of' : 'are not among'} ` +
+        `the profiles, so ${selection.unknown.length === 1 ? 'it was' : 'they were'} left out` +
+        (live && selection.ids.length === 0
+          ? ' and the page is showing its default three styles instead.'
+          : '.'),
+    );
+  }
+  if (live && selection.tooFew) {
+    notices.push(
+      `Only one style was picked. Its column is below, but a comparison needs at least ${String(MIN_COMPARE_PROFILES)}: ` +
+        'with one there is nothing for it to disagree with, so there is no takeaway. Tick another below.',
+    );
+  }
+  return notices;
+}
+
 export function profileHref(profileId: string, difficulty?: LegendDifficulty): string {
   const path = `/legends/${encodeURIComponent(profileId)}`;
   return difficulty === undefined ? path : `${path}?difficulty=${difficulty}`;

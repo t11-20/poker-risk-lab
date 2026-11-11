@@ -49,7 +49,6 @@ import { LegendSigil } from '@/components/LegendSigil.tsx';
 import { ProfileDisclaimers } from '@/components/ProfileDisclaimers.tsx';
 import {
   COMPARE_SITUATION,
-  type CompareSelection,
   DEFAULT_COMPARE_PROFILE_IDS,
   LEGENDS_COMPARE_PATH,
   LEGENDS_HAND_REVIEW_PATH,
@@ -62,6 +61,7 @@ import {
   parseDifficulty,
   profileHref,
   type SearchParams,
+  selectionNotices,
 } from '@/lib/legends-data.ts';
 
 export const metadata: Metadata = {
@@ -103,43 +103,6 @@ function cards(text: string): readonly number[] {
   return parsed;
 }
 
-/**
- * One sentence per id the page did not compare, and one if it compared too few.
- *
- * Said above the comparison rather than below it, because each one changes how the columns should
- * be read — a reader who ticked seven boxes and sees five columns needs to know which two went
- * before they look for them.
- */
-function selectionNotices(
-  selection: CompareSelection,
-  shown: readonly string[],
-  nameOf: (id: string) => string,
-): readonly string[] {
-  const notices: string[] = [];
-  if (selection.dropped.length > 0) {
-    notices.push(
-      `This page compares two to five styles at a time, and ${String(shown.length + selection.dropped.length)} were picked. ` +
-        `It is showing the first ${String(MAX_COMPARE_PROFILES)} in the order they were named; ` +
-        `${selection.dropped.map(nameOf).join(', ')} ${selection.dropped.length === 1 ? 'was' : 'were'} left out. ` +
-        'Untick some below to choose which five.',
-    );
-  }
-  if (selection.unknown.length > 0) {
-    notices.push(
-      `${selection.unknown.map((id) => `"${id}"`).join(', ')} ${selection.unknown.length === 1 ? 'is not one of' : 'are not among'} ` +
-        `the profiles, so ${selection.unknown.length === 1 ? 'it was' : 'they were'} left out` +
-        (selection.ids.length === 0 ? ' and the page is showing its default three styles instead.' : '.'),
-    );
-  }
-  if (selection.tooFew) {
-    notices.push(
-      `Only one style was picked. Its column is below, but a comparison needs at least ${String(MIN_COMPARE_PROFILES)}: ` +
-        'with one there is nothing for it to disagree with, so there is no takeaway. Tick another below.',
-    );
-  }
-  return notices;
-}
-
 export default async function ComparePage({
   searchParams,
 }: {
@@ -162,11 +125,7 @@ export default async function ComparePage({
     difficulty,
     situation: COMPARE_SITUATION,
   });
-  // Only over live columns. The bundled sample has its own four columns and its own takeaway, so a
-  // notice about which of the PICKED styles are shown would contradict the page under it ("the
-  // first five are shown" over four unrelated columns; Devin Review on #24). The fallback callout
-  // below already says the columns are a sample.
-  const notices = comparison.source === 'api' ? selectionNotices(selection, profileIds, nameOf) : [];
+  const notices = selectionNotices(selection, profileIds, nameOf, comparison.source === 'api');
   const { analysis, entries, trials, takeaway } = comparison.data;
   const halfWidth = worstCaseHalfWidthPoints(trials);
 
