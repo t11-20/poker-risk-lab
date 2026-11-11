@@ -157,13 +157,16 @@ export default async function ComparePage({
   const profileIds = selection.ids.length === 0 ? DEFAULT_COMPARE_PROFILE_IDS : selection.ids;
   const nameOf = (id: string): string =>
     profiles.data.profiles.find((profile) => profile.id === id)?.disclosure.archetypeName ?? id;
-  const notices = selectionNotices(selection, profileIds, nameOf);
-
   const comparison = await loadProfileComparison({
     profileIds,
     difficulty,
     situation: COMPARE_SITUATION,
   });
+  // Only over live columns. The bundled sample has its own four columns and its own takeaway, so a
+  // notice about which of the PICKED styles are shown would contradict the page under it ("the
+  // first five are shown" over four unrelated columns; Devin Review on #24). The fallback callout
+  // below already says the columns are a sample.
+  const notices = comparison.source === 'api' ? selectionNotices(selection, profileIds, nameOf) : [];
   const { analysis, entries, trials, takeaway } = comparison.data;
   const halfWidth = worstCaseHalfWidthPoints(trials);
 
