@@ -1259,6 +1259,53 @@ async function auditNarrowViewport(page) {
       ok('Narrow viewport: focus moves into the sheet on open', `on "${opened.activeName}"`);
     else bad('Narrow viewport: menu', `focus stayed outside the sheet, on "${opened.activeName}"`);
 
+    /**
+     * The sheet must be the size of the viewport, and its links must be the thing under a finger.
+     *
+     * Everything above passed while the menu was unusable. The header carried a `backdrop-filter`,
+     * which makes it the containing block for `position: fixed` descendants, so the sheet — `fixed;
+     * inset: 0`, mounted inside the header — was 76px tall with a 684px scroll height. Focus moved
+     * in, Tab stayed in, Escape closed it: a keyboard walk sees none of that, and a finger sees a
+     * strip reading "NAVIGATE ×" with every destination behind it. `elementFromPoint` is the check
+     * that matches what a tap does.
+     */
+    const geometry = await page.evaluate(
+      `(() => {
+        const dialog = document.querySelector('[role="dialog"]');
+        if (dialog === null || dialog.hasAttribute('hidden')) return null;
+        const box = dialog.getBoundingClientRect();
+        const links = [...dialog.querySelectorAll('a[href]')];
+        const unreachable = links.filter((link) => {
+          const r = link.getBoundingClientRect();
+          const x = r.left + Math.min(8, r.width / 2);
+          const y = r.top + Math.min(8, r.height / 2);
+          if (y >= window.innerHeight) return false;
+          return !link.contains(document.elementFromPoint(x, y));
+        });
+        return {
+          height: Math.round(box.height),
+          viewport: window.innerHeight,
+          links: links.length,
+          firstUnreachable: unreachable[0]?.textContent.replace(/\\s+/g, ' ').trim().slice(0, 30) ?? null,
+          unreachable: unreachable.length,
+        };
+      })()`,
+    );
+    if (geometry === null) bad('Narrow viewport: menu', 'the sheet was not open to measure');
+    else if (geometry.links === 0) bad('Narrow viewport: menu', 'the open sheet holds no links to measure');
+    else if (geometry.height < geometry.viewport - 1 || geometry.unreachable > 0)
+      bad(
+        'Narrow viewport: menu',
+        `the open sheet is ${geometry.height}px of a ${geometry.viewport}px viewport and ` +
+          `${geometry.unreachable} of ${geometry.links} on-screen links are not under the pointer ` +
+          `(first: "${geometry.firstUnreachable}")`,
+      );
+    else
+      ok(
+        'Narrow viewport: the open sheet fills the viewport and every on-screen link takes a tap',
+        `${geometry.height}px, ${geometry.links} links`,
+      );
+
     // The trap: Tab must never leave the sheet while it is open.
     let escaped = null;
     for (let step = 0; step < 25 && escaped === null; step += 1) {
@@ -1313,6 +1360,46 @@ async function auditNarrowViewport(page) {
 
     if (closed.onTrigger) ok('Narrow viewport: focus returns to the trigger that opened it');
     else bad('Narrow viewport: menu', `focus went to <${closed.activeTag}> instead of back to the trigger`);
+
+    /**
+     * The units disclosure must open on screen. It was anchored to the end of the units pill, which
+     * on a phone stops short of the edge because the menu trigger sits beyond it: at 360 and 411
+     * the panel began at x=-40 and every line lost its first 40px. `test:layout` never sees it,
+     * because it measures the page with every disclosure closed.
+     */
+    const note = await page.evaluate(
+      `(() => {
+        const toggle = document.querySelector('.prl-shell__header .prl-units__toggle');
+        if (toggle === null || toggle.getClientRects().length === 0) return null;
+        toggle.focus();
+        return true;
+      })()`,
+    );
+    if (note === null) bad('Narrow viewport: units', 'no visible units disclosure in the bar to open');
+    else {
+      await page.press('Enter');
+      await delay(200);
+      const placed = await page.evaluate(
+        `(() => {
+          const panel = document.querySelector('.prl-shell__header .prl-units__note');
+          if (panel === null || panel.hidden) return null;
+          const r = panel.getBoundingClientRect();
+          return { left: Math.round(r.left), right: Math.round(r.right), width: window.innerWidth };
+        })()`,
+      );
+      if (placed === null) bad('Narrow viewport: units', 'Enter on the "i" did not open the explanation');
+      else if (placed.left < 0 || placed.right > placed.width)
+        bad(
+          'Narrow viewport: units',
+          `the explanation spans x=${placed.left} to ${placed.right} in a ${placed.width}px viewport`,
+        );
+      else
+        ok(
+          'Narrow viewport: the units explanation opens inside the viewport',
+          `x=${placed.left} to ${placed.right} of ${placed.width}`,
+        );
+      await page.press('Enter');
+    }
   } finally {
     await page.send('Emulation.clearDeviceMetricsOverride');
   }
