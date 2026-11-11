@@ -652,6 +652,19 @@
   font-weight: var(--prl-weight-medium);
 }
 
+/**
+ * The figure and its "of 1" as one item that never splits, pushed to the end edge even when the
+ * whole unit has to take a second line. See `TraitBars.tsx` for the 360px row where it split.
+ */
+.prl-legend-traits__figure {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  gap: var(--prl-space-3);
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+
 .prl-legend-traits__value {
   flex: 0 0 auto;
   color: var(--prl-text);
@@ -782,6 +795,7 @@
  * same material, there is no hierarchy for a reader to use.
  */
 .prl-legend-difficulty {
+  container: prl-legend-difficulty / inline-size;
   display: grid;
   gap: var(--prl-space-6);
   padding: var(--prl-space-8);
@@ -803,6 +817,21 @@
   gap: var(--prl-space-5);
   grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-option-min)), 1fr));
   margin-block-start: var(--prl-space-5);
+}
+
+/**
+ * Three options or one column, never two plus an orphan.
+ *
+ * Three 15rem options and two gaps need 744px (46.5rem). Below that `auto-fit` packed two to a row
+ * and left the third alone beside an empty cell: measured at 768px, two 322px options at y=806 and
+ * the third at y=1000 with nothing next to it. A container query on the form rather than a media
+ * query on the viewport, because the same picker sits in different columns on `/legends` and on the
+ * compare page, and the answer depends on the picker's own width.
+ */
+@container prl-legend-difficulty (width < 46.5rem) {
+  .prl-legend-difficulty__options {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /**
@@ -854,9 +883,13 @@
  * TARGET is the `<label>`, which wraps the whole option block — measured at 252x222 here, and 44px
  * high for the checkbox variant. That is the pattern WCAG 2.5.8 is satisfied by: a native control's
  * label extends its activation area, so the label is the thing that has to be big.
+ *
+ * It sits on the NAME's row, at every width. It used to span the name and the description and
+ * centre on both, which put it beside the description: measured at 1440px, the dot's centre 72px
+ * into the option and the name's 29px. A radio belongs to the words that name the choice.
  */
 .prl-legend-difficulty__control {
-  grid-row: 1 / span 2;
+  grid-row: 1;
   align-self: center;
   min-height: 0;
   margin: 0;
@@ -918,6 +951,9 @@
  * with every line of text indented past it. Measured at 390x844, that indent cost a line of
  * description per option, and the picker was 888px tall. With the options laid out as below it is
  * 785 (360: 962 to 848), nothing scrolls sideways, and every word and both chips are still there.
+ *
+ * The dot's own row is no longer set here: it is on the name's row at every width now (see
+ * `.prl-legend-difficulty__control`), so only the full-width description is phone-specific.
  */
 @media (width < 600px) {
   .prl-legend-difficulty {
@@ -927,10 +963,6 @@
   .prl-legend-difficulty__option {
     column-gap: var(--prl-space-5);
     padding: var(--prl-space-5) var(--prl-space-6);
-  }
-
-  .prl-legend-difficulty__control {
-    grid-row: 1;
   }
 
   .prl-legend-difficulty__description,

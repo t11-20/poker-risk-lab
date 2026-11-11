@@ -84,10 +84,18 @@ export function TraitBars(props: TraitBarsProps): ReactElement {
                   Signature axis
                 </Chip>
               ) : null}
-              <span className="prl-legend-traits__value">
-                {formatChips(axis.value, { decimals: VALUE_DECIMALS })}
+              {/*
+                The figure and its scale are one unit that wraps as a whole. As two flex items they
+                broke apart: measured at 360px on /legends/calling-station, "03 Aggression [Signature
+                axis] 0.16" filled the line and "OF 1" went onto a line of its own, a scale with no
+                figure beside it.
+              */}
+              <span className="prl-legend-traits__figure">
+                <span className="prl-legend-traits__value">
+                  {formatChips(axis.value, { decimals: VALUE_DECIMALS })}
+                </span>
+                <span className="prl-label">of 1</span>
               </span>
-              <span className="prl-label">of 1</span>
             </div>
             {/*
               Decorative: the figure above and the sentence below carry everything this draws. The
