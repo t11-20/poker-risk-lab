@@ -278,12 +278,22 @@ function heroLegalActions(
   // `ScenarioSeat.stack` is chips BEHIND, so a seat that is all in is exactly `stack === 0`; this
   // is the same test the Coach makes, against the same numbers, which is the point.
   const someOpponentCanAnswer = scenario.seats.some((seat) => seat.isHero !== true && seat.stack > 0);
+  //
+  // A raise whenever there is a bet LEVEL, not whenever something is owed. The two differ at the big
+  // blind's option in a limped pot (`fl-big-blind-option-limped-pot`: hero posted 10, the cutoff
+  // limped 10, nothing owed), and keying on `owed` offered "Bet to 10 · 0 units" there — a button
+  // that put nothing in, floored at the blind hero had already posted. Every size it accepted came
+  // back `pricing: 'action-not-priced'`, because the Coach names the action from the bet level
+  // (`betLevelOf(spot) === 0 ? bet : raise` in `@prl/poker-math`), its rows for that spot are
+  // `raise 22`, `raise 28` and `raise 1000`, and `judgeConsistency` matches on the name. With a level
+  // in force the floor is the raise floor — 20 here, the same figure `minimumAggressiveTo` derives.
   if (someOpponentCanAnswer && ceiling > heroCommitted + Math.min(owed, hero.stack)) {
-    const floor = owed > 0 ? raiseFloor(betLevel, heroCommitted, scenario.bigBlind) : scenario.bigBlind;
+    const isRaise = betLevel > 0;
+    const floor = isRaise ? raiseFloor(betLevel, heroCommitted, scenario.bigBlind) : scenario.bigBlind;
     const capped = Math.min(floor, ceiling);
     const isAllInOnly = floor >= ceiling;
     actions.push({
-      type: owed > 0 ? 'raise' : 'bet',
+      type: isRaise ? 'raise' : 'bet',
       minTo: capped,
       maxTo: ceiling,
       costAtMin: capped - heroCommitted,
