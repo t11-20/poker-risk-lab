@@ -1004,6 +1004,13 @@
   min-width: 0;
 }
 
+/* Two opponents' holdings sit side by side and wrap as whole holdings, never mid-hand. */
+.prl-learn-calc__input-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--prl-space-4) var(--prl-space-6);
+}
+
 .prl-learn-calc__input dd {
   margin: 0;
   overflow-wrap: anywhere;
