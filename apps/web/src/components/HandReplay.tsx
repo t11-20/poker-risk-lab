@@ -63,6 +63,7 @@ import {
 } from '@prl/ui';
 import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
 import type { HandReplay as Replay, ReplayStep } from '../lib/hand-replay.ts';
+import { markerActor, markerShort, openingStepIndex } from '../lib/replay-steps.ts';
 import { CommitmentVerifier } from './CommitmentVerifier.tsx';
 import { DecisionTimeline, type TimelineMarker, type TimelineStreet } from './DecisionTimeline.tsx';
 
@@ -80,21 +81,10 @@ const ACTION_VERB: Readonly<Record<string, string>> = {
   raise: 'raised to',
 };
 
-/** The compressed label on a marker. Amounts are what left the stack, which is what a reader tracks. */
-function markerShort(step: ReplayStep): string {
+/** "folded", "raised to 60 units", "called 20 units": the verb and the amount, with no actor. */
+function actionPhrase(step: ReplayStep): string {
   const decision = step.decision;
-  if (decision === null) return 'END';
-  const word = decision.action.toUpperCase();
-  if (decision.action === 'raise' && decision.to !== null) return `${word} ${decision.to}`;
-  if (decision.amountPaid > 0) return `${word} ${decision.amountPaid}`;
-  return word;
-}
-
-/** The whole sentence a screen reader gets for a marker. */
-function markerDescription(step: ReplayStep, names: Readonly<Record<number, string>>): string {
-  const decision = step.decision;
-  if (decision === null) return 'End of the hand: final stacks and the settled pot.';
-  const who = step.isViewerDecision ? 'you' : (names[decision.seat] ?? `seat ${decision.seat + 1}`);
+  if (decision === null) return '';
   const verb = ACTION_VERB[decision.action] ?? decision.action;
   const amount =
     decision.action === 'raise' && decision.to !== null
@@ -102,15 +92,67 @@ function markerDescription(step: ReplayStep, names: Readonly<Record<number, stri
       : decision.amountPaid > 0
         ? ` ${formatUnits(decision.amountPaid)}`
         : '';
+  return `${verb}${amount}`;
+}
+
+/** The whole sentence a screen reader gets for a marker, and the one the live region carries. */
+function markerDescription(step: ReplayStep, names: Readonly<Record<number, string>>): string {
+  const decision = step.decision;
+  if (decision === null) return 'End of the hand: final stacks and the settled pot.';
+  const who = step.isViewerDecision ? 'you' : (names[decision.seat] ?? `seat ${decision.seat + 1}`);
   const automatic = decision.wasAutomatic ? ' The clock ran out and the server acted.' : '';
   const analysis = step.analysis === null ? '' : ' An analysis is attached to this decision.';
-  return `${decision.street}: ${who} ${verb}${amount}.${automatic}${analysis}`;
+  return `${decision.street}: ${who} ${actionPhrase(step)}.${automatic}${analysis}`;
+}
+
+/**
+ * The sentence the transport shows: who did what, as a sighted reader scans it.
+ *
+ * Shorter than `markerDescription` on purpose. The street and the step number sit beside it in the
+ * transport, and "an analysis is attached" is the `+` on the marker and the Coach panel itself — so
+ * this is the one fact the counter could not say. It is NOT a live region: `role="status"` below
+ * already announces the step, and J6.2 fails a step that is announced from two places.
+ *
+ * "To act:" because a step is positioned BEFORE its decision (`ReplayStep.decision`): the table
+ * shows the seat with "to act" on it and the bet not yet in. A bare "Quartile called 40 units."
+ * beside a table where Quartile has not called yet reads as the table being a step behind.
+ */
+function stepHeadline(step: ReplayStep, names: Readonly<Record<number, string>>): string {
+  if (step.decision === null) return 'The hand is over.';
+  const automatic = step.decision.wasAutomatic ? ' (the clock ran out)' : '';
+  return `To act: ${markerActor(step, names) ?? ''} — ${actionPhrase(step)}${automatic}.`;
+}
+
+/**
+ * A transport button's label: a glyph, and words that are visible from 600px up.
+ *
+ * Below 600px the words are visually hidden rather than removed, so the accessible name stays
+ * "Previous decision" / "Next decision" (J6.5 finds the buttons by that text, and a voice-control
+ * user says it) while the row fits one line. Measured at 360 before: the two worded buttons and the
+ * counter wrapped to two rows, a 126px sticky bar under a 77px header — 32% of a 640px screen.
+ */
+function TransportLabel({ glyph, words }: { readonly glyph: string; readonly words: string }): ReactElement {
+  return (
+    <>
+      <span className="prl-replay__step-glyph" aria-hidden="true">
+        {glyph}
+      </span>
+      <span className="prl-replay__step-words">{words}</span>
+    </>
+  );
+}
+
+/** The street word for the transport: "Preflop", "Flop", or "Settled" for the terminal frame. */
+function stepStreet(step: ReplayStep): string {
+  const key = step.decision === null ? 'settled' : step.decision.street;
+  return key.charAt(0).toUpperCase() + key.slice(1);
 }
 
 function buildMarkers(replay: Replay): readonly TimelineMarker[] {
   return replay.steps.map((step) => ({
     index: step.index,
     street: step.decision === null ? 'settled' : step.decision.street,
+    actor: markerActor(step, replay.seatNames),
     short: markerShort(step),
     description: markerDescription(step, replay.seatNames),
     isViewer: step.isViewerDecision,
@@ -210,7 +252,9 @@ function ResultRow({
 }
 
 export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
-  const [stepIndex, setStepIndex] = useState(0);
+  // The reader's own first decision, not step 1 — see `openingStepIndex`. Computed from props, so
+  // the server render and the first client render agree and nothing jumps on hydration.
+  const [stepIndex, setStepIndex] = useState(() => openingStepIndex(replay));
   const instructionsId = useId();
   /**
    * The transport row, so the rescue below can find whichever button is still enabled.
@@ -296,8 +340,9 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
     <div className="prl-replay">
       <p className="prl-note" id={instructionsId}>
         Use the left and right arrow keys to step through the hand one decision at a time, Page Up and Page
-        Down to jump a street, and Home or End for the first and last. The table, the pot and the analysis all
-        follow the marker you are on.
+        Down to jump a street, and Home or End for the first and last. The replay opens on your own first
+        decision; Home goes back to the start of the hand. The table, the pot and the analysis all follow the
+        marker you are on.
       </p>
 
       <DecisionTimeline
@@ -312,28 +357,37 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
         <Button
           variant="secondary"
           size="sm"
+          className="prl-replay__step-button"
           disabled={step.index === 0}
           onClick={() => {
             pressed.current = 'previous';
             setStepIndex(step.index - 1);
           }}
         >
-          Previous decision
+          <TransportLabel glyph="‹" words="Previous decision" />
         </Button>
-        <p className="prl-replay__position">
-          <span className="prl-label">Step</span>
-          <span className="prl-replay__position-value">{`${step.index + 1} / ${total}`}</span>
-        </p>
+        {/* What the counter could not say: who did what at this step, where the reader is looking
+            when they press. Plain text, not a live region — `role="status"` below announces the
+            step, and J6.2 fails a step announced from two places. */}
+        <div className="prl-replay__now">
+          <p className="prl-replay__position">
+            <span className="prl-label">Step</span>
+            <span className="prl-replay__position-value">{`${step.index + 1} / ${total}`}</span>
+            <span className="prl-label prl-replay__street">{stepStreet(step)}</span>
+          </p>
+          <p className="prl-replay__headline">{stepHeadline(step, replay.seatNames)}</p>
+        </div>
         <Button
           variant="secondary"
           size="sm"
+          className="prl-replay__step-button"
           disabled={step.index === total - 1}
           onClick={() => {
             pressed.current = 'next';
             setStepIndex(step.index + 1);
           }}
         >
-          Next decision
+          <TransportLabel glyph="›" words="Next decision" />
         </Button>
       </div>
 
@@ -376,15 +430,16 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
           </p>
         )}
 
-        <p className="prl-replay__caption">
-          {step.decision === null
-            ? `The hand is over. ${
-                review.hand.endedByFold
-                  ? 'It ended with everybody folding, so no cards were shown.'
-                  : 'It went to a showdown, so the hands that were shown are visible above.'
-              }`
-            : `About to act: ${markerDescription(step, replay.seatNames)}`}
-        </p>
+        {/* The terminal frame only. For a decision this line used to read "About to act: preflop:
+            you folded." under the table — y≈1997 at 1440 — and that fact is now the transport's
+            headline, where the reader is looking when they press. */}
+        {step.decision === null ? (
+          <p className="prl-replay__caption">
+            {review.hand.endedByFold
+              ? 'It ended with everybody folding, so no cards were shown.'
+              : 'It went to a showdown, so the hands that were shown are visible above.'}
+          </p>
+        ) : null}
       </div>
 
       {analysis !== null ? (

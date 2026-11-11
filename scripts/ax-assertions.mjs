@@ -2781,6 +2781,13 @@ async function gatherReplay(page, baseUrl) {
       if (marker !== null) marker.focus();
     })()`,
   );
+  // Home first, so the three presses below start from step 1 as they always did. The replay now
+  // OPENS on the reader's own first decision (`openingStepIndex` in `src/lib/replay-steps.ts`), and
+  // in a hand where that decision is the second-to-last action — the big blind folding to a raise —
+  // three right-arrows from there would run off the end and J6.3 would fail a hand rather than the
+  // product. Home itself is what J6.4 checks, separately, further down.
+  await page.press('Home');
+  await page.settle(300);
   evidence.scrub = [];
   for (let step = 0; step < 3; step += 1) {
     await page.evaluate('window.__prlSpeechReset && window.__prlSpeechReset()');

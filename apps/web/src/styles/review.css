@@ -878,6 +878,21 @@ span.prl-review-table__cell-label {
   white-space: nowrap;
 }
 
+/**
+ * Who acted, ahead of what they did — "Quartile RAISE 20", "You FOLD".
+ *
+ * Quieter than the action (regular weight, secondary ink) because the action is still what a reader
+ * scans the row for; the name is what tells them whose it was, which the row did not say at all
+ * before. A display name runs to 24 characters with spaces (`DISPLAY_NAME_SCHEMA`), so it is
+ * allowed to wrap inside the marker rather than being clipped or ellipsised — a cut-off name is a
+ * different name.
+ */
+.prl-timeline__actor {
+  color: inherit;
+  font-weight: var(--prl-weight-regular);
+  overflow-wrap: anywhere;
+}
+
 /** The `+` that marks a decision carrying an analysis. Ink only; the sentence says it too. */
 .prl-timeline__analysis-mark {
   color: var(--prl-accent-text);
@@ -927,19 +942,22 @@ span.prl-review-table__cell-label {
   z-index: var(--prl-z-sticky);
   isolation: isolate;
   inset-block-start: var(--prl-space-13);
-  display: flex;
-  flex-wrap: wrap;
+  /* Three tracks, never wrapping: back, what happened, forward. It used to be a wrapping flex row,
+     and at 360 the two worded buttons and the counter wrapped onto two rows — 126px of sticky glass
+     under the 77px header, 32% of a 640px screen held by chrome. Below 600px the button words are
+     visually hidden (section 4, the `width < 600px` block), so the row fits one line at 360. */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: var(--prl-space-5);
   /* BOUNDED, and that is a rule rather than a preference: `tokens.css` allows glass on a floating
      PANE and forbids it on a full-width strip, because a `backdrop-filter` across the whole
      content column is one of the most expensive things a compositor can be asked for on every
-     scroll frame. Unbounded this measured 1360px wide at a 1440px viewport — a strip. 34rem
-     (`3 x --prl-space-16 + --prl-space-12`, the same way `--prl-legend-card-min` is built) is what
-     the two buttons and the counter actually need, and a centred transport is what a scrubber
-     looks like anyway. */
-  max-inline-size: calc(3 * var(--prl-space-16) + var(--prl-space-12));
+     scroll frame. Unbounded this measured 1360px wide at a 1440px viewport — a strip. It was 34rem
+     for two buttons and a counter; it is 40rem (`4 x --prl-space-16`) now that the middle track
+     also carries the sentence saying what happened at this step, which needs a line long enough to
+     hold "Quartile raised to 1,250 units." without breaking. Still a centred pane, not a strip. */
+  max-inline-size: calc(4 * var(--prl-space-16));
   margin-inline: auto;
   padding: var(--prl-space-5) var(--prl-space-6);
   border: 1px solid var(--prl-edge);
@@ -959,12 +977,19 @@ span.prl-review-table__cell-label {
  * 18px it was the same size as the button labels either side of it. The counter is what tells you
  * the press landed, so it is the loudest thing in the bar.
  */
+.prl-replay__now {
+  display: grid;
+  justify-items: center;
+  gap: var(--prl-space-1);
+  min-width: 0;
+  text-align: center;
+}
+
 .prl-replay__position {
   display: flex;
   align-items: baseline;
   gap: var(--prl-space-4);
   margin: 0;
-  padding-inline: var(--prl-space-4);
 }
 
 .prl-replay__position-value {
@@ -974,6 +999,56 @@ span.prl-review-table__cell-label {
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-metric);
   line-height: var(--prl-leading-tight);
+}
+/**
+ * What happened at this step, in the transport where the reader is looking when they press.
+ *
+ * Measured before: the transport said only "STEP 3 / 16", and the sentence for the step sat under
+ * the table — y≈1997 at 1440 and ≈2900 at 360 — while the copy a screen reader hears is visually
+ * hidden. A sighted reader stepping through a hand could see the table change and could not read
+ * what had changed it without scrolling a screen and a half.
+ */
+.prl-replay__headline {
+  margin: 0;
+  max-width: none;
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-medium);
+  line-height: var(--prl-leading-tight);
+  overflow-wrap: anywhere;
+}
+
+.prl-replay__step-glyph {
+  font-size: var(--prl-type-body-lg);
+  line-height: var(--prl-leading-tight);
+}
+
+@media (width < 600px) {
+  .prl-replay__transport {
+    gap: var(--prl-space-4);
+    padding: var(--prl-space-4);
+  }
+
+  /* The visually-hidden technique from `base.css`: out of sight, still the button's name. */
+  .prl-replay__step-words {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* A glyph-only button is still a 44px square target, not a 30px sliver. */
+  .prl-replay__transport .prl-replay__step-button {
+    min-width: var(--prl-target-min);
+    min-height: var(--prl-target-min);
+    padding-inline: var(--prl-space-4);
+  }
+
+  .prl-replay__position-value {
+    font-size: var(--prl-type-metric-sm);
+  }
 }
 
 /**
