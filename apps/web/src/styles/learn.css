@@ -762,6 +762,19 @@
   border-block-start: var(--prl-hairline);
 }
 
+/**
+ * A button whose label carries a lesson title, and so can wrap.
+ *
+ * `.prl-btn` has a 44px `min-height` and no block padding, which is right for a one-line label and
+ * wrong for "I have finished “Actions, and what each one commits you to”": measured at 360, that
+ * label wrapped to two lines (41.6px of text) inside the 44px pill with nothing above or below it.
+ * Block padding lets the pill grow round the text; a one-line label (20.8px + 16px) is still under
+ * the 44px floor, so every single-line button keeps exactly the height it had.
+ */
+.prl-learn-titled-btn {
+  padding-block: var(--prl-space-4);
+}
+
 /* ---- contents rail ---------------------------------------------------------------------- */
 
 /**
@@ -1422,6 +1435,31 @@
 
 .prl-learn-quiz__verdict:empty {
   margin: 0;
+}
+
+/**
+ * Which verdict this is, before the sentence is read.
+ *
+ * The two used to be drawn identically — one neutral box, no mark — so "matches" and "does not
+ * match" could only be told apart by reading them, from a box that at 360x640 sits 1060–1210px down
+ * the page. They now carry the mark of the chip they agree with (`◆` the lesson's answer, `✕` a
+ * different pick) and a match takes the accent edge the chosen option already wears. A miss keeps
+ * the neutral `--prl-line-strong` edge on purpose: nothing is deducted for it, and a rose or red edge
+ * would be the mark this product declines to give. Both edges are gated by `design:contrast` as
+ * meaningful borders on every surface.
+ */
+.prl-learn-quiz__verdict[data-matched="true"] {
+  border-inline-start-color: var(--prl-accent-edge);
+}
+
+.prl-learn-quiz__verdict-mark {
+  margin-inline-end: var(--prl-space-4);
+  color: var(--prl-text-secondary);
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-learn-quiz__verdict[data-matched="true"] .prl-learn-quiz__verdict-mark {
+  color: var(--prl-accent-text);
 }
 
 /**

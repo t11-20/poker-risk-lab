@@ -45,7 +45,9 @@ import {
   asDifficulty,
   DIFFICULTY_GLYPHS,
   DIFFICULTY_LABELS,
+  LESSON_TITLE_ID,
   lessonOutline,
+  nextLesson,
   topicLabel,
 } from '@/lib/learn-curriculum.ts';
 import { GLOSSARY_PATH, LEARN_PATH, lessonHref, loadLesson } from '@/lib/learn-data.ts';
@@ -119,6 +121,10 @@ export default async function LessonPage({ params }: LessonPageProps): Promise<R
     title: lessonSummaryFixture(id)?.title ?? id,
   }));
   const takeaways = withKeys(lesson.keyTakeaways, 'takeaway');
+  // Reading order, not the index's numbering: see `nextLesson`. Null on the last lesson, whose foot
+  // keeps "Back to the curriculum" as its first step.
+  const next = nextLesson(lessonsInReadingOrder(), lesson.id);
+  const nextStep = next === null ? null : { href: lessonHref(next.id), title: next.title };
 
   return (
     <div className="prl-learn-lesson">
@@ -130,7 +136,14 @@ export default async function LessonPage({ params }: LessonPageProps): Promise<R
           <span aria-hidden="true"> / </span>
           <span className="prl-label">{topicLabel(lesson.topic)}</span>
         </p>
-        <h1 className="prl-display-2">{lesson.title}</h1>
+        {/*
+          The target of the quiz's "Re-read" link. `tabIndex={-1}` so the link can put focus here as
+          well as scrolling here: a keyboard reader who followed it should continue from the top of
+          the lesson, not from the quiz they left.
+        */}
+        <h1 className="prl-display-2" id={LESSON_TITLE_ID} tabIndex={-1}>
+          {lesson.title}
+        </h1>
         <p className="prl-learn-lesson__summary">{lesson.summary}</p>
         <div className="prl-row prl-learn-lesson__chips">
           {difficulty === null ? (
@@ -216,7 +229,12 @@ export default async function LessonPage({ params }: LessonPageProps): Promise<R
           )}
 
           {quiz === null ? null : (
-            <QuizRunner quiz={quiz} lessonHref={lessonHref(lesson.id)} lessonTitle={lesson.title} />
+            <QuizRunner
+              quiz={quiz}
+              lessonTitleId={LESSON_TITLE_ID}
+              lessonTitle={lesson.title}
+              nextLesson={nextStep}
+            />
           )}
 
           {/*
@@ -228,7 +246,19 @@ export default async function LessonPage({ params }: LessonPageProps): Promise<R
           */}
           <LessonRead lessonId={lesson.id} lessonTitle={lesson.title} />
 
+          {/*
+            "Next" is the primary step and comes first. The foot used to offer only the index and the
+            glossary, so finishing a lesson meant going back to `/learn` and finding your place.
+          */}
           <div className="prl-btn-row prl-learn-lesson__foot">
+            {nextStep === null ? null : (
+              <Link
+                className="prl-btn prl-btn--primary prl-btn--md prl-learn-titled-btn"
+                href={nextStep.href}
+              >
+                {`Next: ${nextStep.title}`}
+              </Link>
+            )}
             <Link className="prl-btn prl-btn--secondary prl-btn--md" href={LEARN_PATH}>
               Back to the curriculum
             </Link>

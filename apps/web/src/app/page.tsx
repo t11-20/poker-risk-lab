@@ -35,12 +35,15 @@
  * One `h1`, then `h2` per section, then `h3` on the module panels — so `heading-order` holds.
  */
 
+import { lessonsInReadingOrder } from '@prl/content';
 import { formatIndex, Panel, Reveal } from '@prl/ui';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
 import { MetricsBand } from '@/components/MetricsBand.tsx';
 import { ProcessSpine } from '@/components/ProcessSpine.tsx';
+import { firstLesson } from '@/lib/learn-curriculum.ts';
+import { LEARN_PATH, lessonHref } from '@/lib/learn-data.ts';
 import { RECORD_PATH } from '@/lib/record-data.ts';
 import '@/styles/home.css';
 
@@ -62,6 +65,17 @@ interface CapabilityModule {
 }
 
 /**
+ * Where "Start with the foundations" goes: the first lesson in reading order, not the index.
+ *
+ * It used to be `/learn`, and on a 360x640 first visit the index's first lesson button was measured
+ * at y=1682 — a link that promised the foundations delivered four screens of curriculum first. The
+ * index is still one tap away in the hero ("Read the lessons"), which is the link that names it.
+ * Falls back to the index only if the content package ever ships no lessons at all.
+ */
+const FOUNDATIONS = firstLesson(lessonsInReadingOrder());
+const FOUNDATIONS_HREF = FOUNDATIONS === null ? LEARN_PATH : lessonHref(FOUNDATIONS.id);
+
+/**
  * Three modules, one per verb. Each `points` entry is a capability that exists, not a promise —
  * anything aspirational belongs in a roadmap rather than on a home page.
  */
@@ -76,7 +90,7 @@ const MODULES: readonly CapabilityModule[] = [
       'A glossary of 90 terms, linked from wherever a term first appears',
       'Every worked figure recomputed live, so no example can drift out of date',
     ],
-    href: '/learn',
+    href: FOUNDATIONS_HREF,
     action: 'Start with the foundations',
   },
   {

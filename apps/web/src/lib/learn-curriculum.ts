@@ -365,6 +365,51 @@ export function buildCurriculum(summaries: readonly LessonSummary[], options: Cu
 // Lesson outline
 // ---------------------------------------------------------------------------
 
+/** The two fields a step between lessons needs. `Lesson` and `LessonSummary` both carry them. */
+export interface LessonStep {
+  readonly id: ContentId;
+  readonly title: string;
+}
+
+/**
+ * Where a learner starts: the first lesson in the order given, or `null` for an empty list.
+ *
+ * The home page's "Start with the foundations" used to link to `/learn`, where the first lesson's
+ * button was measured at y=1682 on a 360x640 first visit — four screens of index before the thing
+ * the link had promised. `?? null` because `noUncheckedIndexedAccess` is on.
+ */
+export function firstLesson(order: readonly LessonStep[]): LessonStep | null {
+  const first = order[0];
+  return first === undefined ? null : { id: first.id, title: first.title };
+}
+
+/**
+ * The lesson after `currentId` in `order`, or `null` for the last lesson or an id not in it.
+ *
+ * Callers pass `lessonsInReadingOrder()` and not the index's display order, and that choice is the
+ * whole of this function. Display order groups by topic and, over the shipped content, puts
+ * `bet-sizing` before `fold-equity` — which `bet-sizing` names as a prerequisite — so a "Next" that
+ * followed the index's numbering would walk a reader past a lesson they had been told to read
+ * first. Reading order is the one the content package defines as front to back.
+ */
+export function nextLesson(order: readonly LessonStep[], currentId: ContentId): LessonStep | null {
+  const index = order.findIndex((lesson) => lesson.id === currentId);
+  if (index === -1) return null;
+  const next = order[index + 1];
+  return next === undefined ? null : { id: next.id, title: next.title };
+}
+
+/**
+ * The `id` on a lesson's `h1`, which "Re-read" in the quiz points at.
+ *
+ * That link used to be `<Link href={lessonHref(id)}>` — the URL of the page it was on — and a
+ * same-URL navigation does nothing: measured against the running build, scrollY 10050 before the
+ * click and 10050 after, history unchanged. A learner meets that link once per answered question
+ * and once more at the end. A fragment is what makes it move, and `lessonOutline` reserves this id
+ * so no section heading can ever be given it too.
+ */
+export const LESSON_TITLE_ID = 'lesson-title';
+
 export interface OutlineHeading {
   /** The `id` on the rendered heading, and the fragment the contents link points at. */
   readonly id: string;
@@ -411,7 +456,8 @@ function slugify(text: string, fallback: string): string {
 export function lessonOutline(blocks: readonly LessonBlock[]): LessonOutline {
   const headings: OutlineHeading[] = [];
   const idByBlockIndex = new Map<number, string>();
-  const used = new Map<string, number>();
+  // Seeded with the title's id, so a heading that slugs to it is suffixed rather than duplicated.
+  const used = new Map<string, number>([[LESSON_TITLE_ID, 1]]);
 
   blocks.forEach((block, blockIndex) => {
     if (block.kind !== 'heading') return;
