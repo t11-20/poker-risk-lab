@@ -960,7 +960,10 @@
     padding: var(--prl-space-6);
   }
 
+  /* `relative` is the containing block for the visually-hidden description in the next rule, so
+     its 1px box stays inside the option rather than being positioned against the page. */
   .prl-legend-difficulty__option {
+    position: relative;
     column-gap: var(--prl-space-5);
     padding: var(--prl-space-5) var(--prl-space-6);
   }
@@ -968,6 +971,60 @@
   .prl-legend-difficulty__description,
   .prl-legend-difficulty__coach {
     grid-column: 1 / -1;
+  }
+}
+
+/**
+ * On a phone only the TICKED option shows its description; the other two show their name and their
+ * Coach chip, and their description is still read out.
+ *
+ * Measured at 360x640 on the production build, `/legends` with the API up: the first "Play this
+ * style" was at y=3,230 and the picker was 849px of it (head 447, framing 479, section intro 335,
+ * card 1 to its Play 848). Four ways of making the picker smaller were tried in the same Chrome,
+ * picker height and first Play:
+ *
+ *  - three name-only radios in one segmented row, the ticked option's text once below: 391px,
+ *    y=2,772. Rejected: each segment is 94px at 360, and "Educational" was cut to "Educationa" —
+ *    a block narrower than its own longest word, which `test:layout` fails, and worse at 320.
+ *  - the picker in a `<details>` closed by default: 82px, y=2,463. Rejected: `open` is markup, so
+ *    the server cannot close it on a phone and leave it open at 1440 without script or a flash, and
+ *    a closed disclosure takes the radios out of the tab order and the accessibility tree, so what
+ *    each setting means is one more tap away for everybody.
+ *  - the picker moved below the first card: y=2,333. Rejected: that Play is then reached before the
+ *    setting it starts has been seen, and moving it in the DOM moves it at every width.
+ *  - this: 602px with Educational ticked (623 with Expert), y=2,983. At 320 the picker is 943 to
+ *    675, at 390 786 to 581; from 600 up nothing changes (768 and 1440 measured identical).
+ *
+ * It saves the least of the four and it is the only one that keeps everything: one radio group under
+ * its legend, every option's name and Coach consequence visible before choosing — the Coach is the
+ * part of the choice a learner feels — and the description of the one that is ticked. Ticking
+ * another to read it is free: nothing is applied until "Apply setting", and the Play links follow
+ * the tick on purpose (`LegendDifficultyScope.tsx`). It is CSS on the radio's own state, so it works
+ * with scripts off, and a browser without `:has()` drops this rule and shows every description,
+ * which is the full picker — the safe direction. Ticking a lower option closes the one above it,
+ * so the ticked block moves up by one description; nothing under the finger is activated by that.
+ * The same picker on `/legends/compare` gets the same rule, for the same reason.
+ *
+ * Visually hidden, NOT `display: none`. The `<label>` wraps the whole option, so each radio's
+ * accessible name includes its description; `display: none` would cut it out and a screen-reader
+ * user would hear three bare names.
+ *
+ * The floor, so nobody tries again here: with no picker at all the first Play is at y=2,333, three
+ * and a half screens. The rest of the depth is the framing and the card, whose order is a guardrail
+ * (`LegendCard.tsx`), so "two screens" is not reachable from the picker alone.
+ */
+@media (width < 600px) {
+  .prl-legend-difficulty__option:not(:has(.prl-legend-difficulty__control:checked))
+    > .prl-legend-difficulty__description {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    border: 0;
+    white-space: nowrap;
   }
 }
 
