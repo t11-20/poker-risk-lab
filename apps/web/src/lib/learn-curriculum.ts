@@ -399,6 +399,33 @@ export function nextLesson(order: readonly LessonStep[], currentId: ContentId): 
   return next === undefined ? null : { id: next.id, title: next.title };
 }
 
+/** What a lesson's foot offers after it: a link, the title of a lesson this build cannot show, or nothing. */
+export type NextLessonStep =
+  | { readonly kind: 'link'; readonly id: ContentId; readonly title: string }
+  | { readonly kind: 'unavailable'; readonly title: string }
+  | null;
+
+/**
+ * `nextLesson`, checked against what can actually be read right now.
+ *
+ * When the content service is down the lesson page falls back to a bundle of eight lesson bodies,
+ * and reading order puts `betting-actions`, which is not one of them, straight after `hand-flow`.
+ * A primary "Next" there opened "This lesson's text is not available in this build" (Devin Review
+ * on #22). Skipping ahead to the next bundled lesson would walk a reader past a prerequisite, so
+ * the step instead names the lesson and says it cannot be shown, and the foot's first action falls
+ * back to the curriculum.
+ *
+ * `readable` is `null` when the lesson came from the live service, where every lesson is readable.
+ */
+export function nextLessonStep(
+  next: LessonStep | null,
+  readable: readonly ContentId[] | null,
+): NextLessonStep {
+  if (next === null) return null;
+  if (readable !== null && !readable.includes(next.id)) return { kind: 'unavailable', title: next.title };
+  return { kind: 'link', id: next.id, title: next.title };
+}
+
 /**
  * The `id` on a lesson's `h1`, which "Re-read" in the quiz points at.
  *

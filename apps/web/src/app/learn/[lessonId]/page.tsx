@@ -48,9 +48,10 @@ import {
   LESSON_TITLE_ID,
   lessonOutline,
   nextLesson,
+  nextLessonStep,
   topicLabel,
 } from '@/lib/learn-curriculum.ts';
-import { GLOSSARY_PATH, LEARN_PATH, lessonHref, loadLesson } from '@/lib/learn-data.ts';
+import { GLOSSARY_PATH, LEARN_PATH, lessonHref, loadLesson, READABLE_LESSON_IDS } from '@/lib/learn-data.ts';
 
 interface LessonPageProps {
   readonly params: Promise<{ readonly lessonId: string }>;
@@ -123,8 +124,12 @@ export default async function LessonPage({ params }: LessonPageProps): Promise<R
   const takeaways = withKeys(lesson.keyTakeaways, 'takeaway');
   // Reading order, not the index's numbering: see `nextLesson`. Null on the last lesson, whose foot
   // keeps "Back to the curriculum" as its first step.
-  const next = nextLesson(lessonsInReadingOrder(), lesson.id);
-  const nextStep = next === null ? null : { href: lessonHref(next.id), title: next.title };
+  const step = nextLessonStep(
+    nextLesson(lessonsInReadingOrder(), lesson.id),
+    loaded.source === 'fixture' ? READABLE_LESSON_IDS : null,
+  );
+  const nextStep = step?.kind === 'link' ? { href: lessonHref(step.id), title: step.title } : null;
+  const unreadableNext = step?.kind === 'unavailable' ? step.title : null;
 
   return (
     <div className="prl-learn-lesson">
@@ -250,6 +255,11 @@ export default async function LessonPage({ params }: LessonPageProps): Promise<R
             "Next" is the primary step and comes first. The foot used to offer only the index and the
             glossary, so finishing a lesson meant going back to `/learn` and finding your place.
           */}
+          {unreadableNext === null ? null : (
+            <p className="prl-note">
+              {`The next lesson, “${unreadableNext}”, needs the content service, which this page could not reach. It is in the curriculum, and it will open once the service answers.`}
+            </p>
+          )}
           <div className="prl-btn-row prl-learn-lesson__foot">
             {nextStep === null ? null : (
               <Link

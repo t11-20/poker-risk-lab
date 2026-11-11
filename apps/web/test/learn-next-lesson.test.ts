@@ -24,7 +24,13 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { lessonsInReadingOrder } from '@prl/content';
 import { TOPICS } from '@prl/contracts';
-import { firstLesson, LESSON_TITLE_ID, lessonOutline, nextLesson } from '../src/lib/learn-curriculum.ts';
+import {
+  firstLesson,
+  LESSON_TITLE_ID,
+  lessonOutline,
+  nextLesson,
+  nextLessonStep,
+} from '../src/lib/learn-curriculum.ts';
 
 const ORDER = lessonsInReadingOrder();
 
@@ -92,5 +98,33 @@ describe('the lesson title anchor', () => {
     // make two elements with one id, and the link would land on whichever the browser found first.
     const outline = lessonOutline([{ kind: 'heading', text: LESSON_TITLE_ID.replace(/-/g, ' ') }]);
     assert.notEqual(outline.headings[0]?.id, LESSON_TITLE_ID);
+  });
+});
+
+describe('nextLessonStep: Next never promises a lesson this page cannot show (REGRESSION)', () => {
+  // Devin Review on #22: offline, the lesson page reads a bundle of eight bodies, and reading order
+  // puts an unbundled lesson straight after `hand-flow`, so the primary Next opened an apology.
+  const [first, second] = ORDER;
+  assert.ok(first !== undefined && second !== undefined, 'reading order has at least two lessons');
+  const next = nextLesson(ORDER, first.id);
+
+  it('links to the next lesson when every lesson is readable', () => {
+    assert.deepEqual(nextLessonStep(next, null), { kind: 'link', id: second.id, title: second.title });
+  });
+
+  it('names the next lesson as unavailable, rather than linking it, when it is not in the readable set', () => {
+    assert.deepEqual(nextLessonStep(next, [first.id]), { kind: 'unavailable', title: second.title });
+  });
+
+  it('links when the next lesson is in the readable set', () => {
+    assert.deepEqual(nextLessonStep(next, [first.id, second.id]), {
+      kind: 'link',
+      id: second.id,
+      title: second.title,
+    });
+  });
+
+  it('has nothing after the last lesson', () => {
+    assert.equal(nextLessonStep(null, [first.id]), null);
   });
 });
