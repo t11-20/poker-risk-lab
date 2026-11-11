@@ -299,7 +299,19 @@ export function chooseRoom(
   userId: string,
   preferredId: string | null,
 ): RoomSummary | null {
-  const mine = rooms.filter((room) => room.ownerUserId === userId && room.status !== 'closed');
+  // Only a room as wide as the tables this page builds. `/play` is headed "Six-handed table", and a
+  // legend match is an owned room with a bot seated too — the remembered one, even, since the match
+  // remembered itself when it opened — so following a legend match's "open the bot table" link
+  // reopened the match under that heading (Devin Review on #24). The match's width is its own:
+  // `POST /legends/matches` seats profiles + 1, and the web client sends one profile, so two seats.
+  // Width rather than the server's name for the room ('Legends practice'), which this client would
+  // have to copy and could not notice changing; and not the bots' profiles, which overlap — Calling
+  // Station is both a legend and a `BOT_TABLE` seat. A five-opponent match would be six seats wide
+  // and pass this; nothing in the web client asks for one.
+  const mine = rooms.filter(
+    (room) =>
+      room.ownerUserId === userId && room.status !== 'closed' && room.maxSeats === BOT_TABLE_REQUEST.maxSeats,
+  );
   if (preferredId !== null) {
     const remembered = mine.find((room) => room.id === preferredId);
     if (remembered !== undefined) return remembered;
