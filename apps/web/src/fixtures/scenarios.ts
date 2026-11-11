@@ -606,13 +606,12 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         min: 130,
         max: 238,
       },
-      confidence: 'low',
+      confidence: 'reasonable',
       reason:
-        'Raise comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.',
+        'Raise has the highest expected value against the stated range, by 46.3 units over the next-best action.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
-        'The gap to the next-best action is only 3.3 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
@@ -931,14 +930,13 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         min: 120,
         max: 210,
       },
-      confidence: 'low',
+      confidence: 'reasonable',
       reason:
-        'Raise comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.',
+        'Raise has the highest expected value against the stated range, by 21.1 units over the next-best action.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
         'The equity figure is sampled, ±0.48 points at 95% confidence. A close decision could sit either side of that.',
-        'The gap to the next-best action is only 2.2 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
@@ -1144,7 +1142,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       confidence: 'reasonable',
       reason:
-        'Bet has the highest expected value against the stated range, by 45.3 units over the next-best action.',
+        'Bet has the highest expected value against the stated range, by 132.9 units over the next-best action.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
@@ -1414,14 +1412,13 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         min: 80,
         max: 230,
       },
-      confidence: 'low',
+      confidence: 'reasonable',
       reason:
-        'Raise comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.',
+        'Raise has the highest expected value against the stated range, by 34.0 units over the next-best action.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
         'The equity figure is sampled, ±0.47 points at 95% confidence. A close decision could sit either side of that.',
-        'The gap to the next-best action is only 1.6 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {

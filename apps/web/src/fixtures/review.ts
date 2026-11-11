@@ -584,14 +584,13 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             min: 130,
             max: 325,
           },
-          confidence: 'low',
+          confidence: 'reasonable',
           reason:
-            'Raise comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.',
+            'Raise has the highest expected value against the stated range, by 45.9 units over the next-best action.',
           whatWouldChangeIt: [
             'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
             'Being raised is not modelled here, so treat the figure as optimistic.',
             '7 of your 15 outs are dirty — they improve you without making you safe, so counting all of them would overstate your chances.',
-            'The gap to the next-best action is only 1.9 units, well under a big blind — this is close to indifferent.',
           ],
         },
         stackContext: {
@@ -783,13 +782,12 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
             min: 260,
             max: 303,
           },
-          confidence: 'moderate',
+          confidence: 'reasonable',
           reason:
-            'Raise has the highest expected value against the stated range, by 10.0 units over the next-best action.',
+            'Raise has the highest expected value against the stated range, by 93.3 units over the next-best action.',
           whatWouldChangeIt: [
             'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
             'Being raised is not modelled here, so treat the figure as optimistic.',
-            'The gap to the next-best action is only 10.0 units, well under a big blind — this is close to indifferent.',
           ],
         },
         stackContext: {
@@ -951,7 +949,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           },
           confidence: 'reasonable',
           reason:
-            'Raise has the highest expected value against the stated range, by 53.6 units over the next-best action.',
+            'Raise has the highest expected value against the stated range, by 348.6 units over the next-best action.',
           whatWouldChangeIt: [
             'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
             'Being raised is not modelled here, so treat the figure as optimistic.',

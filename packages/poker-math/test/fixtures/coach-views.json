@@ -350,12 +350,11 @@
           "max": 43
         },
         "confidence": "moderate",
-        "reason": "Raise has the highest expected value against the stated range, by 3.0 units over the next-best action.",
+        "reason": "Raise has the highest expected value against the stated range, by 10.2 units over the next-best action.",
         "whatWouldChangeIt": [
           "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
           "Being raised is not modelled here, so treat the figure as optimistic.",
-          "The equity figure is sampled, ±1.62 points at 95% confidence. A close decision could sit either side of that.",
-          "The gap to the next-best action is only 3.0 units, well under a big blind — this is close to indifferent."
+          "The equity figure is sampled, ±1.62 points at 95% confidence. A close decision could sit either side of that."
         ]
       },
       "stackContext": {
@@ -743,7 +742,7 @@
           "max": 990
         },
         "confidence": "reasonable",
-        "reason": "Raise has the highest expected value against the stated range, by 91.8 units over the next-best action.",
+        "reason": "Raise has the highest expected value against the stated range, by 104.2 units over the next-best action.",
         "whatWouldChangeIt": [
           "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
           "Being raised is not modelled here, so treat the figure as optimistic.",
@@ -1814,12 +1813,12 @@
           "min": 10,
           "max": 30
         },
-        "confidence": "low",
-        "reason": "Bet comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.",
+        "confidence": "moderate",
+        "reason": "Bet has the highest expected value against the stated range, by 4.9 units over the next-best action.",
         "whatWouldChangeIt": [
           "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
           "Being raised is not modelled here, so treat the figure as optimistic.",
-          "The gap to the next-best action is only 1.0 units, well under a big blind — this is close to indifferent."
+          "The gap to the next-best action is only 4.9 units, well under a big blind — this is close to indifferent."
         ]
       },
       "stackContext": {

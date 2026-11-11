@@ -1380,3 +1380,36 @@ test('"loses more often than it wins" is keyed to hero equity, not to the price 
     `a hero ahead at ${(report.equity.heroEquity * 100).toFixed(1)}% was told the call "loses more often than it wins"`,
   );
 });
+
+test('confidence measures the gap to the next-best ACTION, not to a neighbouring size of the same one', () => {
+  // Facing 100 into 210 at a big blind of 20, Qh Jh against exactly Ac Kd on Th 9s 2c 3d. The
+  // Coach prices the bar's sizes, and the floor (200) and the ⅓-pot preset (203) are three chips
+  // apart, so they come out within a chip of each other: 41.44 and 40.65. Measured against
+  // `ranked[1]` that is a 0.04-big-blind margin, and the suggestion read "Raise comes out
+  // marginally ahead here, but only just — treat this as close to indifferent", while the best
+  // line that is not a raise — folding, at 0 — is 41.4 units, two big blinds, behind. Size
+  // near-ties are what `sizeRange` is for; the confidence is about which action.
+  const report = buildCoachReport({
+    heroCards: parseCards('Qh Jh'),
+    board: parseCards('Th 9s 2c 3d'),
+    street: 'turn',
+    opponents: [{ label: 'the opponent', range: exactRange(parseCards('Ac Kd')) }],
+    pot: 210,
+    contestablePot: 210,
+    toCall: 100,
+    heroCommittedThisStreet: 0,
+    heroStack: 1000,
+    opponentStacks: [1000],
+    bigBlind: 20,
+  });
+  const raises = report.candidates.filter((candidate) => candidate.action === 'raise');
+  assert.equal(raises[0]?.to, 200, 'the floor is priced');
+  assert.equal(raises[1]?.to, 203, 'and the ⅓-pot preset beside it');
+  assert.ok(Math.abs((raises[0]?.ev ?? 0) - (raises[1]?.ev ?? 0)) < 1, 'the two sizes are within a chip');
+
+  assert.equal(report.suggestion.action, 'raise');
+  assert.equal(report.suggestion.confidence, 'reasonable');
+  assert.match(report.suggestion.reason, /by 41\.4 units over the next-best action/u);
+  // 255 (½ pot) is 26.82, inside one big blind of the best, so it belongs in the range too.
+  assert.deepEqual(report.suggestion.sizeRange, { min: 200, max: 255 }, 'the near-tie is the size range');
+});

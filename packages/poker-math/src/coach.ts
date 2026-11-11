@@ -1223,8 +1223,15 @@ function buildSuggestion(
 ): CoachSuggestion {
   const ranked = [...candidates].sort(byExpectedValue);
   const best = ranked[0];
-  const second = ranked[1];
   if (best === undefined) throw new CoachError('no candidate actions were produced');
+  // The next-best ACTION, not the next row. Several rows can share an action at different sizes,
+  // and since the Coach prices the bar's own sizes (`offeredSizes`) two of them can sit three chips
+  // apart — the floor and the ⅓-pot preset — and price within a chip of each other. Against
+  // `ranked[1]` that read as a near-indifferent decision: over the 36 Lab scenarios, 12 changed
+  // confidence when the sizes changed, nearly all at a same-action neighbour, and a raise two big
+  // blinds clear of folding was published as "only just — treat this as close to indifferent".
+  // How close two sizes of the chosen action are is what `sizeRange` below reports.
+  const second = ranked.find((candidate) => candidate.action !== best.action);
 
   if (input.toCall === 0) {
     const foldRank = ranked.findIndex((candidate) => candidate.action === 'fold');
