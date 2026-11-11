@@ -39,6 +39,7 @@ import {
   LEGENDS_COMPARE_PATH,
   LEGENDS_PATH,
   loadHandComparison,
+  profileHref,
   type SearchParams,
 } from '@/lib/legends-data.ts';
 import { readerCallOptions } from '@/lib/server-session.ts';
@@ -188,6 +189,19 @@ export default async function HandReviewPage({
         component omits that sentence instead.
       */}
       <PostHandComparison comparison={result.comparison} />
+      {/*
+        Back to the style this hand was played against. `HandComparison.profileId` is the server's
+        own record of which modelled style held the seat, so this names nothing the API did not send.
+        `/review/<hand>` cannot do the same: `HandReviewResponse` carries seat plates and no profile
+        id, and the six-handed bot table plates its bots from the same ids, so a plate cannot tell a
+        legend match from the bot table without inventing the answer.
+      */}
+      <nav aria-label="After this hand" className="prl-legend-nav">
+        <Link href={profileHref(result.comparison.profileId)}>
+          {`${result.comparison.disclosure.archetypeName}, in full`}
+        </Link>
+        <Link href={LEGENDS_PATH}>Choose another opponent</Link>
+      </nav>
     </div>
   );
 }

@@ -53,6 +53,7 @@
  */
 
 import { Button, browserAbandonedFocus, Callout, Panel, type TableAction } from '@prl/ui';
+import Link from 'next/link';
 import {
   type FocusEvent,
   type FormEvent,
@@ -65,6 +66,7 @@ import {
 } from 'react';
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
 import { reviewHrefFor } from '@/lib/coach-body.ts';
+import { LEGENDS_PATH } from '@/lib/legend-links.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
 import { type LiveTable as LiveTableModel, useLiveTable } from '@/lib/use-live-table.ts';
@@ -198,6 +200,8 @@ function stageStatusOf(live: LiveTableModel): TableStageStatus {
 
 interface ConnectionPanelProps {
   readonly live: LiveTableModel;
+  /** True on `/play?profile=…`: a match against one AI Legends style rather than the bot table. */
+  readonly inLegendMatch?: boolean;
 }
 
 /**
@@ -365,6 +369,7 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
  */
 function ConnectionControls({
   live,
+  inLegendMatch = false,
   fallbackRef,
 }: ConnectionPanelProps & { readonly fallbackRef: RefObject<HTMLParagraphElement | null> }): ReactElement {
   const { phase, closed, table } = live;
@@ -455,6 +460,17 @@ function ConnectionControls({
           <Button variant="secondary" onClick={live.stand}>
             Stand up
           </Button>
+        ) : null}
+
+        {/*
+          The way back to the choice. After "Stand up" in a legend match the only controls were
+          "Take seat 1" and "Start a fresh table", neither of which leads to another opponent, and the
+          shell's own nav was the only route to /legends. A link, not a button: it navigates.
+        */}
+        {isLive && !seated && inLegendMatch ? (
+          <Link className="prl-btn prl-btn--secondary prl-btn--md" href={LEGENDS_PATH}>
+            Choose another opponent
+          </Link>
         ) : null}
 
         {isLive && seated && !table.betweenHands && live.coachOff === null ? (
@@ -643,7 +659,7 @@ function JoinByInviteCode({ live }: ConnectionPanelProps): ReactElement {
 }
 
 /** The setup half: session, room, socket — and every reason one of them is not there. */
-function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
+function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps): ReactElement {
   const room = live.table.room;
   /**
    * Where the caret lands when the control it was on is taken away.
@@ -718,7 +734,7 @@ function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
       </div>
 
       <ConnectionNotices live={live} />
-      <ConnectionControls live={live} fallbackRef={statusRef} />
+      <ConnectionControls live={live} inLegendMatch={inLegendMatch} fallbackRef={statusRef} />
 
       {room === null ? null : (
         <dl className="prl-stat__pair prl-play__facts">
@@ -753,7 +769,7 @@ export function LiveTable({
 
   return (
     <>
-      <ConnectionPanel live={live} />
+      <ConnectionPanel live={live} inLegendMatch={legendMatch !== undefined} />
 
       <TableStage
         status={status}

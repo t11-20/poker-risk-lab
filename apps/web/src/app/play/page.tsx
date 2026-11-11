@@ -40,6 +40,7 @@
  * a static page, and every state below depends on the request.
  */
 
+import type { LegendDifficultyDto } from '@prl/contracts';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
@@ -59,6 +60,8 @@ import {
   TABLE_STATES,
   type TableStateName,
 } from '@/fixtures/table.ts';
+import { legendMatchCopy } from '@/lib/legend-match-copy.ts';
+import { findProfile, LEGENDS_PATH, loadLegendProfiles, profileHref } from '@/lib/legends-data.ts';
 import { LiveTable } from './LiveTable.tsx';
 import '@/styles/play.css';
 
@@ -85,6 +88,7 @@ const STATE_LEDE: Readonly<Record<TableStateName, string>> = {
     'left for the Coach to price; the useful feedback is in the hand’s review, not in the result.',
 };
 
+/** The six-handed table's lede. A legend match has its own — see `legendMatchCopy`. */
 const LIVE_LEDE =
   'A private table against five bots, dealt and settled by the server. Every card, every stack, ' +
   'every pot and every legal action on this screen arrived over the socket — nothing here is decided ' +
@@ -103,6 +107,28 @@ function stagePropsFor(state: TableStateName): {
     return { status: 'complete', view: COMPLETED_HAND_VIEW, report: null };
   }
   return { status: 'ready', view: FLOP_DECISION_VIEW, report: FLOP_DECISION_REPORT };
+}
+
+/**
+ * The legend match's head: the style the reader picked, the setting, and the framing, from the same
+ * profiles response `/legends` rendered. An outage falls back to the bundled profiles inside
+ * `loadLegendProfiles`; anything else it throws is caught here and costs only the archetype name,
+ * because a heading is not worth failing the table over.
+ */
+async function legendHead(profileId: string, difficulty: MatchDifficulty) {
+  let archetypeName: string | null = null;
+  let setting: LegendDifficultyDto | null = null;
+  try {
+    const profiles = await loadLegendProfiles();
+    archetypeName = findProfile(profiles.data.profiles, profileId)?.disclosure.archetypeName ?? null;
+    setting = profiles.data.difficulties.find((entry) => entry.id === difficulty) ?? null;
+  } catch {
+    // Fail in the safe direction: a generic heading, still framed, and the table still loads.
+  }
+  return {
+    known: archetypeName !== null,
+    copy: legendMatchCopy({ profileId, archetypeName, difficulty, setting }),
+  };
 }
 
 /** The list of fixture renderings, used from both branches so the audit can crawl all four. */
@@ -233,6 +259,8 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
   const difficulty = firstValue(params['difficulty']);
   const legendMatch =
     profile !== undefined && isMatchDifficulty(difficulty) ? { profileId: profile, difficulty } : undefined;
+  const legend =
+    legendMatch === undefined ? null : await legendHead(legendMatch.profileId, legendMatch.difficulty);
 
   return (
     <div className="prl-play">
@@ -241,27 +269,50 @@ export default async function PlayPage({ searchParams }: PlayPageProps): Promise
           <span className="prl-index" aria-hidden="true">
             02
           </span>
-          <span className="prl-label">Play</span>
+          <span className="prl-label">{legend === null ? 'Play' : legend.copy.eyebrow}</span>
         </p>
-        <h1 className="prl-play__title">
-          {legendMatch === undefined ? 'Six-handed table' : 'Heads-up against this style'}
-        </h1>
-        <p className="prl-play__lede">{LIVE_LEDE}</p>
+        <h1 className="prl-play__title">{legend === null ? 'Six-handed table' : legend.copy.heading}</h1>
+        <p className="prl-play__lede">{legend === null ? LIVE_LEDE : legend.copy.lede}</p>
+        {legend === null || legendMatch === undefined ? null : (
+          <p className="prl-play__framing prl-note">
+            {`${legend.copy.framing} `}
+            {legend.known ? (
+              <>
+                <Link href={profileHref(legendMatch.profileId, legendMatch.difficulty)}>
+                  The profile in full
+                </Link>
+                {' · '}
+              </>
+            ) : null}
+            <Link href={LEGENDS_PATH}>Choose another opponent</Link>
+          </p>
+        )}
       </header>
 
       <LiveTable {...(legendMatch === undefined ? {} : { legendMatch })} />
 
-      <details className="prl-disclose">
-        <summary className="prl-disclose__summary">Fixture renderings, for design and audit</summary>
-        <div className="prl-disclose__body">
-          <p>
-            Four states this screen has to handle, rendered from a typed fixture so they can be reviewed
-            without waiting for a live table to reach them. They are not what this page is showing, and no
-            link below opens a socket.
-          </p>
-          <FixtureLinks current={null} />
-        </div>
-      </details>
+      {/*
+        Deliberately public, and deliberately below the table with a rule above it. The four fixture
+        states are an audit surface: `test:ax`, `test:keyboard` and `test:layout` crawl
+        `/play?state=…` on the PRODUCTION build (`next start`), so they cannot be hidden outside
+        development without hiding them from the gates that check them, and a reviewer reaches them
+        from here. What was wrong was only that they read as part of the table; the separator and the
+        "For reviewers" label say they are not.
+      */}
+      <div className="prl-play__review-states">
+        <p className="prl-label">For reviewers</p>
+        <details className="prl-disclose">
+          <summary className="prl-disclose__summary">Fixture renderings, for design and audit</summary>
+          <div className="prl-disclose__body">
+            <p>
+              Four states this screen has to handle, rendered from a typed fixture so they can be reviewed
+              without waiting for a live table to reach them. They are not what this page is showing, and no
+              link below opens a socket.
+            </p>
+            <FixtureLinks current={null} />
+          </div>
+        </details>
+      </div>
     </div>
   );
 }
