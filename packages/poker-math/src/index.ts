@@ -193,10 +193,22 @@ export {
   type SprResult,
   StackError,
   sizingLadder,
+  sizingOptionAt,
   sprBandFor,
   stackInBigBlinds,
   stackToPotRatio,
 } from './stacks.ts';
+export {
+  type BetBounds,
+  clampToBounds,
+  nearestPricedSizes,
+  type OfferedSize,
+  offeredSizes,
+  presetTo,
+  type SizingContext,
+  type SizingPreset,
+  TABLE_SIZING_PRESETS,
+} from './table-sizing.ts';
 export {
   bankrollForRiskTolerance,
   type DownswingOutlook,

@@ -42,6 +42,7 @@ import * as odds from '../src/odds.ts';
 import * as outs from '../src/outs.ts';
 import * as ranges from '../src/ranges.ts';
 import * as stacks from '../src/stacks.ts';
+import * as tableSizing from '../src/table-sizing.ts';
 import * as variance from '../src/variance.ts';
 
 /** The modules whose exports the index is expected to republish, in its own order. */
@@ -57,6 +58,7 @@ const PUBLIC_MODULES: readonly (readonly [string, Record<string, unknown>])[] = 
   ['outs.ts', outs],
   ['ranges.ts', ranges],
   ['stacks.ts', stacks],
+  ['table-sizing.ts', tableSizing],
   ['variance.ts', variance],
 ];
 

@@ -545,7 +545,27 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 130,
         ev: 81.1810606060606,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 65) - 130 ] = 68.25 + 12.93 = 81.18 chips. Risks 130 to win 195. Raising by 65 is one quarter pot of the 260 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 65, and has to continue with 60% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 65) - 130 ] = 68.25 + 12.93 = 81.18 chips. Risks 130 to win 195. Raising by 65 is the smallest raise the rules allow here: 25% of the 260 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 65, and has to continue with 60% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.3843434343434343,
+      },
+      {
+        action: 'raise',
+        to: 152,
+        cost: 152,
+        ev: 77.87328282828283,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 87) - 152 ] = 68.25 + 9.62 = 77.87 chips. Risks 152 to win 195. Raising by 87 is the ⅓-pot size: 33.5% of the 260 that would be in the middle once you call. A caller needs 20% equity to break even on the extra 87, and has to continue with 56.2% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.3843434343434343,
+      },
+      {
+        action: 'raise',
+        to: 195,
+        cost: 195,
+        ev: 71.40808080808081,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 130) - 195 ] = 68.25 + 3.16 = 71.41 chips. Risks 195 to win 195. Raising by 130 is the ½-pot size: 50% of the 260 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 130, and has to continue with 50% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.3843434343434343,
       },
@@ -555,7 +575,17 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 238,
         ev: 64.94287878787878,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 173) - 238 ] = 68.25 + (-3.31) = 64.94 chips. Risks 238 to win 195. Raising by 173 is two thirds pot of the 260 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 173, and has to continue with 45% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 173) - 238 ] = 68.25 + (-3.31) = 64.94 chips. Risks 238 to win 195. Raising by 173 is the ⅔-pot size: 66.5% of the 260 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 173, and has to continue with 45% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.3843434343434343,
+      },
+      {
+        action: 'raise',
+        to: 325,
+        cost: 325,
+        ev: 51.86212121212119,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 195 + 0.65 x [ 0.3843 x (195 + 65 + 2 x 260) - 325 ] = 68.25 + (-16.39) = 51.86 chips. Risks 325 to win 195. Raising by 260 is the pot-sized size: 100% of the 260 that would be in the middle once you call. A caller needs 33.3% equity to break even on the extra 260, and has to continue with 37.5% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.3843434343434343,
       },
@@ -576,13 +606,13 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         min: 130,
         max: 238,
       },
-      confidence: 'moderate',
+      confidence: 'low',
       reason:
-        'Raise has the highest expected value against the stated range, by 16.2 units over the next-best action.',
+        'Raise comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
-        'The gap to the next-best action is only 16.2 units, well under a big blind — this is close to indifferent.',
+        'The gap to the next-best action is only 3.3 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
@@ -689,17 +719,47 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 200,
         ev: 10.454545454545467,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 100) - 200 ] = 105 + (-94.55) = 10.45 chips. Risks 200 to win 300. Raising by 100 is one quarter pot of the 400 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 100, and has to continue with 60% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 100) - 200 ] = 105 + (-94.55) = 10.45 chips. Risks 200 to win 300. Raising by 100 is the smallest raise the rules allow here: 25% of the 400 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 100, and has to continue with 60% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.09090909090909091,
       },
       {
         action: 'raise',
-        to: 366,
-        cost: 366,
-        ev: -77.82727272727271,
+        to: 233,
+        cost: 233,
+        ev: -7.095454545454544,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 266) - 366 ] = 105 + (-182.83) = -77.83 chips. Risks 366 to win 300. Raising by 266 is two thirds pot of the 400 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 266, and has to continue with 45% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 133) - 233 ] = 105 + (-112.1) = -7.1 chips. Risks 233 to win 300. Raising by 133 is the ⅓-pot size: 33.3% of the 400 that would be in the middle once you call. A caller needs 20% equity to break even on the extra 133, and has to continue with 56.3% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.09090909090909091,
+      },
+      {
+        action: 'raise',
+        to: 300,
+        cost: 300,
+        ev: -42.72727272727272,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 200) - 300 ] = 105 + (-147.73) = -42.73 chips. Risks 300 to win 300. Raising by 200 is the ½-pot size: 50% of the 400 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 200, and has to continue with 50% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.09090909090909091,
+      },
+      {
+        action: 'raise',
+        to: 367,
+        cost: 367,
+        ev: -78.35909090909092,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 267) - 367 ] = 105 + (-183.36) = -78.36 chips. Risks 367 to win 300. Raising by 267 is the ⅔-pot size: 66.8% of the 400 that would be in the middle once you call. A caller needs 28.6% equity to break even on the extra 267, and has to continue with 45% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.09090909090909091,
+      },
+      {
+        action: 'raise',
+        to: 500,
+        cost: 500,
+        ev: -149.0909090909091,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 300 + 0.65 x [ 0.0909 x (300 + 100 + 2 x 400) - 500 ] = 105 + (-254.09) = -149.09 chips. Risks 500 to win 300. Raising by 400 is the pot-sized size: 100% of the 400 that would be in the middle once you call. A caller needs 33.3% equity to break even on the extra 400, and has to continue with 37.5% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.09090909090909091,
       },
@@ -718,7 +778,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       action: 'raise',
       sizeRange: {
         min: 200,
-        max: 200,
+        max: 233,
       },
       confidence: 'moderate',
       reason:
@@ -816,21 +876,41 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       {
         action: 'raise',
-        to: 135,
-        cost: 135,
-        ev: 18.842062499999997,
+        to: 120,
+        cost: 120,
+        ev: 21.082856250000006,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 75) - 135 ] = 31.5 + (-12.66) = 18.84 chips. Risks 135 to win 90. Raising by 75 is half pot of the 150 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 75, and has to continue with 40% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 60) - 120 ] = 31.5 + (-10.42) = 21.08 chips. Risks 120 to win 90. Raising by 60 is the smallest raise the rules allow here: 40% of the 150 that would be in the middle once you call. A caller needs 22.2% equity to break even on the extra 60, and has to continue with 42.9% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.3850875,
       },
       {
         action: 'raise',
-        to: 172,
-        cost: 172,
-        ev: 13.31477125,
+        to: 135,
+        cost: 135,
+        ev: 18.842062499999997,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 112) - 172 ] = 31.5 + (-18.19) = 13.31 chips. Risks 172 to win 90. Raising by 112 is three quarters pot of the 150 that would be in the middle once you call. A caller needs 29.9% equity to break even on the extra 112, and has to continue with 34.4% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 75) - 135 ] = 31.5 + (-12.66) = 18.84 chips. Risks 135 to win 90. Raising by 75 is the ½-pot size: 50% of the 150 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 75, and has to continue with 40% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.3850875,
+      },
+      {
+        action: 'raise',
+        to: 160,
+        cost: 160,
+        ev: 15.107406250000004,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 100) - 160 ] = 31.5 + (-16.39) = 15.11 chips. Risks 160 to win 90. Raising by 100 is the ⅔-pot size: 66.7% of the 150 that would be in the middle once you call. A caller needs 28.6% equity to break even on the extra 100, and has to continue with 36% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.3850875,
+      },
+      {
+        action: 'raise',
+        to: 210,
+        cost: 210,
+        ev: 7.6380937499999995,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 90 + 0.65 x [ 0.3851 x (90 + 60 + 2 x 150) - 210 ] = 31.5 + (-23.86) = 7.64 chips. Risks 210 to win 90. Raising by 150 is the pot-sized size: 100% of the 150 that would be in the middle once you call. A caller needs 33.3% equity to break even on the extra 150, and has to continue with 30% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.3850875,
       },
@@ -848,17 +928,17 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     suggestion: {
       action: 'raise',
       sizeRange: {
-        min: 135,
-        max: 172,
+        min: 120,
+        max: 210,
       },
-      confidence: 'moderate',
+      confidence: 'low',
       reason:
-        'Raise has the highest expected value against the stated range, by 5.5 units over the next-best action.',
+        'Raise comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
         'The equity figure is sampled, ±0.48 points at 95% confidence. A close decision could sit either side of that.',
-        'The gap to the next-best action is only 5.5 units, well under a big blind — this is close to indifferent.',
+        'The gap to the next-best action is only 2.2 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {
@@ -997,21 +1077,51 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       {
         action: 'bet',
-        to: 70,
-        cost: 70,
-        ev: 228.60718050065876,
+        to: 20,
+        cost: 20,
+        ev: 219.17689942907333,
         derivation:
-          'EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 280 + 0.65 x [ 0.6451 x (280 + 2 x 70) - 70 ] = 98 + 130.61 = 228.61 chips. Risks 70 to win 280. A caller needs 16.7% equity to break even, and as a pure bluff it would have to work 20% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 80% of their range.',
+          'EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 280 + 0.65 x [ 0.6451 x (280 + 2 x 20) - 20 ] = 98 + 121.18 = 219.18 chips. This is the smallest bet the rules allow here. Risks 20 to win 280. A caller needs 6.3% equity to break even, and as a pure bluff it would have to work 6.7% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 93.3% of their range.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.6450812472551603,
       },
       {
         action: 'bet',
-        to: 186,
-        cost: 186,
-        ev: 250.48543258673692,
+        to: 93,
+        cost: 93,
+        ev: 232.94510979358805,
         derivation:
-          'EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 280 + 0.65 x [ 0.6451 x (280 + 2 x 186) - 186 ] = 98 + 152.49 = 250.49 chips. Risks 186 to win 280. A caller needs 28.5% equity to break even, and as a pure bluff it would have to work 39.9% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 60.1% of their range.',
+          'EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 280 + 0.65 x [ 0.6451 x (280 + 2 x 93) - 93 ] = 98 + 134.95 = 232.95 chips. This is the ⅓-pot size. Risks 93 to win 280. A caller needs 20% equity to break even, and as a pure bluff it would have to work 24.9% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 75.1% of their range.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.6450812472551603,
+      },
+      {
+        action: 'bet',
+        to: 140,
+        cost: 140,
+        ev: 241.8095740008783,
+        derivation:
+          'EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 280 + 0.65 x [ 0.6451 x (280 + 2 x 140) - 140 ] = 98 + 143.81 = 241.81 chips. This is the ½-pot size. Risks 140 to win 280. A caller needs 25% equity to break even, and as a pure bluff it would have to work 33.3% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 66.7% of their range.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.6450812472551603,
+      },
+      {
+        action: 'bet',
+        to: 187,
+        cost: 187,
+        ev: 250.67403820816864,
+        derivation:
+          'EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 280 + 0.65 x [ 0.6451 x (280 + 2 x 187) - 187 ] = 98 + 152.67 = 250.67 chips. This is the ⅔-pot size. Risks 187 to win 280. A caller needs 28.6% equity to break even, and as a pure bluff it would have to work 40% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 60% of their range.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.6450812472551603,
+      },
+      {
+        action: 'bet',
+        to: 280,
+        cost: 280,
+        ev: 268.2143610013175,
+        derivation:
+          'EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 280 + 0.65 x [ 0.6451 x (280 + 2 x 280) - 280 ] = 98 + 170.21 = 268.21 chips. This is the pot-sized size. Risks 280 to win 280. A caller needs 33.3% equity to break even, and as a pure bluff it would have to work 50% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 50% of their range.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.6450812472551603,
       },
@@ -1034,7 +1144,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       confidence: 'reasonable',
       reason:
-        'Bet has the highest expected value against the stated range, by 63.0 units over the next-best action.',
+        'Bet has the highest expected value against the stated range, by 45.3 units over the next-best action.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
@@ -1134,7 +1244,7 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
         cost: 900,
         ev: 71.51351351351352,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 900 + 0.65 x [ 0.2432 x (900 + 540 + 2 x 360) - 900 ] = 315 + (-243.49) = 71.51 chips. Risks 900 to win 900. Raising by 360 is one quarter pot of the 1440 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 360, and has to continue with 50% of their range for a raise of this size not to print automatically. That size is also your whole remaining stack.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 900 + 0.65 x [ 0.2432 x (900 + 540 + 2 x 360) - 900 ] = 315 + (-243.49) = 71.51 chips. Risks 900 to win 900. Raising by 360 is the smallest raise the rules allow here: 25% of the 1440 that would be in the middle once you call. A caller needs 16.7% equity to break even on the extra 360, and has to continue with 50% of their range for a raise of this size not to print automatically. That size is also your whole remaining stack.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.24324324324324326,
       },
@@ -1239,21 +1349,51 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
       },
       {
         action: 'raise',
-        to: 87,
-        cost: 87,
-        ev: 78.24467999999999,
+        to: 80,
+        cost: 80,
+        ev: 78.7379,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 47) - 87 ] = 52.5 + 25.74 = 78.24 chips. Risks 87 to win 150. Raising by 47 is one quarter pot of the 190 that would be in the middle once you call. A caller needs 16.5% equity to break even on the extra 47, and has to continue with 63.3% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 40) - 80 ] = 52.5 + 26.24 = 78.74 chips. Risks 80 to win 150. Raising by 40 is the smallest raise the rules allow here: 21.1% of the 190 that would be in the middle once you call. A caller needs 14.8% equity to break even on the extra 40, and has to continue with 65.2% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.4458,
       },
       {
         action: 'raise',
-        to: 166,
-        cost: 166,
-        ev: 72.67833999999999,
+        to: 103,
+        cost: 103,
+        ev: 77.11731999999999,
         derivation:
-          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 126) - 166 ] = 52.5 + 20.18 = 72.68 chips. Risks 166 to win 150. Raising by 126 is two thirds pot of the 190 that would be in the middle once you call. A caller needs 28.5% equity to break even on the extra 126, and has to continue with 47.5% of their range for a raise of this size not to print automatically.',
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 63) - 103 ] = 52.5 + 24.62 = 77.12 chips. Risks 103 to win 150. Raising by 63 is the ⅓-pot size: 33.2% of the 190 that would be in the middle once you call. A caller needs 19.9% equity to break even on the extra 63, and has to continue with 59.3% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.4458,
+      },
+      {
+        action: 'raise',
+        to: 135,
+        cost: 135,
+        ev: 74.8626,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 95) - 135 ] = 52.5 + 22.36 = 74.86 chips. Risks 135 to win 150. Raising by 95 is the ½-pot size: 50% of the 190 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 95, and has to continue with 52.6% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.4458,
+      },
+      {
+        action: 'raise',
+        to: 167,
+        cost: 167,
+        ev: 72.60788,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 127) - 167 ] = 52.5 + 20.11 = 72.61 chips. Risks 167 to win 150. Raising by 127 is the ⅔-pot size: 66.8% of the 190 that would be in the middle once you call. A caller needs 28.6% equity to break even on the extra 127, and has to continue with 47.3% of their range for a raise of this size not to print automatically.',
+        foldEquityAssumed: 0.35,
+        potShareIfCalled: 0.4458,
+      },
+      {
+        action: 'raise',
+        to: 230,
+        cost: 230,
+        ev: 68.1689,
+        derivation:
+          'EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 150 + 0.65 x [ 0.4458 x (150 + 40 + 2 x 190) - 230 ] = 52.5 + 15.67 = 68.17 chips. Risks 230 to win 150. Raising by 190 is the pot-sized size: 100% of the 190 that would be in the middle once you call. A caller needs 33.3% equity to break even on the extra 190, and has to continue with 39.5% of their range for a raise of this size not to print automatically.',
         foldEquityAssumed: 0.35,
         potShareIfCalled: 0.4458,
       },
@@ -1271,17 +1411,17 @@ export const LAB_SCENARIO_ANALYSIS: Readonly<Record<ContentId, CoachReport>> = {
     suggestion: {
       action: 'raise',
       sizeRange: {
-        min: 87,
-        max: 166,
+        min: 80,
+        max: 230,
       },
-      confidence: 'moderate',
+      confidence: 'low',
       reason:
-        'Raise has the highest expected value against the stated range, by 5.6 units over the next-best action.',
+        'Raise comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.',
       whatWouldChangeIt: [
         'This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.',
         'Being raised is not modelled here, so treat the figure as optimistic.',
         'The equity figure is sampled, ±0.47 points at 95% confidence. A close decision could sit either side of that.',
-        'The gap to the next-best action is only 5.6 units, well under a big blind — this is close to indifferent.',
+        'The gap to the next-best action is only 1.6 units, well under a big blind — this is close to indifferent.',
       ],
     },
     stackContext: {

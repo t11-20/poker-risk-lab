@@ -80,7 +80,8 @@ import {
 } from './odds.ts';
 import { computeOuts, type OutsResult } from './outs.ts';
 import { exactRange, type ParsedRange } from './ranges.ts';
-import { effectiveStack, type SizingOption, sizingLadder, stackToPotRatio } from './stacks.ts';
+import { effectiveStack, type SizingOption, sizingOptionAt, stackToPotRatio } from './stacks.ts';
+import { type OfferedSize, offeredSizes } from './table-sizing.ts';
 
 export class CoachError extends Error {
   override readonly name = 'CoachError';
@@ -902,6 +903,7 @@ export function minimumAggressiveTo(spot: SizedSpot): number {
  */
 function raiseSizingNote(
   option: SizingOption,
+  sizeId: OfferedSize['id'],
   potAfterCall: number,
   potBeforeCall: number,
   toCall: number,
@@ -911,16 +913,42 @@ function raiseSizingNote(
   // alpha = (c + r) / (pot + c + r).
   const risked = toCall + option.amount;
   const minimumDefence = potBeforeCall / (potBeforeCall + risked);
+  const share = `${percent(option.fractionOfPot)} of the ${chips(potAfterCall)} that would be in the middle once you call`;
   const shape =
-    option.label === 'all-in'
+    sizeId === 'allIn'
       ? `Raising by ${chips(option.amount)} puts your whole remaining stack in.`
-      : `Raising by ${chips(option.amount)} is ${option.label} of the ${chips(potAfterCall)} that would be in the middle once you call.`;
-  const allIn = isAllIn && option.label !== 'all-in' ? ' That size is also your whole remaining stack.' : '';
+      : sizeId === 'minimum'
+        ? `Raising by ${chips(option.amount)} is the smallest raise the rules allow here: ${share}.`
+        : `Raising by ${chips(option.amount)} is the ${SIZE_WORDS[sizeId]} size: ${share}.`;
+  const allIn = isAllIn && sizeId !== 'allIn' ? ' That size is also your whole remaining stack.' : '';
   return (
     `${shape} A caller needs ${percent(option.priceLaidToCaller)} equity to break even on the extra ` +
     `${chips(option.amount)}, and has to continue with ${percent(minimumDefence)} of ` +
     `their range for a raise of this size not to print automatically.${allIn}`
   );
+}
+
+/**
+ * How each offered size is named in a derivation: the button a learner would press for it.
+ *
+ * Named after the control rather than after the fraction it works out to, because the fraction is
+ * printed beside it and the two can differ — a preset is rounded to a whole chip, and one that
+ * clamps to the floor or the stack is listed under the floor or the stack instead.
+ */
+const SIZE_WORDS: Readonly<Record<OfferedSize['id'], string>> = {
+  minimum: 'minimum',
+  third: '⅓-pot',
+  half: '½-pot',
+  twoThirds: '⅔-pot',
+  pot: 'pot-sized',
+  allIn: 'all-in',
+};
+
+/** The sentence that names a bet's size, ahead of the ladder's note. The note says all-in itself. */
+function betSizeSentence(sizeId: OfferedSize['id']): string {
+  if (sizeId === 'allIn') return '';
+  if (sizeId === 'minimum') return 'This is the smallest bet the rules allow here. ';
+  return `This is the ${SIZE_WORDS[sizeId]} size. `;
 }
 
 /**
@@ -942,9 +970,9 @@ function raiseSizingNote(
  *   2. **The total.** `to` is a seat's whole street commitment, so it is
  *      `heroCommittedThisStreet + toCall + r`. Dropping the first term is what
  *      published raises the table would refuse.
- *   3. **The floor.** A raise must reach a minimum, so ladder rungs below it are not
- *      offered at all. The smallest rung is exactly the one a learner is most likely
- *      to try.
+ *   3. **The floor.** A raise must reach a minimum, so no size below it is offered at
+ *      all — and the floor itself is, because it is what an untouched sizer sends and
+ *      so exactly the size a learner is most likely to try.
  *
  * Which of a bet and a raise is on offer is decided by the bet level, not by `toCall`:
  * a big blind facing a limped pot owes nothing and still cannot *bet*, because there
@@ -1031,34 +1059,38 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
     // the clamp `legalActions` applies. It moved into the floor itself when a second caller
     // appeared that has to hold a learner's submitted size to the same figure.
     const floorTo = minimumAggressiveTo(input);
-    const floorRaiseBy = floorTo - betLevel;
 
     // Sizes are fractions of the pot as it stands *after* the call, which is both how
     // a raise is described at a table and the pot the raise actually lays a price
     // into. For an opening bet there is nothing to call and this is just the pot.
     const potAfterCall = Math.max(1, pot + input.toCall);
-    const ladder = sizingLadder(potAfterCall, maxRaiseBy);
-    // `legalRungs`, not `legal`: this is the set of legal *sizes*, a different question
-    // from the set of legal actions resolved at the top of this function, and one name
-    // for both is how the two got conflated in the first place.
-    const legalRungs = ladder.filter((option) => option.amount >= floorRaiseBy);
 
-    // Three representative sizes rather than the whole ladder: enough to show how the
-    // decision moves with size without turning the panel into a table nobody reads.
-    // Smallest legal, something in the middle, and the shove — taken from the legal
-    // rungs, so no size here is one the table would refuse. The ladder always ends in
-    // an all-in rung and an all-in always clears the clamped floor, so this list is
-    // never empty.
-    const picks = [
-      legalRungs[0],
-      legalRungs[Math.floor((legalRungs.length - 1) / 2)],
-      legalRungs[legalRungs.length - 1],
-    ];
-    const seen = new Set<number>();
-    for (const option of picks) {
-      if (option === undefined || option.amount <= 0 || seen.has(option.amount)) continue;
-      seen.add(option.amount);
-      const raiseBy = option.amount;
+    // The sizes the table's own bar offers — its default (the floor) and every preset —
+    // and no others. They used to be three rungs of `sizingLadder`, rounded down, while the
+    // bar offered a floor default and ⅓/½/⅔/pot presets rounded to the nearest chip, and a
+    // sized action is graded only on an exact match: over the 36 Lab scenarios the bar's
+    // default was unpriced in 23 of the 31 that offer aggression, and 97 of the sizes the
+    // bar offered by a button were sizes this table never priced. `offeredSizes` is the one
+    // definition both sides read. See `./table-sizing.ts`.
+    //
+    // Up to six rows rather than three. The extra rows are the sizes a learner can actually
+    // press, which is the only reason to price a size at all; on a short stack they clamp
+    // together and the table shrinks with them.
+    //
+    // Sized against `pot`, which is `contestablePot`. The bar sizes against the whole middle,
+    // and the two are equal wherever this branch runs: raising needs chips behind the call
+    // (`maxRaiseBy > 0`), so hero covers the bet and nothing in the middle is above hero's
+    // reach. `apps/web/test/lab-sizes-priced.test.ts` asserts the equality over the bundle.
+    const offered = offeredSizes({
+      bounds: { min: floorTo, max: maximumTo(input) },
+      pot,
+      toCall: input.toCall,
+      committedThisStreet: input.heroCommittedThisStreet,
+    });
+    for (const size of offered) {
+      const raiseBy = size.to - betLevel;
+      if (raiseBy <= 0) continue;
+      const isAllIn = raiseBy === maxRaiseBy;
 
       if (isOpening) {
         const bet = evOfBet({
@@ -1068,12 +1100,13 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
           equityWhenCalled: heroEquity,
           callerCanRaise: true,
         });
+        const option = sizingOptionAt(potAfterCall, raiseBy, SIZE_WORDS[size.id], isAllIn);
         candidates.push({
           action: 'bet',
           to: raiseBy,
           cost: raiseBy,
           ev: bet.ev,
-          derivation: `${bet.derivation} ${option.note}`,
+          derivation: `${bet.derivation} ${betSizeSentence(size.id)}${option.note}`,
           foldEquityAssumed: foldEquity,
           potShareIfCalled: heroEquity,
         });
@@ -1088,12 +1121,13 @@ function buildCandidates(input: CoachInput, heroEquity: number, foldEquity: numb
         equityWhenCalled: heroEquity,
         callerCanRaise: true,
       });
+      const option = sizingOptionAt(potAfterCall, raiseBy, SIZE_WORDS[size.id], isAllIn);
       candidates.push({
         action: 'raise',
         to: betLevel + raiseBy,
         cost: raise.risk,
         ev: raise.ev,
-        derivation: `${raise.derivation} ${raiseSizingNote(option, potAfterCall, pot, input.toCall, raiseBy === maxRaiseBy)}`,
+        derivation: `${raise.derivation} ${raiseSizingNote(option, size.id, potAfterCall, pot, input.toCall, isAllIn)}`,
         foldEquityAssumed: foldEquity,
         potShareIfCalled: heroEquity,
       });

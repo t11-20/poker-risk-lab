@@ -256,7 +256,7 @@ function evTone(ev: number): 'favourable' | 'adverse' | 'neutral' {
  * The candidate the suggestion is talking about, so its EV can be shown beside it.
  *
  * Matched on the action, then narrowed by the size range when the suggestion has one — a report may
- * carry three different raise sizes as separate candidates. Returns `null` rather than guessing
+ * carry several raise sizes as separate candidates. Returns `null` rather than guessing
  * when nothing matches: an EV attributed to the wrong line is worse than no EV at all.
  */
 function candidateForSuggestion(

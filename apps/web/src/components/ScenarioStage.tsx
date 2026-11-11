@@ -101,6 +101,7 @@ import {
   type Consistency,
   foldAssumingActions,
   judgeConsistency,
+  nearestPricedSentence,
   type ScenarioAction,
 } from '../lib/consistency.ts';
 
@@ -281,6 +282,12 @@ function Verdict({
               : 'The server could not be reached, so this verdict is the shared rule applied in your browser. It is the same rule the server grades with.'}
         </span>
       </div>
+
+      {/* Where the priced sizes are, so "did not price that size" is a next step and not a dead end.
+          Only a typed or dragged total reaches this: every preset and the default are priced. */}
+      {judgement.nearestPriced === null ? null : (
+        <p className="prl-note">{nearestPricedSentence(action, judgement.nearestPriced, formatUnits)}</p>
+      )}
 
       <dl className="prl-stage__ev">
         <div className="prl-stage__ev-row">

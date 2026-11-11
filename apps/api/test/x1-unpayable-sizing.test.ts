@@ -247,8 +247,8 @@ describe('a scenario sizing that is legal but was never priced', () => {
   /**
    * The honest middle case, and the reason the fix is not simply "refuse harder".
    *
-   * The Coach prices three representative sizes, not the whole ladder. A learner who raises to a
-   * total between them has made a decision the table would accept and the analysis has nothing to
+   * The Coach prices the sizes the table's sizing buttons offer, not every legal total. A learner
+   * who types or drags to a total between them has made a decision the table would accept and the analysis has nothing to
    * say about. That is neither consistent nor inconsistent, and the reply has to say so — the
    * `ScenarioAttemptResponse` contract has one boolean, so the distinction lives in the prose and
    * in what does *not* get written to the database.

@@ -10,6 +10,11 @@
  * a turn under a named notation range. The views are stored as data, so the pin does not move
  * when the engine's dealing does. `apps/api/test/coach-task-pin.test.ts` holds the tasks.
  *
+ * The `report` halves were re-pinned when the Coach began pricing the sizes the table's bar offers
+ * (`offeredSizes`) instead of three ladder rungs. Only `candidates` and `suggestion` moved, in the
+ * four views that offer a raise or a bet; the views, the tasks and every other field are as
+ * written, and the side-pot view — fold and call only — is byte-identical.
+ *
  * The bot's copy, run over the same four default-range views, differed from the API's in every
  * one, and only in the opponent labels (`seat N+1` against `seat N`), which reach the learner
  * through the assumptions list. That disagreement is what this module ends.
