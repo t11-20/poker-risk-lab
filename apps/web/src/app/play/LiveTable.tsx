@@ -60,6 +60,7 @@ import {
   type TableAction,
   usePrefersReducedMotion,
 } from '@prl/ui';
+import Link from 'next/link';
 import {
   type FocusEvent,
   type FormEvent,
@@ -245,6 +246,9 @@ function hintSentence(live: LiveTableModel): string {
       ? `Taking seat ${String(live.readerSeat + 1)} for you, then dealing your first hand.`
       : 'Dealing your first hand.';
   }
+  if (live.outOfUnits) {
+    return 'You have no units left at this seat, so the server deals every hand without you.';
+  }
   if (live.table.seat === null) {
     // The seat is whichever one is actually free, not a constant. At a room reached by invite code
     // seat 1 is the owner's, so naming it here would send the joiner at a seat they cannot have.
@@ -336,6 +340,23 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
             </p>
           </Callout>
         </div>
+      ) : null}
+      {/*
+        Not an alert. Nothing was refused and nothing interrupted the reader: the hand that took the
+        last unit was narrated as it happened, and this is the standing state that follows it. It
+        sits beside the control it disables, so the reason is where the reader goes to press it.
+      */}
+      {live.outOfUnits ? (
+        <Callout tone="warning" title="You are out of units">
+          <p>
+            The server deals you out of every hand while your seat has nothing in front of it, so pressing
+            deal now would only deal the bots. Units are free practice counters: reset them to the starting
+            amount to play on.
+          </p>
+          <p>
+            <Link href="/record">Reset your units on your record page</Link>
+          </p>
+        </Callout>
       ) : null}
       {table.notice !== null && table.noticeCode !== 'enrolment_required' ? (
         <div role="alert">
@@ -458,7 +479,7 @@ function ConnectionControls({
         ) : null}
 
         {manual && seated ? (
-          <Button variant="primary" onClick={live.deal} disabled={!table.betweenHands}>
+          <Button variant="primary" onClick={live.deal} disabled={!table.betweenHands || live.outOfUnits}>
             Deal the next hand
           </Button>
         ) : null}
@@ -638,8 +659,8 @@ function JoinByInviteCode({ live }: ConnectionPanelProps): ReactElement {
           </p>
         ) : null}
         <p className="prl-field__hint" id={hintId}>
-          The code the table’s owner shared with you. Spaces and lower case are tidied up; the hyphens are
-          part of the code and are not.
+          The code the table’s owner shared with you. Spaces and lower case are tidied up for you; keep the
+          hyphens, because they are part of the code.
         </p>
       </div>
       <p className="prl-btn-row">
@@ -741,7 +762,11 @@ function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
           <dt className="prl-label">Blinds</dt>
           <dd>{`${String(room.smallBlind)} / ${String(room.bigBlind)} units`}</dd>
           <dt className="prl-label">Your seat</dt>
-          <dd>{live.table.seat === null ? 'watching' : `seat ${String(live.table.seat + 1)}`}</dd>
+          <dd>
+            {live.table.seat === null
+              ? 'watching'
+              : `seat ${String(live.table.seat + 1)}${live.outOfUnits ? ' — out of units' : ''}`}
+          </dd>
         </dl>
       )}
     </Panel>

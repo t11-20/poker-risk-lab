@@ -789,8 +789,14 @@
     grid-template-columns: minmax(0, 1fr) var(--prl-play-rail);
   }
 
+  /* Below the sticky header, not above it. The rail inherited `--prl-z-sheet` (300) from the phone's
+     fixed sheet, which outranks the header's `--prl-z-nav` (200) — so once the stage ended and the
+     rail scrolled up with it, it painted over the header: measured at 1440, `elementFromPoint` on
+     the units readout and the theme control returned the Coach panel. A rail is page content, and
+     page content goes under the bar. */
   .prl-play__coach {
     position: sticky;
+    z-index: var(--prl-z-sticky);
     inset-block-start: var(--prl-play-sticky-top);
     max-block-size: calc(100dvh - var(--prl-play-sticky-top) - var(--prl-space-8));
     overflow-y: auto;

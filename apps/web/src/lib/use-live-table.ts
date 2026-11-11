@@ -441,8 +441,15 @@ export function spokenDecision(action: TableAction): string {
  *
  * Neither one carries a number. See `onCoachFrame` for why.
  */
+/*
+ * The ready sentence used to end "below the table on a narrow screen", which is true between 600px
+ * and 900px and false on a phone, where `styles/play.css` makes the panel a bottom sheet that starts
+ * collapsed behind its handle. It now names the handle, whose label is the same at every width, and
+ * still says where rather than what — no figure (assertion J3.11 in `scripts/ax-assertions.mjs`
+ * keys on the opening words, which are unchanged).
+ */
 export const COACH_READY_ANNOUNCEMENT =
-  'The analysis of this decision is ready in the Coach panel, below the table on a narrow screen.';
+  'The analysis of this decision is ready in the Coach panel. On a phone it opens from “Show the analysis”.';
 export const COACH_FAILED_ANNOUNCEMENT = 'The analysis could not be shown.';
 
 /**
@@ -661,12 +668,15 @@ function onAckFrame(state: TableState, frame: Extract<WsServerMessage, { type: '
   if (pending === null || pending.requestId !== frame.requestId) {
     return { ...state, notice: null, noticeCode: null };
   }
-  const applied = frame.appliedSequence;
+  // No sequence number in the sentence. It read "The server applied it at sequence 11", which is
+  // the protocol's bookkeeping (`expectedSequence`, the idempotency check) reported to a person who
+  // has no use for it and no way to read it. What they need is that it counted, and what happens
+  // next; the number stays on the wire, where it does its job.
   const detail =
     frame.deduplicated === true
       ? 'This decision had already been applied, so the server counted the retry as the same one. ' +
         'Nothing was staked twice.'
-      : `The server applied it${applied === undefined ? '' : ` at sequence ${String(applied)}`}.`;
+      : 'The table has it. The next decision appears here when it is yours.';
   return {
     ...state,
     pending: null,
@@ -1054,6 +1064,26 @@ export function dealInStep(
   return table.betweenHands ? STAY('dealSent') : STAY('off');
 }
 
+/**
+ * The reader holds a seat with nothing in front of it.
+ *
+ * ## The defect this exists for
+ *
+ * At stack 0 the server deals the reader out — `PlayerView.seats` holds only the seats dealt in —
+ * and keeps them seated. Nothing on the page said so: the hero's plate simply vanished from the
+ * table, the connection panel went on saying "Your seat: seat 1", and "Deal the next hand" stayed
+ * enabled and dealt hands between five bots, one after another, with no word about why the reader
+ * was not in any of them. Measured on the live table after an all-in loss.
+ *
+ * Read off the room roster rather than inferred from the hero's absence in the view: a seat waiting
+ * for the big blind is also absent from the view, with chips, and is not out of anything.
+ */
+export function outOfUnits(table: Pick<TableState, 'room' | 'userId' | 'seat'>): boolean {
+  if (table.room === null || table.userId === null || table.seat === null) return false;
+  const me = table.room.members.find((member) => member.userId === table.userId);
+  return me !== undefined && me.seat !== null && me.stack <= 0;
+}
+
 /** Where a join-by-invite-code attempt has got to. */
 export type JoinPhase =
   | { readonly state: 'idle' }
@@ -1124,6 +1154,8 @@ export interface LiveTable {
   readonly readerSeat: number | null;
   /** True while "Deal me in" is still taking the seat or dealing on the reader's behalf. */
   readonly dealingIn: boolean;
+  /** Seated with a stack of zero, so the server will deal every hand without the reader. */
+  readonly outOfUnits: boolean;
   /** Opts in: session, room, socket, then the seat and the first deal. Safe to call twice. */
   readonly start: () => void;
   /** Abandons the remembered room and builds a fresh bot table. */
@@ -1179,6 +1211,20 @@ function messageOf(cause: unknown): string {
   if (cause instanceof ApiRequestError) return `${cause.message} (${cause.code})`;
   if (cause instanceof Error) return cause.message;
   return 'the table could not be prepared';
+}
+
+/**
+ * A join refusal, as the sentence beside the field — without the contract code `messageOf` appends.
+ *
+ * The code is there for a reason on the setup path, where a reader may need to quote it to support.
+ * Under an invite field it is noise in the one place a person is reading closely: the field showed
+ * "That invite code is not valid. (invite_code_invalid)", a machine token after a sentence that had
+ * already said everything it says. `ConnectionNotices` drops it for `enrolment_required` for the
+ * same reason.
+ */
+function joinRefusalOf(cause: unknown): string {
+  if (cause instanceof ApiRequestError) return cause.message;
+  return messageOf(cause);
 }
 
 async function openPracticeRoom(
@@ -1380,7 +1426,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         // wrong code is not a broken page, and turning the whole screen into an error state would
         // throw away a table the reader may already be sitting at.
         setPhase(socketRef.current === null ? 'idle' : 'ready');
-        setJoin({ state: 'refused', message: messageOf(cause) });
+        setJoin({ state: 'refused', message: joinRefusalOf(cause) });
       }
     })();
   }, []);
@@ -1659,6 +1705,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     isMyTurn,
     readerSeat,
     dealingIn: dealIn !== 'off',
+    outOfUnits: outOfUnits(table),
     start,
     startFreshTable,
     startPrivateTable,
