@@ -7,26 +7,34 @@
 #
 # ## First run, exactly
 #
-#   1. Start the database on its own and prepare the schema. `db:setup` is
-#      `db:up && db:wait && db:migrate && db:seed`, so this one command brings
-#      PostgreSQL up, blocks until it actually accepts connections, applies the
-#      migrations in db/migrations, and loads the lesson/glossary content:
-#
-#          pnpm install --frozen-lockfile
-#          pnpm run db:setup
-#
-#   2. Put a session secret in .env. There is no default and there is not going to
-#      be one: `api` below reads `${SESSION_COOKIE_SECRET:?...}`, so a missing value
-#      stops `docker compose up` with a message instead of booting a stack whose
+#   1. Put a session secret in .env, FIRST. There is no default and there is not
+#      going to be one: `api` below reads `${SESSION_COOKIE_SECRET:?...}`, so a
+#      missing value stops compose with a message instead of booting a stack whose
 #      sessions are signed with a value from a public repository.
 #
 #          cp .env.example .env      # if you have not already
 #          node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 #          # paste that into SESSION_COOKIE_SECRET in .env
 #
+#      It has to come before step 2, not after it. Compose interpolates the WHOLE
+#      file even when it is asked for one service, and `db:up` is
+#      `docker compose up -d postgres`. Measured with no .env:
+#      `docker compose config postgres` exits 1 with "required variable
+#      SESSION_COOKIE_SECRET is missing a value". This list used to put db:setup
+#      first, so a fresh clone failed on the first command it was told to run.
+#
 #      compose reads .env from this directory for interpolation. It is gitignored
 #      and dockerignored, so the value reaches the container's environment and never
 #      an image layer.
+#
+#   2. Start the database on its own and prepare the schema. Docker must be
+#      running. `db:setup` is `db:up && db:wait && db:migrate && db:seed`, so this
+#      one command brings PostgreSQL up, blocks until it actually accepts
+#      connections, applies the migrations in db/migrations, and loads the
+#      lesson/glossary content:
+#
+#          pnpm install --frozen-lockfile
+#          pnpm run db:setup
 #
 #   3. Then either run the app from source, which is what you want while
 #      developing (hot reload, no image rebuild):
@@ -313,7 +321,7 @@ services:
       # the first time in production, as a permission-denied at request time.
       #
       # `prl_api` is created with this password by `db/seeds/0002_dev_login_roles.sql`,
-      # which `pnpm run db:seed` — and therefore `pnpm run db:setup`, step 1 of First
+      # which `pnpm run db:seed` — and therefore `pnpm run db:setup`, step 2 of First
       # run at the top of this file — applies. If you skipped that step, this
       # container will log `password authentication failed for user "prl_api"`; the
       # fix is `pnpm run db:seed`, not a superuser in this line. A real deployment
@@ -332,7 +340,7 @@ services:
       # repository, and the server would accept it in development and boot happily.
       # Quoted because the message contains a colon-space, which YAML would otherwise
       # read as a nested mapping.
-      SESSION_COOKIE_SECRET: '${SESSION_COOKIE_SECRET:?missing. Put a generated value in .env — step 2 of First run at the top of this file}'
+      SESSION_COOKIE_SECRET: '${SESSION_COOKIE_SECRET:?missing. Put a generated value in .env — step 1 of First run at the top of this file}'
       # TRUST_PROXY is deliberately NOT enabled, even though there is now a proxy in
       # front. The port below publishes api on loopback for host-side tooling, so the
       # proxy is not the only route to it, and TRUST_PROXY's own warning is exactly
