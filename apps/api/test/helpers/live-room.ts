@@ -50,7 +50,7 @@ export function seatingOnlyStore(units = 10_000): RoomStore {
     addMember: () => refuse('addMember'),
     seatMember: (_roomId, userId, seat) => {
       seats.set(userId, seat);
-      return Promise.resolve();
+      return Promise.resolve(`mem_${userId}`);
     },
     unseatMember: (_roomId, userId) => {
       seats.set(userId, null);

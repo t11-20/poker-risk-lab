@@ -832,14 +832,18 @@ describe('live Coach follows the match difficulty', () => {
     const room = test.registry.get(test.roomId);
     assert.ok(room !== null);
     await room.table.sit({ userId: 'usr_a', displayName: 'Ada', seat: 0, stack: 1_000 });
-    await test.registry.seatBot(test.roomId, {
-      userId: 'usr_bot',
-      displayName: 'Legend',
-      seat: 1,
-      profileId: 'adaptive-exploiter',
-      difficulty,
-      seed: 1,
-    });
+    await test.registry.seatBot(
+      test.roomId,
+      {
+        userId: 'usr_bot',
+        displayName: 'Legend',
+        seat: 1,
+        profileId: 'adaptive-exploiter',
+        difficulty,
+        seed: 1,
+      },
+      'mem_usr_bot',
+    );
     const { recorded, connection } = connect(test, 'usr_a', 'Ada');
     return { test, recorded, connection };
   }

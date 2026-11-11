@@ -294,9 +294,13 @@ export interface RoomStore {
     /** All three facts, or none. A partial bot row cannot be rehydrated — see `bot-profile.ts`. */
     readonly bot?: DurableBotSeat | null;
   }) => Promise<roomsRepository.RoomMemberRow>;
-  readonly seatMember: (roomId: string, userId: string, seat: number) => Promise<void>;
-  /** Once the LIVE table has accepted the seat, never before. See `rooms.recordFirstSit`. */
-  readonly recordFirstSit: (roomId: string, userId: string) => Promise<boolean>;
+  /** Resolves to the id of the membership that took the seat, which `recordFirstSit` is given. */
+  readonly seatMember: (roomId: string, userId: string, seat: number) => Promise<string>;
+  /**
+   * Once the LIVE table has accepted the seat, never before, and for the membership `seatMember`
+   * seated — not whichever is live by then. See `rooms.recordFirstSit`.
+   */
+  readonly recordFirstSit: (memberId: string) => Promise<boolean>;
   readonly unseatMember: (roomId: string, userId: string) => Promise<void>;
   readonly removeMember: (roomId: string, userId: string) => Promise<void>;
   readonly close: (roomId: string, ownerUserId: string) => Promise<boolean>;
@@ -326,10 +330,9 @@ export function postgresRoomStore(sql: () => Db): RoomStore {
     membersOfRooms: (roomIds) => roomsRepository.membersOfRooms(sql(), roomIds),
     memberOf: (roomId, userId) => roomsRepository.memberOf(sql(), roomId, userId),
     addMember: (input) => roomsRepository.addMember(sql(), input),
-    seatMember: async (roomId, userId, seat) => {
-      await roomsRepository.seatMember(sql(), roomId, userId, seat);
-    },
-    recordFirstSit: (roomId, userId) => roomsRepository.recordFirstSit(sql(), roomId, userId),
+    seatMember: async (roomId, userId, seat) =>
+      (await roomsRepository.seatMember(sql(), roomId, userId, seat)).id,
+    recordFirstSit: (memberId) => roomsRepository.recordFirstSit(sql(), memberId),
     unseatMember: async (roomId, userId) => {
       await roomsRepository.unseatMember(sql(), roomId, userId);
     },
@@ -1341,7 +1344,7 @@ export class RoomRegistry {
       });
     }
 
-    await this.store.seatMember(roomId, principal.userId, seat);
+    const memberId = await this.store.seatMember(roomId, principal.userId, seat);
     try {
       await room.table.sit({
         userId: principal.userId,
@@ -1361,8 +1364,9 @@ export class RoomRegistry {
     });
     // After the live sit, not inside `seatMember`: the live table can still refuse a chair the
     // database granted, and a first sit written before that refusal counted a membership nobody had
-    // sat at toward units for as long as it lived. See `rooms.recordFirstSit`.
-    await this.recordFirstSit(roomId, principal.userId);
+    // sat at toward units for as long as it lived. And by `memberId`: a leave and rejoin from another
+    // tab before this lands makes a new membership that has not sat. See `rooms.recordFirstSit`.
+    await this.recordFirstSit(roomId, principal.userId, memberId);
   }
 
   /**
@@ -1375,9 +1379,9 @@ export class RoomRegistry {
    * the room holds for them, never more. Reported, because a quiet gap here is the hole migration
    * 0008 was written to close.
    */
-  private async recordFirstSit(roomId: string, userId: string): Promise<void> {
+  private async recordFirstSit(roomId: string, userId: string, memberId: string): Promise<void> {
     try {
-      await this.store.recordFirstSit(roomId, userId);
+      await this.store.recordFirstSit(memberId);
     } catch (error) {
       this.onProblem('a first sit could not be recorded', {
         event: 'first-sit-record',
@@ -1663,10 +1667,14 @@ export class RoomRegistry {
     }
   }
 
-  /** Seats a bot and registers it with the runner. Both, or neither. */
+  /**
+   * Seats a bot and registers it with the runner. Both, or neither. `memberId` is what the caller's
+   * `store.seatMember` returned for this bot's durable seat; its first sit is recorded on that row.
+   */
   async seatBot(
     roomId: string,
     spec: BotSeatSpec & { readonly displayName: string },
+    memberId: string,
   ): Promise<RoomMemberRecord> {
     const room = this.rooms.get(roomId);
     if (room === undefined) {
@@ -1689,7 +1697,7 @@ export class RoomRegistry {
     });
     // A bot's units are never read, but the column says when this membership first sat, and it
     // should say so for every row rather than only for the ones somebody reads.
-    await this.recordFirstSit(roomId, spec.userId);
+    await this.recordFirstSit(roomId, spec.userId, memberId);
     return member;
   }
 

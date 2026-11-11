@@ -503,13 +503,12 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
               isBot: true,
               bot: durable,
             });
-            await registry.store.seatMember(roomId, user.id, seat.seat);
-            await registry.seatBot(roomId, {
-              userId: user.id,
-              displayName: seat.displayName,
-              seat: seat.seat,
-              ...durable,
-            });
+            const memberId = await registry.store.seatMember(roomId, user.id, seat.seat);
+            await registry.seatBot(
+              roomId,
+              { userId: user.id, displayName: seat.displayName, seat: seat.seat, ...durable },
+              memberId,
+            );
           }
           return made;
         });
@@ -643,8 +642,8 @@ async function seatRequestedBots(
       isBot: true,
       bot: durable,
     });
-    await registry.store.seatMember(room.record.id, user.id, seat);
-    await registry.seatBot(room.record.id, { userId: user.id, displayName, seat, ...durable });
+    const memberId = await registry.store.seatMember(room.record.id, user.id, seat);
+    await registry.seatBot(room.record.id, { userId: user.id, displayName, seat, ...durable }, memberId);
   }
 }
 

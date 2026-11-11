@@ -485,7 +485,7 @@ function rosterStore(
     membersOfRooms: () => Promise.resolve(rows),
     memberOf: (_roomId, userId) => Promise.resolve(rows.find((entry) => entry.user_id === userId) ?? null),
     addMember: () => refuse('addMember'),
-    seatMember: () => Promise.resolve(),
+    seatMember: (_roomId, userId) => Promise.resolve(`mem_${userId}`),
     unseatMember: (_roomId, userId) => {
       unseated.push(userId);
       return Promise.resolve();

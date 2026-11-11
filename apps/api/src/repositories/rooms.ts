@@ -445,6 +445,19 @@ export async function membersOfRooms(
   return rows.map(toMemberRow);
 }
 
+/** One membership by its id, left or not. */
+async function memberById(sql: Db, memberId: string): Promise<RoomMemberRow | null> {
+  const rows = await sql<RoomMemberRowRaw[]>`
+    select m.id, m.room_id, m.user_id, u.display_name, m.seat, m.stack, m.is_bot, m.bot_profile,
+           m.bot_difficulty, m.bot_seed, m.joined_at, m.left_at
+      from prl.room_members m
+      join prl.users u on u.id = m.user_id
+     where m.id = ${memberId}
+  `;
+  const raw = rows[0];
+  return raw === undefined ? null : toMemberRow(raw);
+}
+
 /** One learner's live membership of one room, or null. The authorisation primitive. */
 export async function memberOf(sql: Db, roomId: string, userId: string): Promise<RoomMemberRow | null> {
   const rows = await sql<RoomMemberRowRaw[]>`
@@ -637,8 +650,11 @@ export async function seatMember(
          and ${seat}::int < r.max_seats
       returning m.id
     `;
-    if (rows.length > 0) {
-      const member = await memberOf(sql, roomId, userId);
+    const seated = rows[0];
+    if (seated !== undefined) {
+      // Read back by the id the UPDATE returned, not by (room, user, live): a leave and rejoin in
+      // between would answer with the new membership, and the caller records the first sit on this id.
+      const member = await memberById(sql, seated.id);
       if (member !== null) return member;
       throw new AppError('internal_error', { logDetail: 'seat update succeeded but read back nothing' });
     }
@@ -653,8 +669,9 @@ export async function seatMember(
 /**
  * Records that this membership has sat at its table: `room_members.first_seated_at`, what
  * `users.readUnits` counts a membership by (migration 0008). Kept once set, so standing up leaves the
- * chips this membership holds in front of the learner. Returns false when there is no live
- * membership to record it on — one that left in between, which `readUnits` does not count anyway.
+ * chips this membership holds in front of the learner. `memberId` is the id `seatMember` returned
+ * for the seat being recorded. Returns false when that membership has left in between, which
+ * `readUnits` does not count anyway.
  *
  * ## Why this is not part of `seatMember`
  *
@@ -667,12 +684,24 @@ export async function seatMember(
  * sat at counted its whole `starting_stack` toward units for as long as it lived: `2000 !== 1000`
  * in `practice-table-units.test.ts`. So the fact is written only once the live table has accepted
  * the seat, and nothing ever has to clear it — the column's comment says it is never cleared.
+ *
+ * ## Why it is found by id
+ *
+ * It was found by (room, user, live), and Devin Review on PR #25 found what that cost. The live sit
+ * resolves and then this is a round trip; a second tab that leaves and rejoins inside it makes a new
+ * membership, never seated and holding `starting_stack`, and the write landed on that one. The
+ * learner then read 2,000 for a 2,000-stack table the new membership had never sat at:
+ * `2000 !== 1000` in `practice-table-units.test.ts`. So the row is the one the sit took.
+ *
+ * `left_at is null` keeps the write off a membership that left, and nothing more. It does NOT ask
+ * for a seat: a stand before this lands still follows a genuine sit, and that sit is what keeps the
+ * room's chips in front of a learner who stood before the first deal.
  */
-export async function recordFirstSit(sql: Db, roomId: string, userId: string): Promise<boolean> {
+export async function recordFirstSit(sql: Db, memberId: string): Promise<boolean> {
   const rows = await sql<{ id: string }[]>`
     update prl.room_members
        set first_seated_at = coalesce(first_seated_at, now())
-     where room_id = ${roomId} and user_id = ${userId} and left_at is null
+     where id = ${memberId} and left_at is null
     returning id
   `;
   return rows.length > 0;

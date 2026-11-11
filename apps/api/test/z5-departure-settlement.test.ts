@@ -153,7 +153,7 @@ function fakeStore(): {
       // `room_members_live_seat_key`, in one line. See this factory's comment.
       if (taken) throw new AppError('seat_taken', { logDetail: `seat ${seat} is already held` });
       seats.set(userId, seat);
-      return Promise.resolve();
+      return Promise.resolve(`mem_${userId}`);
     },
     // Both of these are partial on `left_at IS NULL` in the real schema, so a member who has left
     // is untouched by either. Mirrored here so a test cannot pass on a write the database refuses.
@@ -164,7 +164,8 @@ function fakeStore(): {
       if (!left.has(userId)) seats.set(userId, null);
       return Promise.resolve();
     },
-    recordFirstSit: (_roomId, userId) => Promise.resolve(!left.has(userId)),
+    // One membership per user here, so the id `seatMember` minted names the user it belongs to.
+    recordFirstSit: (memberId) => Promise.resolve(!left.has(memberId.slice('mem_'.length))),
     removeMember: (_roomId, userId) => {
       left.add(userId);
       return Promise.resolve();

@@ -608,6 +608,100 @@ describe('only a table the reader has sat at holds units', dbOptions, () => {
     });
   });
 
+  /**
+   * Holds the next `recordFirstSit` open while `inTheGap` runs, then lets the real write go. The
+   * arguments are passed through untouched, so the gate does not decide which row is written.
+   */
+  function gateFirstSit(): {
+    readonly wrap: (store: RoomStore) => RoomStore;
+    arm: (inTheGap: () => Promise<void>) => void;
+    readonly armed: () => boolean;
+  } {
+    let pending: (() => Promise<void>) | null = null;
+    return {
+      wrap: (store) => ({
+        ...store,
+        recordFirstSit: async (...args: Parameters<RoomStore['recordFirstSit']>) => {
+          const inTheGap = pending;
+          pending = null;
+          if (inTheGap !== null) await inTheGap();
+          return store.recordFirstSit(...args);
+        },
+      }),
+      arm: (inTheGap) => {
+        pending = inTheGap;
+      },
+      armed: () => pending !== null,
+    };
+  }
+
+  it('a leave and rejoin while the first sit is written does not record it on the new membership', async () => {
+    await inRollback(async (tx) => {
+      // Devin Review on PR #25: `recordFirstSit` found its row by (room, user, live). The live sit
+      // resolves, then the write is a round trip; a second tab that leaves and rejoins inside it makes
+      // a new membership, never seated, holding `starting_stack` — and the write landed on that one,
+      // so `readUnits` counted 2,000 for a table the new membership had never sat at.
+      const gate = gateFirstSit();
+      const test = await harness(tx, { wrap: gate.wrap });
+      const table = await createTable(test, { ...FRIENDS_TABLE, startingStack: 2_000, bots: undefined });
+      const friend = await usersRepository.createGuest(tx, { displayName: 'Friend' });
+      const principal = { userId: friend.id, displayName: 'Friend' };
+      await test.registry.joinByInviteCode(principal, table.inviteCode);
+      gate.arm(async () => {
+        // The other tab: leave the table the first tab just sat at, then rejoin it by its code.
+        await test.registry.leaveRoom(table.id, friend.id);
+        await test.registry.joinByInviteCode(principal, table.inviteCode);
+      });
+      await test.registry.sitAtTable(table.id, principal, 3);
+      assert.equal(gate.armed(), false, 'the leave and rejoin never ran in the gap, so this proved nothing');
+
+      assert.equal(await units(tx, friend.id), 1_000, 'the new membership used to count 2,000');
+      // The membership that sat has left, so `left_at is null` keeps the write off it too: a left row
+      // is never counted, and a CHECK-legal timestamp on it would say nothing anybody reads.
+      const rows = await tx<{ left: boolean; sat: boolean }[]>`
+        select left_at is not null as left, first_seated_at is not null as sat
+          from prl.room_members
+         where room_id = ${table.id} and user_id = ${friend.id}
+         order by left_at nulls last
+      `;
+      assert.deepEqual(
+        rows.map((row) => ({ ...row })),
+        [
+          { left: true, sat: false },
+          { left: false, sat: false },
+        ],
+        'the rejoined membership has not sat',
+      );
+      assert.deepEqual(test.problems, [], 'a membership that left in the gap is not a failure to record');
+
+      // Its own first sit is recorded on it.
+      await test.registry.sitAtTable(table.id, principal, 3);
+      await test.registry.standFromTable(table.id, friend.id);
+      assert.equal(await units(tx, friend.id), 2_000, 'sat at, then stood before a deal');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
+  it('a stand while the first sit is written still records the sit', async () => {
+    await inRollback(async (tx) => {
+      // The write must not require a seat: the learner did sit, and a stand before the first deal
+      // keeps the chips the room gave that sit ("standing up before the first deal…" above).
+      const gate = gateFirstSit();
+      const test = await harness(tx, { wrap: gate.wrap });
+      const table = await createTable(test, { ...FRIENDS_TABLE, startingStack: 2_000, bots: undefined });
+      gate.arm(() => test.registry.standFromTable(table.id, test.userId));
+      assert.equal((await test.send('POST', `/api/v1/rooms/${table.id}/sit`, { seat: 0 })).status, 200);
+      assert.equal(gate.armed(), false, 'the stand never ran in the gap, so this proved nothing');
+      assert.equal(test.registry.get(table.id)?.table.seatOf(test.userId), null, 'precondition: stood up');
+      assert.equal(await units(tx, test.userId), 2_000, 'the sit happened, so the room holds 2,000 for them');
+
+      await test.registry.shutdown();
+      await test.app.close();
+    });
+  });
+
   it('a row with no first sit recorded still counts by the old evidence', async () => {
     await inRollback(async (tx) => {
       // Rows written before migration 0008, or seated by the previous build between the migration

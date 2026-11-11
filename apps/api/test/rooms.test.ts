@@ -207,14 +207,15 @@ function fakeRoomStore(): FakeRoomStore {
       );
       if (taken) throw new AppError('seat_taken', {});
       members.set(key(roomId, userId), { ...member, seat });
-      return Promise.resolve();
+      return Promise.resolve(member.id);
     },
     unseatMember: (roomId, userId) => {
       const member = members.get(key(roomId, userId));
       if (member !== undefined) members.set(key(roomId, userId), { ...member, seat: null });
       return Promise.resolve();
     },
-    recordFirstSit: (roomId, userId) => Promise.resolve(members.has(key(roomId, userId))),
+    // By id, as the real statement is: a membership removed since its seat was taken is not found.
+    recordFirstSit: (memberId) => Promise.resolve([...members.values()].some((m) => m.id === memberId)),
     removeMember: (roomId, userId) => {
       members.delete(key(roomId, userId));
       return Promise.resolve();

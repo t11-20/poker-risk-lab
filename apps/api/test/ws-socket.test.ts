@@ -285,14 +285,18 @@ async function startHub(options: {
 /** Seats a bot at the live table, the way `POST /rooms` does. */
 function seatBot(hub: Hub, seat: number, legacyName = 'tight-aggressive'): Promise<unknown> {
   const profile = resolveProfile(legacyName);
-  return hub.registry.seatBot(hub.roomId, {
-    userId: `usr_bot${seat}`,
-    displayName: botDisplayName(profile.naming.id),
-    seat,
-    profileId: profile.naming.id,
-    difficulty: 'realistic',
-    seed: seedFor(hub.roomId, seat, 7),
-  });
+  return hub.registry.seatBot(
+    hub.roomId,
+    {
+      userId: `usr_bot${seat}`,
+      displayName: botDisplayName(profile.naming.id),
+      seat,
+      profileId: profile.naming.id,
+      difficulty: 'realistic',
+      seed: seedFor(hub.roomId, seat, 7),
+    },
+    `mem_usr_bot${seat}`,
+  );
 }
 
 type Policy = (legal: readonly { readonly type: string; readonly minTo?: number }[]) => {

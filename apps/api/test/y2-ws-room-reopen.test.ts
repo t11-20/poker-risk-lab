@@ -185,7 +185,7 @@ function persistedStore(
       return Promise.resolve(roomId === ROOM_ID ? (members.get(userId) ?? null) : null);
     },
     addMember: () => refuse('addMember'),
-    seatMember: () => Promise.resolve(),
+    seatMember: (_roomId, userId) => Promise.resolve(`mem_${userId}`),
     unseatMember: () => Promise.resolve(),
     recordFirstSit: () => Promise.resolve(true),
     removeMember: () => Promise.resolve(),
