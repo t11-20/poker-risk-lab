@@ -891,7 +891,10 @@ function readManifest(path) {
  * an image, read by a migration, or read by the smoke test, so a HEAD that differs from the build
  * in those paths alone deploys exactly what was built. `committedSince` is `git diff --name-only
  * <manifest> HEAD`, probed only when HEAD is strictly ahead; any other path in it is refused as
- * before, and so is a diff git would not produce.
+ * before, and so is a diff git would not produce. **Clean manifests only**: a `dirty: true` build
+ * holds edits no commit records, so once they are reverted and a record committed, the committed
+ * trees differ by the record alone while the images still carry the discarded edits (Devin Review
+ * on #30). A dirty rehearsal deploys from the commit it was built on or not at all.
  *
  * Pure, so the arithmetic is tested without git or docker; `commandUp` does the probing.
  *
@@ -919,7 +922,7 @@ export function manifestMatchesCheckout(manifestCommit, checkout) {
         `(${checkout.headSha.slice(0, 12)}). ${rebuild}`,
     };
   }
-  if (built !== checkout.headSha && !onlyReleaseRecordsSince(checkout)) {
+  if (built !== checkout.headSha && !(manifestCommit?.dirty === false && onlyReleaseRecordsSince(checkout))) {
     const distance =
       checkout.behind === null
         ? `${built.slice(0, 12)} is not in this clone's history, so the distance cannot be counted`

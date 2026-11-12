@@ -531,6 +531,18 @@ test('manifestMatchesCheckout still refuses a HEAD past the build by anything el
   }
 });
 
+test('a DIRTY manifest gets no release-record exception (REGRESSION)', () => {
+  // Devin Review on #30: build with an uncommitted API edit at A, revert it, commit only the
+  // signature record as B. The trees differ by the record alone, but the images carry the edit.
+  for (const dirty of [true, null, undefined]) {
+    const result = manifestMatchesCheckout(
+      { sha: OLD, dirty },
+      cleanCheckout({ behind: 1, ahead: 0, committedSince: ['deploy/staging/release-signatures.json'] }),
+    );
+    assert.ok('problem' in result, `dirty: ${String(dirty)} deploys only from the commit it was built on`);
+  }
+});
+
 test('release records past the build still have to be committed', () => {
   const result = manifestMatchesCheckout(
     { sha: OLD, dirty: false },
