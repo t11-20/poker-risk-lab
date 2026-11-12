@@ -209,7 +209,7 @@ unknown, and unknown is not clean.
 | Command | What it does |
 | --- | --- |
 | `pnpm run db:up` | Start PostgreSQL |
-| `pnpm run db:wait` | Block until it accepts connections |
+| `pnpm run db:wait` | Block until it accepts connections. Reads `.env` and waits on `DATABASE_MIGRATION_URL`, else `DATABASE_URL` — the database `db:migrate` opens next |
 | `pnpm run db:migrate` | Apply pending migrations |
 | `pnpm run db:migrate:status` | Show applied and pending. Reads `DATABASE_MIGRATION_URL`, so it needs a migration identity — see the note below |
 | `pnpm run db:roles` | Create the cluster-wide `prl_migrator`/`prl_app` roles. Only needed before a **restore** (§11.4); `db:migrate` creates them otherwise |
