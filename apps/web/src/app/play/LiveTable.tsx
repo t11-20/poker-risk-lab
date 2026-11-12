@@ -856,6 +856,33 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
 }
 
 /**
+ * The out-of-units notice again, in the decision band, where the reader is looking when they bust.
+ *
+ * The full notice is in the connection card, beside the Deal control it disables, and that card is
+ * above the table: measured at the moment of a bust, at y -1,203..-780 at 390x844 and above a Deal at
+ * -558 at 1440x900 (audit at 6b3886e, M4). What was on screen was STACK 0, "went all in" and the
+ * showdown — the result, and not that the reader was out. This says so where they are, with the way
+ * on. The card keeps the longer version, which carries the fallback for a reset that does not reach
+ * a seat already taken.
+ *
+ * Not a live region, like the card's: nothing was refused, and the hand that took the last unit was
+ * narrated as it happened.
+ */
+function OutOfUnitsAtTheTable(): ReactElement {
+  return (
+    <Callout tone="warning" title="You are out of units">
+      <p>
+        Your seat has nothing in front of it, so the server deals every hand without you. Units are free
+        practice counters: reset them to the starting amount to play on.
+      </p>
+      <p>
+        <Link href="/record">Reset your units on your record page</Link>
+      </p>
+    </Callout>
+  );
+}
+
+/**
  * Keeps the decision band on screen when the table has something new for the reader.
  *
  * ## The defect this exists for
@@ -967,6 +994,7 @@ export function LiveTable({
         onAct={act}
         autoActed={table.autoActed}
         decisionRef={decisionRef}
+        {...(live.outOfUnits ? { decisionNotice: <OutOfUnitsAtTheTable /> } : {})}
         idleMessage={IDLE_TABLE_MESSAGE}
         {...coachUnavailableProps(live)}
         {...(status === 'complete' ? { reviewHref: reviewHrefFor(table.view) } : {})}

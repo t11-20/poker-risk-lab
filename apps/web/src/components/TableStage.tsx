@@ -123,6 +123,7 @@ import {
   type FocusEvent,
   type PointerEvent,
   type ReactElement,
+  type ReactNode,
   type RefObject,
   useEffect,
   useRef,
@@ -255,6 +256,12 @@ export interface TableStageProps {
    * `app/play/LiveTable.tsx`.
    */
   readonly decisionRef?: RefObject<HTMLDivElement | null>;
+  /**
+   * A standing notice for the decision band, where the reader is looking when it applies — the live
+   * table's out-of-units notice. The caller decides when, because only the caller reads the roster.
+   * Not announced: the hand that caused it was narrated as it happened.
+   */
+  readonly decisionNotice?: ReactNode;
 }
 
 /** Skeletons at the real content's dimensions, so nothing reflows when the data lands. */
@@ -541,6 +548,7 @@ interface DecisionBandProps {
   readonly onAct: (action: TableAction) => void;
   readonly autoActed: string | null;
   readonly decisionRef: RefObject<HTMLDivElement | null> | undefined;
+  readonly notice: ReactNode;
 }
 
 /**
@@ -692,6 +700,8 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
           }
         />
       )}
+
+      {props.notice}
 
       {/*
         Not a live region: the table's narration already said "(the clock ran out, so the server
@@ -974,6 +984,7 @@ export function TableStage(props: TableStageProps): ReactElement {
           autoActed={props.autoActed ?? null}
           decisionRef={props.decisionRef}
           seatNames={seatNames}
+          notice={props.decisionNotice}
         />
       </div>
 
