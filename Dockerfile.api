@@ -179,6 +179,10 @@
 # stage — and expect a review conversation about giving the serving container
 # schema-change rights.
 #
+# `db/migrations` itself IS in the image, copied back by the runtime stage, as
+# read-only data: the API compares it with the migration ledger at boot and
+# refuses a schema behind this build. See the comment on that COPY line.
+#
 # ## Signals
 #
 # There is no dumb-init or tini in here, and no package was added for one.
@@ -424,6 +428,19 @@ COPY --from=prod-deps --chown=node:node /app /app
 # missing glossary.
 COPY --from=build --chown=node:node /app/packages /app/packages
 COPY --from=build --chown=node:node /app/apps/api/dist /app/apps/api/dist
+# The migration FILES, not the runner. apps/api/src/schema-guard.ts compares them
+# with prl.schema_migrations at boot and refuses to serve a schema behind this
+# build: an API that booted green against a missing column once lost archive
+# writes in silence, and nothing said the schema was behind the code. The prune
+# above still removes `db`, so this puts back exactly one directory of it, at the
+# path the guard resolves from dist/ (three levels up, as from src/).
+#
+# This gives the serving container no schema-change rights — the objection the
+# "deliberately NOT in the image" note above anticipates is about the runner and
+# a migrating identity, and the image has neither: no apps/api/scripts, and a
+# DATABASE_URL that names a member of prl_app, which holds no CREATE. No --chown:
+# the process reads these and has no business being able to rewrite them.
+COPY --from=source /app/db/migrations /app/db/migrations
 
 # uid/gid 1000, present in the official Node images. Never root: a process that
 # cannot write to its own code cannot be persuaded to modify it.

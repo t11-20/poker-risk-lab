@@ -31,10 +31,11 @@ import { pathToFileURL } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from './app.ts';
 import { type AppConfig, ConfigError, getConfig } from './config.ts';
-import { closeDatabase, configureDatabase, getSql } from './db.ts';
+import { closeDatabase, configureDatabase, getSql, PROBE_QUERY_DEADLINE_MS, ping } from './db.ts';
 import { startRetentionSweep } from './maintenance/retention-sweep.ts';
 import { appMetrics } from './observability/metrics.ts';
 import { API_ROUTE_MODULES, registerApiRoutes } from './routes/index.ts';
+import { createSchemaGate, describeRefusal, readLedger } from './schema-guard.ts';
 import { beginSharedPoolWarmup, closeSharedPool } from './workers/pool.ts';
 
 /** Exit codes, so a supervisor's logs mean something. */
@@ -330,7 +331,17 @@ async function main(): Promise<void> {
     process.exit(EXIT_CONFIG_INVALID);
   }
 
-  const app = await buildApp({ config });
+  // The readiness probe's database handle, gated on the schema. Wired here and not as `buildApp`'s
+  // default because `buildApp` is the seam every test builds an app through, with a stub handle or
+  // none; this is the one process that serves traffic. See `schema-guard.ts`.
+  const schema = createSchemaGate({
+    readLedger: () => readLedger(getSql()),
+    probeDeadlineMs: PROBE_QUERY_DEADLINE_MS,
+  });
+  const app = await buildApp({
+    config,
+    database: { ping: async () => schema.readiness(await ping()), close: closeDatabase },
+  });
   // Before `listen()`, so that no connection can be accepted that the drain cannot see.
   const connections = trackConnections(app);
   installProcessHandlers(app, config, connections);
@@ -347,6 +358,35 @@ async function main(): Promise<void> {
       app.log.warn({ notice: message }, 'postgres notice');
     },
   });
+
+  // Before any route exists. Two PRs in one day added a migration that the development database did
+  // not have, and the API booted green against it; the first sign was `column "automatic_reason"
+  // does not exist` from an archive write, and units silently stopped moving. A database that
+  // ANSWERS with a schema behind this build is refused here, with the files and the command named.
+  // One that does not answer at all is not: that is `db-unavailable.md`'s designed posture, and
+  // `/ready` stays degraded until it can ask. `console.error` and not the logger: `logging.ts`
+  // switches the logger off under `test`, and a refusal nobody can read is a silent exit 78.
+  const verdict = await schema.verify();
+  if (verdict.kind === 'refused') {
+    console.error(describeRefusal(verdict));
+    await closeDatabase(1_000);
+    process.exit(EXIT_CONFIG_INVALID);
+  }
+  if (verdict.kind === 'unverified') {
+    app.log.warn(
+      { reason: verdict.reason },
+      'database schema not verified at boot; /ready reports degraded until the migration ledger answers',
+    );
+  } else if (verdict.ahead.length > 0) {
+    // Expected during a deploy (migrate, then roll) and after an image rollback. Loud because it is
+    // also what pointing an old build at somebody else's database looks like.
+    app.log.warn(
+      { applied: verdict.applied, ahead: verdict.ahead },
+      'database schema is ahead of this build: a newer build migrated it; serving, since migrations are additive',
+    );
+  } else {
+    app.log.info({ applied: verdict.applied }, 'database schema matches this build');
+  }
 
   try {
     // Registers every route module under `API_PREFIX`, and the process-wide state more than one of
