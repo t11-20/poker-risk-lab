@@ -91,6 +91,7 @@
 import {
   type ReactElement,
   type FocusEvent as ReactFocusEvent,
+  type MouseEvent as ReactMouseEvent,
   useEffect,
   useId,
   useLayoutEffect,
@@ -112,6 +113,7 @@ import {
   type StampedDraft,
 } from '../bet-sizing.ts';
 import { cx } from '../cx.ts';
+import { foldPress, spotSignature } from '../fold-guard.ts';
 import { formatChips, formatUnits } from '../format.ts';
 import type { LegalAction, TableAction } from '../view-types.ts';
 
@@ -147,7 +149,7 @@ interface ActionButtonProps {
   readonly spoken: string;
   readonly primary?: boolean;
   readonly disabled: boolean;
-  readonly onClick: () => void;
+  readonly onClick: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }
 
 function ActionButton(props: ActionButtonProps): ReactElement {
@@ -163,6 +165,35 @@ function ActionButton(props: ActionButtonProps): ReactElement {
       <span className="prl-action-btn__label">{label}</span>
       <span className="prl-action-btn__cost">{cost}</span>
     </button>
+  );
+}
+
+/**
+ * Fold, which is the one key in the row that can ask before it acts. See `../fold-guard.ts`.
+ *
+ * Armed, it is the same button relabelled, never a second one: the caret a pointer press left on it
+ * stays put, the row keeps its shape, and the changed name is read where focus already is.
+ */
+function FoldButton(props: {
+  readonly canCheck: boolean;
+  readonly armed: boolean;
+  readonly disabled: boolean;
+  readonly onClick: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+}): ReactElement {
+  const { canCheck, armed, disabled, onClick } = props;
+  const verb = armed ? 'fold anyway' : 'fold';
+  return (
+    <ActionButton
+      label={armed ? 'Fold anyway' : 'Fold'}
+      cost={formatUnits(0)}
+      spoken={
+        canCheck
+          ? `${verb}, costs ${formatUnits(0)}, gives up the hand and any claim on the pot; checking also costs ${formatUnits(0)}`
+          : `fold, costs ${formatUnits(0)}, gives up the hand and any claim on the pot`
+      }
+      disabled={disabled}
+      onClick={onClick}
+    />
   );
 }
 
@@ -363,6 +394,11 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   // value while the flag stayed true would leave a legal amount marked invalid — and a separate
   // record of the bounds could outlive the text in the other direction.
   const [stamped, setStamped] = useState<StampedDraft | null>(null);
+  /**
+   * The spot in which Fold was pressed once by pointer while Check was free, or null. Stamped rather
+   * than a boolean so it cannot outlive the spot it was pressed in; see `../fold-guard.ts`.
+   */
+  const [foldArmedFor, setFoldArmedFor] = useState<string | null>(null);
 
   /**
    * Where focus goes when the controls it was on are taken away, in the TWO ways that happens.
@@ -477,6 +513,9 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   useEffect(() => {
     const left = wasActing.current && !acting;
     wasActing.current = acting;
+    // A turn that ended takes its arming with it, even when the next spot draws the same row: a
+    // clock that ran out checks, and an unchanged pot on the next street would otherwise match.
+    if (left) setFoldArmedFor(null);
     if (!left || !hadFocus.current) return;
     // Only when the browser has actually given up on focus. If something else legitimately took it
     // — a Coach panel that re-rendered and restored its own — leave it alone.
@@ -516,6 +555,8 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   const canFold = legalActions.some((action) => action.type === 'fold');
   const canCheck = legalActions.some((action) => action.type === 'check');
   const call = legalActions.find((action) => action.type === 'call');
+  const spot = spotSignature(legalActions, toCall, pot, committedThisStreet);
+  const foldArmed = foldArmedFor === spot;
 
   // The single clamp every path goes through. `draft` is what the reader typed FOR THIS SPOT; `to`
   // is what will be sent, and the two cannot disagree at submit time because the button reads `to`.
@@ -542,6 +583,15 @@ export function ActionBar(props: ActionBarProps): ReactElement {
   const actFromBar = (action: TableAction): void => {
     hadFocus.current = true;
     onAct(action);
+  };
+
+  /** Fold, or, for a pointer press beside a free Check, ask once first. See `../fold-guard.ts`. */
+  const pressFold = (event: ReactMouseEvent<HTMLButtonElement>): void => {
+    if (foldPress({ canCheck, pointer: event.detail > 0, armed: foldArmed }) === 'arm') {
+      setFoldArmedFor(spot);
+      return;
+    }
+    actFromBar({ type: 'fold' });
   };
 
   const commitSized = (): void => {
@@ -604,17 +654,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
 
       <div className="prl-action-bar__actions">
         {canFold ? (
-          <ActionButton
-            label="Fold"
-            cost={formatUnits(0)}
-            spoken={
-              canCheck
-                ? `fold, costs ${formatUnits(0)}, gives up the hand and any claim on the pot; checking also costs ${formatUnits(0)}`
-                : `fold, costs ${formatUnits(0)}, gives up the hand and any claim on the pot`
-            }
-            disabled={disabled}
-            onClick={() => actFromBar({ type: 'fold' })}
-          />
+          <FoldButton canCheck={canCheck} armed={foldArmed} disabled={disabled} onClick={pressFold} />
         ) : null}
 
         {canCheck ? (
