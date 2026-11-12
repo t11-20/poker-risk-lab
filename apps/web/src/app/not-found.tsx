@@ -66,7 +66,7 @@ import { formatIndex } from '@prl/ui';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
-import { NAV_DESTINATIONS } from '@/lib/nav.ts';
+import { NAV_DESTINATIONS, RECORD_DESTINATION } from '@/lib/nav.ts';
 
 export const metadata: Metadata = {
   title: 'Page not found',
@@ -96,6 +96,14 @@ export function NotFoundBody(): ReactElement {
               <span className="prl-footer__summary">{destination.summary}</span>
             </li>
           ))}
+          {/* After the five and unnumbered: see `RECORD_DESTINATION`. */}
+          <li className="prl-footer__item">
+            <Link className="prl-footer__link" href={RECORD_DESTINATION.href}>
+              <span aria-hidden="true" className="prl-index prl-index--blank" />
+              <span className="prl-footer__link-label">{RECORD_DESTINATION.label}</span>
+            </Link>
+            <span className="prl-footer__summary">{RECORD_DESTINATION.summary}</span>
+          </li>
         </ul>
       </nav>
     </section>

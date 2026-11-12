@@ -55,7 +55,7 @@
 import { formatIndex } from '@prl/ui';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
-import { DOCUMENT_DESTINATIONS, NAV_DESTINATIONS } from '@/lib/nav.ts';
+import { DOCUMENT_DESTINATIONS, NAV_DESTINATIONS, RECORD_DESTINATION } from '@/lib/nav.ts';
 import { RECORD_PATH } from '@/lib/record-data.ts';
 import { SessionDuration } from './SessionDuration.tsx';
 import { ThemeToggle } from './ThemeToggle.tsx';
@@ -105,6 +105,14 @@ export function SiteFooter(): ReactElement {
                 <span className="prl-footer__summary">{destination.summary}</span>
               </li>
             ))}
+            {/* After the five and unnumbered: see `RECORD_DESTINATION`. */}
+            <li className="prl-footer__item">
+              <Link className="prl-footer__link" href={RECORD_DESTINATION.href}>
+                <span aria-hidden="true" className="prl-index prl-index--blank" />
+                <span className="prl-footer__link-label">{RECORD_DESTINATION.label}</span>
+              </Link>
+              <span className="prl-footer__summary">{RECORD_DESTINATION.summary}</span>
+            </li>
           </ul>
         </nav>
 

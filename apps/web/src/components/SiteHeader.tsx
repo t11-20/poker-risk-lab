@@ -79,6 +79,16 @@
  * or dropped at any viewport width: it is a product guardrail, and the whole bar is laid out
  * around keeping it visible.
  *
+ * ### It is also the way to `/record`
+ *
+ * The figure is a link to the reader's record, and the explanation's "reset them" is a link to the
+ * same page. The audit at 6b3886e found `/record` — progress, the reset, account deletion — in
+ * neither this bar nor the sheet, reachable only from a phrase in the footer's prose. A sixth pill
+ * was the other way to fix that and the wrong one: it costs width the bar measured it does not have
+ * between 860 and 1279, and `lib/nav.ts` explains why the numbered five stay five. The figure costs
+ * no width at all, is in the bar at every width on every page, and is the reader's own number —
+ * which is what a record is about.
+ *
  * It renders the fixture's starting balance on the server and asks the API for the real figure
  * after mount. That order is deliberate: the badge is part of the shell, the shell is on every
  * page, and awaiting a session in the root layout would make every route in the app dynamic and
@@ -123,7 +133,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { type ReactElement, useEffect, useRef, useState } from 'react';
 import { API_PATHS, apiGet, fetchSession, safeFetch, subscribeToAcceptedMutations } from '@/lib/api.ts';
-import { isCurrentDestination, NAV_DESTINATIONS } from '@/lib/nav.ts';
+import { isCurrentDestination, NAV_DESTINATIONS, RECORD_DESTINATION } from '@/lib/nav.ts';
 import { MobileNav } from './MobileNav.tsx';
 
 /** The destination promoted out of the link list and into the accent pill. */
@@ -371,7 +381,15 @@ export function SiteHeader(props: SiteHeaderProps): ReactElement {
             {units.state === 'unknown' ? (
               <UnitsUnknown />
             ) : (
-              <UnitsBadge className="prl-shell__units" label="Practice units" units={units.units} />
+              <UnitsBadge
+                className="prl-shell__units"
+                label="Practice units"
+                linkAs={Link}
+                recordHref={RECORD_DESTINATION.href}
+                resetHref={RECORD_DESTINATION.href}
+                route={pathname}
+                units={units.units}
+              />
             )}
             <MobileNav pathname={pathname} />
           </div>

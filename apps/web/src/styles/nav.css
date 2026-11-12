@@ -527,6 +527,7 @@
  * `tokens.css`), and the outline still survives `forced-colors` where the halo does not.
  */
 .prl-pillbar .prl-units__toggle:focus-visible,
+.prl-pillbar .prl-units__link:focus-visible,
 .prl-pillbar__cta:focus-visible,
 .prl-nav-trigger:focus-visible {
   box-shadow: var(--prl-focus-ring), var(--prl-elevation-2);
@@ -916,6 +917,12 @@
 .prl-shell__header[data-stuck="true"] .prl-nav-trigger,
 .prl-shell__header[data-stuck="true"] .prl-shell__brand-index {
   border-color: var(--prl-line-strong);
+}
+
+/* The units pill is a link to the reader's record, and the rules above own its edge at (0,2,0) and
+   (0,3,0) — so its hover edge has to be stated after them, or it never shows in the bar. */
+.prl-shell__header .prl-units__link:hover {
+  border-color: var(--prl-accent-edge);
 }
 
 /* ==========================================================================================
