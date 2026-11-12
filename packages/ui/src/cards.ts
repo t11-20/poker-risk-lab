@@ -162,3 +162,14 @@ export function listCardNames(cards: readonly number[]): string {
   const last = names[names.length - 1] ?? '';
   return `${names.slice(0, -1).join(', ')} and ${last}`;
 }
+
+/**
+ * `"Your cards: ace of spades and king of diamonds. Board: queen of hearts, jack of spades and two of
+ * clubs."` — the one name `HandGlance` carries, so a screen reader meets the reader's hand and the
+ * board as one sentence rather than as seven images in two groups. An empty board says so, in the
+ * table's own words (`boardName` in `PokerTable.tsx`), rather than reading "no cards".
+ */
+export function handAndBoardName(hole: readonly number[], board: readonly number[]): string {
+  const dealt = board.length === 0 ? 'none dealt yet' : listCardNames(board);
+  return `Your cards: ${listCardNames(hole)}. Board: ${dealt}.`;
+}

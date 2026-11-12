@@ -92,6 +92,7 @@ import {
   type ReactElement,
   type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
   useEffect,
   useId,
   useLayoutEffect,
@@ -138,6 +139,13 @@ export interface ActionBarProps {
   readonly disabled?: boolean;
   /** Shown when there are no legal actions. */
   readonly idleText?: string;
+  /**
+   * What the decision is about, drawn between the price and the sizer, and only while there is a
+   * decision. The play screen passes `HandGlance` here on a phone, where the follow scroll takes the
+   * reader's own plate and the board off the top: see that component for why it is inside the bar
+   * and not above it. A full line of the bar to itself, like the price.
+   */
+  readonly context?: ReactNode;
   readonly className?: string;
 }
 
@@ -385,6 +393,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     committedThisStreet,
     disabled = false,
     idleText = 'Waiting for another player to act.',
+    context,
     className,
   } = props;
 
@@ -638,6 +647,8 @@ export function ActionBar(props: ActionBarProps): ReactElement {
           <span className="prl-action-bar__price-value">{toCall > 0 ? formatUnits(toCall) : 'nothing'}</span>
         </span>
       </p>
+
+      {context}
 
       {sized === null ? null : (
         <BetSizer

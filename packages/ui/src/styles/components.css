@@ -3358,6 +3358,35 @@
   line-height: var(--prl-leading-tight);
 }
 
+/**
+ * `HandGlance`: the reader's two cards, a hairline, then the board — a line of the bar to itself.
+ *
+ * No drawn labels, and that is width rather than taste. Seven `sm` cards with their gaps and the
+ * hairline are 269px, and the bar's content box at 360px is 288px; a "Board" label would wrap the
+ * board onto a second line and double the height that `follow-the-table.ts` has to find room for.
+ * The two groups are told apart by the hairline and by count, and the accessible name says which is
+ * which. It still wraps rather than overflows if it has to (320px), for the reason on
+ * `.prl-card-row__cards`: a scroll strip with nothing focusable in it is a strip a keyboard cannot
+ * scroll.
+ */
+.prl-hand-glance {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--prl-space-2) var(--prl-space-5);
+}
+
+.prl-hand-glance__cards {
+  display: flex;
+  gap: var(--prl-space-2);
+}
+
+.prl-hand-glance__board {
+  padding-inline-start: var(--prl-space-5);
+  border-inline-start: var(--prl-hairline);
+}
+
 .prl-action-bar__actions {
   display: flex;
   flex-wrap: wrap;

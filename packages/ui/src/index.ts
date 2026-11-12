@@ -47,6 +47,7 @@ export {
   type CardDescription,
   type CardValue,
   describeCard,
+  handAndBoardName,
   isCardValue,
   listCardNames,
   parseCardText,
@@ -74,6 +75,7 @@ export { Chip, type ChipProps, type ChipTone } from './components/Chip.tsx';
 export { CoachPanel, type CoachPanelProps } from './components/CoachPanel.tsx';
 export { EquityBar, type EquityBarPlayer, type EquityBarProps } from './components/EquityBar.tsx';
 export { Formula, type FormulaProps } from './components/Formula.tsx';
+export { HandGlance, type HandGlanceProps } from './components/HandGlance.tsx';
 export {
   Metric,
   type MetricDelta,
