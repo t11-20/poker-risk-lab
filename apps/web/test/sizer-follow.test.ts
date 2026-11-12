@@ -29,7 +29,13 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { rowCoversSizer, type SizerGeometry, sizerFollowDelta } from '../src/lib/follow-the-table.ts';
+import {
+  rowCoversSizer,
+  type SizerGeometry,
+  sizerFollowDelta,
+  type WatchGeometry,
+  watchDelta,
+} from '../src/lib/follow-the-table.ts';
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
@@ -103,6 +109,44 @@ describe('the follow scroll brings the sizer in with the row under it', () => {
   });
 });
 
+/**
+ * Once the decision is over, the table comes back. Measured at 390x844 on this branch with only the
+ * sizer follow in place: after a call the band collapsed to 92..204 under the header with the plate
+ * at -146..55; at the end of a hand the result was at -157..-21 above a band at 108..355.
+ */
+describe('when the decision is not the reader’s, the table is watched', () => {
+  const AFTER_A_CALL: WatchGeometry = { bandTop: 92, bandBottom: 204, tableBottom: 55, ...VIEW };
+  const HAND_OVER: WatchGeometry = { bandTop: 108, bandBottom: 355, tableBottom: -169, ...VIEW };
+
+  it('NEGATIVE CONTROL: the band by its nearest edge, as before, leaves both where they were', () => {
+    // The old follow did nothing to a band already in view, which is what both of these are.
+    for (const at of [AFTER_A_CALL, HAND_OVER]) {
+      assert.ok(at.bandTop >= VIEW.viewTop && at.bandBottom <= VIEW.viewBottom, 'not in view: not the case');
+      assert.ok(at.tableBottom <= VIEW.viewTop, 'the plate is on screen: not the case');
+    }
+  });
+
+  it('puts the band at the bottom edge, with the plate above it, after a call', () => {
+    const by = watchDelta(AFTER_A_CALL);
+    assert.equal(by, 204 - VIEW.viewBottom);
+    assert.ok(AFTER_A_CALL.tableBottom - by > VIEW.viewTop, 'the plate is still above the header');
+  });
+
+  it('brings the result in above the band at the end of a hand, as measured after the change', () => {
+    const by = watchDelta(HAND_OVER);
+    // The summary was at -157..-21; measured after: 252..388, with the band at 517..764.
+    assert.deepEqual([-157 - by, -21 - by], [252, 388]);
+  });
+
+  it('does not move a reader who can see their plate', () => {
+    assert.equal(watchDelta({ bandTop: 505, bandBottom: 617, tableBottom: 468, ...VIEW }), 0);
+  });
+
+  it('brings the band up from below, as before, for a reader who pressed Deal at the top', () => {
+    assert.equal(watchDelta({ bandTop: 1700, bandBottom: 1800, tableBottom: 1690, ...VIEW }), 1800 - 764);
+  });
+});
+
 describe('the live table uses it, on a narrow column only', () => {
   const wired = (source: string): boolean =>
     /window\.getComputedStyle\(row\)\.position !== 'sticky'\) return null;/u.test(source) &&
@@ -115,10 +159,21 @@ describe('the live table uses it, on a narrow column only', () => {
     assert.ok(wired(live), 'useFollowTheTable no longer brings the sizer in on a narrow column');
   });
 
+  const watches = (source: string): boolean =>
+    /const watchEdge = turnEdge === '' \? handEdge : null;/u.test(source) &&
+    /const by = watchScroll\(element\);\s*if \(by !== 0\) window\.scrollBy\(/u.test(source) &&
+    /\}, \[watchEdge, band, reduced\]\);/u.test(source);
+
+  it('watches the table on a deal, at the end of the reader’s decision and at the end of the hand', () => {
+    const live = readFileSync(join(SRC, 'app', 'play', 'LiveTable.tsx'), 'utf8');
+    assert.ok(watches(live), 'useFollowTheTable no longer brings the table back when the decision is over');
+  });
+
   it('NEGATIVE CONTROL: the old follow, the buttons by the nearest edge only, fails the predicate', () => {
     const old = `    const target = element.querySelector<HTMLElement>('.prl-action-bar__actions') ?? element;
     if (inView(target)) return;
     target.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });`;
     assert.equal(wired(old), false);
+    assert.equal(watches(old), false);
   });
 });

@@ -65,3 +65,43 @@ export function sizerFollowDelta(geometry: SizerGeometry): number {
   }
   return sizerTop - viewTop;
 }
+
+/**
+ * How far to move the page, when the decision is not the reader's, so the table is on screen again.
+ *
+ * ## Why this exists
+ *
+ * The sizer region above takes the reader's own plate and the board off the top of a phone, and once
+ * they have acted the band collapses to a line or two under the header — so the page was left on that
+ * line with the whole table above it, and the reader had to scroll up to watch the hand they were in.
+ * Measured at 390x844 on this branch before this rule: after a call, the band at 92..204, the reader's
+ * plate at -146..55 and the board at -223..-179; when the call ended the hand, the result went in
+ * above the band at -157..-21; and the next deal, finding the short band already in view, left it
+ * there, so every hand after the first was watched from below.
+ *
+ * So when the decision is over, a hand has settled or a hand is dealt that is not yet theirs to act
+ * in, and the table is NOT on screen, the band is brought in by its bottom edge: the table is above
+ * it, and the result too when there is one. Only when the band fits — during a decision it does not,
+ * which is why the decision is followed differently (see `useFollowTheTable`) — and never when any of
+ * the reader's plate is already on screen, so a reader who is watching is not moved by a pixel.
+ */
+export interface WatchGeometry {
+  readonly bandTop: number;
+  readonly bandBottom: number;
+  /** The reader's own plate, or the table's last block when they hold none: what "watching" sees. */
+  readonly tableBottom: number;
+  readonly viewTop: number;
+  readonly viewBottom: number;
+}
+
+/** Pixels to scroll by (negative is up the page), or 0 to leave the page where it is. */
+export function watchDelta(geometry: WatchGeometry): number {
+  const { bandTop, bandBottom, tableBottom, viewTop, viewBottom } = geometry;
+  // Taller than the view: by its nearest edge, if it is below, and otherwise left alone.
+  if (bandBottom - bandTop > viewBottom - viewTop) return bandTop > viewBottom ? bandTop - viewTop : 0;
+  // Below the view — the reader pressed Deal at the top of the page: up by its bottom edge, as before.
+  if (bandBottom > viewBottom) return bandBottom - viewBottom;
+  // The table has gone off the top: the band to the bottom edge, and the table back above it.
+  if (tableBottom <= viewTop) return bandBottom - viewBottom;
+  return 0;
+}

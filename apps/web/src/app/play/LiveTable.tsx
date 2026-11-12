@@ -73,7 +73,7 @@ import {
 } from 'react';
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
 import { noAnalysisReason, readerHasDecisions, reviewHrefFor } from '@/lib/coach-body.ts';
-import { sizerFollowDelta } from '@/lib/follow-the-table.ts';
+import { sizerFollowDelta, watchDelta } from '@/lib/follow-the-table.ts';
 import { LEGENDS_PATH } from '@/lib/legend-links.ts';
 import { describeTable } from '@/lib/table-description.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
@@ -897,11 +897,18 @@ function OutOfUnitsAtTheTable(): ReactElement {
  *
  * ## When it scrolls, and when it does not
  *
- * Twice, both edges the reader is waiting for: a hand is dealt with the reader in it, and a
- * decision becomes theirs. Never on a frame that merely re-describes a spot already on screen, and
- * never when the target is already in view — so a reader who is looking at the table is not moved
- * by a pixel. Not while they are typing somewhere else on the page either: pulling a half-typed
- * invite code out from under the caret would be worse than the defect.
+ * On the edges the reader is waiting for: a decision becomes theirs; and, while it is not, a hand is
+ * dealt with them in it, their decision ends, or the hand does. Never on a frame that merely
+ * re-describes a spot already on screen, and never when what it would bring in is already in view —
+ * so a reader who is looking at the table is not moved by a pixel. Not while they are typing
+ * somewhere else on the page either: pulling a half-typed invite code out from under the caret would
+ * be worse than the defect.
+ *
+ * The edges that are not a decision are "watched": the table on screen with the band under it
+ * (`watchDelta` in `lib/follow-the-table.ts`). They used to be followed like a decision, by the
+ * band's nearest edge, which was harmless while a decision left the reader's plate on screen. Once a
+ * raise brings the sizer in on a phone (below), it is not, and the band by its nearest edge kept the
+ * reader under the table for the rest of the session.
  *
  * ## What it brings into view: the buttons, by the nearest edge
  *
@@ -978,17 +985,36 @@ function sizerScroll(band: HTMLElement): number | null {
   });
 }
 
+/** The scroll that puts the table back on screen above the band; see `watchDelta`. */
+function watchScroll(band: HTMLElement): number {
+  const table =
+    document.querySelector<HTMLElement>('.prl-table__hero') ?? document.querySelector('.prl-table__field');
+  if (table === null) return 0;
+  const root = window.getComputedStyle(document.documentElement);
+  const box = band.getBoundingClientRect();
+  return watchDelta({
+    bandTop: box.top,
+    bandBottom: box.bottom,
+    tableBottom: table.getBoundingClientRect().bottom,
+    viewTop: Number.parseFloat(root.scrollPaddingBlockStart) || 0,
+    viewBottom: window.innerHeight - (Number.parseFloat(root.scrollPaddingBlockEnd) || 0),
+  });
+}
+
 function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement | null>): void {
   const reduced = usePrefersReducedMotion();
   const view = live.table.view;
-  const dealtHand = view !== null && !live.table.betweenHands && view.seats.some((seat) => seat.isSelf);
-  const handId = dealtHand ? view.handId : null;
   // Non-empty exactly while the decision is the reader's, and set on the edge — see
   // `turnAnnouncement` in `lib/use-live-table.ts` — so it changes once per turn, not per frame.
   const turnEdge = live.table.turnAnnouncement;
+  // A hand the reader was dealt into, and whether it is over: the other edges worth following.
+  const handEdge =
+    view !== null && view.viewerSeat !== null ? `${view.handId}:${String(view.street === 'complete')}` : null;
+  const watchEdge = turnEdge === '' ? handEdge : null;
 
+  // The reader's decision: the buttons, or the sizer with the buttons under it.
   useEffect(() => {
-    if (handId === null && turnEdge === '') return;
+    if (turnEdge === '') return;
     const element = band.current;
     if (element === null || typingElsewhere(element)) return;
     const sized = sizerScroll(element);
@@ -999,7 +1025,17 @@ function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement 
     const target = element.querySelector<HTMLElement>('.prl-action-bar__actions') ?? element;
     if (inView(target)) return;
     target.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
-  }, [handId, turnEdge, band, reduced]);
+  }, [turnEdge, band, reduced]);
+
+  // Everything else the reader waits for — a deal, the end of their decision, the end of the hand —
+  // is watched: the table on screen with the band under it. See `watchDelta`.
+  useEffect(() => {
+    if (watchEdge === null) return;
+    const element = band.current;
+    if (element === null || typingElsewhere(element)) return;
+    const by = watchScroll(element);
+    if (by !== 0) window.scrollBy({ top: by, behavior: reduced ? 'auto' : 'smooth' });
+  }, [watchEdge, band, reduced]);
 }
 
 export function LiveTable({
