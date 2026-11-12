@@ -195,13 +195,19 @@
  * only the fill would leave the last word on `background-color` in a block with no
  * `backdrop-filter` in it, which is the ghosting bug written down, and it is the shape
  * `layout-guarantees.test.ts` fails. Wherever a glass fill goes, the filter goes with it.
+ *
+ * Both sit on `::before`, not on the header: a filter on the header made it the containing block
+ * for the fixed menu sheet inside it, and the sheet opened 76px tall. See `globals.css`.
  */
 .prl-shell__header {
   padding-block: var(--prl-pillbar-pad-block);
+  border-block-end: 1px solid var(--prl-edge-shade);
+}
+
+.prl-shell__header::before {
   background-color: var(--prl-glass-floating);
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
-  border-block-end: 1px solid var(--prl-edge-shade);
 }
 
 /**
@@ -545,6 +551,30 @@
   border-radius: var(--prl-radius-3);
   background-color: var(--prl-surface-panel);
   font-size: var(--prl-type-body-sm);
+}
+
+/**
+ * Below the nav breakpoint the panel hangs from the BAR, not from the units pill.
+ *
+ * Anchored to the pill's end, it grew leftwards from wherever the pill happened to stop, and on a
+ * phone the pill stops well short of the edge because the menu trigger sits beyond it. Measured at
+ * 360: the pill ended at x=288 and the panel was 328px wide, so it started at x=-40 and the first
+ * 40px of every line ("s are free practice chips…") was off the screen. The same at 411. This is a
+ * newcomer's first "what is this?" tap. With the units group unpositioned the panel's containing
+ * block is the sticky header, which spans the viewport: measured after, x=16 to 344 at 360 and
+ * 16 to 395 at 411, and at 768 it ends at the gutter rather than mid-bar.
+ */
+@media (width < 860px) {
+  .prl-shell__units {
+    position: static;
+  }
+
+  .prl-shell__units .prl-units__note {
+    inset-block-start: calc(var(--prl-pillbar-pad-block) + var(--prl-pill-h) + var(--prl-space-3));
+    inset-inline-start: auto;
+    inset-inline-end: var(--prl-space-6);
+    max-width: min(var(--prl-measure), calc(100% - 2 * var(--prl-space-6)));
+  }
 }
 
 /* ==========================================================================================
