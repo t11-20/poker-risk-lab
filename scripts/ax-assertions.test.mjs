@@ -2125,3 +2125,43 @@ describe('the quiz verdict openings match what the app writes', () => {
     assert.doesNotMatch('That matches the answer this lesson gives.' + tail, NUMERIC_VERDICT_OPENING);
   });
 });
+
+/**
+ * J2.5 used to click a radio and read the verdict, because a radio change answered the question —
+ * and so a keyboard reader arrowing through four options answered and posted three of them (UX audit
+ * at 6b3886e, Minor 2). The quiz now answers only on "Check answer", and J2.5 reads the region
+ * between the two steps: a verdict that is already there after a mere selection is the old
+ * behaviour back, and must fail rather than pass on the strength of the later press.
+ */
+describe('J2.5: selecting is not answering', () => {
+  const check = checkFor('J2.5');
+  const answered = {
+    verdictOnSelect: '',
+    choiceAnswered: true,
+    choiceVerdict: {
+      role: 'status',
+      live: 'polite',
+      text:
+        'That matches the answer this lesson gives. The reasoning is below. ' +
+        'Kept on this browser’s guest record as a question you have answered.',
+    },
+    choiceVerdictCount: 1,
+  };
+
+  it('passes when the region is empty until "Check answer" is pressed', () => {
+    assert.equal(check.decide(answered).ok, true, check.decide(answered).detail);
+  });
+
+  it('fails when selecting an option already wrote a verdict', () => {
+    const early = {
+      ...answered,
+      verdictOnSelect: 'That is not the answer this lesson gives. Nothing is deducted.',
+    };
+    assert.ok(refuses(check, early));
+    assert.match(check.decide(early).detail, /before "Check answer" was pressed/u);
+  });
+
+  it('fails when there is no "Check answer" to press', () => {
+    assert.ok(refuses(check, { ...answered, choiceAnswered: false }));
+  });
+});

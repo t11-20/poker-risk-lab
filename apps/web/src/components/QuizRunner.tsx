@@ -181,8 +181,20 @@ function MultipleChoice(props: {
   readonly onAnswer: (answer: Answer) => void;
 }): ReactElement {
   const { question, answer, server, onAnswer } = props;
+  /** The option the learner last CHECKED — what the verdict, chips and note describe. */
   const chosen = answer?.kind === 'choice' ? answer.index : null;
   const answered = chosen !== null;
+  /**
+   * The option the radio group is on, which is not yet an answer.
+   *
+   * The radios used to answer on `onChange`, and a radio group changes on every arrow key: a keyboard
+   * reader moving through four options answered, and posted, three of them on the way — "not the
+   * answer", "matches", "not the answer" — and one stray tap revealed "the answer this lesson gives"
+   * (UX audit at 6b3886e, Minor 2). Selecting is now only selecting; "Check answer" is the answer.
+   * Seeded from the checked answer because this component remounts per question (`key` in
+   * `questionBody`), so paging back shows the option that was checked.
+   */
+  const [selected, setSelected] = useState<number | null>(chosen);
   // Keys from the option text, with an occurrence counter, rather than from the position: an
   // index key makes React reuse the wrong radio if a question is ever re-ordered, and the
   // position is still available as the `index` argument for the logic that genuinely needs it.
@@ -219,8 +231,8 @@ function MultipleChoice(props: {
                   type="radio"
                   name={question.id}
                   value={String(index)}
-                  checked={isChoice}
-                  onChange={() => onAnswer({ kind: 'choice', index })}
+                  checked={selected === index}
+                  onChange={() => setSelected(index)}
                 />
                 <span className="prl-choice__label">{entry.value}</span>
               </label>
@@ -241,6 +253,25 @@ function MultipleChoice(props: {
           );
         })}
       </fieldset>
+      {/*
+        Disabled until an option is selected, as the numeric branch's button is until a number is
+        typed. Focus stays on it after a press: the verdict is announced by the region below, and
+        moving the caret would drag a reader away from the control they will press again if they
+        change their mind. "Check again" mirrors the numeric branch, and re-sends — that is an
+        attempt the learner asked for, and `record` mints a new answer object so it is posted.
+      */}
+      <div className="prl-btn-row">
+        <Button
+          className="prl-learn-quiz__check"
+          variant="secondary"
+          disabled={selected === null}
+          onClick={() => {
+            if (selected !== null) onAnswer({ kind: 'choice', index: selected });
+          }}
+        >
+          {!answered ? 'Check answer' : selected === chosen ? 'Check again' : 'Check this answer'}
+        </Button>
+      </div>
       {/*
         The live region is in the DOM from the first render, empty, rather than appearing with
         its text. A region that arrives at the same moment as its content is missed by several
