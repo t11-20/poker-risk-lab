@@ -56,6 +56,8 @@ import {
 } from '../../../lib/api.ts';
 import { buildHandReplay } from '../../../lib/hand-replay.ts';
 import { formatTimestamp } from '../../../lib/lab-labels.ts';
+import { netWord } from '../../../lib/net-words.ts';
+import { decisionCount } from '../../../lib/replay-steps.ts';
 import { reviewPageMetadata } from '../../../lib/review-titles.ts';
 import { readerCallOptions } from '../../../lib/server-session.ts';
 import { NotFoundBody } from '../../not-found.tsx';
@@ -260,11 +262,7 @@ export default async function HandReviewPage({
               data-sign={net === null ? 'unknown' : net > 0 ? 'positive' : net < 0 ? 'negative' : 'neutral'}
             >
               {net === null ? 'not settled' : formatSignedUnits(net)}
-              {net === null ? null : (
-                <span className="prl-review-net__word">
-                  {net > 0 ? 'gained' : net < 0 ? 'lost' : 'level'}
-                </span>
-              )}
+              {net === null ? null : <span className="prl-review-net__word">{netWord(net)}</span>}
             </span>
           </li>
           <li>
@@ -278,7 +276,9 @@ export default async function HandReviewPage({
           </li>
           <li>
             <span className="prl-label">Decisions</span>
-            <span className="prl-review-summary__value">{String(review.decisions.length)}</span>
+            {/* Counted the way the transport counts them, so "Decisions 13" here and "Decision 2 / 13"
+                there are one number. See `decisionCount`. */}
+            <span className="prl-review-summary__value">{String(decisionCount(replay))}</span>
           </li>
         </ul>
       </header>

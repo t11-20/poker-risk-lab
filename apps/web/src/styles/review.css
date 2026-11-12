@@ -396,7 +396,7 @@ td.prl-review-table__when {
 
 /**
  * The net cell. Four independent signals, and the colour is the fourth: the digits carry an
- * explicit `+`/`-`, the unit word is in the string, the word "gained"/"lost"/"level" sits beside it,
+ * explicit `+`/`-`, the unit word is in the string, the word "gained"/"lost"/"broke even" sits beside it,
  * and only then does `data-sign` change the ink. Remove the stylesheet and the column still reads.
  */
 .prl-review-net {

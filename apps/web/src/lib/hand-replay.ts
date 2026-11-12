@@ -583,6 +583,11 @@ export function buildHandReplay(review: HandReviewResponse): HandReplay {
 
   const seatNames: Record<number, string> = {};
   for (const seat of review.seats) seatNames[seat.seat] = seat.displayName;
+  // The reader's own seat is "You", as it already is in the timeline (`markerActor`). The table
+  // plate showed the API's guest name with the marker appended — "Guest 7E37B1 (you)" above a
+  // timeline saying "You" (audit at 6b3886e) — and a reader should not have to work out that the
+  // two are the same person. `Seat` appends no marker to a seat already named "You".
+  if (viewerSeat !== null) seatNames[viewerSeat] = 'You';
 
   const occupied = review.seats
     .filter((seat) => seat.startingStack > 0)

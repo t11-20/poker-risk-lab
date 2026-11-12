@@ -63,7 +63,8 @@ import {
 } from '@prl/ui';
 import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
 import type { HandReplay as Replay, ReplayStep } from '../lib/hand-replay.ts';
-import { markerActor, markerShort, openingStepIndex } from '../lib/replay-steps.ts';
+import { netWord } from '../lib/net-words.ts';
+import { markerActor, markerShort, openingStepIndex, stepCounter } from '../lib/replay-steps.ts';
 import { CommitmentVerifier } from './CommitmentVerifier.tsx';
 import { DecisionTimeline, type TimelineMarker, type TimelineStreet } from './DecisionTimeline.tsx';
 
@@ -245,7 +246,7 @@ function ResultRow({
       <dt>{`${name}${isBot ? ' (bot)' : ''}`}</dt>
       <dd data-sign={sign}>
         {`${net > 0 ? '+' : ''}${formatUnits(net)} `}
-        <span className="prl-replay__result-word">{net > 0 ? 'gained' : net < 0 ? 'lost' : 'level'}</span>
+        <span className="prl-replay__result-word">{netWord(net)}</span>
       </dd>
     </div>
   );
@@ -330,6 +331,7 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
   }
 
   const analysis = step.analysis;
+  const counter = stepCounter(step, replay);
   // Seats the server disclosed. Named on screen, because a replay that shows an opponent's cards
   // from step one without saying why invites the reader to think the analysis knew them too.
   const shownSeats = review.seats
@@ -371,9 +373,11 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
             step, and J6.2 fails a step announced from two places. */}
         <div className="prl-replay__now">
           <p className="prl-replay__position">
-            <span className="prl-label">Step</span>
-            <span className="prl-replay__position-value">{`${step.index + 1} / ${total}`}</span>
-            <span className="prl-label prl-replay__street">{stepStreet(step)}</span>
+            <span className="prl-label">{counter.label}</span>
+            <span className="prl-replay__position-value">{counter.value}</span>
+            {step.decision === null ? null : (
+              <span className="prl-label prl-replay__street">{stepStreet(step)}</span>
+            )}
           </p>
           <p className="prl-replay__headline">{stepHeadline(step, replay.seatNames)}</p>
         </div>
@@ -448,7 +452,14 @@ export function HandReplay({ review, replay }: HandReplayProps): ReactElement {
         <Panel title="How the hand settled" eyebrow="Result" headingLevel={2}>
           <dl className="prl-replay__result">
             {review.seats.map((seat) => (
-              <ResultRow key={seat.seat} name={seat.displayName} isBot={seat.isBot} net={seat.net} />
+              <ResultRow
+                key={seat.seat}
+                // The replay's names, not the payload's: the reader's own seat is "You" there, as it
+                // is on the table and the timeline, rather than "Guest 7E37B1".
+                name={replay.seatNames[seat.seat] ?? seat.displayName}
+                isBot={seat.isBot}
+                net={seat.net}
+              />
             ))}
           </dl>
           <p className="prl-note">
