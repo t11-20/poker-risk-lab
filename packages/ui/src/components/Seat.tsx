@@ -109,6 +109,13 @@ export interface SeatProps {
    * name. Why a card is marked is the caller's knowledge, which is why it is a prop and not a default.
    */
   readonly highlightLabel?: string;
+  /**
+   * What this seat last did on the street in progress — "raised to 124", "called 10" — from
+   * `lastActionsThisStreet`. Shown in place of "in the hand" on the status line, so the plate grows
+   * by nothing; absent, the line says what it always said. Ignored once the hand is settled, where
+   * the past-tense status is the whole story. See `../seat-actions.ts` for why it exists.
+   */
+  readonly lastAction?: string | null;
   /** `li` inside the opponents list, `div` for the viewer's own plate. */
   readonly as?: 'li' | 'div';
   readonly className?: string;
@@ -173,6 +180,12 @@ export function seatRingPosition(index: number, count: number): StyleWithVars {
   return { '--prl-seat-x': `${x.toFixed(2)}%`, '--prl-seat-y': `${y.toFixed(2)}%` };
 }
 
+/** The status line: the last action this street when there is one, otherwise the status. */
+function statusLine(status: SeatStatus, settled: boolean, lastAction: string | null): string {
+  if (settled) return SETTLED_STATUS_TEXT[status];
+  return lastAction !== null && status !== 'sittingOut' ? lastAction : STATUS_TEXT[status];
+}
+
 /** Not after a name that already says it: every fixture names the reader "You", which read "You (you)". */
 function needsSelfMarker(isSelf: boolean, name: string): boolean {
   return isSelf && name !== 'You';
@@ -180,7 +193,7 @@ function needsSelfMarker(isSelf: boolean, name: string): boolean {
 
 export function Seat(props: SeatProps): ReactElement {
   const { seat, street, name, ringIndex, ringCount, turn = null, highlightedCards, highlightLabel } = props;
-  const { as = 'li', className } = props;
+  const { as = 'li', className, lastAction = null } = props;
 
   const Tag = as;
   const settled = isSettled(street);
@@ -285,7 +298,12 @@ export function Seat(props: SeatProps): ReactElement {
         </div>
       </dl>
 
-      <p className="prl-seat__status">{(settled ? SETTLED_STATUS_TEXT : STATUS_TEXT)[seat.status]}</p>
+      {/* The status line carries the last action rather than a new line beside it: an oval of six
+          13rem plates has no height to spare (`components.css`, the `@container prl-table` block),
+          and "raised to 124" is a more useful thing to say about an active seat than "in the hand".
+          A folded seat still says "folded" — its last action this street, or its status from an
+          earlier one, which is the same word. */}
+      <p className="prl-seat__status">{statusLine(seat.status, settled, lastAction)}</p>
 
       {seat.status === 'sittingOut' ? null : (
         <CardRow

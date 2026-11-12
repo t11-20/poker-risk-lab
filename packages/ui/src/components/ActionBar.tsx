@@ -100,9 +100,11 @@ import {
 import {
   type BetDraft,
   clampBetTo,
+  clampedFrom,
   draftForBounds,
   isDraftMalformed,
   presetTotal,
+  pressedPreset,
   resolveDraft,
   resolveSizedAction,
   SIZING_PRESETS,
@@ -183,6 +185,7 @@ function BetSizer(props: BetSizerProps): ReactElement {
   const numberId = useId();
   const boundsId = useId();
   const invalidId = useId();
+  const clampedId = useId();
 
   const { bounds } = sized;
   const isBet = sized.kind === 'bet';
@@ -205,7 +208,16 @@ function BetSizer(props: BetSizerProps): ReactElement {
    * is read out on every visit to the field.
    */
   const malformed = isDraftMalformed(draft);
-  const describedBy = malformed ? `${invalidId} ${boundsId}` : boundsId;
+  // A number the clamp has replaced. Said beside the field, and first in its description, for the
+  // same reason the malformed correction is: the reader is in the field when it matters.
+  const clamped = clampedFrom(draft, to);
+  const describedBy = malformed
+    ? `${invalidId} ${boundsId}`
+    : clamped !== null
+      ? `${clampedId} ${boundsId}`
+      : boundsId;
+  const context = { bounds, pot, toCall, committedThisStreet };
+  const pressed = pressedPreset(context, to);
 
   return (
     <fieldset className="prl-sizer" disabled={disabled}>
@@ -216,13 +228,14 @@ function BetSizer(props: BetSizerProps): ReactElement {
           // Derived from the engine's own bounds, never from an invented maximum: `presetTotal`
           // clamps into `[minTo, maxTo]`, so a preset can never propose an amount the server did
           // not offer. On a short stack several presets collapse onto all-in, which is correct.
-          const target = presetTotal(preset, { bounds, pot, toCall, committedThisStreet });
+          const target = presetTotal(preset, context);
           return (
             <button
               key={preset.id}
               type="button"
               className="prl-preset"
-              aria-pressed={target === to}
+              // One pressed preset at most — see `pressedPreset`.
+              aria-pressed={preset.id === pressed}
               onClick={() => onDraft({ text: String(target), badInput: false })}
             >
               <span aria-hidden="true" className="prl-preset__mark">
@@ -291,6 +304,12 @@ function BetSizer(props: BetSizerProps): ReactElement {
           }
         </p>
       ) : null}
+
+      {clamped === null ? null : (
+        <p className="prl-field__hint prl-sizer__clamped" id={clampedId}>
+          {`${clamped > bounds.max ? `${formatChips(clamped)} is above the most you can put in` : clamped < bounds.min ? `${formatChips(clamped)} is below the minimum` : 'Units are whole'}, so the ${isBet ? 'bet' : 'raise'} will be to ${formatChips(to)}${isAllIn ? ' — all in' : ''}.`}
+        </p>
+      )}
 
       <p className="prl-sizer__bounds" id={boundsId}>
         {`Allowed range ${formatChips(bounds.min)} to ${formatChips(bounds.max)} units. Presets are a fraction of the pot after your call.`}
@@ -415,6 +434,17 @@ export function ActionBar(props: ActionBarProps): ReactElement {
    * `hadFocus` stays true through a disable or an unmount on purpose. `focusout` fires with a null
    * `relatedTarget` in both cases, and treating that as "focus left the bar" would clear the flag a
    * moment before the effect needs to read it.
+   *
+   * ## Every move here is `preventScroll`
+   *
+   * Each of these moves is for the caret and for a screen reader, and none of them is a reason to
+   * move the page. A plain `.focus()` scrolls its target into view, and these targets are lines
+   * that appear and disappear as the bar changes shape — so every decision scrolled the page by
+   * however far the new line was from the old button. Measured at 1440x900 on the live table: a
+   * Call pressed at scrollY 1286 ended at 1851, the footer, with the next decision's buttons at
+   * viewport y -261; at 390x844 every action jumped the page 566 to 2,073px. Every target is inside
+   * this bar, which is where the reader's eyes already were, so nothing lands off-screen that was
+   * on-screen a moment before.
    */
   const idleRef = useRef<HTMLParagraphElement>(null);
   const inFlightRef = useRef<HTMLParagraphElement>(null);
@@ -451,7 +481,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     // Only when the browser has actually given up on focus. If something else legitimately took it
     // — a Coach panel that re-rendered and restored its own — leave it alone.
     if (!browserAbandonedFocus()) return;
-    idleRef.current?.focus();
+    idleRef.current?.focus({ preventScroll: true });
     hadFocus.current = false;
   }, [acting]);
 
@@ -466,7 +496,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
       // delayed rescue can lose to Chrome parking the caret on `<html>` with nobody watching.
       // A parent (TableStage) that wants a better destination runs its own layout effect after
       // this one, because layout effects run child-then-parent, and overwrites the caret.
-      inFlightRef.current?.focus();
+      inFlightRef.current?.focus({ preventScroll: true });
       parked.current = document.activeElement === inFlightRef.current;
       return;
     }
@@ -479,7 +509,7 @@ export function ActionBar(props: ActionBarProps): ReactElement {
     // check because a control that came back still disabled is not somewhere to leave a reader.
     if (control === null || !control.isConnected) return;
     if (control instanceof HTMLButtonElement && control.disabled) return;
-    control.focus();
+    control.focus({ preventScroll: true });
   }, [disabled]);
 
   const sized = resolveSizedAction(legalActions);
@@ -631,36 +661,43 @@ export function ActionBar(props: ActionBarProps): ReactElement {
             onClick={commitSized}
           />
         )}
+        {/*
+          The caret's home for the length of the round trip, mounted only while there is one.
+
+          Not always present: a labelled status that is always there sits in every reader's rotor
+          announcing an empty container on a table where nothing has been sent. `TableStage` reached
+          the same conclusion about its acknowledgement for the same reason.
+
+          It borrows `prl-action-bar__idle`, which is the other line in this bar that exists to be
+          landed on and is the one place in `components.css` with a `:focus-visible` ring drawn for
+          exactly that — "unlike <main>, this is a place focus arrives at unexpectedly, and a reader
+          who has just folded needs to see where they now are". Sharing it means the two lines cannot
+          drift apart visually; it costs a class name that says `idle` on a line that is not idle at
+          all, and this comment is the whole of the mitigation for that.
+
+          The label and the sentence deliberately do not say the same thing: the label is announced as
+          the name of the place the caret arrived at, and the sentence is what is on the screen.
+
+          INSIDE the action row, as its last line, and that placement is what lets the caret move
+          here with `preventScroll` and still be seen. Below 46rem of column the row is sticky
+          (`styles/play.css` section 3.1) and paints at the bottom of the viewport while its place in
+          flow is further down, past the sizer. As the bar's next block the line sat at its flow
+          position: measured at 390x844 on `/play?state=decision`, Fold at viewport y 620 and this
+          line at 1,099, off the screen, so a focus move that no longer scrolls left the caret where
+          nobody could see it. In the row it rides with the buttons it replaced.
+        */}
+        {disabled ? (
+          <p
+            aria-label="Your decision is with the server"
+            className="prl-action-bar__idle"
+            ref={inFlightRef}
+            role="status"
+            tabIndex={-1}
+          >
+            {'Waiting for the server.'}
+          </p>
+        ) : null}
       </div>
-
-      {/*
-        The caret's home for the length of the round trip, mounted only while there is one.
-
-        Not always present: a labelled status that is always there sits in every reader's rotor
-        announcing an empty container on a table where nothing has been sent. `TableStage` reached
-        the same conclusion about its acknowledgement for the same reason.
-
-        It borrows `prl-action-bar__idle`, which is the other line in this bar that exists to be
-        landed on and is the one place in `components.css` with a `:focus-visible` ring drawn for
-        exactly that — "unlike <main>, this is a place focus arrives at unexpectedly, and a reader
-        who has just folded needs to see where they now are". Sharing it means the two lines cannot
-        drift apart visually; it costs a class name that says `idle` on a line that is not idle at
-        all, and this comment is the whole of the mitigation for that.
-
-        The label and the sentence deliberately do not say the same thing: the label is announced as
-        the name of the place the caret arrived at, and the sentence is what is on the screen.
-      */}
-      {disabled ? (
-        <p
-          aria-label="Your decision is with the server"
-          className="prl-action-bar__idle"
-          ref={inFlightRef}
-          role="status"
-          tabIndex={-1}
-        >
-          {'Waiting for the server.'}
-        </p>
-      ) : null}
 
       <p className="prl-action-bar__note">
         {/* The engine offers Fold where Check is free, with the note "Legal, but checking costs

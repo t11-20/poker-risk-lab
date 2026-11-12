@@ -126,7 +126,7 @@ const SOURCE = readFileSync(SOURCE_PATH, 'utf8');
  * below has to come back false for this string, or it is not testing what it claims to test.
  */
 const WITHOUT_THE_FIX = SOURCE.replace(/useLayoutEffect\(\(\) => \{[\s\S]*?\}, \[disabled\]\);/u, '').replace(
-  /\{disabled \? \(\n {8}<p[\s\S]*?<\/p>\n {6}\) : null\}/u,
+  /\{disabled \? \(\n {10}<p[\s\S]*?<\/p>\n {8}\) : null\}/u,
   '',
 );
 const WITHOUT_ACTIVATION_MARK = SOURCE.replace(
@@ -231,14 +231,16 @@ describe('where the caret is actually moved', () => {
   // source, and every predicate is proved able to fail by running it over `WITHOUT_THE_FIX`.
 
   const rescuesOnDisable = (source: string): boolean =>
-    /useLayoutEffect\(\(\) => \{/u.test(source) && /inFlightRef\.current\?\.focus\(\);/u.test(source);
+    /useLayoutEffect\(\(\) => \{/u.test(source) &&
+    /inFlightRef\.current\?\.focus\(\{ preventScroll: true \}\);/u.test(source);
 
   const yieldsToAnOuterRescue = (source: string): boolean =>
     /layout effects run child-then-parent/u.test(source) &&
-    /inFlightRef\.current\?\.focus\(\);/u.test(source);
+    /inFlightRef\.current\?\.focus\(\{ preventScroll: true \}\);/u.test(source);
 
   const returnsTheCaret = (source: string): boolean =>
-    /if \(!returned \|\| !parked\.current\) return;/u.test(source) && /control\.focus\(\);/u.test(source);
+    /if \(!returned \|\| !parked\.current\) return;/u.test(source) &&
+    /control\.focus\(\{ preventScroll: true \}\);/u.test(source);
 
   it('moves it to the landing place when the controls are disabled under it', () => {
     assert.ok(

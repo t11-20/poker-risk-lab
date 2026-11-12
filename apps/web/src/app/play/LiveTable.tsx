@@ -52,7 +52,14 @@
  * somewhere else entirely.
  */
 
-import { Button, browserAbandonedFocus, Callout, Panel, type TableAction } from '@prl/ui';
+import {
+  Button,
+  browserAbandonedFocus,
+  Callout,
+  Panel,
+  type TableAction,
+  usePrefersReducedMotion,
+} from '@prl/ui';
 import Link from 'next/link';
 import {
   type FocusEvent,
@@ -242,6 +249,9 @@ function hintSentence(live: LiveTableModel): string {
       ? `Taking seat ${String(live.readerSeat + 1)} for you, then dealing your first hand.`
       : 'Dealing your first hand.';
   }
+  if (live.outOfUnits) {
+    return 'You have no units left at this seat, so the server deals every hand without you.';
+  }
   if (live.table.seat === null) {
     // The seat is whichever one is actually free, not a constant. At a room reached by invite code
     // seat 1 is the owner's, so naming it here would send the joiner at a seat they cannot have.
@@ -334,6 +344,34 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
           </Callout>
         </div>
       ) : null}
+      {/*
+        Not an alert. Nothing was refused and nothing interrupted the reader: the hand that took the
+        last unit was narrated as it happened, and this is the standing state that follows it. It
+        sits beside the control it disables, so the reason is where the reader goes to press it.
+
+        It goes when the server's next frame shows chips at the reader's seat — `outOfUnits` is read
+        off every frame's roster, nothing remembers it. Whether a reset reaches a seat already taken is
+        the server's to decide, and without PR #25 it does not: a reset writes the durable stack and
+        leaves the live seat at 0, so the reader comes back to this notice and a disabled Deal (review
+        on PR #27). The last paragraph is the way on that works against either server — a seat taken after
+        a reset made while standing is bought in at the reset figure — so it is never a dead end.
+      */}
+      {live.outOfUnits ? (
+        <Callout tone="warning" title="You are out of units">
+          <p>
+            The server deals you out of every hand while your seat has nothing in front of it, so pressing
+            deal now would only deal the bots. Units are free practice counters: reset them to the starting
+            amount to play on.
+          </p>
+          <p>
+            <Link href="/record">Reset your units on your record page</Link>
+          </p>
+          <p>
+            This notice goes once the table shows units at your seat. If it is still here after a reset, stand
+            up, reset once more, then take your seat again: you sit down with the reset units.
+          </p>
+        </Callout>
+      ) : null}
       {table.notice !== null && table.noticeCode !== 'enrolment_required' ? (
         <div role="alert">
           <Callout tone="warning" title="The server refused something">
@@ -343,6 +381,21 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
       ) : null}
     </>
   );
+}
+
+/** The set of controls `ConnectionControls` has on screen, as a string: its focus rescue's trigger. */
+function controlsSignature(live: ConnectionPanelProps['live']): string {
+  return [
+    live.phase,
+    live.status ?? 'none',
+    live.closed?.action ?? 'none',
+    live.table.seat !== null ? 'seated' : 'standing',
+    live.readerSeat === null ? 'full' : 'free',
+    live.table.betweenHands ? 'between' : 'in-hand',
+    live.coachOff === null ? 'coach' : 'no-coach',
+    live.dealingIn ? 'dealing-in' : 'manual',
+    live.join.state,
+  ].join('/');
 }
 
 /**
@@ -377,17 +430,7 @@ function ConnectionControls({
   const seated = table.seat !== null;
   const manual = isLive && !live.dealingIn;
 
-  const signature = [
-    phase,
-    live.status ?? 'none',
-    closed?.action ?? 'none',
-    seated ? 'seated' : 'standing',
-    live.readerSeat === null ? 'full' : 'free',
-    table.betweenHands ? 'between' : 'in-hand',
-    live.coachOff === null ? 'coach' : 'no-coach',
-    live.dealingIn ? 'dealing-in' : 'manual',
-    live.join.state,
-  ].join('/');
+  const signature = controlsSignature(live);
 
   /**
    * `hadFocus` stays true through the unmount deliberately: `focusout` fires as the button is
@@ -414,7 +457,12 @@ function ConnectionControls({
     // that knows only `body` never fires — the same shape of stale copy that stopped `HandReplay`'s
     // rescue from ever running. One definition, in the package that measured it.
     if (!browserAbandonedFocus()) return;
-    fallbackRef.current?.focus();
+    // `preventScroll`, because this line is at the TOP of the page and the control that vanished
+    // usually was not: when a hand ends the in-hand controls go and the caret is put here, and a plain
+    // `.focus()` scrolled a reader who was looking at the result of the hand back to scrollY 0, with
+    // the showdown and the result below the fold. The move is for the caret and the screen reader —
+    // the next Tab is "Deal the next hand" either way.
+    fallbackRef.current?.focus({ preventScroll: true });
     hadFocus.current = false;
   }, [signature, fallbackRef]);
 
@@ -451,7 +499,7 @@ function ConnectionControls({
         ) : null}
 
         {manual && seated ? (
-          <Button variant="primary" onClick={live.deal} disabled={!table.betweenHands}>
+          <Button variant="primary" onClick={live.deal} disabled={!table.betweenHands || live.outOfUnits}>
             Deal the next hand
           </Button>
         ) : null}
@@ -480,22 +528,25 @@ function ConnectionControls({
         ) : null}
       </p>
 
-      {/*
-        Not in a legend match. Both flows inside it switch this page's room without changing its URL,
-        and the heading, the setting and the Coach rule above are rendered from that URL: joining a
-        friend's table here left "Heads-up against <archetype>, Expert" over somebody else's table
-        (Devin Review on #24). The bot table at /play is where they belong, so a legend match links
-        there instead.
-      */}
-      {inLegendMatch ? (
-        <p className="prl-note">
-          To play with somebody you know, <Link href="/play">open the bot table</Link> and start or join a
-          private table from there.
-        </p>
-      ) : (
-        <PlayWithSomebody live={live} />
-      )}
+      <OtherTables live={live} inLegendMatch={inLegendMatch} />
     </div>
+  );
+}
+
+/**
+ * The private-table flows, or in a legend match a link to the bot table instead. Both flows switch
+ * this page's room without changing its URL, and the heading, the setting and the Coach rule above
+ * are rendered from that URL: joining a friend's table here left "Heads-up against <archetype>,
+ * Expert" over somebody else's table (Devin Review on #24).
+ */
+function OtherTables({ live, inLegendMatch = false }: ConnectionPanelProps): ReactElement {
+  return inLegendMatch ? (
+    <p className="prl-note">
+      To play with somebody you know, <Link href="/play">open the bot table</Link> and start or join a private
+      table from there.
+    </p>
+  ) : (
+    <PlayWithSomebody live={live} />
   );
 }
 
@@ -656,8 +707,8 @@ function JoinByInviteCode({ live }: ConnectionPanelProps): ReactElement {
           </p>
         ) : null}
         <p className="prl-field__hint" id={hintId}>
-          The code the table’s owner shared with you. Spaces and lower case are tidied up; the hyphens are
-          part of the code and are not.
+          The code the table’s owner shared with you. Spaces and lower case are tidied up for you; keep the
+          hyphens, because they are part of the code.
         </p>
       </div>
       <p className="prl-btn-row">
@@ -759,11 +810,94 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
           <dt className="prl-label">Blinds</dt>
           <dd>{`${String(room.smallBlind)} / ${String(room.bigBlind)} units`}</dd>
           <dt className="prl-label">Your seat</dt>
-          <dd>{live.table.seat === null ? 'watching' : `seat ${String(live.table.seat + 1)}`}</dd>
+          <dd>
+            {live.table.seat === null
+              ? 'watching'
+              : `seat ${String(live.table.seat + 1)}${live.outOfUnits ? ' — out of units' : ''}`}
+          </dd>
         </dl>
       )}
     </Panel>
   );
+}
+
+/**
+ * Keeps the decision band on screen when the table has something new for the reader.
+ *
+ * ## The defect this exists for
+ *
+ * The connection card is above the table, and it is tall — ~560px at 1440 once the room facts and
+ * the private-table disclosure are in it — so `styles/play.css` section 3's promise that the table
+ * and the band fit one viewport held only for a reader who had already scrolled past it. Measured
+ * at 1440x900 on the live table: "Deal me in" at docY 360, and after it the first decision's Fold
+ * at docY 1746, two screens down with nothing on screen saying a decision was waiting; at 390x844
+ * Fold at docY ~1904, on every hand. Meanwhile the clock was running.
+ *
+ * ## When it scrolls, and when it does not
+ *
+ * Twice, both edges the reader is waiting for: a hand is dealt with the reader in it, and a
+ * decision becomes theirs. Never on a frame that merely re-describes a spot already on screen, and
+ * never when the target is already in view — so a reader who is looking at the table is not moved
+ * by a pixel. Not while they are typing somewhere else on the page either: pulling a half-typed
+ * invite code out from under the caret would be worse than the defect.
+ *
+ * ## What it brings into view: the buttons, by the nearest edge
+ *
+ * The action row when there is one (it is the thing the reader has to reach), the band when there
+ * is not, and `block: 'nearest'` — never the band by its bottom edge. Measured on
+ * `/play?state=decision` from scrollY 0, rects as viewport y:
+ *
+ *     390x844   band, block 'end'          plate -209..12, board -342..-242, buttons 499..668
+ *               buttons, block 'nearest'   plate  316..537, board  183..283,  buttons 611..780
+ *     1440x900  buttons, block 'nearest'   plate  146..465, board  118..230,  buttons 828..900
+ *     768x1024  buttons, block 'nearest'   plate  656..877, board  511..623,  buttons 935..1024
+ *     1024x768  buttons, block 'nearest'   plate  321..542, board  176..288,  buttons 679..768
+ *
+ * The first line is why: below 900px the band is ~715px against ~620px of viewport between the
+ * header's and the Coach sheet's scroll padding, so the band can never be "in view" and aligning its
+ * bottom put the reader's own plate — the only place their cards are shown at that width — under the
+ * header. The row is sticky inside its bar there, so bringing it in by the nearest edge stops as soon
+ * as it can stick, with the plate and the board still above it.
+ *
+ * This moves the viewport only. Focus is the business of the rescues in `ActionBar` and
+ * `TableStage`, which now all pass `preventScroll` so the two cannot fight; nothing here moves the
+ * caret, so a screen-reader user's position is untouched. `scrollIntoView` honours the root's
+ * `scroll-padding` (the sticky header above, the phone's Coach sheet peek below), and the reduced
+ * motion preference decides between a smooth scroll and a jump.
+ */
+function inView(element: HTMLElement): boolean {
+  const box = element.getBoundingClientRect();
+  const root = window.getComputedStyle(document.documentElement);
+  const top = Number.parseFloat(root.scrollPaddingBlockStart) || 0;
+  const bottom = Number.parseFloat(root.scrollPaddingBlockEnd) || 0;
+  return box.top >= top && box.bottom <= window.innerHeight - bottom;
+}
+
+function typingElsewhere(band: HTMLElement): boolean {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || band.contains(active)) return false;
+  return (
+    active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active.isContentEditable
+  );
+}
+
+function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement | null>): void {
+  const reduced = usePrefersReducedMotion();
+  const view = live.table.view;
+  const dealtHand = view !== null && !live.table.betweenHands && view.seats.some((seat) => seat.isSelf);
+  const handId = dealtHand ? view.handId : null;
+  // Non-empty exactly while the decision is the reader's, and set on the edge — see
+  // `turnAnnouncement` in `lib/use-live-table.ts` — so it changes once per turn, not per frame.
+  const turnEdge = live.table.turnAnnouncement;
+
+  useEffect(() => {
+    if (handId === null && turnEdge === '') return;
+    const element = band.current;
+    if (element === null || typingElsewhere(element)) return;
+    const target = element.querySelector<HTMLElement>('.prl-action-bar__actions') ?? element;
+    if (inView(target)) return;
+    target.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
+  }, [handId, turnEdge, band, reduced]);
 }
 
 export function LiveTable({
@@ -780,6 +914,8 @@ export function LiveTable({
   const highlighted = live.highlightedCards;
 
   const act = (action: TableAction): void => live.act(action);
+  const decisionRef = useRef<HTMLDivElement | null>(null);
+  useFollowTheTable(live, decisionRef);
 
   return (
     <>
@@ -795,6 +931,8 @@ export function LiveTable({
         turnAnnouncement={table.turnAnnouncement}
         submission={table.submission}
         onAct={act}
+        autoActed={table.autoActed}
+        decisionRef={decisionRef}
         idleMessage={IDLE_TABLE_MESSAGE}
         {...coachUnavailableProps(live)}
         {...(status === 'complete' ? { reviewHref: reviewHrefFor(table.view) } : {})}

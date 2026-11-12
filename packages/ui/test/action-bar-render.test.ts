@@ -165,7 +165,8 @@ describe('where the invalid state comes from', () => {
     // before hearing the allowed range again, which they have already heard once.
     assert.match(
       SOURCE,
-      /malformed \? `\$\{invalidId\} \$\{boundsId\}` : boundsId/u,
+      // Followed by the clamp note's own branch, which puts ITS sentence first the same way.
+      /malformed\s*\?\s*`\$\{invalidId\} \$\{boundsId\}`\s*:/u,
       'the correction id must come first in aria-describedby',
     );
   });

@@ -76,6 +76,7 @@ import type { ReactElement } from 'react';
 import { listCardNames } from '../cards.ts';
 import { cx } from '../cx.ts';
 import { formatChips, formatIndex, formatUnits } from '../format.ts';
+import { lastActionsThisStreet } from '../seat-actions.ts';
 import type { PlayerView, SeatView, Street } from '../view-types.ts';
 import { CardRow } from './CardRow.tsx';
 import { PotDisplay } from './PotDisplay.tsx';
@@ -100,6 +101,12 @@ export interface PokerTableProps {
    * or `null` renders the active seat's other two cues without a ring.
    */
   readonly turn?: TurnClock | null;
+  /**
+   * Show each seat's last action on the street in progress on its plate. Off by default: the live
+   * table and its fixtures want it, and the screens that already narrate a hand step by step
+   * (review, the Lab) are left as they were.
+   */
+  readonly showLastActions?: boolean;
   readonly className?: string;
 }
 
@@ -156,12 +163,32 @@ function boardName(board: readonly number[]): string {
 }
 
 interface PhaseSpineProps {
-  readonly street: Street;
+  readonly view: Pick<PlayerView, 'street' | 'board' | 'result'>;
 }
 
-function PhaseSpine({ street }: PhaseSpineProps): ReactElement {
-  const current = PHASE_OF_STREET[street];
+/** The betting street a board of this many cards belongs to. */
+const PHASE_OF_BOARD: readonly Phase[] = ['preflop', 'preflop', 'preflop', 'flop', 'turn', 'river'];
+
+/**
+ * The spine step a hand is on — and, for a finished hand, the step it actually ENDED on.
+ *
+ * `complete` used to fold into `showdown` unconditionally, so a hand everybody folded to preflop
+ * finished with SHOWDOWN marked "(current phase)" and every street before it marked done — a
+ * showdown that never happened, on a hand whose board was empty. The engine says whether one did:
+ * `result.showdowns` is empty when the pot was won uncontested, and the board's length is then the
+ * street the betting stopped on.
+ */
+function phaseOf(view: PhaseSpineProps['view']): Phase {
+  if (view.street === 'complete' && view.result !== null && view.result.showdowns.length === 0) {
+    return PHASE_OF_BOARD[view.board.length] ?? 'river';
+  }
+  return PHASE_OF_STREET[view.street];
+}
+
+function PhaseSpine({ view }: PhaseSpineProps): ReactElement {
+  const current = phaseOf(view);
   const currentAt = PHASES.indexOf(current);
+  const over = view.street === 'complete';
 
   return (
     <ol className="prl-table__spine">
@@ -185,7 +212,11 @@ function PhaseSpine({ street }: PhaseSpineProps): ReactElement {
               {formatIndex(position + 1)}
             </span>
             <span className="prl-table__step-name">{phase}</span>
-            {state === 'current' ? <span className="prl-visually-hidden">{' (current phase)'}</span> : null}
+            {state === 'current' ? (
+              <span className="prl-visually-hidden">
+                {over ? ' (where the hand ended)' : ' (current phase)'}
+              </span>
+            ) : null}
             {state === 'done' ? <span className="prl-visually-hidden">{' (done)'}</span> : null}
           </li>
         );
@@ -196,7 +227,8 @@ function PhaseSpine({ street }: PhaseSpineProps): ReactElement {
 
 export function PokerTable(props: PokerTableProps): ReactElement {
   const { view, title, seatNames, highlightedCards, highlightLabel } = props;
-  const { turn = null, className } = props;
+  const { turn = null, className, showLastActions = false } = props;
+  const lastActions = showLastActions ? lastActionsThisStreet(view) : {};
 
   const seats = rotateToViewer(view.seats, view.viewerSeat);
   const heading = title ?? `Hand ${formatChips(view.handNumber)}`;
@@ -235,7 +267,7 @@ export function PokerTable(props: PokerTableProps): ReactElement {
             <li className="prl-badge prl-badge--caution">{`${formatUnits(view.amountToCall)} to call`}</li>
           ) : null}
         </ul>
-        <PhaseSpine street={view.street} />
+        <PhaseSpine view={view} />
       </div>
 
       <div className="prl-table__field">
@@ -279,6 +311,7 @@ export function PokerTable(props: PokerTableProps): ReactElement {
                 ringIndex={index}
                 ringCount={seats.length}
                 turn={seat.isToAct ? turn : null}
+                lastAction={lastActions[seat.seat] ?? null}
                 {...highlightProps}
                 as="li"
               />
@@ -295,6 +328,7 @@ export function PokerTable(props: PokerTableProps): ReactElement {
               ringIndex={heroIndex}
               ringCount={seats.length}
               turn={hero.isToAct ? turn : null}
+              lastAction={lastActions[hero.seat] ?? null}
               {...highlightProps}
               as="div"
             />
