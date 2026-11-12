@@ -38,6 +38,7 @@
  * on the wire — parsing to integers and formatting again would be work in service of nothing.
  */
 
+import type { AutomaticReason } from '@prl/contracts';
 import type {
   ActionType,
   BettingStreet,
@@ -122,6 +123,8 @@ export interface HandActionRow {
   readonly bet_level_after: number;
   readonly pot_after: number;
   readonly was_automatic: boolean;
+  /** Null on a person's decision, and on an automatic row written before migration 0009. */
+  readonly automatic_reason: AutomaticReason | null;
 }
 
 /** A row of the hand-history list, with the viewer's own net and the pot size already summed. */
@@ -444,8 +447,14 @@ export interface AppendActionInput {
   readonly amountPaid: number;
   readonly betLevelAfter: number;
   readonly potAfter: number;
-  /** True when the server acted for a player whose timer expired. */
+  /** True when the server acted for the seat rather than its player. `automaticReason` says why. */
   readonly wasAutomatic: boolean;
+  /**
+   * Why, when `wasAutomatic`; null otherwise. Two fields rather than one so `was_automatic` keeps the
+   * meaning every row before migration 0009 already has, and the database refuses a reason on a
+   * decision a person made (`hand_actions_automatic_reason_only_if_automatic`).
+   */
+  readonly automaticReason: AutomaticReason | null;
   /**
    * The client's own id for this decision, stable across retries, or null for a server-generated
    * automatic action. Null is what puts the row outside the partial unique index, which is
@@ -501,12 +510,12 @@ export async function appendAction(sql: Db, input: AppendActionInput): Promise<A
     const rows = await sql<{ id: string }[]>`
       insert into prl.hand_actions (
         id, hand_id, sequence, street, seat, action_type, action_to,
-        amount_paid, bet_level_after, pot_after, was_automatic, action_id
+        amount_paid, bet_level_after, pot_after, was_automatic, automatic_reason, action_id
       )
       values (
         ${id}, ${input.handId}, ${input.sequence}, ${input.street}, ${input.seat},
         ${input.actionType}, ${input.actionTo}, ${input.amountPaid}, ${input.betLevelAfter},
-        ${input.potAfter}, ${input.wasAutomatic}, ${input.actionId}
+        ${input.potAfter}, ${input.wasAutomatic}, ${input.automaticReason}, ${input.actionId}
       )
       on conflict (hand_id, action_id) where action_id is not null do nothing
       returning id
@@ -524,7 +533,7 @@ export async function appendAction(sql: Db, input: AppendActionInput): Promise<A
 export async function actionsOf(sql: Db, handId: string): Promise<readonly HandActionRow[]> {
   const rows = await sql<HandActionRow[]>`
     select sequence, street, seat, action_type, action_to, amount_paid, bet_level_after,
-           pot_after, was_automatic
+           pot_after, was_automatic, automatic_reason
       from prl.hand_actions
      where hand_id = ${handId}
      order by sequence

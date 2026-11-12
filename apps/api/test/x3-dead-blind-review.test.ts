@@ -142,6 +142,7 @@ function deal(options: DealOptions): DealtHand {
     bet_level_after: logged.betLevelAfter,
     pot_after: logged.potAfter,
     was_automatic: logged.wasAutomatic,
+    automatic_reason: null,
   }));
 
   const startedAt = new Date('2026-08-19T09:00:00.000Z');

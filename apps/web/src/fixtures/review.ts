@@ -244,6 +244,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
       amountPaid: 60,
       potBefore: 30,
       wasAutomatic: false,
+      automaticReason: null,
       analysis: {
         street: 'preflop',
         potTotal: 30,
@@ -420,6 +421,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
       amountPaid: 0,
       potBefore: 90,
       wasAutomatic: false,
+      automaticReason: null,
       analysis: null,
     },
     {
@@ -431,6 +433,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
       amountPaid: 40,
       potBefore: 90,
       wasAutomatic: false,
+      automaticReason: null,
       analysis: null,
     },
     {
@@ -442,6 +445,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
       amountPaid: 65,
       potBefore: 130,
       wasAutomatic: false,
+      automaticReason: null,
       analysis: null,
     },
     {
@@ -453,6 +457,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
       amountPaid: 65,
       potBefore: 195,
       wasAutomatic: false,
+      automaticReason: null,
       analysis: {
         street: 'flop',
         potTotal: 195,
@@ -640,6 +645,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
       amountPaid: 130,
       potBefore: 260,
       wasAutomatic: false,
+      automaticReason: null,
       analysis: null,
     },
     {
@@ -651,6 +657,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
       amountPaid: 130,
       potBefore: 390,
       wasAutomatic: false,
+      automaticReason: null,
       analysis: {
         street: 'turn',
         potTotal: 390,
@@ -837,6 +844,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
       amountPaid: 200,
       potBefore: 520,
       wasAutomatic: false,
+      automaticReason: null,
       analysis: null,
     },
     {
@@ -848,6 +856,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
       amountPaid: 500,
       potBefore: 720,
       wasAutomatic: false,
+      automaticReason: null,
       analysis: {
         street: 'river',
         potTotal: 720,
@@ -999,6 +1008,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
       amountPaid: 300,
       potBefore: 1220,
       wasAutomatic: false,
+      automaticReason: null,
       analysis: null,
     },
   ],
@@ -1074,6 +1084,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
       amountPaid: 60,
       potBefore: 30,
       wasAutomatic: false,
+      automaticReason: null,
       analysis: {
         street: 'preflop',
         potTotal: 30,
@@ -1250,6 +1261,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
       amountPaid: 0,
       potBefore: 90,
       wasAutomatic: false,
+      automaticReason: null,
       analysis: null,
     },
     {
@@ -1261,6 +1273,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
       amountPaid: 0,
       potBefore: 90,
       wasAutomatic: true,
+      automaticReason: 'timeout',
       analysis: null,
     },
   ],
