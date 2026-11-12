@@ -986,7 +986,7 @@ function sizerScroll(band: HTMLElement): number | null {
 }
 
 /** The scroll that puts the table back on screen above the band; see `watchDelta`. */
-function watchScroll(band: HTMLElement): number {
+function watchScroll(band: HTMLElement, dealt: boolean): number {
   const table =
     document.querySelector<HTMLElement>('.prl-table__hero') ?? document.querySelector('.prl-table__field');
   if (table === null) return 0;
@@ -998,6 +998,7 @@ function watchScroll(band: HTMLElement): number {
     tableBottom: table.getBoundingClientRect().bottom,
     viewTop: Number.parseFloat(root.scrollPaddingBlockStart) || 0,
     viewBottom: window.innerHeight - (Number.parseFloat(root.scrollPaddingBlockEnd) || 0),
+    dealt,
   });
 }
 
@@ -1029,11 +1030,15 @@ function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement 
 
   // Everything else the reader waits for — a deal, the end of their decision, the end of the hand —
   // is watched: the table on screen with the band under it. See `watchDelta`.
+  const watchedHand = useRef<string | null>(null);
   useEffect(() => {
     if (watchEdge === null) return;
+    const hand = watchEdge.slice(0, watchEdge.lastIndexOf(':'));
+    const dealt = hand !== watchedHand.current;
+    watchedHand.current = hand;
     const element = band.current;
     if (element === null || typingElsewhere(element)) return;
-    const by = watchScroll(element);
+    const by = watchScroll(element, dealt);
     if (by !== 0) window.scrollBy({ top: by, behavior: reduced ? 'auto' : 'smooth' });
   }, [watchEdge, band, reduced]);
 }

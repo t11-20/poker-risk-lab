@@ -115,8 +115,20 @@ describe('the follow scroll brings the sizer in with the row under it', () => {
  * at -146..55; at the end of a hand the result was at -157..-21 above a band at 108..355.
  */
 describe('when the decision is not the reader’s, the table is watched', () => {
-  const AFTER_A_CALL: WatchGeometry = { bandTop: 92, bandBottom: 204, tableBottom: 55, ...VIEW };
-  const HAND_OVER: WatchGeometry = { bandTop: 108, bandBottom: 355, tableBottom: -169, ...VIEW };
+  const AFTER_A_CALL: WatchGeometry = {
+    bandTop: 92,
+    bandBottom: 204,
+    tableBottom: 55,
+    dealt: false,
+    ...VIEW,
+  };
+  const HAND_OVER: WatchGeometry = {
+    bandTop: 108,
+    bandBottom: 355,
+    tableBottom: -169,
+    dealt: false,
+    ...VIEW,
+  };
 
   it('NEGATIVE CONTROL: the band by its nearest edge, as before, leaves both where they were', () => {
     // The old follow did nothing to a band already in view, which is what both of these are.
@@ -139,11 +151,21 @@ describe('when the decision is not the reader’s, the table is watched', () => 
   });
 
   it('does not move a reader who can see their plate', () => {
-    assert.equal(watchDelta({ bandTop: 505, bandBottom: 617, tableBottom: 468, ...VIEW }), 0);
+    assert.equal(watchDelta({ bandTop: 505, bandBottom: 617, tableBottom: 468, dealt: false, ...VIEW }), 0);
   });
 
   it('brings the band up from below, as before, for a reader who pressed Deal at the top', () => {
-    assert.equal(watchDelta({ bandTop: 1700, bandBottom: 1800, tableBottom: 1690, ...VIEW }), 1800 - 764);
+    assert.equal(
+      watchDelta({ bandTop: 1700, bandBottom: 1800, tableBottom: 1690, dealt: true, ...VIEW }),
+      1800 - 764,
+    );
+  });
+
+  it('leaves a reader who scrolled up mid-hand where they are when the hand ends', () => {
+    assert.equal(
+      watchDelta({ bandTop: 1700, bandBottom: 1800, tableBottom: 1690, dealt: false, ...VIEW }),
+      0,
+    );
   });
 });
 
@@ -161,7 +183,7 @@ describe('the live table uses it, on a narrow column only', () => {
 
   const watches = (source: string): boolean =>
     /const watchEdge = turnEdge === '' \? handEdge : null;/u.test(source) &&
-    /const by = watchScroll\(element\);\s*if \(by !== 0\) window\.scrollBy\(/u.test(source) &&
+    /const by = watchScroll\(element, dealt\);\s*if \(by !== 0\) window\.scrollBy\(/u.test(source) &&
     /\}, \[watchEdge, band, reduced\]\);/u.test(source);
 
   it('watches the table on a deal, at the end of the reader’s decision and at the end of the hand', () => {

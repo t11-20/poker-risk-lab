@@ -92,15 +92,24 @@ export interface WatchGeometry {
   readonly tableBottom: number;
   readonly viewTop: number;
   readonly viewBottom: number;
+  /**
+   * True on the edge where a hand is dealt. Only then is a band BELOW the view brought up: the reader
+   * pressed Deal at the top of the page and is waiting for the table. At the end of their decision or
+   * of the hand, a reader who has scrolled up has done so on purpose, and the end of the hand used to
+   * leave the page where it was — it still does for them.
+   */
+  readonly dealt: boolean;
 }
 
 /** Pixels to scroll by (negative is up the page), or 0 to leave the page where it is. */
 export function watchDelta(geometry: WatchGeometry): number {
-  const { bandTop, bandBottom, tableBottom, viewTop, viewBottom } = geometry;
-  // Taller than the view: by its nearest edge, if it is below, and otherwise left alone.
-  if (bandBottom - bandTop > viewBottom - viewTop) return bandTop > viewBottom ? bandTop - viewTop : 0;
-  // Below the view — the reader pressed Deal at the top of the page: up by its bottom edge, as before.
-  if (bandBottom > viewBottom) return bandBottom - viewBottom;
+  const { bandTop, bandBottom, tableBottom, viewTop, viewBottom, dealt } = geometry;
+  // Taller than the view: by its nearest edge, if it is below on a deal, and otherwise left alone.
+  if (bandBottom - bandTop > viewBottom - viewTop) {
+    return dealt && bandTop > viewBottom ? bandTop - viewTop : 0;
+  }
+  // Below the view on a deal — the reader pressed Deal at the top of the page: up by its bottom edge.
+  if (bandBottom > viewBottom) return dealt ? bandBottom - viewBottom : 0;
   // The table has gone off the top: the band to the bottom edge, and the table back above it.
   if (tableBottom <= viewTop) return bandBottom - viewBottom;
   return 0;
