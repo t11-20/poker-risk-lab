@@ -700,14 +700,18 @@ describe('a socket Coach request that cannot be served says so', () => {
       const room = harness.registry.get(harness.roomId);
       assert.ok(room !== null);
       await room.table.stand('usr_b');
-      await harness.registry.seatBot(harness.roomId, {
-        userId: 'usr_bot',
-        displayName: 'Legend',
-        seat: 1,
-        profileId: 'adaptive-exploiter',
-        difficulty: 'expert',
-        seed: 1,
-      });
+      await harness.registry.seatBot(
+        harness.roomId,
+        {
+          userId: 'usr_bot',
+          displayName: 'Legend',
+          seat: 1,
+          profileId: 'adaptive-exploiter',
+          difficulty: 'expert',
+          seed: 1,
+        },
+        'mem_usr_bot',
+      );
       assert.equal(room.bots.coachDuringHand(), false);
 
       const alpha = connect(harness, 'usr_a');

@@ -492,6 +492,12 @@ export class LiveTable {
   private currentMemo: HandMemo | null = null;
   /** Kept so a retry arriving after the hand ended is deduplicated rather than re-applied. */
   private previousMemo: HandMemo | null = null;
+  /**
+   * Units resets that arrived while their player was in the live hand, applied when it settles.
+   *
+   * By user id, like everything about a person. See `restack`.
+   */
+  private readonly pendingRestacks = new Map<string, number>();
   /** The hand whose stacks have already been written back, so settlement happens once. */
   private settledHandId: string | null = null;
   private closed = false;
@@ -571,7 +577,11 @@ export class LiveTable {
   }
 
   snapshot(): TableSnapshot {
-    const live = this.hand?.state ?? null;
+    // Only while the hand can still move. Once it has settled, `settleIfComplete` has written every
+    // final stack into the seating, so the seat IS the figure — and reading the retained hand
+    // instead hid anything that changed the seat afterwards: a reader busted in the last hand and
+    // then reset kept showing 0 here, because the finished hand still said 0. See `restack`.
+    const live = this.handInProgress ? (this.hand?.state ?? null) : null;
     const seats = this.seats.map((seat) => {
       // By id, not by index. A finished hand outlives its seating, so the seat 3 in a retained
       // hand may belong to somebody who has since left — and reporting their closing stack as the
@@ -773,16 +783,7 @@ export class LiveTable {
       const seat = this.seats.find((entry) => entry.userId === userId);
       if (seat === undefined) throw new AppError('not_seated', { logDetail: 'not seated at this table' });
 
-      const live = this.hand;
-      // "Is this PERSON in the live hand", not "is this chair in it". The two differ for somebody
-      // who sat down after the deal: they hold no cards and owe nothing, so they leave at once
-      // rather than being held to the end of a hand they were never part of.
-      const inTheLiveHand =
-        live !== null &&
-        live.state.street !== 'complete' &&
-        live.state.seats.some((entry) => entry.playerId === userId && entry.status !== 'sittingOut');
-
-      if (!inTheLiveHand) {
+      if (!this.inTheLiveHand(userId)) {
         this.removeSeats([seat]);
         return;
       }
@@ -794,6 +795,38 @@ export class LiveTable {
       const applied = collector();
       this.runAutomaticActions(applied);
       this.afterMutation('action', applied);
+    });
+  }
+
+  /**
+   * Sets a seated player's chips to `stack` — the units reset, reaching the table that holds them.
+   *
+   * Between hands the seat's stack is the truth (`TableSeat.stack`), so writing only
+   * `room_members.stack` left this table dealing from the old figure and then settling it back over
+   * the reset. See `RoomRegistry.restackForUnitsReset` for the sequence that was measured.
+   *
+   * A player in the live hand is not restacked now: their chips are inside a `HandState` the engine
+   * owns, and this architecture changes a hand only through actions it validated (see `stand`). The
+   * reset is held and applied in `settleIfComplete`, so the settled stack the archive writes is the
+   * reset one, agreeing with the durable reset the caller has already made. Resolves `'deferred'`
+   * then, `'applied'` when it took effect, `'notSeated'` when there was nothing to reset here.
+   *
+   * Never throws for a closed table: a reset racing a table being torn down has nothing to do.
+   */
+  restack(userId: string, stack: number): Promise<'applied' | 'deferred' | 'notSeated'> {
+    return this.enqueue(() => {
+      if (this.closed) return 'notSeated';
+      const seat = this.seats.find((entry) => entry.userId === userId);
+      if (seat === undefined) return 'notSeated';
+      if (this.inTheLiveHand(userId)) {
+        this.pendingRestacks.set(userId, stack);
+        return 'deferred';
+      }
+      if (seat.stack === stack) return 'applied';
+      this.seats = this.seats.map((entry) => (entry.userId === userId ? { ...entry, stack } : entry));
+      // A seating change, so every socket gets the state frame with the new stack in it.
+      this.publish('seating', collector(), null);
+      return 'applied';
     });
   }
 
@@ -1093,9 +1126,12 @@ export class LiveTable {
     // otherwise be paid its predecessor's closing stack.
     const finalStacks = new Map(live.state.seats.map((seat) => [seat.playerId, seat.stack]));
     this.seats = this.seats.map((seat) => {
-      const stack = finalStacks.get(seat.userId);
+      // A reset made during the hand wins over the hand's result: that is what the learner asked
+      // for, and the durable reset was written when they asked. See `restack`.
+      const stack = this.pendingRestacks.get(seat.userId) ?? finalStacks.get(seat.userId);
       return stack === undefined ? seat : { ...seat, stack };
     });
+    this.pendingRestacks.clear();
     live.secret = null;
 
     // Read HERE, between the write-back and the removal, and nowhere else. Move this line below
@@ -1237,6 +1273,20 @@ export class LiveTable {
   // -------------------------------------------------------------------------
   // Small helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * "Is this PERSON in the live hand", not "is this chair in it". The two differ for somebody who
+   * sat down after the deal: they hold no cards and owe nothing, so they leave at once rather than
+   * being held to the end of a hand they were never part of — and a reset reaches them at once.
+   */
+  private inTheLiveHand(userId: string): boolean {
+    const live = this.hand;
+    return (
+      live !== null &&
+      live.state.street !== 'complete' &&
+      live.state.seats.some((entry) => entry.playerId === userId && entry.status !== 'sittingOut')
+    );
+  }
 
   private assertOpen(): void {
     if (this.closed) throw new AppError('room_closed', { logDetail: 'this table has been closed' });

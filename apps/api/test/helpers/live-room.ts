@@ -50,14 +50,16 @@ export function seatingOnlyStore(units = 10_000): RoomStore {
     addMember: () => refuse('addMember'),
     seatMember: (_roomId, userId, seat) => {
       seats.set(userId, seat);
-      return Promise.resolve();
+      return Promise.resolve(`mem_${userId}`);
     },
     unseatMember: (_roomId, userId) => {
       seats.set(userId, null);
       return Promise.resolve();
     },
+    recordFirstSit: () => Promise.resolve(true),
     removeMember: () => Promise.resolve(),
     close: () => Promise.resolve(true),
+    closePracticeTable: () => refuse('closePracticeTable'),
     createBotUser: () => refuse('createBotUser'),
     readUnits: () => Promise.resolve(units),
   };

@@ -199,7 +199,8 @@ Room: `name`, `owner_user_id` (**SET NULL** since `db/migrations/0004_account_de
 requires a migration, `status`, `closed_at`.
 
 Member: `user_id` (**CASCADE** since `0004_account_deletion.sql:183-185`), `seat`, `stack`,
-`joined_at`, `left_at`, plus bot-only `is_bot`, `bot_profile`, and `bot_difficulty` / `bot_seed`
+`joined_at`, `left_at`, `first_seated_at` (when the membership first took a seat,
+`0008_room_members_first_seated.sql`), plus bot-only `is_bot`, `bot_profile`, and `bot_difficulty` / `bot_seed`
 (`db/migrations/0003_bot_seat_recovery.sql:125,130`). `stack` is a count of practice units, not a
 balance (`0001_initial.sql:420-421`).
 

@@ -118,6 +118,8 @@ interface FakeRoomStore extends RoomStore {
   readonly codes: Map<string, string>;
   readonly units: Map<string, number>;
   readonly rows: Map<string, RoomRow>;
+  /** Memberships by `roomId:userId`, so a test can put one in the state a hand would leave it. */
+  readonly members: Map<string, RoomMemberRow>;
 }
 
 /**
@@ -138,6 +140,7 @@ function fakeRoomStore(): FakeRoomStore {
     codes,
     units,
     rows,
+    members,
     create: (spec) => {
       counter += 1;
       const id = `room_test${counter}`;
@@ -204,13 +207,15 @@ function fakeRoomStore(): FakeRoomStore {
       );
       if (taken) throw new AppError('seat_taken', {});
       members.set(key(roomId, userId), { ...member, seat });
-      return Promise.resolve();
+      return Promise.resolve(member.id);
     },
     unseatMember: (roomId, userId) => {
       const member = members.get(key(roomId, userId));
       if (member !== undefined) members.set(key(roomId, userId), { ...member, seat: null });
       return Promise.resolve();
     },
+    // By id, as the real statement is: a membership removed since its seat was taken is not found.
+    recordFirstSit: (memberId) => Promise.resolve([...members.values()].some((m) => m.id === memberId)),
     removeMember: (roomId, userId) => {
       members.delete(key(roomId, userId));
       return Promise.resolve();
@@ -218,6 +223,19 @@ function fakeRoomStore(): FakeRoomStore {
     close: (roomId) => {
       const row = rows.get(roomId);
       if (row === undefined) return Promise.resolve(false);
+      rows.set(roomId, { ...row, status: 'closed', closed_at: new Date() });
+      return Promise.resolve(true);
+    },
+    // `rooms.closePracticeTable`: refused while another person is a member at the moment of closing.
+    closePracticeTable: (roomId, ownerUserId) => {
+      const row = rows.get(roomId);
+      if (row === undefined || row.status === 'closed' || row.owner_user_id !== ownerUserId) {
+        return Promise.resolve(false);
+      }
+      const others = [...members.values()].some(
+        (member) => member.room_id === roomId && !member.is_bot && member.user_id !== ownerUserId,
+      );
+      if (others) return Promise.resolve(false);
       rows.set(roomId, { ...row, status: 'closed', closed_at: new Date() });
       return Promise.resolve(true);
     },
@@ -797,7 +815,13 @@ describe('joining and sitting', () => {
     assert.equal(clash.statusCode, 409);
     assert.equal((clash.json() as { error: { code: string } }).error.code, 'seat_taken');
 
-    // The same learner, now short of units for the buy-in.
+    // The same learner, busted here and short of units for a rebuy. Their membership has to hold 0
+    // for this to be reachable: a membership with chips in it is sat down with its own, which is
+    // what the real `readUnits` always implied (it used to include this membership's stack, so the
+    // comparison could not refuse it) and what `sitAtTable` now says outright.
+    const membership = test.store.members.get(`${roomId}:usr_guest`);
+    assert.ok(membership !== undefined);
+    test.store.members.set(`${roomId}:usr_guest`, { ...membership, stack: 0 });
     test.store.units.set('usr_guest', 10);
     const broke = await test.app.inject({
       method: 'POST',
@@ -908,23 +932,6 @@ describe('the Legends endpoints', () => {
     assert.equal(body.difficulty.id, 'educational');
     assert.equal(body.difficulty.coachAvailable, true);
 
-    const expert = await test.app.inject({
-      method: 'POST',
-      url: '/api/v1/legends/matches',
-      payload: {
-        profileIds: ['adaptive-exploiter'],
-        difficulty: 'expert',
-        startingStack: 1_000,
-        smallBlind: 5,
-        bigBlind: 10,
-      },
-      cookies: { ...learner.cookies, prl_csrf: cookie },
-      headers: { 'x-csrf-token': token, origin: ALLOWED_ORIGIN },
-    });
-    assert.equal(expert.statusCode, 201, expert.payload);
-    const expertBody = expert.json() as { difficulty: { id: string; coachAvailable: boolean } };
-    assert.equal(expertBody.difficulty.id, 'expert');
-    assert.equal(expertBody.difficulty.coachAvailable, false);
     assert.deepEqual(
       body.seats.map((seat) => seat.seat),
       [1, 2],
@@ -944,6 +951,37 @@ describe('the Legends endpoints', () => {
     assert.equal(read.statusCode, 200, read.payload);
     const summary = read.json() as { room: { members: readonly { isBot: boolean }[] } };
     assert.equal(summary.room.members.filter((member) => member.isBot).length, 2);
+
+    // A second match retires the first: a learner holds one practice table at a time, and every
+    // match used to leave the previous one open with a stack in it. See `retirePracticeTables`.
+    // The hub closes the old match's sockets off this notification; without it a second tab would
+    // sit on a table that never sends another frame.
+    const notified: string[] = [];
+    test.registry.onRetirement((roomId) => notified.push(roomId));
+    const expert = await test.app.inject({
+      method: 'POST',
+      url: '/api/v1/legends/matches',
+      payload: {
+        profileIds: ['adaptive-exploiter'],
+        difficulty: 'expert',
+        startingStack: 1_000,
+        smallBlind: 5,
+        bigBlind: 10,
+      },
+      cookies: { ...learner.cookies, prl_csrf: cookie },
+      headers: { 'x-csrf-token': token, origin: ALLOWED_ORIGIN },
+    });
+    assert.equal(expert.statusCode, 201, expert.payload);
+    const expertBody = expert.json() as { difficulty: { id: string; coachAvailable: boolean } };
+    assert.equal(expertBody.difficulty.id, 'expert');
+    assert.equal(expertBody.difficulty.coachAvailable, false);
+    const retired = await test.app.inject({
+      method: 'GET',
+      url: `/api/v1/rooms/${body.roomId}`,
+      cookies: learner.cookies,
+    });
+    assert.equal(retired.statusCode, 404, 'the first match closed when the second began');
+    assert.deepEqual(notified, [body.roomId]);
     await test.app.close();
   });
 

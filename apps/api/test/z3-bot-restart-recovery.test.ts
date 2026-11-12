@@ -249,15 +249,19 @@ describe('a restarted process puts every Legend back', dbOptions, () => {
           isBot: true,
           bot: { profileId: profile.naming.id, difficulty, seed },
         });
-        await store.seatMember(roomId, bot.id, 1);
-        await first.seatBot(roomId, {
-          userId: bot.id,
-          displayName: `Bot ${index}`,
-          seat: 1,
-          profileId: profile.naming.id,
-          difficulty,
-          seed,
-        });
+        const memberId = await store.seatMember(roomId, bot.id, 1);
+        await first.seatBot(
+          roomId,
+          {
+            userId: bot.id,
+            displayName: `Bot ${index}`,
+            seat: 1,
+            profileId: profile.naming.id,
+            difficulty,
+            seed,
+          },
+          memberId,
+        );
         assert.equal(
           created.room.bots.seatCount,
           1,

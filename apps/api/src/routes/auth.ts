@@ -75,6 +75,7 @@ import { hashOidcSecret, timingSafeEquals } from '../repositories/hashing.ts';
 import * as sessionsRepository from '../repositories/sessions.ts';
 import { SESSION_TTL_SECONDS } from '../repositories/sessions.ts';
 import * as usersRepository from '../repositories/users.ts';
+import { type RoomRegistry, roomRegistry } from '../rooms/registry.ts';
 
 // ---------------------------------------------------------------------------
 // Limits
@@ -312,6 +313,11 @@ export interface AuthRoutesOptions {
   readonly store?: AuthStore;
   /** Defaults to a relying party built from `config.oidc`. Injected by the tests. */
   readonly relyingParty?: OidcRelyingParty;
+  /**
+   * The live tables a units reset has to reach. Defaults to the process-wide registry, which the
+   * room routes and the WebSocket hub share; see `POST /me/units/reset` for why it is needed.
+   */
+  readonly tables?: Pick<RoomRegistry, 'restackForUnitsReset'>;
 }
 
 // ---------------------------------------------------------------------------
@@ -537,6 +543,7 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
   return async (app) => {
     const config = app.appConfig;
     const store = options.store ?? createAuthStore(getSql());
+    const tables = options.tables ?? roomRegistry();
     const relyingParty =
       options.relyingParty ?? (config.oidc === null ? null : createOidcRelyingParty({ config: config.oidc }));
 
@@ -1111,9 +1118,16 @@ export function createAuthRoutes(options: AuthRoutesOptions = {}): FastifyPlugin
      *
      * Deliberately not given a tighter rate limit than the global one: "you have reset too
      * recently" is precisely the friction `docs/PRODUCT-GUARDRAILS.md` §1 forbids.
+     *
+     * The live tables first, then the rows. Writing only the rows is what this used to do, and a
+     * seated learner who had busted was told "your units are back to 1000" while the table they
+     * were sitting at kept dealing around their 0 and then wrote the 0 back over the reset — see
+     * `RoomRegistry.restackForUnitsReset`, which also drains the archive so nothing queued before
+     * the reset can land after the write below.
      */
     app.post('/me/units/reset', async (request) => {
       const session = requireSession(request);
+      await tables.restackForUnitsReset(session.user.id);
       const body: ResetUnitsResponse = { units: await store.users.resetUnits(session.user.id) };
       return body;
     });
