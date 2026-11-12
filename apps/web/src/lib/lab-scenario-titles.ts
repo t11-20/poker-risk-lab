@@ -31,9 +31,16 @@ export function bundledScenarioTitle(id: string): ScenarioTitle | null {
   return { id: scenario.id, title: scenario.title, question: scenario.question };
 }
 
-/** The page metadata for `/lab/[scenarioId]`: the scenario's own title, or a plain fallback. */
+/**
+ * The page metadata for `/lab/[scenarioId]`: the scenario's own title, or "Scenario not found".
+ *
+ * The fallback was "Scenario", which the audit at 6b3886e heard announced over the 404 body at
+ * `/lab/nope`. "Not found" is a claim this module can make: the bundle is the list
+ * `generateStaticParams` builds the routes from and `dynamicParams` is false, so an id it does not
+ * carry is not a page this route serves.
+ */
 export function scenarioPageMetadata(id: string): { readonly title: string; readonly description?: string } {
   const found = bundledScenarioTitle(id);
-  if (found === null) return { title: 'Scenario' };
+  if (found === null) return { title: 'Scenario not found' };
   return { title: found.title, description: found.question };
 }
