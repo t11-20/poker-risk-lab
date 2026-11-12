@@ -23,12 +23,21 @@
  * and is not labelled. A visible warning is a bug report on screen, which is the only version of
  * this that gets fixed.
  *
+ * ## The one exception, and how narrow it is
+ *
+ * `shownAbove` is for `/legends` alone, where the universal disclaimer is printed in full once above
+ * twelve cards. There, an entry byte-identical to that text becomes a visible one-line statement of
+ * the same fact with a link to the full text, and every other entry is still printed in full. The
+ * rule lives in `lib/disclaimer-framing.ts`, which is tested; the measurement that motivated it is
+ * in its header. The pointer is a list item in the same list, so the block is never empty.
+ *
  * Server-render safe: no state, no effects.
  */
 
 import type { ProfileDisclosureDto } from '@prl/contracts';
 import { Callout, cx, withKeys } from '@prl/ui';
 import type { ReactElement } from 'react';
+import { disclaimerFraming } from '@/lib/disclaimer-framing.ts';
 
 export interface ProfileDisclaimersProps {
   readonly disclosure: ProfileDisclosureDto;
@@ -39,10 +48,19 @@ export interface ProfileDisclaimersProps {
    */
   readonly title?: string;
   readonly className?: string;
+  /**
+   * The disclaimer the page has already printed in full above this one, and the fragment it is at.
+   * Only `/legends` passes it. See "The one exception" above.
+   */
+  readonly shownAbove?: { readonly text: string; readonly href: string };
 }
 
+/** The pointer's sentence. The same fact as the universal disclaimer, in one line. */
+const POINTER_TEXT =
+  'An educational strategy simulation of a style — not a real person, and not a copy of anyone.';
+
 export function ProfileDisclaimers(props: ProfileDisclaimersProps): ReactElement {
-  const { disclosure, title = 'What these profiles are', className } = props;
+  const { disclosure, title = 'What these profiles are', className, shownAbove } = props;
   const disclaimers = disclosure.disclaimers;
 
   if (disclaimers.length === 0) {
@@ -61,11 +79,19 @@ export function ProfileDisclaimers(props: ProfileDisclaimersProps): ReactElement
     );
   }
 
+  const framing = disclaimerFraming(disclaimers, shownAbove?.text);
+
   return (
     <div className={cx('prl-legend-disclaimers', className)}>
       <span className="prl-legend-disclaimers__title prl-label">{title}</span>
       <ul className="prl-legend-disclaimers__list">
-        {withKeys(disclaimers, 'disclaimer').map((entry) => (
+        {framing.pointer && shownAbove !== undefined ? (
+          <li className="prl-legend-disclaimers__item">
+            {`${POINTER_TEXT} `}
+            <a href={shownAbove.href}>Read what these profiles are</a>
+          </li>
+        ) : null}
+        {withKeys(framing.inFull, 'disclaimer').map((entry) => (
           <li className="prl-legend-disclaimers__item" key={entry.key}>
             {entry.value}
           </li>

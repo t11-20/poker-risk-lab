@@ -110,7 +110,7 @@ It is a command rather than an unrecognised argument on purpose: a deploy pipeli
 
 The contract is: **the previous release's code must run correctly against the schema the current release applied.** That is a property of each migration, decided when it is written, and it is what makes an application rollback possible at all.
 
-There are six applied migrations today: `0001_initial.sql`, `0002_indexes_and_constraints.sql`, `0003_bot_seat_recovery.sql`, `0004_account_deletion.sql`, `0005_room_ownership.sql`, `0006_cohort_enrolments.sql`.
+There are eight applied migrations today: `0001_initial.sql`, `0002_indexes_and_constraints.sql`, `0003_bot_seat_recovery.sql`, `0004_account_deletion.sql`, `0005_room_ownership.sql`, `0006_cohort_enrolments.sql`, `0007_audit_forbidden_keys.sql`, `0008_room_members_first_seated.sql`.
 
 ### Changes the previous release tolerates
 

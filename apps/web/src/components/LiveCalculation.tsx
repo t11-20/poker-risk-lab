@@ -68,6 +68,7 @@ import { type Definition, shownAbove } from '@/lib/definition-repeats.ts';
 import {
   type CalculationDetail,
   type CalculationFigure,
+  type CalculationInput,
   type CalculationOutcome,
   computeCalculation,
   figureFormat,
@@ -184,15 +185,41 @@ function FigureMetric(props: {
   return <Metric {...metric} />;
 }
 
-/** The parameters the content stored, so the reader can see the situation and not only the answer. */
-function Inputs(props: { readonly inputs: readonly { label: string; text: string }[] }): ReactElement | null {
+/**
+ * The parameters the content stored, so the reader can see the situation and not only the answer.
+ *
+ * Cards are drawn as cards — see `CalculationInput.cards` for the `AhKs` this replaced. The row's
+ * figure is named by the same words as the `dt` beside it, so a screen reader hears "Your cards"
+ * then "ace of hearts, king of spades" rather than a four-letter code.
+ */
+function Inputs(props: { readonly inputs: readonly CalculationInput[] }): ReactElement | null {
   if (props.inputs.length === 0) return null;
   return (
     <dl className="prl-learn-calc__inputs">
       {props.inputs.map((input) => (
         <div className="prl-learn-calc__input" key={input.label}>
           <dt className="prl-label">{input.label}</dt>
-          <dd className="prl-mono">{input.text}</dd>
+          {input.cards === undefined ? (
+            <dd className="prl-mono">{input.text}</dd>
+          ) : (
+            <dd className="prl-learn-calc__input-cards">
+              {input.cards.map((group, position) => (
+                <CardRow
+                  // No two holdings share a card, so the cards are a unique key without an index.
+                  key={group.join(' ')}
+                  cards={group}
+                  label={
+                    input.cards?.length === 1
+                      ? input.label
+                      : `${input.label}, holding ${String(position + 1)}`
+                  }
+                  showLabel={false}
+                  size="sm"
+                  tight
+                />
+              ))}
+            </dd>
+          )}
         </div>
       ))}
     </dl>

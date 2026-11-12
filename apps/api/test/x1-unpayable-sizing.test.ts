@@ -239,6 +239,39 @@ describe('a scenario sizing nobody could have paid', () => {
   });
 });
 
+/**
+ * A total the table would accept and the analysis did not price, read off the analysis itself.
+ *
+ * Derived, never assumed. The database test below used to raise to `floorTo` on the premise that
+ * "the Coach's ladder starts above it". It stopped being true the moment the Coach began pricing
+ * the sizes the decision bar offers, because the bar's default IS the minimum raise: in CI on
+ * `lab-pricing`, run 43047978449, the floor came back `consistentWithAnalysis: true` and the test
+ * failed on `true !== false` — a test of the unpriced path that had quietly become a test of a
+ * priced one. Both tests now ask the same question the same way, so the next change to what gets
+ * priced cannot split them.
+ */
+async function unpricedRaise(
+  app: FastifyInstance,
+): Promise<{ readonly to: number; readonly pricedRaises: readonly number[] }> {
+  const { floorTo, maxTo } = boundsFor(SCENARIO_ID);
+  const priced = await app.inject({ method: 'GET', url: `/api/v1/content/scenarios/${SCENARIO_ID}` });
+  const analysis: unknown = JSON.parse(priced.body);
+  assert.ok(typeof analysis === 'object' && analysis !== null && 'analysis' in analysis);
+  const candidates = (
+    analysis as { readonly analysis: { readonly candidates: readonly Record<string, unknown>[] } }
+  ).analysis.candidates;
+  const pricedRaises = candidates
+    .filter((candidate) => candidate['action'] === 'raise')
+    .map((candidate) => Number(candidate['to']));
+  assert.ok(pricedRaises.length >= 2, 'the spot should price more than one raise');
+
+  // A legal total the ladder skipped: at or above the floor, at or below the stack, unpriced.
+  for (let to = floorTo; to <= maxTo; to += 1) {
+    if (!pricedRaises.includes(to)) return { to, pricedRaises };
+  }
+  assert.fail('the ladder cannot possibly have priced every total in the range');
+}
+
 describe('a scenario sizing that is legal but was never priced', () => {
   after(async () => {
     await closeSharedPool();
@@ -247,37 +280,17 @@ describe('a scenario sizing that is legal but was never priced', () => {
   /**
    * The honest middle case, and the reason the fix is not simply "refuse harder".
    *
-   * The Coach prices three representative sizes, not the whole ladder. A learner who raises to a
-   * total between them has made a decision the table would accept and the analysis has nothing to
+   * The Coach prices the sizes the table's sizing buttons offer, not every legal total. A learner
+   * who types or drags to a total between them has made a decision the table would accept and the analysis has nothing to
    * say about. That is neither consistent nor inconsistent, and the reply has to say so — the
    * `ScenarioAttemptResponse` contract has one boolean, so the distinction lives in the prose and
    * in what does *not* get written to the database.
    */
   it('answers it, and says plainly that the analysis has nothing to compare it with', async () => {
-    const { floorTo, maxTo } = boundsFor(SCENARIO_ID);
     const app = await contentApp();
     try {
       // Every priced raise, from the analysis itself rather than from a number written here.
-      const priced = await app.inject({ method: 'GET', url: `/api/v1/content/scenarios/${SCENARIO_ID}` });
-      const analysis: unknown = JSON.parse(priced.body);
-      assert.ok(typeof analysis === 'object' && analysis !== null && 'analysis' in analysis);
-      const candidates = (
-        analysis as { readonly analysis: { readonly candidates: readonly Record<string, unknown>[] } }
-      ).analysis.candidates;
-      const pricedRaises = candidates
-        .filter((candidate) => candidate['action'] === 'raise')
-        .map((candidate) => Number(candidate['to']));
-      assert.ok(pricedRaises.length >= 2, 'the spot should price more than one raise');
-
-      // A legal total the ladder skipped: at or above the floor, at or below the stack, unpriced.
-      let unpriced: number | null = null;
-      for (let to = floorTo; to <= maxTo; to += 1) {
-        if (!pricedRaises.includes(to)) {
-          unpriced = to;
-          break;
-        }
-      }
-      assert.ok(unpriced !== null, 'the ladder cannot possibly have priced every total in the range');
+      const { to: unpriced, pricedRaises } = await unpricedRaise(app);
 
       const response = await attempt(app, SCENARIO_ID, { action: 'raise', to: unpriced });
       assert.equal(response.status, 200, 'a legal size is a real decision, so it gets an answer');
@@ -299,12 +312,12 @@ describe('a scenario sizing that is legal but was never priced', () => {
     await sql`insert into prl.users (id, kind, display_name) values (${userId}, 'guest', 'X1 Learner')`;
     const app = await contentApp({ userId });
     try {
-      const { floorTo } = boundsFor(SCENARIO_ID);
-      // `floorTo` is the smallest legal raise; the Coach's ladder starts above it, so this total
-      // is payable and unpriced — see the previous test, which derives the same thing the long way.
-      const response = await attempt(app, SCENARIO_ID, { action: 'raise', to: floorTo });
+      const { to: unpriced } = await unpricedRaise(app);
+      const response = await attempt(app, SCENARIO_ID, { action: 'raise', to: unpriced });
       assert.equal(response.status, 200);
       assert.equal(response.body['consistentWithAnalysis'], false);
+      // The reply has to be the unpriced one, or the NULL below proves nothing about that path.
+      assert.match(String(response.body['reasoning']), new RegExp(`did not price raise to ${unpriced}`));
 
       const rows = await sql<{ matched_expected: boolean | null }[]>`
         select matched_expected from prl.scenario_attempts where user_id = ${userId}

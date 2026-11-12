@@ -781,6 +781,8 @@ describe('users — against Postgres', dbOptions, () => {
 
       const { room } = await makeRoom(tx, ownerId);
       await rooms.addMember(tx, { roomId: room.id, userId: ownerId });
+      // Seated: a membership counts only once the learner has sat at it (`users.readUnits`).
+      await rooms.seatMember(tx, room.id, ownerId, 0);
       const seated = await users.readUnits(tx, ownerId);
       assert.equal(seated.units, 200, 'units are the chips in front of them');
 

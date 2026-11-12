@@ -645,3 +645,82 @@
     text-decoration: underline;
   }
 }
+
+/**
+ * The fold-frequency control in the reveal.
+ *
+ * The rows are a list of name-over-figure pairs rather than a table: the figure is a sentence ("+41.4
+ * units as analysed, +12.0 units now (-29.4 units)") and a table cell holding one is the
+ * `minmax(0, 1fr) auto` collapse `test:layout` exists for. Stacked, each row wraps inside its own box
+ * at 360px.
+ */
+.prl-fold-input {
+  display: grid;
+  gap: var(--prl-space-4);
+  max-width: var(--prl-measure);
+}
+
+.prl-fold-input__label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--prl-space-3);
+  color: var(--prl-text);
+  font-weight: var(--prl-weight-medium);
+}
+
+.prl-fold-input__value {
+  color: var(--prl-text);
+  font-size: var(--prl-type-metric-md);
+  font-variant-numeric: var(--prl-numeric);
+  font-weight: var(--prl-weight-semibold);
+  letter-spacing: var(--prl-tracking-metric);
+  line-height: var(--prl-leading-tight);
+}
+
+.prl-fold-input__slider {
+  margin: 0;
+}
+
+.prl-fold-input__summary {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text);
+  font-weight: var(--prl-weight-medium);
+}
+
+.prl-fold-input__reset {
+  justify-self: start;
+}
+
+/* Two or three across on a wide screen, one at 360: up to eight rows stacked at 1440 measured
+   ~1,000px of a narrow column beside 600px of nothing. */
+.prl-fold-input__rows {
+  display: grid;
+  gap: var(--prl-space-3);
+  margin: 0;
+  padding: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, calc(var(--prl-space-15) * 2.5)), 1fr));
+  list-style: none;
+}
+
+.prl-fold-input__row {
+  display: grid;
+  gap: var(--prl-space-2);
+  padding: var(--prl-space-5);
+  border: 1px solid var(--prl-line-subtle);
+  border-radius: var(--prl-radius-2);
+  background-color: var(--prl-surface-inset);
+}
+
+.prl-fold-input__row-name {
+  color: var(--prl-text);
+  font-weight: var(--prl-weight-semibold);
+}
+
+.prl-fold-input__row-value {
+  color: var(--prl-text-secondary);
+  font-variant-numeric: var(--prl-numeric);
+  overflow-wrap: anywhere;
+}

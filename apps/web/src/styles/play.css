@@ -658,8 +658,30 @@
    ==========================================================================================
    A disclosure listing the states this screen can be rendered in while there is no server behind it.
    It is not a product feature and it does not pretend to be one: it is labelled as a fixture, it is
-   collapsed, and the moment a live view arrives the page stops rendering it.
+   collapsed, and on the live page it sits after the table under a strong rule and a "For
+   reviewers" label, so it cannot be read as one of the table's own controls. (This used to say the
+   page stops rendering it once a live view arrives; the live page has rendered it for as long as
+   the socket has existed, which is the version a reader saw.)
    ========================================================================================== */
+
+.prl-play__review-states {
+  display: grid;
+  gap: var(--prl-space-4);
+  margin-block-start: var(--prl-space-9);
+  padding-block-start: var(--prl-space-8);
+  border-block-start: 1px solid var(--prl-line-strong);
+}
+
+.prl-play__review-states > .prl-label {
+  margin: 0;
+  color: var(--prl-text-muted);
+}
+
+/* The legend match's framing line, under the heading. Prose size: it is read, not glanced at. */
+.prl-play__framing {
+  margin: 0;
+  max-width: var(--prl-measure);
+}
 
 .prl-play__states {
   display: flex;
@@ -770,13 +792,19 @@
   }
 
   .prl-play__eyebrow,
-  .prl-play__title {
+  .prl-play__title,
+  .prl-play__framing {
     grid-column: 1;
     margin-block-end: var(--prl-space-3);
   }
 
   .prl-play__title {
     margin-block-end: var(--prl-space-0);
+  }
+
+  /* The head's row gap is zero from here (see above), so the framing line takes its own air. */
+  .prl-play__framing {
+    margin-block-start: var(--prl-space-4);
   }
 
   .prl-play__lede {

@@ -12,7 +12,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
+import { clampToBounds, presetTo, TABLE_SIZING_PRESETS } from '@prl/poker-math';
 import {
   type BetBounds,
   clampBetTo,
@@ -256,6 +258,28 @@ describe('isDraftMalformed', () => {
     for (const text of ['abc', 'e5', '-', '.', '+', 'one third', '1e3', '600abc']) {
       assert.equal(isDraftMalformed({ text, badInput: false }), true, `text "${text}"`);
     }
+  });
+});
+
+describe('the sizer reads the sizes the Coach prices', () => {
+  // The Coach prices exactly `offeredSizes` from `@prl/poker-math`, and the Scenario Lab grades a
+  // sized action only on an exact match, so the sizer's presets and arithmetic must BE that
+  // package's — not a copy that agrees today. A copy is what they were: the presets rounded to the
+  // nearest chip, the Coach's ladder rounded down, and a ⅔-pot button sent 207 against a priced 206.
+  it('re-exports the presets, the clamp and the preset arithmetic by identity', () => {
+    assert.equal(SIZING_PRESETS, TABLE_SIZING_PRESETS);
+    assert.equal(presetTotal, presetTo);
+    assert.equal(clampBetTo, clampToBounds);
+  });
+
+  it('renders its presets from that list and defaults to the floor', () => {
+    // A source check, because the component cannot be rendered under `node:test`. `offeredSizes`
+    // is "the floor plus every preset"; these are the two places the bar could drift from it.
+    const bar = readFileSync(new URL('../src/components/ActionBar.tsx', import.meta.url), 'utf8');
+    assert.match(bar, /SIZING_PRESETS\.map\(\(preset\) =>/u);
+    assert.match(bar, /presetTotal\(preset, context\)/u);
+    assert.match(bar, /const context(?:: SizingContext)? = \{ bounds, pot, toCall, committedThisStreet \}/u);
+    assert.equal(resolveDraft(null, bounds(50, 500)), 50, 'an untouched sizer sends the floor');
   });
 });
 

@@ -113,9 +113,13 @@
    * breakpoint the bar is a wordmark beside `.prl-shell__header-tools`, which is `flex-wrap:
    * wrap` — so the units readout and the menu trigger take a row each as soon as they do not fit
    * side by side. Measured against the production build with scripting disabled, so this is the
-   * server's own markup and not an outage state: the bar is 129px at every width up to 381px and
-   * 77px from 382px up. In the units-unavailable state the readout is the longer string
-   * `units — not available`, and the wrap starts at 412px instead.
+   * server's own markup and not an outage state: the bar was 129px at every width up to 381px and
+   * 77px from 382px up.
+   *
+   * Since 2026-11-11 the trigger drops its word below 412px (section 8), and the bar measures one
+   * 77px row at every width from 320 to 411 with the API up ("1,000 units") or down ("units
+   * offline"). This default stays two rows, and the rule below narrows it from 360px up: the
+   * readout grows about 9px a digit, and at 320 a five-figure balance still wraps.
    *
    * 129px is `2 * 44 + 8 + 2 * 16` plus the 1px bottom edge — two pill rows, the tools row-gap
    * (`--prl-space-4`, from `.prl-shell__header-tools`) and the block padding. The one-row value
@@ -126,14 +130,22 @@
 }
 
 /**
- * From the nav breakpoint up the bar cannot wrap: the tools sit in their own `auto` column beside
- * a centred navigation pill, and every width from 382px was measured at one row anyway. Narrowing
- * the token here rather than widening it in a `max-width` query keeps this file on the two
- * breakpoints section 9 already owns, and keeps the DEFAULT on the safe side — a bar that is
- * shorter than the padding reserved for it costs a reader some air above an anchor; a bar that is
- * taller than it hides the thing they were sent to.
+ * One row, in two bands. At 860 and above the bar cannot wrap: the tools sit in their own `auto`
+ * column beside a centred navigation pill. From 360 to 411 the menu trigger is a 44px circle
+ * (section 8), and the bar measured one row with balances up to 10,000,000 units; it first wraps
+ * at 100,000,000. Holding two rows of padding there cost every anchor on a phone 67px of empty air
+ * (scroll-padding 144px over a 77px bar, measured by `test:keyboard` at 360x640).
+ *
+ * Nothing caps a balance, so that band is a trade, not a proof: a wrap needs 100,000 times the
+ * 1,000-unit starting allowance, against 67px on every anchor on the most common phone width.
+ * From 412 to 859 the trigger shows its word and the bar wraps at 10,000,000 (measured at 412),
+ * a hundredth of that, on tablet widths where 67px buys much less; that band keeps the default,
+ * as does everything below 360. The default is the safe side: a bar that is shorter than the padding reserved for it costs a
+ * reader some air above an anchor; a bar that is taller than it hides the thing they were sent to.
+ * `test:keyboard` walks four routes backwards at 360x640 and fails if any control lands under the
+ * bar, so a trigger that grows its word back fails there.
  */
-@media (min-width: 860px) {
+@media (360px <= width < 412px), (min-width: 860px) {
   :root {
     --prl-pillbar-h: calc(var(--prl-pill-h) + 2 * var(--prl-pillbar-pad-block));
   }
@@ -183,13 +195,19 @@
  * only the fill would leave the last word on `background-color` in a block with no
  * `backdrop-filter` in it, which is the ghosting bug written down, and it is the shape
  * `layout-guarantees.test.ts` fails. Wherever a glass fill goes, the filter goes with it.
+ *
+ * Both sit on `::before`, not on the header: a filter on the header made it the containing block
+ * for the fixed menu sheet inside it, and the sheet opened 76px tall. See `globals.css`.
  */
 .prl-shell__header {
   padding-block: var(--prl-pillbar-pad-block);
+  border-block-end: 1px solid var(--prl-edge-shade);
+}
+
+.prl-shell__header::before {
   background-color: var(--prl-glass-floating);
   -webkit-backdrop-filter: var(--prl-glass-filter);
   backdrop-filter: var(--prl-glass-filter);
-  border-block-end: 1px solid var(--prl-edge-shade);
 }
 
 /**
@@ -535,6 +553,30 @@
   font-size: var(--prl-type-body-sm);
 }
 
+/**
+ * Below the nav breakpoint the panel hangs from the BAR, not from the units pill.
+ *
+ * Anchored to the pill's end, it grew leftwards from wherever the pill happened to stop, and on a
+ * phone the pill stops well short of the edge because the menu trigger sits beyond it. Measured at
+ * 360: the pill ended at x=288 and the panel was 328px wide, so it started at x=-40 and the first
+ * 40px of every line ("s are free practice chips…") was off the screen. The same at 411. This is a
+ * newcomer's first "what is this?" tap. With the units group unpositioned the panel's containing
+ * block is the sticky header, which spans the viewport: measured after, x=16 to 344 at 360 and
+ * 16 to 395 at 411, and at 768 it ends at the gutter rather than mid-bar.
+ */
+@media (width < 860px) {
+  .prl-shell__units {
+    position: static;
+  }
+
+  .prl-shell__units .prl-units__note {
+    inset-block-start: calc(var(--prl-pillbar-pad-block) + var(--prl-pill-h) + var(--prl-space-3));
+    inset-inline-start: auto;
+    inset-inline-end: var(--prl-space-6);
+    max-width: min(var(--prl-measure), calc(100% - 2 * var(--prl-space-6)));
+  }
+}
+
 /* ==========================================================================================
    5. THE THEME SWITCH, AND WHERE IT WENT
    ==========================================================================================
@@ -731,6 +773,39 @@
 }
 
 /**
+ * Below 412px the trigger is the bars alone, in a 44px circle like the units `i` beside it, and the
+ * word stays in the accessibility tree as the button's name (the declarations are
+ * `.prl-visually-hidden`'s, which cannot be applied from a media query).
+ *
+ * The word cost the bar a second row. At 360 the units readout (173px at "1,000 units") and a
+ * 103px labelled trigger need 288px with the gap, and the bar had 272: the tools wrapped, and the
+ * sticky bar was 129px — a fifth of a 360x640 screen, on every page. As a circle the trigger is
+ * 44px and the bar is one 77px row at every width from 320 to 411, with the API up or down.
+ *
+ * 412 rather than the 382 where "1,000 units" stops wrapping: the readout grows with the figure,
+ * about 9px a digit, and 412 keeps a six-figure balance on one row with the word showing above it.
+ */
+@media (width < 412px) {
+  .prl-nav-trigger {
+    justify-content: center;
+    inline-size: var(--prl-pill-h);
+    padding-inline: 0;
+  }
+
+  .prl-nav-trigger .prl-nav-trigger__word {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    border: 0;
+    white-space: nowrap;
+  }
+}
+
+/**
  * The sheet's own type, raised with the rest of the app. The destination word was
  * `--prl-type-display-3`; the SUMMARY under it was 15px and the index beside it 11px, which is the
  * wrong way round for a list whose whole job is to be read on a phone.
@@ -805,7 +880,7 @@
 
 .prl-footer__theme .prl-theme__word,
 .prl-sheet__foot .prl-theme__word {
-  min-height: calc(var(--prl-pill-h) - var(--prl-space-3));
+  min-height: var(--prl-target-min); /* was pill-h − space-3: 38px at 360, under the 44px floor */
   min-width: 0;
   padding-inline: var(--prl-space-6);
   border-radius: var(--prl-radius-pill);

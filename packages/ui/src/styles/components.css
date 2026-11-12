@@ -1092,13 +1092,22 @@
 }
 
 /**
- * TERTIARY. No fill, no border, no elevation — subordinate by having none of the three, rather
- * than by being a faint copy of the secondary. It still takes the capsule and the full 44px
- * target, so the hover fill arrives as the same shape as everything around it; before this the
- * hover was a hard-cornered rectangle appearing under a rounded row.
+ * TERTIARY. No fill and no elevation — subordinate to the secondary by lacking its glass and its
+ * lift. It still takes the capsule and the full 44px target, so the hover fill arrives as the same
+ * shape as everything around it; before this the hover was a hard-cornered rectangle appearing
+ * under a rounded row.
+ *
+ * It used to have no border either, and that was one cue too few. An audit of the running build
+ * found "Open the glossary" at a lesson's foot, and the onboarding's "Back" and "Skip", reading as
+ * plain text: secondary-coloured words with no underline and no edge, which is what a sentence
+ * looks like. The capsule now has the `--prl-line-strong` edge the secondary carries — the token
+ * rule B and `design:contrast` hold to 3:1 for a boundary that identifies a control — so it is
+ * recognisably a button, and the hierarchy is kept by the fill and the elevation it still lacks.
+ * The border was already 1px of `transparent` on `.prl-btn`, so no ghost button moved a pixel.
  */
 .prl-btn--ghost {
   padding-inline: var(--prl-space-6);
+  border-color: var(--prl-line-strong);
   background-color: transparent;
   color: var(--prl-text-secondary);
 }

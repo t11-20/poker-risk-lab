@@ -37,18 +37,18 @@
  */
 
 import type { ReactElement } from 'react';
-
-export interface FilterOption {
-  readonly value: string;
-  readonly label: string;
-  /** How many scenarios this option would show, given the other two filters. */
-  readonly count: number;
-}
+import { FILTER_ANY, type FilterOption, LAB_RESULTS_ID } from '../lib/lab-filters.ts';
 
 export interface ScenarioFilterSelection {
   readonly topic: string;
   readonly difficulty: string;
   readonly street: string;
+}
+
+export interface ScenarioFilterSelectionCounts {
+  readonly topic: number;
+  readonly difficulty: number;
+  readonly street: number;
 }
 
 export interface ScenarioFiltersProps {
@@ -59,12 +59,14 @@ export interface ScenarioFiltersProps {
   /** How many scenarios the current selection matches, for the summary line. */
   readonly matching: number;
   readonly totalAvailable: number;
+  /**
+   * What each facet's "any" option would show, counted against the other two filters exactly as the
+   * options are. See `anyCountFor` in `lib/lab-filters.ts` for why it is not `totalAvailable`.
+   */
+  readonly anyCounts: ScenarioFilterSelectionCounts;
   /** Where the form submits. The route that renders it, so the query lands on the same page. */
   readonly action: string;
 }
-
-/** The sentinel for "no filter". A value rather than an absent parameter, so the control has a state. */
-export const FILTER_ANY = 'any';
 
 /**
  * The counted part of the summary — "12 of 36", or "all 36" when nothing has been filtered out.
@@ -123,11 +125,16 @@ function FilterField({ id, name, label, anyLabel, options, value }: FilterFieldP
 }
 
 export function ScenarioFilters(props: ScenarioFiltersProps): ReactElement {
-  const { topics, difficulties, streets, selected, matching, totalAvailable, action } = props;
+  const { topics, difficulties, streets, selected, matching, totalAvailable, anyCounts, action } = props;
   const isFiltered = isFilteredSelection(selected);
 
   return (
-    <form className="prl-lab-filters" method="get" action={action}>
+    // The fragment survives a GET submit — the HTML form-submission algorithm replaces the action
+    // URL's query with the form data and keeps its fragment — so the new document opens scrolled
+    // to the count, with the results directly beneath it. Without it, measured at 360x640 on the
+    // production build, "Apply filters" reloaded at scrollY 0 with the first result card below the
+    // fold under three stacked selects, so the answer to the button was off screen.
+    <form className="prl-lab-filters" method="get" action={`${action}#${LAB_RESULTS_ID}`}>
       <fieldset className="prl-lab-filters__set">
         <legend className="prl-lab-filters__legend">Filter the scenarios</legend>
 
@@ -136,7 +143,7 @@ export function ScenarioFilters(props: ScenarioFiltersProps): ReactElement {
             id="prl-filter-topic"
             name="topic"
             label="Topic"
-            anyLabel={`Every topic (${totalAvailable})`}
+            anyLabel={`Every topic (${anyCounts.topic})`}
             options={topics}
             value={selected.topic}
           />
@@ -144,7 +151,7 @@ export function ScenarioFilters(props: ScenarioFiltersProps): ReactElement {
             id="prl-filter-difficulty"
             name="difficulty"
             label="Difficulty"
-            anyLabel={`Every level (${totalAvailable})`}
+            anyLabel={`Every level (${anyCounts.difficulty})`}
             options={difficulties}
             value={selected.difficulty}
           />
@@ -152,7 +159,7 @@ export function ScenarioFilters(props: ScenarioFiltersProps): ReactElement {
             id="prl-filter-street"
             name="street"
             label="Street"
-            anyLabel={`Every street (${totalAvailable})`}
+            anyLabel={`Every street (${anyCounts.street})`}
             options={streets}
             value={selected.street}
           />
@@ -189,7 +196,7 @@ export function ScenarioFilters(props: ScenarioFiltersProps): ReactElement {
             the count is announced by the one channel a new document does announce: the `<title>`.
             See `app/lab/page.tsx`. Certification assertion 4.2.
           */}
-          <p className="prl-lab-filters__summary">
+          <p className="prl-lab-filters__summary" id={LAB_RESULTS_ID}>
             Showing{' '}
             <span className="prl-lab-filters__count">{scenarioCountPhrase(matching, totalAvailable)}</span>{' '}
             scenarios.

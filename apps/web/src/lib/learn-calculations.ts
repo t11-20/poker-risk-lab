@@ -104,6 +104,16 @@ export interface CalculationFigure {
 export interface CalculationInput {
   readonly label: string;
   readonly text: string;
+  /**
+   * When the parameter is cards: one engine-card group per holding (or one for a board), drawn as
+   * playing cards instead of `text`.
+   *
+   * `/learn/hand-flow` — the first lesson in reading order — showed its first live calculation's
+   * inputs as `AhKs` and `7c7d`, wire notation nobody has been taught yet, with no key. Everywhere
+   * else in the product a card is drawn with its suit glyph and named for a screen reader by
+   * `CardRow`, and these now are too. `text` stays as the row's identity and as the fallback.
+   */
+  readonly cards?: readonly (readonly number[])[];
 }
 
 export interface CalculationMethod {
@@ -631,6 +641,11 @@ function resolveRiskOfRuin(calculation: Extract<LiveCalculation, { kind: 'riskOf
   };
 }
 
+/** One holding or one board, as an input drawn in cards. The calculation has already parsed it. */
+function cardInput(label: string, notation: string): CalculationInput {
+  return { label, text: notation, cards: [parseCards(notation)] };
+}
+
 function resolveEquity(calculation: Extract<LiveCalculation, { kind: 'equity' }>): CalculationResult {
   const spec = equitySpec(calculation);
   const result: EquityResult = equity(spec);
@@ -638,11 +653,12 @@ function resolveEquity(calculation: Extract<LiveCalculation, { kind: 'equity' }>
   if (hero === undefined) throw new Error('an equity result with no players cannot be rendered');
   const interval =
     result.confidence === null ? undefined : `± ${formatPoints(result.confidence.halfWidthPoints)}`;
-  const inputs: CalculationInput[] = [{ label: 'Your cards', text: calculation.heroCards }];
-  if (calculation.board !== undefined) inputs.push({ label: 'Board', text: calculation.board });
+  const inputs: CalculationInput[] = [cardInput('Your cards', calculation.heroCards)];
+  if (calculation.board !== undefined) inputs.push(cardInput('Board', calculation.board));
   inputs.push({
     label: calculation.opponents.length === 1 ? 'Opponent' : 'Opponents',
     text: calculation.opponents.join(', '),
+    cards: calculation.opponents.map((holding) => parseCards(holding)),
   });
 
   return {
@@ -711,9 +727,9 @@ function resolveOuts(calculation: Extract<LiveCalculation, { kind: 'outs' }>): C
     kind: 'outs',
     title: 'Which cards actually help',
     inputs: [
-      { label: 'Your cards', text: calculation.heroCards },
-      { label: 'Board', text: calculation.board },
-      { label: 'Opponent', text: calculation.opponentCards },
+      cardInput('Your cards', calculation.heroCards),
+      cardInput('Board', calculation.board),
+      cardInput('Opponent', calculation.opponentCards),
     ],
     figures: [
       {

@@ -20,8 +20,9 @@
  * against; this file used to carry its own `LEGEND_API_PATHS`, written before the routes were
  * named, and every entry in it was wrong — the version segment was missing, the profile detail
  * route was invented as `/legends/:id/learn` rather than the real `/legends/profiles/:id`, and
- * one entry named a route that does not exist at all. `PLAY_PATH` below is still local, because
- * that one is a *web* route and belongs to the play screen.
+ * one entry named a route that does not exist at all. The *web* routes and the query parameters
+ * live in `legend-links.ts`, which has no fixture behind it and can be imported by a client
+ * component or a test.
  */
 
 import type {
@@ -57,9 +58,6 @@ import {
   serverCsrfHandshake,
 } from './api.ts';
 
-/** The play screen's route. A legend match runs as an ordinary private room once it starts. */
-const PLAY_PATH = '/play';
-
 export type LegendDataSource = 'api' | 'fixture';
 
 /** Data, plus which of the two sources produced it. Never one without the other. */
@@ -79,69 +77,26 @@ function sampled<T>(data: T, reason: string): LegendData<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Reading query parameters
+// Query parameters and links: `legend-links.ts`, re-exported so no screen's imports changed
 // ---------------------------------------------------------------------------
 
-/** What Next hands a page as `searchParams`, once awaited. */
-export type SearchParams = Readonly<Record<string, string | string[] | undefined>>;
-
-const DIFFICULTIES: readonly LegendDifficulty[] = ['educational', 'realistic', 'expert'];
-
-/**
- * The difficulty a page was asked for.
- *
- * Defaults to `educational` rather than to the middle setting. `educational` is the one where
- * the style is most legible and the Coach stays available while playing, which is the right
- * place for someone who has not chosen yet — and an unrecognised value falls back to it rather
- * than throwing, because a hand-edited URL should not be able to produce an error page.
- */
-export function parseDifficulty(raw: string | string[] | undefined): LegendDifficulty {
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  const match = DIFFICULTIES.find((difficulty) => difficulty === value);
-  return match ?? 'educational';
-}
-
-/** Profile ids from a repeated or comma-separated `profiles` parameter, de-duplicated in order. */
-export function parseProfileIds(raw: string | string[] | undefined): readonly string[] {
-  const values = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
-  const ids: string[] = [];
-  for (const value of values) {
-    for (const part of value.split(',')) {
-      const id = part.trim();
-      if (id !== '' && !ids.includes(id)) ids.push(id);
-    }
-  }
-  return ids;
-}
-
-// ---------------------------------------------------------------------------
-// Links
-// ---------------------------------------------------------------------------
-
-export function profileHref(profileId: string, difficulty?: LegendDifficulty): string {
-  const path = `/legends/${encodeURIComponent(profileId)}`;
-  return difficulty === undefined ? path : `${path}?difficulty=${difficulty}`;
-}
-
-/**
- * The link that starts a match against one style.
- *
- * A query on `/play` rather than a nested route: the play screen exists and owns its own URL
- * shape, and a link into a path it has not defined would be a broken link on every card.
- */
-export function legendMatchHref(profileId: string, difficulty: LegendDifficulty): string {
-  return `${PLAY_PATH}?profile=${encodeURIComponent(profileId)}&difficulty=${difficulty}`;
-}
-
-export function compareHref(profileIds: readonly string[], difficulty: LegendDifficulty): string {
-  const profiles = profileIds.map((id) => encodeURIComponent(id)).join(',');
-  const query = profiles === '' ? '' : `profiles=${profiles}&`;
-  return `/legends/compare?${query}difficulty=${difficulty}`;
-}
-
-export const LEGENDS_PATH = '/legends';
-export const LEGENDS_COMPARE_PATH = '/legends/compare';
-export const LEGENDS_HAND_REVIEW_PATH = '/legends/hand-review';
+export {
+  type CompareSelection,
+  compareHref,
+  DIFFICULTIES,
+  LEGENDS_COMPARE_PATH,
+  LEGENDS_HAND_REVIEW_PATH,
+  LEGENDS_PATH,
+  legendMatchHref,
+  MAX_COMPARE_PROFILES,
+  MIN_COMPARE_PROFILES,
+  parseCompareSelection,
+  parseDifficulty,
+  parseProfileIds,
+  profileHref,
+  type SearchParams,
+  selectionNotices,
+} from './legend-links.ts';
 
 // ---------------------------------------------------------------------------
 // Loaders

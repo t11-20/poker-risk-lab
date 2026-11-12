@@ -445,6 +445,26 @@ export async function membersOfRooms(
   return rows.map(toMemberRow);
 }
 
+/**
+ * One LIVE membership by its id, or null once it has left.
+ *
+ * `left_at is null` is the point of it. Devin Review on PR #25: this read "left or not", and
+ * `seatMember` returns what it reads. A leave between its UPDATE and this read handed the departed
+ * row back as a seat taken, `sitAtTable` put the learner back on the live roster, and `require`
+ * let them into a room they had left. A membership that has left is not a member of anything.
+ */
+async function liveMemberById(sql: Db, memberId: string): Promise<RoomMemberRow | null> {
+  const rows = await sql<RoomMemberRowRaw[]>`
+    select m.id, m.room_id, m.user_id, u.display_name, m.seat, m.stack, m.is_bot, m.bot_profile,
+           m.bot_difficulty, m.bot_seed, m.joined_at, m.left_at
+      from prl.room_members m
+      join prl.users u on u.id = m.user_id
+     where m.id = ${memberId} and m.left_at is null
+  `;
+  const raw = rows[0];
+  return raw === undefined ? null : toMemberRow(raw);
+}
+
 /** One learner's live membership of one room, or null. The authorisation primitive. */
 export async function memberOf(sql: Db, roomId: string, userId: string): Promise<RoomMemberRow | null> {
   const rows = await sql<RoomMemberRowRaw[]>`
@@ -637,10 +657,18 @@ export async function seatMember(
          and ${seat}::int < r.max_seats
       returning m.id
     `;
-    if (rows.length > 0) {
-      const member = await memberOf(sql, roomId, userId);
+    const seated = rows[0];
+    if (seated !== undefined) {
+      // Read back by the id the UPDATE returned, not by (room, user, live): a leave and rejoin in
+      // between would answer with the new membership, and the caller records the first sit on this id.
+      const member = await liveMemberById(sql, seated.id);
       if (member !== null) return member;
-      throw new AppError('internal_error', { logDetail: 'seat update succeeded but read back nothing' });
+      // It left in between. Not a seat taken: `sitAtTable` must not put the learner back at a table
+      // they left. Fails toward refusing the sit. Thrown here, not diagnosed: after a leave AND a
+      // rejoin, `diagnoseMembershipFailure` finds a live member and answers a bad seat number. The
+      // departed row keeps the seat the UPDATE wrote, which holds nothing: both unique indexes are
+      // partial on `left_at is null`, so there is nothing to give back.
+      throw new AppError('not_room_member', { logDetail: `left ${roomId} while taking a seat` });
     }
   } catch (error) {
     const mapped = violationError(error, 'taking a seat');
@@ -648,6 +676,47 @@ export async function seatMember(
     throw error;
   }
   throw await diagnoseMembershipFailure(sql, roomId, userId, 'invalid_request');
+}
+
+/**
+ * Records that this membership has sat at its table: `room_members.first_seated_at`, what
+ * `users.readUnits` counts a membership by (migration 0008). Kept once set, so standing up leaves the
+ * chips this membership holds in front of the learner. `memberId` is the id `seatMember` returned
+ * for the seat being recorded. Returns false when that membership has left in between, which
+ * `readUnits` does not count anyway.
+ *
+ * ## Why this is not part of `seatMember`
+ *
+ * It was, and Devin Review on PR #25 found what that cost. `RoomRegistry.sitAtTable` takes the
+ * durable seat FIRST — the database is what refuses a contested chair — and then the live table,
+ * which can still refuse: a leaver mid-hand is durably gone (`left_at`) while their live chair holds
+ * the cards. In a two-seat room the next member was given that chair by the database, refused it by
+ * the live table (`room_full`), and stood back up by the failure path, which gives back `seat` and
+ * nothing else. The row then carried a first sit that never happened, and a membership nobody had
+ * sat at counted its whole `starting_stack` toward units for as long as it lived: `2000 !== 1000`
+ * in `practice-table-units.test.ts`. So the fact is written only once the live table has accepted
+ * the seat, and nothing ever has to clear it — the column's comment says it is never cleared.
+ *
+ * ## Why it is found by id
+ *
+ * It was found by (room, user, live), and Devin Review on PR #25 found what that cost. The live sit
+ * resolves and then this is a round trip; a second tab that leaves and rejoins inside it makes a new
+ * membership, never seated and holding `starting_stack`, and the write landed on that one. The
+ * learner then read 2,000 for a 2,000-stack table the new membership had never sat at:
+ * `2000 !== 1000` in `practice-table-units.test.ts`. So the row is the one the sit took.
+ *
+ * `left_at is null` keeps the write off a membership that left, and nothing more. It does NOT ask
+ * for a seat: a stand before this lands still follows a genuine sit, and that sit is what keeps the
+ * room's chips in front of a learner who stood before the first deal.
+ */
+export async function recordFirstSit(sql: Db, memberId: string): Promise<boolean> {
+  const rows = await sql<{ id: string }[]>`
+    update prl.room_members
+       set first_seated_at = coalesce(first_seated_at, now())
+     where id = ${memberId} and left_at is null
+    returning id
+  `;
+  return rows.length > 0;
 }
 
 /** Stands up without leaving the table. Frees the seat for somebody else immediately. */
@@ -768,6 +837,63 @@ export async function close(sql: Db, roomId: string, options: CloseRoomOptions =
     returning id
   `;
   return rows.length > 0;
+}
+
+/**
+ * Closes a room the owner is retiring as a practice table, unless another person is a member.
+ *
+ * ## The defect
+ *
+ * `RoomRegistry.retirePracticeTables` read the roster, decided "nobody else is here", and then
+ * called `close`, which does not look at the roster at all. A join that landed between the two was
+ * closed under the person who made it. Reachable through the routes: the owner of a two-seat table
+ * with one bot leaves it (nothing stops an owner leaving), which frees a membership; a friend
+ * holding the invite code joins; the owner starts a Legends match; the match's retire had read the
+ * roster before the join committed. Found by review on PR #25, and reproduced in
+ * `test/practice-table-units.test.ts` by joining inside the gap.
+ *
+ * ## Why two statements and not `update ... where not exists (...)`
+ *
+ * The same reason `addMember` takes its lock first. A `not exists` over `prl.room_members` is a
+ * subquery on rows this statement does not write, so it is answered from the statement's own
+ * snapshot. `addMember` only LOCKS the room row and never modifies it, so this UPDATE has no newer
+ * row version to re-check against (EvalPlanQual never fires) and the subquery would not see the
+ * join it waited for. So:
+ *
+ *   1. `select ... for update` on the room row — the lock `addMember` takes, so a join of this
+ *      room in flight finishes first and a join that starts after waits for this to commit;
+ *   2. a NEW statement, whose snapshot is taken once the lock is granted, and so sees every
+ *      committed join, decides and writes.
+ *
+ * Only "another person" is re-decided here. A room's bots and `max_seats` do not change after it
+ * is built, so the rest of the practice-table shape the registry checked still holds.
+ *
+ * Returns false when the room is missing, already closed, not this owner's, or has another person
+ * in it — the caller treats all four as "not retired".
+ */
+export function closePracticeTable(sql: Db, roomId: string, ownerUserId: string): Promise<boolean> {
+  return inOneTransaction(sql, async (tx) => {
+    const locked = await tx<{ id: string }[]>`
+      select r.id from prl.rooms r where r.id = ${roomId} for update
+    `;
+    if (locked.length === 0) return false;
+    const rows = await tx<{ id: string }[]>`
+      update prl.rooms r
+         set status = 'closed', closed_at = now()
+       where r.id = ${roomId}
+         and r.status <> 'closed'
+         and r.owner_user_id = ${ownerUserId}
+         and not exists (
+               select 1 from prl.room_members m
+                where m.room_id = r.id
+                  and m.left_at is null
+                  and not m.is_bot
+                  and m.user_id <> ${ownerUserId}
+             )
+      returning r.id
+    `;
+    return rows.length > 0;
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -127,6 +127,14 @@
 }
 
 /**
+ * `LegendDifficultyScope`'s wrapper is a listener, not a layout box. `contents` keeps the picker and
+ * the card section as direct grid items of the page, so the gap above sits between them as before.
+ */
+.prl-legend-scope {
+  display: contents;
+}
+
+/**
  * The masthead.
  *
  * `--prl-line-strong` under it rather than the decorative hairline: this rule is the boundary
@@ -462,6 +470,22 @@
 }
 
 /**
+ * Two columns from 720px, below the width at which the 24rem floor allows them.
+ *
+ * Two 24rem cards and the gap need 792px of grid, which a 768px tablet does not have (706px), so it
+ * got a single column of twelve 795px-tall cards. Most of that height was the universal disclaimer,
+ * repeated in every card at roughly 70 characters a line; with it printed once above the grid and a
+ * one-line pointer per card (`lib/disclaimer-framing.ts`), a card is a sigil, three figures, a radar
+ * and two buttons, and ~337px holds that: the radar keeps its 15rem cap and the figures stack. The
+ * floor still governs from 900px, where it was chosen (three columns at 1440, not four).
+ */
+@media (720px <= width < 900px) {
+  .prl-legend-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/**
  * A PROFILE CARD — level 2, and the object the whole section is about.
  *
  * Twelve of these are the page. They were `--prl-hairline` boxes on a one-step fill, which in dark
@@ -628,6 +652,19 @@
   font-weight: var(--prl-weight-medium);
 }
 
+/**
+ * The figure and its "of 1" as one item that never splits, pushed to the end edge even when the
+ * whole unit has to take a second line. See `TraitBars.tsx` for the 360px row where it split.
+ */
+.prl-legend-traits__figure {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  gap: var(--prl-space-3);
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+
 .prl-legend-traits__value {
   flex: 0 0 auto;
   color: var(--prl-text);
@@ -758,6 +795,7 @@
  * same material, there is no hierarchy for a reader to use.
  */
 .prl-legend-difficulty {
+  container: prl-legend-difficulty / inline-size;
   display: grid;
   gap: var(--prl-space-6);
   padding: var(--prl-space-8);
@@ -779,6 +817,21 @@
   gap: var(--prl-space-5);
   grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--prl-legend-option-min)), 1fr));
   margin-block-start: var(--prl-space-5);
+}
+
+/**
+ * Three options or one column, never two plus an orphan.
+ *
+ * Three 15rem options and two gaps need 744px (46.5rem). Below that `auto-fit` packed two to a row
+ * and left the third alone beside an empty cell: measured at 768px, two 322px options at y=806 and
+ * the third at y=1000 with nothing next to it. A container query on the form rather than a media
+ * query on the viewport, because the same picker sits in different columns on `/legends` and on the
+ * compare page, and the answer depends on the picker's own width.
+ */
+@container prl-legend-difficulty (width < 46.5rem) {
+  .prl-legend-difficulty__options {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /**
@@ -830,9 +883,13 @@
  * TARGET is the `<label>`, which wraps the whole option block — measured at 252x222 here, and 44px
  * high for the checkbox variant. That is the pattern WCAG 2.5.8 is satisfied by: a native control's
  * label extends its activation area, so the label is the thing that has to be big.
+ *
+ * It sits on the NAME's row, at every width. It used to span the name and the description and
+ * centre on both, which put it beside the description: measured at 1440px, the dot's centre 72px
+ * into the option and the name's 29px. A radio belongs to the words that name the choice.
  */
 .prl-legend-difficulty__control {
-  grid-row: 1 / span 2;
+  grid-row: 1;
   align-self: center;
   min-height: 0;
   margin: 0;
@@ -894,24 +951,80 @@
  * with every line of text indented past it. Measured at 390x844, that indent cost a line of
  * description per option, and the picker was 888px tall. With the options laid out as below it is
  * 785 (360: 962 to 848), nothing scrolls sideways, and every word and both chips are still there.
+ *
+ * The dot's own row is no longer set here: it is on the name's row at every width now (see
+ * `.prl-legend-difficulty__control`), so only the full-width description is phone-specific.
  */
 @media (width < 600px) {
   .prl-legend-difficulty {
     padding: var(--prl-space-6);
   }
 
+  /* `relative` is the containing block for the visually-hidden description in the next rule, so
+     its 1px box stays inside the option rather than being positioned against the page. */
   .prl-legend-difficulty__option {
+    position: relative;
     column-gap: var(--prl-space-5);
     padding: var(--prl-space-5) var(--prl-space-6);
-  }
-
-  .prl-legend-difficulty__control {
-    grid-row: 1;
   }
 
   .prl-legend-difficulty__description,
   .prl-legend-difficulty__coach {
     grid-column: 1 / -1;
+  }
+}
+
+/**
+ * On a phone only the TICKED option shows its description; the other two show their name and their
+ * Coach chip, and their description is still read out.
+ *
+ * Measured at 360x640 on the production build, `/legends` with the API up: the first "Play this
+ * style" was at y=3,230 and the picker was 849px of it (head 447, framing 479, section intro 335,
+ * card 1 to its Play 848). Four ways of making the picker smaller were tried in the same Chrome,
+ * picker height and first Play:
+ *
+ *  - three name-only radios in one segmented row, the ticked option's text once below: 391px,
+ *    y=2,772. Rejected: each segment is 94px at 360, and "Educational" was cut to "Educationa" —
+ *    a block narrower than its own longest word, which `test:layout` fails, and worse at 320.
+ *  - the picker in a `<details>` closed by default: 82px, y=2,463. Rejected: `open` is markup, so
+ *    the server cannot close it on a phone and leave it open at 1440 without script or a flash, and
+ *    a closed disclosure takes the radios out of the tab order and the accessibility tree, so what
+ *    each setting means is one more tap away for everybody.
+ *  - the picker moved below the first card: y=2,333. Rejected: that Play is then reached before the
+ *    setting it starts has been seen, and moving it in the DOM moves it at every width.
+ *  - this: 602px with Educational ticked (623 with Expert), y=2,983. At 320 the picker is 943 to
+ *    675, at 390 786 to 581; from 600 up nothing changes (768 and 1440 measured identical).
+ *
+ * It saves the least of the four and it is the only one that keeps everything: one radio group under
+ * its legend, every option's name and Coach consequence visible before choosing — the Coach is the
+ * part of the choice a learner feels — and the description of the one that is ticked. Ticking
+ * another to read it is free: nothing is applied until "Apply setting", and the Play links follow
+ * the tick on purpose (`LegendDifficultyScope.tsx`). It is CSS on the radio's own state, so it works
+ * with scripts off, and a browser without `:has()` drops this rule and shows every description,
+ * which is the full picker — the safe direction. Ticking a lower option closes the one above it,
+ * so the ticked block moves up by one description; nothing under the finger is activated by that.
+ * The same picker on `/legends/compare` gets the same rule, for the same reason.
+ *
+ * Visually hidden, NOT `display: none`. The `<label>` wraps the whole option, so each radio's
+ * accessible name includes its description; `display: none` would cut it out and a screen-reader
+ * user would hear three bare names.
+ *
+ * The floor, so nobody tries again here: with no picker at all the first Play is at y=2,333, three
+ * and a half screens. The rest of the depth is the framing and the card, whose order is a guardrail
+ * (`LegendCard.tsx`), so "two screens" is not reachable from the picker alone.
+ */
+@media (width < 600px) {
+  .prl-legend-difficulty__option:not(:has(.prl-legend-difficulty__control:checked))
+    > .prl-legend-difficulty__description {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    border: 0;
+    white-space: nowrap;
   }
 }
 
@@ -963,6 +1076,21 @@
 .prl-legend-picker__control {
   min-height: 0;
   margin: 0;
+}
+
+/**
+ * Five are ticked, so this one cannot be (`CompareChoiceLimit.tsx`). Muted text and the not-allowed
+ * cursor rather than opacity, so the name stays legible: the reader still needs to read it to decide
+ * which ticked one to swap out. The hover lift is withdrawn because the box will not respond to it.
+ */
+.prl-legend-picker__option:has(input:disabled) {
+  color: var(--prl-text-muted);
+  cursor: not-allowed;
+}
+
+.prl-legend-picker__option:has(input:disabled):hover {
+  border-color: var(--prl-line);
+  background-color: var(--prl-surface-inset);
 }
 
 /* ==========================================================================================

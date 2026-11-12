@@ -21,7 +21,7 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { LAB_SCENARIO_ANALYSIS, LAB_SCENARIOS } from '../src/fixtures/scenarios.ts';
-import { judgeConsistency } from '../src/lib/consistency.ts';
+import { judgeConsistency, nearestPricedSentence } from '../src/lib/consistency.ts';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
@@ -85,5 +85,48 @@ describe('an unpriced size is reported as unpriced', () => {
       !/tone="caution"[\s\S]{0,80}did not price/u.test(stage),
       'the unpriced case is being shown as a caution; it is not a mistake the learner made',
     );
+  });
+});
+
+describe('an unpriced size names the priced sizes nearest it', () => {
+  // "This analysis did not price that size" was the whole message, which left the reader nowhere to
+  // go. Only a typed or dragged total reaches it now — every preset and the default are priced, see
+  // `lab-sizes-priced.test.ts` — and the reply names the priced sizes either side.
+  it('carries the neighbours on the judgement and says them in units (REGRESSION)', () => {
+    let checked = 0;
+    for (const scenario of LAB_SCENARIOS) {
+      const report = LAB_SCENARIO_ANALYSIS[scenario.id];
+      if (report === undefined) continue;
+      for (const action of ['bet', 'raise'] as const) {
+        const sizes: number[] = report.candidates
+          .filter((candidate) => candidate.action === action && candidate.to !== undefined)
+          .map((candidate) => candidate.to as number)
+          .sort((a, b) => a - b);
+        const [low, high] = sizes;
+        if (low === undefined || high === undefined || high - low < 2) continue;
+        const between = low + 1;
+        const verdict = judgeConsistency(report, action, between, scenario.bigBlind);
+        assert.deepEqual(
+          verdict.nearestPriced,
+          { below: low, above: high },
+          `${scenario.id} ${action} ${between}`,
+        );
+        const sentence = nearestPricedSentence(action, { below: low, above: high }, (n) => `${n} units`);
+        assert.match(sentence, new RegExp(`${action} to ${low} units and ${action} to ${high} units`, 'u'));
+        checked += 1;
+      }
+      // A priced size and an unsized action carry no neighbours.
+      const best = report.candidates.find((candidate) => candidate.to !== undefined);
+      if (best !== undefined) {
+        assert.equal(judgeConsistency(report, best.action, best.to, scenario.bigBlind).nearestPriced, null);
+      }
+      assert.equal(judgeConsistency(report, 'fold', undefined, scenario.bigBlind).nearestPriced, null);
+    }
+    assert.ok(checked > 0, 'no fixture had two priced sizes with a gap between them; a sweep of nothing');
+  });
+
+  it('is rendered by the Verdict', () => {
+    const stage = readFileSync(join(SRC, 'components', 'ScenarioStage.tsx'), 'utf8');
+    assert.match(stage, /nearestPricedSentence\(action, judgement\.nearestPriced, formatUnits\)/u);
   });
 });

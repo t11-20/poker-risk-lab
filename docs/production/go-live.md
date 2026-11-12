@@ -27,17 +27,21 @@ unrelated lists; read each off its own.
 
 ## 2. The artefacts (machine, ~10 min)
 
-> **Where this checkout is right now, 2026-08-26.** Steps 2.1 and 2.2 are **already done** at
-> `0b01f90ce510` and their evidence is in `final-readiness-report.md`: both images rebuilt from a
-> clean tree, and `security:containers` reporting `0 blocking, 0 unfixable, 0 allowed`. They were
-> rebuilt because **CVE-2026-14456** (HIGH, OpenSSL) landed upstream in the base image's
-> libcrypto3/libssl3 3.5.7-r0; both Dockerfiles now install the fixed 3.5.8-r0, pinned exactly.
+> **2.1 and 2.2 are per commit. Run them for the commit you are deploying, every time.** This
+> section used to say, on 2026-08-26, that both were "already done" at `0b01f90ce510` and to start
+> at 2.3. That stayed true for one commit: by 2026-11-11 `main` was 161 commits past it, with
+> `db/migrations/0007` among them, while the gitignored `deploy/staging/release-manifest.json` still
+> described `0b01f90ce510` — and following the note would have deployed three-month-old images,
+> migrated and smoke-tested by a newer checkout. `pnpm run staging up` now **refuses** a manifest
+> whose recorded commit is not `git rev-parse HEAD`, or a clean manifest over a checkout whose
+> tracked files have since been edited, and prints the distance and `pnpm run release:artifacts`.
 >
-> **Start at 2.3.** The rebuild invalidated the committed signature record, which still covers the
-> superseded digests, so `pnpm run verify` exits non-zero today on `security:audit` →
-> `release-image-signatures`. Every other gate passes. That red is expected and it clears at 2.3 —
-> it is not a reason to skip it, and it is not a reason to allowlist anything. Nothing was
-> allowlisted; the allowlist is empty.
+> History worth keeping from that note: the 2026-08-26 rebuild was for **CVE-2026-14456** (HIGH,
+> OpenSSL) in the base image's libcrypto3/libssl3 3.5.7-r0; both Dockerfiles install the fixed
+> 3.5.8-r0, pinned exactly. A rebuild invalidates the committed signature record, which then covers
+> superseded digests, so `pnpm run verify` exits non-zero on `security:audit` →
+> `release-image-signatures` between 2.1 and 2.3. That red is expected and clears at 2.3 — it is
+> not a reason to skip it, and not a reason to allowlist anything. The allowlist is empty.
 >
 > Then 2.4, then §3. **Do not deploy before signing**: staging would run digests nothing had
 > signed, and `security:audit` would stay red through the smoke test, the alert verification and

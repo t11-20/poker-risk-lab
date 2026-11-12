@@ -485,13 +485,15 @@ function rosterStore(
     membersOfRooms: () => Promise.resolve(rows),
     memberOf: (_roomId, userId) => Promise.resolve(rows.find((entry) => entry.user_id === userId) ?? null),
     addMember: () => refuse('addMember'),
-    seatMember: () => Promise.resolve(),
+    seatMember: (_roomId, userId) => Promise.resolve(`mem_${userId}`),
     unseatMember: (_roomId, userId) => {
       unseated.push(userId);
       return Promise.resolve();
     },
+    recordFirstSit: () => Promise.resolve(true),
     removeMember: () => Promise.resolve(),
     close: () => Promise.resolve(true),
+    closePracticeTable: () => refuse('closePracticeTable'),
     createBotUser: () => refuse('createBotUser'),
     readUnits: () => Promise.resolve(10_000),
   };

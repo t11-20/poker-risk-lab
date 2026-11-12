@@ -12,8 +12,10 @@
  * ## What it says out loud, every time
  *
  *  - **The universal disclaimer, at the top, in the body.** `LegendProfilesResponse` carries it as
- *    its own field precisely so it is shown once above the grid as well as per-card, and it is
- *    rendered as visible prose rather than as a footer nobody reads.
+ *    its own field precisely so it is shown once above the grid, and it is rendered as visible
+ *    prose rather than as a footer nobody reads. Each card then carries a visible one-line
+ *    statement of it with a link back here, plus every disclaimer specific to that card in full —
+ *    see `lib/disclaimer-framing.ts` for why the full text is no longer printed thirteen times.
  *  - **Which naming mode is in force.** If a deployment has opted into attributed names, the page
  *    says so and says what those names are: a mnemonic for a modelled style, beneath the archetype.
  *  - **Where the data came from.** When the API is unreachable the page renders from a typed
@@ -29,6 +31,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 import { DifficultyPicker } from '@/components/DifficultyPicker.tsx';
 import { LegendCard } from '@/components/LegendCard.tsx';
+import { LegendDifficultyScope } from '@/components/LegendDifficultyScope.tsx';
 import {
   compareHref,
   DEFAULT_COMPARE_PROFILE_IDS,
@@ -56,6 +59,9 @@ const NAMING_NOTE: Readonly<Record<'archetype' | 'attributed', string>> = {
     'archetype name and always reads "(modelled style)", because the archetype is the profile and ' +
     'the attributed name is only a mnemonic for it. No profile reproduces how any person plays.',
 };
+
+/** The page-level framing block's fragment, which every card's one-line pointer links to. */
+const FRAMING_ID = 'what-these-profiles-are';
 
 export default async function LegendsPage({
   searchParams,
@@ -100,7 +106,7 @@ export default async function LegendsPage({
         body-sm, never collapsed — so a reader meets it before the first profile rather than after
         the last one.
       */}
-      <div className="prl-legend-disclaimers prl-legend-disclaimers--wide">
+      <div className="prl-legend-disclaimers prl-legend-disclaimers--wide" id={FRAMING_ID}>
         <span className="prl-legend-disclaimers__title prl-label">What these profiles are</span>
         <ul className="prl-legend-disclaimers__list">
           <li className="prl-legend-disclaimers__item">{universalDisclaimer}</li>
@@ -108,22 +114,33 @@ export default async function LegendsPage({
         </ul>
       </div>
 
-      <DifficultyPicker action={LEGENDS_PATH} difficulties={difficulties} selected={difficulty} />
+      {/*
+        One scope around the picker and the cards, so every Play link follows the ticked option
+        before "Apply setting" is pressed. See `LegendDifficultyScope.tsx` for the measurement.
+      */}
+      <LegendDifficultyScope>
+        <DifficultyPicker action={LEGENDS_PATH} difficulties={difficulties} selected={difficulty} />
 
-      <section className="prl-legend-section">
-        <h2>The profiles</h2>
-        <p className="prl-prose">
-          Three signature axes are called out on each card so it is readable at a glance; the radar behind
-          them is all sixteen, numbered 01 to 16, with the full table of values available to a screen reader.
-          No axis is ranked and no value is a score — a high figure on "folds under pressure" is a different
-          opponent, not a worse one.
-        </p>
-        <div className="prl-legend-grid">
-          {profiles.data.profiles.map((profile) => (
-            <LegendCard difficulty={difficulty} key={profile.id} profile={profile} />
-          ))}
-        </div>
-      </section>
+        <section className="prl-legend-section">
+          <h2>The profiles</h2>
+          <p className="prl-prose">
+            Three signature axes are called out on each card so it is readable at a glance; the radar behind
+            them is all sixteen, numbered 01 to 16, with the full table of values available to a screen
+            reader. No axis is ranked and no value is a score — a high figure on "folds under pressure" is a
+            different opponent, not a worse one.
+          </p>
+          <div className="prl-legend-grid">
+            {profiles.data.profiles.map((profile) => (
+              <LegendCard
+                difficulty={difficulty}
+                key={profile.id}
+                profile={profile}
+                shownAbove={{ text: universalDisclaimer, href: `#${FRAMING_ID}` }}
+              />
+            ))}
+          </div>
+        </section>
+      </LegendDifficultyScope>
     </div>
   );
 }

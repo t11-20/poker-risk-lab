@@ -73,6 +73,7 @@ import {
 } from 'react';
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
 import { reviewHrefFor } from '@/lib/coach-body.ts';
+import { LEGENDS_PATH } from '@/lib/legend-links.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
 import { type LiveTable as LiveTableModel, useLiveTable } from '@/lib/use-live-table.ts';
@@ -206,6 +207,8 @@ function stageStatusOf(live: LiveTableModel): TableStageStatus {
 
 interface ConnectionPanelProps {
   readonly live: LiveTableModel;
+  /** True on `/play?profile=…`: a match against one AI Legends style rather than the bot table. */
+  readonly inLegendMatch?: boolean;
 }
 
 /**
@@ -380,6 +383,21 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
   );
 }
 
+/** The set of controls `ConnectionControls` has on screen, as a string: its focus rescue's trigger. */
+function controlsSignature(live: ConnectionPanelProps['live']): string {
+  return [
+    live.phase,
+    live.status ?? 'none',
+    live.closed?.action ?? 'none',
+    live.table.seat !== null ? 'seated' : 'standing',
+    live.readerSeat === null ? 'full' : 'free',
+    live.table.betweenHands ? 'between' : 'in-hand',
+    live.coachOff === null ? 'coach' : 'no-coach',
+    live.dealingIn ? 'dealing-in' : 'manual',
+    live.join.state,
+  ].join('/');
+}
+
 /**
  * The controls, each shown only where it is the thing to do.
  *
@@ -404,6 +422,7 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
  */
 function ConnectionControls({
   live,
+  inLegendMatch = false,
   fallbackRef,
 }: ConnectionPanelProps & { readonly fallbackRef: RefObject<HTMLParagraphElement | null> }): ReactElement {
   const { phase, closed, table } = live;
@@ -411,17 +430,7 @@ function ConnectionControls({
   const seated = table.seat !== null;
   const manual = isLive && !live.dealingIn;
 
-  const signature = [
-    phase,
-    live.status ?? 'none',
-    closed?.action ?? 'none',
-    seated ? 'seated' : 'standing',
-    live.readerSeat === null ? 'full' : 'free',
-    table.betweenHands ? 'between' : 'in-hand',
-    live.coachOff === null ? 'coach' : 'no-coach',
-    live.dealingIn ? 'dealing-in' : 'manual',
-    live.join.state,
-  ].join('/');
+  const signature = controlsSignature(live);
 
   /**
    * `hadFocus` stays true through the unmount deliberately: `focusout` fires as the button is
@@ -501,6 +510,17 @@ function ConnectionControls({
           </Button>
         ) : null}
 
+        {/*
+          The way back to the choice. After "Stand up" in a legend match the only controls were
+          "Take seat 1" and "Start a fresh table", neither of which leads to another opponent, and the
+          shell's own nav was the only route to /legends. A link, not a button: it navigates.
+        */}
+        {isLive && !seated && inLegendMatch ? (
+          <Link className="prl-btn prl-btn--secondary prl-btn--md" href={LEGENDS_PATH}>
+            Choose another opponent
+          </Link>
+        ) : null}
+
         {isLive && seated && !table.betweenHands && live.coachOff === null ? (
           <Button variant="ghost" onClick={live.askCoach}>
             Refresh the analysis
@@ -508,8 +528,25 @@ function ConnectionControls({
         ) : null}
       </p>
 
-      <PlayWithSomebody live={live} />
+      <OtherTables live={live} inLegendMatch={inLegendMatch} />
     </div>
+  );
+}
+
+/**
+ * The private-table flows, or in a legend match a link to the bot table instead. Both flows switch
+ * this page's room without changing its URL, and the heading, the setting and the Coach rule above
+ * are rendered from that URL: joining a friend's table here left "Heads-up against <archetype>,
+ * Expert" over somebody else's table (Devin Review on #24).
+ */
+function OtherTables({ live, inLegendMatch = false }: ConnectionPanelProps): ReactElement {
+  return inLegendMatch ? (
+    <p className="prl-note">
+      To play with somebody you know, <Link href="/play">open the bot table</Link> and start or join a private
+      table from there.
+    </p>
+  ) : (
+    <PlayWithSomebody live={live} />
   );
 }
 
@@ -687,7 +724,7 @@ function JoinByInviteCode({ live }: ConnectionPanelProps): ReactElement {
 }
 
 /** The setup half: session, room, socket — and every reason one of them is not there. */
-function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
+function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps): ReactElement {
   const room = live.table.room;
   /**
    * Where the caret lands when the control it was on is taken away.
@@ -762,7 +799,7 @@ function ConnectionPanel({ live }: ConnectionPanelProps): ReactElement {
       </div>
 
       <ConnectionNotices live={live} />
-      <ConnectionControls live={live} fallbackRef={statusRef} />
+      <ConnectionControls live={live} inLegendMatch={inLegendMatch} fallbackRef={statusRef} />
 
       {room === null ? null : (
         <dl className="prl-stat__pair prl-play__facts">
@@ -882,7 +919,7 @@ export function LiveTable({
 
   return (
     <>
-      <ConnectionPanel live={live} />
+      <ConnectionPanel live={live} inLegendMatch={legendMatch !== undefined} />
 
       <TableStage
         status={status}

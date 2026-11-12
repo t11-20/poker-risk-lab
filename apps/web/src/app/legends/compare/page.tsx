@@ -43,6 +43,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Fragment, type ReactElement } from 'react';
 import { ActionDistribution } from '@/components/ActionDistribution.tsx';
+import { CompareChoiceLimit } from '@/components/CompareChoiceLimit.tsx';
 import { DifficultyPicker } from '@/components/DifficultyPicker.tsx';
 import { LegendSigil } from '@/components/LegendSigil.tsx';
 import { ProfileDisclaimers } from '@/components/ProfileDisclaimers.tsx';
@@ -54,10 +55,13 @@ import {
   LEGENDS_PATH,
   loadLegendProfiles,
   loadProfileComparison,
+  MAX_COMPARE_PROFILES,
+  MIN_COMPARE_PROFILES,
+  parseCompareSelection,
   parseDifficulty,
-  parseProfileIds,
   profileHref,
   type SearchParams,
+  selectionNotices,
 } from '@/lib/legends-data.ts';
 
 export const metadata: Metadata = {
@@ -106,15 +110,22 @@ export default async function ComparePage({
 }): Promise<ReactElement> {
   const query = await searchParams;
   const difficulty = parseDifficulty(query['difficulty']);
-  const requested = parseProfileIds(query['profiles']);
-  const profileIds = requested.length === 0 ? DEFAULT_COMPARE_PROFILE_IDS : requested;
-
+  // The profile list first, because it is what decides which of the requested ids are real. See
+  // `parseCompareSelection` for what happened to an unknown id, or a sixth, before this order.
   const profiles = await loadLegendProfiles();
+  const selection = parseCompareSelection(
+    query['profiles'],
+    profiles.data.profiles.map((profile) => profile.id),
+  );
+  const profileIds = selection.ids.length === 0 ? DEFAULT_COMPARE_PROFILE_IDS : selection.ids;
+  const nameOf = (id: string): string =>
+    profiles.data.profiles.find((profile) => profile.id === id)?.disclosure.archetypeName ?? id;
   const comparison = await loadProfileComparison({
     profileIds,
     difficulty,
     situation: COMPARE_SITUATION,
   });
+  const notices = selectionNotices(selection, profileIds, nameOf, comparison.source === 'api');
   const { analysis, entries, trials, takeaway } = comparison.data;
   const halfWidth = worstCaseHalfWidthPoints(trials);
 
@@ -139,6 +150,14 @@ export default async function ComparePage({
           <Link href={LEGENDS_HAND_REVIEW_PATH}>A finished hand, reviewed</Link>
         </nav>
       </div>
+
+      {notices.length === 0 ? null : (
+        <Callout tone="warning" title="Not exactly the styles you picked">
+          {notices.map((notice) => (
+            <p key={notice}>{notice}</p>
+          ))}
+        </Callout>
+      )}
 
       {comparison.fallbackReason === null ? null : (
         <Callout tone="warning" title="This comparison is a bundled sample spot">
@@ -250,9 +269,12 @@ export default async function ComparePage({
         </div>
       </section>
 
-      <Callout tone="insight" title="What the disagreement is telling you">
-        <p>{takeaway}</p>
-      </Callout>
+      {/* One column has no disagreement to describe; `selectionNotices` says so above instead. */}
+      {entries.length < MIN_COMPARE_PROFILES ? null : (
+        <Callout tone="insight" title="What the disagreement is telling you">
+          <p>{takeaway}</p>
+        </Callout>
+      )}
 
       <section className="prl-legend-section">
         <h2>Change the comparison</h2>
@@ -269,7 +291,7 @@ export default async function ComparePage({
           <input name="difficulty" type="hidden" value={difficulty} />
           <fieldset>
             <legend className="prl-legend-difficulty__legend prl-label">Styles to put side by side</legend>
-            <div className="prl-legend-picker__options">
+            <CompareChoiceLimit className="prl-legend-picker__options" max={MAX_COMPARE_PROFILES}>
               {profiles.data.profiles.map((profile) => (
                 <label className="prl-legend-picker__option" key={profile.id}>
                   <input
@@ -282,15 +304,16 @@ export default async function ComparePage({
                   {profile.disclosure.archetypeName}
                 </label>
               ))}
-            </div>
+            </CompareChoiceLimit>
           </fieldset>
           <div className="prl-legend-difficulty__actions">
             <Button type="submit" variant="secondary">
               Compare these styles
             </Button>
             <p className="prl-legend-difficulty__note">
-              Pick at least two: a comparison with one column has nothing to disagree with. The choice stays
-              in the address bar, so a spot can be shared exactly as it was read.
+              Pick two to five: one column has nothing to disagree with, and more than five is more than one
+              request can price. The choice stays in the address bar, so a spot can be shared exactly as it
+              was read.
             </p>
           </div>
         </form>

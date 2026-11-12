@@ -55,8 +55,9 @@ import { DEFAULT_HAND_SORT, HAND_SORTS } from '@prl/contracts';
 import { Chip, formatSignedUnits, formatUnits, PlayingCard, parseCardText } from '@prl/ui';
 import type { Metadata } from 'next';
 import type { ReactElement } from 'react';
+import { ScrollRegion } from '../../components/ScrollRegion.tsx';
 import { emptyHandListFixture, HAND_PAGE_SIZE, REVIEW_HAND_SUMMARIES } from '../../fixtures/review.ts';
-import { API_PATHS, apiGet, isApiUnavailable, isSignedOut } from '../../lib/api.ts';
+import { API_PATHS, apiGet, isApiUnavailable, isRejectedCursor, isSignedOut } from '../../lib/api.ts';
 import { formatTimestamp } from '../../lib/lab-labels.ts';
 import { readerCallOptions } from '../../lib/server-session.ts';
 import '../../styles/page.css';
@@ -73,13 +74,20 @@ const ROUTE = '/review';
 /**
  * The scroll container's accessible name.
  *
- * A const rather than an inline string for two reasons. It keeps the element on one line, which is
- * what lets a `biome-ignore` attach to it — a suppression on a multi-line JSX element anchors to the
- * wrong line and silently stops working. And the tab stop needs a name: a scrollable region has to
+ * The region is a tab stop only while it scrolls sideways (`ScrollRegion`, and the 360px finding in
+ * `../../lib/scroll-region.ts`), and whenever it is one it needs a name: a scrollable region has to
  * be keyboard-reachable (axe `scrollable-region-focusable`, WCAG 2.1.1) and an unnamed tab stop is a
- * silent one. Same problem and the same resolution as the EV table in `@prl/ui`'s CoachPanel.
+ * silent one. The name stays when the stop goes, so a screen reader still finds the table as a
+ * named region. Same problem as the EV table in `@prl/ui`'s CoachPanel, which is always a table.
+ *
+ * The name says nothing about scrolling: below 1024px the rows are cards and the region never
+ * scrolls, so "scrolls sideways when the window is too narrow" was read out as a false sentence on
+ * every phone.
  */
-const TABLE_LABEL = 'Hand history table. Scrolls sideways on a narrow screen.';
+const TABLE_LABEL = 'Hand history table';
+
+/** The narrow layout's sort `<select>`, for its `<label>`. One per page, so a constant is enough. */
+const SORT_SELECT_ID = 'prl-review-sort';
 
 /**
  * The orderings the page offers — the contract's list, not a second copy of it.
@@ -173,6 +181,8 @@ type FixtureReason = 'unavailable' | 'signed-out';
 interface HistoryData {
   readonly response: HandListResponse;
   readonly fromFixture: FixtureReason | null;
+  /** True when the API refused the cursor in the URL and this is page one in its place. */
+  readonly cursorRejected: boolean;
 }
 
 /**
@@ -195,13 +205,18 @@ async function loadHistory(sort: Sort, cursor: string | null, forceEmpty: boolea
       API_PATHS.hands(query.toString()),
       await readerCallOptions(),
     );
-    return { response, fromFixture: null };
+    return { response, fromFixture: null, cursorRejected: false };
   } catch (error) {
+    // An edited or stale `?cursor=` — see `isRejectedCursor`. Page one, once, and the page says so.
+    // The retry carries no cursor, so it cannot come back here.
+    if (cursor !== null && isRejectedCursor(error)) {
+      return { ...(await loadHistory(sort, null, forceEmpty)), cursorRejected: true };
+    }
     const signedOut = isSignedOut(error);
     if (!signedOut && !isApiUnavailable(error)) throw error;
     const reason: FixtureReason = signedOut ? 'signed-out' : 'unavailable';
     if (forceEmpty) {
-      return { response: emptyHandListFixture(), fromFixture: reason };
+      return { response: emptyHandListFixture(), fromFixture: reason, cursorRejected: false };
     }
     // Sort the whole list, then cut the page from it — the order a paginated endpoint uses, and the
     // only order in which a cursor means anything. `sortHands` mirrors the server's five clauses so
@@ -214,6 +229,7 @@ async function loadHistory(sort: Sort, cursor: string | null, forceEmpty: boolea
     return {
       response: { hands: page, nextCursor: next === undefined ? null : next.id },
       fromFixture: reason,
+      cursorRejected: false,
     };
   }
 }
@@ -263,6 +279,22 @@ function NetCell({ net }: { readonly net: number | null }): ReactElement {
   );
 }
 
+/**
+ * A column's name, printed inside the cell for the narrow layout only.
+ *
+ * Below 600px the header row is visually hidden and each row is drawn as a card, so a bare
+ * "1,520 units" no longer sits under a "Pot" a reader can see. `aria-hidden`, because the header
+ * row is still in the accessibility tree and a screen reader already announces each cell with its
+ * column header — "Pot" twice is noise. `review.css` hides it from 600px up.
+ */
+function CellLabel({ children }: { readonly children: string }): ReactElement {
+  return (
+    <span className="prl-review-table__cell-label" aria-hidden="true">
+      {children}
+    </span>
+  );
+}
+
 function sortHref(sort: Sort): string {
   return `${ROUTE}?sort=${sort}`;
 }
@@ -274,9 +306,11 @@ export default async function ReviewIndexPage({
 }): Promise<ReactElement> {
   const query = await searchParams;
   const sort = readSort(query['sort']);
-  const cursor = readCursor(query['cursor']);
+  const requestedCursor = readCursor(query['cursor']);
   const forceEmpty = readCursor(query['state']) === 'empty';
-  const { response, fromFixture } = await loadHistory(sort, cursor, forceEmpty);
+  const { response, fromFixture, cursorRejected } = await loadHistory(sort, requestedCursor, forceEmpty);
+  // The page shown is page one when the cursor was refused, so the paging links must say so too.
+  const cursor = cursorRejected ? null : requestedCursor;
   const hands = response.hands;
 
   return (
@@ -309,6 +343,13 @@ export default async function ReviewIndexPage({
         </p>
       )}
 
+      {cursorRejected ? (
+        <p className="prl-note">
+          That page link is not one this history issued — it may be out of date, or have been edited — so this
+          is the first page instead.
+        </p>
+      ) : null}
+
       {hands.length === 0 ? (
         <div className="prl-empty">
           <p>
@@ -326,10 +367,15 @@ export default async function ReviewIndexPage({
         </div>
       ) : (
         <>
+          {/* Two forms of one control, and only one is rendered at a time: the other is
+              `display: none`, so it is out of the tab order and the accessibility tree, not merely out
+              of sight. The links are one press per ordering and fit one row from 600px up. Below that
+              they wrapped to five rows — measured at 360x640 on the fixture history, 247px of control,
+              and the first hand started at y=931 under a 640px fold. The select is one row and still
+              needs no script: a GET form, so the ordering stays a link a reader can share and the
+              server still applies it to the whole history. */}
           <nav className="prl-review-sorts" aria-label="Sort hand history">
-            <p className="prl-label" id="prl-review-sort-label">
-              Order
-            </p>
+            <p className="prl-label prl-review-sorts__heading">Order</p>
             <ul className="prl-review-sorts__list">
               {SORTS.map((candidate) => (
                 <li key={candidate}>
@@ -343,10 +389,24 @@ export default async function ReviewIndexPage({
                 </li>
               ))}
             </ul>
+            <form className="prl-review-sorts__form" method="get" action={ROUTE}>
+              <label className="prl-label" htmlFor={SORT_SELECT_ID}>
+                Order
+              </label>
+              <select className="prl-select" id={SORT_SELECT_ID} name="sort" defaultValue={sort}>
+                {SORTS.map((candidate) => (
+                  <option key={candidate} value={candidate}>
+                    {SORT_LABEL[candidate]}
+                  </option>
+                ))}
+              </select>
+              <button className="prl-btn prl-btn--secondary" type="submit">
+                Sort
+              </button>
+            </form>
           </nav>
 
-          {/* biome-ignore lint/a11y/noNoninteractiveTabindex: axe scrollable-region-focusable (WCAG 2.1.1) requires it; see TABLE_LABEL */}
-          <section className="prl-review-scroll" tabIndex={0} aria-label={TABLE_LABEL}>
+          <ScrollRegion className="prl-review-scroll" label={TABLE_LABEL}>
             <table className="prl-review-table">
               <caption>
                 {`${hands.length === 1 ? '1 hand' : `${hands.length} hands`}, ordered by ${SORT_LABEL[sort].toLowerCase()}. Net is the change across the whole hand, blinds included.`}
@@ -372,20 +432,27 @@ export default async function ReviewIndexPage({
                 {hands.map((hand) => (
                   <tr key={hand.id}>
                     <th className="prl-review-table__hand" scope="row">
+                      {/* The words are visible and the link covers the whole row — `review.css`, "THE
+                          ROW IS THE TARGET". Measured before: the way into a hand was its number, a
+                          21x44px target at every width, while the rest of the row did nothing and
+                          still lit up on hover as though it would. */}
                       <a className="prl-review-table__link" href={`${ROUTE}/${hand.id}`}>
-                        <span className="prl-visually-hidden">Replay hand </span>
-                        {hand.handNumber}
+                        {`Replay hand ${hand.handNumber}`}
                       </a>
                     </th>
                     <td className="prl-review-table__when">{formatTimestamp(hand.startedAt)}</td>
-                    <td>
+                    <td className="prl-review-table__board">
                       <BoardCells board={hand.board} />
                     </td>
-                    <td className="prl-review-table__pot">{formatUnits(hand.potTotal)}</td>
-                    <td>
+                    <td className="prl-review-table__pot">
+                      <CellLabel>Pot</CellLabel>
+                      {formatUnits(hand.potTotal)}
+                    </td>
+                    <td className="prl-review-table__net">
+                      <CellLabel>Net to you</CellLabel>
                       <NetCell net={hand.heroNet} />
                     </td>
-                    <td>
+                    <td className="prl-review-table__ending">
                       <Chip tone={hand.endedByFold ? 'neutral' : 'info'} glyph={hand.endedByFold ? '⤶' : '⇄'}>
                         {hand.endedByFold ? 'folded out' : 'showdown'}
                       </Chip>
@@ -394,7 +461,7 @@ export default async function ReviewIndexPage({
                 ))}
               </tbody>
             </table>
-          </section>
+          </ScrollRegion>
 
           <nav className="prl-review-paging" aria-label="Hand history pages">
             {cursor === null ? (

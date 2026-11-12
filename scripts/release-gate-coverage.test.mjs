@@ -179,6 +179,66 @@ describe('the README does not promise a gate count the audit does not run', () =
   });
 });
 
+/**
+ * The README's Stack line names exact versions and was joined to nothing either. On 2026-11-11 every
+ * one of the four it could have got wrong was wrong — Next.js 16.3.8, React 19.2.8, Fastify 5.12.5,
+ * Biome 2.5.7 against 16.4.4, 19.3.0, 5.12.8 and 2.5.15 pinned — because a dependency bump is a
+ * lockfile change and nothing sends anybody to the README to make it. Joined here to the exact pins
+ * in the package.json files, which `saveExact: true` makes the only version each one can resolve to.
+ */
+describe('the README Stack line names the versions that are pinned', () => {
+  const README = readFileSync(join(REPO_ROOT, 'README.md'), 'utf8');
+  const pinned = (workspace, name) => {
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, workspace, 'package.json'), 'utf8'));
+    return pkg.dependencies?.[name] ?? pkg.devDependencies?.[name];
+  };
+  const STACK = [
+    ['Next.js', pinned('apps/web', 'next')],
+    ['React', pinned('apps/web', 'react')],
+    ['Fastify', pinned('apps/api', 'fastify')],
+    ['Biome', pinned('.', '@biomejs/biome')],
+    ['TypeScript', pinned('.', 'typescript')],
+  ];
+
+  /** The `## Stack` section's text, or null when it is not where this guard looks. */
+  const stackSection = (text) => /^## Stack\n([\s\S]*?)\n---/mu.exec(text)?.[1] ?? null;
+  /** Every product it names with the version written after it. */
+  const stated = (section) =>
+    STACK.map(([product]) => [
+      product,
+      new RegExp(`${product} (\\d+\\.\\d+\\.\\d+)`, 'u').exec(section)?.[1],
+    ]);
+
+  it('states each pinned version exactly (REGRESSION)', () => {
+    const section = stackSection(README);
+    assert.ok(
+      section !== null,
+      'README.md has no "## Stack" section ending at a rule; this guard reads nothing',
+    );
+    for (const [product, version] of STACK) {
+      assert.match(
+        String(version),
+        /^\d+\.\d+\.\d+$/u,
+        `${product} is not pinned exact; the join is to nothing`,
+      );
+    }
+    for (const [index, [product, written]] of stated(section).entries()) {
+      assert.equal(
+        written,
+        STACK[index][1],
+        `README.md Stack says ${product} ${written}; pinned is ${STACK[index][1]}`,
+      );
+    }
+  });
+
+  it('NEGATIVE CONTROL — the README as it stood on 2026-11-11 is caught', () => {
+    const stale = stackSection(README)?.replace(/Next\.js \d+\.\d+\.\d+/u, 'Next.js 16.3.8');
+    assert.ok(stale?.includes('Next.js 16.3.8') === true, 'the control did not make the line stale');
+    const written = Object.fromEntries(stated(stale));
+    assert.notEqual(written['Next.js'], pinned('apps/web', 'next'));
+  });
+});
+
 describe('the real pipelines', () => {
   it('release.yml runs every verify gate before an artefact exists', () => {
     const gates = gatesInVerify(PKG);

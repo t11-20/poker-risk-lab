@@ -368,6 +368,14 @@ const CONTROLS = [
     what: 'a sentence held on one line inside a box far too narrow for it',
     css: '.prl-page-head__standfirst { white-space: nowrap; max-width: 120px; }',
   },
+  {
+    id: 'inside-display-contents',
+    route: '/legends',
+    width: 1440,
+    expect: 'escapes',
+    what: 'a Legends card title escaping its box, inside the `display: contents` difficulty scope',
+    css: '.prl-legend-scope .prl-legend-identity__archetype { white-space: nowrap; max-width: 60px; }',
+  },
 ];
 
 // ===========================================================================
@@ -399,8 +407,19 @@ const WALKER = String.raw`(() => {
     return parts.join(' > ');
   };
 
-  /** The visually-hidden idiom, in each of the three spellings this codebase and its reset use. */
+  /**
+   * The visually-hidden idiom, in each of the three spellings this codebase and its reset use.
+   *
+   * "display: contents" is excluded before the size test, because such an element generates no box
+   * and getBoundingClientRect() reports 0x0 for it however much it contains. The Legends difficulty
+   * scope (#24) wraps the picker and all twelve cards in one, and every text block on those cards
+   * was then counted "visually hidden" and never measured: blocks measured against a clipping
+   * ancestor fell from 4,160 to 320 across the sweep, and the coverage floor is what said so. The
+   * inside-display-contents control keeps it from going quiet again. (No backticks in this
+   * comment: it sits inside the template literal the walker is sent to the page as.)
+   */
   const isVisuallyHidden = (style, rect) => {
+    if (style.display === 'contents') return false;
     if (style.clipPath === 'inset(50%)') return true;
     if (style.clip === 'rect(0px, 0px, 0px, 0px)') return true;
     if (rect.width <= 1 && rect.height <= 1) return true;

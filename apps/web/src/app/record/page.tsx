@@ -50,6 +50,7 @@ import {
   RECORD_LABELS,
   type RecordFigureName,
 } from '@/lib/record-data.ts';
+import { type RecordEntry, recordLists } from '@/lib/record-links.ts';
 import { readerCallOptions } from '@/lib/server-session.ts';
 import { AccountDeletion } from './DeleteAccount.tsx';
 import { UnitsReset } from './UnitsReset.tsx';
@@ -71,6 +72,32 @@ export const metadata: Metadata = {
  */
 function formatOf(figure: RecordFigureName): 'number' | 'units' {
   return figure === 'unitsNetLifetime' ? 'units' : 'number';
+}
+
+/**
+ * One of the record's lists: a title per line, linked to its page when it has one.
+ *
+ * A list rather than the comma-joined run it replaced. Titles are sentences ("Pot odds: the price
+ * the pot is offering"), and a comma between two sentences that themselves contain commas is not
+ * a separator anybody can see.
+ */
+function RecordList({
+  entries,
+  empty,
+}: {
+  readonly entries: readonly RecordEntry[];
+  readonly empty: string;
+}): ReactElement {
+  if (entries.length === 0) return <>{empty}</>;
+  return (
+    <ul className="prl-record__list">
+      {entries.map((entry) => (
+        <li key={`${entry.href ?? ''}|${entry.label}`}>
+          {entry.href === null ? entry.label : <Link href={entry.href}>{entry.label}</Link>}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /** The reset block, which is shown whatever state the figures are in. It is a right, not a reward. */
@@ -95,6 +122,7 @@ function ResetPanel(): ReactElement {
 
 export default async function RecordPage(): Promise<ReactElement> {
   const record = await loadRecord(await readerCallOptions());
+  const lists = record.state === 'ready' ? recordLists(record.progress) : null;
 
   return (
     <div className="prl-container prl-record">
@@ -145,26 +173,25 @@ export default async function RecordPage(): Promise<ReactElement> {
             ))}
           </div>
 
-          <dl className="prl-stat__pair prl-record__lists">
-            <dt className="prl-label">Topics touched</dt>
-            <dd>
-              {record.progress.topicsTouched.length === 0
-                ? 'None yet — a topic appears here once you finish a lesson or try a scenario in it.'
-                : record.progress.topicsTouched.join(', ')}
-            </dd>
-            <dt className="prl-label">Lessons finished</dt>
-            <dd>
-              {record.progress.lessonsCompleted.length === 0
-                ? 'None yet.'
-                : record.progress.lessonsCompleted.join(', ')}
-            </dd>
-            <dt className="prl-label">Scenarios tried</dt>
-            <dd>
-              {record.progress.scenariosAttempted.length === 0
-                ? 'None yet.'
-                : record.progress.scenariosAttempted.join(', ')}
-            </dd>
-          </dl>
+          {lists === null ? null : (
+            <dl className="prl-stat__pair prl-record__lists">
+              <dt className="prl-label">Topics touched</dt>
+              <dd>
+                <RecordList
+                  entries={lists.topics}
+                  empty="None yet — a topic appears here once you finish a lesson or try a scenario in it."
+                />
+              </dd>
+              <dt className="prl-label">Lessons finished</dt>
+              <dd>
+                <RecordList entries={lists.lessons} empty="None yet." />
+              </dd>
+              <dt className="prl-label">Scenarios tried</dt>
+              <dd>
+                <RecordList entries={lists.scenarios} empty="None yet." />
+              </dd>
+            </dl>
+          )}
 
           <p className="prl-note">
             {`Topics are derived from the content bundle when this page is read, not stored against your record — so a lesson that is retired contributes no topic rather than breaking the count. ${pluralise(record.progress.topicsTouched.length, 'topic')} so far.`}

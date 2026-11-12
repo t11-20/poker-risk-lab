@@ -16,6 +16,9 @@
  *     builds that suffix itself, so it cannot forget it.
  *  2. **The disclaimers are in the body**, rendered by `ProfileDisclaimers`, which renders the whole
  *     array as visible text. Not a tooltip, not an icon, not a `<details>`.
+ *     On `/legends` the one
+ *     entry the page already printed in full above the grid is a visible one-line pointer instead
+ *     (`lib/disclaimer-framing.ts`); every entry specific to this card is still printed in full.
  *  3. **No image of a person, ever.** The visual identity is `LegendSigil`, a mark generated from
  *     the profile id. There is no `src` anywhere in this file.
  *
@@ -34,14 +37,14 @@
  * profile and the difficulty, because a page of eight cards otherwise offers a screen-reader user
  * eight links all called "Play this style".
  *
- * Server-render safe: no state, no effects.
+ * Server-render safe: no state, no effects. The two links are client components, for the reason
+ * given where they are rendered.
  */
 
 import type { LegendDifficulty, LegendProfileCardDto, LegendTraitAxis } from '@prl/contracts';
 import { Chip, cx, type HeadingLevel, Metric, RadarChart } from '@prl/ui';
-import Link from 'next/link';
 import type { ReactElement } from 'react';
-import { legendMatchHref, profileHref } from '@/lib/legends-data.ts';
+import { LegendPlayLink, LegendProfileLink } from './LegendDifficultyScope.tsx';
 import { LegendSigil } from './LegendSigil.tsx';
 import { ProfileDisclaimers } from './ProfileDisclaimers.tsx';
 
@@ -59,11 +62,19 @@ const BEST_FOR_WORD: Readonly<Record<LegendProfileCardDto['bestFor'], string>> =
 
 export interface LegendCardProps {
   readonly profile: LegendProfileCardDto;
-  /** Threaded into the play link, so the card's action starts the match the reader chose. */
+  /**
+   * The APPLIED setting, from the URL. The links start here and follow the picker's ticked option
+   * when the page wraps them in a `LegendDifficultyScope`.
+   */
   readonly difficulty: LegendDifficulty;
   /** Defaults to 3: a page owns its `h1` and the grid's section owns the `h2`. Never 1. */
   readonly headingLevel?: HeadingLevel;
   readonly className?: string;
+  /**
+   * The universal disclaimer as the page printed it above the grid, and where. Passed through to
+   * `ProfileDisclaimers`, which then prints a one-line pointer for that entry only.
+   */
+  readonly shownAbove?: { readonly text: string; readonly href: string };
 }
 
 /** The signature axes, in the order the profile declares them, skipping any the axes list lacks. */
@@ -78,7 +89,7 @@ function signatureAxes(profile: LegendProfileCardDto): readonly LegendTraitAxis[
 }
 
 export function LegendCard(props: LegendCardProps): ReactElement {
-  const { profile, difficulty, headingLevel = 3, className } = props;
+  const { profile, difficulty, headingLevel = 3, className, shownAbove } = props;
   const { disclosure } = profile;
   const Heading = `h${headingLevel}` as const;
   const signature = signatureAxes(profile);
@@ -130,19 +141,30 @@ export function LegendCard(props: LegendCardProps): ReactElement {
         label={`${disclosure.archetypeName}, sixteen trait axes`}
       />
 
-      <ProfileDisclaimers disclosure={disclosure} />
+      <ProfileDisclaimers disclosure={disclosure} {...(shownAbove === undefined ? {} : { shownAbove })} />
 
+      {/*
+        Client links inside a server card: they start at the setting this page was rendered with and
+        follow whatever the reader ticks in the picker above (`LegendDifficultyScope.tsx`). Without a
+        scope, or without JavaScript, they are exactly the server-rendered links they used to be.
+      */}
       <div className="prl-legend-card__actions">
-        <Link className="prl-btn prl-btn--primary prl-btn--md" href={legendMatchHref(profile.id, difficulty)}>
+        <LegendPlayLink
+          archetypeName={disclosure.archetypeName}
+          className="prl-btn prl-btn--primary prl-btn--md"
+          difficulty={difficulty}
+          profileId={profile.id}
+        >
           Play this style
-          <span className="prl-visually-hidden">
-            {`: ${disclosure.archetypeName}, ${difficulty} setting`}
-          </span>
-        </Link>
-        <Link className="prl-btn prl-btn--secondary prl-btn--md" href={profileHref(profile.id, difficulty)}>
+        </LegendPlayLink>
+        <LegendProfileLink
+          archetypeName={disclosure.archetypeName}
+          className="prl-btn prl-btn--secondary prl-btn--md"
+          difficulty={difficulty}
+          profileId={profile.id}
+        >
           Full profile
-          <span className="prl-visually-hidden">{`: ${disclosure.archetypeName}`}</span>
-        </Link>
+        </LegendProfileLink>
       </div>
     </article>
   );

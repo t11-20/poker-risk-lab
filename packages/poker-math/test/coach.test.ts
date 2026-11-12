@@ -719,33 +719,33 @@ test('facing a bet: every candidate EV matches a figure computed by hand', () =>
   //          = 4900/44 - 300 = 111.3636364 - 300 = -188.6363636
   assertChips(byAction('call')?.ev ?? Number.NaN, -188.63636364, 'EV of calling 300 into 400');
 
-  // The three raise sizes. Hero has nothing out on this street, so the level is the 300
-  // being faced; the minimum legal total is 300 + max(300, bigBlind 10) = 600, so the
-  // smallest offered raise is the smallest ladder rung at or above a 300 increment. The
-  // ladder is priced against the 700 that would be in the middle once hero calls, giving
-  // rungs of 175, 233, 350, 466, 525, 700, 1050 and the 1700 all-in; the rungs below 300
-  // are not legal raises and are not offered. Smallest legal, middle, and the shove:
+  // The raise sizes are the ones the table's bar offers: its default, the floor, and the ⅓, ½,
+  // ⅔, pot and all-in presets, each `betLevel + round(fraction x potAfterCall)` clamped into the
+  // legal range (`offeredSizes`). Hero has nothing out on this street, so the level is the 300
+  // being faced; the floor is 300 + max(300, bigBlind 10) = 600; the pot after the call is 700.
+  // So ⅓ is 300 + 233 = 533, below the floor and clamped onto it; ½ is 650; ⅔ is 300 + 467 = 767;
+  // pot is 1000; and the shove is 2000. Each is priced as a raise by r = to - 300:
   //
-  //   R = 350 -> to = 650, risk = 300 + 350 = 650, final pot = 400 + 300 + 700 = 1400
-  //     EV = 0.35 x 400 + 0.65 x [ (7/44) x 1400 - 650 ]
-  //        = 140 + 0.65 x [ 222.7272727 - 650 ]
-  //        = 140 + 0.65 x (-427.2727273) = 140 - 277.7272727 = -137.7272727
+  //     EV = 0.35 x 400 + 0.65 x [ (7/44) x (400 + 300 + 2r) - (300 + r) ]
   //
-  //   R = 525 -> to = 825, risk = 825, final pot = 400 + 300 + 1050 = 1750
-  //     EV = 140 + 0.65 x [ (7/44) x 1750 - 825 ]
-  //        = 140 + 0.65 x [ 278.4090909 - 825 ] = 140 - 355.2840909 = -215.2840909
+  //   to  600, r =  300: 140 + 0.65 x [ (7/44) x 1300 - 600 ]  = -115.5681818
+  //   to  650, r =  350: 140 + 0.65 x [ (7/44) x 1400 - 650 ]  = -137.7272727
+  //   to  767, r =  467: 140 + 0.65 x [ (7/44) x 1634 - 767 ]  = -189.5795455
+  //   to 1000, r =  700: 140 + 0.65 x [ (7/44) x 2100 - 1000 ] = -292.8409091
+  //   to 2000, r = 1700: 140 + 0.65 x [ (7/44) x 4100 - 2000 ] = -736.0227273
   //
-  //   R = 1700 -> to = 2000 (the all-in), risk = 2000, final pot = 400 + 300 + 3400 = 4100
-  //     EV = 140 + 0.65 x [ (7/44) x 4100 - 2000 ]
-  //        = 140 + 0.65 x [ 652.2727273 - 2000 ] = 140 - 876.0227273 = -736.0227273
+  // These used to be three rungs of the sizing ladder, rounded down — 650, 825 and 2000 — and
+  // the bar's default of 600 was not among them, which is the defect `table-sizing.ts` records.
   const expectedRaises: readonly [number, number, number][] = [
     // [to, cost, ev]
+    [600, 600, -115.56818182],
     [650, 650, -137.72727273],
-    [825, 825, -215.28409091],
+    [767, 767, -189.57954545],
+    [1000, 1000, -292.84090909],
     [2000, 2000, -736.02272727],
   ];
   const raises = report.candidates.filter((candidate) => candidate.action === 'raise');
-  assert.equal(raises.length, expectedRaises.length, 'three raise sizes are offered');
+  assert.equal(raises.length, expectedRaises.length, 'the floor, ½, ⅔, pot and the shove are offered');
   for (const [index, [to, cost, ev]] of expectedRaises.entries()) {
     const candidate = raises[index];
     assert.equal(candidate?.to, to, `raise ${index} total`);
@@ -788,19 +788,22 @@ test('checked to: every candidate EV matches a figure computed by hand', () => {
     'a free check must be worth strictly more than folding whenever the hand has any equity at all',
   );
 
-  // The ladder is priced against the 400 pot, giving 100, 133, 200, 266, 300, 400, 600
-  // and the 2000 all-in; the minimum legal bet is one big blind, so all of them are
-  // legal and the picks are smallest, middle and shove.
+  // The bar's sizes against the 400 pot: the one-big-blind floor of 10, then ⅓ = 133, ½ = 200,
+  // ⅔ = 267 (266.67 rounded to the nearest chip, as the bar rounds it) and pot = 400, and the 2000
+  // all-in.
   //
-  //   b = 100:  EV = 0.35 x 400 + 0.65 x [ (7/44) x (400 + 200) - 100 ]
-  //                = 140 + 0.65 x [ 95.4545455 - 100 ] = 140 - 2.9545455 = 137.0454545
-  //   b = 266:  EV = 140 + 0.65 x [ (7/44) x (400 + 532) - 266 ]
-  //                = 140 + 0.65 x [ 148.2727273 - 266 ] = 140 - 76.5227273 = 63.4772727
-  //   b = 2000: EV = 140 + 0.65 x [ (7/44) x (400 + 4000) - 2000 ]
-  //                = 140 + 0.65 x [ 700 - 2000 ] = 140 - 845 = -705
+  //   b =   10:  EV = 0.35 x 400 + 0.65 x [ (7/44) x (400 + 20) - 10 ]   = 176.9318182
+  //   b =  133:  EV = 140 + 0.65 x [ (7/44) x (400 + 266) - 133 ]         = 122.4204545
+  //   b =  200:  EV = 140 + 0.65 x [ (7/44) x (400 + 400) - 200 ]         =  92.7272727
+  //   b =  267:  EV = 140 + 0.65 x [ (7/44) x (400 + 534) - 267 ]         =  63.0340909
+  //   b =  400:  EV = 140 + 0.65 x [ (7/44) x (400 + 800) - 400 ]         =   4.0909091
+  //   b = 2000:  EV = 140 + 0.65 x [ (7/44) x (400 + 4000) - 2000 ]       = -705
   const expectedBets: readonly [number, number][] = [
-    [100, 137.04545455],
-    [266, 63.47727273],
+    [10, 176.93181818],
+    [133, 122.42045455],
+    [200, 92.72727273],
+    [267, 63.03409091],
+    [400, 4.09090909],
     [2000, -705],
   ];
   const bets = report.candidates.filter((candidate) => candidate.action === 'bet');
@@ -934,14 +937,17 @@ test('a hand that is drawing dead is priced as a pure bluff, with no equity cred
   //   EV(call)  = 0 x (140 + 45) - 45 = -45, the money handed over.
   //   EV(raise) = f x pot - (1 - f) x risk = 0.35 x 140 - 0.65 x risk = 49 - 0.65 x risk.
   //
-  // The level is 45 and the minimum legal total is 45 + max(45, 10) = 90, so the ladder
-  // (priced against the 185 that would be in the middle after the call) offers increments
-  // of 46, 61, 92, 123, 138, 185, 277 and the 455 all-in, all of them legal raises.
-  // Smallest, middle and shove:
+  // The level is 45 and the minimum legal total is 45 + max(45, 10) = 90. The sizes are the bar's
+  // (`offeredSizes`), against the 185 that would be in the middle after the call: the floor of 90,
+  // ⅓ = 45 + 62 = 107, ½ = 45 + 93 = 138 (92.5 rounds up), ⅔ = 45 + 123 = 168, pot = 230, and
+  // the 500 all-in. With nothing out there the risk is the total, so EV = 49 - 0.65 x to:
   //
-  //   R = 46  -> to = 91,  risk = 91:  49 - 59.15  = -10.15
-  //   R = 123 -> to = 168, risk = 168: 49 - 109.20 = -60.20
-  //   R = 455 -> to = 500, risk = 500: 49 - 325.00 = -276.00
+  //   to =  90:  49 -  58.50 =   -9.50
+  //   to = 107:  49 -  69.55 =  -20.55
+  //   to = 138:  49 -  89.70 =  -40.70
+  //   to = 168:  49 - 109.20 =  -60.20
+  //   to = 230:  49 - 149.50 = -100.50
+  //   to = 500:  49 - 325.00 = -276.00
   const report = buildCoachReport({
     heroCards: parseCards('7c 2d'),
     board: parseCards('Ah Kd Qs 9c 4h'),
@@ -961,8 +967,11 @@ test('a hand that is drawing dead is priced as a pure bluff, with no equity cred
   assertChips(report.candidates.find((c) => c.action === 'call')?.ev ?? Number.NaN, -45, 'EV of calling');
 
   const expected: readonly [number, number][] = [
-    [91, -10.15],
+    [90, -9.5],
+    [107, -20.55],
+    [138, -40.7],
     [168, -60.2],
+    [230, -100.5],
     [500, -276],
   ];
   const raises = report.candidates.filter((candidate) => candidate.action === 'raise');
@@ -1370,4 +1379,37 @@ test('"loses more often than it wins" is keyed to hero equity, not to the price 
     undefined,
     `a hero ahead at ${(report.equity.heroEquity * 100).toFixed(1)}% was told the call "loses more often than it wins"`,
   );
+});
+
+test('confidence measures the gap to the next-best ACTION, not to a neighbouring size of the same one', () => {
+  // Facing 100 into 210 at a big blind of 20, Qh Jh against exactly Ac Kd on Th 9s 2c 3d. The
+  // Coach prices the bar's sizes, and the floor (200) and the ⅓-pot preset (203) are three chips
+  // apart, so they come out within a chip of each other: 41.44 and 40.65. Measured against
+  // `ranked[1]` that is a 0.04-big-blind margin, and the suggestion read "Raise comes out
+  // marginally ahead here, but only just — treat this as close to indifferent", while the best
+  // line that is not a raise — folding, at 0 — is 41.4 units, two big blinds, behind. Size
+  // near-ties are what `sizeRange` is for; the confidence is about which action.
+  const report = buildCoachReport({
+    heroCards: parseCards('Qh Jh'),
+    board: parseCards('Th 9s 2c 3d'),
+    street: 'turn',
+    opponents: [{ label: 'the opponent', range: exactRange(parseCards('Ac Kd')) }],
+    pot: 210,
+    contestablePot: 210,
+    toCall: 100,
+    heroCommittedThisStreet: 0,
+    heroStack: 1000,
+    opponentStacks: [1000],
+    bigBlind: 20,
+  });
+  const raises = report.candidates.filter((candidate) => candidate.action === 'raise');
+  assert.equal(raises[0]?.to, 200, 'the floor is priced');
+  assert.equal(raises[1]?.to, 203, 'and the ⅓-pot preset beside it');
+  assert.ok(Math.abs((raises[0]?.ev ?? 0) - (raises[1]?.ev ?? 0)) < 1, 'the two sizes are within a chip');
+
+  assert.equal(report.suggestion.action, 'raise');
+  assert.equal(report.suggestion.confidence, 'reasonable');
+  assert.match(report.suggestion.reason, /by 41\.4 units over the next-best action/u);
+  // 255 (½ pot) is 26.82, inside one big blind of the best, so it belongs in the range too.
+  assert.deepEqual(report.suggestion.sizeRange, { min: 200, max: 255 }, 'the near-tie is the size range');
 });

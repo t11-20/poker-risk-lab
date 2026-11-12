@@ -393,14 +393,37 @@ body {
   z-index: var(--prl-z-nav);
   inset-block-start: 0;
   border-block-end: 1px solid var(--prl-edge-shade);
-  background-color: var(--prl-glass-floating);
-  -webkit-backdrop-filter: var(--prl-glass-filter);
-  backdrop-filter: var(--prl-glass-filter);
   /* Colour only. `background-color` and `border-color` neither lay out nor composite badly, which
      is why the design system permits them alongside transform and opacity. */
   transition:
     background-color var(--prl-dur-quick) var(--prl-ease-standard),
     border-color var(--prl-dur-quick) var(--prl-ease-standard);
+}
+
+/**
+ * The glass is a layer BEHIND the bar's contents, never a property of the bar.
+ *
+ * A `backdrop-filter` on an element makes it the containing block for every `position: fixed`
+ * descendant (Filter Effects 2; Chrome and Safari both do it). The menu sheet is `position: fixed;
+ * inset: 0` and is mounted inside this header, so with the filter here the sheet was sized to the
+ * 77px bar, not the viewport: measured at 360x640 and at 600, the open sheet was 76px tall with a
+ * 684px scroll height, and `elementFromPoint` on its first link returned the page behind it. On a
+ * phone the menu opened as a strip reading "NAVIGATE ×" and no destination could be reached. It
+ * looked fine under `prefers-reduced-transparency`, where `--prl-glass-filter` is `none`.
+ *
+ * On a pseudo-element the blur is identical and contains nothing. `z-index: -1` is inside the
+ * header's own stacking context (it is sticky with a z-index), so the layer paints above the page
+ * and below the pills.
+ */
+.prl-shell__header::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background-color: var(--prl-glass-floating);
+  -webkit-backdrop-filter: var(--prl-glass-filter);
+  backdrop-filter: var(--prl-glass-filter);
+  content: "";
+  pointer-events: none;
 }
 
 /**

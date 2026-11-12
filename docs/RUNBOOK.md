@@ -8,15 +8,19 @@ Everything you need to run, verify, and operate Poker Risk Lab.
 
 | Tool | Version | Why pinned |
 | --- | --- | --- |
-| Node | **24.18.0** | `engineStrict` refuses anything else; the test runner relies on Node 24's native TypeScript execution |
-| pnpm | **11.10.0** | Pinned with an integrity hash in `packageManager`, verified by Corepack |
-| Docker | any recent | PostgreSQL 16 for local development |
+| Node | **24.18.0** | `.nvmrc` and `.node-version` pin 24.18.0, which CI uses. `engines` accepts `>=24.18.0 <25` and `engineStrict` refuses anything outside that; the test runner relies on Node 24's native TypeScript execution |
+| pnpm | **11.10.0** | Pinned with an integrity hash in `packageManager`, verified by Corepack. `engines` accepts `>=11.10.0 <12` |
+| Docker | any recent, **running** | PostgreSQL 16 for local development; `db:setup` starts it with `docker compose` |
 
 ```bash
 corepack enable            # uses the packageManager field, so the hash is checked
-node --version             # must be v24.18.0
+node --version             # v24.18.0 is what CI runs; any v24 at or above it installs
 pnpm --version             # must be 11.10.0
 ```
+
+pnpm may print `To update, run: corepack use pnpm@12.x`. **Do not follow it.** That rewrites
+`packageManager` to a version `engines` (`<12`) refuses under `engineStrict`, and the next install
+fails.
 
 ## 2. First run
 
@@ -30,7 +34,7 @@ cp .env.example .env
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 # paste that into SESSION_COOKIE_SECRET in .env
 
-pnpm run db:setup                  # up + wait + migrate + seed
+pnpm run db:setup                  # Docker must be running: up + wait + migrate + seed
 pnpm run build:packages
 pnpm run dev                       # api on :3001, web on :3000
 ```
@@ -46,19 +50,21 @@ care about the difference:
   in production, no `Domain`), so a cookie set on `localhost` is never sent to `127.0.0.1`.
   Switching host mid-session presents as being silently signed out.
 * **The API's `PUBLIC_WEB_ORIGIN` allowlist**, which is matched exactly. `.env.example` ships
-  `http://localhost:3000`. Loading the app from `127.0.0.1:3000` with that value gives refused
-  CORS requests and WebSocket closes with 4406, with no message naming the cause. If you want both
-  to work, list both: `PUBLIC_WEB_ORIGIN=http://localhost:3000,http://127.0.0.1:3000`.
+  both spellings, `PUBLIC_WEB_ORIGIN=http://localhost:3000,http://127.0.0.1:3000`, so a fresh
+  `.env` accepts either. An allowlist trimmed to one of them is the trap: loading the app from the
+  other gives refused CORS requests and WebSocket closes with 4406, with no message naming the
+  cause.
 * **Next's dev-asset origin check.** This one used to be a trap: `next dev` served the HTML from
   `127.0.0.1` and returned **403 for every `/_next/*` chunk**, so the page rendered and then never
   hydrated — no error, nothing responding to a click. `allowedDevOrigins` in
   `apps/web/next.config.ts` now lists both hosts, so this specific failure is gone. Unknown
   origins are still refused.
 
-The repository is not yet consistent about which one it prints: `scripts/dev.mjs` and
-`scripts/a11y-audit.mjs` use `127.0.0.1:3000`, `scripts/smoke-test.mjs` uses `localhost:3000` for
-the web and `127.0.0.1:3001` for the API. All of them work now, but **pick one for your browser
-and stay on it** — the cookie jar is the mechanism that will not forgive switching.
+What a person is told to open is `localhost:3000` everywhere, including the banner
+`scripts/dev.mjs` prints. Machine-driven scripts are not uniform — `scripts/a11y-audit.mjs` drives
+`127.0.0.1:3000`, `scripts/smoke-test.mjs` uses `localhost:3000` for the web and `127.0.0.1:3001`
+for the API — and all of them work, but **pick one for your browser and stay on it**: the cookie
+jar is the mechanism that will not forgive switching.
 
 The container stack has no such split: there is exactly one published origin (§6).
 
@@ -371,12 +377,15 @@ developer to meet the problem as a permission error at request time.
 ## 6. Containers
 
 ```bash
-docker compose up -d postgres
-pnpm run db:migrate && pnpm run db:seed
-
-# SESSION_COOKIE_SECRET has no default. Compose refuses to start without it.
+# FIRST. SESSION_COOKIE_SECRET has no default, and compose interpolates the whole file even for
+# one service: with no .env, `docker compose config postgres` exits 1 naming that variable, so
+# the postgres-only start below cannot run until this is done.
+cp .env.example .env               # if you have not already
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 # paste into SESSION_COOKIE_SECRET in .env
+
+docker compose up -d postgres
+pnpm run db:migrate && pnpm run db:seed
 
 docker compose up -d --build
 ```

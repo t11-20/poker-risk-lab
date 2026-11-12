@@ -205,7 +205,10 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 }
 
 process.stdout.write(dim('Poker Risk Lab dev servers\n'));
-process.stdout.write(dim('  api  http://127.0.0.1:3001   web  http://127.0.0.1:3000\n'));
+// `localhost` for the web because that is the address every doc tells a person to open, and the
+// session cookie is host-scoped: a person who clicks this and then follows README lands on two
+// origins and is silently signed out between them (docs/RUNBOOK.md §2). The API line is for curl.
+process.stdout.write(dim('  api  http://127.0.0.1:3001   web  http://localhost:3000\n'));
 process.stdout.write(dim('  needs a database: run `pnpm run db:setup` first if you have not already\n\n'));
 
 for (const target of TARGETS) start(target);

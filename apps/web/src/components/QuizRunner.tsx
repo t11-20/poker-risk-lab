@@ -23,8 +23,8 @@
  *
  * ## Nothing is labelled "correct"
  *
- * Multiple choice says "the answer this lesson gives"; numeric says "within the tolerance of the
- * computed value". Both are precise about *what* the comparison is, which "correct" is not — the
+ * Multiple choice says "the answer this lesson gives"; numeric says "within ±N of the computed
+ * value". Both are precise about *what* the comparison is, which "correct" is not — the
  * lesson's answer is the lesson's answer, and a numeric answer is judged against a figure
  * computed here, to a tolerance the question itself declares.
  *
@@ -108,6 +108,7 @@ import {
   submitQuizAttempt,
   VERDICT_SOURCE_NOTE,
 } from '@/lib/quiz-attempts.ts';
+import { CHOICE_MARKER, numericVerdictSentence, verdictMarker } from '@/lib/quiz-verdict.ts';
 import { RECORD_PATH } from '@/lib/record-data.ts';
 
 /** What the learner did. `revealed` is a decision question, which has nothing to check. */
@@ -115,12 +116,59 @@ type Answer = QuizAnswer;
 
 export interface QuizRunnerProps {
   readonly quiz: Quiz;
-  /** Where to send a learner who wants to re-read. `null` when the quiz stands alone. */
-  readonly lessonHref: string | null;
+  /**
+   * The `id` of the lesson's title on THIS page, which "Re-read" scrolls and moves focus to. `null`
+   * when the quiz stands alone.
+   *
+   * An id and not a URL. This used to be `lessonHref` — the lesson's own path — rendered as a
+   * `<Link>` to the page it was already on, and a same-URL navigation does nothing: measured
+   * against the running build, scrollY 10050 before the tap and 10050 after, history unchanged.
+   */
+  readonly lessonTitleId: string | null;
   readonly lessonTitle: string | null;
+  /** The lesson after this one in reading order, offered at the end. `null` on the last lesson. */
+  readonly nextLesson: { readonly href: string; readonly title: string } | null;
 }
 
-const CHOICE_MARKER = { lesson: '◆', yours: '✕' } as const;
+/**
+ * "Re-read <lesson>": a same-document fragment link that also moves focus.
+ *
+ * A plain `<a>`, not `next/link`, because this never leaves the document: native fragment
+ * navigation scrolls with the root's `scroll-padding` so the title clears the sticky header, and
+ * makes `:target` match. Focus is moved by hand as well because not every browser moves it to a
+ * fragment target on its own, and a keyboard reader who followed the link should continue from the
+ * top of the lesson rather than from the quiz they left. `preventScroll`, because the fragment
+ * navigation that follows does the scrolling, and does it with the header offset applied.
+ */
+function ReReadLink(props: {
+  readonly targetId: string;
+  readonly lessonTitle: string | null;
+  readonly className: string;
+}): ReactElement {
+  const { targetId, lessonTitle, className } = props;
+  return (
+    <a
+      className={className}
+      href={`#${targetId}`}
+      onClick={() => document.getElementById(targetId)?.focus({ preventScroll: true })}
+    >
+      {lessonTitle === null ? 'Re-read the lesson' : `Re-read ${lessonTitle}`}
+    </a>
+  );
+}
+
+/**
+ * The verdict's mark, as attributes the stylesheet draws — not as a child of the live region.
+ *
+ * The mark is `::before { content: attr(data-mark) / "" }`, so it is painted and never spoken, and
+ * it is not in the region's `textContent`. A child `<span aria-hidden>` was tried first and is
+ * silent too, but it puts "◆" at the front of the region's text, and `test:ax` reads a live region
+ * by its `textContent` and anchors on the sentence's first word ("That matches…"), as a reader's
+ * announcement does. The region also stays `:empty` until answered, which its box depends on.
+ */
+function verdictMarkAttributes(matched: boolean): { 'data-matched': string; 'data-mark': string } {
+  return { 'data-matched': String(matched), 'data-mark': verdictMarker(matched) };
+}
 
 // ---------------------------------------------------------------------------
 // Multiple choice
@@ -201,7 +249,12 @@ function MultipleChoice(props: {
 
         `role="status"` for the atomic half — see the module comment.
       */}
-      <p aria-live="polite" className="prl-learn-quiz__verdict" role="status">
+      <p
+        aria-live="polite"
+        className="prl-learn-quiz__verdict"
+        role="status"
+        {...(answered ? verdictMarkAttributes(resolved.matched) : {})}
+      >
         {verdict}
         {answered ? ` ${VERDICT_SOURCE_NOTE[resolved.source]}` : ''}
       </p>
@@ -284,7 +337,7 @@ function Unmarkable(props: { readonly reason: string; readonly explanation: stri
  */
 function numericVerdict(input: {
   readonly submitted: { readonly value: number } | null;
-  readonly against: number | undefined;
+  readonly against: { readonly value: number; readonly tolerance: number } | undefined;
   readonly matched: boolean;
   readonly unit: Extract<QuizQuestion, { kind: 'numeric' }>['unit'];
 }): string {
@@ -293,13 +346,13 @@ function numericVerdict(input: {
   if (against === undefined) {
     return 'The computed figure is not available, so there is nothing to compare your answer with.';
   }
-  const yours = formatQuizValue(submitted.value, unit);
-  const theirs = formatQuizValue(against, unit);
-  if (matched) return `${yours} is within the tolerance of ${theirs}.`;
-  return (
-    `${yours} is outside the tolerance of ${theirs}. Nothing is deducted for that — the working is ` +
-    'below, and the gap is usually one step of the method rather than the whole of it.'
-  );
+  // The wording lives in `lib/quiz-verdict.ts`, where a test can read it.
+  return numericVerdictSentence({
+    yours: formatQuizValue(submitted.value, unit),
+    computed: formatQuizValue(against.value, unit),
+    tolerance: `${formatTolerance(against.tolerance, unit)} ${QUIZ_UNIT_WORDS[unit]}`,
+    matched,
+  });
 }
 
 function NumericQuestion(props: {
@@ -373,7 +426,14 @@ function NumericQuestion(props: {
   // the server and stored nowhere, which is the `'anonymous'` state — a `=== 'live'` test here would
   // quietly show them this page's figure while the server's own sat unread in the reply.
   const graded = gradedAnswer(server);
-  const against = graded !== null && graded.expected !== null ? graded.expected.value : target?.value;
+  // The tolerance travels with the figure for the same reason: the band the sentence states has to
+  // be the band that produced the verdict, so it is the server's when the server's figure is used.
+  const against =
+    graded !== null && graded.expected !== null
+      ? { value: graded.expected.value, tolerance: graded.expected.tolerance }
+      : target === null
+        ? undefined
+        : { value: target.value, tolerance: question.tolerance };
   const verdict = numericVerdict({
     submitted,
     against,
@@ -441,7 +501,12 @@ function NumericQuestion(props: {
       </div>
 
       {/* Empty from the first render, and `role="status"` for the atomic half. See the module comment. */}
-      <p aria-live="polite" className="prl-learn-quiz__verdict" role="status">
+      <p
+        aria-live="polite"
+        className="prl-learn-quiz__verdict"
+        role="status"
+        {...(submitted === null ? {} : verdictMarkAttributes(resolved.matched))}
+      >
         {verdict}
         {submitted === null ? '' : ` ${VERDICT_SOURCE_NOTE[resolved.source]}`}
       </p>
@@ -536,7 +601,7 @@ function questionBody(
 const IDLE_VERDICT: QuizVerdict = { state: 'idle' };
 
 export function QuizRunner(props: QuizRunnerProps): ReactElement {
-  const { quiz, lessonHref, lessonTitle } = props;
+  const { quiz, lessonTitleId, lessonTitle, nextLesson } = props;
   const [step, setStep] = useState(0);
   const [answers, setAnswers] = useState<ReadonlyMap<ContentId, Answer>>(new Map());
   const [verdicts, setVerdicts] = useState<ReadonlyMap<ContentId, QuizVerdict>>(new Map());
@@ -653,14 +718,29 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
           product for a mark out of five to live. These questions exist to make your own reasoning visible to
           you, which a score actively gets in the way of.
         </p>
+        {/*
+          "Next" leads, because the end of a quiz is the end of a lesson and this panel used to offer
+          every way back and none forward. On the last lesson there is no next and the curriculum is
+          the way on.
+        */}
         <div className="prl-btn-row">
+          {nextLesson === null ? null : (
+            <Link
+              className="prl-btn prl-btn--primary prl-btn--md prl-learn-titled-btn"
+              href={nextLesson.href}
+            >
+              {`Next: ${nextLesson.title}`}
+            </Link>
+          )}
           <Button variant="secondary" onClick={() => setStep(0)}>
             Back to the first question
           </Button>
-          {lessonHref === null ? null : (
-            <Link className="prl-btn prl-btn--ghost prl-btn--md" href={lessonHref}>
-              {lessonTitle === null ? 'Re-read the lesson' : `Re-read ${lessonTitle}`}
-            </Link>
+          {lessonTitleId === null ? null : (
+            <ReReadLink
+              targetId={lessonTitleId}
+              lessonTitle={lessonTitle}
+              className="prl-btn prl-btn--ghost prl-btn--md prl-learn-titled-btn"
+            />
           )}
           <Link className="prl-btn prl-btn--ghost prl-btn--md" href="/learn">
             Back to the curriculum
@@ -701,10 +781,12 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
         <div className="prl-learn-quiz__explanation">
           <span className="prl-label">Why</span>
           <p>{question.explanation}</p>
-          {lessonHref === null ? null : (
-            <Link className="prl-learn-quiz__lesson-link" href={lessonHref}>
-              {lessonTitle === null ? 'Re-read the lesson' : `Re-read ${lessonTitle}`}
-            </Link>
+          {lessonTitleId === null ? null : (
+            <ReReadLink
+              targetId={lessonTitleId}
+              lessonTitle={lessonTitle}
+              className="prl-learn-quiz__lesson-link"
+            />
           )}
         </div>
       ) : null}

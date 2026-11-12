@@ -290,10 +290,28 @@
         },
         {
           "action": "raise",
-          "to": 22,
-          "cost": 12,
-          "ev": 17.721476666666668,
-          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 50 + 0.65 x [ 0.1668 x (50 + 0 + 2 x 12) - 12 ] = 17.5 + 0.22 = 17.72 chips. Risks 12 to win 50. Raising by 12 is one quarter pot of the 50 that would be in the middle once you call. A caller needs 16.2% equity to break even on the extra 12, and has to continue with 80.6% of their range for a raise of this size not to print automatically.",
+          "to": 20,
+          "cost": 10,
+          "ev": 18.587883333333334,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 50 + 0.65 x [ 0.1668 x (50 + 0 + 2 x 10) - 10 ] = 17.5 + 1.09 = 18.59 chips. Risks 10 to win 50. Raising by 10 is the smallest raise the rules allow here: 20% of the 50 that would be in the middle once you call. A caller needs 14.3% equity to break even on the extra 10, and has to continue with 83.3% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.16676666666666667
+        },
+        {
+          "action": "raise",
+          "to": 27,
+          "cost": 17,
+          "ev": 15.55546,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 50 + 0.65 x [ 0.1668 x (50 + 0 + 2 x 17) - 17 ] = 17.5 + (-1.94) = 15.56 chips. Risks 17 to win 50. Raising by 17 is the ⅓-pot size: 34% of the 50 that would be in the middle once you call. A caller needs 20.2% equity to break even on the extra 17, and has to continue with 74.6% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.16676666666666667
+        },
+        {
+          "action": "raise",
+          "to": 35,
+          "cost": 25,
+          "ev": 12.089833333333333,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 50 + 0.65 x [ 0.1668 x (50 + 0 + 2 x 25) - 25 ] = 17.5 + (-5.41) = 12.09 chips. Risks 25 to win 50. Raising by 25 is the ½-pot size: 50% of the 50 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 25, and has to continue with 66.7% of their range for a raise of this size not to print automatically.",
           "foldEquityAssumed": 0.35,
           "potShareIfCalled": 0.16676666666666667
         },
@@ -302,7 +320,16 @@
           "to": 43,
           "cost": 33,
           "ev": 8.624206666666666,
-          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 50 + 0.65 x [ 0.1668 x (50 + 0 + 2 x 33) - 33 ] = 17.5 + (-8.88) = 8.62 chips. Risks 33 to win 50. Raising by 33 is two thirds pot of the 50 that would be in the middle once you call. A caller needs 28.4% equity to break even on the extra 33, and has to continue with 60.2% of their range for a raise of this size not to print automatically.",
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 50 + 0.65 x [ 0.1668 x (50 + 0 + 2 x 33) - 33 ] = 17.5 + (-8.88) = 8.62 chips. Risks 33 to win 50. Raising by 33 is the ⅔-pot size: 66% of the 50 that would be in the middle once you call. A caller needs 28.4% equity to break even on the extra 33, and has to continue with 60.2% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.16676666666666667
+        },
+        {
+          "action": "raise",
+          "to": 60,
+          "cost": 50,
+          "ev": 1.2597500000000004,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 50 + 0.65 x [ 0.1668 x (50 + 0 + 2 x 50) - 50 ] = 17.5 + (-16.24) = 1.26 chips. Risks 50 to win 50. Raising by 50 is the pot-sized size: 100% of the 50 that would be in the middle once you call. A caller needs 33.3% equity to break even on the extra 50, and has to continue with 50% of their range for a raise of this size not to print automatically.",
           "foldEquityAssumed": 0.35,
           "potShareIfCalled": 0.16676666666666667
         },
@@ -319,16 +346,15 @@
       "suggestion": {
         "action": "raise",
         "sizeRange": {
-          "min": 22,
+          "min": 20,
           "max": 43
         },
         "confidence": "moderate",
-        "reason": "Raise has the highest expected value against the stated range, by 9.1 units over the next-best action.",
+        "reason": "Raise has the highest expected value against the stated range, by 10.2 units over the next-best action.",
         "whatWouldChangeIt": [
           "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
           "Being raised is not modelled here, so treat the figure as optimistic.",
-          "The equity figure is sampled, ±1.62 points at 95% confidence. A close decision could sit either side of that.",
-          "The gap to the next-best action is only 9.1 units, well under a big blind — this is close to indifferent."
+          "The equity figure is sampled, ±1.62 points at 95% confidence. A close decision could sit either side of that."
         ]
       },
       "stackContext": {
@@ -347,7 +373,7 @@
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Estimated by sampling 2,000 random run-outs, not by exhaustive enumeration.",
         "No community cards are known yet, so five more cards are still to come.",
-        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
+        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
         "For a half-pot bet of 25 to break even here it would need to win uncontested 14% of the time.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
@@ -656,19 +682,46 @@
         },
         {
           "action": "raise",
-          "to": 31,
-          "cost": 31,
-          "ev": 22.81940576940577,
-          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 35 + 0.65 x [ 0.5763 x (35 + 15 + 2 x 16) - 31 ] = 12.25 + 10.57 = 22.82 chips. Risks 31 to win 35. Raising by 16 is one third pot of the 50 that would be in the middle once you call. A caller needs 19.5% equity to break even on the extra 16, and has to continue with 53% of their range for a raise of this size not to print automatically.",
+          "to": 30,
+          "cost": 30,
+          "ev": 22.720151970151974,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 35 + 0.65 x [ 0.5763 x (35 + 15 + 2 x 15) - 30 ] = 12.25 + 10.47 = 22.72 chips. Risks 30 to win 35. Raising by 15 is the smallest raise the rules allow here: 30% of the 50 that would be in the middle once you call. A caller needs 18.8% equity to break even on the extra 15, and has to continue with 53.8% of their range for a raise of this size not to print automatically.",
           "foldEquityAssumed": 0.35,
           "potShareIfCalled": 0.5763490763490764
         },
         {
           "action": "raise",
-          "to": 52,
-          "cost": 52,
-          "ev": 24.90373555373556,
-          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 35 + 0.65 x [ 0.5763 x (35 + 15 + 2 x 37) - 52 ] = 12.25 + 12.65 = 24.9 chips. Risks 52 to win 35. Raising by 37 is three quarters pot of the 50 that would be in the middle once you call. A caller needs 29.8% equity to break even on the extra 37, and has to continue with 40.2% of their range for a raise of this size not to print automatically.",
+          "to": 32,
+          "cost": 32,
+          "ev": 22.91865956865957,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 35 + 0.65 x [ 0.5763 x (35 + 15 + 2 x 17) - 32 ] = 12.25 + 10.67 = 22.92 chips. Risks 32 to win 35. Raising by 17 is the ⅓-pot size: 34% of the 50 that would be in the middle once you call. A caller needs 20.2% equity to break even on the extra 17, and has to continue with 52.2% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.5763490763490764
+        },
+        {
+          "action": "raise",
+          "to": 40,
+          "cost": 40,
+          "ev": 23.712689962689968,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 35 + 0.65 x [ 0.5763 x (35 + 15 + 2 x 25) - 40 ] = 12.25 + 11.46 = 23.71 chips. Risks 40 to win 35. Raising by 25 is the ½-pot size: 50% of the 50 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 25, and has to continue with 46.7% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.5763490763490764
+        },
+        {
+          "action": "raise",
+          "to": 48,
+          "cost": 48,
+          "ev": 24.50672035672036,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 35 + 0.65 x [ 0.5763 x (35 + 15 + 2 x 33) - 48 ] = 12.25 + 12.26 = 24.51 chips. Risks 48 to win 35. Raising by 33 is the ⅔-pot size: 66% of the 50 that would be in the middle once you call. A caller needs 28.4% equity to break even on the extra 33, and has to continue with 42.2% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.5763490763490764
+        },
+        {
+          "action": "raise",
+          "to": 65,
+          "cost": 65,
+          "ev": 26.194034944034946,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 35 + 0.65 x [ 0.5763 x (35 + 15 + 2 x 50) - 65 ] = 12.25 + 13.94 = 26.19 chips. Risks 65 to win 35. Raising by 50 is the pot-sized size: 100% of the 50 that would be in the middle once you call. A caller needs 33.3% equity to break even on the extra 50, and has to continue with 35% of their range for a raise of this size not to print automatically.",
           "foldEquityAssumed": 0.35,
           "potShareIfCalled": 0.5763490763490764
         },
@@ -689,7 +742,7 @@
           "max": 990
         },
         "confidence": "reasonable",
-        "reason": "Raise has the highest expected value against the stated range, by 93.1 units over the next-best action.",
+        "reason": "Raise has the highest expected value against the stated range, by 104.2 units over the next-best action.",
         "whatWouldChangeIt": [
           "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
           "Being raised is not modelled here, so treat the figure as optimistic.",
@@ -708,7 +761,7 @@
         "Seat 2 holds any of 444 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
-        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
+        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
         "A half-pot bet of 18 is already break-even or better here purely on the equity you have when called — it does not need to win uncontested at all.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
@@ -1328,19 +1381,37 @@
         },
         {
           "action": "raise",
-          "to": 90,
-          "cost": 90,
-          "ev": -30.258620689655174,
-          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 60 + 0.65 x [ 0.0557 x (60 + 40 + 2 x 50) - 90 ] = 21 + (-51.26) = -30.26 chips. Risks 90 to win 60. Raising by 50 is half pot of the 100 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 50, and has to continue with 40% of their range for a raise of this size not to print automatically.",
+          "to": 80,
+          "cost": 80,
+          "ev": -24.48275862068965,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 60 + 0.65 x [ 0.0557 x (60 + 40 + 2 x 40) - 80 ] = 21 + (-45.48) = -24.48 chips. Risks 80 to win 60. Raising by 40 is the smallest raise the rules allow here: 40% of the 100 that would be in the middle once you call. A caller needs 22.2% equity to break even on the extra 40, and has to continue with 42.9% of their range for a raise of this size not to print automatically.",
           "foldEquityAssumed": 0.35,
           "potShareIfCalled": 0.05570291777188329
         },
         {
           "action": "raise",
-          "to": 115,
-          "cost": 115,
-          "ev": -44.69827586206897,
-          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 60 + 0.65 x [ 0.0557 x (60 + 40 + 2 x 75) - 115 ] = 21 + (-65.7) = -44.7 chips. Risks 115 to win 60. Raising by 75 is three quarters pot of the 100 that would be in the middle once you call. A caller needs 30% equity to break even on the extra 75, and has to continue with 34.3% of their range for a raise of this size not to print automatically.",
+          "to": 90,
+          "cost": 90,
+          "ev": -30.258620689655174,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 60 + 0.65 x [ 0.0557 x (60 + 40 + 2 x 50) - 90 ] = 21 + (-51.26) = -30.26 chips. Risks 90 to win 60. Raising by 50 is the ½-pot size: 50% of the 100 that would be in the middle once you call. A caller needs 25% equity to break even on the extra 50, and has to continue with 40% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.05570291777188329
+        },
+        {
+          "action": "raise",
+          "to": 107,
+          "cost": 107,
+          "ev": -40.07758620689655,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 60 + 0.65 x [ 0.0557 x (60 + 40 + 2 x 67) - 107 ] = 21 + (-61.08) = -40.08 chips. Risks 107 to win 60. Raising by 67 is the ⅔-pot size: 67% of the 100 that would be in the middle once you call. A caller needs 28.6% equity to break even on the extra 67, and has to continue with 35.9% of their range for a raise of this size not to print automatically.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.05570291777188329
+        },
+        {
+          "action": "raise",
+          "to": 140,
+          "cost": 140,
+          "ev": -59.13793103448276,
+          "derivation": "EV(raise) = f x pot + (1 - f) x [ e x (pot + c + 2r) - (c + r) ] = 0.35 x 60 + 0.65 x [ 0.0557 x (60 + 40 + 2 x 100) - 140 ] = 21 + (-80.14) = -59.14 chips. Risks 140 to win 60. Raising by 100 is the pot-sized size: 100% of the 100 that would be in the middle once you call. A caller needs 33.3% equity to break even on the extra 100, and has to continue with 30% of their range for a raise of this size not to print automatically.",
           "foldEquityAssumed": 0.35,
           "potShareIfCalled": 0.05570291777188329
         },
@@ -1357,7 +1428,7 @@
       "suggestion": {
         "action": "fold",
         "confidence": "reasonable",
-        "reason": "Fold has the highest expected value against the stated range, by 30.3 units over the next-best action.",
+        "reason": "Fold has the highest expected value against the stated range, by 24.5 units over the next-best action.",
         "whatWouldChangeIt": [
           "A wider opponent range would raise your equity and can flip a fold into a call.",
           "A narrower, stronger range does the opposite."
@@ -1375,7 +1446,7 @@
         "Seat 1 holds any of 377 combinations from \"AA, KK, QQ, JJ, TT, 99, 88, AKs, AQs, 77, AKo, AJs, ATs, AQo, 66, AJo, KQs, ATo, KJs, A9s, KTs, A8s, KQo, A7s, 55, A9o, KJo, QJs, KTo, K9s, A6s, A5s, QTs, A8o, A4s, A7o, QJo, A3s, JTs, K8s, K7s, K9o, A6o, Q9s, 44, A5o, QTo, A2s, K6s, A4o, K5s, A3o, Q8s, K8o, J9s, JTo, K7o, Q9o, K4s, A2o, Q7s, K6o, K3s, 33, J8s, T9s, Q6s, Q8o, K5o, K2s, Q5s, J9o, J7s, K4o\", each equally likely.",
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
-        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
+        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
         "For a half-pot bet of 30 to break even here it would need to win uncontested 28% of the time.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],
@@ -1695,16 +1766,34 @@
           "to": 10,
           "cost": 10,
           "ev": 15.405512097088007,
-          "derivation": "EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 30 + 0.65 x [ 0.3509 x (30 + 2 x 10) - 10 ] = 10.5 + 4.91 = 15.41 chips. Risks 10 to win 30. A caller needs 20% equity to break even, and as a pure bluff it would have to work 25% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 75% of their range.",
+          "derivation": "EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 30 + 0.65 x [ 0.3509 x (30 + 2 x 10) - 10 ] = 10.5 + 4.91 = 15.41 chips. This is the smallest bet the rules allow here. Risks 10 to win 30. A caller needs 20% equity to break even, and as a pure bluff it would have to work 25% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 75% of their range.",
           "foldEquityAssumed": 0.35,
           "potShareIfCalled": 0.3509388337565541
         },
         {
           "action": "bet",
-          "to": 22,
-          "cost": 22,
-          "ev": 13.080157903690251,
-          "derivation": "EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 30 + 0.65 x [ 0.3509 x (30 + 2 x 22) - 22 ] = 10.5 + 2.58 = 13.08 chips. Risks 22 to win 30. A caller needs 29.7% equity to break even, and as a pure bluff it would have to work 42.3% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 57.7% of their range.",
+          "to": 15,
+          "cost": 15,
+          "ev": 14.43661451650561,
+          "derivation": "EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 30 + 0.65 x [ 0.3509 x (30 + 2 x 15) - 15 ] = 10.5 + 3.94 = 14.44 chips. This is the ½-pot size. Risks 15 to win 30. A caller needs 25% equity to break even, and as a pure bluff it would have to work 33.3% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 66.7% of their range.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.3509388337565541
+        },
+        {
+          "action": "bet",
+          "to": 20,
+          "cost": 20,
+          "ev": 13.467716935923212,
+          "derivation": "EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 30 + 0.65 x [ 0.3509 x (30 + 2 x 20) - 20 ] = 10.5 + 2.97 = 13.47 chips. This is the ⅔-pot size. Risks 20 to win 30. A caller needs 28.6% equity to break even, and as a pure bluff it would have to work 40% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 60% of their range.",
+          "foldEquityAssumed": 0.35,
+          "potShareIfCalled": 0.3509388337565541
+        },
+        {
+          "action": "bet",
+          "to": 30,
+          "cost": 30,
+          "ev": 11.529921774758416,
+          "derivation": "EV(bet) = f x pot + (1 - f) x [ e x (pot + 2b) - b ] = 0.35 x 30 + 0.65 x [ 0.3509 x (30 + 2 x 30) - 30 ] = 10.5 + 1.03 = 11.53 chips. This is the pot-sized size. Risks 30 to win 30. A caller needs 33.3% equity to break even, and as a pure bluff it would have to work 50% of the time. For bluffs of this size not to print automatically, the player facing it has to continue with 50% of their range.",
           "foldEquityAssumed": 0.35,
           "potShareIfCalled": 0.3509388337565541
         },
@@ -1722,14 +1811,14 @@
         "action": "bet",
         "sizeRange": {
           "min": 10,
-          "max": 22
+          "max": 30
         },
-        "confidence": "low",
-        "reason": "Bet comes out marginally ahead here, but only just — treat this as close to indifferent rather than as a recommendation.",
+        "confidence": "moderate",
+        "reason": "Bet has the highest expected value against the stated range, by 4.9 units over the next-best action.",
         "whatWouldChangeIt": [
           "This assumes the line wins uncontested 35% of the time. An opponent who folds less often makes it worse.",
           "Being raised is not modelled here, so treat the figure as optimistic.",
-          "The gap to the next-best action is only 2.3 units, well under a big blind — this is close to indifferent."
+          "The gap to the next-best action is only 4.9 units, well under a big blind — this is close to indifferent."
         ]
       },
       "stackContext": {
@@ -1745,7 +1834,7 @@
         "Seat 2 holds any of 231 combinations from \"22+, A2s+, K9s+, QTs+, JTs, A9o+, KTo+, QJo\", each equally likely.",
         "Every hand in a range is weighted equally. Real opponents do not play every hand in a range the same way, so treat this as the range assumption, not a prediction.",
         "Computed by enumerating every remaining board — there is no sampling error.",
-        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an input you can change, not something measured.",
+        "Bet and raise figures assume the line wins uncontested 35% of the time. That is an assumption, not something measured: the Scenario Lab lets you change it and watch these figures move.",
         "A half-pot bet of 15 is already break-even or better here purely on the equity you have when called — it does not need to win uncontested at all.",
         "Expected values are measured against folding, which is treated as zero. Chips already in the pot are spent either way."
       ],

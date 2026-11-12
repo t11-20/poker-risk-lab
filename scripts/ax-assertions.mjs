@@ -969,9 +969,12 @@ const LEARN_CHECKS = [
 // Journey 2 — a lesson and its quiz
 // ---------------------------------------------------------------------------
 
-const QUIZ_VERDICT_OPENING =
+export const QUIZ_VERDICT_OPENING =
   /^(That matches the answer this lesson gives|That is not the answer this lesson gives)\./u;
-const NUMERIC_VERDICT_OPENING = /^\S.* is (within|outside) the tolerance of .*?\./u;
+// "35.0 % is more than ±1.5 % from the computed 33.3 %." / "… is within ±1.5 % of the computed …".
+// It read "… is outside the tolerance of 33.3 %", which named the target as the tolerance; see
+// `apps/web/src/lib/quiz-verdict.ts`. `ax-assertions.test.mjs` drives this with the app's own sentence.
+export const NUMERIC_VERDICT_OPENING = /^\S.* is (?:within ±.*? of|more than ±.*? from) the computed .*?\./u;
 
 async function gatherQuiz(page) {
   const evidence = { title: await page.evaluate('document.title') };
@@ -2781,6 +2784,13 @@ async function gatherReplay(page, baseUrl) {
       if (marker !== null) marker.focus();
     })()`,
   );
+  // Home first, so the three presses below start from step 1 as they always did. The replay now
+  // OPENS on the reader's own first decision (`openingStepIndex` in `src/lib/replay-steps.ts`), and
+  // in a hand where that decision is the second-to-last action — the big blind folding to a raise —
+  // three right-arrows from there would run off the end and J6.3 would fail a hand rather than the
+  // product. Home itself is what J6.4 checks, separately, further down.
+  await page.press('Home');
+  await page.settle(300);
   evidence.scrub = [];
   for (let step = 0; step < 3; step += 1) {
     await page.evaluate('window.__prlSpeechReset && window.__prlSpeechReset()');
@@ -3500,9 +3510,10 @@ async function submitLabFilter(page, wanting) {
         return counted === null ? null : Number(counted[1]);
       };
       for (const select of document.querySelectorAll('form.prl-lab-filters select')) {
-        // The "any" option's own count is the size of the unfiltered list, which is what makes
-        // "this option NARROWS the list" decidable here rather than assumed. An option that matches
-        // everything would still change the title and would prove nothing about a narrowing.
+        // The "any" option's own count is what this select shows with its own facet relaxed — on
+        // an unfiltered page, the whole list — which is what makes "this option NARROWS the list"
+        // decidable here rather than assumed. An option that matches everything would still change
+        // the title and would prove nothing about a narrowing.
         const anyOption = [...select.options].find((option) => option.value === 'any');
         const total = anyOption === undefined ? null : declared(anyOption);
         for (const option of select.options) {

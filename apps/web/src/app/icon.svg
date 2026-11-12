@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!--
+    The header's brand mark (`.prl-shell__brand-index` in SiteHeader): the "00" disc, the zeroth
+    item in the numbered system. Next's `icon` file convention links this from every page's head,
+    which is what stops the browser asking for /favicon.ico — it did on every load and got a 404,
+    measured at 308fadf as a console error on each route.
+
+    The zeros are drawn, not set in a font: a favicon has no access to the page's typeface, and a
+    fallback face would change the mark per platform. Colours are presentation attributes rather
+    than a <style> block with a dark-mode query, because this response passes through
+    `src/proxy.ts` and carries the app's nonce-based CSP, under which an inline <style> would be
+    refused. One dark disc with a light glyph reads on light and dark browser chrome alike; the
+    values are --prl-ink-850, --prl-ink-000 and --prl-ink-200 from tokens.css.
+  -->
+  <title>Poker Risk Lab</title>
+  <circle cx="16" cy="16" r="15" fill="#12151b" stroke="#a9b2bd" stroke-opacity="0.45" stroke-width="1"/>
+  <ellipse cx="11.6" cy="16" rx="3.6" ry="6.2" fill="none" stroke="#f4f6f8" stroke-width="2.2"/>
+  <ellipse cx="20.4" cy="16" rx="3.6" ry="6.2" fill="none" stroke="#f4f6f8" stroke-width="2.2"/>
+</svg>
