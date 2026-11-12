@@ -277,9 +277,15 @@ describe('the table says “you” only about the reader’s own seat', () => {
     members: members.map((member) => ({ ...member, stack: 1000, isBot: false })),
   });
 
-  /** A hand in progress dealt to `members`' seats, as the reader at `viewerSeat` is sent it. */
-  function inHand(members: readonly Member[], viewerSeat: number | null, ...events: readonly unknown[]) {
-    const seated = members.filter((member) => member.seat !== null);
+  type Dealt = { readonly seat: number; readonly playerId: string };
+
+  /** A hand in progress dealt to `seats`, as the reader at `viewerSeat` is sent it. */
+  function dealt(
+    members: readonly Member[],
+    seats: readonly Dealt[],
+    viewerSeat: number | null,
+    ...events: readonly unknown[]
+  ): TableState {
     const view = {
       handId: 'hand-1',
       street: 'preflop',
@@ -287,7 +293,7 @@ describe('the table says “you” only about the reader’s own seat', () => {
       viewerSeat,
       toAct: null,
       legalActions: [],
-      seats: seated.map((member) => ({ seat: member.seat, playerId: member.userId, isSelf: false })),
+      seats: seats.map((seat) => ({ ...seat, isSelf: seat.playerId === ME })),
     };
     const me = members.find((member) => member.userId === ME);
     const frames: unknown[] = [
@@ -299,6 +305,14 @@ describe('the table says “you” only about the reader’s own seat', () => {
       (state, frame) => tableReducer(state, { kind: 'frame', frame: frame as WsServerMessage }),
       EMPTY_TABLE_STATE,
     );
+  }
+
+  /** The common case: the hand was dealt to exactly the members holding a seat. */
+  function inHand(members: readonly Member[], viewerSeat: number | null, ...events: readonly unknown[]) {
+    const seats = members.flatMap((member) =>
+      member.seat === null ? [] : [{ seat: member.seat, playerId: member.userId }],
+    );
+    return dealt(members, seats, viewerSeat, ...events);
   }
   const fold = (seat: number) => ({ kind: 'action', seat, description: 'Alex folds', wasAutomatic: false });
 
@@ -369,29 +383,25 @@ describe('the table says “you” only about the reader’s own seat', () => {
       { userId: ME, displayName: 'Alex', seat: 2 },
       { userId: 'usr_other', displayName: 'Sam', seat: 1 },
     ];
-    const state = inHand(latecomer, null, {
-      kind: 'action',
-      seat: 2,
-      description: 'Robin folds',
-      wasAutomatic: true,
-    });
+    // Robin was dealt seat 2 and stood up; the reader has since taken that chair, and was dealt nothing.
+    // The server's fold for Robin's seat is Robin's.
+    const hand = [
+      { seat: 1, playerId: 'usr_other' },
+      { seat: 2, playerId: 'usr_robin' },
+    ];
+    const robin = { kind: 'action', seat: 2, description: 'Robin folds', wasAutomatic: true };
+    const state = dealt(latecomer, hand, null, robin);
     assert.equal(state.announcement, 'Robin folds (the server acted for this seat)');
   });
 
   it('leaves the seatless sentences alone when a player dealt into the hand is not in the roster', () => {
     const left: readonly Member[] = [{ userId: ME, displayName: 'Alex', seat: 0 }];
-    const state = inHand(left, 0);
-    const view = state.view as unknown as { seats: unknown[] };
     // The roster the page last saw no longer has the other player; the hand it is narrating does.
-    const dealt = { ...state, view: { ...view, seats: [...view.seats, { seat: 1, playerId: 'usr_gone' }] } };
-    const won = tableReducer(dealt as unknown as TableState, {
-      kind: 'frame',
-      frame: {
-        type: 'event',
-        event: { kind: 'handComplete', summaries: ['Alex wins 30 from the pot.'] },
-        serverTimeMs: 0,
-      } as unknown as WsServerMessage,
-    });
+    const hand = [
+      { seat: 0, playerId: ME },
+      { seat: 1, playerId: 'usr_gone' },
+    ];
+    const won = dealt(left, hand, 0, { kind: 'handComplete', summaries: ['Alex wins 30 from the pot.'] });
     assert.deepEqual(won.summary, ['Alex wins 30 from the pot.']);
   });
 });
