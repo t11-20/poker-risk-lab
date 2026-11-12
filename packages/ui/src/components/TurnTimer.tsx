@@ -179,7 +179,15 @@ function TurnCountdown(props: TurnTimerProps): ReactElement {
       <span className="prl-turn-ring prl-turn-timer__ring" aria-hidden="true" />
       <span className="prl-turn-timer__value" aria-hidden="true">
         {formatChips(secondsLeft)}
-        <span className="prl-turn-timer__unit">s</span>
+        {/*
+          The unit goes at three digits, because three digits and an "s" do not fit the hole. Measured
+          in Chrome at 1440x900, where the seat ring is 32px with a 4px stroke: "196s" painted 31.7px
+          of glyphs across a 24px hole, over the stroke on both sides. The label floor (13px) rules
+          out a smaller face, and a larger ring costs field height (`components.css`, the compacted
+          plate). A bare three-digit figure inside a draining ring still reads as seconds — and the
+          accessible name, which is what is read aloud, says "seconds" whatever is painted here.
+        */}
+        {secondsLeft < 100 ? <span className="prl-turn-timer__unit">s</span> : null}
       </span>
     </span>
   );

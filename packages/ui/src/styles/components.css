@@ -3146,8 +3146,10 @@
     align-self: center;
   }
 
-  /* A smaller ring in the compacted plate: the seconds still fit, and every 0.5rem of plate height
-     costs 2.5rem of field height through the `H = 5 h` relation above. */
+  /* A smaller ring in the compacted plate, because every 0.5rem of plate height costs 2.5rem of
+     field height through the `H = 5 h` relation above. Its hole is 24px, which holds two digits and
+     an "s" or three bare digits and nothing more: "196s" measured 31.7px of glyphs at 1440x900 and
+     painted over the stroke, so `TurnTimer` drops the unit from 100 seconds up. */
   .prl-turn-timer {
     --prl-turn-size: var(--prl-space-9);
   }
