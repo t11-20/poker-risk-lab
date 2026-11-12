@@ -112,6 +112,19 @@ describe('compareSchema — the verdicts', () => {
     assert.match(verdict.problems.join('\n'), /0003_third\.sql sort\(s\) before 0004_other_branch\.sql/);
   });
 
+  it("says migrate will also refuse the other branch's file when behind AND ahead", () => {
+    // Switching branches: the database has another branch's 0004 and lacks this one's 0003 — and
+    // `migrate.mjs up` refuses a ledger row with no file, so "run db:migrate" alone would be a
+    // second refusal.
+    const ledger = [SHIPPED[0], SHIPPED[1], { version: '0009_other_branch.sql', checksum: 'sha256:ffff' }];
+    const verdict = refused(compareSchema(SHIPPED, ledger as MigrationRecord[]));
+    assert.match(
+      verdict.problems.join('\n'),
+      /1 migration\(s\) this build has no file for: 0009_other_branch\.sql/,
+    );
+    assert.match(verdict.problems.join('\n'), /--allow-missing/);
+  });
+
   it('prints in the shape the configuration refusal uses', () => {
     const text = describeRefusal(refused(compareSchema(SHIPPED, SHIPPED.slice(0, 1))));
     assert.match(text, /^Refusing to start: the database schema does not match this build\.\n {2}- /);

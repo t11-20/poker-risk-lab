@@ -46,7 +46,10 @@
  * once the schema has been verified, the gate is sticky and `/ready` goes back to being `select 1`
  * and nothing else (`db.ts` says why that matters: the probe must be cheaper than the cheapest real
  * request). Only an instance that has not yet seen an answer spends a ledger query per probe, and
- * that one is single-flight and bounded by `PROBE_QUERY_DEADLINE_MS`.
+ * that one is single-flight and bounded by `PROBE_QUERY_DEADLINE_MS`. It runs after `ping()`, so
+ * a slow `select 1` followed by a slow ledger read can outlast `READINESS_DEADLINE_MS` and answer
+ * "readiness probe did not answer" rather than the schema's own detail: still a 503, only in the
+ * not-yet-verified state, and the next probe usually has the answer the first one started.
  *
  * A refusal found by a probe, rather than at boot, does NOT exit. Traffic is already withheld by
  * the 503, and a readiness handler that can kill the process is a kill switch on a public route.
@@ -258,6 +261,17 @@ export function compareSchema(
       problems.push(
         `${outOfOrder.join(', ')} sort(s) before ${highest}, which is already applied, so ` +
           '`migrate.mjs up` will refuse them as out of order: renumber them to follow it',
+      );
+    }
+    // Served on its own, an ahead ledger is fine. Beside a pending file it is the state switching
+    // branches leaves — another branch's 0009 applied, this one's 0010 not — and `up` refuses a
+    // ledger row with no file unless told otherwise, so "run db:migrate" alone is a second refusal.
+    if (ahead.length > 0) {
+      problems.push(
+        `the ledger also holds ${ahead.length} migration(s) this build has no file for: ` +
+          `${listed(ahead)}. \`migrate.mjs up\` refuses those unless run with --allow-missing; on a ` +
+          'development database left by another branch, `pnpm run db:reset --confirm-database <name>` ' +
+          'and then `pnpm run db:migrate && pnpm run db:seed` is the clean way back',
       );
     }
   }

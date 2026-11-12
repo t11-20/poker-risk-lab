@@ -398,7 +398,9 @@ to roll back and not to restart — `pnpm run db:migrate` in development, and in
 `prl_deployer` (§11.3). The same comparison refuses an **edited** applied migration (the fix is
 to restore the file; `up` refuses it too) and a ledger the API's role may not read, which means
 `0010_schema_migrations_readable.sql` — the migration that grants `prl_app` SELECT on the ledger,
-and nothing more — has not run yet.
+and nothing more — has not run yet. When the ledger is behind *and* holds a file this build does
+not know (a development database last migrated from another branch), the message says so as well,
+because `up` refuses that too unless run with `--allow-missing`.
 
 Two cases are deliberately **not** refused:
 
