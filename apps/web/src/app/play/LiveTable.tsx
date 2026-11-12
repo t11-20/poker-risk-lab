@@ -73,6 +73,7 @@ import {
 } from 'react';
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
 import { noAnalysisReason, readerHasDecisions, reviewHrefFor } from '@/lib/coach-body.ts';
+import { sizerFollowDelta } from '@/lib/follow-the-table.ts';
 import { LEGENDS_PATH } from '@/lib/legend-links.ts';
 import { describeTable } from '@/lib/table-description.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
@@ -920,6 +921,13 @@ function OutOfUnitsAtTheTable(): ReactElement {
  * header. The row is sticky inside its bar there, so bringing it in by the nearest edge stops as soon
  * as it can stick, with the plate and the board still above it.
  *
+ * ## Except when the reader can size a bet, and the row can stick over the sizer
+ *
+ * Stopping where the row sticks put it straight over the sizer, which is above it in flow: at 390x844
+ * every preset hit-tested to Fold, Call or Raise, and a tap on ½ pot sent a min-raise. So when there
+ * is a sizer and the row is sticky, the sizer is brought in with the row at its own place under it —
+ * `sizerScroll` below, and `lib/follow-the-table.ts` for the measurements and the trade it makes.
+ *
  * This moves the viewport only. Focus is the business of the rescues in `ActionBar` and
  * `TableStage`, which now all pass `preventScroll` so the two cannot fight; nothing here moves the
  * caret, so a screen-reader user's position is untouched. `scrollIntoView` honours the root's
@@ -942,6 +950,34 @@ function typingElsewhere(band: HTMLElement): boolean {
   );
 }
 
+/**
+ * The scroll that makes the sizer reachable, when there is a sizer and the row can stick over it; null
+ * otherwise, and the buttons are followed as above. See `lib/follow-the-table.ts` for the defect.
+ *
+ * The row's `position` is read rather than the viewport's width: it is the only honest answer to
+ * "can the row cover the sizer here", and it is a container query that decides it, not a media one.
+ */
+function sizerScroll(band: HTMLElement): number | null {
+  const bar = band.querySelector<HTMLElement>('.prl-action-bar');
+  const sizer = bar?.querySelector<HTMLElement>('.prl-sizer');
+  const row = bar?.querySelector<HTMLElement>('.prl-action-bar__actions');
+  if (bar == null || sizer == null || row == null) return null;
+  if (window.getComputedStyle(row).position !== 'sticky') return null;
+  const root = window.getComputedStyle(document.documentElement);
+  const first = band.querySelector<HTMLElement>('.prl-play__street') ?? bar;
+  const after = bar.querySelector<HTMLElement>('.prl-action-bar__note');
+  const sizerBox = sizer.getBoundingClientRect();
+  return sizerFollowDelta({
+    regionTop: first.getBoundingClientRect().top,
+    sizerTop: sizerBox.top,
+    sizerBottom: sizerBox.bottom,
+    rowFlowBottom: (after ?? bar).getBoundingClientRect()[after == null ? 'bottom' : 'top'],
+    rowTop: row.getBoundingClientRect().top,
+    viewTop: Number.parseFloat(root.scrollPaddingBlockStart) || 0,
+    viewBottom: window.innerHeight - (Number.parseFloat(root.scrollPaddingBlockEnd) || 0),
+  });
+}
+
 function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement | null>): void {
   const reduced = usePrefersReducedMotion();
   const view = live.table.view;
@@ -955,6 +991,11 @@ function useFollowTheTable(live: LiveTableModel, band: RefObject<HTMLDivElement 
     if (handId === null && turnEdge === '') return;
     const element = band.current;
     if (element === null || typingElsewhere(element)) return;
+    const sized = sizerScroll(element);
+    if (sized !== null) {
+      if (sized !== 0) window.scrollBy({ top: sized, behavior: reduced ? 'auto' : 'smooth' });
+      return;
+    }
     const target = element.querySelector<HTMLElement>('.prl-action-bar__actions') ?? element;
     if (inView(target)) return;
     target.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
