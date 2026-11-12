@@ -243,6 +243,29 @@ describe('a fold where checking is free says what it gives up', () => {
     assert.ok(!markup.includes('Folding costs nothing and'), 'the facing-a-bet sentence must not appear');
   });
 
+  it('draws Fold as plain Fold beside a free check until a pointer has pressed it once', async () => {
+    // The armed state ("Fold anyway") needs a click event and so a DOM, which this package does not
+    // have (ADR 0008); `fold-guard.test.ts` drives the decision. What a render CAN show is that the
+    // guard costs nothing before anybody presses: the label and its spoken form are unchanged.
+    const markup = await render({ legalActions: CHECK_IS_FREE, toCall: 0 });
+    assert.match(markup, /<span class="prl-action-btn__label">Fold<\/span>/u);
+    assert.ok(!markup.includes('Fold anyway'), 'nothing has been pressed, so nothing is armed');
+  });
+
+  it('feeds the guard whether a POINTER pressed Fold, and sends the fold through it', () => {
+    // The wiring a render cannot see. A rewrite that dropped `event.detail` would render the
+    // unarmed state identically and be the audit's defect again: a mis-tap beside a free check
+    // folds at once.
+    const code = SOURCE.replace(/\s+/gu, ' ');
+    assert.match(code, /foldPress\(\{ canCheck, pointer: event\.detail > 0, armed: foldArmed \}\)/u);
+    assert.match(code, /<FoldButton [^>]*onClick=\{pressFold\}/u);
+    assert.doesNotMatch(
+      code,
+      /onClick=\{\(\) => actFromBar\(\{ type: 'fold' \}\)\}/u,
+      'Fold must not bypass the guard',
+    );
+  });
+
   it('keeps the facing-a-bet sentence when there is something to call', async () => {
     const markup = await render();
     assert.match(markup, /Folding costs nothing and gives up any claim on the pot\./u);

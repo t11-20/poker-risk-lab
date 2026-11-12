@@ -577,7 +577,9 @@ function PlayWithSomebody({ live }: ConnectionPanelProps): ReactElement {
             </Button>
           </p>
         ) : null}
-        {live.inviteCode === null ? null : <InviteCode code={live.inviteCode} />}
+        {/* Keyed by the code so a new code remounts: it is brought into view, and a "Copied" left
+            over from the previous code is not shown beside one nobody has copied. */}
+        {live.inviteCode === null ? null : <InviteCode code={live.inviteCode} key={live.inviteCode} />}
         <JoinByInviteCode live={live} />
       </div>
     </details>
@@ -605,9 +607,30 @@ function PlayWithSomebody({ live }: ConnectionPanelProps): ReactElement {
  * URL. It lives in React state for as long as this component is mounted. A reload loses it, and
  * that is correct: writing it down would give this browser a durable key to a private room that the
  * server itself deliberately cannot reproduce.
+ *
+ * ## It is brought into view when it arrives
+ *
+ * The code arrives with the `POST /rooms` answer, after the button that asked for it has gone, and
+ * nothing moved the page to it. The audit at 308fadf measured it at 390x844 at viewport y 796,
+ * under the Coach sheet's 780px peek: a value shown once, on screen, and not visible. It is brought
+ * in by its nearest edge, as `useFollowTheTable` brings the action row in, and for the same reason
+ * that works — `scrollIntoView` honours the root's `scroll-padding-block-end`, which on a phone is
+ * the peek (`styles/play.css`). Only if it is not already in view, so a reader who can see it is
+ * not moved by a pixel. The viewport only: the caret is the business of the focus rescue in
+ * `ConnectionControls`, and moving it here would race that.
  */
 function InviteCode({ code }: { readonly code: string }): ReactElement {
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle');
+  const block = useRef<HTMLDivElement | null>(null);
+  const reduced = usePrefersReducedMotion();
+
+  // On mount, and the caller keys this component by the code, so a second private table started
+  // from the same open disclosure is a new mount too: that code is just as shown-once as the first.
+  useEffect(() => {
+    const element = block.current;
+    if (element === null || inView(element)) return;
+    element.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
+  }, [reduced]);
 
   const copy = (): void => {
     // Feature-detected rather than assumed: the Clipboard API is unavailable over plain HTTP on a
@@ -625,7 +648,7 @@ function InviteCode({ code }: { readonly code: string }): ReactElement {
   };
 
   return (
-    <div className="prl-play__invite">
+    <div className="prl-play__invite" ref={block}>
       <p className="prl-label">Invite code — shown once</p>
       <p className="prl-play__invite-code">
         <code className="prl-mono">{code}</code>
