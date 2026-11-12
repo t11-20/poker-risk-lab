@@ -74,6 +74,7 @@ import {
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
 import { reviewHrefFor } from '@/lib/coach-body.ts';
 import { LEGENDS_PATH } from '@/lib/legend-links.ts';
+import { describeTable } from '@/lib/table-description.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
 import type { TableSocketStatus } from '@/lib/table-socket.ts';
 import { type LiveTable as LiveTableModel, useLiveTable } from '@/lib/use-live-table.ts';
@@ -804,9 +805,7 @@ function ConnectionPanel({ live, inLegendMatch = false }: ConnectionPanelProps):
       {room === null ? null : (
         <dl className="prl-stat__pair prl-play__facts">
           <dt className="prl-label">Room</dt>
-          <dd>
-            {`${room.name} — ${room.visibility.replace('_', '-')}, ${String(room.members.length)} at the table`}
-          </dd>
+          <dd>{describeTable(room, live.table.userId)}</dd>
           <dt className="prl-label">Blinds</dt>
           <dd>{`${String(room.smallBlind)} / ${String(room.bigBlind)} units`}</dd>
           <dt className="prl-label">Your seat</dt>
