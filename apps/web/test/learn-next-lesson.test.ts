@@ -9,12 +9,13 @@
  * `/learn` the first lesson's button sat at y=1682 on a first visit. The home page's "Start with
  * the foundations" sent them to that same index rather than to a foundation.
  *
- * ## Why reading order and not the index's numbering
+ * ## Why reading order and not the old topic-grouped numbering
  *
- * The index numbers its cards in DISPLAY order, grouped by topic, and display order is not a
- * sequence a learner can follow: measured over the shipped content it numbers `bet-sizing` 11
- * and `fold-equity` 13, though `bet-sizing` declares `fold-equity` a prerequisite. A "Next" link that
- * followed the numbering would walk a reader straight past a lesson they were told to read first.
+ * The index used to number its cards in a DISPLAY order grouped by topic, and that order is not a
+ * sequence a learner can follow: over the shipped content it numbered `bet-sizing` 11 and
+ * `fold-equity` 13, though `bet-sizing` declares `fold-equity` a prerequisite. A "Next" link that
+ * followed it would walk a reader straight past a lesson they were told to read first. The index is
+ * now numbered in reading order too, so the two agree — `learn-index-reading-order.test.ts`.
  * `lessonsInReadingOrder()` is the order the content package defines as "front to back", and the
  * lesson page already enumerates its static params from it, so every "next" it names is a page
  * that exists.
@@ -68,7 +69,7 @@ describe('the next lesson', () => {
     assert.equal(passed.size, ORDER.length, 'following "Next" from the first lesson visits every lesson');
   });
 
-  it('is not the index numbering, which would skip a prerequisite', () => {
+  it('is not the old topic-grouped numbering, which would skip a prerequisite', () => {
     // The control for the test above: walking DISPLAY order does break a prerequisite, so the
     // assertion above is distinguishing something rather than passing over any order at all.
     const display = TOPICS.flatMap((topic) => ORDER.filter((lesson) => lesson.topic === topic));

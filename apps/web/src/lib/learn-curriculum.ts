@@ -11,20 +11,30 @@
  * turns seventeen links into a syllabus you can hold in your head. But the number is a
  * *position*, not an identity — insert a lesson on pot geometry between two others and every
  * number after it moves. Storing it in the content would guarantee it goes stale, so it is
- * derived from the display order every time, and the display order is derived from the
+ * derived from the reading order every time, and the reading order is derived from the
  * prerequisites the content already declares.
  *
- * ## The three orderings, and why they are not the same one
+ * ## One ordering, because there used to be three
  *
- *  1. **Reading order** — prerequisites before the lessons that need them, then by difficulty,
- *     then by the order the content package listed them. This is the order a learner could
- *     legitimately read front to back.
- *  2. **Display order** — grouped by topic, topics in the contract's own `TOPICS` order, and
- *     within a topic sorted by reading order. Grouping is what makes the index scannable;
- *     without it the reader gets a flat seventeen-item list with no shape.
- *  3. **Numbering** — assigned down the page in display order, so `01` is the first thing you
- *     see and `17` is the last. Numbering by reading order instead would print numbers that
- *     jump around inside each group, which reads as a mistake rather than as a system.
+ * **Reading order** — prerequisites before the lessons that need them, then by difficulty, then by
+ * the order the content package listed them — is the order a learner can legitimately read front to
+ * back, and it is now the only order this module produces. The cards are in it, the numbers are
+ * assigned down it, and the lesson page's "Next" walks it (`nextLesson`, below).
+ *
+ * The index used to group the cards by topic and number them down the page in that display order,
+ * while "Next" followed reading order. Measured by visiting all seventeen lessons and reading each
+ * Next href (UX audit at 6b3886e, M1): the page said "the numbering is a route through the
+ * material", and the route Next actually took was 1→2→4→6→7→9→10→13→11→12→15→3→5→8→14→16→17 — so
+ * Lesson 2 sent a reader to Lesson 4, and Lesson 15 sent them back to Lesson 3. Making Next follow
+ * the numbers instead is not a fix: the old display order put `bet-sizing` before `fold-equity`,
+ * which it names as a prerequisite (see `nextLesson`).
+ *
+ * Reading order splits topics — rules and flow is lessons 1, 2 and 12 — so contiguous topic
+ * sections and numbers that count upwards cannot both survive. The numbers won. The groups are
+ * consecutive runs of one difficulty (Intro, Core, Advanced), which over reading order are
+ * contiguous by construction because difficulty is the order's own second key, and the topic moved
+ * onto each card. Should a prerequisite ever pull a harder lesson ahead of an easier one, the run
+ * simply breaks and a second heading of the same difficulty appears: honest, and still in order.
  *
  * ## Prerequisites are information, never a gate
  *
@@ -145,8 +155,15 @@ export interface CurriculumEntry {
   readonly readable: boolean;
 }
 
+/**
+ * A consecutive run of reading order at one difficulty. See "One ordering" in the module header for
+ * why the runs are by difficulty and not by topic.
+ */
 export interface CurriculumGroup {
-  readonly topic: string;
+  /** Unique across the curriculum even if a difficulty recurs, so it can key a React list. */
+  readonly key: string;
+  /** The raw difficulty, so an unrecognised one still reads rather than vanishing. */
+  readonly difficulty: string;
   readonly label: string;
   readonly entries: readonly CurriculumEntry[];
   readonly minutes: number;
@@ -154,15 +171,15 @@ export interface CurriculumGroup {
 
 export interface Curriculum {
   readonly groups: readonly CurriculumGroup[];
-  /** Every entry, in display order, so callers do not have to flatten the groups again. */
+  /** Every entry, in reading order, so callers do not have to flatten the groups again. */
   readonly entries: readonly CurriculumEntry[];
   /**
    * Where a learner should go next.
    *
-   * With completion known: the first lesson in display order that is not marked read and whose
+   * With completion known: the first lesson in reading order that is not marked read and whose
    * prerequisites all are, and `null` once everything is read.
    *
-   * With completion unknown: simply the first lesson in display order. That is still a useful
+   * With completion unknown: simply the first lesson in reading order. That is still a useful
    * suggestion — the ordering is the syllabus — but it is a different claim, and `completionKnown`
    * below is how a screen knows which of the two it is printing.
    */
@@ -171,6 +188,7 @@ export interface Curriculum {
   readonly completionKnown: boolean;
   readonly totalMinutes: number;
   readonly lessonCount: number;
+  /** Distinct topics across every lesson. Not `groups.length`: the groups are difficulty runs. */
   readonly topicCount: number;
 }
 
@@ -214,17 +232,10 @@ function readingOrder(summaries: readonly LessonSummary[]): readonly LessonSumma
   return out;
 }
 
-/** Topics in the contract's order, then any topic this build does not know, in first-seen order. */
-function topicOrder(summaries: readonly LessonSummary[]): readonly string[] {
-  const present = new Set(summaries.map((summary) => summary.topic));
-  const out: string[] = [];
-  for (const topic of TOPICS) {
-    if (present.has(topic)) out.push(topic);
-  }
-  for (const summary of summaries) {
-    if (asTopic(summary.topic) === null && !out.includes(summary.topic)) out.push(summary.topic);
-  }
-  return out;
+/** The heading over a run of one difficulty. A difficulty this build has never heard of reads as itself. */
+function groupLabel(difficulty: string): string {
+  const known = asDifficulty(difficulty);
+  return `${known === null ? difficulty : DIFFICULTY_LABELS[known]} lessons`;
 }
 
 export interface CurriculumOptions {
@@ -269,6 +280,29 @@ function chooseStartHere(
     entries.find((entry) => !entry.summary.completed) ??
     null
   );
+}
+
+/**
+ * The sentence under the "Start here" panel's summary, for the four states the suggestion can be in.
+ *
+ * The index printed "Everything this lesson assumes is already marked read." over Lesson 1 for a
+ * reader who had read nothing (UX audit at 6b3886e, Minor 8): Lesson 1 has no prerequisites, so
+ * "every prerequisite is read" was vacuously true and `unlocked === true` could not tell "you have
+ * read what it needs" from "it needs nothing". The count is checked first for that reason.
+ */
+export function startHereNote(start: CurriculumEntry): string {
+  if (start.unlocked === null) {
+    // Nobody asked who this reader is, so the suggestion is the top of the syllabus and says so.
+    return start.prerequisites.length === 0
+      ? 'This is the first lesson in the syllabus, not a suggestion based on what you have read — this page has no way to know that. It assumes nothing, so it is the safe place to start if you are new.'
+      : 'This is the first lesson in the syllabus, not a suggestion based on what you have read — this page has no way to know that. What it assumes is listed on its card below.';
+  }
+  if (start.prerequisites.length === 0) {
+    return 'This is the earliest lesson you have not marked read, and it assumes nothing, so you can start it straight away.';
+  }
+  return start.unlocked
+    ? 'Everything this lesson assumes is already marked read.'
+    : 'This is the earliest lesson in the syllabus you have not marked read. Its prerequisites are listed on its card below.';
 }
 
 /** What one entry needs to know about the curriculum around it. */
@@ -321,33 +355,31 @@ export function buildCurriculum(summaries: readonly LessonSummary[], options: Cu
   const byId = new Map(summaries.map((summary) => [summary.id, summary]));
   const readable = options.readableIds === undefined ? null : new Set(options.readableIds);
   const { completionKnown } = options;
-  const rank = new Map<ContentId, number>();
-  let readingRank = 0;
-  for (const summary of readingOrder(summaries)) {
-    rank.set(summary.id, readingRank);
-    readingRank += 1;
-  }
+
+  // Numbered down reading order, so the number on a card is the step "Next" takes it to. See the
+  // module header for the audit that measured the two disagreeing.
+  const entries = readingOrder(summaries).map((summary, index) =>
+    buildEntry(summary, index + 1, { byId, readable, completionKnown }),
+  );
 
   const groups: CurriculumGroup[] = [];
-  const entries: CurriculumEntry[] = [];
-  let position = 0;
-
-  for (const topic of topicOrder(summaries)) {
-    const inTopic = summaries
-      .filter((summary) => summary.topic === topic)
-      .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
-    const groupEntries: CurriculumEntry[] = [];
-    let minutes = 0;
-
-    for (const summary of inTopic) {
-      position += 1;
-      minutes += summary.estimatedMinutes;
-      const entry = buildEntry(summary, position, { byId, readable, completionKnown });
-      groupEntries.push(entry);
-      entries.push(entry);
+  for (const entry of entries) {
+    const last = groups.at(-1);
+    if (last !== undefined && last.difficulty === entry.summary.difficulty) {
+      groups[groups.length - 1] = {
+        ...last,
+        entries: [...last.entries, entry],
+        minutes: last.minutes + entry.summary.estimatedMinutes,
+      };
+      continue;
     }
-
-    groups.push({ topic, label: topicLabel(topic), entries: groupEntries, minutes });
+    groups.push({
+      key: `${entry.summary.difficulty}-${entry.position}`,
+      difficulty: entry.summary.difficulty,
+      label: groupLabel(entry.summary.difficulty),
+      entries: [entry],
+      minutes: entry.summary.estimatedMinutes,
+    });
   }
 
   return {
@@ -357,7 +389,7 @@ export function buildCurriculum(summaries: readonly LessonSummary[], options: Cu
     completionKnown,
     totalMinutes: entries.reduce((sum, entry) => sum + entry.summary.estimatedMinutes, 0),
     lessonCount: entries.length,
-    topicCount: groups.length,
+    topicCount: new Set(entries.map((entry) => entry.summary.topic)).size,
   };
 }
 
@@ -386,11 +418,11 @@ export function firstLesson(order: readonly LessonStep[]): LessonStep | null {
 /**
  * The lesson after `currentId` in `order`, or `null` for the last lesson or an id not in it.
  *
- * Callers pass `lessonsInReadingOrder()` and not the index's display order, and that choice is the
- * whole of this function. Display order groups by topic and, over the shipped content, puts
- * `bet-sizing` before `fold-equity` — which `bet-sizing` names as a prerequisite — so a "Next" that
- * followed the index's numbering would walk a reader past a lesson they had been told to read
- * first. Reading order is the one the content package defines as front to back.
+ * Callers pass `lessonsInReadingOrder()`, which is the order the content package defines as front to
+ * back, and the order `buildCurriculum` numbers the index in — so "Next" from the card numbered 06
+ * opens the card numbered 07. The index used to be numbered in a topic-grouped display order that
+ * put `bet-sizing` before `fold-equity`, which `bet-sizing` names as a prerequisite, and the fix for
+ * the two disagreeing was to renumber the index, never to make this follow it.
  */
 export function nextLesson(order: readonly LessonStep[], currentId: ContentId): LessonStep | null {
   const index = order.findIndex((lesson) => lesson.id === currentId);
