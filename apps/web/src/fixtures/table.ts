@@ -471,6 +471,14 @@ export const FLOP_DECISION_REPORT: CoachReport = {
  * hands that could cover it. That is exactly the fact a learner most often gets wrong about all-ins,
  * and it is why this state exists.
  *
+ * The stacks are the ones the engine's `settle` writes: what was left behind, plus what was won.
+ * They used to be the stacks from just BEFORE settlement, so `/play?state=complete` showed "You,
+ * STACK 0" beside a summary saying you had won the 905 main pot (UI audit of 308fadf, item 18) —
+ * and the three queens that took the 600 side pot still on 400. So hero is on 0 + 905, the cutoff
+ * on 400 + 600, and the button on the 400 it kept; `committedTotal` and `status` stay as the hand
+ * left them, because `settle` leaves them too. `play-fixture-pots.test.ts` settles this hand from
+ * the pots and checks every seat.
+ *
  * `result` is left null on purpose. It carries the revealed deck and the Merkle proofs, and the screen
  * that renders those is hand review — which gets them from the server and verifies them. Fabricating
  * a proof here would put a fake cryptographic artefact in the repo.
@@ -492,7 +500,7 @@ export const COMPLETED_HAND_VIEW: PlayerView = {
     {
       seat: 0,
       playerId: 'fixture-user',
-      stack: 0,
+      stack: 905,
       committedThisStreet: 0,
       committedTotal: 300,
       status: 'allIn',
@@ -531,7 +539,7 @@ export const COMPLETED_HAND_VIEW: PlayerView = {
     {
       seat: 3,
       playerId: 'fixture-bot-3',
-      stack: 400,
+      stack: 1000,
       committedThisStreet: 0,
       committedTotal: 600,
       status: 'active',
