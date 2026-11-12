@@ -77,6 +77,11 @@ export interface TimelineMarker {
   readonly index: number;
   /** Street key, so the marker can be grouped and `PageUp`/`PageDown` can jump. */
   readonly street: string;
+  /**
+   * Who acted — "You" or the seat's name — or null for the terminal frame. Visible, because a row
+   * of "FOLD, RAISE 20, CALL 10" told a sighted reader what happened and never to whom.
+   */
+  readonly actor: string | null;
   /** Compressed visible text, e.g. `CALL 65` or `END`. */
   readonly short: string;
   /** The whole sentence a screen reader gets. */
@@ -150,6 +155,13 @@ function Marker({ marker, total, isActive, register, onSelect }: MarkerProps): R
         <span className="prl-timeline__glyph" aria-hidden="true">
           {marker.isTerminal ? '■' : marker.isViewer ? '▸' : '·'}
         </span>
+        {/* `aria-hidden` like the action beside it: the accessible name is the whole sentence in
+            the visually-hidden span below, which already names the actor. */}
+        {marker.actor === null ? null : (
+          <span className="prl-timeline__actor" aria-hidden="true">
+            {marker.actor}
+          </span>
+        )}
         <span className="prl-timeline__short" aria-hidden="true">
           {marker.short}
         </span>

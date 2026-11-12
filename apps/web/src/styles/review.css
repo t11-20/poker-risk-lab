@@ -160,11 +160,66 @@
 }
 
 /**
- * The scroll container. A table's columns cannot wrap, so on a phone this scrolls sideways, and
- * axe's `scrollable-region-focusable` (WCAG 2.1.1) requires a scrollable region with no focusable
- * content to be reachable by keyboard — hence the `tabindex` in the markup. The alternative,
- * `display: block` on the rows at narrow widths, strips the table role from the accessibility tree
- * in every current browser and was rejected for that reason.
+ * The narrow form of the same control: a `<select>` and a submit, in one row.
+ *
+ * Measured at 360x640 on the fixture history before this existed: the five links wrapped to five
+ * rows, the control was 247px tall, and the first hand began at y=931 — below the fold of a 640px
+ * screen whose whole purpose is the list of hands. `.prl-select` and `.prl-btn` are `@prl/ui`'s, so
+ * the box, its dark-mode fill and its focus ring are the ones `design:contrast` and `test:keyboard`
+ * already measure on the Lab's filters.
+ *
+ * Each form is `display: none` at the widths where the other is shown, which removes it from the
+ * tab order and the accessibility tree as well as from sight — one ordering control at a time.
+ */
+.prl-review-sorts__form {
+  display: none;
+  flex: 1 1 100%;
+  align-items: center;
+  gap: var(--prl-space-4);
+}
+
+.prl-review-sorts__form .prl-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/**
+ * The submit keeps its own width; the select is the one that gives.
+ *
+ * `.prl-btn` sets an explicit `min-width`, and an explicit `min-width` on a flex item replaces the
+ * automatic min-content floor, so with the default `flex-shrink: 1` the button shrank alongside the
+ * select's long option text. `test:layout` caught it in CI run 43044654587, at 360px in both themes:
+ * "the column is 16.02px and the word "Sort" needs 29.34px". The select already has `min-width: 0`
+ * and ellipsises an option; a button word cut in half is just wrong.
+ */
+.prl-review-sorts__form .prl-btn {
+  flex: none;
+}
+
+@media (width < 600px) {
+  .prl-review-sorts {
+    margin-block: var(--prl-space-8) var(--prl-space-6);
+  }
+
+  .prl-review-sorts__heading,
+  .prl-review-sorts__list {
+    display: none;
+  }
+
+  .prl-review-sorts__form {
+    display: flex;
+  }
+}
+
+/**
+ * The scroll container. A table's columns cannot wrap, so from 1024px up — where the rows are a
+ * table again (section 1b) — anything that makes the six columns wider than the window (a larger
+ * text size, a longer timestamp) makes this scroll sideways. axe's `scrollable-region-focusable`
+ * (WCAG 2.1.1) requires a scrollable region with no focusable content to be reachable by keyboard,
+ * so `ScrollRegion` makes it a tab stop exactly while `scrollWidth > clientWidth`, and not otherwise.
+ * Below 1024px the cards never scroll, and a stop that stayed anyway cost `test:keyboard` its 360x640
+ * sticky-bar walk: the region is 1,549px tall there, and focusing it backwards left its top at
+ * y=-134 with 263px of it behind a bar ending at 129.
  */
 .prl-review-scroll {
   overflow-x: auto;
@@ -214,12 +269,47 @@
   border-block-end: 0;
 }
 
+/**
+ * THE ROW IS THE TARGET.
+ *
+ * The audit at 308fadf measured the only way into a hand as its number — a 10px-wide link on a
+ * one-digit hand, 21px on a two-digit one, at every width — while the row around it took a hover
+ * background that promised the whole row would open. It did nothing: a tap at 70% across the first
+ * row at 1440 landed on the net figure's `<span>`.
+ *
+ * The link's own `::after` is stretched over the row, so the whole row opens the hand and there is
+ * still ONE link per row for a screen reader — the stretched-link pattern, rather than a click
+ * handler on the `<tr>` (no keyboard path, and a row that is clickable without being a link). The
+ * `<tr>` is the containing block: `position: relative` on a table row is honoured by Chrome's table
+ * layout, measured with `elementFromPoint` at 10%, 40%, 70% and 95% across the first row at 1440 —
+ * all four land on the link. Below 1024px the row is a grid box (section 1b), where it is a
+ * containing block in every engine.
+ *
+ * The hover background stays, because it is now true.
+ */
 .prl-review-table tbody tr {
+  position: relative;
   transition: background-color var(--prl-dur-fast) var(--prl-ease-material);
 }
 
 .prl-review-table tbody tr:hover {
   background-color: var(--prl-surface-hover);
+}
+
+/* The caret is on the link, but the thing it opens is the row, so the row says so too. Ink and
+   background only: the link keeps its own focus ring, which is what `test:keyboard` measures. */
+.prl-review-table tbody tr:has(.prl-review-table__link:focus-visible) {
+  background-color: var(--prl-surface-hover);
+}
+
+/* `--prl-z-raised` because `.prl-card` is `position: relative` and comes later in the row, so at
+   `z-index: auto` the board cards painted over this layer and a tap on a card opened nothing —
+   measured with `elementFromPoint` at 40% across the first row at 1440, which found `.prl-card__face`. */
+.prl-review-table__link::after {
+  content: "";
+  position: absolute;
+  z-index: var(--prl-z-raised);
+  inset: 0;
 }
 
 /**
@@ -250,15 +340,19 @@ a.prl-review-table__link {
   align-items: center;
   min-height: var(--prl-target-min);
   color: var(--prl-accent-text);
-  font-size: var(--prl-type-metric-sm);
+  /* Body size and underlined, because it is now a sentence that is a link ("Replay hand 42") rather
+     than a figure. At `metric-sm` with metric tracking it read as a number in a column, which is
+     exactly how a reader came to see it as data rather than as the way in. */
+  font-size: var(--prl-type-body);
   font-variant-numeric: var(--prl-numeric);
   font-weight: var(--prl-weight-semibold);
-  letter-spacing: var(--prl-tracking-metric);
-  text-decoration: none;
+  white-space: nowrap;
 }
 
-.prl-review-table__link:hover {
-  text-decoration: underline;
+/* `base.css`'s own hover cue for a link — the underline getting heavier — given to the row, since
+   hovering anywhere on the row is now hovering the link. Same value, so it is the same cue. */
+.prl-review-table tbody tr:hover .prl-review-table__link {
+  text-decoration-thickness: 0.12em;
 }
 
 td.prl-review-table__when {
@@ -338,6 +432,149 @@ td.prl-review-table__when {
   font-size: var(--prl-type-label);
   letter-spacing: var(--prl-tracking-label);
   text-transform: uppercase;
+}
+
+/* The column names printed inside the cells exist for the card layout below and nowhere else.
+   `span.` for the reason `a.prl-review-table__link` gives: bare, the label's colour lost to
+   `.prl-review-table caption` (0,1,1), which `layout-guarantees.test.ts` caught on this change. */
+span.prl-review-table__cell-label {
+  display: none;
+}
+
+/* ==========================================================================================
+   1b. THE SAME TABLE, AS CARDS, BELOW 1024px
+   ==========================================================================================
+   Measured on the fixture history before this section existed: at 360x640 an 852px table in a
+   328px scroller, "Net to you" starting at x=616 and "Ending" at x=745 — the two columns a reader
+   opens this page for were the two they had to scroll sideways to find, and nothing on screen said
+   they were there. It is not only a phone: the six columns need about 930px, so at 768 the table
+   was 928px in a 707px scroller and at 900 it was 928px in 828px. From 1024 up it fits (942px in
+   944px at 1024), which is where the breakpoint is.
+
+   ## Why the rows can change `display` here, when this file used to say they could not
+
+   The old comment said `display: block` on the rows "strips the table role from the accessibility
+   tree in every current browser". Measured in Chrome 157 (CDP `Accessibility.getFullAXTree` on
+   this page at 360, with exactly these rules applied): `table`, a header `row` with all six
+   `columnheader`s, then one `row` per hand holding a `rowheader` (its link) and five `cell`s. The
+   engine keeps a table's semantics from its elements rather than from its boxes. Two details are
+   load-bearing:
+
+   - The header row is VISUALLY hidden, not `display: none`. With `display: none` the same probe
+     found no `columnheader` at all, which leaves a cell announced as a bare "1,520 units".
+   - Each card prints its own column names (`.prl-review-table__cell-label`), `aria-hidden`,
+     because the header row a sighted reader relied on is the thing that was hidden.
+
+   Not measured, and which way it fails: an engine that still flattens a re-displayed table
+   (WebKit used to) would expose each card as a run of text with ONE link in it — "Replay hand
+   42" — which is still the way in, once per hand, in reading order. It loses column navigation,
+   not the content or the control.
+
+   ## The order on the card
+
+   Net to you first, then the board, then when and the pot, then the link — the order a reader
+   asks the questions in. It is a visual reordering of the grid only; the DOM, and so the reading
+   order and the single tab stop per row, is the table's own.
+   ========================================================================================== */
+
+@media (width < 1024px) {
+  .prl-review-table,
+  .prl-review-table caption {
+    display: block;
+  }
+
+  /* One card per hand: one column on a phone, two at 768, three at 900. */
+  .prl-review-table tbody {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(2 * var(--prl-space-15))), 1fr));
+    gap: var(--prl-space-5);
+    padding: var(--prl-space-5);
+  }
+
+  /* The visually-hidden technique from `base.css`, restated rather than added as a class in the
+     markup, because it is only hidden at these widths. */
+  .prl-review-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .prl-review-table tbody tr {
+    display: grid;
+    grid-template-areas:
+      "net ending"
+      "board board"
+      "when pot"
+      "hand hand";
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-content: start;
+    align-items: center;
+    gap: var(--prl-space-4) var(--prl-space-5);
+    padding: var(--prl-space-6);
+    border: var(--prl-hairline);
+    border-radius: var(--prl-radius-2);
+  }
+
+  .prl-review-table tbody th,
+  .prl-review-table tbody td,
+  .prl-review-table tbody tr:last-child th,
+  .prl-review-table tbody tr:last-child td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border-block-end: 0;
+  }
+
+  .prl-review-table tbody th.prl-review-table__hand {
+    grid-area: hand;
+  }
+
+  .prl-review-table tbody td.prl-review-table__when {
+    grid-area: when;
+    /* Wraps here rather than painting past its own box: "11 Nov 2026, 13:37 UTC" is wider than its
+       track on the narrowest phones, and `test:layout` reports glyphs outside their box. */
+    white-space: normal;
+  }
+
+  .prl-review-table tbody td.prl-review-table__board {
+    grid-area: board;
+  }
+
+  .prl-review-table tbody td.prl-review-table__pot {
+    grid-area: pot;
+    text-align: end;
+  }
+
+  .prl-review-table tbody td.prl-review-table__net {
+    grid-area: net;
+  }
+
+  .prl-review-table tbody td.prl-review-table__ending {
+    grid-area: ending;
+    justify-self: end;
+  }
+
+  span.prl-review-table__cell-label {
+    display: inline;
+    margin-inline-end: var(--prl-space-3);
+    color: var(--prl-text-muted);
+    font-size: var(--prl-type-label);
+    letter-spacing: var(--prl-tracking-label);
+    text-transform: uppercase;
+  }
+
+  /* The net is the card's headline, so it is set larger, with its label on a line of its own. */
+  .prl-review-table__net .prl-review-table__cell-label {
+    display: block;
+    margin-block-end: var(--prl-space-2);
+  }
+
+  .prl-review-table__net .prl-review-net__value {
+    font-size: var(--prl-type-metric-sm);
+  }
 }
 
 .prl-review-paging {
@@ -658,6 +895,21 @@ td.prl-review-table__when {
   white-space: nowrap;
 }
 
+/**
+ * Who acted, ahead of what they did — "Quartile RAISE 20", "You FOLD".
+ *
+ * Quieter than the action (regular weight, secondary ink) because the action is still what a reader
+ * scans the row for; the name is what tells them whose it was, which the row did not say at all
+ * before. A display name runs to 24 characters with spaces (`DISPLAY_NAME_SCHEMA`), so it is
+ * allowed to wrap inside the marker rather than being clipped or ellipsised — a cut-off name is a
+ * different name.
+ */
+.prl-timeline__actor {
+  color: inherit;
+  font-weight: var(--prl-weight-regular);
+  overflow-wrap: anywhere;
+}
+
 /** The `+` that marks a decision carrying an analysis. Ink only; the sentence says it too. */
 .prl-timeline__analysis-mark {
   color: var(--prl-accent-text);
@@ -707,19 +959,22 @@ td.prl-review-table__when {
   z-index: var(--prl-z-sticky);
   isolation: isolate;
   inset-block-start: var(--prl-space-13);
-  display: flex;
-  flex-wrap: wrap;
+  /* Three tracks, never wrapping: back, what happened, forward. It used to be a wrapping flex row,
+     and at 360 the two worded buttons and the counter wrapped onto two rows — 126px of sticky glass
+     under the 77px header, 32% of a 640px screen held by chrome. Below 600px the button words are
+     visually hidden (section 4, the `width < 600px` block), so the row fits one line at 360. */
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: var(--prl-space-5);
   /* BOUNDED, and that is a rule rather than a preference: `tokens.css` allows glass on a floating
      PANE and forbids it on a full-width strip, because a `backdrop-filter` across the whole
      content column is one of the most expensive things a compositor can be asked for on every
-     scroll frame. Unbounded this measured 1360px wide at a 1440px viewport — a strip. 34rem
-     (`3 x --prl-space-16 + --prl-space-12`, the same way `--prl-legend-card-min` is built) is what
-     the two buttons and the counter actually need, and a centred transport is what a scrubber
-     looks like anyway. */
-  max-inline-size: calc(3 * var(--prl-space-16) + var(--prl-space-12));
+     scroll frame. Unbounded this measured 1360px wide at a 1440px viewport — a strip. It was 34rem
+     for two buttons and a counter; it is 40rem (`4 x --prl-space-16`) now that the middle track
+     also carries the sentence saying what happened at this step, which needs a line long enough to
+     hold "Quartile raised to 1,250 units." without breaking. Still a centred pane, not a strip. */
+  max-inline-size: calc(4 * var(--prl-space-16));
   margin-inline: auto;
   padding: var(--prl-space-5) var(--prl-space-6);
   border: 1px solid var(--prl-edge);
@@ -739,12 +994,19 @@ td.prl-review-table__when {
  * 18px it was the same size as the button labels either side of it. The counter is what tells you
  * the press landed, so it is the loudest thing in the bar.
  */
+.prl-replay__now {
+  display: grid;
+  justify-items: center;
+  gap: var(--prl-space-1);
+  min-width: 0;
+  text-align: center;
+}
+
 .prl-replay__position {
   display: flex;
   align-items: baseline;
   gap: var(--prl-space-4);
   margin: 0;
-  padding-inline: var(--prl-space-4);
 }
 
 .prl-replay__position-value {
@@ -754,6 +1016,56 @@ td.prl-review-table__when {
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-metric);
   line-height: var(--prl-leading-tight);
+}
+/**
+ * What happened at this step, in the transport where the reader is looking when they press.
+ *
+ * Measured before: the transport said only "STEP 3 / 16", and the sentence for the step sat under
+ * the table — y≈1997 at 1440 and ≈2900 at 360 — while the copy a screen reader hears is visually
+ * hidden. A sighted reader stepping through a hand could see the table change and could not read
+ * what had changed it without scrolling a screen and a half.
+ */
+.prl-replay__headline {
+  margin: 0;
+  max-width: none;
+  color: var(--prl-text);
+  font-size: var(--prl-type-body-sm);
+  font-weight: var(--prl-weight-medium);
+  line-height: var(--prl-leading-tight);
+  overflow-wrap: anywhere;
+}
+
+.prl-replay__step-glyph {
+  font-size: var(--prl-type-body-lg);
+  line-height: var(--prl-leading-tight);
+}
+
+@media (width < 600px) {
+  .prl-replay__transport {
+    gap: var(--prl-space-4);
+    padding: var(--prl-space-4);
+  }
+
+  /* The visually-hidden technique from `base.css`: out of sight, still the button's name. */
+  .prl-replay__step-words {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* A glyph-only button is still a 44px square target, not a 30px sliver. */
+  .prl-replay__transport .prl-replay__step-button {
+    min-width: var(--prl-target-min);
+    min-height: var(--prl-target-min);
+    padding-inline: var(--prl-space-4);
+  }
+
+  .prl-replay__position-value {
+    font-size: var(--prl-type-metric-sm);
+  }
 }
 
 /**
