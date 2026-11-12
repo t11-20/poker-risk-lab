@@ -254,3 +254,144 @@ describe('the table narrates the reader’s own seat as “you”', () => {
     assert.deepEqual(odd.summary, ['Guest 12D91B collects 30 from the pot.']);
   });
 });
+
+/**
+ * "You" is decided by the seat, never by the name alone.
+ *
+ * Review on PR #33 (Devin): display names are not unique — `createGuest` takes any name, and seats
+ * are by user id — and the first version of this rewrite matched on the reader's name. So a reader
+ * named Alex was told the other Alex's fold was theirs, a spectator named Alex was told every Alex's
+ * blind was theirs, and "Dr. Alex posts the small blind" read "Dr. You post the small blind". Each
+ * case below failed against that version.
+ *
+ * The hand is opened with a `state` frame carrying a view, as the server does, so `viewerSeat` is
+ * the seat that decides — not the chair the welcome named.
+ */
+describe('the table says “you” only about the reader’s own seat', () => {
+  type Member = { readonly userId: string; readonly displayName: string; readonly seat: number | null };
+  const roster = (members: readonly Member[]): unknown => ({
+    id: 'room-1',
+    name: 'Friends',
+    maxSeats: 6,
+    actionTimeoutSeconds: 60,
+    members: members.map((member) => ({ ...member, stack: 1000, isBot: false })),
+  });
+
+  /** A hand in progress dealt to `members`' seats, as the reader at `viewerSeat` is sent it. */
+  function inHand(members: readonly Member[], viewerSeat: number | null, ...events: readonly unknown[]) {
+    const seated = members.filter((member) => member.seat !== null);
+    const view = {
+      handId: 'hand-1',
+      street: 'preflop',
+      actionSequence: 1,
+      viewerSeat,
+      toAct: null,
+      legalActions: [],
+      seats: seated.map((member) => ({ seat: member.seat, playerId: member.userId, isSelf: false })),
+    };
+    const me = members.find((member) => member.userId === ME);
+    const frames: unknown[] = [
+      { type: 'welcome', userId: ME, room: roster(members), seat: me?.seat ?? null, serverTimeMs: 0 },
+      { type: 'state', view, room: roster(members), deadlineMs: null, serverTimeMs: 0, revision: 1 },
+      ...events.map((event) => ({ type: 'event', event, serverTimeMs: 0 })),
+    ];
+    return frames.reduce<TableState>(
+      (state, frame) => tableReducer(state, { kind: 'frame', frame: frame as WsServerMessage }),
+      EMPTY_TABLE_STATE,
+    );
+  }
+  const fold = (seat: number) => ({ kind: 'action', seat, description: 'Alex folds', wasAutomatic: false });
+
+  it('of two players named Alex, says “you” about the reader’s alone (REGRESSION)', () => {
+    const alexes: readonly Member[] = [
+      { userId: ME, displayName: 'Alex', seat: 0 },
+      { userId: 'usr_other', displayName: 'Alex', seat: 1 },
+    ];
+    assert.equal(inHand(alexes, 0, fold(0)).announcement, 'You fold');
+    assert.equal(inHand(alexes, 0, fold(1)).announcement, 'Alex folds');
+    // No seat in these, and two seats it could be: the server's sentence, which is true.
+    const blind = inHand(alexes, 0, { kind: 'forcedBets', detail: 'Alex posts the small blind, 5.' });
+    assert.equal(blind.announcement, 'Alex posts the small blind, 5.');
+    const won = inHand(alexes, 0, { kind: 'handComplete', summaries: ['Alex wins 30 from the pot.'] });
+    assert.deepEqual(won.summary, ['Alex wins 30 from the pot.']);
+  });
+
+  it('says nothing about a spectator in the second person, though the name is theirs (REGRESSION)', () => {
+    const watching: readonly Member[] = [
+      { userId: ME, displayName: 'Alex', seat: null },
+      { userId: 'usr_other', displayName: 'Alex', seat: 0 },
+    ];
+    assert.equal(inHand(watching, null, fold(0)).announcement, 'Alex folds');
+    // A unique name does not make a spectator a player: the narrated Alex may be one who has left.
+    const alone: readonly Member[] = [
+      { userId: ME, displayName: 'Alex', seat: null },
+      { userId: 'usr_other', displayName: 'Sam', seat: 0 },
+    ];
+    const blind = inHand(alone, null, { kind: 'forcedBets', detail: 'Alex posts the big blind, 10.' });
+    assert.equal(blind.announcement, 'Alex posts the big blind, 10.');
+    const won = inHand(alone, null, { kind: 'handComplete', summaries: ['Alex wins 30 from the pot.'] });
+    assert.deepEqual(won.summary, ['Alex wins 30 from the pot.']);
+  });
+
+  it('does not find the reader inside a longer name (REGRESSION)', () => {
+    const doctor: readonly Member[] = [
+      { userId: ME, displayName: 'Alex', seat: 0 },
+      { userId: 'usr_other', displayName: 'Dr. Alex', seat: 1 },
+    ];
+    const detail = 'Dr. Alex posts the small blind, 5. Alex posts the big blind, 10.';
+    // Both sentences are left alone: once another name contains the reader's, a seatless sentence
+    // opening on it may be either of them, and the server's wording is the one that is certainly true.
+    assert.equal(inHand(doctor, 0, { kind: 'forcedBets', detail }).announcement, detail);
+    // The reader's own action still has its seat, which settles it.
+    const mine = { kind: 'action', seat: 0, description: 'Alex checks', wasAutomatic: false };
+    assert.equal(inHand(doctor, 0, mine).announcement, 'You check');
+  });
+
+  it('still says “you” when the reader’s name is the only one it could be', () => {
+    const table: readonly Member[] = [
+      { userId: ME, displayName: 'Patient Technician 1', seat: 0 },
+      { userId: 'usr_other', displayName: 'Patient Technician 12', seat: 1 },
+    ];
+    const blinds = inHand(table, 0, {
+      kind: 'forcedBets',
+      detail: 'Patient Technician 12 posts the small blind, 5. Patient Technician 1 posts the big blind, 10.',
+    });
+    assert.equal(
+      blinds.announcement,
+      'Patient Technician 12 posts the small blind, 5. You post the big blind, 10.',
+    );
+  });
+
+  // The chair is not the hand: `PlayerView.viewerSeat` is null for a reader who sat down after the
+  // deal, and this used to fall through to the chair they took, which the hand dealt to somebody else.
+  it('does not take the chair the reader sat down in mid-hand for the seat they were dealt', () => {
+    const latecomer: readonly Member[] = [
+      { userId: ME, displayName: 'Alex', seat: 2 },
+      { userId: 'usr_other', displayName: 'Sam', seat: 1 },
+    ];
+    const state = inHand(latecomer, null, {
+      kind: 'action',
+      seat: 2,
+      description: 'Robin folds',
+      wasAutomatic: true,
+    });
+    assert.equal(state.announcement, 'Robin folds (the server acted for this seat)');
+  });
+
+  it('leaves the seatless sentences alone when a player dealt into the hand is not in the roster', () => {
+    const left: readonly Member[] = [{ userId: ME, displayName: 'Alex', seat: 0 }];
+    const state = inHand(left, 0);
+    const view = state.view as unknown as { seats: unknown[] };
+    // The roster the page last saw no longer has the other player; the hand it is narrating does.
+    const dealt = { ...state, view: { ...view, seats: [...view.seats, { seat: 1, playerId: 'usr_gone' }] } };
+    const won = tableReducer(dealt as unknown as TableState, {
+      kind: 'frame',
+      frame: {
+        type: 'event',
+        event: { kind: 'handComplete', summaries: ['Alex wins 30 from the pot.'] },
+        serverTimeMs: 0,
+      } as unknown as WsServerMessage,
+    });
+    assert.deepEqual(won.summary, ['Alex wins 30 from the pot.']);
+  });
+});

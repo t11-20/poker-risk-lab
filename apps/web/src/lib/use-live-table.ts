@@ -531,6 +531,56 @@ export const DEAL_ANNOUNCEMENT = 'A new hand was dealt.';
 type WireEvent = Extract<WsServerMessage, { type: 'event' }>['event'];
 
 /**
+ * The reader's seat in the hand the next event is about, or null when they were not dealt into it.
+ *
+ * Events are written into the socket BEFORE the state frame of the same notice
+ * (`apps/api/src/ws/router.ts`), so while a hand is in progress `view` is that hand and `viewerSeat`
+ * is the answer — resolved by the server from the dealt roster, so null means "not in this hand"
+ * and must stay null. Falling through to `state.seat` there would make a reader who sat down mid-hand
+ * into whoever was dealt the chair before them. Only between hands, when the next event is the new
+ * hand's forced bets and the view is the last hand's, is the chair the best there is.
+ */
+function readersSeat(state: TableState): number | null {
+  const view = state.view;
+  if (view !== null && view.street !== 'complete') return view.viewerSeat;
+  return state.seat;
+}
+
+/**
+ * Whether a sentence that opens on `name` can only be about the reader.
+ *
+ * Review on PR #33 (Devin): display names are not unique — `createGuest` takes any name, and seats
+ * are by user id — so matching on the name alone told one Alex that the other Alex's fold was
+ * theirs ("You fold"), told a spectator named Alex that every Alex's blind was theirs, and read "Dr.
+ * Alex posts the small blind" as "Dr. You post the small blind", because `inSecondPerson` opens a
+ * sentence after any ". ". The forced bets, the showdown and the awards carry no seat, so the name is
+ * all there is, and it is only enough when nobody else at the table could be the one it names:
+ *
+ *   - the reader holds a seat in this hand;
+ *   - no other member's name contains the reader's as a whole word. EVERY member, seated or not: a
+ *     player who was dealt in and then stood up is narrated under that name with `seat: null`.
+ *     Whole-word rather than equal, which is the "Dr. Alex" case; "Patient Technician 12" does not
+ *     contain "Patient Technician 1" as a word, and the verb after the name already keeps them apart;
+ *   - every player dealt into the view is a member, so no dealt name is one this page cannot see.
+ *
+ * Any doubt leaves the server's sentence, which is true. A rename mid-hand is not chased: the dealt
+ * name then no longer opens on the roster's, nothing matches, and the sentence is left alone.
+ */
+function onlyTheReaderIsNamed(state: TableState, name: string): boolean {
+  if (readersSeat(state) === null) return false;
+  const members = state.room?.members ?? [];
+  const word = new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapedName(name)}(?:$|[^\\p{L}\\p{N}])`, 'u');
+  const named = members.some((member) => member.userId !== state.userId && word.test(member.displayName));
+  if (named) return false;
+  const known = new Set(members.map((member) => member.userId));
+  return (state.view?.seats ?? []).every((seat) => known.has(seat.playerId));
+}
+
+function escapedName(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+/**
  * The event as the reader should hear it: their own sentences in the second person.
  *
  * Every socket in the room receives the same sentences, written with the name each seat was dealt in
@@ -539,15 +589,22 @@ type WireEvent = Extract<WsServerMessage, { type: 'event' }>['event'];
  * the reader's roster entry — the same string the server dealt them in under — and the rewrite is
  * `inSecondPerson`, which reads the verbs from the table the API writes them from. A sentence it
  * does not recognise is left exactly as the server wrote it, which is still true.
+ *
+ * WHOSE sentence is decided here, not by the name: an action carries its seat, and is the reader's
+ * exactly when that is the reader's seat in this hand; the rest carry none, and are rewritten only
+ * when `onlyTheReaderIsNamed`.
  */
 function inReadersWords(event: WireEvent, state: TableState): WireEvent {
   const name = state.room?.members.find((member) => member.userId === state.userId)?.displayName ?? null;
   if (name === null) return event;
+  if (event.kind === 'action') {
+    const own = event.seat === readersSeat(state);
+    return own ? { ...event, description: inSecondPerson(event.description, name) } : event;
+  }
+  if (!onlyTheReaderIsNamed(state, name)) return event;
   switch (event.kind) {
     case 'forcedBets':
       return { ...event, detail: inSecondPerson(event.detail, name) };
-    case 'action':
-      return { ...event, description: inSecondPerson(event.description, name) };
     case 'showdown':
     case 'handComplete':
       return { ...event, summaries: event.summaries.map((line) => inSecondPerson(line, name)) };
@@ -648,7 +705,7 @@ function onEventFrame(state: TableState, frame: Extract<WsServerMessage, { type:
     frame.event.kind === 'action' && frame.event.wasAutomatic && frame.event.seat === state.clockExpiredSeat;
   const clockExpiredSeat = frame.event.kind === 'seatTimedOut' ? frame.event.seat : null;
   const event = inReadersWords(frame.event, state);
-  const sentence = announce(event, clockExpired, state.view?.viewerSeat ?? state.seat);
+  const sentence = announce(event, clockExpired, readersSeat(state));
   const announcement = state.carried === '' ? sentence : `${state.carried} ${sentence}`;
   const next: TableState = { ...state, announcement, carried: '', clockExpiredSeat };
   if (event.kind === 'showdown') {

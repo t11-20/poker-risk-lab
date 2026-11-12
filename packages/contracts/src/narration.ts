@@ -25,7 +25,13 @@
  *
  * Towards the server's own sentence. A sentence that does not open on exactly the reader's name and
  * a verb from this table comes back unchanged, and that sentence is true — it names the reader the
- * way the server does. Nothing here can put "You" on a sentence about somebody else.
+ * way the server does.
+ *
+ * What this cannot decide is WHOSE name it is. Display names are not unique, and a sentence opens
+ * after any ". ", so it puts "You" on the other Alex's fold, and makes "Dr. Alex posts the small
+ * blind" into "Dr. You post the small blind" (review on PR #33). Attribution is the caller's: the
+ * page rewrites an action only at the reader's own seat, and a sentence with no seat only when no
+ * other name at the table contains the reader's (`inReadersWords` in `apps/web/src/lib/use-live-table.ts`).
  */
 
 /** Each narrated verb phrase, as the server writes it about a seat and as it reads about the reader. */
