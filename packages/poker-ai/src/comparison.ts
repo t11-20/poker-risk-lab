@@ -273,7 +273,7 @@ export function scoreDecisionQuality(input: {
   const chosenTotal = chosenAction.type === 'bet' || chosenAction.type === 'raise' ? chosenAction.to : null;
   const sizeNote =
     chosenTotal !== null && chosen.to !== undefined && chosen.to !== chosenTotal
-      ? ` The analysis priced three representative sizes rather than every size, and the nearest to the ${chosenTotal} taken was ${chosen.to}, so that is the figure used.`
+      ? ` The analysis priced the sizes the table's sizing buttons offer rather than every size, and the nearest to the ${chosenTotal} taken was ${chosen.to}, so that is the figure used.`
       : '';
 
   return {

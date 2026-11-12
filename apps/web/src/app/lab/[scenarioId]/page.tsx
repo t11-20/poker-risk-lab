@@ -41,6 +41,7 @@ import { LAB_SCENARIO_SUMMARIES, scenarioFixture } from '../../../fixtures/scena
 import { API_PATHS, apiGet, isApiUnavailable, isMissingResource, safeFetch } from '../../../lib/api.ts';
 import { difficultyLabel, topicLabel } from '../../../lib/lab-labels.ts';
 import { nextScenarioHref } from '../../../lib/lab-next.ts';
+import { bundledScenarioTitle, scenarioPageMetadata } from '../../../lib/lab-scenario-titles.ts';
 import { scenarioSeatName, scenarioToPlayerView } from '../../../lib/scenario-view.ts';
 import { NotFoundBody } from '../../not-found.tsx';
 import '../../../styles/page.css';
@@ -86,12 +87,9 @@ export async function generateMetadata({
   readonly params: Promise<RouteParams>;
 }): Promise<Metadata> {
   const { scenarioId } = await params;
-  const summary = LAB_SCENARIO_SUMMARIES.find((candidate) => candidate.id === scenarioId);
-  if (summary === undefined) return { title: 'Scenario' };
-  return {
-    title: summary.title,
-    description: summary.question,
-  };
+  // The bundled content, not `LAB_SCENARIO_SUMMARIES`: that is the six offline fixtures, whose ids
+  // are not the API's, and looking the id up there titled all 36 real pages "Scenario".
+  return scenarioPageMetadata(scenarioId);
 }
 
 /**
@@ -117,9 +115,12 @@ async function nextHrefAfter(id: string, state: 'live' | 'sampled'): Promise<str
 /**
  * The screen for "the scenario service is not answering and this one is not in the bundle".
  *
- * It names the scenario where it can. `LAB_SCENARIO_SUMMARIES` is the bundled index — thirty-six
- * titles, of which only six have a full fixture behind them — so for most ids this page can still
- * say WHICH scenario the reader asked for even though it cannot stage it. That matters: "Rule of 4:
+ * It names the scenario where it can. The bundled content (`bundledScenarioTitle`) carries every
+ * scenario's title and question even though the analysis is the server's to compute, so for every
+ * id this route can render the page can still say WHICH scenario the reader asked for even though
+ * it cannot stage it. It used to read `LAB_SCENARIO_SUMMARIES`, which a comment here called "the
+ * bundled index — thirty-six titles" and which is the six offline fixtures, under ids the API does
+ * not use: it named none of them. That matters: "Rule of 4:
  * a big draw on the flop could not be loaded" is a different message from "there is nothing at this
  * address", and the difference is the whole ticket.
  *
@@ -134,7 +135,7 @@ function ScenarioUnavailable({
   readonly scenarioId: string;
   readonly detail: string;
 }): ReactElement {
-  const summary = LAB_SCENARIO_SUMMARIES.find((candidate) => candidate.id === scenarioId);
+  const summary = bundledScenarioTitle(scenarioId);
   return (
     <div className="prl-container prl-lab-page">
       <header className="prl-page-head">
@@ -144,18 +145,18 @@ function ScenarioUnavailable({
           </a>
         </p>
         <h1 className="prl-display-2 prl-page-head__title">
-          {summary === undefined ? 'This scenario could not be loaded' : summary.title}
+          {summary === null ? 'This scenario could not be loaded' : summary.title}
         </h1>
         <p className="prl-page-head__standfirst">
           The scenario service is not reachable, and this scenario is not one of the six carried in the
-          bundled copy — so there is nothing here to stage the situation from.{' '}
-          {summary === undefined
+          bundled copy with an analysis already computed — so there is no analysis here to show.{' '}
+          {summary === null
             ? 'Nothing here has established whether this scenario exists.'
-            : 'The scenario exists: its title above comes from the bundled index of all thirty-six. What is missing is the situation and the analysis, both of which are the server’s to compute.'}
+            : 'The scenario exists: its title above comes from the bundled content. What is missing is the analysis, which is the server’s to compute.'}
         </p>
       </header>
 
-      {summary === undefined ? null : (
+      {summary === null ? null : (
         <p className="prl-note">
           <span className="prl-label">The question it asks</span> {summary.question}
         </p>

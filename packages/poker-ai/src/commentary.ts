@@ -468,9 +468,9 @@ export function bestCandidate(analysis: CoachReport): ActionCandidate {
  *
  * A bet and a raise are different actions to the engine and to the report, and they are not
  * matched across: a decision the report did not price is reported as unscored rather than
- * scored against something else. For a sized action the report offers three representative
- * sizes, so the chosen size is matched to the nearest one it priced — and every caller that
- * shows a figure derived from this says which size it used.
+ * scored against something else. For a sized action the report prices the sizes the table's
+ * sizing buttons offer, not every legal total, so the chosen size is matched to the nearest one it
+ * priced — and every caller that shows a figure derived from this says which size it used.
  */
 export function candidateForAction(analysis: CoachReport, action: Action): ActionCandidate | null {
   const sameType = analysis.candidates.filter((candidate) => candidate.action === action.type);

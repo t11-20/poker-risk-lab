@@ -18,13 +18,27 @@
  * and non-finite input. A formatter that throws mid-render takes out the table around it.
  */
 
+import {
+  type BetBounds,
+  clampToBounds,
+  presetTo,
+  type SizingContext,
+  type SizingPreset,
+  TABLE_SIZING_PRESETS,
+} from '@prl/poker-math';
 import type { LegalAction } from './view-types.ts';
 
-/** The inclusive range of total street commitments the server will accept. */
-export interface BetBounds {
-  readonly min: number;
-  readonly max: number;
-}
+/**
+ * The bounds, the presets, the clamp and the preset arithmetic are `@prl/poker-math`'s, under the
+ * names this module has always exported them by.
+ *
+ * They moved because the Coach has to price exactly the sizes this sizer offers, and a second copy
+ * of the arithmetic is how the two came apart: the presets rounded to the nearest chip and the
+ * Coach's ladder rounded down, and the Scenario Lab told learners "this analysis did not price
+ * that size" for a preset it had just offered them. `packages/poker-math/src/table-sizing.ts` has
+ * the measurement. Re-exported rather than re-implemented, so there is nothing here that can drift.
+ */
+export type { BetBounds, SizingContext, SizingPreset };
 
 /** The aggressive action, narrowed to the two kinds that take a size. */
 export interface SizedAction {
@@ -34,62 +48,11 @@ export interface SizedAction {
   readonly note: string | null;
 }
 
-export interface SizingContext {
-  readonly bounds: BetBounds;
-  /** `PlayerView.potTotal` — everything in the middle, this street included. */
-  readonly pot: number;
-  /** `PlayerView.amountToCall`. Zero when nothing is owed. */
-  readonly toCall: number;
-  /** This seat's commitment so far this street. */
-  readonly committedThisStreet: number;
-}
+/** The presets the sizer renders, in the order it renders them. */
+export const SIZING_PRESETS: readonly SizingPreset[] = TABLE_SIZING_PRESETS;
 
-export interface SizingPreset {
-  readonly id: string;
-  /** Shown on the button. */
-  readonly label: string;
-  /** Fraction of the pot-after-call, or `null` for "everything you have". */
-  readonly fraction: number | null;
-}
-
-/**
- * The preset sizes, as a fraction of the pot **after** the call:
- *
- *     total = committedThisStreet + toCall + fraction × (pot + toCall)
- *
- * With nothing to call that reduces to a plain fraction-of-pot bet. Facing a bet it is the
- * standard pot-sized-raise construction — match the bet first, then bet a fraction of what
- * is then in the middle. That definition is printed next to the buttons in the UI, because
- * "pot-sized raise" means at least three different things in the wild and a learner should
- * not have to reverse-engineer which one a button implements.
- */
-export const SIZING_PRESETS: readonly SizingPreset[] = [
-  { id: 'third', label: '⅓ pot', fraction: 1 / 3 },
-  { id: 'half', label: '½ pot', fraction: 0.5 },
-  { id: 'twoThirds', label: '⅔ pot', fraction: 2 / 3 },
-  { id: 'pot', label: 'Pot', fraction: 1 },
-  { id: 'allIn', label: 'All in', fraction: null },
-];
-
-/**
- * Rounds to a whole chip and pins into `[min, max]`.
- *
- * Total by construction, and every branch is deliberate:
- *
- *  - non-finite in (`NaN` from an empty or half-typed field, `Infinity` from nothing
- *    sensible at all) collapses to `min`, which is always a legal amount;
- *  - an inverted or impossible range (`max < min`, which the server should never send but
- *    which a bug upstream could) also collapses to `min` rather than returning something
- *    between two contradictory bounds;
- *  - rounding happens BEFORE the pin, so a value just outside a bound cannot round its way
- *    back out again.
- */
-export function clampBetTo(value: number, bounds: BetBounds): number {
-  if (!Number.isFinite(bounds.min)) return 0;
-  if (!Number.isFinite(value)) return bounds.min;
-  if (!Number.isFinite(bounds.max) || bounds.max < bounds.min) return bounds.min;
-  return Math.min(Math.max(Math.round(value), bounds.min), bounds.max);
-}
+/** Rounds to a whole chip and pins into `[min, max]`. See `clampToBounds` in `@prl/poker-math`. */
+export const clampBetTo: (value: number, bounds: BetBounds) => number = clampToBounds;
 
 /**
  * The only spelling of an amount this sizer accepts: digits, with an optional sign and an
@@ -257,13 +220,8 @@ export function draftForBounds(draft: StampedDraft | null, bounds: BetBounds): B
   return sameBounds(draft.bounds, bounds) ? draft : null;
 }
 
-/** The total a preset resolves to, already clamped into the legal range. */
-export function presetTotal(preset: SizingPreset, context: SizingContext): number {
-  const { bounds, pot, toCall, committedThisStreet } = context;
-  if (preset.fraction === null) return clampBetTo(bounds.max, bounds);
-  const raw = committedThisStreet + toCall + Math.round(preset.fraction * (pot + toCall));
-  return clampBetTo(raw, bounds);
-}
+/** The total a preset resolves to, already clamped into the legal range. See `presetTo`. */
+export const presetTotal: (preset: SizingPreset, context: SizingContext) => number = presetTo;
 
 /**
  * Finds the bet or raise in a legal-action list, with usable bounds.

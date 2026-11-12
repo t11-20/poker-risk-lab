@@ -306,6 +306,20 @@ function buildOption(
 }
 
 /**
+ * One size, priced the way a ladder rung is, for a caller that chose the amount itself.
+ *
+ * The Coach prices the sizes the table's bar offers (`offeredSizes` in `./table-sizing.ts`) rather
+ * than the ladder's rungs, and it still needs each size's price and defence frequency computed by
+ * the same arithmetic. Exposing the rung builder keeps that one computation rather than two.
+ * `fractionOfPot` is the fraction the amount actually is.
+ */
+export function sizingOptionAt(pot: number, amount: number, label: string, isAllIn: boolean): SizingOption {
+  requirePositiveChips('pot', pot);
+  requirePositiveChips('amount', amount);
+  return buildOption(pot, amount, amount / pot, label, isAllIn);
+}
+
+/**
  * The usable bet sizes at this pot, each with the price it lays and the defence it
  * demands.
  *

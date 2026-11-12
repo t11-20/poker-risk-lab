@@ -34,7 +34,12 @@
  */
 
 import type { ActionCandidate, CoachReport } from '@prl/contracts';
-import { type ConsistencyPricing, judgeConsistency as judgeShared } from '@prl/poker-math';
+import {
+  type ConsistencyPricing,
+  judgeConsistency as judgeShared,
+  nearestPricedSizes,
+  pricedSizesFor,
+} from '@prl/poker-math';
 
 /** The action names a learner can commit to. Matches `ScenarioAttemptRequest.action`. */
 export type ScenarioAction = ActionCandidate['action'];
@@ -119,6 +124,16 @@ export interface Consistency {
    * from. Null when the action was not priced: there is no distance for an allowance to contain.
    */
   readonly withinAllowance: boolean | null;
+  /**
+   * For a size the analysis did not price, the priced sizes of the same action either side of it;
+   * null in every other case.
+   *
+   * "This analysis did not price that size" was the whole message, which is true and leaves the
+   * reader nowhere to go. Every size a button produces is priced now (`offeredSizes` in
+   * `@prl/poker-math`), so this is reached only by typing or dragging to a total in between, and
+   * naming the neighbours is what turns the refusal into a next step.
+   */
+  readonly nearestPriced: { readonly below: number | null; readonly above: number | null } | null;
 }
 
 /**
@@ -168,7 +183,34 @@ export function judgeConsistency(
     pricing: verdict.pricing,
     behindBenchmarkUnits: chosenEv === null ? null : benchmarkEv - chosenEv,
     withinAllowance: chosenEv === null ? null : verdict.consistent,
+    nearestPriced:
+      verdict.pricing === 'sizing-not-priced' && to !== undefined
+        ? nearestPricedSizes(to, pricedSizesFor(report, action))
+        : null,
   };
+}
+
+/**
+ * The sentence that names the priced sizes nearest an unpriced one, in the units the bar shows.
+ *
+ * Kept beside the judgement rather than in the component so it can be tested: JSX cannot run under
+ * `node:test` here. The formatter is passed in — the component hands it `formatUnits` — because
+ * `@prl/ui`'s entry point carries JSX this module's tests cannot load.
+ */
+export function nearestPricedSentence(
+  action: ScenarioAction,
+  nearest: { readonly below: number | null; readonly above: number | null },
+  units: (value: number) => string,
+): string {
+  const word = action === 'bet' ? 'bet' : 'raise';
+  const sides: string[] = [];
+  if (nearest.below !== null) sides.push(`${word} to ${units(nearest.below)}`);
+  if (nearest.above !== null) sides.push(`${word} to ${units(nearest.above)}`);
+  const where =
+    sides.length === 0
+      ? `It priced no ${word} sizes at all.`
+      : `The priced sizes nearest yours are ${sides.join(' and ')}.`;
+  return `${where} Every preset button sets a size the analysis priced, so choosing again with one of them gives you a figure to compare.`;
 }
 
 /**
