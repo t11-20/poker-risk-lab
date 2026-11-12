@@ -138,6 +138,18 @@ const SUPERSEDED = new Map([
     'sha256:6b1043cc9edbdce67870d365f74809199be5cc0b5f905b77747138dce9fa1f5f',
     'the web digest from the same build, affected by the same advisory and still deployed',
   ],
+  // The pair built at 0b01f90ce510, signed and deployed on 2026-08-27, and what staging ran until
+  // the 6b3886ed3246 pair replaced it on 2026-11-12. Kept visible because it scanned clean when it
+  // was built and carried 30 findings at or above HIGH by the day it was replaced, and because every
+  // alerts:*, drills, load and backup figure in the report is still a measurement of these two.
+  [
+    'sha256:94872a9abc937547b0d98441e4496718a9a5f879b2ea4f6c17a33be48a9d4083',
+    'the api digest built at 0b01f90ce510, deployed 2026-08-27, replaced by the 6b3886ed3246 pair',
+  ],
+  [
+    'sha256:e1c04b0e4f5f1d940280c09cda74e23981120d9f9fdacb72b3995199b9864af3',
+    'the web digest from the same build, replaced on the same day',
+  ],
 ]);
 
 /** Every full-length digest the report states, in order, deduplicated. */
