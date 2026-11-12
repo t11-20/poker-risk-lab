@@ -114,6 +114,17 @@ describe('the sentences say true things in the reader’s words', () => {
     assert.doesNotMatch(acked.submission?.message ?? '', /sequence|\d/u);
   });
 
+  // Audit at 308fadf: the hint read "…the hyphens are part of the code and are not", a sentence that
+  // stopped half way. Fixed before this pin was written; the pin is so it stays fixed.
+  it('says what to do with the hyphens in an invite code, in a whole sentence', () => {
+    const source = readFileSync(new URL('../src/app/play/LiveTable.tsx', import.meta.url), 'utf8');
+    const hint = /className="prl-field__hint" id=\{hintId\}>([\s\S]*?)<\/p>/u.exec(source)?.[1];
+    assert.ok(hint !== undefined, 'the invite field’s hint was not found in LiveTable.tsx');
+    const words = hint.replace(/\s+/gu, ' ').trim();
+    assert.match(words, /keep the hyphens, because they are part of the code\.$/u);
+    assert.doesNotMatch(words, /and are not$/u);
+  });
+
   it('does not tell a phone the Coach is below the table, where it is a sheet', () => {
     assert.doesNotMatch(COACH_READY_ANNOUNCEMENT, /below the table/u);
     // J3.11 in `scripts/ax-assertions.mjs` keys on these opening words, and refuses any digit.
