@@ -135,6 +135,7 @@ import { type ReactElement, useEffect, useRef, useState } from 'react';
 import { API_PATHS, apiGet, fetchSession, safeFetch, subscribeToAcceptedMutations } from '@/lib/api.ts';
 import { isCurrentDestination, NAV_DESTINATIONS, RECORD_DESTINATION } from '@/lib/nav.ts';
 import { MobileNav } from './MobileNav.tsx';
+import { NavigationPending } from './NavigationPending.tsx';
 
 /** The destination promoted out of the link list and into the accent pill. */
 const CTA_HREF = '/play';
@@ -395,6 +396,7 @@ export function SiteHeader(props: SiteHeaderProps): ReactElement {
           </div>
         </div>
       </header>
+      <NavigationPending pathname={pathname} />
     </>
   );
 }
