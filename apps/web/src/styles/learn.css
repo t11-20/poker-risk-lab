@@ -355,6 +355,8 @@
  * a `translateY` rather than a margin: transform composites, layout does not.
  */
 .prl-learn-entry {
+  /* The containing block for the title link's stretched `::after`, below. */
+  position: relative;
   display: grid;
   gap: var(--prl-space-4) var(--prl-space-6);
   grid-template-columns: auto minmax(0, 1fr);
@@ -423,18 +425,42 @@
 }
 
 /**
- * The whole title is the link, and it is underlined.
+ * The whole title is the link, and it is underlined — and the whole card is its target.
  *
  * `base.css` already underlines links; this only removes the underline offset default so a
  * two-line title's rules do not collide with the descenders above them.
+ *
+ * The card used to be tappable only on the title: measured at 390x844, a 252x24 target inside a
+ * card several times that size, beside Lab cards that take a tap anywhere (UX audit at 6b3886e,
+ * Minor 1). The stretch is the Lab's own (`.prl-lab-card__link::after` in lab.css, which says why
+ * it is a pseudo-element and not an anchor around the card). One difference: a lesson card holds
+ * other links, its prerequisites, and an overlay above them would swallow their taps — so they are
+ * lifted over it below.
  */
 .prl-learn-entry__link {
   color: var(--prl-text);
   text-underline-offset: var(--prl-space-1);
 }
 
+.prl-learn-entry__link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--prl-radius-3);
+}
+
 .prl-learn-entry__link:hover {
   color: var(--prl-accent-text);
+}
+
+/** The ring belongs on the card, as on the Lab: the card is what the pseudo-element covers. */
+.prl-learn-entry:has(.prl-learn-entry__link:focus-visible) {
+  outline: var(--prl-focus-width) solid var(--prl-focus-color);
+  outline-offset: var(--prl-focus-offset);
+}
+
+.prl-learn-entry__link:focus-visible {
+  outline: none;
 }
 
 /**
@@ -462,6 +488,28 @@
 
 .prl-learn-entry__prereq .prl-label {
   margin-inline-end: var(--prl-space-3);
+}
+
+/**
+ * Above the card's stretched link, and a full target of their own.
+ *
+ * `position: relative` with a `z-index` is what puts these over `.prl-learn-entry__link::after`;
+ * without it a tap on "How a hand runs" opened the card's own lesson instead. The height is the
+ * product's 44px floor (`--prl-target-min`): these were 17px tall (UX audit at 6b3886e, Minor 1),
+ * and a comma-separated list of links is a row of controls, not a sentence of prose.
+ */
+.prl-learn-entry__prereq-link {
+  position: relative;
+  z-index: 1;
+}
+
+.prl-learn-entry__prereq-link,
+.prl-learn-lesson__prereq a,
+.prl-learn-lesson__back,
+.prl-learn-terms__list a {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--prl-target-min);
 }
 
 .prl-learn-entry__prereq-note {

@@ -291,7 +291,7 @@ export default async function LabIndexPage({ searchParams }: LabIndexProps): Pro
       */}
       {isFilteredSelection(selection) || introCount === 0 ? null : (
         <p className="prl-note">
-          <a href={`${ROUTE}?difficulty=intro#${LAB_RESULTS_ID}`}>
+          <a className="prl-lab-start-link" href={`${ROUTE}?difficulty=intro#${LAB_RESULTS_ID}`}>
             {`New here? Start with the ${introCount} Intro scenarios`}
           </a>
         </p>

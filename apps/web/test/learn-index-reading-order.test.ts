@@ -17,6 +17,8 @@
  * ## Also here
  *
  * - The "Start here" sentence over a lesson with no prerequisites (Minor 8).
+ * - The tap targets on `/learn`, the lesson page and `/lab` (Minor 1), held as the stylesheet rules
+ *   that fixed them — `test:layout` measures glyphs, and a 17px-tall link is not a glyph defect.
  */
 
 import assert from 'node:assert/strict';
@@ -173,5 +175,49 @@ describe('"Start here" over a lesson with no prerequisites', () => {
 
   it('is the sentence the page prints', () => {
     assert.match(read('app', 'learn', 'page.tsx'), /\{startHereNote\(start\)\}/u);
+  });
+});
+
+/** The declarations of the first top-level rule whose selector list is exactly `selector`. */
+function rule(css: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const match = new RegExp(`(?:^|\\n)${escaped} \\{([^}]*)\\}`, 'u').exec(css);
+  assert.ok(match !== null, `no rule for ${selector}`);
+  return match[1] ?? '';
+}
+
+describe('tap targets (Minor 1)', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//gu, '');
+  const learnCss = strip(read('styles', 'learn.css'));
+  const labCss = strip(read('styles', 'lab.css'));
+
+  it('makes the whole lesson card the link’s target, as the Lab’s cards are', () => {
+    assert.match(rule(learnCss, '.prl-learn-entry'), /position: relative;/u);
+    const after = rule(learnCss, '.prl-learn-entry__link::after');
+    assert.match(after, /position: absolute;/u);
+    assert.match(after, /inset: 0;/u);
+  });
+
+  it('keeps the prerequisite links tappable above that overlay', () => {
+    const lifted = rule(learnCss, '.prl-learn-entry__prereq-link');
+    assert.match(lifted, /position: relative;/u);
+    assert.match(lifted, /z-index: 1;/u);
+  });
+
+  it('gives every standalone link the 44px floor', () => {
+    const floor = rule(
+      learnCss,
+      '.prl-learn-entry__prereq-link,\n.prl-learn-lesson__prereq a,\n.prl-learn-lesson__back,\n.prl-learn-terms__list a',
+    );
+    assert.match(floor, /min-block-size: var\(--prl-target-min\);/u);
+    assert.match(floor, /display: inline-flex;/u);
+    assert.match(rule(labCss, '.prl-lab-start-link'), /min-block-size: var\(--prl-target-min\);/u);
+    assert.match(read('app', 'lab', 'page.tsx'), /className="prl-lab-start-link"/u);
+  });
+
+  it('does not touch links inside lesson prose', () => {
+    // The floor is for links that stand alone. A link in a paragraph that grew to 44px would push
+    // its line apart from the lines around it.
+    assert.doesNotMatch(learnCss, /\.prl-prose a[^{]*\{[^}]*min-block-size/u);
   });
 });
