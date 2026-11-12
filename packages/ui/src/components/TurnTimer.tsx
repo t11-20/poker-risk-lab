@@ -93,7 +93,32 @@ function clampDuration(value: number, max: number): number {
   return Math.min(Math.max(value, 0), max);
 }
 
+/**
+ * One turn's countdown, remounted for every new turn by the key `TurnTimer` gives it.
+ *
+ * ## The defect the key exists for
+ *
+ * The countdown used to restart only when `remainingAtFrameMs` changed, and that is a DURATION. A
+ * reader who calls on the turn and is first to act on the river is given a new deadline in the next
+ * frame, armed `now + 240,000` and sent a millisecond or so later — so its remaining time is very
+ * often exactly what the previous turn's first frame said. Same number, so the effect did not run,
+ * and the digits went on counting down from the turn before. Measured on the live table at
+ * 1440x900: 5 of 12 hero-to-hero transitions had equal `deadlineMs - serverTimeMs`, and every one
+ * of them lagged by the time spent on the previous decision — a river ring reading 190s while the
+ * server had just given 237s. A reader who spent 200s on one street and was first on the next saw
+ * 40s, then "0s", with 200s still on the server's clock.
+ *
+ * The ring had the same defect in its own medium: `--prl-turn-offset` was the same string, so the
+ * browser had no reason to restart the CSS animation either. Keying the whole countdown on the
+ * deadline fixes both at once — a new key is a new element, so the state starts from the server's
+ * figure and the animation starts from its first keyframe — and needs no dependency the effect
+ * does not read.
+ */
 export function TurnTimer(props: TurnTimerProps): ReactElement {
+  return <TurnCountdown {...props} key={String(props.clock.deadlineMs)} />;
+}
+
+function TurnCountdown(props: TurnTimerProps): ReactElement {
   const { clock, label = 'Turn timer', className } = props;
 
   const budgetMs = Number.isFinite(clock.budgetSeconds)
