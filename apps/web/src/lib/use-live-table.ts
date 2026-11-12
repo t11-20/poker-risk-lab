@@ -80,6 +80,7 @@ import {
   listRooms,
   normaliseInviteCode,
   READER_SEAT,
+  resumeRememberedTable,
 } from './table-rooms.ts';
 import {
   type CloseMeaning,
@@ -1162,6 +1163,12 @@ export type CoachOff =
 
 export interface LiveTable {
   readonly phase: SetupPhase;
+  /**
+   * True while the page is reconnecting, on load, to the table this tab was at. `phase` stays `idle`
+   * meanwhile, because nothing has been asked for on this visit; this is what lets the status line
+   * say "reconnecting" rather than "not connected yet". See `resumeRememberedTable`.
+   */
+  readonly resuming: boolean;
   readonly status: TableSocketStatus | null;
   readonly closed: CloseMeaning | null;
   readonly setupError: string | null;
@@ -1327,6 +1334,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [join, setJoin] = useState<JoinPhase>({ state: 'idle' });
   const [dealIn, setDealIn] = useState<DealIn>('off');
+  const [resuming, setResuming] = useState(false);
 
   const socketRef = useRef<TableSocketHandle | null>(null);
   const pendingRef = useRef<PendingDecision | null>(null);
@@ -1351,6 +1359,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
   const prepare = useCallback(
     (fresh: boolean, request: CreateRoomRequest = BOT_TABLE_REQUEST) => {
       setupRef.current?.abort();
+      setResuming(false);
       setPhase('preparing');
       setSetupError(null);
       const controller = new AbortController();
@@ -1379,6 +1388,60 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
 
   /** Whatever setup pass is still running when the component goes away. */
   useEffect(() => () => setupRef.current?.abort(), []);
+
+  /**
+   * Back at the table this tab was at, when the reader returns to `/play`.
+   *
+   * Navigating away unmounts this hook and closes the socket, and the server keeps the seat; coming
+   * back used to land on "Not connected yet" with a button whose sentence promised a new room (UI
+   * audit of 308fadf, item 15). `resumeRememberedTable` decides, and only ever reconnects: no
+   * guest is minted, no room is created or chosen in place of the remembered one. Anything else
+   * leaves the page exactly where a first visit starts.
+   *
+   * Never for a Legends page: `/play?profile=…` is a request for a new match by its URL, and the
+   * match is opened by the press there, as it always was.
+   *
+   * Read in an effect, not during render: `sessionStorage` does not exist on the server, and a first
+   * render that differed between the two would be a hydration mismatch.
+   *
+   * `dealIn` stays `off`. Reconnecting is not being dealt in — the reader may be mid-hand, or have
+   * stood up before leaving — so the manual controls appear and nothing is sent on their behalf.
+   */
+  useEffect(() => {
+    if (legendMatch !== undefined) return;
+    const remembered = rememberedRoom();
+    if (remembered === null) return;
+    const controller = new AbortController();
+    setupRef.current = controller;
+    setResuming(true);
+    void (async (): Promise<void> => {
+      try {
+        const resumed = await resumeRememberedTable(remembered, controller.signal);
+        if (controller.signal.aborted) return;
+        if (resumed === null) {
+          // The tab's memory names a table this account can no longer reach — closed, left, or a
+          // different session. Forgotten, so the next press of "Deal me in" does not aim at it.
+          rememberRoom(null);
+          return;
+        }
+        setDisplayName(resumed.session.user.displayName);
+        dispatch({ kind: 'reset' });
+        setInviteCode(null);
+        setJoin({ state: 'idle' });
+        setRoomId(resumed.room.id);
+        setPhase('ready');
+      } catch {
+        // A failed reconnect is the page a first visit gets, which still works: "Deal me in" reads
+        // the same memory and tries again, with its own error reporting.
+      } finally {
+        // Only this pass's own flag. A press of "Deal me in" meanwhile aborted it and cleared the
+        // flag itself, and React's development double-mount starts a second pass before the first
+        // one's `finally` has run.
+        if (setupRef.current === controller) setResuming(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [legendMatch]);
 
   const start = useCallback((): void => {
     if (phase === 'preparing' || phase === 'ready') return;
@@ -1444,6 +1507,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
     }
 
     setupRef.current?.abort();
+    setResuming(false);
     const controller = new AbortController();
     setupRef.current = controller;
     setDealIn('off');
@@ -1736,6 +1800,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
 
   return {
     phase,
+    resuming,
     status,
     closed,
     setupError,
