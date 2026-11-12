@@ -16,9 +16,10 @@
  * the row stuck at 611..780, and the note after the row — where the row sits in flow — at 1,168.
  * Scrolled by the answer, the row's flow position is above the line it sticks at, so it sits under
  * the sizer and covers none of it; measured after the change on the same decision shape, sizer
- * 220..587 and row 591..760, and `elementFromPoint` returned the control itself at all five presets,
- * the slider and the number field, on 10 of 10 decisions across both themes and 390x844 and
- * 360x640. The negative control is the old geometry itself: the detector says covered.
+ * 220..587 and row 591..760 (213..580 and 584..753 since the glance, below), and `elementFromPoint`
+ * returned the control itself at all five presets, the slider and the number field, on 10 of 10
+ * decisions across both themes and 390x844 and 360x640. The negative control is the old geometry
+ * itself: the detector says covered.
  *
  * The wiring in `LiveTable.tsx` imports `@prl/ui`, which this runner cannot load, so it is read
  * from source with its own negative control, as `focus-rescues-scroll.test.ts` reads the rest.

@@ -402,10 +402,12 @@
 }
 
 /**
- * The reader's cards and the board inside the bar (`HandGlance` in `@prl/ui`), shown exactly where
- * this block is not: on a narrow column (section 3.1, where the follow scroll can take the plate off
- * the top) and below 900px (section 8, where this block takes over). So the band draws the reader's
- * cards once at every width, and never shifts: which one shows is decided here, before paint.
+ * The reader's cards and the board inside the bar (`HandGlance` in `@prl/ui`), shown where the row
+ * sticks (section 3.1: a column under 46rem, where the follow scroll can take the plate off the top)
+ * and this block is not drawn (below 900px; section 8 hides it again above). Measured on the decision
+ * fixture: glance at 320, 390 and 768; HUD at 1024, 1280 and 1440; neither at 899, where the column
+ * is wide enough for the row to sit still, the follow never moves, and the plate stays above the band.
+ * So the band never draws the reader's cards twice, and never shifts: it is decided here, before paint.
  */
 .prl-play .prl-hand-glance {
   display: none;
