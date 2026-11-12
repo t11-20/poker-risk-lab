@@ -24,6 +24,21 @@ import type { ForcedBet, LoggedAction, PotAward, SeatIndex, SeatShowdown } from 
 
 export type NameOf = (seat: SeatIndex) => string;
 
+/**
+ * An amount as a reader sees it, grouped.
+ *
+ * These were `String(amount)`, so the result line under the table read "Patient Technician 1 wins
+ * 1529 from the pot." and "Disciplined Specialist wins 1975 from the main pot." (audit at 308fadf,
+ * both from the socket log), beside seat plates and a pot that `formatUnits` in `@prl/ui` prints
+ * grouped. `en-GB` because that is the grouping the web client's own `units()` uses for the
+ * sentences it writes into the same live region, so one announcement cannot mix "1,529" and "1529".
+ */
+const GROUPED = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 });
+
+export function amount(value: number): string {
+  return GROUPED.format(value);
+}
+
 /** A name lookup over the dealt roster, falling back to the seat's one-based number. */
 export function namesFrom(names: ReadonlyMap<SeatIndex, string>): NameOf {
   return (seat) => names.get(seat) ?? `Seat ${String(seat + 1)}`;
@@ -40,7 +55,7 @@ export function forcedBetsSentence(bets: readonly ForcedBet[], nameOf: NameOf): 
   return bets
     .map(
       (bet) =>
-        `${nameOf(bet.seat)} posts ${FORCED_BET[bet.kind]}, ${String(bet.amount)}` +
+        `${nameOf(bet.seat)} posts ${FORCED_BET[bet.kind]}, ${amount(bet.amount)}` +
         `${bet.wasShort ? ', which is all they had' : ''}.`,
     )
     .join(' ');
@@ -58,11 +73,11 @@ function verbOf(logged: LoggedAction): string {
     case 'check':
       return 'checks';
     case 'call':
-      return `calls ${String(logged.amountPaid)}`;
+      return `calls ${amount(logged.amountPaid)}`;
     case 'bet':
-      return `bets to ${String(action.to)}`;
+      return `bets to ${amount(action.to)}`;
     case 'raise':
-      return `raises to ${String(action.to)}`;
+      return `raises to ${amount(action.to)}`;
     default:
       return 'acts';
   }
@@ -76,7 +91,7 @@ export function showdownSentence(showdown: SeatShowdown, nameOf: NameOf): string
 export function awardSentence(award: PotAward, potCount: number, nameOf: NameOf): string {
   const pot =
     potCount <= 1 ? 'the pot' : award.potIndex === 0 ? 'the main pot' : `side pot ${award.potIndex}`;
-  return `${nameOf(award.seat)} wins ${String(award.amount)} from ${pot}${award.wasSplit ? ', split' : ''}.`;
+  return `${nameOf(award.seat)} wins ${amount(award.amount)} from ${pot}${award.wasSplit ? ', split' : ''}.`;
 }
 
 export const NO_CHIPS_CHANGED_HANDS = 'No chips changed hands.';

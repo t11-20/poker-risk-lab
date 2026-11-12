@@ -70,6 +70,23 @@ describe('the narration names who did it', () => {
     );
   });
 
+  // Audit at 308fadf, from the socket log: "Patient Technician 1 wins 1529 from the pot." and
+  // "Disciplined Specialist wins 1975 from the main pot." under a table whose plates say "1,529".
+  it('groups an amount of four figures or more, in every sentence that carries one (REGRESSION)', () => {
+    assert.equal(awardSentence(award(3, 0, 1_529), 1, nameOf), 'Nit bot wins 1,529 from the pot.');
+    assert.equal(awardSentence(award(0, 0, 1_975), 2, nameOf), 'Ada wins 1,975 from the main pot.');
+    assert.equal(actionSentence(logged(0, { type: 'call' }, 1_200), nameOf), 'Ada calls 1,200');
+    assert.equal(actionSentence(logged(0, { type: 'bet', to: 2_500 }), nameOf), 'Ada bets to 2,500');
+    assert.equal(
+      actionSentence(logged(3, { type: 'raise', to: 10_000 }), nameOf),
+      'Nit bot raises to 10,000',
+    );
+    assert.equal(
+      forcedBetsSentence([{ kind: 'bigBlind', seat: 0, amount: 1_000, wasShort: false }], nameOf),
+      'Ada posts the big blind, 1,000.',
+    );
+  });
+
   it('names who showed down', () => {
     const shown = { seat: 0, playerId: 'usr_0', description: 'a flush, ace high' };
     assert.equal(
