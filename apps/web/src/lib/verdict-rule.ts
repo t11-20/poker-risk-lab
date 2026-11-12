@@ -44,58 +44,44 @@ export interface VerdictFormatters {
   readonly signedUnits: (delta: number, options?: { readonly decimals?: number }) => string;
 }
 
-/** Below this, a difference prints as 0.0 at the panel's precision, so it is "level". */
+/** Below this, two figures print the same at the panel's precision. */
 const LEVEL = 0.05;
 
 /**
  * The sentence, or `null` for an action the analysis did not price — the panel already says so, and
  * "judged against folding" is not true of a decision nothing judged.
  *
- * `consistent` is passed rather than read off `judgement` because the panel shows the server's
- * verdict when there is one; the sentence must agree with the chip beside it.
+ * It states the rule and where the best row stands against it, and deliberately not the outcome:
+ * the chip says that, and "Distance from that" says by how much. A first version restated both in
+ * two more sentences, which made the panel's explanation longer than the figures it explained.
  */
 export function verdictRuleSentence(
   judgement: Consistency,
   action: ScenarioAction,
-  consistent: boolean,
   format: VerdictFormatters,
 ): string | null {
   const { units: formatUnits, signedUnits: formatSignedUnits } = format;
-  const behind = judgement.behindBenchmarkUnits;
-  if (behind === null || judgement.chosenEv === null) return null;
+  if (judgement.behindBenchmarkUnits === null || judgement.chosenEv === null) return null;
   const allowance = formatUnits(judgement.toleranceUnits);
-  const distance = formatUnits(Number(Math.abs(behind).toFixed(1)), { decimals: 1 });
-  const level = Math.abs(behind) < LEVEL;
 
   if (action === 'fold') {
     const benchmark = formatSignedUnits(judgement.benchmarkEv, { decimals: 1 });
-    const rule =
-      'A fold is judged the other way round: against the best row that does not rely on an assumed ' +
-      `fold rate, worth ${benchmark} here. It counts as consistent when nothing measured beats it by ` +
-      `more than the allowance of ${allowance}`;
-    return consistent
-      ? `${rule}, and nothing does, so folding is consistent with this analysis.`
-      : `${rule}. That row beats folding by ${distance}, more than the allowance, so folding is not the line the analysis leans towards.`;
+    return (
+      'A fold is judged the other way round: it counts as consistent unless something the analysis ' +
+      `measured — leaving out rows that rely on an assumed fold rate — beats it by more than ${allowance}, ` +
+      `and the best such row here is worth ${benchmark}.`
+    );
   }
 
-  const name = ACTION_NAME[action];
-  const rule =
-    `The verdict judges one thing: whether ${name} does at least as well as folding, which is worth 0, ` +
-    `give or take an allowance of ${allowance}.`;
-  const outcome = !consistent
-    ? ` Yours is ${distance} behind folding, more than the allowance, so it is not the line the analysis leans towards.`
-    : level
-      ? ' Yours is level with folding, so it is consistent.'
-      : behind < 0
-        ? ` Yours is ${distance} ahead of folding, so it is consistent — the allowance is only there for actions that fall short.`
-        : ` Yours is ${distance} behind folding, inside the allowance, so it is close enough to break-even to count as consistent.`;
-
-  // The best row is context, not the bar. Said only when it is a different, better row: naming it
+  // The best row is context, not the bar. Named only when it is a different, better row: naming it
   // when the learner already chose it would be telling them their action is beaten by itself.
   const { bestAction, bestTo } = judgement;
   const best =
     bestAction === null || judgement.bestEv - judgement.chosenEv < LEVEL
       ? ''
-      : ` The best row, ${ROW_NAME[bestAction]}${bestTo === null ? '' : ` to ${formatUnits(bestTo)}`}, is worth more; it is shown for comparison and does not change the verdict.`;
-  return `${rule}${outcome}${best}`;
+      : `; the best row, ${ROW_NAME[bestAction]}${bestTo === null ? '' : ` to ${formatUnits(bestTo)}`}, is there for comparison and does not have to be matched`;
+  return (
+    `The verdict asks one thing: whether ${ACTION_NAME[action]} does at least as well as folding, ` +
+    `which is worth 0, allowing it to fall up to ${allowance} short${best}.`
+  );
 }

@@ -43,17 +43,16 @@ describe('the verdict says what it judged', () => {
     assert.ok(JUDGED.length >= 15, `only ${JUDGED.length} judged; a sweep of nothing is not a pass`);
   });
 
-  it('names folding as the benchmark, and agrees with the chip, for every priced action', () => {
+  it('is one sentence naming folding as the benchmark, and the allowance, for every priced action', () => {
     for (const { id, action, judgement } of JUDGED) {
-      const sentence = verdictRuleSentence(judgement, action, judgement.consistent, FORMAT);
+      const sentence = verdictRuleSentence(judgement, action, FORMAT);
       assert.ok(sentence !== null, `${id}: a priced action has no sentence`);
       assert.match(sentence, /fold/u, `${id}: the sentence does not say it is measured against folding`);
-      if (judgement.consistent) {
-        assert.match(sentence, /consistent/u, `${id}: ${sentence}`);
-        assert.doesNotMatch(sentence, /not the line/u, `${id}: ${sentence}`);
-      } else {
-        assert.match(sentence, /not the line the analysis leans towards/u, `${id}: ${sentence}`);
-      }
+      assert.ok(
+        sentence.includes(FORMAT.units(judgement.toleranceUnits)),
+        `${id}: no allowance in "${sentence}"`,
+      );
+      assert.equal(sentence.match(/\. /gu), null, `${id}: more than one sentence: "${sentence}"`);
       if (action === 'fold') assert.match(sentence, /other way round/u, `${id}: ${sentence}`);
     }
   });
@@ -68,25 +67,31 @@ describe('the verdict says what it judged', () => {
         (judgement.behindBenchmarkUnits ?? 0) < 0,
     );
     assert.ok(found !== undefined, 'no shipped spot reproduces the audit’s case; check before deleting this');
-    const sentence = verdictRuleSentence(found.judgement, found.action, true, FORMAT) ?? '';
-    assert.match(sentence, /ahead of folding, so it is consistent/u, sentence);
-    assert.match(sentence, /allowance is only there for actions that fall short/u, sentence);
-    assert.match(sentence, /The best row, .+, is worth more; it is shown for comparison/u, sentence);
+    const sentence = verdictRuleSentence(found.judgement, found.action, FORMAT) ?? '';
+    // "20.6 units ahead" beside "within the allowance of 10": the allowance is for falling short.
+    assert.match(
+      sentence,
+      /does at least as well as folding, which is worth 0, allowing it to fall up to/u,
+      sentence,
+    );
+    // "consistent" beside "Best row: +56.6 — Raise to 50": the best row is not the bar.
+    assert.match(
+      sentence,
+      /the best row, .+, is there for comparison and does not have to be matched\.$/u,
+      sentence,
+    );
   });
 
   it('says nothing about a decision the analysis did not price', () => {
     const [first] = JUDGED;
     assert.ok(first !== undefined);
     const unpriced = { ...first.judgement, behindBenchmarkUnits: null, chosenEv: null };
-    assert.equal(verdictRuleSentence(unpriced, first.action, false, FORMAT), null);
+    assert.equal(verdictRuleSentence(unpriced, first.action, FORMAT), null);
   });
 
   it('is the sentence the panel prints', () => {
     const stage = readFileSync(join(SRC, 'components', 'ScenarioStage.tsx'), 'utf8');
-    assert.match(
-      stage,
-      /<VerdictRule judgement=\{judgement\} action=\{action\} consistent=\{consistent\} \/>/u,
-    );
+    assert.match(stage, /<VerdictRule judgement=\{judgement\} action=\{action\} \/>/u);
     assert.match(
       stage,
       /rule === null \? null : <p className="prl-prose prl-stage__verdict-rule">\{rule\}<\/p>/u,

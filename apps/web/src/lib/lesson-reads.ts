@@ -150,7 +150,7 @@ export function lessonReadNote(outcome: LessonReadOutcome): string {
       );
     case 'unavailable':
       return (
-        'Poker Risk Lab could not be reached, so nothing was recorded. Nothing else about this lesson ' +
+        'That could not be sent, so nothing was recorded. Nothing else about this lesson ' +
         'changed, and pressing the button again is safe.'
       );
   }

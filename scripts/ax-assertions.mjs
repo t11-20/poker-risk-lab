@@ -904,7 +904,7 @@ const LEARN_CHECKS = [
   },
   {
     id: 'J1.3',
-    what: 'every topic group is a level-2 or level-3 heading and no level is skipped',
+    what: 'every group of lessons is a level-2 or level-3 heading and no level is skipped',
     decide: (e) => {
       const belowTheTitle = e.headings.filter((heading) => heading.level > 1);
       if (belowTheTitle.length < 5) {

@@ -629,7 +629,7 @@ arrives.
 |---|---|---|---|---|
 | 1.1 | auto | Load `/learn` | The title **"Learn — Poker Risk Lab"** is announced. | |
 | 1.2 | auto | VO + Command + H (or `H`) to the first heading | A single level-1 heading naming the curriculum is announced, with its level. | |
-| 1.3 | auto | Continue by heading | Each topic group announces as a heading at level 2 or 3, in an order that never skips a level. | |
+| 1.3 | auto | Continue by heading | Each group of lessons (Intro, Core, Advanced) announces as a heading at level 2 or 3, in an order that never skips a level. | |
 | 1.4 | auto | Rotor → Links (or `K`) | Every lesson link announces the lesson's title. No link announces as a bare number, a glyph, or "link". | |
 | 1.6 | auto | Read the figures at the top (VO + Right / Down) | Each figure announces a **label and a value together** ("Lessons, 17"), never a bare number. | |
 

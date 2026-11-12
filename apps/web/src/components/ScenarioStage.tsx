@@ -230,9 +230,8 @@ function BenchmarkRows({
 function VerdictRule(props: {
   readonly judgement: Consistency;
   readonly action: ScenarioAction;
-  readonly consistent: boolean;
 }): ReactElement | null {
-  const rule = verdictRuleSentence(props.judgement, props.action, props.consistent, {
+  const rule = verdictRuleSentence(props.judgement, props.action, {
     units: formatUnits,
     signedUnits: formatSignedUnits,
   });
@@ -300,11 +299,11 @@ function Verdict({
               : 'Nothing was recorded, because this browser has no guest session to keep it on.'
             : server.state === 'pending'
               ? 'Checking your action. The figures below are the same rule, worked out in your browser.'
-              : 'Poker Risk Lab could not be reached, so this verdict was worked out in your browser by the same rule, and nothing was recorded.'}
+              : 'Your decision could not be sent, so this verdict was worked out in your browser by the same rule, and nothing was recorded.'}
         </span>
       </div>
 
-      <VerdictRule judgement={judgement} action={action} consistent={consistent} />
+      <VerdictRule judgement={judgement} action={action} />
 
       {/* Where the priced sizes are, so "did not price that size" is a next step and not a dead end.
           Only a typed or dragged total reaches this: every preset and the default are priced. */}

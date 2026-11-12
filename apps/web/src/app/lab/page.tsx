@@ -271,11 +271,11 @@ export default async function LabIndexPage({ searchParams }: LabIndexProps): Pro
           {/* This named the scenario API and `src/fixtures/scenarios.ts` to a learner (UX audit at
               6b3886e, M5). The fallback is the typed fixture; what the reader needs is that it is a
               partial copy that knows nothing about them. */}
-          <span className="prl-label prl-label--accent">Bundled copy</span> The Scenario Lab could not be
-          reached, so this list is the copy that ships with the app. The scenarios and their questions are
-          real, and the analysis behind each one was worked out by the same maths — but it is a partial copy
-          rather than the full set, and it does not know which of them you have attempted, so every card reads
-          as unattempted whatever you have actually done.
+          <span className="prl-label prl-label--accent">Bundled copy</span> The full list could not be loaded,
+          so this is the copy that ships with the app. The scenarios and their questions are real, and the
+          analysis behind each one was worked out by the same maths — but it is a partial copy rather than the
+          full set, and it does not know which of them you have attempted, so every card reads as unattempted
+          whatever you have actually done.
         </p>
       ) : null}
 

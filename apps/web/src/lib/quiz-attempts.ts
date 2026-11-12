@@ -252,5 +252,5 @@ export const VERDICT_SOURCE_NOTE: Readonly<Record<VerdictSource, string>> = {
     'Nothing was recorded, because this browser has no guest session to keep it on. Answers count towards your record once it has one — opening a table starts a guest session straight away, with no email and no password.',
   pending: 'Checking your answer. What is shown was worked out in your browser, the same way.',
   local:
-    'Poker Risk Lab could not be reached, so this was worked out in your browser and nothing was recorded. It is the same comparison either way.',
+    'Your answer could not be sent, so this was worked out in your browser and nothing was recorded. It is the same comparison either way.',
 };

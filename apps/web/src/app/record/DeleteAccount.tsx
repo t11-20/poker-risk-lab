@@ -158,8 +158,8 @@ export function AccountDeletion({ deletable }: AccountDeletionProps): ReactEleme
           state: 'failed',
           // The CSRF token could not be fetched; see the same message in `UnitsReset.tsx`.
           message:
-            'This page could not get ready to send that, so nothing was sent and your account is exactly ' +
-            'as it was. Reload the page and try again.',
+            'Something went wrong before anything was sent, so nothing was deleted and your account is ' +
+            'exactly as it was. Reload the page and try again.',
         });
         return;
       }
