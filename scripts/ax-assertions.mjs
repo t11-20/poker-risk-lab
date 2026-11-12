@@ -969,9 +969,12 @@ const LEARN_CHECKS = [
 // Journey 2 — a lesson and its quiz
 // ---------------------------------------------------------------------------
 
-const QUIZ_VERDICT_OPENING =
+export const QUIZ_VERDICT_OPENING =
   /^(That matches the answer this lesson gives|That is not the answer this lesson gives)\./u;
-const NUMERIC_VERDICT_OPENING = /^\S.* is (within|outside) the tolerance of .*?\./u;
+// "35.0 % is more than ±1.5 % from the computed 33.3 %." / "… is within ±1.5 % of the computed …".
+// It read "… is outside the tolerance of 33.3 %", which named the target as the tolerance; see
+// `apps/web/src/lib/quiz-verdict.ts`. `ax-assertions.test.mjs` drives this with the app's own sentence.
+export const NUMERIC_VERDICT_OPENING = /^\S.* is (?:within ±.*? of|more than ±.*? from) the computed .*?\./u;
 
 async function gatherQuiz(page) {
   const evidence = { title: await page.evaluate('document.title') };

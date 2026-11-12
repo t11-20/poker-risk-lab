@@ -158,7 +158,12 @@ export function LessonRead(props: LessonReadProps): ReactElement {
       </p>
       <div className="prl-stack">
         <p className="prl-btn-row">
-          <Button variant="primary" onClick={() => setPress({ lessonId })} disabled={working || done}>
+          <Button
+            variant="primary"
+            className="prl-learn-titled-btn"
+            onClick={() => setPress({ lessonId })}
+            disabled={working || done}
+          >
             {working ? 'Recording…' : done ? 'Recorded' : `I have finished “${lessonTitle}”`}
           </Button>
         </p>

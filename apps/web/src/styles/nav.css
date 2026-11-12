@@ -880,7 +880,7 @@
 
 .prl-footer__theme .prl-theme__word,
 .prl-sheet__foot .prl-theme__word {
-  min-height: calc(var(--prl-pill-h) - var(--prl-space-3));
+  min-height: var(--prl-target-min); /* was pill-h − space-3: 38px at 360, under the 44px floor */
   min-width: 0;
   padding-inline: var(--prl-space-6);
   border-radius: var(--prl-radius-pill);
