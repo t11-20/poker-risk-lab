@@ -104,6 +104,7 @@ import {
   nearestPricedSentence,
   type ScenarioAction,
 } from '../lib/consistency.ts';
+import { verdictRuleSentence } from '../lib/verdict-rule.ts';
 import { FoldEquityControl } from './FoldEquityControl.tsx';
 
 export interface ScenarioStageProps {
@@ -220,6 +221,25 @@ function BenchmarkRows({
 }
 
 /**
+ * The rule in words, with this action's numbers, ahead of the figures.
+ *
+ * Without it a consistent call beside a far better best row, and "ahead of it" beside "within the
+ * allowance", read as contradictions (UX audit at 6b3886e, Minor 9); `lib/verdict-rule.ts` has the
+ * measurement. Nothing for an unpriced action, which the chip above already explains.
+ */
+function VerdictRule(props: {
+  readonly judgement: Consistency;
+  readonly action: ScenarioAction;
+  readonly consistent: boolean;
+}): ReactElement | null {
+  const rule = verdictRuleSentence(props.judgement, props.action, props.consistent, {
+    units: formatUnits,
+    signedUnits: formatSignedUnits,
+  });
+  return rule === null ? null : <p className="prl-prose prl-stage__verdict-rule">{rule}</p>;
+}
+
+/**
  * The comparison, and the three numbers behind it.
  *
  * All three are on screen together on purpose. A chip on its own would be a verdict; a chip beside
@@ -283,6 +303,8 @@ function Verdict({
               : 'The server could not be reached, so this verdict is the shared rule applied in your browser. It is the same rule the server grades with.'}
         </span>
       </div>
+
+      <VerdictRule judgement={judgement} action={action} consistent={consistent} />
 
       {/* Where the priced sizes are, so "did not price that size" is a next step and not a dead end.
           Only a typed or dragged total reaches this: every preset and the default are priced. */}
