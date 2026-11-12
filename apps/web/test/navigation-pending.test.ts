@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
+  formDestination,
   PENDING_CEILING_MS,
   PENDING_DELAY_MS,
   pendingMessage,
@@ -48,6 +49,31 @@ describe('which presses start the message', () => {
       }),
       true,
     );
+  });
+
+  it('a GET form whose action is the page it is on, once its fields are the query (REGRESSION)', () => {
+    // The compare picker on a bare /legends/compare: the action alone equals the current URL.
+    const current = at('/legends/compare');
+    const destination = formDestination('/legends/compare', current.href, [
+      ['difficulty', 'standard'],
+      ['profiles', 'calling-station'],
+      ['profiles', 'maniac'],
+    ]);
+    assert.equal(destination.search, '?difficulty=standard&profiles=calling-station&profiles=maniac');
+    assert.equal(shouldShowPending({ destination, current, documentLoad: true }), true);
+    // The action alone is what the first version used, and it said "same page".
+    assert.equal(
+      shouldShowPending({ destination: at('/legends/compare'), current, documentLoad: true }),
+      false,
+    );
+  });
+
+  it('builds the query from text fields only, as a GET form sends it', () => {
+    const destination = formDestination('?x=stale', 'https://lab.example/lab', [
+      ['topic', 'pot-odds'],
+      ['upload', { name: 'not text' }],
+    ]);
+    assert.equal(destination.href, 'https://lab.example/lab?topic=pot-odds');
   });
 
   it('not a fragment, the same page, or another site', () => {
@@ -97,6 +123,10 @@ describe('the wiring', () => {
     assert.match(component, /window\.addEventListener\('submit', onSubmit\)/u);
     assert.match(component, /window\.addEventListener\('pageshow', onPageShow\)/u);
     assert.match(component, /start\(new URL\(anchor\.href\), !event\.defaultPrevented\)/u);
+    assert.match(
+      component,
+      /formDestination\(action, window\.location\.href, new FormData\(form\)\.entries\(\)\)/u,
+    );
   });
 
   it('withdraws the message when the pathname lands', () => {

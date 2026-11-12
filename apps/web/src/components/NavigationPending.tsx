@@ -25,6 +25,7 @@
 
 import { type ReactElement, useEffect, useRef, useState } from 'react';
 import {
+  formDestination,
   PENDING_CEILING_MS,
   PENDING_DELAY_MS,
   pendingMessage,
@@ -81,7 +82,8 @@ export function NavigationPending({ pathname }: NavigationPendingProps): ReactEl
       if (!(form instanceof HTMLFormElement) || event.defaultPrevented) return;
       if (form.method.toLowerCase() !== 'get' || (form.target !== '' && form.target !== '_self')) return;
       // The attribute, not `form.action`: a control named "action" shadows the property.
-      start(new URL(form.getAttribute('action') ?? '', window.location.href), true);
+      const action = form.getAttribute('action') ?? '';
+      start(formDestination(action, window.location.href, new FormData(form).entries()), true);
     };
 
     const onPageShow = (event: PageTransitionEvent): void => {

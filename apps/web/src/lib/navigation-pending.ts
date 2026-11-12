@@ -59,6 +59,28 @@ export function shouldShowPending(input: PendingInput): boolean {
 }
 
 /**
+ * Where a GET form goes: its action with the form's fields as the query, as the browser builds it.
+ *
+ * The action alone is not the destination. The compare picker's action is `/legends/compare`, so on
+ * a bare `/legends/compare` the action IS the current URL and the press read as "same page, nothing
+ * to load" — the one form the audit timed got no message. Files are skipped: a GET form cannot send
+ * one, and the browser sends its name only.
+ */
+export function formDestination(
+  action: string,
+  base: string,
+  fields: Iterable<readonly [string, unknown]>,
+): URL {
+  const destination = new URL(action, base);
+  const query = new URLSearchParams();
+  for (const [name, value] of fields) {
+    if (typeof value === 'string') query.append(name, value);
+  }
+  destination.search = query.toString();
+  return destination;
+}
+
+/**
  * The sentence, for where the press is going.
  *
  * The two routes the audit timed say why they are slow, because "loading" over a two-second wait
