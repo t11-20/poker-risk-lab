@@ -611,6 +611,19 @@ export class LiveTable {
   }
 
   /**
+   * Each dealt-in seat's display name, as it was at the deal — the names the narration uses.
+   *
+   * For the live Coach, which used to label opponents "seat 2" beside plates that show names and no
+   * numbers (audit at 308fadf). The deal's names rather than the seating's for the reason in
+   * `narration.ts`: a chair can change hands between deals, and a name taken from the current
+   * seating would put the newcomer's name on the previous player's range. Empty before the first
+   * deal.
+   */
+  dealtNames(): ReadonlyMap<SeatIndex, string> {
+    return this.hand?.names ?? new Map();
+  }
+
+  /**
    * True while this player still owes a blind and is therefore not being dealt in.
    *
    * By user id, because the obligation belongs to the person: it survives standing up, taking a

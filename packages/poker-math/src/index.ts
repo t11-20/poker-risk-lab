@@ -68,6 +68,7 @@ export {
   coachSpotForView,
   expandAssumedRange,
   LIVE_COACH_POLICY,
+  type SeatNamer,
 } from './coach-view.ts';
 export {
   bestCandidate,
