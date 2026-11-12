@@ -10,6 +10,7 @@ PostgreSQL is not answering. The API process is fine.
 - The instance leaves the load balancer without the orchestrator killing it.
 - Learners can load pages but cannot sign in, join a room, or see history.
 - Logs carry `readiness check failed` with `{"check":{"ok":false,"detail":"database did not answer"}}`.
+- An API that STARTED during the outage also logged `database schema not verified at boot`, and once Postgres answers its `detail` reads `schema not yet verified: …` until the first probe has read the migration ledger. It did not exit, by design: it compares the ledger with its build the moment it can ([`../../RUNBOOK.md`](../../RUNBOOK.md) §5).
 
 **Healthy 200 with a degraded 503 is the design working, not a bug.** Liveness answers from memory and readiness runs `select 1`; the split exists precisely so a database outage takes an instance out of rotation without an orchestrator killing a process that is perfectly fine. `pnpm run test:drills --only postgres-outage` exercises exactly this.
 

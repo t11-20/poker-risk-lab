@@ -12,7 +12,7 @@ Read [README.md](README.md) first. Two facts change everything below: **restarti
 - Containers start and never become healthy; `depends_on: service_healthy` never satisfies and the proxy never starts.
 - The deploy reports success and `GET /api/v1/ready` returns 503.
 - The public origin answers 502 or 504.
-- The process exits immediately with code 78 and a list of configuration problems.
+- The process exits immediately with code 78 and a list of configuration problems — or with `Refusing to start: the database schema does not match this build` and the migrations it is missing.
 - The process crash-loops.
 - Learners see the page load with no data, or every WebSocket closes with `4406`.
 - `pnpm run staging promote` refuses.
@@ -113,6 +113,7 @@ A blocking finding is one **at or above HIGH with an upstream fix available**. U
 | Symptom | Cause |
 | --- | --- |
 | exit **78**, a list of configuration problems, never listened | `ConfigError`. Common: `SESSION_COOKIE_SECRET` missing or a placeholder, `PUBLIC_WEB_ORIGIN` with a trailing slash or a path, `COOKIE_SECURE=false`, or `RATE_LIMIT_RESET_TOKEN` present in production |
+| exit **78**, `the database schema does not match this build`, never listened | the migration step did not run, or ran from a different commit. The message names the pending files. Migrate from a checkout of the release commit (`../../RUNBOOK.md` §11.3), then start it again. An *edited* applied migration is refused the same way and wants the file restored, not a migration |
 | healthy container, unreachable service | the server bound to loopback. `HOST` comes from the image's own `ENV` for this reason; the healthcheck probes the container's own network address so this cannot masquerade as working |
 | every WebSocket closes `4406` | `PUBLIC_WEB_ORIGIN` is not exactly the origin the browser used. **Never** widen the allowlist to silence it: `Origin` is the only defence on that boundary ([`../architecture.md`](../architecture.md) §2) |
 | sockets closing `1006` on every roll | the orchestrator's grace period is at or below `SHUTDOWN_GRACE_MS`. Not a release defect |
@@ -124,7 +125,7 @@ A blocking finding is one **at or above HIGH with an upstream fix available**. U
 | Situation | Action |
 | --- | --- |
 | The new version is serving and failing | **roll back** — [rollback.md](rollback.md). Do not diagnose on the broken version |
-| The new version never started (exit 78) | fix the variable and redeploy. The artefact is fine; a rollback would hide a misconfiguration that recurs |
+| The new version never started (exit 78) | fix the variable and redeploy. The artefact is fine; a rollback would hide a misconfiguration that recurs. If the message names migrations, run them — the artefact is fine there too |
 | The bring-up failed before anything served | fix the cause and re-run. Nothing was deployed, so there is nothing to roll back |
 | A migration failed | [failed-migration.md](failed-migration.md). **Do not let the application roll forward onto a schema it does not have** |
 | The staging stack is in an unknown state | `pnpm run staging down --volumes`, then `up` again. Staging data is disposable by definition; capture logs first |

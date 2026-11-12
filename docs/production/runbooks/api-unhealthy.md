@@ -74,7 +74,7 @@ Exit codes are chosen so the logs mean something:
 
 | Code | Meaning |
 | --- | --- |
-| 78 | configuration invalid — `ConfigError` lists every problem on stderr; the process never listened |
+| 78 | configuration invalid — `ConfigError` lists every problem on stderr; the process never listened. Or `the database schema does not match this build`: the database answered with a migration ledger behind this build, and the message names the files |
 | 1 at startup | `failed to start` — bind failure, or `listen EADDRINUSE` |
 | 1 later | crash (`uncaught exception` / `unhandled rejection`), or a shutdown that exceeded its grace |
 | 0 | clean shutdown |
@@ -110,6 +110,8 @@ kubectl logs <pod> | grep -E '"msg":"a bot seat could not be restored|"msg":"a h
 ```
 
 ## Recovery
+
+**Schema behind the build (exit 78, `the database schema does not match this build`).** Run the migrations it names from a checkout of the release commit (`../../RUNBOOK.md` §11.3), then start it again. Not a rollback: the old image would serve, and the next deploy would stop at the same place.
 
 **Configuration (exit 78).** Fix the variable, redeploy. Nothing else is wrong. Do not "temporarily" satisfy a refused check with a placeholder value — every one of those checks exists because a placeholder in production caused an incident once already.
 
