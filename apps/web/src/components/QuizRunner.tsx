@@ -740,13 +740,17 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
           answers were never sent anywhere. They are sent now, so the sentence says what is actually
           kept — and, more usefully, what is not: there is no total, and the schema has no column
           one could be stored in.
+
+          It then said "If you are signed in, each question you answered is stored as one row", to a
+          learner who has no sign-in and no reason to think in rows (UX audit at 6b3886e, M5). The
+          condition that actually applies is a guest session, which opening a table starts.
         */}
         <p className="prl-note">
-          Nothing here was scored. If you are signed in, each question you answered is stored as one row — the
-          question, the answer you sent, and whether it matched — and the only figure derived from those rows
-          is how many different questions you have answered, which you can see under{' '}
-          <Link href={RECORD_PATH}>your record</Link>. Nothing adds them up, and there is nowhere in this
-          product for a mark out of five to live. These questions exist to make your own reasoning visible to
+          Nothing here was scored. Once this browser has a guest session — opening a table starts one — each
+          question you answer is kept on your record: the question, your answer, and whether it matched. The
+          only figure taken from them is how many different questions you have answered, which you can see on{' '}
+          <Link href={RECORD_PATH}>your record</Link>. Nothing adds them up, and there is nowhere in Poker
+          Risk Lab for a mark out of five to live. These questions exist to make your own reasoning visible to
           you, which a score actively gets in the way of.
         </p>
         {/*

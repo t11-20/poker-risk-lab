@@ -156,9 +156,10 @@ export function AccountDeletion({ deletable }: AccountDeletionProps): ReactEleme
       if (token === null) {
         setDeletion({
           state: 'failed',
+          // The CSRF token could not be fetched; see the same message in `UnitsReset.tsx`.
           message:
-            'This page could not get a security token from the server, so nothing was sent and your ' +
-            'account is exactly as it was. Reload and try again.',
+            'This page could not get ready to send that, so nothing was sent and your account is exactly ' +
+            'as it was. Reload the page and try again.',
         });
         return;
       }
@@ -183,8 +184,8 @@ export function AccountDeletion({ deletable }: AccountDeletionProps): ReactEleme
         The half that actually removes the deleted account's record from the screen.
 
         `RecordPage` is a per-reader server render carrying the session cookie, and the deletion
-        has just invalidated it — so re-running it is what turns the panel above into "there is no
-        session to read a record with". Fired after the state is set, not before: this component's
+        has just invalidated it — so re-running it is what turns the panel above into "This browser
+        has no record yet". Fired after the state is set, not before: this component's
         own subtree is on the client side of the refresh and keeps the receipt, and a refresh that
         landed first would briefly draw a page with neither the record nor the receipt on it.
       */

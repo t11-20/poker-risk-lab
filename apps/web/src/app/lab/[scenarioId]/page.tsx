@@ -148,11 +148,11 @@ function ScenarioUnavailable({
           {summary === null ? 'This scenario could not be loaded' : summary.title}
         </h1>
         <p className="prl-page-head__standfirst">
-          The scenario service is not reachable, and this scenario is not one of the six carried in the
-          bundled copy with an analysis already computed — so there is no analysis here to show.{' '}
+          The Scenario Lab could not be reached, and this scenario is not one of the six that ship with the
+          app with an analysis already worked out — so there is no analysis here to show.{' '}
           {summary === null
             ? 'Nothing here has established whether this scenario exists.'
-            : 'The scenario exists: its title above comes from the bundled content. What is missing is the analysis, which is the server’s to compute.'}
+            : 'The scenario exists: its title above comes from the copy that ships with the app. What is missing is the analysis, which is worked out when the Lab can be reached.'}
         </p>
       </header>
 
@@ -222,12 +222,13 @@ export default async function ScenarioPage({
 
       {data.state === 'sampled' ? (
         <p className="prl-source-note prl-note">
-          <span className="prl-label prl-label--accent">Fixture data</span> The scenario API is not reachable,
-          so this page is rendered from <code className="prl-mono">src/fixtures/scenarios.ts</code>. The
-          analysis in it was produced by the same functions the endpoint will call —{' '}
-          <code className="prl-mono">readSituation</code> and{' '}
-          <code className="prl-mono">buildCoachReport</code> — so the figures are the engine&rsquo;s, but they
-          were computed ahead of time rather than for this request.
+          {/* The fallback is `src/fixtures/scenarios.ts`, built by `readSituation` and `buildCoachReport`
+              — which is what this used to say, file path and function names included (UX audit at
+              6b3886e, M5). The learner needs the consequence: same maths, worked out in advance. */}
+          <span className="prl-label prl-label--accent">Bundled copy</span> The Scenario Lab could not be
+          reached, so this scenario is the copy that ships with the app. Its analysis was worked out by the
+          same maths, ahead of time rather than for you just now, so the figures are the same ones the Lab
+          would show.
         </p>
       ) : null}
 

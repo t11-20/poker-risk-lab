@@ -177,7 +177,7 @@ describe('/lab/[scenarioId] answers 404 only when the API said 404', () => {
     // `lab-scenario-titles.test.ts`.
     assert.match(page, /function ScenarioUnavailable/u);
     assert.match(page, /const summary = bundledScenarioTitle\(scenarioId\);/u);
-    assert.match(page, /not one of the six carried in the\s*\n?\s*bundled copy/u);
+    assert.match(page, /not one of the six that ship with the\s*\n?\s*app/u);
   });
 
   it('leaves the second, legitimate 404 in place', () => {

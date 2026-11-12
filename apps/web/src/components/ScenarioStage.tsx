@@ -296,11 +296,11 @@ function Verdict({
             ? server.recorded
               ? judgement.pricing !== 'priced'
                 ? 'The analysis covers particular sizes rather than every one, and yours is not among them. That is not a judgement on your decision — there is nothing here to compare it with.'
-                : 'This is the server’s own verdict on your action — the same one it recorded.'
-              : 'This is the server’s own verdict on your action. Nothing was recorded, because there is no session to attach it to.'
+                : 'This verdict is the one kept on your record.'
+              : 'Nothing was recorded, because this browser has no guest session to keep it on.'
             : server.state === 'pending'
-              ? 'Asking the server for its verdict. The figures below are the shared rule applied here, and the two agree.'
-              : 'The server could not be reached, so this verdict is the shared rule applied in your browser. It is the same rule the server grades with.'}
+              ? 'Checking your action. The figures below are the same rule, worked out in your browser.'
+              : 'Poker Risk Lab could not be reached, so this verdict was worked out in your browser by the same rule, and nothing was recorded.'}
         </span>
       </div>
 
@@ -529,8 +529,9 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
           <>
             <p className="prl-prose">
               {scenario.question} Choose before you read the analysis: nothing is scored, and deciding first
-              is what lets the analysis tell you something about your own reasoning. Signed in, the scenario
-              is marked as attempted; there is no mark, total or streak.
+              is what lets the analysis tell you something about your own reasoning. Once this browser has a
+              guest session, a scenario you decide is marked as attempted on your record; there is no mark,
+              total or streak.
             </p>
             <ActionBar
               legalActions={legalActions}
@@ -538,7 +539,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
               pot={view.potTotal}
               toCall={view.amountToCall}
               committedThisStreet={hero?.committedThisStreet ?? 0}
-              idleText="This scenario offers no decision, which is a content bug rather than your turn ending."
+              idleText="This scenario offers no decision to make. That is a fault in the scenario, not something you did."
             />
           </>
         ) : (
@@ -600,13 +601,16 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
 
             <Callout tone="insight" title="This is a comparison, not a mark">
               {foldAssumptionSentence(foldAssumingActions(analysis))}
-              {server.state === 'live' ? (
+              {/* Only when a row was written. This said "If you are signed in, this scenario is now
+                  marked…" for every answered call, signed-out ones included, to a learner with no
+                  sign-in (UX audit at 6b3886e, M5); `recorded` already says whether it is true. */}
+              {server.state === 'live' && server.recorded ? (
                 <>
                   {' '}
-                  There is no score. If you are signed in, this scenario is now marked as one you have
-                  attempted, along with the action you chose and — only where the analysis actually supports a
-                  single action — whether yours was one of them. Where it supports several, which is common,
-                  nothing is recorded about which you picked, because there would be nothing true to record.
+                  There is no score. This scenario is now on your record as one you have attempted, along with
+                  the action you chose and — only where the analysis actually supports a single action —
+                  whether yours was one of them. Where it supports several, which is common, nothing is
+                  recorded about which you picked, because there would be nothing true to record.
                 </>
               ) : null}
             </Callout>
