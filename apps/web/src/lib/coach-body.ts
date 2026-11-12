@@ -83,14 +83,14 @@ export function noAnalysisReason(view: Pick<PlayerView, 'seats'>): string {
   if (reader.status === 'folded') {
     return (
       'You are out of this hand, so there is no decision of yours left in it to price. The analysis ' +
-      'comes back with the next hand you are dealt, and this hand’s review prices every decision you ' +
-      'made in it.'
+      'comes back with the next hand you are dealt, and once this one is over its review prices every ' +
+      'decision you made in it.'
     );
   }
   if (reader.status === 'allIn') {
     return (
       'You are all in, so there is nothing left for you to decide in this hand and nothing to price. ' +
-      'Its review prices the decisions that got you here.'
+      'Once it is over, its review prices the decisions that got you here.'
     );
   }
   return (
