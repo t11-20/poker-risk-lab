@@ -49,8 +49,9 @@
  *
  * ## Development is a separate policy, not a hole in this one
  *
- * `next dev` needs `'unsafe-eval'` (React Refresh compiles modules at runtime) and a websocket to
- * the dev server for HMR. Both are added ONLY when `development` is true, and
+ * `next dev` needs `'unsafe-eval'` (React Refresh compiles modules at runtime), a websocket to
+ * the dev server for HMR, and `'unsafe-inline'` in `style-src` for its error overlay's own styles.
+ * All three are added ONLY when `development` is true, and
  * `test/csp-policy.test.ts` asserts that the production policy contains neither `unsafe-eval` nor
  * `unsafe-inline` in `script-src`, so a development convenience cannot quietly become the shipped
  * policy. The two are built by the same function so they cannot drift structurally.
@@ -105,6 +106,9 @@ const FIXED_DIRECTIVES: readonly string[] = [
  * Assembled from a list rather than a template literal so every directive is one reviewable line,
  * and joined with `; ` because a policy is read far more often than it is written.
  */
+/** The one fixed directive development widens. Named so the replacement cannot silently miss. */
+const DEV_STYLE_SRC_REPLACES = "style-src 'self'";
+
 export function contentSecurityPolicy(options: CspOptions): string {
   const development = options.development ?? false;
 
@@ -143,7 +147,13 @@ export function contentSecurityPolicy(options: CspOptions): string {
   ].join(' ');
 
   return [
-    ...FIXED_DIRECTIVES,
+    // Next's dev overlay injects its own <style> elements and carries no nonce, so under `style-src
+    // 'self'` a fresh-clone `pnpm run dev` logged 333 CSP errors over about seven page loads and the
+    // error overlay rendered unstyled (first-run check, 2026-11-13). Development only, like
+    // 'unsafe-eval': `test/csp-policy.test.ts` holds production's style-src to 'self'.
+    ...FIXED_DIRECTIVES.map((directive) =>
+      development && directive === DEV_STYLE_SRC_REPLACES ? "style-src 'self' 'unsafe-inline'" : directive,
+    ),
     script,
     connect,
     // Only in production. On a development machine served over http it would rewrite every
