@@ -67,7 +67,6 @@ import type { CoachReport, CreateRoomRequest, ErrorCode, RoomSummary, WsServerMe
 import type { PlayerView, TableAction, TurnClock } from '@prl/ui';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { TableSubmission } from '@/components/TableStage.tsx';
-import { ApiRequestError } from './api.ts';
 import {
   BOT_TABLE_REQUEST,
   chooseRoom,
@@ -737,8 +736,11 @@ function onErrorFrame(state: TableState, frame: Extract<WsServerMessage, { type:
     };
   }
   const pending = state.pending;
+  // The server's sentence and nothing after it. These read "…(insufficient_units)" and "…(not_your_turn).
+  // Nothing was applied." (audit at 308fadf): a contract token after a sentence that had already said
+  // everything a person can use. The code is kept, in `noticeCode`, for the one screen that branches on it.
   if (pending === null || pending.requestId !== frame.requestId) {
-    return { ...state, notice: `${frame.error.message} (${frame.error.code})`, noticeCode: frame.error.code };
+    return { ...state, notice: frame.error.message, noticeCode: frame.error.code };
   }
   const stale = frame.error.code === 'stale_action_sequence';
   return {
@@ -750,7 +752,7 @@ function onErrorFrame(state: TableState, frame: Extract<WsServerMessage, { type:
       message: stale
         ? 'The hand moved on before this arrived, so the server applied nothing. It refuses to put a ' +
           'decision into a spot you never saw. The table below is the spot as it is now.'
-        : `${frame.error.message} (${frame.error.code}). Nothing was applied.`,
+        : `${frame.error.message} Nothing was applied.`,
     },
   };
 }
@@ -1254,24 +1256,18 @@ function winningCards(view: PlayerView | null): readonly number[] {
   return result.showdowns.filter((showdown) => winners.has(showdown.seat)).flatMap((s) => [...s.bestFive]);
 }
 
-function messageOf(cause: unknown): string {
-  if (cause instanceof ApiRequestError) return `${cause.message} (${cause.code})`;
+/**
+ * A refusal as the sentence a reader is shown: the server's own wording, without its contract code.
+ *
+ * This used to append the code — "(invite_code_invalid)", "(insufficient_units)" — on the theory that
+ * a reader might quote it to support. Nobody reading a play-money table is going to, and it was the one
+ * machine token on a screen otherwise written for a person (audit at 308fadf). The join field dropped it
+ * first, as a `joinRefusalOf` beside this; the setup path and the socket's refusals now drop it too, so there is one
+ * rule and one function.
+ */
+export function refusalSentence(cause: unknown): string {
   if (cause instanceof Error) return cause.message;
   return 'the table could not be prepared';
-}
-
-/**
- * A join refusal, as the sentence beside the field — without the contract code `messageOf` appends.
- *
- * The code is there for a reason on the setup path, where a reader may need to quote it to support.
- * Under an invite field it is noise in the one place a person is reading closely: the field showed
- * "That invite code is not valid. (invite_code_invalid)", a machine token after a sentence that had
- * already said everything it says. `ConnectionNotices` drops it for `enrolment_required` for the
- * same reason.
- */
-function joinRefusalOf(cause: unknown): string {
-  if (cause instanceof ApiRequestError) return cause.message;
-  return messageOf(cause);
 }
 
 async function openPracticeRoom(
@@ -1369,7 +1365,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
           setPhase('ready');
         } catch (cause) {
           if (controller.signal.aborted) return;
-          setSetupError(messageOf(cause));
+          setSetupError(refusalSentence(cause));
           setPhase('failed');
         }
       })();
@@ -1473,7 +1469,7 @@ export function useLiveTable(options: UseLiveTableOptions = {}): LiveTable {
         // wrong code is not a broken page, and turning the whole screen into an error state would
         // throw away a table the reader may already be sitting at.
         setPhase(socketRef.current === null ? 'idle' : 'ready');
-        setJoin({ state: 'refused', message: joinRefusalOf(cause) });
+        setJoin({ state: 'refused', message: refusalSentence(cause) });
       }
     })();
   }, []);

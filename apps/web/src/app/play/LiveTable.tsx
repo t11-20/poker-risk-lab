@@ -324,9 +324,9 @@ function ConnectionNotices({ live }: ConnectionPanelProps): ReactElement {
         the button they pressed would look broken rather than refused.
 
         The server's own sentence is shown unchanged and unlabelled by a code: it is the one place
-        in this app that already says what to do about it, and repeating "(enrolment_required)"
-        after it — which the generic branch does deliberately, so a reader can quote a code at
-        support — would put a machine token in the middle of the one message written for a person.
+        in this app that already says what to do about it. No branch here prints a contract code any
+        more — the generic one used to append "(insufficient_units)" and the like, a machine token
+        after a sentence written for a person (audit at 308fadf). `noticeCode` is what branches.
 
         There is no "get access" control here, and there must not be. This software has no way to
         take money, holds no amount, currency or price anywhere in its schema, and nobody reading

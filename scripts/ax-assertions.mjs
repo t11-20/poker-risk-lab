@@ -2546,13 +2546,20 @@ const LIVE_TABLE_CHECKS = [
 const SERVER_REFUSED = /The server refused it/u;
 
 /**
- * The wording the server itself supplied, as `onErrorFrame` renders it: a sentence, then `(code)`.
+ * The wording the server itself supplied, as `onErrorFrame` renders it: the heading, the server's
+ * sentence, then "Nothing was applied."
  *
  * Matched as a shape rather than as a string. Which refusal arrives depends on where the hand got
  * to between the two frames, and pinning `not_your_turn` would fail the gate on a timing difference
  * that changes nothing about what a reader is told.
+ *
+ * It used to key on the `(code)` the sentence ended with. The page no longer prints a contract code
+ * after a refusal (audit at 308fadf: "(invite_code_invalid)", "(insufficient_units)" shown to a
+ * reader), so what is required now is a sentence of the server's own between the heading and the
+ * last one — and a code in the text is a failure rather than the evidence.
  */
-const SERVER_REFUSAL_REASON = /\(([a-z_]+)\)\.\s*Nothing was applied\./u;
+const SERVER_REFUSAL_REASON = /The server refused it\s*(\S[\s\S]*?[.!?])\s*Nothing was applied\./u;
+const CONTRACT_CODE = /\([a-z]+(?:_[a-z]+)+\)/u;
 
 const REFUSED_DECISION_CHECKS = [
   {
@@ -2594,6 +2601,12 @@ const REFUSED_DECISION_CHECKS = [
             'have acted again — "a refusal that is announced politely is a FAIL"',
         );
       }
+      if (CONTRACT_CODE.test(interrupting.text)) {
+        return fail(
+          `the alert says "${interrupting.text.slice(0, 80)}", which reads a contract code out to the ` +
+            'reader after the sentence that already said what happened',
+        );
+      }
       const reason = SERVER_REFUSAL_REASON.exec(interrupting.text);
       if (reason === null) {
         return fail(
@@ -2617,7 +2630,7 @@ const REFUSED_DECISION_CHECKS = [
             'The refusal is the only thing here that is allowed to',
         );
       }
-      return pass(`assertive, "${interrupting.text.slice(0, 56)}…", code ${reason[1]}, sole interruption`);
+      return pass(`assertive, "${reason[1].slice(0, 56)}", sole interruption`);
     },
   },
 ];

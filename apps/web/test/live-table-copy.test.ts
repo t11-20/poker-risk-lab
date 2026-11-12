@@ -7,7 +7,8 @@
  *   - The decision acknowledgement read "The server applied it at sequence 11".
  *   - The Coach-ready sentence said the panel was "below the table on a narrow screen", which on a
  *     phone is a bottom sheet.
- *   - A refused invite code showed "(invite_code_invalid)" after the server's own sentence.
+ *   - A refused invite code showed "(invite_code_invalid)" after the server's own sentence, and the
+ *     refusal panel and the refused-decision alert did the same with every other code.
  */
 
 import assert from 'node:assert/strict';
@@ -16,10 +17,12 @@ import { dirname, join, resolve } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { WsServerMessage } from '@prl/contracts';
+import { ApiRequestError } from '../src/lib/api.ts';
 import {
   COACH_READY_ANNOUNCEMENT,
   EMPTY_TABLE_STATE,
   outOfUnits,
+  refusalSentence,
   type TableState,
   tableReducer,
 } from '../src/lib/use-live-table.ts';
@@ -95,8 +98,6 @@ describe('a seated reader with nothing left is out of units', () => {
 });
 
 describe('the sentences say true things in the reader’s words', () => {
-  const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
-
   it('does not report the protocol’s sequence number to the reader', () => {
     const pending = {
       action: { type: 'call' },
@@ -120,9 +121,44 @@ describe('the sentences say true things in the reader’s words', () => {
     assert.doesNotMatch(COACH_READY_ANNOUNCEMENT, /\d/u);
   });
 
-  it('does not show a contract code under the invite field', () => {
-    const source = readFileSync(join(SRC, 'lib', 'use-live-table.ts'), 'utf8');
-    assert.match(source, /setJoin\(\{ state: 'refused', message: joinRefusalOf\(cause\) \}\)/u);
-    assert.doesNotMatch(source, /setJoin\(\{ state: 'refused', message: messageOf\(cause\) \}\)/u);
+  // Audit at 308fadf: "That invite code is not valid. (invite_code_invalid)" under the field, and the
+  // same shape in the refusal panel and the refused-decision alert. Driven through the reducer and
+  // the one function every REST refusal goes through, rather than read out of the source.
+  it('does not show a contract code after any refusal (REGRESSION)', () => {
+    const CODE = /\([a-z]+(?:_[a-z]+)+\)|\b[a-z]+_[a-z_]+\b/u;
+    const refused = new ApiRequestError({
+      message: 'That invite code is not valid.',
+      status: 404,
+      code: 'invite_code_invalid',
+    });
+    assert.equal(refusalSentence(refused), 'That invite code is not valid.');
+
+    const notice = tableReducer(EMPTY_TABLE_STATE, {
+      kind: 'frame',
+      frame: {
+        type: 'error',
+        requestId: null,
+        error: { code: 'insufficient_units', message: 'You do not have enough units for that seat.' },
+      } as unknown as WsServerMessage,
+    });
+    assert.equal(notice.notice, 'You do not have enough units for that seat.');
+    assert.equal(notice.noticeCode, 'insufficient_units', 'the code is kept for the screen that branches');
+
+    const pending = { action: { type: 'fold' }, actionId: 'a', expectedSequence: 3, requestId: 'r' } as const;
+    const submitted = tableReducer(EMPTY_TABLE_STATE, { kind: 'submit', pending, delivery: 'sent' });
+    const rejected = tableReducer(submitted, {
+      kind: 'frame',
+      frame: {
+        type: 'error',
+        requestId: 'r',
+        error: { code: 'not_your_turn', message: 'It is not your turn to act.' },
+      } as unknown as WsServerMessage,
+    });
+    assert.equal(rejected.submission?.status, 'rejected');
+    // J3.19 in `scripts/ax-assertions.mjs` keys on the server's sentence before "Nothing was applied."
+    assert.equal(rejected.submission?.message, 'It is not your turn to act. Nothing was applied.');
+    for (const shown of [refusalSentence(refused), notice.notice ?? '', rejected.submission?.message ?? '']) {
+      assert.doesNotMatch(shown, CODE, `"${shown}" carries a contract code`);
+    }
   });
 });
