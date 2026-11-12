@@ -763,8 +763,14 @@ const ALL_IN_FOR = /all[-\s]?in for ([\d,]+)/gi;
 /** "bets 25 into a pot of 120", "bet 55 into 110", "leads out for 25 into a pot of 110". */
 const WAGER_INTO_POT =
   /(?:bets?|leads out for|all[-\s]?in for)\s+([\d,]+)\s+into\s+(?:a pot of\s+)?([\d,]+)/gi;
-/** The scenario stating outright that hero's call is for everything. */
-const CALLING_IS_ALL_IN = /calling puts hero all[-\s]?in/i;
+/**
+ * The scenario stating outright that hero's call is for everything.
+ *
+ * `you` as well as `hero`: the prompts and the situation line now address the learner, because
+ * "hero" was never defined for them (UX audit at 6b3886e, Minor 7). Matching `hero` alone would
+ * have let this check go quiet on the one scenario that says it, behind a green validation.
+ */
+const CALLING_IS_ALL_IN = /calling puts (?:hero|you) all[-\s]?in/i;
 
 /**
  * A stack depth quoted in words: "Nine big blinds", "seventy blinds deep", "12 blinds".
