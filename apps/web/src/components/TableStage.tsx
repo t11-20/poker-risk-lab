@@ -674,9 +674,14 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
         {turnAnnouncement}
       </div>
 
-      {view === null ? null : <HeroReadout view={view} />}
-
+      {/*
+        Before the plate, not after it: from 46rem of column the band is a grid of the plate and the
+        controls, and this line spans both. After the plate it took the second row and pushed the
+        controls to a third, leaving the plate alone in the first (measured at 1440x900).
+      */}
       <StreetLine view={view} seatNames={seatNames} />
+
+      {view === null ? null : <HeroReadout view={view} />}
 
       {view === null ? (
         <p className="prl-play__decision-idle">
