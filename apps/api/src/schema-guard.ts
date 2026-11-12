@@ -119,7 +119,7 @@ export type SchemaVerdict =
 const MIGRATE_FIX =
   'Apply them with `pnpm run db:migrate` (development: it reads DATABASE_MIGRATION_URL, else ' +
   'DATABASE_URL, from .env), or in a deployment run `node apps/api/scripts/migrate.mjs up` from a ' +
-  'checkout of this commit with DATABASE_MIGRATION_URL naming the migrating identity ' +
+  'clone of this commit with DATABASE_MIGRATION_URL naming the migrating identity ' +
   '(docs/RUNBOOK.md §11.3). Then start the API again.';
 
 const DRIFT_FIX =

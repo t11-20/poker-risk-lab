@@ -169,7 +169,7 @@ export interface SchemaProbe {
  * fixes and because the first two are exactly how this suite could go back to proving nothing.
  *
  * Then the same comparison the server makes at boot (`src/schema-guard.ts`). A database one
- * migration behind this checkout used to pass this probe — `prl.users` was there — and the whole
+ * migration behind this working tree used to pass this probe — `prl.users` was there — and the whole
  * API test file then failed on `column "automatic_reason" does not exist`, a column name rather
  * than a cause. Now this file fails first, naming the pending migration and `pnpm run db:migrate`.
  */
