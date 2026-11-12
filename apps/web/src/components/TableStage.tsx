@@ -114,6 +114,7 @@ import {
   type PlayerView,
   PokerTable,
   type StyleWithVars,
+  streetSummary,
   type TableAction,
   type TurnClock,
 } from '@prl/ui';
@@ -369,6 +370,45 @@ function HeroReadout({ view }: HeroReadoutProps): ReactElement | null {
   );
 }
 
+/**
+ * Who did what on this street, in one line beside the controls — or, until somebody acts on the new
+ * street, on the one that just closed. See `street-summary.ts` in `@prl/ui` for both defects.
+ *
+ * Not a live region. The table's narration already said every one of these as it happened, and a
+ * second region repeating them would read each action twice. This is the same facts for the eye, put
+ * where the eye is at a decision: beside "To continue", which is the figure they explain.
+ */
+function StreetLine({
+  view,
+  seatNames,
+}: {
+  readonly view: PlayerView | null;
+  readonly seatNames: Readonly<Record<number, string>> | undefined;
+}): ReactElement | null {
+  const line = view === null ? null : streetSummary(view, seatNames);
+  if (line === null) return null;
+  return (
+    <p className="prl-play__street">
+      <span className="prl-label">{line.label}</span>
+      {line.earlier > 0 ? (
+        <span className="prl-play__street-earlier">
+          <span aria-hidden="true">{' …'}</span>
+          <span className="prl-visually-hidden">{`, after ${String(line.earlier)} earlier,`}</span>
+        </span>
+      ) : null}
+      {line.actions.map((phrase, index) => (
+        // The phrase's place on its street, counted from the street's first action, plus the phrase:
+        // a street's actions are only ever appended to, so that pair names one action for good.
+        <span key={`${String(line.earlier + index)}:${phrase}`}>
+          {index === 0 ? ' ' : <span aria-hidden="true">{' · '}</span>}
+          {index === 0 ? null : <span className="prl-visually-hidden">{'; '}</span>}
+          {phrase}
+        </span>
+      ))}
+    </p>
+  );
+}
+
 interface TableRegionProps {
   readonly status: TableStageStatus;
   readonly view: PlayerView | null;
@@ -494,6 +534,7 @@ const NO_VIEW_LINE: Readonly<Record<'error' | 'idle' | 'waiting', string>> = {
 interface DecisionBandProps {
   readonly status: TableStageStatus;
   readonly view: PlayerView | null;
+  readonly seatNames: Readonly<Record<number, string>> | undefined;
   readonly submission: TableSubmission | null;
   readonly turnAnnouncement: string;
   readonly isLive: boolean;
@@ -545,7 +586,8 @@ const SUBMISSION_IN_FLIGHT: ReadonlySet<TableSubmission['status']> = new Set<Tab
  * rather than the feature, and for the test that now holds that line.
  */
 function DecisionBand(props: DecisionBandProps): ReactElement {
-  const { status, view, submission, turnAnnouncement, isLive, onAct, autoActed, decisionRef } = props;
+  const { status, view, seatNames, submission, turnAnnouncement, isLive, onAct, autoActed, decisionRef } =
+    props;
   const pending = submission !== null && SUBMISSION_IN_FLIGHT.has(submission.status);
   const rejected = submission !== null && SUBMISSION_ALERTS.has(submission.status);
 
@@ -625,6 +667,8 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
       </div>
 
       {view === null ? null : <HeroReadout view={view} />}
+
+      <StreetLine view={view} seatNames={seatNames} />
 
       {view === null ? (
         <p className="prl-play__decision-idle">
@@ -929,6 +973,7 @@ export function TableStage(props: TableStageProps): ReactElement {
           onAct={act}
           autoActed={props.autoActed ?? null}
           decisionRef={props.decisionRef}
+          seatNames={seatNames}
         />
       </div>
 

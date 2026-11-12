@@ -203,6 +203,8 @@ export {
 } from './radar.ts';
 // What each seat did on the street in progress, for the plate's status line.
 export { lastActionsThisStreet } from './seat-actions.ts';
+// Who did what on the street, as one line for the decision band.
+export { STREET_SUMMARY_LIMIT, type StreetSummary, streetSummary } from './street-summary.ts';
 // -- Table types, projected out of the wire contract -------------------------
 export type {
   ActionName,

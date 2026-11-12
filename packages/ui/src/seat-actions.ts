@@ -38,7 +38,16 @@ import type { PlayerView } from './view-types.ts';
 type LoggedAction = PlayerView['actions'][number];
 type SeatView = PlayerView['seats'][number];
 
-function wordsFor(entry: LoggedAction, seat: SeatView | undefined): string {
+/**
+ * The words for one logged action.
+ *
+ * `committed` is what the seat had in front of it on that street once the action was taken, and it
+ * is the amount a call is worded with; `allIn` says the action left the seat with nothing behind.
+ * The caller supplies both because only the caller knows which street it is describing: the plates
+ * read them off the seat, which is right for the street in progress, and `street-summary.ts` rebuilds
+ * them from the log, which is right for any street.
+ */
+export function actionWords(entry: LoggedAction, committed: number, allIn: boolean): string {
   const { action } = entry;
   let words: string;
   switch (action.type) {
@@ -52,8 +61,8 @@ function wordsFor(entry: LoggedAction, seat: SeatView | undefined): string {
       // What the seat now has in front of it, not the chips this action moved: a big blind
       // completing pays 5 to call 10, and "called 5" would contradict the price everybody else at
       // the table just saw. Not the bet level either: a short all-in call matches less than the
-      // level (see the header). The level only if the seat is somehow missing from the view.
-      words = `called ${formatChips(seat?.committedThisStreet ?? entry.betLevelAfter)}`;
+      // level (see the header).
+      words = `called ${formatChips(committed)}`;
       break;
     case 'bet':
       words = `bet ${formatChips(action.to)}`;
@@ -66,7 +75,7 @@ function wordsFor(entry: LoggedAction, seat: SeatView | undefined): string {
   }
   // Said, because it is why a call can be smaller than the price: the seat had nothing more to put in.
   const putChipsIn = action.type === 'call' || action.type === 'bet' || action.type === 'raise';
-  if (putChipsIn && seat?.status === 'allIn') words = `${words}, all in`;
+  if (putChipsIn && allIn) words = `${words}, all in`;
   // The server's act, not the player's, and the plate says so — without naming a cause, because the
   // log cannot. `wasAutomatic` is set both for a clock that ran out and for the fold the server makes
   // for a seat whose player stood up mid-hand (`runAutomaticActions` in `apps/api/src/rooms/table.ts`),
@@ -75,6 +84,11 @@ function wordsFor(entry: LoggedAction, seat: SeatView | undefined): string {
   // same after a reload, when no event is there to ask. The narration and the reader's own notice,
   // which do see the events, say "the clock ran out" when it did.
   return entry.wasAutomatic && words !== '' ? `${words} by the server` : words;
+}
+
+function wordsFor(entry: LoggedAction, seat: SeatView | undefined): string {
+  // The level only if the seat is somehow missing from the view.
+  return actionWords(entry, seat?.committedThisStreet ?? entry.betLevelAfter, seat?.status === 'allIn');
 }
 
 /** Seat index to its last action this street. Seats that have not acted this street are absent. */

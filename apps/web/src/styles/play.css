@@ -365,6 +365,24 @@
 }
 
 /**
+ * Who did what on the street, beside the controls (`StreetLine` in `TableStage.tsx`).
+ *
+ * It wraps rather than truncates. The line names at most three actions — `street-summary.ts` keeps
+ * the latest and says how many it left out — so at 360px it is two lines at most, and an ellipsis
+ * would cut off the end of it, which is the most recent action and the one the price is made of.
+ */
+.prl-play__street {
+  margin: 0;
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+  font-variant-numeric: var(--prl-numeric);
+}
+
+.prl-play__street > .prl-label {
+  margin-inline-end: var(--prl-space-2);
+}
+
+/**
  * Your cards, your stack and your street commitment, beside the controls that change them.
  *
  * Hidden below 900px, where the stacked table already pins the viewer's own plate directly above this
@@ -896,6 +914,12 @@
      action scrolls the page away" looked like once the focus moves stopped scrolling. */
   .prl-play__decision > .prl-callout,
   .prl-play__decision > .prl-play__ack {
+    grid-column: 1 / -1;
+  }
+
+  /* The street line is about the whole decision too, and auto-placed it would take the plate's
+     column and widen it, exactly as the acknowledgement did. */
+  .prl-play__decision > .prl-play__street {
     grid-column: 1 / -1;
   }
 }
