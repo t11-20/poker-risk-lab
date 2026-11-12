@@ -63,7 +63,14 @@
  * the region speaks once per turn rather than once per frame.
  */
 
-import type { CoachReport, CreateRoomRequest, ErrorCode, RoomSummary, WsServerMessage } from '@prl/contracts';
+import {
+  type CoachReport,
+  type CreateRoomRequest,
+  type ErrorCode,
+  inSecondPerson,
+  type RoomSummary,
+  type WsServerMessage,
+} from '@prl/contracts';
 import type { PlayerView, TableAction, TurnClock } from '@prl/ui';
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { TableSubmission } from '@/components/TableStage.tsx';
@@ -521,14 +528,47 @@ const COACH_NOT_SENT: Readonly<Record<'rate-limited' | 'undeliverable', string>>
  */
 export const DEAL_ANNOUNCEMENT = 'A new hand was dealt.';
 
+type WireEvent = Extract<WsServerMessage, { type: 'event' }>['event'];
+
+/**
+ * The event as the reader should hear it: their own sentences in the second person.
+ *
+ * Every socket in the room receives the same sentences, written with the name each seat was dealt in
+ * under, so the reader's own hand used to come back to them as "Guest 12D91B posts the big blind,
+ * 10." and, under the table, "Guest 12D91B wins 1529 from the pot." (audit at 308fadf). The name is
+ * the reader's roster entry — the same string the server dealt them in under — and the rewrite is
+ * `inSecondPerson`, which reads the verbs from the table the API writes them from. A sentence it
+ * does not recognise is left exactly as the server wrote it, which is still true.
+ */
+function inReadersWords(event: WireEvent, state: TableState): WireEvent {
+  const name = state.room?.members.find((member) => member.userId === state.userId)?.displayName ?? null;
+  if (name === null) return event;
+  switch (event.kind) {
+    case 'forcedBets':
+      return { ...event, detail: inSecondPerson(event.detail, name) };
+    case 'action':
+      return { ...event, description: inSecondPerson(event.description, name) };
+    case 'showdown':
+    case 'handComplete':
+      return { ...event, summaries: event.summaries.map((line) => inSecondPerson(line, name)) };
+    default:
+      return event;
+  }
+}
+
 /**
  * One sentence for the table's single polite live region.
  *
  * `clockExpired` says whether the `seatTimedOut` just before this event named its seat — see
  * `clockExpiredSeat` on `TableState`. Without it an automatic action is the server folding for a
  * player who stood up, and the sentence says the server acted without naming a cause.
+ *
+ * `ownSeat` is the reader's seat in this hand, so the two sentences this page writes about a seat by
+ * number say "you" about the reader's: "Seat 1 ran out of time and the server acted for it" was the
+ * reader being told about themselves as a chair.
  */
-function announce(event: Extract<WsServerMessage, { type: 'event' }>['event'], clockExpired = false): string {
+function announce(event: WireEvent, clockExpired = false, ownSeat: number | null = null): string {
+  const own = ownSeat !== null && 'seat' in event && event.seat === ownSeat;
   switch (event.kind) {
     case 'handStarted':
       return DEAL_ANNOUNCEMENT;
@@ -538,7 +578,7 @@ function announce(event: Extract<WsServerMessage, { type: 'event' }>['event'], c
       if (!event.wasAutomatic) return event.description;
       return clockExpired
         ? `${event.description} (the clock ran out, so the server acted)`
-        : `${event.description} (the server acted for this seat)`;
+        : `${event.description} (the server acted for ${own ? 'you' : 'this seat'})`;
     case 'street':
       return event.newCards.length === 0
         ? `The ${event.street}.`
@@ -552,7 +592,9 @@ function announce(event: Extract<WsServerMessage, { type: 'event' }>['event'], c
     case 'playerLeft':
       return `${event.displayName} left the table.`;
     case 'seatTimedOut':
-      return `Seat ${String(event.seat + 1)} ran out of time and the server acted for it.`;
+      return own
+        ? 'You ran out of time and the server acted for you.'
+        : `Seat ${String(event.seat + 1)} ran out of time and the server acted for it.`;
     default:
       return '';
   }
@@ -605,20 +647,21 @@ function onEventFrame(state: TableState, frame: Extract<WsServerMessage, { type:
   const clockExpired =
     frame.event.kind === 'action' && frame.event.wasAutomatic && frame.event.seat === state.clockExpiredSeat;
   const clockExpiredSeat = frame.event.kind === 'seatTimedOut' ? frame.event.seat : null;
-  const sentence = announce(frame.event, clockExpired);
+  const event = inReadersWords(frame.event, state);
+  const sentence = announce(event, clockExpired, state.view?.viewerSeat ?? state.seat);
   const announcement = state.carried === '' ? sentence : `${state.carried} ${sentence}`;
   const next: TableState = { ...state, announcement, carried: '', clockExpiredSeat };
-  if (frame.event.kind === 'showdown') {
-    return { ...next, summary: frame.event.summaries };
+  if (event.kind === 'showdown') {
+    return { ...next, summary: event.summaries };
   }
-  if (frame.event.kind === 'handComplete') {
+  if (event.kind === 'handComplete') {
     // APPENDED to the showdown's lines, never written over them. Both events arrive at the end of
     // a contested hand and each carries different sentences: `showdown` says what each seat showed
     // ("Patient Technician 1 shows three of a kind, sixes"), `handComplete` who was paid. This used
     // to assign `summaries` for both, so the second always replaced the first and "How the hand
     // ended" listed a winner with no word of what they won with. `handStarted` empties the list,
     // so nothing carries into the next hand.
-    return { ...next, summary: [...state.summary, ...frame.event.summaries] };
+    return { ...next, summary: [...state.summary, ...event.summaries] };
   }
   // A clock expiry at the reader's own seat, and nothing else: an automatic fold after "Stand up"
   // is the reader's own choice and has no `seatTimedOut` before it.

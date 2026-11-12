@@ -18,8 +18,17 @@
  * why a seat index is not a person: between hands somebody stands and somebody else takes the
  * chair, and the current roster would then put a newcomer's name on the previous player's fold.
  * A seat with no captured name is still counted from one, never from zero.
+ *
+ * ## Whose verbs
+ *
+ * `NARRATED_VERBS` in `@prl/contracts`, and only those. Every sentence here is broadcast to every
+ * socket in the room, so the reader hears their own hand under their dealt name; the page puts the
+ * sentences that open on that name into the second person ("You fold", "You win 1,529 from the pot.")
+ * with `inSecondPerson`, which reads the same table. A verb written here as a literal would be one
+ * the page cannot recognise, and the reader would be named in the third person again.
  */
 
+import { ALL_THEY_HAD, NARRATED_VERBS } from '@prl/contracts';
 import type { ForcedBet, LoggedAction, PotAward, SeatIndex, SeatShowdown } from '@prl/poker-engine';
 
 export type NameOf = (seat: SeatIndex) => string;
@@ -55,8 +64,8 @@ export function forcedBetsSentence(bets: readonly ForcedBet[], nameOf: NameOf): 
   return bets
     .map(
       (bet) =>
-        `${nameOf(bet.seat)} posts ${FORCED_BET[bet.kind]}, ${amount(bet.amount)}` +
-        `${bet.wasShort ? ', which is all they had' : ''}.`,
+        `${nameOf(bet.seat)} ${NARRATED_VERBS.post.third} ${FORCED_BET[bet.kind]}, ${amount(bet.amount)}` +
+        `${bet.wasShort ? `, ${ALL_THEY_HAD.third}` : ''}.`,
     )
     .join(' ');
 }
@@ -69,29 +78,29 @@ function verbOf(logged: LoggedAction): string {
   const action = logged.action;
   switch (action.type) {
     case 'fold':
-      return 'folds';
+      return NARRATED_VERBS.fold.third;
     case 'check':
-      return 'checks';
+      return NARRATED_VERBS.check.third;
     case 'call':
-      return `calls ${amount(logged.amountPaid)}`;
+      return `${NARRATED_VERBS.call.third} ${amount(logged.amountPaid)}`;
     case 'bet':
-      return `bets to ${amount(action.to)}`;
+      return `${NARRATED_VERBS.bet.third} ${amount(action.to)}`;
     case 'raise':
-      return `raises to ${amount(action.to)}`;
+      return `${NARRATED_VERBS.raise.third} ${amount(action.to)}`;
     default:
-      return 'acts';
+      return NARRATED_VERBS.act.third;
   }
 }
 
 export function showdownSentence(showdown: SeatShowdown, nameOf: NameOf): string {
-  return `${nameOf(showdown.seat)} shows ${showdown.description}.`;
+  return `${nameOf(showdown.seat)} ${NARRATED_VERBS.show.third} ${showdown.description}.`;
 }
 
 /** `potCount` decides whether pot 0 is "the pot" or "the main pot": a main pot implies a side one. */
 export function awardSentence(award: PotAward, potCount: number, nameOf: NameOf): string {
   const pot =
     potCount <= 1 ? 'the pot' : award.potIndex === 0 ? 'the main pot' : `side pot ${award.potIndex}`;
-  return `${nameOf(award.seat)} wins ${amount(award.amount)} from ${pot}${award.wasSplit ? ', split' : ''}.`;
+  return `${nameOf(award.seat)} ${NARRATED_VERBS.win.third} ${amount(award.amount)} from ${pot}${award.wasSplit ? ', split' : ''}.`;
 }
 
 export const NO_CHIPS_CHANGED_HANDS = 'No chips changed hands.';

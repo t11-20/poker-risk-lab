@@ -162,3 +162,84 @@ describe('the sentences say true things in the reader’s words', () => {
     }
   });
 });
+
+/**
+ * The reader's own seat is "you" wherever the table narrates it.
+ *
+ * Audit at 308fadf: "How the hand ended" read "Guest 12D91B wins 1529 from the pot." to the reader
+ * who was Guest 12D91B, and the live region said their blinds and their folds the same way. The
+ * sentences below are the server's shapes (`apps/api/src/rooms/narration.ts`); the roster is the
+ * one `room()` above builds, with the reader at seat 0 as "Guest 12D91B".
+ */
+describe('the table narrates the reader’s own seat as “you”', () => {
+  const welcomed = tableReducer(EMPTY_TABLE_STATE, {
+    kind: 'frame',
+    frame: { type: 'welcome', userId: ME, room: room(1000, 0), seat: 0, serverTimeMs: 0 } as WsServerMessage,
+  });
+  const after = (...events: readonly unknown[]): TableState =>
+    events.reduce<TableState>(
+      (state, event) =>
+        tableReducer(state, {
+          kind: 'frame',
+          frame: { type: 'event', event, serverTimeMs: 0 } as unknown as WsServerMessage,
+        }),
+      welcomed,
+    );
+
+  it('in the result under the table, and in the region (REGRESSION)', () => {
+    const done = after(
+      {
+        kind: 'showdown',
+        summaries: ['Guest 12D91B shows a flush, ace high.', 'Patient Technician 1 shows a pair.'],
+      },
+      { kind: 'handComplete', summaries: ['Guest 12D91B wins 1,529 from the pot.'] },
+    );
+    assert.deepEqual(done.summary, [
+      'You show a flush, ace high.',
+      'Patient Technician 1 shows a pair.',
+      'You win 1,529 from the pot.',
+    ]);
+    assert.equal(done.announcement, 'The hand is complete. You win 1,529 from the pot.');
+  });
+
+  it('in the blinds and the actions, and nobody else’s', () => {
+    const blinds = after({
+      kind: 'forcedBets',
+      detail: 'Patient Technician 1 posts the small blind, 5. Guest 12D91B posts the big blind, 10.',
+    });
+    assert.equal(
+      blinds.announcement,
+      'Patient Technician 1 posts the small blind, 5. You post the big blind, 10.',
+    );
+    const mine = after({
+      kind: 'action',
+      seat: 0,
+      description: 'Guest 12D91B raises to 1,050',
+      wasAutomatic: false,
+    });
+    assert.equal(mine.announcement, 'You raise to 1,050');
+    const theirs = after({
+      kind: 'action',
+      seat: 1,
+      description: 'Patient Technician 1 calls 1,050',
+      wasAutomatic: false,
+    });
+    assert.equal(theirs.announcement, 'Patient Technician 1 calls 1,050');
+  });
+
+  it('when the clock runs out at the reader’s seat, and only there', () => {
+    assert.equal(
+      after({ kind: 'seatTimedOut', seat: 0 }).announcement,
+      'You ran out of time and the server acted for you.',
+    );
+    assert.equal(
+      after({ kind: 'seatTimedOut', seat: 1 }).announcement,
+      'Seat 2 ran out of time and the server acted for it.',
+    );
+  });
+
+  it('leaves a sentence it does not recognise exactly as the server wrote it', () => {
+    const odd = after({ kind: 'handComplete', summaries: ['Guest 12D91B collects 30 from the pot.'] });
+    assert.deepEqual(odd.summary, ['Guest 12D91B collects 30 from the pot.']);
+  });
+});

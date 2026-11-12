@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { inSecondPerson } from '@prl/contracts';
 import { createSecureRandom, type LoggedAction, type PotAward } from '@prl/poker-engine';
 import {
   actionSentence,
@@ -140,5 +141,23 @@ describe('a live table narrates with the names it dealt in', () => {
       events.some((event) => event.kind === 'action'),
       'the hand was played, so it narrated at least one action',
     );
+
+    // The page says these to Ada as "you" with `inSecondPerson` from `@prl/contracts`. Run over
+    // what this table actually wrote, so a verb added here without its row in `NARRATED_VERBS`
+    // fails here rather than leaving the reader named in the third person on the page.
+    const ada = sentences.flatMap((sentence) => sentence.split(/(?<=\.) (?=Ada |Bo )/u));
+    assert.ok(
+      ada.some((sentence) => sentence.startsWith('Ada ')),
+      'Ada said something to rewrite',
+    );
+    for (const sentence of ada) {
+      const said = inSecondPerson(sentence, 'Ada');
+      if (sentence.startsWith('Ada ')) {
+        assert.match(said, /^You /u, `"${sentence}" was not put to Ada as "you"`);
+        assert.doesNotMatch(said, /Ada|they had/u, `"${said}" still names Ada in the third person`);
+      } else {
+        assert.equal(said, sentence, `"${sentence}" is about Bo and was changed`);
+      }
+    }
   });
 });
