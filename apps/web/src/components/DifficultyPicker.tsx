@@ -11,7 +11,9 @@
  *    arrow-keying through the options triggers a navigation per option, which is WCAG 3.2.2 (On
  *    Input) and also makes the third option unreachable without visiting the first two.
  *  - **It does not hold the value in React state.** There is nothing to hold: the current setting
- *    arrives as a prop from the URL, and the server render is the source of truth.
+ *    arrives as a prop from the URL, and the server render is the source of truth. What is ticked
+ *    but not yet applied is read by `LegendDifficultyScope` where a page wraps the picker in one,
+ *    so the page's Play links can start the match the reader picked without a navigation here.
  *
  * ## What each option has to say
  *
@@ -35,6 +37,7 @@
 import type { LegendDifficulty, LegendDifficultyDto } from '@prl/contracts';
 import { Button, Chip, cx } from '@prl/ui';
 import type { ReactElement } from 'react';
+import { ScopedDifficultyNote } from './LegendDifficultyScope.tsx';
 
 /** The query parameter this control writes. Shared with `parseDifficulty` in `legends-data.ts`. */
 export const DIFFICULTY_PARAM = 'difficulty';
@@ -101,8 +104,16 @@ export function DifficultyPicker(props: DifficultyPickerProps): ReactElement {
           Apply setting
         </Button>
         <p className="prl-legend-difficulty__note">
-          The setting is applied when you submit, not while you are moving through the options, and it stays
-          in the address bar so a spot can be shared exactly as it was read.
+          {/*
+            On `/legends` the Play links follow the ticked option before a submit (see
+            `LegendDifficultyScope.tsx`), and the sentence says so once that is true. Anywhere else —
+            the compare page, where the setting changes the figures themselves — and with scripts
+            off, the first sentence is the one that holds.
+          */}
+          <ScopedDifficultyNote following="Every Play link on this page starts a match at the option you tick. Applying it also puts it in the address bar, so the page can be shared exactly as it was read.">
+            The setting is applied when you submit, not while you are moving through the options, and it stays
+            in the address bar so a spot can be shared exactly as it was read.
+          </ScopedDifficultyNote>
         </p>
       </div>
     </form>
