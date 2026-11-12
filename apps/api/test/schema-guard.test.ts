@@ -17,15 +17,24 @@
 
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import websocketPlugin from '@fastify/websocket';
+import type { FastifyInstance } from 'fastify';
+import WebSocket from 'ws';
+import { buildApp, type RouteModule, registerRoutes } from '../src/app.ts';
+import { type AppConfig, loadConfig } from '../src/config.ts';
+import type { DatabaseHandle } from '../src/db.ts';
+import { AppMetrics } from '../src/observability/metrics.ts';
 import {
   classifyLedgerFailure,
   compareSchema,
   createSchemaGate,
   describeRefusal,
   LEDGER_GRANT_MIGRATION,
+  type LedgerReading,
   type MigrationRecord,
   migrationChecksum,
   readShippedMigrations,
@@ -218,15 +227,18 @@ describe('readShippedMigrations — a sweep of nothing is not a pass', () => {
   });
 });
 
+/** A ledger read from the database called `identity`. */
+const reading = (rows: readonly MigrationRecord[], identity = 'db-a'): LedgerReading => ({ identity, rows });
+
 describe('createSchemaGate — readiness', () => {
-  const ok = { ok: true } as const;
+  const ok = { ok: true, identity: 'db-a' } as const;
 
   it('passes the database answer through untouched when ping failed, without reading the ledger', async () => {
     let reads = 0;
     const gate = createSchemaGate({
       readLedger: () => {
         reads += 1;
-        return Promise.resolve(SHIPPED);
+        return Promise.resolve(reading(SHIPPED));
       },
       shipped: () => SHIPPED,
       probeDeadlineMs: 50,
@@ -236,7 +248,7 @@ describe('createSchemaGate — readiness', () => {
     assert.equal(
       reads,
       0,
-      "a dead `select 1` must not be followed by a second query; ping's latch exists for that",
+      "a dead probe must not be followed by a second query; ping's latch exists for that",
     );
   });
 
@@ -246,7 +258,7 @@ describe('createSchemaGate — readiness', () => {
     const gate = createSchemaGate({
       readLedger: () => {
         reads += 1;
-        return Promise.resolve(ledger);
+        return Promise.resolve(reading(ledger));
       },
       shipped: () => SHIPPED,
       probeDeadlineMs: 50,
@@ -259,8 +271,8 @@ describe('createSchemaGate — readiness', () => {
     ledger = SHIPPED; // somebody ran `migrate up` while this instance was degraded
     assert.deepEqual(await gate.readiness(ok), ok);
 
-    // Sticky: from here `/ready` is `select 1` again. A reader that would now fail proves it is
-    // not consulted.
+    // Sticky: from here `/ready` is the one probe query again. A reader that would now fail proves
+    // it is not consulted — for the same database.
     const before = reads;
     ledger = [];
     assert.deepEqual(await gate.readiness(ok), ok);
@@ -269,8 +281,8 @@ describe('createSchemaGate — readiness', () => {
 
   it('answers "not yet verified" inside its deadline when the ledger hangs, and shares one read', async () => {
     let reads = 0;
-    let release: (rows: readonly MigrationRecord[]) => void = () => undefined;
-    const hanging = new Promise<readonly MigrationRecord[]>((resolve) => {
+    let release: (value: LedgerReading) => void = () => undefined;
+    const hanging = new Promise<LedgerReading>((resolve) => {
       release = resolve;
     });
     const gate = createSchemaGate({
@@ -285,7 +297,7 @@ describe('createSchemaGate — readiness', () => {
     assert.match(first.detail ?? '', /not yet verified: the migration ledger did not answer within 30 ms/);
     assert.deepEqual(second, first);
     assert.equal(reads, 1, 'concurrent probes must share one outstanding ledger read');
-    release(SHIPPED);
+    release(reading(SHIPPED));
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(await gate.readiness(ok), ok);
   });
@@ -295,7 +307,7 @@ describe('createSchemaGate — readiness', () => {
     const gate = createSchemaGate({
       readLedger: () => {
         reads += 1;
-        return Promise.resolve(SHIPPED);
+        return Promise.resolve(reading(SHIPPED));
       },
       shipped: () => SHIPPED,
       probeDeadlineMs: 50,
@@ -315,5 +327,292 @@ describe('createSchemaGate — readiness', () => {
     const answer = await gate.readiness(ok);
     assert.equal(answer.ok, false);
     assert.match(answer.detail ?? '', /does not exist; run pnpm run db:migrate/);
+  });
+});
+
+/**
+ * PR #38's review (Devin): a verdict used to be trusted for the life of the process, so a database
+ * replaced behind the same DSN — restored into a recreated database, failed over, a newer
+ * container — was served on the strength of a check made against a different one.
+ */
+describe('createSchemaGate — a verdict belongs to one database', () => {
+  it('re-verifies when a different database answers, and refuses one that is behind', async () => {
+    // Database A is current; B, which replaces it, is one file behind.
+    let answering = reading(SHIPPED, 'db-a');
+    let reads = 0;
+    let changes = 0;
+    const gate = createSchemaGate({
+      readLedger: () => {
+        reads += 1;
+        return Promise.resolve(answering);
+      },
+      shipped: () => SHIPPED,
+      probeDeadlineMs: 50,
+      onDatabaseChanged: () => {
+        changes += 1;
+      },
+    });
+    assert.equal((await gate.verify()).kind, 'current');
+    assert.deepEqual(await gate.readiness({ ok: true, identity: 'db-a' }), { ok: true, identity: 'db-a' });
+    assert.equal(reads, 1, 'the same database is not asked twice');
+
+    answering = reading(SHIPPED.slice(0, 2), 'db-b');
+    const swapped = await gate.readiness({ ok: true, identity: 'db-b' });
+    assert.equal(swapped.ok, false, 'a verdict for A must not admit B');
+    assert.match(swapped.detail ?? '', /0003_third\.sql/);
+    assert.equal(reads, 2, 'a different identity must cost exactly one ledger read');
+    assert.equal(changes, 1);
+    assert.equal(gate.admits().ok, false, 'and the feature routes close with it');
+
+    // B is migrated in place: the same identity, now current, and sticky again.
+    answering = reading(SHIPPED, 'db-b');
+    assert.equal((await gate.readiness({ ok: true, identity: 'db-b' })).ok, true);
+    assert.equal(gate.admits().ok, true);
+    const settled = reads;
+    assert.equal((await gate.readiness({ ok: true, identity: 'db-b' })).ok, true);
+    assert.equal(reads, settled);
+  });
+
+  it('never trusts a verdict for a probe that cannot say which database answered', async () => {
+    let reads = 0;
+    const gate = createSchemaGate({
+      readLedger: () => {
+        reads += 1;
+        return Promise.resolve(reading(SHIPPED, 'db-a'));
+      },
+      shipped: () => SHIPPED,
+      probeDeadlineMs: 50,
+    });
+    await gate.verify();
+    await gate.readiness({ ok: true });
+    await gate.readiness({ ok: true });
+    // Fail closed: an identity-less answer re-asks every time rather than inheriting A's verdict.
+    assert.equal(reads, 3);
+  });
+
+  it('closes the gate for the length of the re-verification, not after it', async () => {
+    let release: (value: LedgerReading) => void = () => undefined;
+    let first = true;
+    const gate = createSchemaGate({
+      readLedger: () => {
+        if (first) {
+          first = false;
+          return Promise.resolve(reading(SHIPPED, 'db-a'));
+        }
+        return new Promise<LedgerReading>((resolve) => {
+          release = resolve;
+        });
+      },
+      shipped: () => SHIPPED,
+      probeDeadlineMs: 20,
+    });
+    await gate.verify();
+    assert.equal(gate.admits().ok, true);
+    const probe = await gate.readiness({ ok: true, identity: 'db-b' });
+    assert.match(probe.detail ?? '', /not yet verified/);
+    const closed = gate.admits();
+    assert.equal(closed.ok, false, 'feature requests must not be served while B is being looked at');
+    assert.match(closed.detail ?? '', /different database is answering/);
+    release(reading(SHIPPED, 'db-b'));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(gate.admits().ok, true);
+  });
+});
+
+describe('createSchemaGate — admits, the feature gate', () => {
+  it('refuses before any verdict, admits after current, refuses after a refusal found later', async () => {
+    let ledger: Promise<LedgerReading> = Promise.reject(
+      Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+    );
+    ledger.catch(() => undefined);
+    const verdicts: string[] = [];
+    const gate = createSchemaGate({
+      readLedger: () => ledger,
+      shipped: () => SHIPPED,
+      probeDeadlineMs: 50,
+      onVerdictChanged: (verdict) => verdicts.push(verdict.kind),
+    });
+    assert.equal(gate.admits().ok, false, 'nothing has been verified yet');
+
+    assert.equal((await gate.verify()).kind, 'unverified'); // boot, during the outage
+    const closed = gate.admits();
+    assert.equal(closed.ok, false);
+    assert.match(
+      closed.detail ?? '',
+      /not yet verified: the migration ledger could not be read \(ECONNREFUSED\)/,
+    );
+
+    ledger = Promise.resolve(reading(SHIPPED.slice(0, 2))); // back, and behind
+    assert.equal((await gate.readiness({ ok: true, identity: 'db-a' })).ok, false);
+    assert.match(gate.admits().detail ?? '', /schema is behind this build/);
+
+    ledger = Promise.resolve(reading(SHIPPED)); // migrated
+    assert.equal((await gate.readiness({ ok: true, identity: 'db-a' })).ok, true);
+    assert.deepEqual(gate.admits(), { ok: true });
+    assert.deepEqual(verdicts, ['refused', 'current'], 'each change reported once; boot reports itself');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The hook in `buildApp`
+// ---------------------------------------------------------------------------
+
+function gateConfig(): AppConfig {
+  return loadConfig({
+    NODE_ENV: 'test',
+    // Syntactically valid and never dialled.
+    DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused',
+    PUBLIC_WEB_ORIGIN: 'http://localhost:3000',
+    SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
+    RATE_LIMIT_MAX: '5000',
+    RATE_LIMIT_EXPENSIVE_MAX: '5000',
+  });
+}
+
+const stubDatabase: DatabaseHandle = {
+  ping: () => Promise.resolve({ ok: true }),
+  close: () => Promise.resolve(undefined),
+};
+
+/** A feature route that touches nothing, and a WebSocket route that would accept anybody. */
+const features: RouteModule = async (app) => {
+  app.get('/feature', async () => ({ served: true }));
+  await app.register(websocketPlugin);
+  app.get('/socket', { websocket: true }, (socket) => {
+    socket.close(1000, 'opened');
+  });
+};
+
+async function gatedApp(
+  admits: () => { ok: boolean; detail?: string },
+  featureGate = true,
+): Promise<FastifyInstance> {
+  const app = await buildApp({
+    config: gateConfig(),
+    database: stubDatabase,
+    metrics: new AppMetrics(),
+    ...(featureGate ? { featureGate: { admits, retryAfterSeconds: 5 } } : {}),
+  });
+  await registerRoutes(app, [features]);
+  await app.ready();
+  return app;
+}
+
+/** The upgrade's answer: the HTTP status it was refused with, or 101 when the handshake completed. */
+async function upgradeStatus(app: FastifyInstance): Promise<number> {
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  const { port } = app.server.address() as AddressInfo;
+  return await new Promise<number>((resolve, reject) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/api/v1/socket`);
+    socket.once('unexpected-response', (_request, response) => {
+      // Not terminated from this side: the server must hang up itself, or the refused upgrade is a
+      // socket that holds a shutdown drain open. `close` never firing fails this as a timeout.
+      response.socket.once('close', () => resolve(response.statusCode ?? 0));
+      response.resume();
+    });
+    socket.once('upgrade', () => {
+      resolve(101);
+    });
+    socket.once('error', (error) => {
+      if (!/Unexpected server response/.test(error.message)) reject(error);
+    });
+  });
+}
+
+describe('buildApp featureGate — feature routes wait for a verdict', () => {
+  it('answers 503 service_unavailable with Retry-After while closed, in the contract shape', async () => {
+    const app = await gatedApp(() => ({ ok: false, detail: 'schema not yet verified: test' }));
+    try {
+      const response = await app.inject({ method: 'GET', url: '/api/v1/feature' });
+      assert.equal(response.statusCode, 503);
+      assert.equal(response.headers['retry-after'], '5');
+      assert.equal(response.headers['cache-control'], 'no-store');
+      const body = response.json<{ error: { code: string; retryAfterSeconds?: number; message: string } }>();
+      assert.equal(body.error.code, 'service_unavailable');
+      assert.equal(body.error.retryAfterSeconds, 5);
+      // The reason is logged, never sent.
+      assert.doesNotMatch(response.body, /schema|verified/);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('keeps liveness, readiness and metrics reachable while closed', async () => {
+    const app = await gatedApp(() => ({ ok: false, detail: 'closed' }));
+    try {
+      for (const url of ['/api/v1/health', '/api/v1/ready', '/metrics']) {
+        const response = await app.inject({ method: 'GET', url });
+        assert.equal(response.statusCode, 200, `${url} must not be gated: ${response.body}`);
+      }
+      // An unknown path is refused too while closed: there is no route pattern to exempt.
+      assert.equal((await app.inject({ method: 'GET', url: '/api/v1/nope' })).statusCode, 503);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('serves once the gate admits, and follows it when it closes again', async () => {
+    let open = false;
+    const app = await gatedApp(() => (open ? { ok: true } : { ok: false, detail: 'refused' }));
+    try {
+      assert.equal((await app.inject({ method: 'GET', url: '/api/v1/feature' })).statusCode, 503);
+      open = true;
+      const served = await app.inject({ method: 'GET', url: '/api/v1/feature' });
+      assert.equal(served.statusCode, 200);
+      assert.deepEqual(served.json(), { served: true });
+      open = false; // a refusal found later, or a different database answering
+      assert.equal((await app.inject({ method: 'GET', url: '/api/v1/feature' })).statusCode, 503);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses the WebSocket upgrade with an HTTP 503 while closed, and completes it once open', async () => {
+    const closed = await gatedApp(() => ({ ok: false, detail: 'closed' }));
+    try {
+      assert.equal(await upgradeStatus(closed), 503, 'no socket may open onto an unverified schema');
+    } finally {
+      await closed.close();
+    }
+    const open = await gatedApp(() => ({ ok: true }));
+    try {
+      assert.equal(await upgradeStatus(open), 101, 'the positive control: the same route upgrades');
+    } finally {
+      await open.close();
+    }
+  });
+
+  it('counts a refused request against the limiter, like every other answer this server gives', async () => {
+    const app = await buildApp({
+      config: loadConfig({
+        NODE_ENV: 'test',
+        DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused',
+        PUBLIC_WEB_ORIGIN: 'http://localhost:3000',
+        SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
+        RATE_LIMIT_MAX: '3',
+      }),
+      database: stubDatabase,
+      metrics: new AppMetrics(),
+      featureGate: { admits: () => ({ ok: false, detail: 'closed' }), retryAfterSeconds: 5 },
+    });
+    await registerRoutes(app, [features]);
+    try {
+      const statuses: number[] = [];
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        statuses.push((await app.inject({ method: 'GET', url: '/api/v1/feature' })).statusCode);
+      }
+      assert.deepEqual(statuses, [503, 503, 503, 429, 429]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('is absent by default, so an app built without it is ungated (the seam every test uses)', async () => {
+    const app = await gatedApp(() => ({ ok: false, detail: 'never consulted' }), false);
+    try {
+      assert.equal((await app.inject({ method: 'GET', url: '/api/v1/feature' })).statusCode, 200);
+    } finally {
+      await app.close();
+    }
   });
 });

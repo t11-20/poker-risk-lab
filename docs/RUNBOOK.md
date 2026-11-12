@@ -411,9 +411,22 @@ Two cases are deliberately **not** refused:
 * **A database that does not answer at boot.** The API comes up degraded, exactly as for an
   outage that began after boot ([db-unavailable.md](production/runbooks/db-unavailable.md)), and
   `/ready` stays 503 — `checks.database.detail` reading `schema not yet verified: ...` once Postgres
-  answers `select 1` but before the ledger has been read — until a probe gets the ledger. If that
-  answer is a refusal, `/ready` says so in the same field and keeps asking, so migrating then makes
-  the instance ready without a restart.
+  answers but before the ledger has been read — until a probe gets the ledger. If that answer is a
+  refusal, `/ready` says so in the same field and keeps asking, so migrating then makes the
+  instance ready without a restart.
+
+Until a verdict of current (or ahead) is held, **every route except `/api/v1/health`,
+`/api/v1/ready` and `/metrics` answers 503 `service_unavailable` with `Retry-After: 5`**, and the
+WebSocket upgrade is refused with the same 503 — `/ready` alone withholds traffic only where
+something routes on it, and the staging proxy does not (PR #38's review). The process re-checks on
+its own every five seconds, so it recovers whether or not anything probes `/ready`.
+
+The verdict belongs to the database it was reached against, not to the process. Every probe reads
+which database is answering (its oid, the postmaster's start time and the ledger table's oid, in the
+probe's one query); when that changes — a restore into a recreated database, a failover, a DSN
+that now reaches a different container — the API logs `a different database is answering
+DATABASE_URL`, closes the feature routes, and reads the ledger again. A plain Postgres restart
+trips it too, and costs one ledger read.
 
 The test suite makes the same comparison: `test/database-availability.test.ts` fails first, naming
 the pending file and the command, instead of the rest of the run failing on a missing column.
@@ -1158,7 +1171,8 @@ log driver, or a sidecar. Points that matter when you configure it:
 * `GET /api/v1/health` — liveness. Cheap, no database.
 * `GET /api/v1/ready` — readiness. Checks the database, 503 while degraded. This is the one a load
   balancer should use. Until the process has compared the migration ledger with its build (§5) it
-  is not ready either; once it has, the check is `select 1` again.
+  is not ready either, and its feature routes answer 503; once it has, the check is one cheap query
+  again, which also notices a different database behind the DSN.
 * Web has no health route; `GET /` renders the home page and that is the honest check.
 * Both container `HEALTHCHECK`s probe the container's own network address, so "healthy" means
   "reachable", not "a process exists".

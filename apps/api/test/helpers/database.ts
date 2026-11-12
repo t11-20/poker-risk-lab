@@ -181,7 +181,7 @@ export async function probeSchema(): Promise<SchemaProbe> {
   try {
     await client`select 1 from prl.users limit 1`;
     const verdict = await verifySchema(
-      () => readLedger(client),
+      async () => (await readLedger(client)).rows,
       () => readShippedMigrations(),
     );
     if (verdict.kind === 'refused') {

@@ -57,7 +57,7 @@
  * So there is a timer on this side of the socket, one that does not need the database to be
  * alive in order to fire. There are two of them because they answer different questions:
  *
- *   * `PROBE_QUERY_DEADLINE_MS` bounds the readiness probe's `select 1`. It is short,
+ *   * `PROBE_QUERY_DEADLINE_MS` bounds the readiness probe's one query. It is short,
  *     because a probe that is slow has already answered the only question readiness asks.
  *   * `queryDeadlineMs(config)` bounds everything else — every statement, and every
  *     `begin` block as a whole. It is deliberately GENEROUS — it exists to turn "hangs
@@ -177,7 +177,7 @@ export type TransactionSql = postgres.TransactionSql<Record<never, never>>;
 export const READINESS_DEADLINE_MS = 750;
 
 /**
- * The bound on the probe's own `select 1`, inside `READINESS_DEADLINE_MS`.
+ * The bound on the probe's own query, inside `READINESS_DEADLINE_MS`.
  *
  * Two bounds rather than one, because they guarantee different things. This one is what
  * normally fires, and it is what lets `ping()` report *which* kind of failure happened and
@@ -240,6 +240,60 @@ export interface DbCheck {
   readonly ok: boolean;
   /** Short, non-sensitive reason when `ok` is false. Never a driver message. */
   readonly detail?: string;
+  /**
+   * Which database answered, when `ok` is true and the handle can say: see `databaseIdentity`.
+   *
+   * Server-side only. `/api/v1/ready` copies `ok` and `detail` into its body and nothing else, so
+   * this never reaches a client — it carries the postmaster's start time, which is nobody's
+   * business outside this process.
+   */
+  readonly identity?: string;
+}
+
+/**
+ * Which database is answering this DSN, as one short string: the database's oid, the
+ * postmaster's start time, and the oid of the migration ledger's table.
+ *
+ * ## Why the schema guard needs it
+ *
+ * PR #38's review (Devin): once the guard had verified the schema it trusted that verdict for
+ * the life of the process, while the database behind `DATABASE_URL` can change underneath a
+ * running API without the API restarting — a restore into a recreated database, a failover, a
+ * DSN whose host now resolves to a newer container. Each of those can put a database BEHIND this
+ * build behind a process that already said "current". So the verdict is tied to this value, and
+ * `schema-guard.ts` re-verifies when it changes.
+ *
+ * ## Why these three, and not `system_identifier`
+ *
+ * `pg_control_system()` is readable by `prl_app` on the development cluster (measured, PG 16),
+ * but its `system_identifier` names the CLUSTER, and is shared by every physical replica of it.
+ * `backup.mjs restore` drops the database `WITH (FORCE)` and restores into a new one ON THE SAME
+ * CLUSTER, so that identifier does not move for the exact case the review names. What does move:
+ *
+ *   * the database oid — a dropped and recreated database never gets its old oid back;
+ *   * `pg_postmaster_start_time()` — a different server (failover, a new container, a replica
+ *     promoted) started at a different instant. Needed because two freshly initialised clusters
+ *     can hand out the SAME oids, so the oids alone do not tell two new containers apart;
+ *   * the ledger table's oid — `db:reset` and a `pg_restore --clean` recreate the table inside
+ *     the same database, and `to_regclass` answers null rather than an error when it is absent.
+ *
+ * All three are `pg_catalog` reads the runtime role may make with no grant at all, and they cost
+ * nothing measurable next to the round trip itself. A plain Postgres restart also changes the
+ * start time, which makes the guard read the ledger once more than it strictly needed to: the
+ * false positive is one cheap query, in the safe direction.
+ *
+ * `extract(epoch …)` rather than the timestamp itself, so the text does not depend on a
+ * connection's `DateStyle` or `TimeZone`: `ping()` and the ledger read must produce the same
+ * string for the same database, or every probe would look like a different one.
+ *
+ * Built as a fragment so `ping()` and `schema-guard.ts`'s ledger read splice one expression and
+ * cannot drift; postgres.js composes a `Query` interpolated into another (see `boundQuery`).
+ */
+export function databaseIdentity(sql: Sql): postgres.PendingQuery<postgres.Row[]> {
+  return sql`pg_catalog.concat_ws(':',
+    (select d.oid from pg_catalog.pg_database d where d.datname = pg_catalog.current_database()),
+    extract(epoch from pg_catalog.pg_postmaster_start_time()),
+    pg_catalog.to_regclass('prl.schema_migrations')::oid)`;
 }
 
 /**
@@ -538,7 +592,7 @@ let shared: Sql | null = null;
 let bound: Sql | null = null;
 
 /**
- * The `select 1` a previous probe gave up on, while it is still unanswered.
+ * The probe query a previous probe gave up on, while it is still unanswered.
  *
  * A latch rather than a counter: what it prevents is a probe interval's worth of abandoned
  * queries piling up against `DATABASE_POOL_MAX` for the length of an outage. With it, a
@@ -614,10 +668,13 @@ export async function withTransaction<T>(fn: (tx: TransactionSql) => Promise<T>)
 /**
  * Readiness check.
  *
- * `select 1` and nothing else: the probe has to be cheaper than the cheapest real request,
- * or a readiness endpoint under load becomes the reason the service is not ready. The
- * driver's message is deliberately not returned — it can name hosts, users and databases —
- * so the caller gets a fixed string while the detail goes to the log at the call site.
+ * One round trip and nothing heavier than a catalog lookup: the probe has to be cheaper than the
+ * cheapest real request, or a readiness endpoint under load becomes the reason the service is not
+ * ready. It used to be `select 1`; it now selects `databaseIdentity` instead, in the same single
+ * statement, so the schema guard can notice a different database behind the DSN without a second
+ * query per probe. The driver's message is deliberately not returned — it can name hosts, users
+ * and databases — so the caller gets a fixed string while the detail goes to the log at the call
+ * site.
  *
  * The three `detail` values are three different incidents and are worded so an operator can
  * tell them apart from the 503 body alone: never configured, answered with an error, and
@@ -634,10 +691,10 @@ export async function ping(): Promise<DbCheck> {
   if (abandonedProbe !== null) {
     return { ok: false, detail: `database did not answer within ${PROBE_QUERY_DEADLINE_MS} ms` };
   }
-  const query = shared`select 1 as ok`;
+  const query = shared<{ identity: string }[]>`select ${databaseIdentity(shared)} as identity`;
   try {
-    await underDeadline(query, PROBE_QUERY_DEADLINE_MS);
-    return { ok: true };
+    const [row] = await underDeadline(query, PROBE_QUERY_DEADLINE_MS);
+    return row === undefined ? { ok: true } : { ok: true, identity: row.identity };
   } catch (error) {
     if (!(error instanceof DatabaseDeadlineError)) return { ok: false, detail: 'database did not answer' };
     const outstanding = error.abandoned;

@@ -10,9 +10,9 @@ PostgreSQL is not answering. The API process is fine.
 - The instance leaves the load balancer without the orchestrator killing it.
 - Learners can load pages but cannot sign in, join a room, or see history.
 - Logs carry `readiness check failed` with `{"check":{"ok":false,"detail":"database did not answer"}}`.
-- An API that STARTED during the outage also logged `database schema not verified at boot`, and once Postgres answers its `detail` reads `schema not yet verified: …` until the first probe has read the migration ledger. It did not exit, by design: it compares the ledger with its build the moment it can ([`../../RUNBOOK.md`](../../RUNBOOK.md) §5).
+- An API that STARTED during the outage also logged `database schema not verified at boot`, and once Postgres answers its `detail` reads `schema not yet verified: …` until the first probe has read the migration ledger. It did not exit, by design: it compares the ledger with its build the moment it can ([`../../RUNBOOK.md`](../../RUNBOOK.md) §5). Until then it also answers every feature route, and the WebSocket upgrade, with 503 `service_unavailable` and `Retry-After: 5` — even through a proxy that ignores `/ready` — and logs `database schema verified; serving` when that ends. If Postgres came back as a different database (restored, failed over), the log says `a different database is answering DATABASE_URL` and the same 503s last until its ledger has been read.
 
-**Healthy 200 with a degraded 503 is the design working, not a bug.** Liveness answers from memory and readiness runs `select 1`; the split exists precisely so a database outage takes an instance out of rotation without an orchestrator killing a process that is perfectly fine. `pnpm run test:drills --only postgres-outage` exercises exactly this.
+**Healthy 200 with a degraded 503 is the design working, not a bug.** Liveness answers from memory and readiness runs one cheap query; the split exists precisely so a database outage takes an instance out of rotation without an orchestrator killing a process that is perfectly fine. `pnpm run test:drills --only postgres-outage` exercises exactly this.
 
 ## Detection
 
