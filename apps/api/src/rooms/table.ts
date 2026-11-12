@@ -140,7 +140,7 @@
  * re-forms, and is the only alternative to a table that can never deal again.
  */
 
-import type { WsEvent } from '@prl/contracts';
+import type { AutomaticReason, WsEvent } from '@prl/contracts';
 import type { PublicActionEvent } from '@prl/poker-ai';
 import type {
   Action,
@@ -239,9 +239,9 @@ export interface TableNotice {
    *
    * Safe to hand out: a `LoggedAction` carries a seat, an action and amounts, and no card. It is
    * already in every `PlayerView.actions`, so this is public information in a shape the
-   * persistence layer can write directly.
+   * persistence layer can write directly. `ArchivedAction` adds only why an automatic one was taken.
    */
-  readonly loggedActions: readonly LoggedAction[];
+  readonly loggedActions: readonly ArchivedAction[];
   /** True on the one notice that carried a hand to completion. Exactly `settledStacks !== null`. */
   readonly handCompleted: boolean;
   /**
@@ -443,9 +443,26 @@ interface BlindDebt {
   readonly since: number;
 }
 
+/**
+ * The engine's log entry, plus why the server took it when nobody submitted it.
+ *
+ * The reason lives here rather than in `@prl/poker-engine` because the engine never decides one: it
+ * is told "automatic" and nothing else, and a timer and a departure are both this class's ideas.
+ * Putting it on `LoggedAction` would also have put it into every `PlayerView.actions` on the wire,
+ * which the live table neither needs nor validates (it reads `seatTimedOut` instead).
+ *
+ * Without it the archive wrote `was_automatic = true` for both of this class's automatic paths, and
+ * the hand review told a reader who had pressed "Stand up" that their clock ran out.
+ */
+export interface ArchivedAction extends LoggedAction {
+  /** Non-null exactly when `wasAutomatic`. See `AUTOMATIC_REASONS` in `@prl/contracts`. */
+  readonly automaticReason: AutomaticReason | null;
+}
+
 interface ApplyOptions {
   readonly actionId: string | null;
-  readonly automatic: boolean;
+  /** Why the server is acting for this seat, or null for a decision its player submitted. */
+  readonly automatic: AutomaticReason | null;
   /** Events to publish alongside the engine's own, e.g. `seatTimedOut`. */
   readonly extraEvents?: readonly TableEvent[];
 }
@@ -460,7 +477,7 @@ interface ApplyOptions {
 interface Applied {
   readonly events: TableEvent[];
   readonly publicActions: PublicActionEvent[];
-  readonly loggedActions: LoggedAction[];
+  readonly loggedActions: ArchivedAction[];
 }
 
 function collector(): Applied {
@@ -927,7 +944,7 @@ export class LiveTable {
       }
       const outcome = this.apply(acting.seat, submitted.action, {
         actionId: submitted.actionId,
-        automatic: false,
+        automatic: null,
       });
       if (outcome === null) {
         throw new AppError('illegal_action', {
@@ -971,7 +988,7 @@ export class LiveTable {
     let applied: { readonly state: HandState; readonly events: readonly HandEvent[] };
     try {
       applied = applyAction(before, seat, action, {
-        automatic: options.automatic,
+        automatic: options.automatic !== null,
         actionId: options.actionId,
       });
     } catch (error) {
@@ -990,7 +1007,8 @@ export class LiveTable {
     accumulated.events.push(...(options.extraEvents ?? []), ...this.wireEvents(applied.events));
     const logged = applied.state.actions.at(-1);
     accumulated.publicActions.push({ ...fact, amountPaid: logged?.amountPaid ?? 0 });
-    if (logged !== undefined) accumulated.loggedActions.push(logged);
+    if (logged !== undefined)
+      accumulated.loggedActions.push({ ...logged, automaticReason: options.automatic });
 
     const outcome: ActionOutcome = { appliedSequence: applied.state.actionSequence, deduplicated: false };
     if (options.actionId !== null) this.recordMemo(options.actionId, outcome);
@@ -1039,7 +1057,9 @@ export class LiveTable {
       live.state = applied.state;
       const logged = applied.state.actions.at(-1);
       accumulated.publicActions.push({ ...fact, amountPaid: logged?.amountPaid ?? 0 });
-      if (logged !== undefined) accumulated.loggedActions.push(logged);
+      // `departed`, never `timeout`: this player pressed "Stand up" (or left, or opened another
+      // practice table) holding cards, and no clock was involved. Recorded as the one thing it was.
+      if (logged !== undefined) accumulated.loggedActions.push({ ...logged, automaticReason: 'departed' });
       accumulated.events.push(...this.wireEvents(applied.events));
     }
   }
@@ -1056,7 +1076,7 @@ export class LiveTable {
     const action = timeoutAction(live.state, expiry.seat);
     const applied = this.apply(expiry.seat, action, {
       actionId: null,
-      automatic: true,
+      automatic: 'timeout',
       extraEvents: [{ kind: 'seatTimedOut', seat: expiry.seat }],
     });
     if (applied === null) {

@@ -231,6 +231,30 @@ describe('the review replays a hand from its rows, with no deck anywhere', () =>
     }
   });
 
+  // Migration 0009. The review used to have only `wasAutomatic`, and the web printed "the clock ran
+  // out" for all of it. The reason is passed through as recorded — and a row archived before the
+  // reason existed stays null, because inventing `timeout` from `was_automatic` is that same guess.
+  it('carries why the server acted, and invents no reason for a row that recorded none', () => {
+    const fixture = showdownHand();
+    assert.ok(fixture.actions.length >= 3, 'a sweep of nothing is not a pass');
+    const recorded = [
+      [true, 'timeout'],
+      [true, 'departed'],
+      [true, null],
+    ] as const;
+    const actions = fixture.actions.map((action, index) => {
+      const marked = recorded[index];
+      return marked === undefined
+        ? action
+        : { ...action, was_automatic: marked[0], automatic_reason: marked[1] };
+    });
+    const review = reviewAs({ ...fixture, actions }, ALICE, { maxAnalysedDecisions: 0 });
+    assert.deepEqual(
+      review.decisions.map((decision) => [decision.wasAutomatic, decision.automaticReason]),
+      [...recorded, ...actions.slice(recorded.length).map(() => [false, null])],
+    );
+  });
+
   it('reconstructs the board for each street from the stored board alone', () => {
     const fixture = showdownHand();
     const review = reviewAs(fixture, ALICE);

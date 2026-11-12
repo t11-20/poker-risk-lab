@@ -65,6 +65,7 @@ function decision(
     amountPaid,
     potBefore,
     wasAutomatic: false,
+    automaticReason: null,
     // Null throughout: these hands belong to nobody in particular, and the labels under test are
     // drawn for every seat regardless of whose review it is.
     analysis: null,

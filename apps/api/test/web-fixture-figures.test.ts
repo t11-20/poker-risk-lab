@@ -196,6 +196,7 @@ function reviewActionRows(review: HandReviewResponse): readonly HandActionRow[] 
       bet_level_after: betLevel,
       pot_after: nextPotAfter,
       was_automatic: decision.wasAutomatic,
+      automatic_reason: decision.automaticReason,
     });
   }
   return rows;

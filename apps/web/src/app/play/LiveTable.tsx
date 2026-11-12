@@ -228,10 +228,16 @@ interface ConnectionPanelProps {
  * screen reader ends up reading the same failure three times.
  */
 function statusSentence(live: LiveTableModel): string {
+  if (live.phase === 'idle' && live.resuming) return 'Reconnecting you to the table you were at.';
   if (live.phase === 'idle') {
+    // "Opens your practice table", not "creates a room": the press reuses a table this account
+    // already has (`chooseRoom`), and this sentence used to promise a new one to a reader who had
+    // just come back to /play from a table that was still being held for them (UI audit of
+    // 308fadf, item 15). Both halves are said because, from here, the page cannot know which.
     return (
-      'Not connected yet. “Deal me in” creates a guest session — no email, no password — and a private ' +
-      'room with bots already seated, then sits you down and deals your first hand.'
+      'Not connected yet. “Deal me in” starts a guest session if you need one — no email, no ' +
+      'password — and opens your practice table: the one you already have, or a new one with bots ' +
+      'already seated. Then it takes your seat and deals, unless a hand is already being played.'
     );
   }
   if (live.phase === 'preparing') {

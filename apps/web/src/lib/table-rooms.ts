@@ -153,6 +153,21 @@ export async function ensureSession(signal?: AbortSignal): Promise<TableSession>
   return { user: created.user, csrfToken: created.csrfToken };
 }
 
+/**
+ * Reads the session and never creates one: null when this browser has no signed-in user.
+ *
+ * `ensureSession` mints a guest when there is none, which is right behind a press of "Deal me in"
+ * and wrong for anything that runs without one. `resumeRememberedTable` runs on page load; built on
+ * `ensureSession`, a tab whose cookie had expired would mint a stranger's account just by being
+ * opened.
+ */
+export async function readSession(signal?: AbortSignal): Promise<TableSession | null> {
+  const options = signal === undefined ? {} : { signal };
+  const current = await apiGet<SessionResponse>(API_PATHS.session(), options);
+  if (current.user === null || current.csrfToken === null) return null;
+  return { user: current.user, csrfToken: current.csrfToken };
+}
+
 /** Every room this session owns or is sitting at. */
 export async function listRooms(signal?: AbortSignal): Promise<readonly RoomSummary[]> {
   const options = signal === undefined ? {} : { signal };
@@ -320,4 +335,68 @@ export function chooseRoom(
   // whose bots were lost to a server restart, and choosing it would seat the reader at a table where
   // nobody else can act.
   return mine.find((room) => room.members.some((member) => member.isBot)) ?? null;
+}
+
+/**
+ * The table to put a returning reader back at, or null when there is none to return to.
+ *
+ * ## The defect
+ *
+ * Leaving `/play` and coming back dropped the table. The page remounts, `useLiveTable` starts at
+ * `idle`, and the reader got "Not connected yet. “Deal me in” creates … a private room" — about a
+ * table they were sitting at a moment ago and that the server was still holding for them (UI audit
+ * of 308fadf, item 15). The tab even remembered which room it was (`prl.play.roomId`); only a press
+ * of "Deal me in" ever read that memory, and the sentence above that button said it would create a
+ * room when it would in fact rejoin that one.
+ *
+ * ## Why this is narrower than "Deal me in"
+ *
+ * It runs on page load, without a press, so it may only ever reconnect — never create:
+ *
+ *   - **no session is minted.** `readSession`, not `ensureSession`: no cookie means no table here;
+ *   - **no room is created, and no other room is chosen.** Only the room this tab remembers, and
+ *     only while the server still lists it for this account as open. `chooseRoom`'s fallback to
+ *     "any owned room with a bot" belongs to the press, which is a request for a table; this is a
+ *     request for *that* table, so anything else is null and the page stays at "Deal me in";
+ *   - **only a room as wide as `/play` draws** — the rule `chooseRoom` has for the legend match the
+ *     tab may also remember (Devin Review on #24).
+ *
+ * A room reached by invite code qualifies too: that reader was at it, and the server lists rooms a
+ * session is sitting at as well as the ones it owns.
+ *
+ * Nothing here sits or deals. Being reconnected is not being dealt in; the controls that appear are
+ * the manual ones, because the reader may be mid-hand and has asked for nothing yet on this visit.
+ */
+export function resumableRoom(
+  rooms: readonly RoomSummary[],
+  rememberedId: string | null,
+): RoomSummary | null {
+  if (rememberedId === null) return null;
+  const room = rooms.find((entry) => entry.id === rememberedId);
+  if (room === undefined || room.status === 'closed') return null;
+  return room.maxSeats === BOT_TABLE_REQUEST.maxSeats ? room : null;
+}
+
+/** What `resumeRememberedTable` needs from the network, injected so a test can count the calls. */
+export interface ResumeDependencies {
+  readonly readSession: (signal: AbortSignal) => Promise<TableSession | null>;
+  readonly listRooms: (signal: AbortSignal) => Promise<readonly RoomSummary[]>;
+}
+
+/**
+ * The whole page-load reconnect: the remembered room and the session to open it with, or null.
+ *
+ * Asks nothing at all when the tab remembers no room, so a first visit to `/play` makes no request
+ * before the reader presses something — which is what it did before this existed.
+ */
+export async function resumeRememberedTable(
+  rememberedId: string | null,
+  signal: AbortSignal,
+  dependencies: ResumeDependencies = { readSession, listRooms },
+): Promise<{ readonly session: TableSession; readonly room: RoomSummary } | null> {
+  if (rememberedId === null) return null;
+  const session = await dependencies.readSession(signal);
+  if (session === null) return null;
+  const room = resumableRoom(await dependencies.listRooms(signal), rememberedId);
+  return room === null ? null : { session, room };
 }

@@ -63,7 +63,13 @@ import {
 } from '@prl/ui';
 import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
 import type { HandReplay as Replay, ReplayStep } from '../lib/hand-replay.ts';
-import { markerActor, markerShort, openingStepIndex } from '../lib/replay-steps.ts';
+import {
+  automaticAside,
+  automaticSentence,
+  markerActor,
+  markerShort,
+  openingStepIndex,
+} from '../lib/replay-steps.ts';
 import { CommitmentVerifier } from './CommitmentVerifier.tsx';
 import { DecisionTimeline, type TimelineMarker, type TimelineStreet } from './DecisionTimeline.tsx';
 
@@ -100,7 +106,7 @@ function markerDescription(step: ReplayStep, names: Readonly<Record<number, stri
   const decision = step.decision;
   if (decision === null) return 'End of the hand: final stacks and the settled pot.';
   const who = step.isViewerDecision ? 'you' : (names[decision.seat] ?? `seat ${decision.seat + 1}`);
-  const automatic = decision.wasAutomatic ? ' The clock ran out and the server acted.' : '';
+  const automatic = automaticSentence(step);
   const analysis = step.analysis === null ? '' : ' An analysis is attached to this decision.';
   return `${decision.street}: ${who} ${actionPhrase(step)}.${automatic}${analysis}`;
 }
@@ -119,7 +125,7 @@ function markerDescription(step: ReplayStep, names: Readonly<Record<number, stri
  */
 function stepHeadline(step: ReplayStep, names: Readonly<Record<number, string>>): string {
   if (step.decision === null) return 'The hand is over.';
-  const automatic = step.decision.wasAutomatic ? ' (the clock ran out)' : '';
+  const automatic = automaticAside(step);
   return `To act: ${markerActor(step, names) ?? ''} — ${actionPhrase(step)}${automatic}.`;
 }
 
