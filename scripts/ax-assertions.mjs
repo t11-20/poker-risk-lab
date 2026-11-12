@@ -2229,8 +2229,19 @@ async function dealAtReconnectedTable(page, evidence) {
     `[...document.querySelectorAll('button')]` +
     `.some((b) => /^Deal the next hand$/u.test((${named})(b)) && !b.disabled)`;
   const inProgress = '/A hand is in progress/u.test(document.body.innerText)';
+  const over = '/The hand is complete/u.test(document.body.innerText)';
   evidence.socketLive = true;
-  if (!evidence.start.snapshot.inProgress) {
+  let needsDeal = !evidence.start.snapshot.inProgress;
+  if (!needsDeal) {
+    // A hand in progress is only this reader's to play if a decision of theirs can still arrive. A
+    // tab that comes back after folding, or standing, watches the bots finish and is never offered
+    // one, so `finishLiveHand` would wait out its whole budget for nothing (Devin Review on #32).
+    // Wait for either: a decision means the hand is usable; the hand ending means deal a new one.
+    await waitInPage(page, `${ENABLED_ACTION} || ${over} || ${enabledDeal}`, 90);
+    needsDeal = (await page.evaluate(ENABLED_ACTION)) !== true;
+    evidence.joinedInProgress = needsDeal ? 'watched it finish, then dealt' : 'had a decision in it';
+  }
+  if (needsDeal) {
     evidence.sat = await pressControl(page, /^Take seat \d+$/iu);
     if (await waitInPage(page, `${enabledDeal} || ${inProgress}`, 20)) {
       evidence.dealPressed = await pressControl(page, /^Deal the next hand$/iu);
