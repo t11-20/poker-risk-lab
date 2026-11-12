@@ -167,3 +167,35 @@ describe('the invite code reaches a screen, in both directions', () => {
     }
   });
 });
+
+describe('the invite code is on screen when it arrives', () => {
+  /** `InviteCode`'s own source, from its declaration to the next top-level function. */
+  function inviteCodeSource(): string {
+    const live = read('app', 'play', 'LiveTable.tsx');
+    const start = live.indexOf('function InviteCode(');
+    assert.ok(start >= 0, 'InviteCode is no longer declared in LiveTable.tsx');
+    const end = live.indexOf('\nfunction ', start + 1);
+    return live.slice(start, end < 0 ? undefined : end).replace(/\s+/gu, ' ');
+  }
+
+  it('brings its own block into view by the nearest edge, unless it is already in view', () => {
+    // The defect, from the audit at 308fadf: at 390x844 the "shown once" code appeared at viewport
+    // y 796, under the Coach sheet's 780px peek, and nothing moved the page to it. Read from source
+    // because the move needs a DOM and a layout; what a source read can pin is that the move exists,
+    // that it is the nearest edge (which honours the root's scroll padding, the peek included), and
+    // that a code already in view is left where it is. Where the block then lands is a browser fact
+    // no gate measures yet — none of the browser harnesses presses "Start a private table".
+    const body = inviteCodeSource();
+    assert.match(body, /className="prl-play__invite" ref=\{block\}/u, 'the block must be the thing moved');
+    assert.match(body, /if \(element === null \|\| inView\(element\)\) return;/u);
+    assert.match(
+      body,
+      /element\.scrollIntoView\(\{ block: 'nearest', behavior: reduced \? 'auto' : 'smooth' \}\)/u,
+    );
+  });
+
+  it('remounts for a new code, so the second code of a session is brought in too', () => {
+    const live = read('app', 'play', 'LiveTable.tsx').replace(/\s+/gu, ' ');
+    assert.match(live, /<InviteCode code=\{live\.inviteCode\} key=\{live\.inviteCode\} \/>/u);
+  });
+});
