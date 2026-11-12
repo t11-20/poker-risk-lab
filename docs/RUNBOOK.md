@@ -42,6 +42,18 @@ pnpm run dev                       # api on :3001, web on :3000
 
 Open <http://localhost:3000>. No sign-in is needed — the app is guest-first.
 
+**A second checkout on the same machine shares the first one's database.** `docker-compose.yml`
+sets `name: poker-risk-lab`, so the project — and with it the `poker-risk-lab-postgres-1`
+container and its volume — is the same whichever directory `db:up` runs from. Measured on
+2026-11-13 from a fresh clone beside an existing one: `docker compose --dry-run up -d postgres`
+answered `Container poker-risk-lab-postgres-1 Recreate`. The volume survives a recreate, but the
+running database restarts under whoever else is using it, and the new clone's `db:migrate` then
+writes into the database the old one uses. To keep a second checkout apart, leave `db:up` out:
+create a database of its own on the running server, point both URLs in that checkout's `.env` at
+it, and run `pnpm run db:wait && pnpm run db:migrate && pnpm run db:seed`. The roles are
+cluster-wide, not per database: that `db:seed` sets the `prl_api` and `prl_deployer` passwords
+back to `poker-dev-only`, which is what the other checkout expects unless its `.env` changed them.
+
 ### Use `localhost`, not `127.0.0.1`
 
 They are the same machine and **different origins**, and three separate mechanisms in this stack
