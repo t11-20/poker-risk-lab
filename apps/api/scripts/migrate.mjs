@@ -555,8 +555,9 @@ async function ensureLedger(sql) {
 
   // Fixed DDL, no interpolation. The schema is created here so the very first
   // migration has somewhere to record itself; 0001 then hands ownership of the
-  // schema to prl_migrator. prl_app is granted nothing on the ledger: the runtime
-  // has no business reading, let alone editing, which migrations have run.
+  // schema to prl_migrator. prl_app is granted SELECT on the ledger by migration
+  // 0010 and never a write: the API reads it to refuse a schema behind its build
+  // (apps/api/src/schema-guard.ts), and this script stays its only writer.
   //
   // Each statement is issued only when it has work to do, which is a privilege
   // decision rather than an optimisation. PostgreSQL checks CREATE on the DATABASE
