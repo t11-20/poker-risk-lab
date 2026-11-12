@@ -13,20 +13,7 @@
  * so a filter dropdown and a chip can say "Pot odds and EV" instead of a slug.
  */
 
-/** `TOPICS` from `@prl/contracts`, in the syllabus order that file declares. */
-const TOPIC_LABELS: Readonly<Record<string, string>> = {
-  'rules-and-flow': 'Rules and flow',
-  'positions-and-blinds': 'Positions and blinds',
-  'hand-reading-and-outs': 'Hand reading and outs',
-  'probability-and-equity': 'Probability and equity',
-  'pot-odds-and-ev': 'Pot odds and EV',
-  'bet-sizing-and-spr': 'Bet sizing and SPR',
-  'fold-equity-and-bluffing': 'Fold equity and bluffing',
-  ranges: 'Ranges',
-  'variance-and-bankroll': 'Variance and bankroll',
-  tournaments: 'Tournaments',
-  'risk-psychology': 'Risk psychology',
-};
+import { TOPIC_LABELS } from '@prl/contracts';
 
 const DIFFICULTY_LABELS: Readonly<Record<string, string>> = {
   intro: 'Intro',
@@ -59,8 +46,14 @@ function fallback(id: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
+/**
+ * A topic's name, from the one map in `@prl/contracts` that Learn and the glossary use too.
+ *
+ * This module had its own topic map, which called `positions-and-blinds` "Positions and blinds"
+ * while the curriculum called it "Position and the blinds" (UX audit at 6b3886e, Minor 4).
+ */
 export function topicLabel(id: string): string {
-  return TOPIC_LABELS[id] ?? fallback(id);
+  return (TOPIC_LABELS as Readonly<Record<string, string>>)[id] ?? fallback(id);
 }
 
 export function difficultyLabel(id: string): string {

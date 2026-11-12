@@ -62,28 +62,14 @@
  */
 
 import type { ContentId, Difficulty, LessonBlock, LessonSummary, Topic } from '@prl/contracts';
-import { TOPICS } from '@prl/contracts';
+import { TOPIC_LABELS, TOPICS } from '@prl/contracts';
 
 /**
- * Human labels for the syllabus areas.
- *
- * Written out rather than de-slugged from the id, because "Pot odds and EV" and "Bet sizing and
- * SPR" both need capitalisation a string transform cannot guess, and a heading that reads
- * "Pot Odds And Ev" undoes the technical voice the labels are for.
+ * Human labels for the syllabus areas: the shared map in `@prl/contracts`, re-exported so callers
+ * that already import from here keep working. It is defined there because the Lab and the bot each
+ * had their own copy, and one of them named a topic differently (see its doc comment).
  */
-export const TOPIC_LABELS: Readonly<Record<Topic, string>> = {
-  'rules-and-flow': 'Rules and flow',
-  'positions-and-blinds': 'Position and the blinds',
-  'hand-reading-and-outs': 'Hand reading and outs',
-  'probability-and-equity': 'Probability and equity',
-  'pot-odds-and-ev': 'Pot odds and EV',
-  'bet-sizing-and-spr': 'Bet sizing and SPR',
-  'fold-equity-and-bluffing': 'Fold equity and bluffing',
-  ranges: 'Ranges',
-  'variance-and-bankroll': 'Variance and bankroll',
-  tournaments: 'Tournaments',
-  'risk-psychology': 'Risk psychology',
-};
+export { TOPIC_LABELS };
 
 export const DIFFICULTY_LABELS: Readonly<Record<Difficulty, string>> = {
   intro: 'Intro',

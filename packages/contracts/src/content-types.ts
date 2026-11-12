@@ -43,6 +43,33 @@ export const TOPICS = [
 ] as const;
 export type Topic = (typeof TOPICS)[number];
 
+/**
+ * The one human name for each syllabus area, for every screen that shows a topic.
+ *
+ * There were three maps — `apps/web/src/lib/learn-curriculum.ts`, `apps/web/src/lib/lab-labels.ts`
+ * and `apps/bot/src/learn.ts` — and they disagreed: the Lab's filter and chips said "Positions and
+ * blinds" while Learn and the glossary said "Position and the blinds" for the same id (UX audit at
+ * 6b3886e, Minor 4). A learner filtering the Lab by a name the curriculum never uses has been told
+ * there are two topics. One map, here beside `TOPICS`, typed `Record<Topic, …>` so a topic added
+ * without a name is a compile error rather than a slug on screen.
+ *
+ * Written out rather than de-slugged from the id, because "Pot odds and EV" and "Bet sizing and
+ * SPR" need capitalisation a string transform cannot guess.
+ */
+export const TOPIC_LABELS: Readonly<Record<Topic, string>> = {
+  'rules-and-flow': 'Rules and flow',
+  'positions-and-blinds': 'Position and the blinds',
+  'hand-reading-and-outs': 'Hand reading and outs',
+  'probability-and-equity': 'Probability and equity',
+  'pot-odds-and-ev': 'Pot odds and EV',
+  'bet-sizing-and-spr': 'Bet sizing and SPR',
+  'fold-equity-and-bluffing': 'Fold equity and bluffing',
+  ranges: 'Ranges',
+  'variance-and-bankroll': 'Variance and bankroll',
+  tournaments: 'Tournaments',
+  'risk-psychology': 'Risk psychology',
+};
+
 export interface GlossaryEntry {
   readonly id: ContentId;
   readonly term: string;
