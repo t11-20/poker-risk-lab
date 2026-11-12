@@ -49,3 +49,52 @@ export function reviewHrefFor(view: PlayerView | null): string | undefined {
   if (view === null || view.viewerSeat === null) return undefined;
   return `/review/${encodeURIComponent(view.handId)}`;
 }
+
+/**
+ * Whether the reader still has decisions in the hand being played: dealt in, not folded, not all in.
+ *
+ * Only then is there anything for the Coach to price, and only then does "Refresh the analysis"
+ * do anything a reader would want.
+ */
+export function readerHasDecisions(view: Pick<PlayerView, 'seats'> | null): boolean {
+  return view?.seats.find((seat) => seat.isSelf)?.status === 'active';
+}
+
+/**
+ * Why there is no analysis beside a hand that is still being played, said from the reader's seat.
+ *
+ * ## The defect
+ *
+ * There was one sentence for every case — "computed when one is yours to make — use 'Refresh the
+ * analysis' to ask for it now" — and it is only true of a reader who is still in the hand. The audit
+ * at 6b3886e found it in the Coach rail after the reader had folded and after the server had folded
+ * for them on the clock: an instruction to press a button for a decision that no longer existed.
+ * A folded seat, an all-in seat and a seat that was never dealt in each get the sentence that is
+ * true of them, and none of them is told to press anything.
+ */
+export function noAnalysisReason(view: Pick<PlayerView, 'seats'>): string {
+  const reader = view.seats.find((seat) => seat.isSelf);
+  if (reader === undefined || reader.status === 'sittingOut') {
+    return (
+      'You were not dealt into this hand, so there is no decision of yours in it to price. The ' +
+      'analysis comes with the next hand you are dealt.'
+    );
+  }
+  if (reader.status === 'folded') {
+    return (
+      'You are out of this hand, so there is no decision of yours left in it to price. The analysis ' +
+      'comes back with the next hand you are dealt, and this hand’s review prices every decision you ' +
+      'made in it.'
+    );
+  }
+  if (reader.status === 'allIn') {
+    return (
+      'You are all in, so there is nothing left for you to decide in this hand and nothing to price. ' +
+      'Its review prices the decisions that got you here.'
+    );
+  }
+  return (
+    'There is no analysis of this spot. The Coach prices a decision, so it is computed when one is ' +
+    'yours to make — use "Refresh the analysis" to ask for it now.'
+  );
+}

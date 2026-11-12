@@ -72,7 +72,7 @@ import {
   useState,
 } from 'react';
 import { TableStage, type TableStageStatus } from '@/components/TableStage.tsx';
-import { reviewHrefFor } from '@/lib/coach-body.ts';
+import { noAnalysisReason, readerHasDecisions, reviewHrefFor } from '@/lib/coach-body.ts';
 import { LEGENDS_PATH } from '@/lib/legend-links.ts';
 import { describeTable } from '@/lib/table-description.ts';
 import { INVITE_CODE_EXAMPLE, MAX_INVITE_CODE_INPUT } from '@/lib/table-rooms.ts';
@@ -122,7 +122,8 @@ function coachOffReason(off: NonNullable<LiveTableModel['coachOff']>): string {
 
 /**
  * The panel's own default sentence is "with no table state there is nothing to price", and it is
- * TRUE only while there is no table state. These two are the cases where there is one.
+ * TRUE only while there is no table state. This and `noAnalysisReason` in `lib/coach-body.ts` are
+ * the cases where there is one.
  *
  * ## The defect
  *
@@ -144,10 +145,6 @@ const COACH_IN_FLIGHT_REASON =
   'server-side from your own redacted view, which takes a moment; nothing is estimated here while ' +
   'you wait.';
 
-const COACH_NOT_ASKED_REASON =
-  'There is no analysis of this spot. The Coach prices a decision, so it is computed when one is ' +
-  'yours to make — use "Refresh the analysis" to ask for it now.';
-
 function coachUnavailableProps(
   live: LiveTableModel,
 ): { readonly coachUnavailableReason: string } | Record<string, never> {
@@ -161,8 +158,10 @@ function coachUnavailableProps(
     };
   }
   if (live.table.coachRequest !== null) return { coachUnavailableReason: COACH_IN_FLIGHT_REASON };
-  // Only when there is genuinely no table state does the panel's own default sentence hold.
-  if (live.table.view !== null) return { coachUnavailableReason: COACH_NOT_ASKED_REASON };
+  // Only when there is genuinely no table state does the panel's own default sentence hold. With
+  // one, the sentence depends on whether the reader still has a decision in it: see
+  // `noAnalysisReason` for the folded reader who was told to press a button.
+  if (live.table.view !== null) return { coachUnavailableReason: noAnalysisReason(live.table.view) };
   return {};
 }
 
@@ -401,6 +400,7 @@ function controlsSignature(live: ConnectionPanelProps['live']): string {
     live.table.betweenHands ? 'between' : 'in-hand',
     live.coachOff === null ? 'coach' : 'no-coach',
     live.dealingIn ? 'dealing-in' : 'manual',
+    readerHasDecisions(live.table.view) ? 'in-the-hand' : 'out-of-the-hand',
     live.join.state,
   ].join('/');
 }
@@ -528,7 +528,13 @@ function ConnectionControls({
           </Link>
         ) : null}
 
-        {isLive && seated && !table.betweenHands && live.coachOff === null ? (
+        {/* Only while the reader still has decisions in the hand: after a fold, or the clock folding
+            for them, there is nothing for the Coach to price and the press asked for nothing. */}
+        {isLive &&
+        seated &&
+        !table.betweenHands &&
+        live.coachOff === null &&
+        readerHasDecisions(table.view) ? (
           <Button variant="ghost" onClick={live.askCoach}>
             Refresh the analysis
           </Button>
