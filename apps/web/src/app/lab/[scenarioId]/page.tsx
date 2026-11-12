@@ -253,7 +253,7 @@ export default async function ScenarioPage({
 
       <nav className="prl-page-nav" aria-label="Scenario Lab">
         <a href="/lab">All scenarios</a>
-        <a href="/legends">AI opponent profiles</a>
+        <a href="/legends">AI Legends</a>
         <a href="/review">Your hand history</a>
       </nav>
     </div>

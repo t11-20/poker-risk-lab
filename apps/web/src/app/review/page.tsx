@@ -65,7 +65,7 @@ import '../../styles/page.css';
 import '../../styles/review.css';
 
 export const metadata: Metadata = {
-  title: 'Hand history',
+  title: 'Review your hand history',
   description:
     'Every hand you have played, with the board, the net result and whether it ended by folding. Open one to replay it decision by decision.',
 };
@@ -325,7 +325,9 @@ export default async function ReviewIndexPage({
           </span>{' '}
           Review
         </p>
-        <h1 className="prl-display-2 prl-page-head__title">Hand history</h1>
+        {/* Carries the nav's word. It said "Hand history" under a nav that said "Review", and the
+            links into it said "Your hand history": three names for one place (audit at 6b3886e). */}
+        <h1 className="prl-display-2 prl-page-head__title">Review your hand history</h1>
         <p className="prl-page-head__standfirst">
           Every hand you have finished. Open one to step through it decision by decision, with the analysis
           for your own choices and the deck proof you can check yourself.
