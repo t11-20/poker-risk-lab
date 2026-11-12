@@ -630,3 +630,18 @@ test('a size range whose two ends are one figure prints it once', async () => {
   });
   assert.match(spread, /Call — 50 units to 80 units</u);
 });
+
+test('a negative margin over break-even is said to be under it (REGRESSION)', async () => {
+  // Measured on the Lab at 308fadf: "▼ −27.0 points over the break-even equity". The glyph and the
+  // sign said under and the words said over; a reader who trusts the words reads the opposite.
+  const label = (markup: string): string | undefined =>
+    /class="prl-metric__delta-label">([^<]*)</u.exec(markup)?.[1];
+  const priced = (surplus: number): CoachReport => ({
+    ...NINE_OUT_DRAW,
+    potOdds: { ...NINE_OUT_DRAW.potOdds, equitySurplus: surplus },
+  });
+  assert.equal(label(await render(priced(-0.27))), 'under the break-even equity');
+  assert.equal(label(await render(priced(0.0616))), 'over the break-even equity');
+  // Rounds to 0.0 points, which the metric renders flat: neither over nor under.
+  assert.equal(label(await render(priced(-0.0004))), 'at the break-even equity');
+});

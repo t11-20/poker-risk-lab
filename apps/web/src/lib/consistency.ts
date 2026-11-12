@@ -73,6 +73,10 @@ export interface Consistency {
    * natural reading is "consistent when best minus mine is inside the tolerance", which is not the
    * rule. So a learner saw +20.6 against a best row of +51.4, a tolerance of 10, and the words
    * "consistent with the analysis", and had every reason to think the panel was broken.
+   *
+   * It is no longer PRINTED, though: zero inside the allowance is right for "how far outside it"
+   * and wrong under any label a reader takes as "how far behind". The panel prints
+   * `behindBenchmarkUnits` and `withinAllowance` instead — see the first.
    */
   readonly shortfallUnits: number;
   /**
@@ -96,6 +100,25 @@ export interface Consistency {
    * nor anything between the two ends.
    */
   readonly pricing: ConsistencyPricing;
+  /**
+   * `benchmarkEv - chosenEv`: how far the chosen action is BEHIND the benchmark, signed, so a
+   * negative figure is an action ahead of it. Null when the action was not priced.
+   *
+   * Not `shortfallUnits`, and the difference is the defect this field was added for. The shared rule
+   * zeroes the shortfall for a consistent action on purpose — it is "how far outside the allowance",
+   * which inside the allowance is nothing — and the Verdict panel printed it under "Shortfall against
+   * that". Measured at commit 308fadf: "Your action is worth −2.9 units … Judged against: folding,
+   * worth 0 … Shortfall against that: 0.0 units, against an allowance of 10 units". The action was
+   * 2.9 units behind folding and the panel said 0.0. The distance and whether it fits the allowance
+   * are two facts, and the panel now prints them as two.
+   */
+  readonly behindBenchmarkUnits: number | null;
+  /**
+   * Whether `behindBenchmarkUnits` fits inside `toleranceUnits` — which, for a priced action, is the
+   * verdict itself (`isDefensible` in `@prl/poker-math`), restated beside the two figures it follows
+   * from. Null when the action was not priced: there is no distance for an allowance to contain.
+   */
+  readonly withinAllowance: boolean | null;
 }
 
 /**
@@ -130,6 +153,7 @@ export function judgeConsistency(
   });
   const chosenEv = verdict.chosen === null ? null : verdict.chosen.ev;
   const best = verdict.best;
+  const benchmarkEv = action === 'fold' ? verdict.measuredBestEv : 0;
 
   return {
     consistent: verdict.consistent,
@@ -140,7 +164,27 @@ export function judgeConsistency(
     gapUnits: chosenEv === null ? null : verdict.bestEv - chosenEv,
     toleranceUnits: verdict.marginUnits,
     shortfallUnits: verdict.shortfallUnits,
-    benchmarkEv: action === 'fold' ? verdict.measuredBestEv : 0,
+    benchmarkEv,
     pricing: verdict.pricing,
+    behindBenchmarkUnits: chosenEv === null ? null : benchmarkEv - chosenEv,
+    withinAllowance: chosenEv === null ? null : verdict.consistent,
   };
+}
+
+/**
+ * The actions whose rows rest on an assumed fold frequency, in table order, each named once.
+ *
+ * For the Lab's insight callout, which used to say "the row it moves is the raise row" under every
+ * verdict. The bundled `flop-spr-commitment` prices BET rows, and a spot where every opponent is
+ * already all in has no aggressive row and no fold assumption at all — the sentence pointed at a
+ * row that was not on the table. A row carries `foldEquityAssumed` exactly when its figure depends
+ * on one, so that field, not the action name, is the test.
+ */
+export function foldAssumingActions(report: CoachReport): readonly ScenarioAction[] {
+  const actions: ScenarioAction[] = [];
+  for (const candidate of report.candidates) {
+    const assumesFolds = candidate.foldEquityAssumed !== undefined && candidate.foldEquityAssumed > 0;
+    if (assumesFolds && !actions.includes(candidate.action)) actions.push(candidate.action);
+  }
+  return actions;
 }

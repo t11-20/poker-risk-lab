@@ -97,7 +97,12 @@ import {
 } from '@prl/ui';
 import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
 import { API_PATHS, apiSend, fetchSession, safeFetch } from '../lib/api.ts';
-import { type Consistency, judgeConsistency, type ScenarioAction } from '../lib/consistency.ts';
+import {
+  type Consistency,
+  foldAssumingActions,
+  judgeConsistency,
+  type ScenarioAction,
+} from '../lib/consistency.ts';
 
 export interface ScenarioStageProps {
   readonly scenario: Scenario;
@@ -164,6 +169,55 @@ function toCommitted(action: TableAction): Committed {
 }
 
 /**
+ * How far behind the benchmark, in words that carry the direction: "2.9 units behind it", "4.1 units
+ * ahead of it", or "level with it" when the figure rounds to nothing at the precision shown — so the
+ * panel never prints "0.0 units behind" beside a nonzero EV.
+ */
+function distanceText(behind: number): string {
+  const shown = Number(Math.abs(behind).toFixed(1));
+  if (shown === 0) return 'level with it';
+  return `${formatUnits(shown, { decimals: 1 })} ${behind > 0 ? 'behind it' : 'ahead of it'}`;
+}
+
+/** The benchmark rows of the Verdict panel, or nothing for an unpriced action. See the comment at the call. */
+function BenchmarkRows({
+  judgement,
+  action,
+}: {
+  readonly judgement: Consistency;
+  readonly action: ScenarioAction;
+}): ReactElement | null {
+  const { behindBenchmarkUnits: behind, withinAllowance: within } = judgement;
+  if (behind === null || within === null) return null;
+  return (
+    <>
+      <div className="prl-stage__ev-row">
+        <dt className="prl-label">Judged against</dt>
+        <dd className="prl-stage__ev-value">
+          {/* Keyed on the ACTION, not on the benchmark's value. A fold is judged against the best
+              row that assumes no folds, which is floored at 0 — so keying on `benchmarkEv === 0`
+              printed "folding, worth 0" under a fold whose best no-fold row was negative, measured
+              on the fixture's river-bluff-catch-range: a fold judged against folding. */}
+          {action === 'fold'
+            ? `the best row that assumes no folds, worth ${formatSignedUnits(judgement.benchmarkEv, { decimals: 1 })}`
+            : 'folding, worth 0'}
+        </dd>
+      </div>
+      <div className="prl-stage__ev-row">
+        <dt className="prl-label">Distance from that</dt>
+        <dd className="prl-stage__ev-value">{distanceText(behind)}</dd>
+      </div>
+      <div className="prl-stage__ev-row">
+        <dt className="prl-label">Allowance</dt>
+        <dd className="prl-stage__ev-value">
+          {`${within ? 'within' : 'outside'} the allowance of ${formatUnits(judgement.toleranceUnits)}`}
+        </dd>
+      </div>
+    </>
+  );
+}
+
+/**
  * The comparison, and the three numbers behind it.
  *
  * All three are on screen together on purpose. A chip on its own would be a verdict; a chip beside
@@ -173,9 +227,11 @@ function toCommitted(action: TableAction): Committed {
  */
 function Verdict({
   judgement,
+  action,
   server,
 }: {
   readonly judgement: Consistency;
+  readonly action: ScenarioAction;
   readonly server: ServerVerdict;
 }): ReactElement {
   const best =
@@ -242,34 +298,45 @@ function Verdict({
           </dd>
         </div>
         {/*
-          The benchmark, and the distance from it.
+          The benchmark, the distance from it, and whether that distance fits the allowance.
 
-          Without these two rows the panel showed the chosen EV, the best row and the tolerance —
+          Without the benchmark rows the panel showed the chosen EV, the best row and the tolerance —
           three numbers whose only natural reading is "consistent when the best row minus mine fits
           inside the tolerance". That is not the rule. The rule asks whether the action beats
           FOLDING, so a learner could see +20.6 against a best row of +51.4, a tolerance of 10, and
           the words "consistent with the analysis", with no way to tell that the panel was right.
-          `@prl/poker-math` publishes `measuredBestEv` and `shortfallUnits` precisely so a caller
-          can show the reader the number the verdict used rather than a different one; this one
-          dropped both.
+
+          The distance and the allowance are two rows because they are two facts. They used to be one
+          — "Shortfall against that: 0.0 units, against an allowance of 10 units" — printing
+          `shortfallUnits`, which the shared rule zeroes for a consistent action on purpose. Measured
+          at commit 308fadf, a call worth −2.9 against folding worth 0 read "0.0" there: a figure
+          that is right for "how far outside the allowance" printed under a label that says "how far
+          behind". `behindBenchmarkUnits` is the distance; `withinAllowance` is the verdict restated.
+
+          None of the three render for an action the analysis did not price: "judged against
+          folding" is not true of a decision nothing judged, and a distance from a figure the action
+          has none of is not a number.
         */}
-        <div className="prl-stage__ev-row">
-          <dt className="prl-label">Judged against</dt>
-          <dd className="prl-stage__ev-value">
-            {judgement.benchmarkEv === 0
-              ? 'folding, worth 0'
-              : `${formatSignedUnits(judgement.benchmarkEv, { decimals: 1 })}, the best row that assumes no folds`}
-          </dd>
-        </div>
-        <div className="prl-stage__ev-row">
-          <dt className="prl-label">Shortfall against that</dt>
-          <dd className="prl-stage__ev-value">
-            {`${formatSignedUnits(-judgement.shortfallUnits, { decimals: 1 })}, against an allowance of ${formatUnits(judgement.toleranceUnits)}`}
-          </dd>
-        </div>
+        <BenchmarkRows judgement={judgement} action={action} />
       </dl>
     </>
   );
+}
+
+/**
+ * The callout's sentence about the fold assumption, naming the rows it actually moves.
+ *
+ * It used to say "the row it moves is the raise row" on every scenario — wrong on a table of bet
+ * rows, and wrong on a table with no fold assumption at all. `foldAssumingActions` reads the rows.
+ */
+function foldAssumptionSentence(actions: readonly ScenarioAction[]): string {
+  const opening =
+    'Both figures come from the candidate table further down, and both rest on the assumptions you read at the top';
+  if (actions.length === 0) {
+    return `${opening}. No row in this table assumes the opponent folds, so its figures move with the range and the price: if you think either is wrong, disagreeing with them on those grounds is exactly the reasoning this scenario is for.`;
+  }
+  const rows = actions.map((action) => ACTION_WORD[action].toLowerCase()).join(' and ');
+  return `${opening} — including the assumed fold frequency, which somebody chose. If you think that fold assumption is too generous, the rows it moves are the ${rows} rows, and disagreeing with it on those grounds is exactly the reasoning this scenario is for.`;
 }
 
 /** One glossary term, with its formula beneath the definition where it has one. */
@@ -295,10 +362,45 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
   const revealRef = useRef<HTMLDivElement>(null);
   const revealId = useId();
 
+  const decisionId = useId();
+  /** Set by "Choose again" and nothing else, so a first render never moves focus. */
+  const choseAgain = useRef(false);
+
   useEffect(() => {
     // Only ever after the reader's own commit — `committed` cannot become non-null any other way.
-    if (committed !== null) revealRef.current?.focus();
-  }, [committed]);
+    if (committed !== null) {
+      // Focus without the browser's own scroll, then align the START of the reveal.
+      //
+      // A bare `focus()` scrolls only when the target is out of view, and the reveal never is: it
+      // mounts directly under the decision the reader just made, so its top edge was already on
+      // screen, under the sticky bar. Measured at 360x640 on the production build: reveal top 60px
+      // against a bar whose bottom is 77px. The audit saw the panel's heading at -1..51px on a live
+      // scenario. A `scroll-margin-block-start` on the reveal was measured too, and it does not
+      // help: at 360 it changed nothing, because nothing scrolled, and at 1440 it stacked on the
+      // root's `scroll-padding` and pushed the reveal to 172px. `scrollIntoView({ block: 'start' })`
+      // always aligns, and alignment honours the root `scroll-padding-block-start` that nav.css
+      // derives from `--prl-pillbar-h`. So the clearance comes from the bar's own token, not from
+      // a literal here. Measured after: reveal top 132px at 360x640 and 80px at 1440x900, both
+      // clear of the 77px bar. The root's `scroll-behavior` still decides whether the scroll is
+      // smooth, so reduced motion is respected.
+      const reveal = revealRef.current;
+      reveal?.focus({ preventScroll: true });
+      reveal?.scrollIntoView({ block: 'start' });
+      return;
+    }
+    // "Choose again" unmounts the button that was just pressed, along with the whole reveal, and a
+    // focused element that leaves the DOM drops focus to <body> — measured at 308fadf,
+    // `document.activeElement` was BODY after pressing it, so a keyboard reader's next Tab started
+    // from the top of the page, several screens above the decision they had asked to retake. Focus
+    // goes to the first action the ActionBar offers instead: the control the button promised.
+    if (!choseAgain.current) return;
+    choseAgain.current = false;
+    const decision = document.getElementById(decisionId);
+    const first =
+      decision?.querySelector<HTMLElement>('.prl-action-bar__actions button:not(:disabled)') ??
+      decision?.querySelector<HTMLElement>('button:not(:disabled)');
+    first?.focus();
+  }, [committed, decisionId]);
 
   /**
    * Asks the server to grade the committed action, and abandons the request on unmount or on a
@@ -370,7 +472,13 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
           Every number in this scenario depends on the statements below, so they come before the decision: a
           figure whose assumptions you have not read is one you cannot disagree with.
         </p>
-        <AssumptionList items={scenario.assumptions} headingLevel={3} />
+        {/* The intro is stated because the list's default — "the figures above" — is written for a list
+            that follows its figures, and this one comes before every figure on the page. */}
+        <AssumptionList
+          items={scenario.assumptions}
+          headingLevel={3}
+          intro="Change any of these and the figures in the analysis below change with it."
+        />
       </Panel>
 
       {/* 2. The situation. The question is the page's standfirst and the title its heading, and
@@ -386,7 +494,7 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
       </Panel>
 
       {/* 3. The decision. */}
-      <Panel title="Your decision" eyebrow="Decide" index={3} headingLevel={2}>
+      <Panel title="Your decision" eyebrow="Decide" index={3} headingLevel={2} id={decisionId}>
         {committed === null ? (
           <>
             <p className="prl-prose">
@@ -412,7 +520,14 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
                 {committed.to === null ? '' : ` to ${formatUnits(committed.to)}`}
               </span>
             </p>
-            <Button variant="secondary" size="sm" onClick={() => setCommitted(null)}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                choseAgain.current = true;
+                setCommitted(null);
+              }}
+            >
               Choose again and compare the other line
             </Button>
           </div>
@@ -451,13 +566,10 @@ export function ScenarioStage(props: ScenarioStageProps): ReactElement {
             index={4}
             headingLevel={2}
           >
-            <Verdict judgement={judgement} server={server} />
+            <Verdict judgement={judgement} action={committed.action} server={server} />
 
             <Callout tone="insight" title="This is a comparison, not a mark">
-              Both figures come from the candidate table further down, and both rest on the assumptions you
-              read at the top — including the assumed fold frequency, which somebody chose. If you think that
-              fold assumption is too generous, the row it moves is the raise row, and disagreeing with it on
-              those grounds is exactly the reasoning this scenario is for.
+              {foldAssumptionSentence(foldAssumingActions(analysis))}
               {server.state === 'live' ? (
                 <>
                   {' '}

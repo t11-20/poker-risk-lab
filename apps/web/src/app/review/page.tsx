@@ -56,7 +56,7 @@ import { Chip, formatSignedUnits, formatUnits, PlayingCard, parseCardText } from
 import type { Metadata } from 'next';
 import type { ReactElement } from 'react';
 import { emptyHandListFixture, HAND_PAGE_SIZE, REVIEW_HAND_SUMMARIES } from '../../fixtures/review.ts';
-import { API_PATHS, apiGet, isApiUnavailable, isSignedOut } from '../../lib/api.ts';
+import { API_PATHS, apiGet, isApiUnavailable, isRejectedCursor, isSignedOut } from '../../lib/api.ts';
 import { formatTimestamp } from '../../lib/lab-labels.ts';
 import { readerCallOptions } from '../../lib/server-session.ts';
 import '../../styles/page.css';
@@ -173,6 +173,8 @@ type FixtureReason = 'unavailable' | 'signed-out';
 interface HistoryData {
   readonly response: HandListResponse;
   readonly fromFixture: FixtureReason | null;
+  /** True when the API refused the cursor in the URL and this is page one in its place. */
+  readonly cursorRejected: boolean;
 }
 
 /**
@@ -195,13 +197,18 @@ async function loadHistory(sort: Sort, cursor: string | null, forceEmpty: boolea
       API_PATHS.hands(query.toString()),
       await readerCallOptions(),
     );
-    return { response, fromFixture: null };
+    return { response, fromFixture: null, cursorRejected: false };
   } catch (error) {
+    // An edited or stale `?cursor=` — see `isRejectedCursor`. Page one, once, and the page says so.
+    // The retry carries no cursor, so it cannot come back here.
+    if (cursor !== null && isRejectedCursor(error)) {
+      return { ...(await loadHistory(sort, null, forceEmpty)), cursorRejected: true };
+    }
     const signedOut = isSignedOut(error);
     if (!signedOut && !isApiUnavailable(error)) throw error;
     const reason: FixtureReason = signedOut ? 'signed-out' : 'unavailable';
     if (forceEmpty) {
-      return { response: emptyHandListFixture(), fromFixture: reason };
+      return { response: emptyHandListFixture(), fromFixture: reason, cursorRejected: false };
     }
     // Sort the whole list, then cut the page from it — the order a paginated endpoint uses, and the
     // only order in which a cursor means anything. `sortHands` mirrors the server's five clauses so
@@ -214,6 +221,7 @@ async function loadHistory(sort: Sort, cursor: string | null, forceEmpty: boolea
     return {
       response: { hands: page, nextCursor: next === undefined ? null : next.id },
       fromFixture: reason,
+      cursorRejected: false,
     };
   }
 }
@@ -274,9 +282,11 @@ export default async function ReviewIndexPage({
 }): Promise<ReactElement> {
   const query = await searchParams;
   const sort = readSort(query['sort']);
-  const cursor = readCursor(query['cursor']);
+  const requestedCursor = readCursor(query['cursor']);
   const forceEmpty = readCursor(query['state']) === 'empty';
-  const { response, fromFixture } = await loadHistory(sort, cursor, forceEmpty);
+  const { response, fromFixture, cursorRejected } = await loadHistory(sort, requestedCursor, forceEmpty);
+  // The page shown is page one when the cursor was refused, so the paging links must say so too.
+  const cursor = cursorRejected ? null : requestedCursor;
   const hands = response.hands;
 
   return (
@@ -308,6 +318,13 @@ export default async function ReviewIndexPage({
           like while it is being built.
         </p>
       )}
+
+      {cursorRejected ? (
+        <p className="prl-note">
+          That page link is not one this history issued — it may be out of date, or have been edited — so this
+          is the first page instead.
+        </p>
+      ) : null}
 
       {hands.length === 0 ? (
         <div className="prl-empty">

@@ -3503,9 +3503,10 @@ async function submitLabFilter(page, wanting) {
         return counted === null ? null : Number(counted[1]);
       };
       for (const select of document.querySelectorAll('form.prl-lab-filters select')) {
-        // The "any" option's own count is the size of the unfiltered list, which is what makes
-        // "this option NARROWS the list" decidable here rather than assumed. An option that matches
-        // everything would still change the title and would prove nothing about a narrowing.
+        // The "any" option's own count is what this select shows with its own facet relaxed — on
+        // an unfiltered page, the whole list — which is what makes "this option NARROWS the list"
+        // decidable here rather than assumed. An option that matches everything would still change
+        // the title and would prove nothing about a narrowing.
         const anyOption = [...select.options].find((option) => option.value === 'any');
         const total = anyOption === undefined ? null : declared(anyOption);
         for (const option of select.options) {
