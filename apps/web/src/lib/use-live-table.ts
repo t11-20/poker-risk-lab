@@ -656,10 +656,20 @@ function onStateFrame(state: TableState, frame: Extract<WsServerMessage, { type:
   const betweenHands = frame.view === null || frame.view.street === 'complete';
   // The edge, not the level. Carried unchanged while the decision stays the reader's, so a burst of
   // whole-state frames cannot re-announce a turn they are already in the middle of.
+  //
+  // "The same decision" is the decision key, not "it was the reader's turn on the last frame too".
+  // That was the rule, and it carried a dead sentence onto a new spot: a call that closes the
+  // preflop betting, from a seat that is first to act on the flop, goes straight from one of the
+  // reader's decisions to the next with no frame in between where it is anybody else's. The audit
+  // at 308fadf heard "Your turn preflop. 74 units to call" read out after "Decision applied" while
+  // the buttons were Check and Bet on the flop — and the flop decision itself was never announced,
+  // because the region's text did not change. A refused decision leaves the key as it was, so that
+  // sentence is still carried and still not said twice.
   const wasTurn = isViewersTurn(state.view, state.betweenHands);
   const nowTurn = isViewersTurn(view, betweenHands);
+  const sameTurn = wasTurn && !movedOn;
   const turnAnnouncement =
-    nowTurn && view !== null ? (wasTurn ? state.turnAnnouncement : turnAnnouncementFor(view)) : '';
+    nowTurn && view !== null ? (sameTurn ? state.turnAnnouncement : turnAnnouncementFor(view)) : '';
   // A new deadline is a new turn, and the first frame that carries it says how long the server
   // gave it. See `turnBudgetMs` on `TableState`.
   const turnBudgetMs =

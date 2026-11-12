@@ -442,6 +442,36 @@ describe('the table announces whose decision it is', () => {
     assert.match(again.turnAnnouncement, /^Your turn on the flop\./u);
   });
 
+  it('says the NEW decision when one of the reader’s decisions follows straight on from another', () => {
+    // The defect, from the audit at 308fadf: "Your turn preflop. 74 units to call" read out while
+    // the buttons were Check and Bet on the flop. The reader's call closed the preflop betting and
+    // they were first to act on the flop, so no frame in between said it was anybody else's turn —
+    // and the reducer carried the old sentence whenever the last frame was the reader's turn too.
+    const preflop: PlayerView = { ...DECISION_VIEW, street: 'preflop', board: [] };
+    const flop: PlayerView = {
+      ...DECISION_VIEW,
+      betLevel: 0,
+      potTotal: 170,
+      actionSequence: 9,
+      legalActions: [
+        { type: 'fold' },
+        { type: 'check' },
+        { type: 'bet', minTo: 10, maxTo: 935, costAtMin: 10 },
+      ],
+      amountToCall: 0,
+    };
+    const first = tableReducer(EMPTY_TABLE_STATE, { kind: 'frame', frame: stateFrame(preflop, 1) });
+    const next = tableReducer(first, { kind: 'frame', frame: stateFrame(flop, 2) });
+    assert.match(first.turnAnnouncement, /^Your turn preflop\./u, 'the fixture must start on preflop');
+    assert.equal(
+      next.turnAnnouncement,
+      turnAnnouncementFor(flop),
+      'a new decision is new news: carrying the last one reads a street and a price that are gone, ' +
+        'and leaves the decision actually in front of the reader unannounced',
+    );
+    assert.match(next.turnAnnouncement, /Nothing to call/u);
+  });
+
   it('agrees with the predicate the buttons are drawn from', () => {
     // One definition, used by the reducer and by the hook. If these ever disagree the table can
     // enable Fold while telling the reader it is somebody else's decision.
