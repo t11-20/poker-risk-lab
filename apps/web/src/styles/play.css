@@ -385,14 +385,30 @@
 /**
  * Your cards, your stack and your street commitment, beside the controls that change them.
  *
- * Hidden below 900px, where the stacked table already pins the viewer's own plate directly above this
- * band and a second copy a centimetre away would be noise. From 900px up the plate can be anywhere
- * inside a 32rem field, so this is what makes the guarantee structural rather than lucky.
+ * Hidden below 900px, where the stacked table puts the viewer's own plate directly above this band and
+ * a second copy a centimetre away would be noise. From 900px up the plate can be anywhere inside a
+ * 32rem field, so this is what makes the guarantee structural rather than lucky.
+ *
+ * "Directly above" stopped being enough below 900px once a decision with a raise legal scrolled the
+ * page to the sizer (`lib/follow-the-table.ts`): at 390x844 that left the plate at -174..46 and the
+ * board at -303..-203. The cards are carried there by `.prl-hand-glance` below, inside the bar, and
+ * the board with them. Not by this block: its stack and street figures are on the buttons and in the
+ * sizer's readout already, and at `md` with two figures beside the cards it is the taller of the two.
  */
 .prl-play__hud {
   display: none;
   align-items: center;
   gap: var(--prl-space-6) var(--prl-space-9);
+}
+
+/**
+ * The reader's cards and the board inside the bar (`HandGlance` in `@prl/ui`), shown exactly where
+ * this block is not: on a narrow column (section 3.1, where the follow scroll can take the plate off
+ * the top) and below 900px (section 8, where this block takes over). So the band draws the reader's
+ * cards once at every width, and never shifts: which one shows is decided here, before paint.
+ */
+.prl-play .prl-hand-glance {
+  display: none;
 }
 
 .prl-play__hud-stats {
@@ -462,6 +478,10 @@
    ========================================================================================== */
 
 @container prl-play-column (width < 46rem) {
+  .prl-play .prl-hand-glance {
+    display: flex;
+  }
+
   .prl-play .prl-action-bar__actions {
     position: sticky;
     z-index: var(--prl-z-raised);
@@ -851,6 +871,12 @@
 
   .prl-play__hud {
     display: flex;
+  }
+
+  /* After section 3.1 in the source, so this wins at the 900..1279px widths where the column is
+     still narrow enough for the row to stick: the block above carries the cards there. */
+  .prl-play .prl-hand-glance {
+    display: none;
   }
 }
 

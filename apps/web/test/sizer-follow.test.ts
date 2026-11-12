@@ -39,15 +39,21 @@ import {
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
-/** 390x844: 77px of sticky header above, the Coach peek's 80px of scroll padding below. */
-const VIEW = { viewTop: 77, viewBottom: 844 - 80 } as const;
+/**
+ * 390x844: the root's scroll padding, 92px above (the 77px header and a step of air) and the Coach
+ * peek's 80px below. Read off `getComputedStyle(document.documentElement)` on the live table at 390
+ * and at 360; this said 77 before the glance, which is the header alone.
+ */
+const VIEW = { viewTop: 92, viewBottom: 844 - 80, coverBottom: 77 } as const;
 /** The row's own height at 390, and the line it sticks at: the 4rem peek above the bottom edge. */
 const ROW_HEIGHT = 169;
 const STICKS_BELOW = 844 - 64;
 
-/** Measured before the change: the row stuck over the sizer. */
+/** Measured before the change: the row stuck over the sizer. Before the glance, too: no cards drawn. */
 const BEFORE: SizerGeometry = {
   regionTop: 557,
+  handTop: null,
+  streetBottom: null,
   sizerTop: 624,
   sizerBottom: 992,
   rowTop: 611,
@@ -63,6 +69,8 @@ function scrolled(geometry: SizerGeometry, delta: number): SizerGeometry {
   return {
     ...geometry,
     regionTop: geometry.regionTop - delta,
+    handTop: geometry.handTop === null ? null : geometry.handTop - delta,
+    streetBottom: geometry.streetBottom === null ? null : geometry.streetBottom - delta,
     sizerTop: geometry.sizerTop - delta,
     sizerBottom: geometry.sizerBottom - delta,
     rowFlowBottom,
@@ -102,12 +110,112 @@ describe('the follow scroll brings the sizer in with the row under it', () => {
   });
 
   it('on a phone too short for the region, puts the sizer’s controls first', () => {
-    // 360x640: 640 - 77 - 80 = 483px of view for a region of about 610px.
-    const short: SizerGeometry = { ...BEFORE, viewTop: 77, viewBottom: 640 - 80 };
+    // 360x640: 640 - 92 - 80 = 468px of view for a region of about 610px.
+    const short: SizerGeometry = { ...BEFORE, viewTop: 92, viewBottom: 640 - 80 };
     const delta = sizerFollowDelta(short);
-    assert.equal(delta, short.sizerTop - 77, 'the sizer’s top is not at the top edge');
+    assert.equal(delta, short.sizerTop - 92, 'the sizer’s top is not at the top edge');
   });
 });
+
+/**
+ * The reader's cards and the board stay on screen while they size a bet.
+ *
+ * The follow above took the reader's own plate and the board off the top at 390x844 (plate at
+ * -174..46, board at -303..-203), so the bar now draws `HandGlance` between the price and the sizer,
+ * and the follow keeps it in view. Each fixture is the layout Chrome measured AFTER the change on the
+ * live table, both themes, placed where a deal leaves it — the sizer at 624, as in `BEFORE` — so the
+ * answer has to bring every rectangle back to where it was measured.
+ *
+ *   390x844: street 56..77 (one line), price 106..144, glance 156..201, sizer 213..580, row in flow
+ *            584..753 and the note after it at 757; number field 402..446.
+ *   360x640: price 43..80, street ending at 14, glance 92..137, sizer 149..538, row stuck at
+ *            407..576, number field at 190..234 below the sizer's top, and the note at 715.
+ */
+describe('the glance at the reader’s cards stays in view while they size a bet', () => {
+  /** Where the deal left the 390x844 layout: everything 411px further down. */
+  const AT_390: SizerGeometry = {
+    regionTop: 56 + 411,
+    handTop: 156 + 411,
+    streetBottom: 77 + 411,
+    sizerTop: 213 + 411,
+    sizerBottom: 580 + 411,
+    rowTop: STICKS_BELOW - ROW_HEIGHT,
+    rowFlowBottom: 757 + 411,
+    ...VIEW,
+  };
+  /** 360x640: 92px above, the peek's 80 below, the row sticking 64px above the bottom edge. */
+  const VIEW_360 = { viewTop: 92, viewBottom: 640 - 80, coverBottom: 77 } as const;
+  const AT_360: SizerGeometry = {
+    regionTop: -7 + 475,
+    handTop: 92 + 475,
+    streetBottom: 14 + 475,
+    sizerTop: 149 + 475,
+    sizerBottom: 538 + 475,
+    rowTop: 640 - 64 - ROW_HEIGHT,
+    rowFlowBottom: 715 + 475,
+    ...VIEW_360,
+  };
+  const FIELD_BELOW_SIZER_TOP = { top: 190, bottom: 234 } as const;
+
+  it('NEGATIVE CONTROL: the sizer at the top edge, the old answer, puts the glance under the header', () => {
+    for (const at of [AT_390, AT_360]) {
+      assert.ok(
+        at.rowFlowBottom - at.regionTop > at.viewBottom - at.viewTop,
+        'the region fits: not the case',
+      );
+      const glanceTop = (at.handTop ?? 0) - (at.sizerTop - at.viewTop);
+      assert.ok(glanceTop < at.viewTop, `the old answer left the glance in view at ${glanceTop}`);
+    }
+  });
+
+  it('NEGATIVE CONTROL: the row at the bottom edge alone leaves half the street line under the header', () => {
+    const streetBottom = (AT_390.streetBottom ?? 0) - (AT_390.rowFlowBottom - AT_390.viewBottom);
+    assert.equal(
+      streetBottom,
+      84,
+      'the street line ended where it was measured before it was given up whole',
+    );
+    assert.ok(streetBottom > AT_390.coverBottom);
+  });
+
+  it('at 390x844 keeps the price, the glance, the sizer and the row in flow, and gives up the street line', () => {
+    const delta = sizerFollowDelta(AT_390);
+    const after = scrolled(AT_390, delta);
+    assert.deepEqual(
+      [after.handTop, after.sizerTop, after.sizerBottom],
+      [156, 213, 580],
+      'not where measured',
+    );
+    assert.equal(after.streetBottom, AT_390.coverBottom, 'the street line is not wholly under the header');
+    assert.ok(after.rowFlowBottom <= VIEW.viewBottom, 'the row is under the Coach peek');
+    assert.equal(
+      rowCoversSizer(after),
+      false,
+      `row ${after.rowTop} over a sizer ending ${after.sizerBottom}`,
+    );
+    assert.equal(sizerFollowDelta(after), 0, 'a second follow moves the page again');
+  });
+
+  it('at 360x640 puts the glance at the top edge with the number field clear of the stuck row', () => {
+    const delta = sizerFollowDelta(AT_360);
+    const after = scrolled360(AT_360, delta);
+    assert.equal(after.handTop, VIEW_360.viewTop, 'the glance is not at the top edge');
+    assert.equal(after.sizerTop, 149, 'the sizer is not where it was measured');
+    const fieldBottom = after.sizerTop + FIELD_BELOW_SIZER_TOP.bottom;
+    assert.ok(
+      fieldBottom <= after.rowTop,
+      `the number field ends at ${fieldBottom}, under a row at ${after.rowTop}`,
+    );
+    assert.equal(sizerFollowDelta(after), 0, 'a second follow moves the page again');
+  });
+});
+
+/** As `scrolled`, for 360x640: the row sticks 64px above a 640px bottom edge. */
+function scrolled360(geometry: SizerGeometry, delta: number): SizerGeometry {
+  const moved = scrolled(geometry, delta);
+  const rowBottom = Math.min(moved.rowFlowBottom - 4, 640 - 64);
+  return { ...moved, rowTop: rowBottom - ROW_HEIGHT };
+}
 
 /**
  * Once the decision is over, the table comes back. Measured at 390x844 on this branch with only the
@@ -181,6 +289,16 @@ describe('the live table uses it, on a narrow column only', () => {
     assert.ok(wired(live), 'useFollowTheTable no longer brings the sizer in on a narrow column');
   });
 
+  const keepsTheGlance = (source: string): boolean =>
+    /bar\.querySelector<HTMLElement>\('\.prl-hand-glance'\)\?\.getBoundingClientRect\(\);/u.test(source) &&
+    /handTop: hand === undefined \|\| hand\.height === 0 \? null : hand\.top,/u.test(source) &&
+    /coverBottom: document\.querySelector\('\.prl-shell__header'\)/u.test(source);
+
+  it('reads the glance, where it is drawn, and the header into the sizer scroll', () => {
+    const live = readFileSync(join(SRC, 'app', 'play', 'LiveTable.tsx'), 'utf8');
+    assert.ok(keepsTheGlance(live), 'sizerScroll no longer tells the follow where the reader’s cards are');
+  });
+
   const watches = (source: string): boolean =>
     /const watchEdge = turnEdge === '' \? handEdge : null;/u.test(source) &&
     /const by = watchScroll\(element, dealt\);\s*if \(by !== 0\) window\.scrollBy\(/u.test(source) &&
@@ -197,5 +315,6 @@ describe('the live table uses it, on a narrow column only', () => {
     target.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });`;
     assert.equal(wired(old), false);
     assert.equal(watches(old), false);
+    assert.equal(keepsTheGlance(old), false);
   });
 });

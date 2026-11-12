@@ -15,19 +15,34 @@
  *
  * ## What it does instead
  *
- * The region that matters is the street line and the price strip, the sizer, and the row where it
- * sits IN FLOW — read off the top of the note that follows it, because the row's own box is wherever
- * it is stuck. If that region fits between the root's scroll padding (the sticky header above, the
- * Coach peek below), it is brought in by its nearest edge, exactly as the buttons were: the row then
- * sits at its own place under the sizer, where it is not stuck and covers nothing. If it does not fit
- * — measured at 390x844 it is 611px of the 687px available, 664px with a street line, so this is a
- * short phone like 360x640 — the sizer's top goes to the top edge, presets and slider first, and the
- * row sticks over the readout at the bottom of the sizer rather than over the controls.
+ * The region that matters is the street line and the price strip, the reader's cards and the board
+ * (`HandGlance`, which the bar draws between the price and the sizer on a narrow column), the sizer,
+ * and the row where it sits IN FLOW — read off the top of the note that follows it, because the
+ * row's own box is wherever it is stuck. If that region fits between the root's scroll padding (the
+ * sticky header above, the Coach peek below), it is brought in by its nearest edge, exactly as the
+ * buttons were: the row then sits at its own place under the sizer, where it is not stuck and covers
+ * nothing.
+ *
+ * If it does not fit, what has to stay is the glance and everything under it — the cards, the
+ * sizer, the row. When those fit, the row goes to the bottom edge in flow, and the street line goes
+ * off the top, wholly under the header rather than cut in half by it. At 390x844 the view is 672px
+ * (the root's scroll padding is 92px, the header's 77 and a step of air; 80px below), the bar from
+ * its top edge to the row's flow bottom is 668px with the glance, and a one-line street line and
+ * its gap add 33px, so this is the 390x844 case at every decision. When even the glance down to the
+ * row does not fit — a short phone like 360x640 — the glance's top goes to the top edge, then
+ * presets and slider, and the row sticks over the readout at the bottom of the sizer rather than
+ * over the controls. Without a glance (900px and up, where the HUD above the bar holds the cards) the
+ * sizer's top is what is kept.
+ *
+ * ## The trade, and the defect it used to make
  *
  * The reader's own plate and the board are above this region, and at 390x844 they go off the top to
- * make room. That is the trade: the sizer is the thing that has to be usable at this moment, the
- * street line names who bet, and the stuck row brings the buttons back the moment the reader scrolls
- * up to look at their cards.
+ * make room: measured on this branch before the glance, plate at -174..46 and board at -303..-203.
+ * The first version of this follow stopped there, and a learner sized every bet without being able
+ * to see what they held or what it had to beat — scrolling up to look took the sizer away instead.
+ * The glance is the cards and the board brought down to the controls, and keeping it on screen is
+ * now the first thing the scroll is for; the street line, which narrates, is the first thing given
+ * up.
  *
  * Pure, and in its own file, so `node --test` drives it with the rectangles the browser measured.
  */
@@ -36,6 +51,11 @@
 export interface SizerGeometry {
   /** The top of the first thing in the band worth keeping: the street line, else the bar. */
   readonly regionTop: number;
+  /**
+   * The top of the reader's cards and the board in the bar (`HandGlance`), or null where the band
+   * does not draw them. What the scroll keeps on screen above everything else when it has to choose.
+   */
+  readonly handTop: number | null;
   /** The sizer's top edge. */
   readonly sizerTop: number;
   /** The sizer's bottom edge. */
@@ -44,7 +64,11 @@ export interface SizerGeometry {
   readonly rowFlowBottom: number;
   /** The row's box as painted, stuck or not. */
   readonly rowTop: number;
-  /** The root's `scroll-padding-block-start`: the bottom of the sticky header. */
+  /** The bottom of the street line, or null where there is none: what is given up first. */
+  readonly streetBottom: number | null;
+  /** The sticky header's bottom edge: what paints over the page above `viewTop`'s step of air. */
+  readonly coverBottom: number;
+  /** The root's `scroll-padding-block-start`: the bottom of the sticky header, and a step of air. */
   readonly viewTop: number;
   /** The viewport height less the root's `scroll-padding-block-end`: the top of the Coach peek. */
   readonly viewBottom: number;
@@ -57,13 +81,24 @@ export function rowCoversSizer(geometry: Pick<SizerGeometry, 'rowTop' | 'sizerBo
 
 /** Pixels to scroll by (positive is down the page), or 0 when the sizer and the row are both usable. */
 export function sizerFollowDelta(geometry: SizerGeometry): number {
-  const { regionTop, sizerTop, rowFlowBottom, viewTop, viewBottom } = geometry;
+  const { regionTop, handTop, sizerTop, streetBottom, coverBottom, rowFlowBottom, viewTop, viewBottom } =
+    geometry;
   const covered = rowCoversSizer(geometry);
   if (!covered && regionTop >= viewTop && rowFlowBottom <= viewBottom) return 0;
-  if (rowFlowBottom - regionTop <= viewBottom - viewTop) {
+  const room = viewBottom - viewTop;
+  if (rowFlowBottom - regionTop <= room) {
     return regionTop < viewTop ? regionTop - viewTop : rowFlowBottom - viewBottom;
   }
-  return sizerTop - viewTop;
+  const keep = handTop ?? sizerTop;
+  // The cards down to the row fit: the row in flow at the bottom edge, the street line given up —
+  // and given up whole. The row at the bottom edge alone left the line's last 7px showing between the
+  // header and the bar at 390x844 (street 63..84 under a header ending at 77): half a line of text,
+  // which reads as a rendering fault rather than as a page scrolled. The step of air under the
+  // header is where it showed, and the row has room to go up by that much.
+  const toBottom = rowFlowBottom - viewBottom;
+  if (keep - toBottom < viewTop) return keep - viewTop;
+  const whole = streetBottom === null ? toBottom : Math.max(toBottom, streetBottom - coverBottom);
+  return keep - whole >= viewTop ? whole : toBottom;
 }
 
 /**

@@ -971,11 +971,17 @@ function sizerScroll(band: HTMLElement): number | null {
   if (bar == null || sizer == null || row == null) return null;
   if (window.getComputedStyle(row).position !== 'sticky') return null;
   const root = window.getComputedStyle(document.documentElement);
-  const first = band.querySelector<HTMLElement>('.prl-play__street') ?? bar;
+  const street = band.querySelector<HTMLElement>('.prl-play__street');
+  const first = street ?? bar;
   const after = bar.querySelector<HTMLElement>('.prl-action-bar__note');
   const sizerBox = sizer.getBoundingClientRect();
+  // `display: none` at the widths where the HUD holds the cards: a zero box is "not drawn", not "at 0".
+  const hand = bar.querySelector<HTMLElement>('.prl-hand-glance')?.getBoundingClientRect();
   return sizerFollowDelta({
     regionTop: first.getBoundingClientRect().top,
+    handTop: hand === undefined || hand.height === 0 ? null : hand.top,
+    streetBottom: street === null ? null : street.getBoundingClientRect().bottom,
+    coverBottom: document.querySelector('.prl-shell__header')?.getBoundingClientRect().bottom ?? 0,
     sizerTop: sizerBox.top,
     sizerBottom: sizerBox.bottom,
     rowFlowBottom: (after ?? bar).getBoundingClientRect()[after == null ? 'bottom' : 'top'],

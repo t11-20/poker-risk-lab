@@ -31,9 +31,11 @@
  *   3. **Your cards** are in the band's own readout at 900px and above. They also appear on the seat
  *      plate at the bottom of the oval — the duplication is deliberate and it is what buys the
  *      guarantee, because a plate positioned inside a 32rem field can be below the fold on a short
- *      viewport. Below 900px the readout is hidden, because the stacked table already pins the
- *      viewer's plate directly above this band and showing the cards twice a centimetre apart is
- *      noise.
+ *      viewport. Below 900px the readout is hidden, because the stacked table puts the viewer's plate
+ *      directly above this band and showing the cards twice a centimetre apart is noise — except
+ *      that a decision with a raise legal scrolls a phone to the sizer and takes the plate off the
+ *      top, so there the bar carries `HandGlance`: the two cards and the board, small, between the
+ *      price and the sizer. See `handGlanceFor` below.
  *   4. **The Coach's equity figure** is the first thing in the Coach panel, and the rail is
  *      `position: sticky` from 900px up with its own scroll region. The top of the panel is always
  *      the top of the rail.
@@ -111,6 +113,7 @@ import {
   CardRow,
   CoachPanel,
   formatChips,
+  HandGlance,
   type PlayerView,
   PokerTable,
   type StyleWithVars,
@@ -587,6 +590,22 @@ const SUBMISSION_IN_FLIGHT: ReadonlySet<TableSubmission['status']> = new Set<Tab
 ]);
 
 /**
+ * The reader's cards and the board for the bar to draw between the price and the sizer, or null.
+ *
+ * Only while a bet or a raise is legal, because that is exactly when `useFollowTheTable` scrolls a
+ * phone to the sizer and the plate goes off the top (measured at 390x844: plate at -174..46, board
+ * at -303..-203). With no sizer the row is followed by its nearest edge, which stops as soon as the
+ * row can stick, so the page moves by the least it can and the table above the band is not traded
+ * away. `styles/play.css` decides the widths it is drawn at; this decides the moments.
+ */
+function handGlanceFor(view: PlayerView): ReactElement | null {
+  const hole = view.seats.find((seat) => seat.isSelf)?.holeCards ?? null;
+  if (hole === null) return null;
+  if (!view.legalActions.some((action) => action.type === 'bet' || action.type === 'raise')) return null;
+  return <HandGlance hole={hole} board={view.board} />;
+}
+
+/**
  * Your own figures, the controls, and the price — the last block in the table column.
  *
  * Guarantees 1 to 3 in the module comment live here. Nothing about its position is set in
@@ -698,6 +717,7 @@ function DecisionBand(props: DecisionBandProps): ReactElement {
           toCall={view.amountToCall}
           committedThisStreet={view.seats.find((seat) => seat.isSelf)?.committedThisStreet ?? 0}
           disabled={pending}
+          context={handGlanceFor(view)}
           idleText={
             status === 'complete'
               ? 'This hand is complete. Nothing is owed and there is nothing to decide.'
