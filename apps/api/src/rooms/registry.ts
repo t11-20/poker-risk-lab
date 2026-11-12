@@ -58,7 +58,7 @@
  */
 
 import type { RoomMember, RoomSummary } from '@prl/contracts';
-import type { BlindPositions, LoggedAction, RandomSource, TableConfig } from '@prl/poker-engine';
+import type { BlindPositions, RandomSource, TableConfig } from '@prl/poker-engine';
 import { createSecureRandom, orderFrom } from '@prl/poker-engine';
 import { getSql } from '../db.ts';
 import { AppError } from '../errors.ts';
@@ -74,6 +74,7 @@ import { BotRunner, type BotSeatSpec } from './bots.ts';
 import type { SeatEntitlement } from './entitlement.ts';
 import { LEASE_HEARTBEAT_INTERVAL_MS, LEASE_SELF_EVICT_AFTER_MS, type RoomOwnership } from './ownership.ts';
 import {
+  type ArchivedAction,
   type ArchivedDeal,
   type ArchivedResult,
   LiveTable,
@@ -149,7 +150,7 @@ export interface HandArchive {
    */
   readonly abandonInterruptedHands: (roomId: string) => Promise<readonly handsRepository.AbandonedHand[]>;
   readonly handStarted: (deal: ArchivedDeal) => Promise<void>;
-  readonly actionsApplied: (handId: string, actions: readonly LoggedAction[]) => Promise<void>;
+  readonly actionsApplied: (handId: string, actions: readonly ArchivedAction[]) => Promise<void>;
   readonly streetAdvanced: (
     handId: string,
     street: 'preflop' | 'flop' | 'turn' | 'river' | 'showdown',
@@ -219,6 +220,7 @@ export function postgresArchive(sql: () => Db): HandArchive {
           betLevelAfter: action.betLevelAfter,
           potAfter: action.potAfter,
           wasAutomatic: action.wasAutomatic,
+          automaticReason: action.automaticReason,
           actionId: action.actionId,
         });
       }

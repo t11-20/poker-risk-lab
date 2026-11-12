@@ -50,3 +50,49 @@ export function markerShort(step: ReplayStep): string {
 export function openingStepIndex(replay: Pick<HandReplay, 'steps'>): number {
   return replay.steps.find((step) => step.isViewerDecision)?.index ?? 0;
 }
+
+/**
+ * What the replay says about a decision the server made, as a sentence for the marker's description.
+ *
+ * ## The defect
+ *
+ * `HandReplay` printed "The clock ran out and the server acted" for every `wasAutomatic` decision,
+ * because that flag was all the review carried. The server also folds, with the same flag, for a
+ * player who pressed "Stand up" (or left the room, or opened another practice table) while holding
+ * cards — so a reader who chose to leave was told, in their own hand history, that they had run out
+ * of time. The live table had already stopped saying that, because it sees `seatTimedOut`; the
+ * review could not, until `automaticReason` was recorded with the row (migration 0009).
+ *
+ * A row recorded before that has no reason, and gets the one sentence that is true of every
+ * automatic decision rather than the likelier guess: a guess is what this replaced.
+ *
+ * Empty for a decision a person made.
+ */
+export function automaticSentence(step: ReplayStep): string {
+  const decision = step.decision;
+  if (decision === null || !decision.wasAutomatic) return '';
+  switch (decision.automaticReason) {
+    case 'timeout':
+      return ' The clock ran out and the server acted.';
+    case 'departed':
+      return step.isViewerDecision
+        ? ' You had already stood up or left the table, so the server folded for you.'
+        : ' They had already left the table, so the server folded for them.';
+    default:
+      return ' The server made this decision automatically.';
+  }
+}
+
+/** The same fact as `automaticSentence`, short enough for the transport's headline. */
+export function automaticAside(step: ReplayStep): string {
+  const decision = step.decision;
+  if (decision === null || !decision.wasAutomatic) return '';
+  switch (decision.automaticReason) {
+    case 'timeout':
+      return ' (the clock ran out)';
+    case 'departed':
+      return step.isViewerDecision ? ' (you had stood up)' : ' (they had left the table)';
+    default:
+      return ' (made automatically)';
+  }
+}

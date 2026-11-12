@@ -87,3 +87,80 @@ describe('the play fixture states a pot the engine would state', () => {
     assert.equal(numberIn('capPerSeat', pot), cap, 'the cap is the deepest commitment among them');
   });
 });
+
+/**
+ * `COMPLETED_HAND_VIEW` is the hand `/play?state=complete` renders, and it showed "You, STACK 0" beside a
+ * summary saying you had won the 905 main pot (UI audit of 308fadf, item 18): its stacks were the ones
+ * from just before settlement. Nothing here asserted them, for the same reason nothing asserted the
+ * decision view's pot — the literal is hand-authored and no regenerator owns it.
+ *
+ * So this settles the hand the way `settle` in `@prl/poker-engine` does, from the fixture's own pots
+ * and the winners its own summary names, and holds every seat to the result. The starting stacks are
+ * the fixture's story (hero short on 300, everybody else on 1,000), stated once here.
+ */
+describe('the completed-hand fixture shows the stacks the hand settled to', () => {
+  const view = (() => {
+    const start = SOURCE.indexOf('export const COMPLETED_HAND_VIEW');
+    assert.ok(start > 0, 'COMPLETED_HAND_VIEW has been renamed or removed');
+    const end = SOURCE.indexOf('export const', start + 1);
+    assert.ok(end > start, 'the view literal must be followed by another export');
+    return SOURCE.slice(start, end);
+  })();
+  const summary = (() => {
+    const start = SOURCE.indexOf('export const COMPLETED_HAND_SUMMARY');
+    assert.ok(start > 0, 'COMPLETED_HAND_SUMMARY has been renamed or removed');
+    return SOURCE.slice(start, SOURCE.indexOf('];', start));
+  })();
+
+  const seats = (() => {
+    const body = /seats:\s*\[([\s\S]*?)\n {2}\]/u.exec(view)?.[1];
+    assert.ok(body !== undefined, 'the view no longer states a seats array this test can read');
+    return [...body.matchAll(/\{[^{}]*\}/gu)].map((match) => {
+      const text = match[0];
+      const seat = numberIn('seat', text);
+      const stack = numberIn('stack', text);
+      const committed = numberIn('committedTotal', text);
+      assert.ok(seat !== null && stack !== null && committed !== null, `unreadable seat entry: ${text}`);
+      return { seat, stack, committed };
+    });
+  })();
+  const pots = [...view.matchAll(/\{\s*amount:[^{}]*\}/gu)].map((match) => numberIn('amount', match[0]));
+
+  const STARTING_STACK: readonly number[] = [300, 1000, 1000, 1000, 1000, 1000];
+  /** Pot index to the seat the summary says took it: the main pot to "you", the side pot to seat 3. */
+  const WINNER_OF_POT: Readonly<Record<number, number>> = { 0: 0, 1: 3 };
+
+  it('reads the hand it is about to settle', () => {
+    assert.equal(seats.length, 6, 'a sweep of nothing is not a pass');
+    assert.deepEqual(pots, [905, 600]);
+    // The winners above are the summary's, not this test's invention; if the summary changes hands,
+    // this is the line that has to change with it.
+    assert.match(summary, /Main pot, 905 units: your/u);
+    assert.match(summary, /Side pot, 600 units: three queens/u);
+    assert.match(view, /seat: 3,[\s\S]*?holeCards: pair\('Qs Qd'\)/u);
+  });
+
+  it('puts every chip committed into a pot', () => {
+    const committed = seats.reduce((sum, seat) => sum + seat.committed, 0);
+    const inPots = pots.reduce<number>((sum, amount) => sum + (amount ?? 0), 0);
+    assert.equal(inPots, committed);
+    assert.equal(numberIn('potTotal', view), committed);
+  });
+
+  it('pays each pot to its winner, so "You" is not on 0 after winning the main pot (REGRESSION)', () => {
+    for (const { seat, stack, committed } of seats) {
+      const start = STARTING_STACK[seat];
+      assert.ok(start !== undefined, `no starting stack stated for seat ${seat}`);
+      const won = pots.reduce<number>(
+        (sum, amount, index) => sum + (WINNER_OF_POT[index] === seat ? (amount ?? 0) : 0),
+        0,
+      );
+      assert.equal(
+        stack,
+        start - committed + won,
+        `seat ${seat} started on ${start}, put in ${committed} and won ${won}, so settled on ` +
+          `${start - committed + won} — not ${stack}`,
+      );
+    }
+  });
+});
