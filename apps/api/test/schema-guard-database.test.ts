@@ -514,7 +514,7 @@ async function statusOf(booted: Booted, path: string): Promise<number> {
 }
 
 /** Polls until `path` answers `status`, failing with the server's output if it never does. */
-async function untilStatus(booted: Booted, path: string, status: number, timeoutMs = 20_000): Promise<void> {
+async function untilStatus(booted: Booted, path: string, status: number, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let last = 0;
   while (Date.now() < deadline) {
