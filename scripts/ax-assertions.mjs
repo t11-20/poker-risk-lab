@@ -2024,6 +2024,110 @@ async function waitInPage(page, expression, seconds) {
 
 const ENABLED_ACTION = `[...document.querySelectorAll('button.prl-action-btn')].some((b) => !b.disabled)`;
 
+/** The controls that mean the socket is live and the table is the reader's to drive by hand. */
+const MANUAL_CONTROL = /^(Take seat \d+|Deal the next hand|Stand up)$/u;
+
+/** What `/play` is showing while it decides how it starts: a `tableStartPath` input. */
+const TABLE_START_JS = `(() => {
+  const named = (b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').replace(/\\s+/gu, ' ').trim();
+  const text = document.body.innerText;
+  const lines = document.querySelector('.prl-play__connection-lines');
+  return {
+    reconnecting: /Reconnecting you to the table you were at/u.test(text),
+    inProgress: /A hand is in progress/u.test(text),
+    status: (lines?.textContent ?? '').replace(/\\s+/gu, ' ').trim().slice(0, 140),
+    controls: [...document.querySelectorAll('button')]
+      .map((b) => ({ name: named(b), enabled: !b.disabled }))
+      .filter((c) => c.name !== '')
+      .slice(0, 16),
+  };
+})()`;
+
+/**
+ * Which of its two starting states `/play` settled into: `first visit`, `reconnected`, or null while
+ * it is still deciding.
+ *
+ * ## Why there are two
+ *
+ * Since PR #32 a tab that remembers a room (`prl.play.roomId`) reconnects to it on load, and offers
+ * the manual controls instead of "Deal me in" — the reader may be mid-hand, so nothing is sent on
+ * their behalf. Every fixture here that played a SECOND hand in one tab pressed "Deal me in", found
+ * none, and played nothing: CI run 43245665934 failed 6.7 with one boardless hand in the history
+ * after two drives that pressed no control at all, and the run before it passed only because the
+ * one hand it already had happened to reach a flop.
+ *
+ * ## Why "Reconnecting" is waited out
+ *
+ * "Deal me in" is on screen, enabled, while the reconnect is in flight (`phase` is still `idle`), and
+ * pressing it then does work — it rejoins the remembered room and deals. But the run would then
+ * record a first visit for a page that was reconnecting, and which state a check was measured in is
+ * the thing a pass line has to be able to say.
+ */
+export function tableStartPath(snapshot) {
+  if (snapshot === null || snapshot === undefined || snapshot.reconnecting) return null;
+  const controls = snapshot.controls ?? [];
+  if (controls.some((c) => c.enabled && /^Deal me in$/u.test(c.name))) return 'first visit';
+  if (controls.some((c) => MANUAL_CONTROL.test(c.name))) return 'reconnected';
+  return null;
+}
+
+/** Poll `/play` until `tableStartPath` names its state, or give up with what it last showed. */
+async function settleTableStart(page, seconds) {
+  const started = Date.now();
+  let snapshot = null;
+  for (let attempt = 0; attempt < seconds * 4; attempt += 1) {
+    snapshot = await page.evaluate(TABLE_START_JS).catch(() => null);
+    const path = tableStartPath(snapshot);
+    if (path !== null) return { path, snapshot, waitedMs: Date.now() - started };
+    await page.settle(250);
+  }
+  return { path: null, snapshot, waitedMs: Date.now() - started };
+}
+
+/** The part of a drive's evidence a check that only needed a hand reports. See `describeDrive`. */
+export function summariseDrive(evidence) {
+  return {
+    path: evidence.path ?? null,
+    pressed: [evidence.opened, evidence.sat, evidence.dealPressed].filter((name) => typeof name === 'string'),
+    dealt: evidence.dealt ?? null,
+    complete: evidence.complete === true,
+    start: evidence.start ?? null,
+  };
+}
+
+/**
+ * One drive as a clause: which state the page started in, what was pressed, and whether a hand came
+ * of it. A drive that dealt nothing says so in capitals, because that is a fixture that has stopped
+ * working and every row downstream of it would otherwise be blamed on the screen it never reached.
+ */
+export function describeDrive(drive) {
+  const screen = (snapshot) =>
+    `status ${JSON.stringify(snapshot?.status ?? null)}, controls ${JSON.stringify(
+      (snapshot?.controls ?? []).map((c) => (c.enabled ? c.name : `${c.name} (disabled)`)),
+    )}`;
+  if (drive.path === null) {
+    return (
+      `/play never settled into a first visit or a reconnect after ${drive.start?.waitedMs ?? 0}ms — ` +
+      screen(drive.start?.snapshot)
+    );
+  }
+  const pressed =
+    drive.pressed.length === 0
+      ? 'pressed nothing'
+      : `pressed ${drive.pressed.map((n) => `"${n}"`).join(' then ')}`;
+  if (drive.dealt === null) {
+    const after = drive.start?.after;
+    return `${drive.path}: ${pressed}, DEALT NOTHING${after ? ` — the page then showed ${screen(after)}` : ''}`;
+  }
+  return `${drive.path}: ${pressed}, ${drive.complete ? 'played to completion' : 'dealt, never completed'}`;
+}
+
+/** Every drive a fixture made to get its hand, as one clause for a pass or a failure line. */
+export function describeDrives(drives) {
+  if (drives.length === 0) return 'a hand already in this session, none played for it';
+  return `${drives.length} hand(s) played for it — ${drives.map(describeDrive).join('; ')}`;
+}
+
 /**
  * Press "Deal me in", let it sit and deal, fold when the decision arrives, and let the hand finish.
  *
@@ -2037,12 +2141,30 @@ const ENABLED_ACTION = `[...document.querySelectorAll('button.prl-action-btn')].
  * `decide` is how the decision is made when the turn arrives. It defaults to one Fold pressed with
  * a real Enter key; 3.19 substitutes a double press, which is the only fixture that reaches a
  * server refusal. See `foldTwiceInOneTask`.
+ *
+ * It starts from either state `/play` can open in — see `tableStartPath`. A first visit presses
+ * "Deal me in"; a tab that reconnected takes the seat if it is offered and presses "Deal the next
+ * hand". `evidence.path` says which, and a drive that settled into neither returns with `dealt`
+ * null and the screen it was looking at in `evidence.start`, never a hand it did not play.
  */
 async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0, decide = foldOnce } = {}) {
-  const evidence = { steps: [], reachedTurn: false, dwellMs: 0, complete: false, turnOpenedAt: null };
+  const evidence = {
+    steps: [],
+    reachedTurn: false,
+    dwellMs: 0,
+    complete: false,
+    turnOpenedAt: null,
+    path: null,
+    opened: null,
+    dealt: null,
+  };
   if (fresh) await page.clearCookies();
   await page.goto(`${baseUrl}/play`);
   await page.evaluate('window.__prlSpeechReset && window.__prlSpeechReset()');
+
+  evidence.start = await settleTableStart(page, 45);
+  evidence.path = evidence.start.path;
+  if (evidence.path === null) return { ...evidence, ...(await speechSoFar(page)) };
 
   // Read BEFORE the press, because that is the last moment a reader can be the one who starts the
   // hand: "Deal me in" sits and deals by itself, and on a machine with the API beside it the whole
@@ -2053,6 +2175,11 @@ async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0, decide
   evidence.regionsBeforeDeal = await page.evaluate(
     'window.__prlSpeechRegions ? window.__prlSpeechRegions() : []',
   );
+  if (evidence.path === 'reconnected') {
+    if (!(await dealAtReconnectedTable(page, evidence))) return { ...evidence, ...(await speechSoFar(page)) };
+    return finishLiveHand(page, evidence, { dwellMs, decide });
+  }
+
   evidence.opened = await pressControl(page, /^Deal me in$/iu);
   if (evidence.opened === null) return { ...evidence, ...(await speechSoFar(page)) };
   await page.settle(700);
@@ -2082,7 +2209,41 @@ async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0, decide
     gone: await controlGone(page, /^(Deal me in|Take seat \d+)$/iu),
     focus: await focusedAx(page),
   });
+  return finishLiveHand(page, evidence, { dwellMs, decide });
+}
 
+/**
+ * At a table the page reconnected to: the seat if it is offered, then the deal. True once a hand is
+ * in progress, whoever started it.
+ *
+ * A hand already being played when the page came back is taken as dealt — the same convergence
+ * `DealIn` has for a held seat — and nothing is pressed for it. "Deal the next hand" is waited for
+ * ENABLED rather than pressed on sight: it renders disabled until the first frame says the table is
+ * between hands, and a single `pressControl` against that frame would find nothing and deal nothing.
+ * It disables rather than unmounting, so it pushes no `steps` entry: 3.2's "gone" is about a control
+ * that was removed under the caret, and this one never is.
+ */
+async function dealAtReconnectedTable(page, evidence) {
+  const named = `(b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').replace(/\\s+/gu, ' ').trim()`;
+  const enabledDeal =
+    `[...document.querySelectorAll('button')]` +
+    `.some((b) => /^Deal the next hand$/u.test((${named})(b)) && !b.disabled)`;
+  const inProgress = '/A hand is in progress/u.test(document.body.innerText)';
+  evidence.socketLive = true;
+  if (!evidence.start.snapshot.inProgress) {
+    evidence.sat = await pressControl(page, /^Take seat \d+$/iu);
+    if (await waitInPage(page, `${enabledDeal} || ${inProgress}`, 20)) {
+      evidence.dealPressed = await pressControl(page, /^Deal the next hand$/iu);
+    }
+  }
+  const handInProgress = await waitInPage(page, inProgress, 45);
+  evidence.dealt = handInProgress ? (evidence.dealPressed ?? 'a hand already in progress') : null;
+  if (evidence.dealt === null) evidence.start.after = await page.evaluate(TABLE_START_JS).catch(() => null);
+  return evidence.dealt !== null;
+}
+
+/** The half of a drive both starting states share: the turn, the decision, the end of the hand. */
+async function finishLiveHand(page, evidence, { dwellMs, decide }) {
   evidence.reachedTurn = await waitInPage(page, ENABLED_ACTION, 60);
   if (!evidence.reachedTurn) return { ...evidence, ...(await speechSoFar(page)) };
   const opened = await speechSoFar(page);
@@ -2167,6 +2328,18 @@ const LIVE_TABLE_CHECKS = [
     id: 'J3.1',
     what: 'the connection status is announced politely as it changes, preparing then live',
     decide: (e) => {
+      // Every row of this journey is about a FIRST visit, and the drive cleared the cookie jar to
+      // make one. A page that reconnected anyway resumed a table with no session behind it, which
+      // `resumeRememberedTable` exists never to do — said as that, not as a missing button.
+      if (e.path === 'reconnected') {
+        return fail(
+          '/play reconnected to a table the tab remembered although the cookie jar had just been ' +
+            'cleared, so there was no first visit to measure and no session that could own that table',
+        );
+      }
+      if (e.path === null && e.start !== undefined) {
+        return fail(`no first visit to measure: ${describeDrive(summariseDrive(e))}`);
+      }
       if (e.opened === null) return fail('no "Deal me in" control on /play; the live table did not render');
       const status = entriesFrom(e.log, CONNECTION_REGION);
       if (status.length === 0) {
@@ -2210,7 +2383,9 @@ const LIVE_TABLE_CHECKS = [
             'off whatever the reader was in the middle of',
         );
       }
-      return pass(`${status.length} polite status changes, preparing -> live`);
+      return pass(
+        `${status.length} polite status changes, preparing -> live, on a ${e.path ?? 'first visit'}`,
+      );
     },
   },
   {
@@ -2720,6 +2895,7 @@ const listHands = (page) =>
  */
 async function handForReplay(page, baseUrl) {
   const tried = [];
+  const drives = [];
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const hands = await listHands(page);
     const candidate = hands[0] ?? null;
@@ -2733,11 +2909,13 @@ async function handForReplay(page, baseUrl) {
           markers: document.querySelectorAll('.prl-timeline__marker').length,
         }))()`,
       );
-      if (shape.faceDown > 0 && shape.faceUp > 0 && shape.markers > 1) return { id: candidate, shape, tried };
+      if (shape.faceDown > 0 && shape.faceUp > 0 && shape.markers > 1) {
+        return { id: candidate, shape, tried, drives };
+      }
     }
-    await driveLiveHand(page, baseUrl, {});
+    drives.push(summariseDrive(await driveLiveHand(page, baseUrl, {})));
   }
-  return { id: null, shape: null, tried };
+  return { id: null, shape: null, tried, drives };
 }
 
 async function gatherReplay(page, baseUrl) {
@@ -2745,6 +2923,7 @@ async function gatherReplay(page, baseUrl) {
   const found = await handForReplay(page, baseUrl);
   evidence.hand = found.id;
   evidence.attempts = found.tried;
+  evidence.drives = found.drives;
   if (found.id === null) return evidence;
 
   await page.goto(`${baseUrl}/review/${found.id}`);
@@ -2863,8 +3042,9 @@ const REPLAY_CHECKS = [
     decide: (e) => {
       if (e.hand === null) {
         return fail(
-          `no replayable hand: this run played ${e.attempts.length} hand(s) and none produced a ` +
-            'timeline with both a face-down and a face-up card. Journey 6 cannot be reached without one',
+          `no replayable hand: this run looked at ${e.attempts.length} hand(s) and none produced a ` +
+            'timeline with both a face-down and a face-up card. Journey 6 cannot be reached without ' +
+            `one. ${describeDrives(e.drives ?? [])}`,
         );
       }
       if (!/ — Poker Risk Lab$/u.test(e.title ?? '')) {
@@ -2891,7 +3071,10 @@ const REPLAY_CHECKS = [
             'control before the sentence that says how to work it',
         );
       }
-      return pass(`"${e.title}", instructions before the timeline and wired to it`);
+      return pass(
+        `"${e.title}", instructions before the timeline and wired to it; the hand: ` +
+          describeDrives(e.drives ?? []),
+      );
     },
   },
   {
@@ -3180,6 +3363,26 @@ const listHandSummaries = (page) =>
     .then((hands) => hands ?? []);
 
 /**
+ * What every read of the hand list amounted to, counted by hand id rather than by read.
+ *
+ * The first version counted a boardless hand once per READ and the list's length as a maximum, so
+ * CI run 43245665934 reported "Of 1 hand(s) in this session 3 dealt no board card" — one hand, read
+ * three times. A failure message that does not add up is one nobody believes, and this one was
+ * otherwise the most useful line in the run.
+ */
+export function tallyListedHands(reads) {
+  const listed = new Set();
+  const boardless = new Set();
+  for (const hands of reads) {
+    for (const hand of hands) {
+      listed.add(hand.id);
+      if (hand.board === 0) boardless.add(hand.id);
+    }
+  }
+  return { looks: reads.length, listed: listed.size, boardless: boardless.size };
+}
+
+/**
  * Act until the hand is over, and never fold. The fixture that puts a byte in the reveal.
  *
  * ## The flake this exists to end, with the measurement
@@ -3231,21 +3434,18 @@ async function stayInTheHand(page, evidence) {
  */
 async function findCorruptibleHand(page, proxiedBase, honestBase, proxy) {
   const tried = [];
-  let seen = 0;
-  let noBoard = 0;
+  const reads = [];
+  const drives = [];
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await page.goto(`${proxiedBase}/review`);
     const hands = await listHandSummaries(page);
-    seen = Math.max(seen, hands.length);
+    reads.push(hands);
     for (const hand of hands) {
       if (tried.some((entry) => entry.id === hand.id)) continue;
       // Read off the list, so a hand that cannot possibly work costs nothing. A hand that dealt no
       // board card and had no showdown proves no deck position — see `stayInTheHand` for the whole
       // arithmetic — and rendering it would only produce a refusal this already knows about.
-      if (hand.board === 0) {
-        noBoard += 1;
-        continue;
-      }
+      if (hand.board === 0) continue;
       const html = await renderedHtml(page, `/review/${hand.id}`);
       const record = proxy.log.mutated.find((entry) => entry.handId === hand.id) ?? null;
       // Matched on the PATH, not by taking the last entry: a refusal recorded for some other hand
@@ -3253,13 +3453,17 @@ async function findCorruptibleHand(page, proxiedBase, honestBase, proxy) {
       // the failure message is the whole value of a refusal.
       const refused = proxy.log.refused.findLast((e) => e.path.endsWith(`/${hand.id}`))?.why ?? null;
       tried.push({ id: hand.id, mutated: record !== null, why: record === null ? refused : null });
-      if (record !== null) return { id: hand.id, html, record, tried, seen, noBoard };
+      if (record !== null) return { id: hand.id, html, record, tried, drives, ...tallyListedHands(reads) };
     }
     // Nothing in this session's history reached a flop. Play one that will: the hero stays in the
     // hand rather than folding, which is what makes the board — and therefore the reveal — exist.
-    if (attempt < 2) await driveLiveHand(page, honestBase, { decide: stayInTheHand });
+    // Kept, not discarded: CI run 43245665934 drove twice, pressed nothing either time, and the
+    // failure could only say how many boardless hands it had counted.
+    if (attempt < 2) {
+      drives.push(summariseDrive(await driveLiveHand(page, honestBase, { decide: stayInTheHand })));
+    }
   }
-  return { id: null, html: null, record: null, tried, seen, noBoard };
+  return { id: null, html: null, record: null, tried, drives, ...tallyListedHands(reads) };
 }
 
 /**
@@ -3293,8 +3497,10 @@ async function gatherDeckProofAlert(page, proxiedBase, context) {
 
   const found = await findCorruptibleHand(page, proxiedBase, honestBase, proxy);
   evidence.tried = found.tried;
-  evidence.seen = found.seen;
-  evidence.noBoard = found.noBoard;
+  evidence.looks = found.looks;
+  evidence.listed = found.listed;
+  evidence.boardless = found.boardless;
+  evidence.drives = found.drives;
   evidence.proxy = { reviews: proxy.log.reviews, refused: proxy.log.refused.slice(-3) };
   if (found.id === null) return evidence;
   evidence.hand = found.id;
@@ -3323,11 +3529,13 @@ const DECK_PROOF_CHECKS = [
         // tell "the application stopped announcing" from "the proxy served nothing corrupted", and
         // guessing between those two is how a green check over nothing happens.
         return fail(
-          `the proxy corrupted no reveal, so nothing was checked. Of ${e.seen ?? 0} hand(s) in this ` +
-            `session ${e.noBoard ?? 0} dealt no board card and could not carry one; the proxy saw ` +
-            `${e.proxy?.reviews ?? 0} review response(s) across the rest — ${JSON.stringify(
+          `the proxy corrupted no reveal, so nothing was checked. This session listed ${e.listed ?? 0} ` +
+            `distinct hand(s) over ${e.looks ?? 0} look(s), and ${e.boardless ?? 0} of them dealt no ` +
+            `board card and could not carry one; the proxy saw ${e.proxy?.reviews ?? 0} review ` +
+            `response(s) across the rest — ${JSON.stringify(
               (e.tried ?? []).map((entry) => `${entry.id}: ${entry.why ?? 'no record'}`),
-            )}. A hand that ended before the flop proves no deck position and has no byte to flip`,
+            )}. To find one: ${describeDrives(e.drives ?? [])}. A hand that ended before the flop ` +
+            'proves no deck position and has no byte to flip',
         );
       }
       if (e.record.serverOk !== true || !(e.record.serverPositions > 0)) {
@@ -3456,7 +3664,8 @@ const DECK_PROOF_CHECKS = [
       return pass(
         `${e.hand}: honest, "${e.honest.note.title}"; then salt byte ${e.record.byteOffset} ` +
           `"${e.record.before}"->"${e.record.after}" at deck position ${e.record.position} — assertive ` +
-          `"${e.corrupted.alert.spoken.slice(0, 56)}…" while the server still says ${corruptedServer.value}`,
+          `"${e.corrupted.alert.spoken.slice(0, 56)}…" while the server still says ${corruptedServer.value}; ` +
+          `the hand: ${describeDrives(e.drives ?? [])}`,
       );
     },
   },
