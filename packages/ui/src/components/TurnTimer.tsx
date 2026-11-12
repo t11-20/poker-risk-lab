@@ -177,7 +177,11 @@ function TurnCountdown(props: TurnTimerProps): ReactElement {
       aria-label={`${label}: ${pluralise(clock.budgetSeconds, 'second')} to act`}
     >
       <span className="prl-turn-ring prl-turn-timer__ring" aria-hidden="true" />
-      <span className="prl-turn-timer__value" aria-hidden="true">
+      <span
+        className="prl-turn-timer__value"
+        aria-hidden="true"
+        data-digits={secondsLeft < 100 ? undefined : 3}
+      >
         {formatChips(secondsLeft)}
         {/*
           The unit goes at three digits, because three digits and an "s" do not fit the hole. Measured

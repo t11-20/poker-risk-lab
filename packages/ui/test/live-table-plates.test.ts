@@ -82,7 +82,9 @@ describe('the turn ring, handed the deadline the server set', () => {
 });
 
 /** The ring as painted, `remainingMs` before its deadline, and whether an "s" is painted after the digits. */
-async function ringAt(remainingMs: number): Promise<{ readonly digits: string; readonly unit: boolean }> {
+async function ringAt(
+  remainingMs: number,
+): Promise<{ readonly digits: string; readonly unit: boolean; readonly tight: boolean }> {
   const TurnTimer = await loadComponent<TurnTimerProps>('components/TurnTimer', 'TurnTimer');
   const markup = renderToStaticMarkup(
     createElement(TurnTimer, {
@@ -90,7 +92,11 @@ async function ringAt(remainingMs: number): Promise<{ readonly digits: string; r
       label: 'Your turn timer',
     }),
   );
-  return { digits: digits(markup), unit: /class="prl-turn-timer__unit"/u.test(markup) };
+  return {
+    digits: digits(markup),
+    unit: /class="prl-turn-timer__unit"/u.test(markup),
+    tight: /class="prl-turn-timer__value"[^>]*data-digits="3"/u.test(markup),
+  };
 }
 
 /**
@@ -99,10 +105,12 @@ async function ringAt(remainingMs: number): Promise<{ readonly digits: string; r
  */
 describe('the countdown fits inside the ring', () => {
   it('paints a bare figure at three digits and keeps the "s" at two', async () => {
-    assert.deepEqual(await ringAt(196_000), { digits: '196', unit: false });
-    assert.deepEqual(await ringAt(100_000), { digits: '100', unit: false });
-    assert.deepEqual(await ringAt(99_000), { digits: '99', unit: true });
-    assert.deepEqual(await ringAt(7_500), { digits: '8', unit: true });
+    // `tight` is the hook for the -0.05em in `components.css`: three bare digits still measured
+    // 25.4px of advance boxes in the 24px hole, so they are set a hair closer.
+    assert.deepEqual(await ringAt(196_000), { digits: '196', unit: false, tight: true });
+    assert.deepEqual(await ringAt(100_000), { digits: '100', unit: false, tight: true });
+    assert.deepEqual(await ringAt(99_000), { digits: '99', unit: true, tight: false });
+    assert.deepEqual(await ringAt(7_500), { digits: '8', unit: true, tight: false });
   });
 
   it('says seconds in the accessible name whatever is painted', async () => {

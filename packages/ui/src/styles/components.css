@@ -1965,6 +1965,13 @@
   line-height: 1;
 }
 
+/* Three bare digits, a hair tighter. Their advance boxes measured 25.4px at 13px semibold in the
+   seat ring's 24px hole at 1440x900 — 0.7px over the stroke each side — and the label floor rules
+   out a smaller face. -0.05em takes 1.95px off three digits. */
+.prl-turn-timer__value[data-digits="3"] {
+  letter-spacing: -0.05em;
+}
+
 .prl-turn-timer__unit {
   color: var(--prl-text-muted);
   font-size: var(--prl-type-label-sm);
