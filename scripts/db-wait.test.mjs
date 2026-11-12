@@ -90,6 +90,12 @@ describe('db:wait waits on the database db:migrate is about to open', () => {
     assert.match(run.targetLine, /\(from DATABASE_URL\)/);
   });
 
+  it('treats a blank DATABASE_MIGRATION_URL as unset, as migrate.mjs does (REGRESSION)', () => {
+    const run = runDbWait(`DATABASE_MIGRATION_URL="   "\nDATABASE_URL=${API_URL}\n`);
+    assert.match(run.targetLine, /dbwait_api@127\.0\.0\.1:1\/dbwait_api_db/);
+    assert.match(run.targetLine, /\(from DATABASE_URL\)/);
+  });
+
   it('lets --url override both', () => {
     const override = 'postgres://dbwait_override:x@127.0.0.1:1/dbwait_override_db';
     const run = runDbWait(`DATABASE_MIGRATION_URL=${MIGRATION_URL}\n`, ['--url', override]);

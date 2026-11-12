@@ -136,6 +136,10 @@ ${bold('pnpm run db:wait')} — block until PostgreSQL answers a query
  * documented first-run sequence works with no .env file at all. If you change one,
  * change the other; there is no third place these live.
  */
+function isSet(value) {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
 function connectionStringFrom(env, override) {
   if (override) return { url: override, source: '--url' };
   // DATABASE_MIGRATION_URL before DATABASE_URL, which is migrate.mjs's order, because db:wait
@@ -146,10 +150,14 @@ function connectionStringFrom(env, override) {
   // (docs/audit/production-audit.md P2-1). Loading .env alone would have broken the first run
   // instead: DATABASE_URL names prl_api, which db:seed creates two steps later, and the 28P01 a
   // missing role returns is not retried — so on a fresh cluster db:setup would stop here.
-  if (env.DATABASE_MIGRATION_URL) {
-    return { url: env.DATABASE_MIGRATION_URL, source: 'DATABASE_MIGRATION_URL' };
+  //
+  // A blank value counts as unset, as `databaseUrl` in migrate.mjs treats it: otherwise a
+  // whitespace-only DATABASE_MIGRATION_URL beat a valid DATABASE_URL and db:setup stopped on a
+  // target nothing could connect to (Devin Review on #37).
+  if (isSet(env.DATABASE_MIGRATION_URL)) {
+    return { url: env.DATABASE_MIGRATION_URL.trim(), source: 'DATABASE_MIGRATION_URL' };
   }
-  if (env.DATABASE_URL) return { url: env.DATABASE_URL, source: 'DATABASE_URL' };
+  if (isSet(env.DATABASE_URL)) return { url: env.DATABASE_URL.trim(), source: 'DATABASE_URL' };
 
   const host = env.POSTGRES_HOST ?? env.PGHOST ?? '127.0.0.1';
   const port = env.POSTGRES_PORT ?? env.PGPORT ?? '5432';
