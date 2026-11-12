@@ -33,6 +33,7 @@ import {
   hstsFromRawHeaders,
   manifestMatchesCheckout,
   PROXY_REFRESH_COMPOSE_ARGS,
+  RELEASE_RECORD_PATHS,
   refreshStagingProxy,
 } from './staging.mjs';
 
@@ -490,6 +491,57 @@ test('manifestMatchesCheckout refuses a clean manifest when git status gave no a
   const result = manifestMatchesCheckout({ sha: HEAD, dirty: false }, cleanCheckout({ changedPaths: null }));
   assert.ok('problem' in result, 'unknown is not clean');
   assert.match(result.problem, /`git status` gave no answer/);
+});
+
+test('manifestMatchesCheckout accepts HEAD past the build by release records alone (REGRESSION)', () => {
+  // Devin Review on #30: committing the signature record moved HEAD one commit past the build, and
+  // the guard then refused to deploy the images that record had just signed.
+  const signed = cleanCheckout({
+    headSha: HEAD,
+    behind: 1,
+    ahead: 0,
+    committedSince: ['deploy/staging/release-signatures.json'],
+  });
+  assert.deepEqual(manifestMatchesCheckout({ sha: OLD, dirty: false }, signed), { ok: true });
+  const both = cleanCheckout({ behind: 2, ahead: 0, committedSince: [...RELEASE_RECORD_PATHS] });
+  assert.deepEqual(manifestMatchesCheckout({ sha: OLD, dirty: false }, both), { ok: true });
+});
+
+test('manifestMatchesCheckout still refuses a HEAD past the build by anything else', () => {
+  const cases = [
+    [
+      'a code change beside the record',
+      { committedSince: ['deploy/staging/release-signatures.json', 'apps/api/src/app.ts'] },
+    ],
+    ['a migration', { committedSince: ['db/migrations/0009_next.sql'] }],
+    ['a diff git would not produce', { committedSince: null }],
+    ['an empty diff', { committedSince: [] }],
+    ['a diverged branch', { ahead: 1, committedSince: ['deploy/staging/release-signatures.json'] }],
+    [
+      'a count git would not produce',
+      { behind: null, committedSince: ['deploy/staging/release-signatures.json'] },
+    ],
+  ];
+  for (const [name, overrides] of cases) {
+    const result = manifestMatchesCheckout(
+      { sha: OLD, dirty: false },
+      cleanCheckout({ behind: 1, ahead: 0, ...overrides }),
+    );
+    assert.ok('problem' in result, `${name} is refused`);
+  }
+});
+
+test('release records past the build still have to be committed', () => {
+  const result = manifestMatchesCheckout(
+    { sha: OLD, dirty: false },
+    cleanCheckout({
+      behind: 1,
+      ahead: 0,
+      committedSince: ['deploy/staging/release-signatures.json'],
+      changedPaths: ['apps/web/src/app/page.tsx'],
+    }),
+  );
+  assert.ok('problem' in result, 'an uncommitted edit is still refused on top of a release-record commit');
 });
 
 test('the checkout probe counts untracked files and leaves out only release-images/', () => {

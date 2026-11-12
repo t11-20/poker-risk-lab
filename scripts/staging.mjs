@@ -883,10 +883,20 @@ function readManifest(path) {
  * refuse every release run on a tree nobody edited. Everything else untracked counts, the same
  * definition of "uncommitted" `release-artifacts.mjs` uses when it records `dirty`.
  *
+ * **NOT a HEAD whose only commits since the build are release records.** Signing a build writes
+ * `deploy/staging/release-signatures.json`, and re-freezing the readiness report against it edits
+ * `docs/production/final-readiness-report.md`; committing either moves HEAD one commit past the
+ * commit the images were built from, by construction. Refusing that made every signed release
+ * undeployable from the branch that records its signature (Devin Review on #30). Neither file is in
+ * an image, read by a migration, or read by the smoke test, so a HEAD that differs from the build
+ * in those paths alone deploys exactly what was built. `committedSince` is `git diff --name-only
+ * <manifest> HEAD`, probed only when HEAD is strictly ahead; any other path in it is refused as
+ * before, and so is a diff git would not produce.
+ *
  * Pure, so the arithmetic is tested without git or docker; `commandUp` does the probing.
  *
  * @param {{ sha?: string | null, dirty?: boolean | null } | null | undefined} manifestCommit
- * @param {{ headSha: string | null, behind: number | null, ahead: number | null, changedPaths: string[] | null }} checkout
+ * @param {{ headSha: string | null, behind: number | null, ahead: number | null, changedPaths: string[] | null, committedSince?: string[] | null }} checkout
  *   `behind` is `git rev-list --count <manifest>..HEAD`, `ahead` is `HEAD..<manifest>`; `null` when
  *   git could not answer (most often: the manifest's commit is not in this clone at all).
  *   `changedPaths` is `null` when `git status` gave no answer.
@@ -909,7 +919,7 @@ export function manifestMatchesCheckout(manifestCommit, checkout) {
         `(${checkout.headSha.slice(0, 12)}). ${rebuild}`,
     };
   }
-  if (built !== checkout.headSha) {
+  if (built !== checkout.headSha && !onlyReleaseRecordsSince(checkout)) {
     const distance =
       checkout.behind === null
         ? `${built.slice(0, 12)} is not in this clone's history, so the distance cannot be counted`
@@ -946,6 +956,23 @@ export function manifestMatchesCheckout(manifestCommit, checkout) {
   return { ok: true };
 }
 
+/**
+ * Files written ABOUT a build after it is made, so committing them cannot change what the build
+ * contains. See `manifestMatchesCheckout`. A list of exact paths, not a directory or a pattern: a
+ * new entry is a claim that somebody checked the file is in no image and read by no deploy step.
+ */
+export const RELEASE_RECORD_PATHS = Object.freeze([
+  'deploy/staging/release-signatures.json',
+  'docs/production/final-readiness-report.md',
+]);
+
+function onlyReleaseRecordsSince(checkout) {
+  if (checkout.behind === null || checkout.behind < 1 || checkout.ahead !== 0) return false;
+  const since = checkout.committedSince;
+  if (!Array.isArray(since) || since.length === 0) return false;
+  return since.every((path) => RELEASE_RECORD_PATHS.includes(path));
+}
+
 /** `git rev-list --count` output as a number, or `null` when git gave no answer. */
 function countOf(output) {
   if (output === null) return null;
@@ -966,10 +993,17 @@ function probeCheckout(builtSha) {
     '.',
     ':(exclude)release-images',
   ]);
+  const behind = known ? countOf(capture('git', ['rev-list', '--count', `${builtSha}..HEAD`])) : null;
+  const ahead = known ? countOf(capture('git', ['rev-list', '--count', `HEAD..${builtSha}`])) : null;
+  const diff =
+    known && behind !== null && behind > 0 && ahead === 0
+      ? capture('git', ['diff', '--name-only', '--no-renames', builtSha, 'HEAD'])
+      : null;
   return {
     headSha,
-    behind: known ? countOf(capture('git', ['rev-list', '--count', `${builtSha}..HEAD`])) : null,
-    ahead: known ? countOf(capture('git', ['rev-list', '--count', `HEAD..${builtSha}`])) : null,
+    behind,
+    ahead,
+    committedSince: diff === null ? null : diff.split('\n').filter((line) => line !== ''),
     changedPaths:
       porcelain === null
         ? null
