@@ -1,19 +1,8 @@
 /**
- * On `/legends`, the Play links start the match at the difficulty the reader TICKED.
- *
- * ## The defect
- *
- * Measured on the running build at 360px: tapping "Expert" in the picker checked the radio and gave
- * the option its accent border, and every one of the twelve "Play this style" links still pointed
- * at `difficulty=educational`. Only "Apply setting" — at y=1790, below the third option — changed
- * them, so a reader who picked Expert and pressed Play was dealt an Educational match with the
- * Coach they had chosen to give up still beside it.
- *
- * The links are client components now (`LegendDifficultyScope.tsx`) that follow the ticked radio.
- * These files are TSX and `node --test` cannot render them, so what is asserted is the wiring that
- * makes it true, read off the source: which component the card renders, what the page wraps, and
- * that following the radio stayed a follow — nothing here may navigate on `change`, which is the
- * WCAG 3.2.2 reason `DifficultyPicker` refuses to auto-submit and which still holds.
+ * On `/legends`, the Play links start the match at the difficulty the reader TICKED, not the applied
+ * one. The links are client components (`LegendDifficultyScope.tsx`) that follow the radio; the wiring
+ * is read from source because `node --test` cannot render TSX. Nothing may navigate on `change`
+ * (WCAG 3.2.2), which is why `DifficultyPicker` refuses to auto-submit.
  */
 
 import assert from 'node:assert/strict';

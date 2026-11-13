@@ -1,17 +1,8 @@
 /**
- * The Lab's one promised input: the fold frequency, changed after deciding.
- *
- * The nav calls the Lab "change one input, watch the maths move" and every scenario's assumptions
- * call the fold frequency "an input you can change". After deciding, the page had no control at
- * all. `FoldEquityControl` is that control; these tests hold it to three things:
- *
- *  1. it is offered on every bundled scenario whose table has a row that reads a fold frequency,
- *     and on every offline fixture, and where it is not offered the page says why;
- *  2. at the analysed frequency it reproduces the analysis exactly, and at any other it moves the
- *     fold-reading rows and only those (the arithmetic itself is pinned against the Coach in
- *     `packages/poker-math/test/reprice.test.ts`);
- *  3. it is wired into the reveal as a labelled, keyboard-operable native range whose value is
- *     announced.
+ * The Lab's one promised input is the fold frequency, changed after deciding. `FoldEquityControl` is
+ * offered wherever a row reads a fold frequency and explained elsewhere, reproduces the analysis at
+ * the analysed frequency and moves only fold-reading rows, and is a labelled native range. The
+ * arithmetic is pinned against the Coach in `packages/poker-math/test/reprice.test.ts`.
  */
 
 import assert from 'node:assert/strict';
@@ -60,7 +51,7 @@ describe('the fold-frequency control', () => {
       }
     }
     assert.deepEqual(wrong, [], wrong.join('\n'));
-    // 31 of the 36 bundled scenarios offer a bet or raise; the other five face an all-in.
+    // The other five of the 36 bundled scenarios face an all-in.
     assert.ok(offered >= 30, `offered on only ${offered}`);
     assert.ok(explained >= 1, 'no scenario exercised the explanation');
   });
@@ -85,17 +76,14 @@ describe('the fold-frequency control', () => {
           assert.equal(row.ev, row.analysedEv, `${id}: ${row.action} moved`);
           continue;
         }
-        // A bet's EV is a straight line in f — f x pot + (1 - f) x (the called branch) — so the
-        // analysed figure must sit on the line through 0% and 100%. Not "fewer folds cost chips":
-        // that was this test's first version, and it is false for a hand whose called branch is
-        // worth more than the pot (eq-equity-against-one-known-hand gains as folds fall).
+        // A bet's EV is linear in f, so the analysed figure sits on the line through 0% and 100%.
+        // "Fewer folds cost chips" is false when the called branch is worth more than the pot.
         const one = atOne.rows[index]?.ev ?? Number.NaN;
         const onLine = row.ev + f * (one - row.ev);
         assert.ok(
           Math.abs(onLine - row.analysedEv) < 1e-6,
           `${id}: ${row.action} ${row.to} is not linear in f`,
         );
-        // At 100% every bet and raise wins exactly the pot hero can win.
         assert.ok(Math.abs(one - report.potOdds.pot) < 1e-9, `${id}: ${row.action} ${row.to} at 100%`);
       }
     }
@@ -126,7 +114,7 @@ describe('the fold-frequency control', () => {
     assert.match(control, /aria-valuetext=\{`\$\{percent\}% fold frequency`\}/u);
     assert.match(control, /role="status" aria-live="polite"/u);
     assert.match(control, /repriceAtFoldEquity\(report, percent \/ 100\)/u);
-    // The reset disables itself on the render it causes; focus has to be moved off it first.
+    // The reset disables itself on the render it causes, so focus moves off it first.
     assert.match(control, /sliderRef\.current\?\.focus\(\);\s*setPercent\(analysedPercent\);/u);
   });
 });

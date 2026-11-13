@@ -1,29 +1,6 @@
 /**
- * The recorded CSP hash for the app's one inline script must equal the script's actual bytes.
- *
- * ## What went wrong, and why a test rather than a corrected number
- *
- * `THEME_BOOT_SCRIPT` is the single inline script this app ships: it applies the reader's stored
- * theme before first paint so that somebody whose system is dark and whose choice is light does not
- * watch the page flash. An inline script needs `script-src` to allow it, and the value that allows
- * it used to live in a prose comment beside the script. The script was then edited and the digits
- * were not, and nothing in the repository could notice — the recorded hash was reviewable but not
- * verifiable. An operator who copied it would have shipped a policy that blocks the one script
- * whose whole job is to prevent the flash, and the page would look fine on every server-side check.
- *
- * Correcting the digits would fix the value and leave the mechanism. This file is the mechanism.
- *
- * ## The independent ground truth
- *
- * The digest is computed here with `node:crypto` over the exported string, and compared against the
- * exported constant. Nothing in `src/lib/theme.ts` participates in producing the expected value:
- * the module supplies the input and the claim, and the platform's own SHA-256 supplies the answer.
- * That independence is the property that matters. A test that called a helper in `theme.ts` to
- * derive the hash would agree with the constant by construction and would have caught nothing —
- * which is precisely the failure mode being closed here.
- *
- * UTF-8 is stated explicitly on the `update` call because it is the encoding a browser hashes the
- * script's bytes in, not merely Node's default.
+ * The recorded CSP hash must equal the inline script's bytes. The digest is computed with `node:crypto`,
+ * because a helper shared with `theme.ts` would agree by construction. UTF-8 is what a browser hashes.
  */
 
 import assert from 'node:assert/strict';
@@ -52,9 +29,7 @@ test('the recorded CSP hash matches the exact bytes of THEME_BOOT_SCRIPT', () =>
 });
 
 test('THEME_BOOT_SCRIPT_CSP_HASH is a well-formed script-src source expression', () => {
-  // A 32-byte digest is 43 base64 characters plus one '=' of padding. Checking the shape as well as
-  // the value means a hand-edit that truncates or mangles the token fails here with a clear reason
-  // rather than as an inequality that looks like ordinary drift.
+  // A 32-byte digest is 43 base64 characters plus one '=', so a mangled token fails with a clear reason.
   const match = /^sha256-([A-Za-z0-9+/]{43}=)$/.exec(THEME_BOOT_SCRIPT_CSP_HASH);
   assert.ok(
     match !== null,
@@ -70,9 +45,7 @@ test('THEME_BOOT_SCRIPT_CSP_HASH is a well-formed script-src source expression',
       'disagree, which a browser rejects outright',
   );
 
-  // The quotes in `script-src 'sha256-…'` are header syntax and belong to whatever assembles the
-  // header. Baking them into the value would double them up at the call site and would break the
-  // digest comparison above for a reason unrelated to the script.
+  // The quotes in `script-src 'sha256-…'` are header syntax and belong to whatever assembles the header.
   assert.ok(
     !THEME_BOOT_SCRIPT_CSP_HASH.includes("'"),
     'the constant must not carry its own quotes; the code emitting the header adds them',
@@ -80,11 +53,8 @@ test('THEME_BOOT_SCRIPT_CSP_HASH is a well-formed script-src source expression',
 });
 
 test('THEME_BOOT_SCRIPT stays hashable: fixed bytes, its own keys, no closing-tag sequence', () => {
-  // A hash is only meaningful for a script whose bytes are fixed at build time. These are the two
-  // properties `src/lib/theme.ts` documents as making that true, asserted rather than asserted-in-
-  // prose: the script must read the module's own exported keys (so a rename cannot leave the script
-  // pointing at a stale one while the hash still matches), and it must not contain a sequence that
-  // would let the HTML parser end the element early.
+  // The hash is only meaningful for fixed bytes. The script reads this module's exported keys, and must
+  // not contain a sequence that ends the element early.
   for (const constant of [THEME_STORAGE_KEY, BOOT_SESSION_KEY, THEME_ATTRIBUTE, BOOT_ATTRIBUTE, BOOT_SKIP]) {
     assert.ok(
       THEME_BOOT_SCRIPT.includes(constant),

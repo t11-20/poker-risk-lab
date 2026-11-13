@@ -1,8 +1,6 @@
 /**
- * Unknown lesson / scenario / profile ids must 404 at the router, not via `notFound()`.
- *
- * Next 16's in-page `notFound()` returns empty HTML (`__next_error__`, no lang/main/h1).
- * `generateStaticParams` + `dynamicParams = false` sends unknown ids through `app/not-found.tsx`.
+ * Unknown lesson, scenario and profile ids must 404 at the router, because Next 16's in-page `notFound()`
+ * returns empty HTML, and `dynamicParams = false` sends unknown ids through `app/not-found.tsx`.
  */
 
 import assert from 'node:assert/strict';

@@ -1,37 +1,8 @@
 /**
- * A Coach request does not survive its socket, and the client must notice.
- *
- * ## The defect these exist for
- *
- * A `coach` frame is asked for once and answered once, and the server matches its `requestId`
- * against the connection the request arrived on. So a request that is outstanding when the socket
- * goes away is never answered — by anything, ever.
- *
- * `onFrame`'s `welcome` case left `coachRequest` exactly as it was, and `useLiveTable`'s
- * `coachAskedRef` still held the key of that spot, so the effect that asks automatically refused to
- * ask again for it. `onStateFrame` could not help: it closes the request only when the spot MOVES,
- * and a reconnect usually lands the reader back in the spot they were already in.
- *
- * ## Observed, in Chrome 151 against a live table
- *
- * One inbound `coach` frame swallowed at the socket, then the socket closed from the page. The
- * frame log, in arrival order:
- *
- *     6683ms out      requestCoach
- *     8035ms DROPPED  coach
- *    12750ms close    4999
- *    13314ms out      hello
- *    13315ms in       welcome
- *    13316ms in       state
- *    28317ms out      ping
- *
- * No second `requestCoach`. The table came back live and it was still the reader's turn, and the
- * Coach panel read "No analysis — the Coach prices the decision in front of you, so with no table
- * state there is nothing to price" for as long as the page stayed open, beside a fully drawn table.
- *
- * The reducer half is below. The hook half — dropping `coachAskedRef` so the effect asks again — is
- * `coachRequestRef` in `useLiveTable`, which cannot be driven from `node --test` because there is no
- * renderer in this repository (ADR 0008); the browser run above is its evidence.
+ * A Coach request does not survive its socket, and the client must notice. The server answers a
+ * `requestId` only on the connection it arrived on, so an outstanding request is never answered after
+ * a reconnect, and a reconnect usually lands the reader back in the same spot. The hook half
+ * (`coachRequestRef`) has no renderer under `node --test` (ADR 0008); a Chrome run is its evidence.
  */
 
 import assert from 'node:assert/strict';
@@ -40,11 +11,7 @@ import type { CoachReport, WsServerMessage } from '@prl/contracts';
 import type { PlayerView, SeatView } from '@prl/ui';
 import { decisionKey, EMPTY_TABLE_STATE, tableReducer } from '../src/lib/use-live-table.ts';
 
-/**
- * Written out and typed rather than imported from `src/fixtures/table.ts`, for the reason
- * `live-regions.test.ts` gives at length: that fixture imports a runtime value from `@prl/ui`,
- * whose entry point re-exports `.tsx`, which Node's type stripping cannot load.
- */
+/** Typed rather than imported from `src/fixtures/table.ts`, which `node --test` cannot load. */
 const HERO_SEAT: SeatView = {
   seat: 0,
   playerId: 'test-hero',

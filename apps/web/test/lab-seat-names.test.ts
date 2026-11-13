@@ -1,14 +1,7 @@
 /**
- * A Lab seat's name says something its position badge does not.
- *
- * Every bundled scenario labels its seats with their positions, and the page passed that label
- * straight through as the seat's name, so the plate printed the position twice — "BTN / BTN",
- * "CO / CO" — on every seat of all 36 scenarios, and nothing on the table said which plate was the
- * reader's opponent. Seen on `/lab/fl-same-cards-under-the-gun` in a screenshot at 1440 wide.
- *
- * The reader's own plate said "Hero" — a word in none of the glossary's terms, on the one plate the
- * live table and the offline Lab fixture both call "You". It now says "You" here as well; with the old
- * `scenario-view.ts` the role case fails on every scenario.
+ * A Lab seat's name says something its position badge does not. Every bundled scenario labels its
+ * seats by position, so passing the label through printed "BTN / BTN" on every plate. The reader's
+ * plate says "You", as on the live table and the offline fixture.
  */
 
 import assert from 'node:assert/strict';

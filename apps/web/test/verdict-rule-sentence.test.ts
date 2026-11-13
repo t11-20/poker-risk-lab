@@ -1,15 +1,7 @@
 /**
- * The Scenario Lab's verdict says, in one place and in words, what it judged.
- *
- * Measured on "Flush draw facing a small bet" at 6b3886e (UX audit, Minor 9): a call showed
- * "consistent with the analysis" beside "Best row: +56.6 — Raise to 50", and "20.6 units ahead of
- * it" beside "within the allowance of 10 units". Every figure was right and the rule — does the
- * action beat folding — was only a row label. `verdictRuleSentence` states it with the action's own
- * numbers, and this drives it over every action the shipped fixture analyses price.
- *
- * Negative control: with `<VerdictRule … />` removed from `ScenarioStage.tsx`, "is the
- * sentence the panel prints" fails; with the best-row clause removed from `verdict-rule.ts`, the
- * audit's case fails.
+ * The Scenario Lab's verdict says, in one place and in words, what it judged, which is whether the action
+ * beats folding. Every figure was right before and the rule was only a row label, so a consistent
+ * call sat beside a much better best row. Driven over every action the shipped fixture prices.
  */
 
 import assert from 'node:assert/strict';
@@ -24,10 +16,8 @@ import { verdictRuleSentence } from '../src/lib/verdict-rule.ts';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const ACTIONS: readonly ScenarioAction[] = ['fold', 'check', 'call', 'bet', 'raise'];
-/** The formatters the panel hands in. */
 const FORMAT = { units: formatUnits, signedUnits: formatSignedUnits };
 
-/** Every priced (scenario, action) the fixture carries, judged by the shared rule. */
 const JUDGED = LAB_SCENARIOS.flatMap((scenario) => {
   const report = LAB_SCENARIO_ANALYSIS[scenario.id];
   if (report === undefined) return [];
@@ -68,13 +58,13 @@ describe('the verdict says what it judged', () => {
     );
     assert.ok(found !== undefined, 'no shipped spot reproduces the audit’s case; check before deleting this');
     const sentence = verdictRuleSentence(found.judgement, found.action, FORMAT) ?? '';
-    // "20.6 units ahead" beside "within the allowance of 10": the allowance is for falling short.
+    // The allowance is for falling short, so "ahead" beside "within the allowance" needs the rule said.
     assert.match(
       sentence,
       /does at least as well as folding, which is worth 0, allowing it to fall up to/u,
       sentence,
     );
-    // "consistent" beside "Best row: +56.6 — Raise to 50": the best row is not the bar.
+    // The best row is not the bar.
     assert.match(
       sentence,
       /the best row, .+, is there for comparison and does not have to be matched\.$/u,

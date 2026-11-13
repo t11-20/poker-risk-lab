@@ -1,14 +1,7 @@
 /**
- * A hand-history cursor the API refuses is an old or edited link, not an outage.
- *
- * ## The failure this is written against
- *
- * `/review?cursor=zzz` — or a bare hand id pasted where a cursor goes — rendered the error boundary.
- * The API answers a cursor it did not mint with `400 invalid_request` and
- * `fields: { 'query.cursor': … }` (`decodeCursor` and `cursorFor` in `apps/api/src/routes/hands.ts`),
- * and `loadHistory` rethrew everything that was neither an outage nor a signed-out reader. Measured
- * by the audit at 308fadf with a guest session: HTTP 500 and the "something went wrong" screen, for
- * a link a reader can produce by editing one query parameter.
+ * A hand-history cursor the API refuses is an old or edited link, not an outage. The API answers a
+ * cursor it did not mint with `400 invalid_request` on the cursor field
+ * (`apps/api/src/routes/hands.ts`), and `loadHistory` once rethrew that into the error boundary.
  */
 
 import assert from 'node:assert/strict';
@@ -32,7 +25,7 @@ describe('a rejected hand-history cursor', () => {
       ),
       true,
     );
-    // One that fails the query schema's pattern is refused before the route, under the schema's key.
+    // A cursor failing the schema's pattern is refused before the route, under the schema's key.
     assert.equal(
       isRejectedCursor(refusal(400, 'invalid_request', { 'querystring.cursor': 'must match pattern' })),
       true,

@@ -1,21 +1,8 @@
 /**
- * The hand review says why the server made a decision, and says no more than it knows.
- *
- * ## The defect
- *
- * `HandReplay` printed "The clock ran out and the server acted" — and "(the clock ran out)" in the
- * transport's headline — for every decision with `wasAutomatic`, because that flag was the only
- * thing the review carried. The server sets it for two different things (`apps/api/src/rooms/
- * table.ts`): a seat whose clock expired, and a player who pressed "Stand up" holding cards, whose
- * seat folds when the action reaches it. A reader who chose to leave was told by their own hand
- * history that they had run out of time.
- *
- * The API now records which one it was (`HandReviewDecision.automaticReason`, migration 0009), and
- * a row archived before that carries `null` — which must read as "the server acted", not as the
- * likelier of the two reasons.
- *
- * The last assertion reads `HandReplay.tsx` as text because `node --test` cannot load a `.tsx`, and
- * the defect was in the component's wiring: two inline sentences keyed on `wasAutomatic` alone.
+ * The hand review says why the server made a decision, and says no more than it knows. `wasAutomatic`
+ * covers both an expired clock and a reader who stood up holding cards (`apps/api/src/rooms/table.ts`).
+ * `automaticReason` (migration 0009) tells them apart, and a row archived before it is `null`, which
+ * must read as "the server acted" rather than the likelier reason. The wiring is read as text.
  */
 
 import assert from 'node:assert/strict';

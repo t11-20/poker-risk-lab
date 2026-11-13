@@ -1,16 +1,7 @@
 /**
  * A legend match names the style the reader chose, at the setting they chose, and has a way back.
- *
- * ## The defects
- *
- * Measured on the running build, `/play?profile=vocal-aggressor&difficulty=expert`:
- *
- *  - the `h1` was "Heads-up against this style" and the lede was the six-handed table's "A private
- *    table against five bots", over a room line reading "2 at the table";
- *  - nothing named "High-Variance Tournament Aggressor", which the reader had picked, while the seat
- *    plate — the API's, built from the id — said "Vocal Aggressor";
- *  - after "Stand up" the controls were "Take seat 1" and "Start a fresh table", and nothing led back
- *    to `/legends`; the Legends hand review, whose payload names the profile, did not link to it.
+ * The page once showed a placeholder heading and the six-handed table's lede, never named the
+ * archetype, and left no link back to `/legends` after "Stand up".
  */
 
 import assert from 'node:assert/strict';

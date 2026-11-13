@@ -1,22 +1,6 @@
 /**
- * `/legends/compare` turns whatever the URL names into a request the API will accept.
- *
- * ## The defect
- *
- * The compare form offers twelve checkboxes and said only "Pick at least two". The API's
- * `PROFILE_IDS_SCHEMA` allows five. Measured against the running build with curl: two to five
- * profiles answered 200; six and seven answered **500** — the schema refused the request,
- * `loadProfileComparison` rethrew the `invalid_request`, and a reader who ticked every box got
- * "This screen did not load", with a "Try again" that failed the same way. Reproduced through the
- * real form at 360px by ticking all twelve.
- *
- * Measured at the same time: `?profiles=nope,calling-station` answered 200 with the bundled
- * four-column sample under "The comparison service is not reachable" — an unknown id refused by a
- * server that was up, reported as an outage, for a comparison the reader never asked for.
- *
- * `parseProfileIds` passed every id through, so both failures were decided before the page could
- * do anything about them. `parseCompareSelection` is the function the page now reads, and every id
- * it keeps out of the request comes back beside the ones it lets in so the page can name it.
+ * `/legends/compare` turns whatever the URL names into a request the API accepts: at most five
+ * (`PROFILE_IDS_SCHEMA`), no unknown ids, and every id left out is returned so the page can name it.
  */
 
 import assert from 'node:assert/strict';
@@ -86,7 +70,6 @@ describe('parseCompareSelection', () => {
   it('keeps unknown ids out of the request and names them, before counting to five', () => {
     const selection = parseCompareSelection(['nope', ...KNOWN.slice(0, 5), 'also-nope'], KNOWN);
     assert.deepEqual(selection.unknown, ['nope', 'also-nope']);
-    // The unknown ones did not use up any of the five places.
     assert.deepEqual(selection.ids, KNOWN.slice(0, 5));
     assert.deepEqual(selection.dropped, []);
 
@@ -102,7 +85,6 @@ describe('parseCompareSelection', () => {
   });
 
   it('every id that reaches the request is one the API listed, and there are never more than five', () => {
-    // A sweep of nothing is not a pass: the cases below must be non-empty for this to mean anything.
     const cases: (string | string[])[] = [
       KNOWN.join(','),
       [...KNOWN].reverse(),
@@ -123,15 +105,8 @@ describe('parseCompareSelection', () => {
 });
 
 /**
- * Over the bundled sample the page still names what it threw away.
- *
- * The first fix for the notices contradicting a fallback ("showing the first five" over four
- * unrelated sample columns) hid every notice whenever the comparison was not live. That also hid
- * the two that describe the reader's INPUT rather than the columns: with the API down,
- * `?profiles=nope,calling-station` rendered the sample and a form with only Calling Station ticked,
- * and nothing anywhere said `nope` had been discarded (Devin Review on #24). An unknown id and a
- * style past the fifth are facts about the request, true whatever answered it; "showing", "its
- * column is below" and "the default three" are facts about the columns, true only when live.
+ * Over the bundled sample the page still names what it threw away, because those are facts about the
+ * request. Sentences about which columns are shown are true only when live.
  */
 describe('selectionNotices', () => {
   const nameOf = (id: string): string => `Name of ${id}`;
@@ -155,7 +130,6 @@ describe('selectionNotices', () => {
         assert.doesNotMatch(notice, DESCRIBES_COLUMNS);
       }
     }
-    // One known style discards nothing; the sentence about it is about its column and takeaway.
     assert.deepEqual(selectionNotices(one, one.ids, nameOf, false), []);
     assert.equal(selectionNotices(onlyUnknown, [], nameOf, false).length, 1);
   });

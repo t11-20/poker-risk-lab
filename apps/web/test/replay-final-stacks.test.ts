@@ -1,32 +1,8 @@
 /**
- * The last frame of a replay shows the stacks the hand ACTUALLY ended on.
- *
- * ## The defect these exist for
- *
- * `buildHandReplay` walks the decision list and subtracts what each seat paid. That is the only
- * thing that ever touches `Tally.stack`, because a decision list records what was *paid* and never
- * what was *won* — so the terminal frame drew every seat at the moment before the pot moved. The
- * comment sitting directly above that frame said, and says, that it "is the only place the reader
- * sees the final stacks".
- *
- * ## Observed
- *
- * `/review/hand-0042`, walked to Step 11 of 11 in Chrome 151 through the page's own "Next decision"
- * button, with the API up:
- *
- *   - seat plate, the reader:    `You (you) STACK 245`
- *   - seat plate, the opponent:  `Quartile STACK 245`
- *   - `StepMetrics`:             `YOUR STACK 245 UNITS`
- *   - the same screen's head:    `NET TO YOU +765 units GAINED`
- *   - the same screen's result:  `You +765 units GAINED`
- *
- * The reader started the hand with 1,000 and won 765, and the frame whose job is to show what the
- * hand cost showed them 245 — the identical figure to the seat they had just beaten, because 245 is
- * what both of them had left after paying in and before either was paid out.
- *
- * `HandReviewSeat.net` is the server's own settled figure and is already on the wire (`ResultRow`
- * prints it), so the fix adds it rather than reconstructing an award. These assertions fail against
- * the code as it was: the first one read 245.
+ * The last frame of a replay shows the stacks the hand ACTUALLY ended on. A decision list records
+ * what was paid and never what was won, so the walked stacks stop before the pot moves (on
+ * `/review/hand-0042` both seats showed 245 after a +765 win). `HandReviewSeat.net` is the server's
+ * settled figure, so the fix adds it rather than reconstructing an award.
  */
 
 import assert from 'node:assert/strict';
@@ -34,14 +10,10 @@ import { describe, it } from 'node:test';
 import { REVIEW_HAND_FOLDED, REVIEW_HAND_SHOWDOWN } from '../src/fixtures/review.ts';
 import { buildHandReplay, type ReplayStep } from '../src/lib/hand-replay.ts';
 
-/**
- * Explicitly annotated, and it has to be: `assert.ok` is an assertion function, and TypeScript
- * refuses to narrow a name it has to infer from the very call that narrows it (TS7022).
- */
+/** Annotated because TypeScript will not narrow a name inferred from the call that narrows it (TS7022). */
 const terminalStepOf = (review: Parameters<typeof buildHandReplay>[0]): ReplayStep | undefined =>
   buildHandReplay(review).steps.at(-1);
 
-/** The stacks the frame actually draws, by seat. */
 const stacksBySeat = (step: ReplayStep): ReadonlyMap<number, number> =>
   new Map(step.view.seats.map((seat) => [seat.seat, seat.stack]));
 
@@ -93,8 +65,7 @@ describe('the terminal replay frame', () => {
   });
 
   it('leaves an unfinished hand alone, because there is no award to add', () => {
-    // A hand with no `completedAt` was abandoned: nothing was settled, so `net` describes a
-    // settlement that never happened and the walked stacks are the honest ones.
+    // No `completedAt` means abandoned, so `net` describes a settlement that never happened.
     const review = {
       ...REVIEW_HAND_SHOWDOWN,
       hand: { ...REVIEW_HAND_SHOWDOWN.hand, completedAt: null },

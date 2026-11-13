@@ -1,15 +1,6 @@
 /**
- * `/record` names what a learner did in words, and links back to it.
- *
- * ## The failure this is written against
- *
- * Measured by the audit at 308fadf on `/record`: "Scenarios tried" listed
- * `eq-flush-draw-turn-small-bet`, "Topics touched" listed `positions-and-blinds`, both unlinked, and
- * the units reset said "back to 1000" where every other surface says "1,000 units". The page joined
- * the raw arrays from `GET /me/progress` with commas and rendered them.
- *
- * The ids below are real ones from the content bundle, not invented, so a renamed scenario breaks
- * this file instead of passing over a title nobody checked.
+ * `/record` names what a learner did in words and links back to it, instead of joining raw ids with
+ * commas. The ids are real ones from the content bundle, so a renamed scenario breaks this file.
  */
 
 import assert from 'node:assert/strict';

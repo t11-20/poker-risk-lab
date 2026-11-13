@@ -1,10 +1,6 @@
 /**
- * A hand replay's title says what the page found, including "not found".
- *
- * The audit at 6b3886e: `/review/nope` and another guest's hand id both rendered the 404 body under
- * the title "Hand replay", because `generateMetadata` consulted only the bundled fixtures. Every
- * real hand was titled "Hand replay" for the same reason. The page imports CSS and cannot be loaded
- * here, so the mapping lives in `lib/review-titles.ts` and the page is held to using it.
+ * A hand replay's title says what the page found, including "not found", from the same load the page
+ * renders. The page imports CSS and cannot load here, so the mapping lives in `lib/review-titles.ts`.
  */
 
 import assert from 'node:assert/strict';

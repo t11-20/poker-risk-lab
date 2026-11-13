@@ -1,16 +1,6 @@
 /**
- * The live table's reducer, against the usability defects an audit of the running build found.
- *
- * Every frame below is shaped like one the auditor captured from the running stack (the full log
- * is not in the repository; the figures that matter are quoted where they are used), and each
- * block carries a NEGATIVE CONTROL that runs the same detector over what the old code produced.
- *
- *   - The turn ring's budget is the deadline the server set for THIS turn, not the room's clock:
- *     the first `state` frame of the reader's turn carried `deadlineMs - serverTimeMs = 239999`
- *     at a room whose `actionTimeoutSeconds` is 60, and the ring said 60s.
- *   - A fold the server made because the clock ran out is kept for the eye, not only the 1x1
- *     narration region.
- *   - The showdown's lines survive `handComplete`, which used to overwrite them.
+ * The live table's reducer against defects found in the running build, each block with a NEGATIVE
+ * CONTROL. The turn ring's budget is the deadline the server set for THIS turn, not the room's clock.
  */
 
 import assert from 'node:assert/strict';
@@ -97,8 +87,7 @@ describe('the turn ring is told the budget the server set for this turn', () => 
   });
 
   it('keeps the budget while the turn runs, instead of shrinking it frame by frame', () => {
-    // The same deadline arriving 90 seconds later is the same turn: the ring is a 240s ring with
-    // 150s left on it, not a 150s ring that looks full.
+    // The same deadline 90 seconds later is the same turn, so it is a 240s ring with 150s left.
     const table = drive([
       welcome(),
       state(1, READER_DEADLINE, SERVER_TIME),
@@ -140,7 +129,6 @@ describe('the turn ring is told the budget the server set for this turn', () => 
 });
 
 describe('a fold the server made for the reader stays on screen', () => {
-  // The order the log carried them in: lines 380-382, event, event, then the state that moved on.
   const timedOut = [
     event({ kind: 'seatTimedOut', seat: 0 }),
     event({ kind: 'action', seat: 0, description: 'Guest 12D91B folds', wasAutomatic: true }),
@@ -154,7 +142,7 @@ describe('a fold the server made for the reader stays on screen', () => {
       state(2, BOT_DEADLINE, SERVER_TIME),
     ]);
     assert.equal(table.autoActed, AUTO_ACTED_NOTICE);
-    // `submission` is NOT where it lives: the reader submitted nothing.
+    // The reader submitted nothing, so it does not live in `submission`.
     assert.equal(table.submission, null);
   });
 
@@ -180,9 +168,8 @@ describe('a fold the server made for the reader stays on screen', () => {
     assert.equal(mine.autoActed, null);
   });
 
-  // Review on PR #27. "Stand up" while holding cards flags the seat, and `runAutomaticActions` folds
-  // it with `{ automatic: true }` — the same flag as a timeout, and with no `seatTimedOut` before it.
-  // These frames are that notice: the action event alone, then the state that moved on.
+  // "Stand up" while holding cards folds with `{ automatic: true }`, the same flag as a timeout, but with
+  // no `seatTimedOut` before it.
   const stoodUp = [event({ kind: 'action', seat: 0, description: 'Guest 12D91B folds', wasAutomatic: true })];
 
   it('is not set by the fold the server makes for a reader who stood up', () => {
@@ -198,7 +185,6 @@ describe('a fold the server made for the reader stays on screen', () => {
   it('does not narrate that fold as a clock running out, and still narrates a real one that way', () => {
     const left = drive([welcome(), state(1, READER_DEADLINE, SERVER_TIME), ...stoodUp]);
     assert.doesNotMatch(left.announcement, /clock|time/u);
-    // The reader's own fold, in the reader's words — see `inReadersWords` in `use-live-table.ts`.
     assert.match(left.announcement, /^You fold \(the server acted for you\)$/u);
     const expired = drive([welcome(), state(1, READER_DEADLINE, SERVER_TIME), ...timedOut]);
     assert.match(expired.announcement, /the clock ran out/u);
@@ -217,7 +203,6 @@ describe('a fold the server made for the reader stays on screen', () => {
 });
 
 describe('how the hand ended keeps the showdown', () => {
-  // Lines 120-121 of the auditor's log: one notice, showdown then handComplete.
   const showdown = event({
     kind: 'showdown',
     summaries: [
@@ -236,7 +221,6 @@ describe('how the hand ended keeps the showdown', () => {
   it('lists what was shown, then who was paid', () => {
     const table = drive([welcome(), showdown, complete]);
     assert.deepEqual(table.summary, [
-      // The reader is Guest 12D91B, so their own line is put to them as "you".
       'You show high card king, queen ten kickers.',
       'Reading Pressure shows flush, ace high.',
       'Reading Pressure wins 1622 from the main pot.',

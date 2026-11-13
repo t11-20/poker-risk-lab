@@ -1,16 +1,7 @@
 /**
- * The Lab index's facet counts and option order.
- *
- * ## The failures this is written against
- *
- * Measured on the running app at 360x640 (commit 308fadf):
- *
- *  - With Intro selected the list showed 6 scenarios, and the topic control's first option read
- *    "Every topic (36)". Every other option was counted against the other two filters, as the page
- *    header promises; the "any" option was the total, which is a promise of 36 results that choosing
- *    it does not deliver.
- *  - The difficulty options read Advanced, Core, Intro and the streets Flop, Preflop, River, Turn:
- *    `localeCompare` on the label, which is an order nobody learns or plays in.
+ * The Lab index's facet counts and option order. Every option is counted against the other two
+ * filters, so the "any" option must be too (it once read 36 with 6 shown). Difficulty and street run
+ * in learning and dealing order, not `localeCompare` on the label.
  */
 
 import assert from 'node:assert/strict';
@@ -45,11 +36,9 @@ describe('the Lab facet options', () => {
   it('counts the "any" option against the other filters, not the whole list (REGRESSION)', () => {
     const intro = SUMMARIES.filter((scenario) => scenario.difficulty === 'intro').length;
     assert.ok(intro > 0 && intro < SUMMARIES.length, 'the bundle needs some Intro scenarios and some not');
-    // Picking "Every topic" with Intro kept shows the Intro scenarios, so that is its count.
     assert.equal(anyCountFor(SUMMARIES, INTRO, 'topic'), intro);
     assert.equal(anyCountFor(SUMMARIES, INTRO, 'street'), intro);
-    // Relaxing the facet's own filter is what makes it a prediction: "Every level" with Intro
-    // selected would show everything the other two filters allow, which is all of them.
+    // Relaxing the facet's own filter makes it a prediction, so "Every level" with Intro counts everything.
     assert.equal(anyCountFor(SUMMARIES, INTRO, 'difficulty'), SUMMARIES.length);
     for (const facet of ['topic', 'difficulty', 'street'] as const) {
       const options = optionsFor(SUMMARIES, INTRO, facet, (id) => id);

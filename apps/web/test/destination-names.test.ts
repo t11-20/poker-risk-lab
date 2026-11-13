@@ -1,14 +1,7 @@
 /**
- * A destination is called the same thing in the nav, on its own page, and in the links into it.
- *
- * The audit at 6b3886e: the nav said "Legends", the page's h1 said "Opponent profiles" and the
- * Lab's footer link said "AI opponent profiles"; the nav said "Review", the h1 said "Hand history"
- * and the links said "Your hand history". A reader following the nav lands on a page whose heading
- * does not say they arrived where they asked to go.
- *
- * The rule held here is the one a reader can check: each h1 contains its nav word. Learn and Play
- * are not in it — "The curriculum" and "Six-handed table" are pages the audit did not flag, and the
- * Learn index belongs to other work in flight. The pages import CSS, so they are held to source.
+ * A destination is called the same thing in the nav, on its own page, and in the links into it. The
+ * rule held is that each h1 contains its nav word. Learn and Play are not checked; their headings
+ * were not flagged. The pages import CSS, so they are held to source.
  */
 
 import assert from 'node:assert/strict';
@@ -24,7 +17,6 @@ function labelOf(href: string): string {
   return destination.label;
 }
 
-/** The text of the page's one `<h1>`, with any markup inside it removed. */
 function h1Of(source: string): string {
   const all = [...source.matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/gu)];
   assert.equal(all.length, 1, 'expected exactly one h1 in the page source');

@@ -1,33 +1,6 @@
 /**
- * The one figure the app shows about the reader on every screen must never be invented.
- *
- * ## Two defects, one badge
- *
- * **It stated a figure it could not check.** The header's session effect read
- * `if (!result.ok) return;`, so when the API could not be reached the bundled starting balance
- * simply stayed on screen. With the API stopped the bar said `1,000 UNITS`, unqualified, on every
- * page, to a reader whose real figure was 2,000 — and on `/record` it sat directly above that
- * page's own "your record could not be fetched" notice. The scenario count three fields down in the
- * same component already did the right thing: "not answering is a fine answer".
- *
- * **It went stale after the reader changed it.** Pressing reset produced "Done. Your units are back
- * to 2000" while the badge went on reading `3,308 UNITS` until a reload. The header read the
- * session once, on mount, and nothing told it the number had moved.
- *
- * ## What is asserted
- *
- * The signal that fixes the second defect is a real, importable function, so it is tested for real:
- * `subscribeToAcceptedMutations` must fire after a mutation the API accepted, and must NOT fire for
- * a read or for a mutation that failed — a header that re-read the session on a failed reset would
- * be busywork, and one that fired on every GET would re-read the session on every page.
- *
- * The badge itself lives in a React component with no renderer in this package, so its half is
- * checked at source level: the branch that let the fallback stand is gone, and there is a rendering
- * path for "no figure" that does not print one.
- *
- * `window` is defined before the module is imported because both halves of the signal are
- * browser-only by construction — a server render must not broadcast, since this module's state is
- * per process and one request's listeners would otherwise be invoked by another's.
+ * The units figure in the header must never be invented, after a failed session read or an accepted
+ * reset. The badge has no renderer here, so its half is checked at source level.
  */
 
 import assert from 'node:assert/strict';
@@ -39,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const read = (...parts: readonly string[]): string => readFileSync(join(SRC, ...parts), 'utf8');
 
-// Before the import, not after: `API_ORIGIN` is resolved at module evaluation from the same test.
+// Defined before the import, because the signal is browser-only and `API_ORIGIN` resolves at evaluation.
 Object.defineProperty(globalThis, 'window', {
   value: { location: { origin: 'http://localhost' } },
   configurable: true,
@@ -48,7 +21,6 @@ Object.defineProperty(globalThis, 'window', {
 
 const { apiGet, apiSend, subscribeToAcceptedMutations } = await import('../src/lib/api.ts');
 
-/** Replaces `fetch` for one call and puts the real one back afterwards. */
 async function withFetch<T>(reply: () => Response, run: () => Promise<T>): Promise<T> {
   const original = globalThis.fetch;
   globalThis.fetch = (() => Promise.resolve(reply())) as typeof globalThis.fetch;
@@ -76,8 +48,6 @@ describe('the shell is told when the reader changes something', () => {
     } finally {
       unsubscribe();
     }
-    // This is the whole of P2-C: without it the header keeps the figure it read on mount, and the
-    // page beside it prints a different one.
     assert.equal(fired, 1, 'A reset the API accepted must reach the header.');
   });
 
@@ -110,8 +80,7 @@ describe('the shell is told when the reader changes something', () => {
     } finally {
       unsubscribe();
     }
-    // The subscriber's response is to re-read the session. Firing on reads would make that a loop,
-    // and would put a second session request behind every page the reader opens.
+    // The subscriber re-reads the session, so firing on reads would loop.
     assert.equal(fired, 0, 'A GET changes nothing, so there is nothing to re-read.');
   });
 
@@ -140,8 +109,7 @@ describe('the shell is told when the reader changes something', () => {
       () => json({ units: 2000 }),
       () => apiSend('POST', '/api/v1/me/units/reset', {}, { csrfToken: 'token' }),
     );
-    // The header unsubscribes on unmount, before it aborts its controller. A listener left behind
-    // would re-read the session into a component that is gone.
+    // A listener left behind would re-read the session into a component that is gone.
     assert.equal(fired, 0);
   });
 });
@@ -154,10 +122,7 @@ describe('the units badge shows no figure when it has not been told one', () => 
     .join('\n');
 
   it('no longer lets a failed session read leave the bundled figure standing', () => {
-    // Scoped to the session read. The same early return is CORRECT in the scenario-count effect
-    // below it — there, "not answering" leaves the badge absent rather than leaving a stale number
-    // on screen — and that sibling is asserted separately, because the fix must not be applied by
-    // deleting the thing that was already right.
+    // Scoped to the session read. The same early return is correct in the scenario-count effect.
     assert.doesNotMatch(
       code,
       /fetchSession\([\s\S]{0,400}?if \(!result\.ok\) return;/u,
@@ -170,23 +135,18 @@ describe('the units badge shows no figure when it has not been told one', () => 
   it('renders a pill with no number in it, rather than a number nobody confirmed', () => {
     assert.match(code, /units\.state === 'unknown' \? \(\s*<UnitsUnknown \/>/u);
     assert.match(header, /units offline/u);
-    // The guardrail is that the word "units" is always present and a currency symbol never is.
-    // Dropping the figure satisfies it; dropping the pill would not.
+    // The word "units" is always present and a currency symbol never is, so the pill must stay.
     assert.match(header, /prl-units__word prl-label">units/u);
   });
 
   it('distinguishes a confirmed figure from the one it was seeded with', () => {
-    // `assumed` and `known` render the same pill today, and the distinction is still worth keeping:
-    // it is what stops the next edit reading a number without first establishing where it came from.
+    // `assumed` and `known` render the same pill, but the type forces a reader to know the figure's origin.
     assert.match(code, /state: 'known'; readonly units: number/u);
     assert.match(code, /state: 'assumed'; readonly units: number/u);
     assert.match(code, /state: 'unknown'/u);
   });
 
   it('leaves the sibling that was already honest alone', () => {
-    // The scenario count is the precedent this fix followed, and the audit named it as the thing
-    // the units badge should imitate. A "cleanup" that gave it a fallback would undo the one part
-    // of this component that never lied.
     assert.match(code, /if \(cachedScenarioCount !== null\) return;/u);
     assert.match(
       code,
@@ -198,8 +158,7 @@ describe('the units badge shows no figure when it has not been told one', () => 
 
   it('re-reads the session when a mutation is accepted, instead of trusting the mutation', () => {
     assert.match(code, /subscribeToAcceptedMutations\(readSession\)/u);
-    // Deliberately NOT reading `units` off the reset response. One authority for the figure is what
-    // makes it impossible for two places on one screen to disagree.
+    // One authority for the figure, so two places on one screen cannot disagree.
     assert.doesNotMatch(code, /ResetUnitsResponse/u);
   });
 });

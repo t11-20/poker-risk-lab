@@ -1,31 +1,7 @@
 /**
- * The sentence under a quiz verdict may not claim a recording that did not happen.
- *
- * ## What went wrong
- *
- * `POST /content/quizzes/:id/attempt` answers 200 to a caller with no session and stores nothing —
- * deliberately, because the app is guest-first — and a signed-out learner is this product's
- * DEFAULT state, since nothing creates a session until somebody opens a table. The reply carried
- * no signal about attribution, so `submitQuizAttempt` mapped every success to `state: 'live'` and
- * the panel printed the one sentence reserved for a stored answer:
- *
- *   > …and the one it recorded as a question you have answered.
- *
- * `prl.quiz_attempts` held nothing of theirs, and `GET /me/progress` answered them
- * `401 not_authenticated`. The module comment on `quiz-attempts.ts` claimed it "never claims a
- * recording that failed", which was true of an outage and false of the ordinary case.
- *
- * ## What is asserted
- *
- * The mapping, and the sentences. Both matter, and the second is the one a refactor loses: a state
- * union that distinguishes the two outcomes buys nothing if both states print the same string, so
- * the strings are checked for the claim they must not make as well as for the state they must
- * describe. The wording is deliberately NOT pinned word for word — that would make this a
- * change-detector — only the claims are: which sentences may say "recorded" as something that
- * happened, and which must say that nothing was.
- *
- * `lesson-reads.ts` is the sibling that already got this right, and it is read here rather than
- * described, so the two cannot drift into two different answers to the same question.
+ * The sentence under a quiz verdict may not claim a recording that did not happen. The attempt route
+ * answers 200 to a caller with no session and stores nothing, and signed-out is the default state.
+ * The claims are pinned, not the exact wording, so this is not a change-detector.
  */
 
 import assert from 'node:assert/strict';
@@ -45,13 +21,7 @@ import {
 
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
-/**
- * The real mapping `submitQuizAttempt` uses, driven without the two fetches around it.
- *
- * `verdictFor` is exported for exactly this — the same way `lesson-reads.ts` exports `outcomeFor`
- * — so the conditional that decides what the screen may claim is tested rather than re-described.
- * `y2-quiz-attempt-recording.test.ts` in `apps/api` drives the route that produces the reply.
- */
+/** Drives `verdictFor`, the real mapping `submitQuizAttempt` uses, without the fetches around it. */
 const GRADED: Omit<QuizAttemptResponse, 'recorded'> = {
   correct: true,
   explanation: 'Because the pot lays 3 to 1.',
@@ -65,9 +35,7 @@ describe('a reply that stored nothing becomes a verdict that says so', () => {
   });
 
   it('keeps the server’s own comparison in both, because both were graded by the server', () => {
-    // The defect this guards against is the natural over-correction: treating "not recorded" as a
-    // failure and falling back to the browser's comparison. The server graded it either way, and
-    // its answer is the one that must be shown.
+    // The natural over-correction falls back to the browser's comparison. The server graded it either way.
     const anonymous = verdictFor({ ...GRADED, correct: false, recorded: false });
     assert.deepEqual(resolvedVerdict(anonymous, true), { matched: false, source: 'anonymous' });
 
@@ -76,8 +44,7 @@ describe('a reply that stored nothing becomes a verdict that says so', () => {
   });
 
   it('exposes the graded figure for an anonymous answer, not only for a recorded one', () => {
-    // `QuizRunner` shows the value the comparison was made against. A `state === 'live'` test there
-    // would silently show a signed-out learner the browser's figure while the server's sat unread.
+    // A `state === 'live'` test in `QuizRunner` would show a signed-out learner the browser's figure.
     for (const recorded of [true, false]) {
       const graded = gradedAnswer(verdictFor({ ...GRADED, recorded }));
       assert.ok(graded !== null, `a graded reply must be readable when recorded=${recorded}`);
@@ -90,7 +57,6 @@ describe('a reply that stored nothing becomes a verdict that says so', () => {
 });
 
 describe('the sentence beside the verdict', () => {
-  /** Every source has a sentence, and none of them is blank. */
   const SOURCES: readonly VerdictSource[] = ['server', 'anonymous', 'local', 'pending'];
 
   it('exists for every source a verdict can resolve to', () => {
@@ -102,8 +68,6 @@ describe('the sentence beside the verdict', () => {
   });
 
   it('only claims a recording in the one state where a row exists', () => {
-    // The precise failure: before the fix there was no `anonymous` source, so this sentence — the
-    // one that says the answer was recorded — was printed for every signed-out learner.
     assert.match(VERDICT_SOURCE_NOTE.server, /Recorded on your record as a question you have answered/u);
 
     for (const source of ['anonymous', 'local'] as const) {
@@ -123,20 +87,14 @@ describe('the sentence beside the verdict', () => {
 
   it('tells an anonymous learner what a session would change, without demanding one', () => {
     const note = VERDICT_SOURCE_NOTE.anonymous;
-    // Said once, at the point it matters, and it names the remedy rather than only the problem —
-    // the same three parts as the sibling sentence in `lesson-reads.ts`.
-    // The remedy was "a guest session in one request"; "in one request" is how the API sees it, not
-    // the learner (UX audit at 6b3886e, M5). The claim pinned is the same: a table starts one, now.
     assert.match(note, /no guest session to keep it on/u);
     assert.match(note, /opening a table starts a guest session straight away/u);
     assert.match(note, /no email and no password/u);
-    // …and it is not a demand. The product is guest-first on purpose.
+    // The product is guest-first on purpose, so this is not a demand.
     assert.doesNotMatch(note, /sign in|log in|create an account|you must|you need to/iu);
   });
 
   it('says the same thing the lesson-read note says, because it is the same fact', () => {
-    // Two endpoints, one rule. If these ever diverge, one of the two screens is describing a
-    // different product from the other.
     const lesson = lessonReadNote({ state: 'anonymous' });
     assert.match(lesson, /no guest session to keep it on/u);
     assert.match(VERDICT_SOURCE_NOTE.anonymous, /no guest session to keep it on/u);
@@ -145,10 +103,8 @@ describe('the sentence beside the verdict', () => {
 
 describe('the panel is wired to the state rather than to "the call succeeded"', () => {
   it('never reads the graded reply through a bare state === live test', () => {
-    // A source-level guard, and it is here because it is the exact shape of the reintroduction:
-    // `'live'` used to be the only graded state, so every `=== 'live'` in the component meant
-    // "graded". It now means "graded AND recorded", and each such test would quietly drop a
-    // signed-out learner onto the browser's own figures.
+    // `=== 'live'` now means "graded AND recorded", so each such test would drop a signed-out learner
+    // onto the browser's own figures.
     const runner = readFileSync(join(SRC, 'components', 'QuizRunner.tsx'), 'utf8');
     const prose = runner
       .split('\n')

@@ -1,21 +1,6 @@
 /**
- * "Deal me in": one press from an empty page to a dealt hand, each step sent once.
- *
- * ## Why these exist
- *
- * `/play` took three presses to reach a first decision — "Open the table", "Take seat 1", "Deal the
- * next hand" — with an empty "Waiting for the table." block between them. `start` now asks for the
- * seat and the deal itself, which turns two intents the reader used to send by hand into intents
- * this page sends on its own. Each of those is a request a server rate-limits and refuses, so what
- * these hold is the part that can go wrong without anybody seeing it: a second `sit` on every
- * whole-state frame, a deal re-sent by a reconnect, a refusal answered by asking again.
- *
- * ## How they drive it
- *
- * There is no renderer in this repository (ADR 0008), so the hook's effect is reproduced here as
- * what it is: after every frame the reducer commits, `dealInStep` is asked for the next step and
- * any send is recorded. The frames are the protocol's own, through the real `tableReducer`, so a
- * `notice` is a real `error` frame and a seat is a real roster.
+ * "Deal me in": one press to a dealt hand, each step sent once, through whole-state frames, reconnects
+ * and refusals. With no renderer (ADR 0008) the hook's effect is reproduced over the real `tableReducer`.
  */
 
 import assert from 'node:assert/strict';
@@ -100,7 +85,6 @@ function refusal(code: string, message: string): WsServerMessage {
   return { type: 'error', requestId: 'sit-1', error: { code, message } } as unknown as WsServerMessage;
 }
 
-/** The hook's state and effect, one commit at a time. */
 class Table {
   table: TableState = EMPTY_TABLE_STATE;
   step: DealIn;
@@ -153,8 +137,7 @@ describe('Deal me in, at the bot table `start` builds', () => {
     for (let revision = 1; revision <= 5; revision += 1) table.frame(state(revision, null, null));
     assert.equal(table.sent.length, 1, 'five frames before the seat is confirmed asked for it once');
 
-    // The socket drops before the seat is confirmed. The chain ends rather than wait: the seat the
-    // server never confirmed is the reader's to ask for again, with the button that is back.
+    // The socket drops before the seat is confirmed. The chain ends, and the reader asks again by hand.
     table.live = false;
     table.settle();
     table.live = true;
@@ -219,17 +202,13 @@ describe('Deal me in, at the bot table `start` builds', () => {
     assert.deepEqual(table.sent, [{ kind: 'deal' }]);
   });
 
-  // Review on PR #27. A reader busted at this room, reset their units on /record and came back to
-  // "Deal me in", which reuses the room they are seated at. Until the server restacked a live seat
-  // on reset (PR #25) the roster still said 0 there, and this chain dealt a hand between the bots,
-  // whose settlement wrote the 0 back over the reset.
+  // A reader seated at 0 who reset elsewhere would otherwise be dealt a bots-only hand whose
+  // settlement wrote the 0 back over the reset.
   it('does not deal for a reader the roster shows seated with nothing in front of them', () => {
     const table = new Table('wantSeat');
     table.frame(welcome(0)).frame(state(1, 0, null, 0));
     assert.deepEqual(table.sent, [], 'a deal here deals only the bots');
     assert.equal(table.step, 'off', 'the chain ends, so the manual buttons and the notice come back');
-    // The test above is the same room with 1,000 at the seat — what the frame says once a reset
-    // has reached it — and there the chain deals.
   });
 
   it('waits for the socket instead of sending into a connection that is not live', () => {
@@ -243,8 +222,7 @@ describe('Deal me in, at the bot table `start` builds', () => {
 
 describe('Deal me in is off everywhere `start` did not ask for it', () => {
   it('sends nothing at a table joined by invite code, or built for friends', () => {
-    // `joinByInviteCode`, `startPrivateTable` and `startFreshTable` all set `off`. At somebody
-    // else's table seat 1 is the owner's and dealing is theirs to ask for.
+    // At somebody else's table seat 1 is the owner's, and dealing is theirs to ask for.
     const table = new Table('off');
     table
       .frame(welcome(null))

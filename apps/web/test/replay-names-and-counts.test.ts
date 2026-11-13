@@ -1,18 +1,7 @@
 /**
- * A hand replay says one thing about the reader, one count of decisions, and a result in words.
- *
- * ## The inconsistencies this is written against
- *
- * The audit at 6b3886e, on a live hand (`shots/d-dark-replay-0.png`, `d-dark-replay-1.png`):
- *
- *  - the summary said "DECISIONS 13" while the transport said "STEP 2 / 14": the transport counted
- *    the terminal "settled" frame as a step, the summary counted `review.decisions`;
- *  - the reader's plate said "Guest 7E37B1 (you)" while the timeline beside it said "You";
- *  - a net of zero read "0 units LEVEL" in the hand list, the summary and the result panel.
- *
- * The fixtures name the reader "You" already, which is why none of these showed on the demo replay;
- * the cases below give the reader the API's guest name, as a live hand does. The components cannot
- * be loaded under `node --test`, so their wiring is held to their source.
+ * A hand replay says one thing about the reader, one count of decisions, and a result in words. The
+ * fixtures already name the reader "You", so the cases give the reader the API's guest name, as a live
+ * hand does. The components cannot load under `node --test`, so their wiring is held to source.
  */
 
 import assert from 'node:assert/strict';
@@ -47,7 +36,6 @@ describe('the reader is "You" everywhere in a replay', () => {
       const replay = buildHandReplay(live);
       assert.notEqual(replay.viewerSeat, null);
       assert.equal(replay.seatNames[replay.viewerSeat ?? -1], 'You');
-      // Everybody else keeps the name the server gave them.
       for (const seat of live.seats) {
         if (seat.seat !== replay.viewerSeat) assert.equal(replay.seatNames[seat.seat], seat.displayName);
       }

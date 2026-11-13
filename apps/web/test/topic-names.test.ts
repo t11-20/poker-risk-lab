@@ -1,13 +1,6 @@
 /**
- * A topic has one name on every screen.
- *
- * The Lab's filter and chips called `positions-and-blinds` "Positions and blinds"; Learn, the lesson
- * eyebrow and the glossary called it "Position and the blinds" (UX audit at 6b3886e, Minor 4). Each
- * screen had its own map, so nothing made them agree. Both now read `TOPIC_LABELS` in
- * `@prl/contracts`, and this compares what the two web helpers actually return for every topic.
- *
- * Negative control: the old `lab-labels.ts` put back fails "agree on every topic" on
- * `positions-and-blinds`.
+ * A topic has one name on every screen. The Lab and Learn each had their own map; both now read
+ * `TOPIC_LABELS` in `@prl/contracts`, and this compares what the two web helpers return.
  */
 
 import assert from 'node:assert/strict';

@@ -18,8 +18,7 @@ const STATUSES: readonly CoachBodyStatus[] = ['idle', 'loading', 'ready', 'error
 
 describe('what the Coach panel holds', () => {
   it('says the hand is over beside a finished hand, even when it was handed a report (REGRESSION)', () => {
-    // `/play?state=complete` handed the stage the flop decision's report, and the panel showed it
-    // beside a settled table.
+    // `/play?state=complete` once showed the flop decision's report beside a settled table.
     assert.equal(coachBodyFor('complete', true), 'hand-over');
     assert.equal(coachBodyFor('complete', false), 'hand-over');
   });
@@ -89,8 +88,7 @@ describe('what the panel says when there is no analysis mid-hand (audit at 6b388
     assert.equal(readerHasDecisions(null), false);
   });
 
-  // `LiveTable.tsx` imports `@prl/ui`, which this runner cannot load, so the wiring is read from the
-  // source — with the predicate run against the old line as well, where it must fail.
+  // `LiveTable.tsx` imports `@prl/ui`, which this runner cannot load, so the wiring is read from source.
   const wired = (source: string): boolean =>
     /coachUnavailableReason: noAnalysisReason\(live\.table\.view\)/u.test(source) &&
     /readerHasDecisions\(table\.view\) \? \(/u.test(source);

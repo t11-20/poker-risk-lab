@@ -1,23 +1,6 @@
 /**
- * Position badges on the two screens that draw a table from something other than a live hand.
- *
- * Both build their own `PlayerView` and both call `positionLabels` to fill in `SeatView.position`,
- * which is the badge a learner reads next to each seat. Neither had a test, and both were labelling
- * the wrong seats:
- *
- *   - `hand-replay.ts` let `positionLabels` derive the blinds from a button it had itself guessed.
- *     The dead-button rule (`packages/poker-engine/src/positions.ts`) made that wrong: the big
- *     blind advances by one live player per hand, the small blind can be DEAD, and `button + 1` is
- *     then not the small blind. On a hand where the previous big blind had left, the review page
- *     badged a player who posted nothing 'SB', badged another who posted nothing 'BB', gave the
- *     seat that actually posted the big blind no badge at all, and printed the table's stakes as
- *     10/10 because the only forced bet it could see was both the smallest and the largest.
- *   - `scenario-view.ts` sized the table by the NUMBER of players instead of the highest seat
- *     index, so every walk round the table was taken modulo a table too small to contain the seats
- *     it was walking. Fourteen of the published scenarios rendered with no position badges at all.
- *
- * Both are read as a learner reads them — through the built `PlayerView`, not through the engine —
- * because the defect was never in `positionLabels` itself.
+ * Position badges on the replay and the Lab, which build their own `PlayerView`. Under the dead-button
+ * rule `button + 1` is not always the small blind, and a table is sized by its highest seat index.
  */
 
 import assert from 'node:assert/strict';
@@ -26,10 +9,6 @@ import { scenarioById, scenarios } from '@prl/content';
 import type { HandReviewDecision, HandReviewResponse, HandReviewSeat } from '@prl/contracts';
 import { buildHandReplay } from '../src/lib/hand-replay.ts';
 import { scenarioToPlayerView } from '../src/lib/scenario-view.ts';
-
-// ---------------------------------------------------------------------------
-// A review payload, as the server would send it
-// ---------------------------------------------------------------------------
 
 interface SeatFixture {
   readonly seat: number;
@@ -66,8 +45,6 @@ function decision(
     potBefore,
     wasAutomatic: false,
     automaticReason: null,
-    // Null throughout: these hands belong to nobody in particular, and the labels under test are
-    // drawn for every seat regardless of whose review it is.
     analysis: null,
   };
 }
@@ -108,14 +85,7 @@ function labelsOf(review: HandReviewResponse): Record<number, string | null> {
   return badges;
 }
 
-/**
- * Four-handed at seats 0–3, blinds 5/10, then the player who paid the big blind stands up.
- *
- * The dead-button rule then deals seats 0, 1 and 3 with the button at seat 1, NO small blind
- * (its chair, seat 2, is empty) and the big blind at seat 3. Seat 0 opens, seat 1 folds, seat 3
- * takes it down: exactly the shape `apps/api/test/x3-dead-blind-review.test.ts` deals through the
- * engine, written out here as the payload that reaches the browser.
- */
+/** Four-handed, 5/10, the last big blind stood up: button 1, no small blind (seat 2 empty), big blind 3. */
 function deadSmallBlindReview(): HandReviewResponse {
   return reviewOf(
     [
@@ -201,10 +171,6 @@ describe('the hand replay badges the seats that actually posted the blinds', () 
   });
 });
 
-// ---------------------------------------------------------------------------
-// Scenario Lab
-// ---------------------------------------------------------------------------
-
 describe('every published scenario renders a position badge for every seat', () => {
   it('labels all of them', () => {
     const unlabelled: string[] = [];
@@ -224,8 +190,7 @@ describe('every published scenario renders a position badge for every seat', () 
   });
 
   it('reads two players at seats 3 and 5 as a six-max table, not as a two-seat one', () => {
-    // Sized by the count of players this is a two-chair table, and neither seat 3 nor seat 5 exists
-    // on it — `assignBlinds` threw and the whole scenario rendered unlabelled.
+    // Sized by player count this is a two-chair table, on which seats 3 and 5 do not exist.
     const scenario = scenarioById('rk-low-spr-commit-top-pair');
     assert.ok(scenario !== null);
     const table = scenarioToPlayerView(scenario);
@@ -238,8 +203,7 @@ describe('every published scenario renders a position badge for every seat', () 
   });
 
   it('agrees with what a scenario says its own seats put in', () => {
-    // The scenario states `committedThisStreet` for seat 5 as one big blind, which is the big
-    // blind's own post. A table walked modulo four chairs badged seats 2 and 3 as the blinds.
+    // Seat 5 committed one big blind. Walked modulo four chairs, seats 2 and 3 got the blinds.
     const scenario = scenarioById('rk-when-survival-outweighs-chip-ev');
     assert.ok(scenario !== null);
     const committed = scenario.committedThisStreet ?? {};

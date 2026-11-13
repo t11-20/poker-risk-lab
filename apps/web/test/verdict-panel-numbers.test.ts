@@ -1,25 +1,8 @@
 /**
- * The Verdict panel must show the number its verdict was decided on.
- *
- * ## The failure this is written against
- *
- * `ScenarioStage` rendered three figures — the chosen action's EV, the best row on the table, and
- * the tolerance — and the only natural reading of those three together is "consistent when the
- * best row minus mine fits inside the tolerance".
- *
- * That is not the rule. `judgeConsistency` asks whether the action beats FOLDING: a non-fold
- * candidate is defensible at `ev >= -marginUnits`, and a fold is judged against the best row that
- * does not rest on an assumed fold frequency. So a learner could be shown a chosen +20.6, a best
- * row of +51.4, a tolerance of 10 and the words "consistent with the analysis", with nothing on
- * screen that could reconcile them.
- *
- * `@prl/poker-math` already published both missing numbers — `shortfallUnits` and `measuredBestEv`,
- * the latter with a comment saying it exists "so a caller can show the reader the number the
- * verdict used rather than a different one". The web layer dropped both.
- *
- * The first assertion below is the important one: it proves the misleading case is REAL in shipped
- * analysis rather than hypothetical, and fails if no such case exists — because a guard written
- * against a case that cannot occur is decoration.
+ * The Verdict panel must show the number its verdict was decided on. `judgeConsistency` asks whether
+ * an action beats FOLDING, so the chosen EV, the best row and the tolerance alone can read as a
+ * contradiction. The first test proves such a case exists in shipped analysis, so the guard is not
+ * written against a case that cannot occur.
  */
 
 import assert from 'node:assert/strict';
@@ -43,7 +26,6 @@ describe('the Verdict panel can explain its own verdict', () => {
         judged += 1;
         const bestRowGap = verdict.bestEv - verdict.chosenEv;
         if (verdict.consistent && bestRowGap > verdict.toleranceUnits) {
-          // The three old numbers contradict each other here. The two new ones must not.
           assert.equal(
             verdict.shortfallUnits,
             0,

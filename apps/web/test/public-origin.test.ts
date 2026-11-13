@@ -1,34 +1,13 @@
 /**
- * Regression test: the origin the proxy presents to the API must be the PUBLIC one.
- *
- * ## The defect
- *
- * `proxy.ts` mints a guest by calling the API server-to-server, and the API exact-matches the
- * `Origin` header against its `PUBLIC_WEB_ORIGIN` allowlist. The proxy sent
- * `request.nextUrl.origin` — the address the container itself was reached at. Behind a reverse
- * proxy that is not the browser's origin, so the API answered `403 cross-origin POST from an
- * origin that is not allowlisted` and guest bootstrap was broken on every real deployment.
- *
- * Measured before the fix, in a production-configured staging stack: with `Host`,
- * `X-Forwarded-Proto` and `X-Forwarded-Host` all set to `localhost:8443`, the web container
- * still sent `origin: https://localhost:3000`.
- *
- * It passed unnoticed because the development stack publishes the proxy on port 3000 and the web
- * container listens on 3000, so the wrong value and the right value happened to coincide. Every
- * case below therefore uses a public origin that DIFFERS from the request's own — the coincidence
- * is the thing that hid this, so no case is allowed to reproduce it.
- *
- * ## Would this fail if the behaviour broke?
- *
- * Yes. Reverting `publicOriginFor` to return `input.requestOrigin` fails 7 of the eleven cases
- * below. That was run, not assumed.
+ * The origin the proxy presents must be the PUBLIC one, which the API exact-matches against
+ * `PUBLIC_WEB_ORIGIN`. Dev publishes and listens on 3000, which hid the bug, so no case here lets the
+ * public origin equal the request's. Reverting `publicOriginFor` fails 7 of 11.
  */
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { normalisePublicOrigin, publicOriginFor } from '../src/lib/public-origin.ts';
 
-/** Headers as the proxy sees them, without needing a `NextRequest`. */
 function headers(entries: Readonly<Record<string, string>> = {}): { get(name: string): string | null } {
   const map = new Map(Object.entries(entries).map(([key, value]) => [key.toLowerCase(), value]));
   return { get: (name) => map.get(name.toLowerCase()) ?? null };
@@ -66,9 +45,7 @@ describe('the origin presented to the API', () => {
   });
 
   it('tolerates a trailing slash, which the API refuses at boot but which is harmless here', () => {
-    // The API compares raw strings, so a trailing slash in ITS allowlist matches nothing and it
-    // refuses to start. This module compares nothing — it builds a value — so normalising through
-    // `URL.origin` makes the slash a non-event rather than a silent fallback to the wrong origin.
+    // The API compares raw strings and refuses a trailing slash at boot. Here `URL.origin` normalises it.
     const origin = publicOriginFor({
       env: { PUBLIC_WEB_ORIGIN: 'https://app.example/' },
       headers: headers(),
@@ -87,8 +64,7 @@ describe('the origin presented to the API', () => {
   });
 
   it('takes the FIRST forwarded host, which is the hop nearest the browser', () => {
-    // Taking the last would name whichever proxy is nearest to us — the internal address this
-    // module exists to stop sending.
+    // The last would name the proxy nearest to us, the internal address this module exists to stop sending.
     const origin = publicOriginFor({
       env: {},
       headers: headers({
@@ -136,8 +112,7 @@ describe('normalisePublicOrigin refuses what would match nothing', () => {
   });
 
   it('refuses the shapes that silently match nothing', () => {
-    // Each of these is a real way an allowlist entry has been got wrong before: they parse as
-    // URLs, so nothing complains, and then no comparison ever succeeds.
+    // These parse as URLs, so nothing complains, and then no comparison ever succeeds.
     for (const bad of [
       'https://app.example/path',
       'https://app.example?a=1',

@@ -1,19 +1,8 @@
 /**
- * `/record` is reachable from the navigation, without becoming a sixth numbered step.
- *
- * ## The defect this exists for
- *
- * The audit at 6b3886e: `/record` holds the reader's progress, the units reset and account
- * deletion, and it was in neither the header nor the menu sheet. On every page the only way in was
- * a phrase inside the footer's prose ("reset to the starting amount whenever you like"), and the
- * "1,000 UNITS" figure in the bar was not a link.
- *
- * ## What is held here
- *
- * The bar's figure and the explanation's reset both lead to it; it is listed, after the five and
- * unnumbered, in the sheet, the footer's site map and the 404 page. That the five stay five is
- * `legal-pages.test.ts`'s assertion and is not repeated here. The components import CSS or Next and
- * cannot be loaded under `node --test`, so they are held to their source.
+ * `/record` is reachable from the navigation without becoming a sixth numbered step: from the bar's
+ * figure, the explanation's reset, the sheet, the footer's site map and the 404 page. That the five
+ * stay five is `legal-pages.test.ts`'s assertion. The components import CSS or Next and cannot load
+ * under `node --test`, so they are held to their source.
  */
 
 import assert from 'node:assert/strict';
@@ -46,9 +35,9 @@ describe('the reader’s record is in the navigation', () => {
     assert.ok(badge !== undefined, 'no <UnitsBadge> in the header');
     assert.match(badge, /recordHref=\{RECORD_DESTINATION\.href\}/u);
     assert.match(badge, /resetHref=\{RECORD_DESTINATION\.href\}/u);
-    // A client navigation, not a document load from the one control that is on every page.
+    // A client navigation, not a document load, from the one control that is on every page.
     assert.match(badge, /linkAs=\{Link\}/u);
-    // What closes the explanation when the reader moves on: the badge has no router of its own.
+    // The badge has no router of its own, so the route closes the explanation when the reader moves on.
     assert.match(badge, /route=\{pathname\}/u);
   });
 
@@ -64,7 +53,7 @@ describe('the reader’s record is in the navigation', () => {
       assert.ok(five >= 0, `${path} no longer renders the five; this assertion needs updating`);
       assert.ok(record > five, `${path} does not link RECORD_DESTINATION after the five`);
       assert.match(source, /\{RECORD_DESTINATION\.label\}/u);
-      // Unmarked: the slot is there for alignment and holds no suit (4.0; it was a blank index).
+      // The slot holds no suit and is there for alignment.
       assert.match(source, /<SuitMark area=\{null\}/u);
     });
   }
@@ -72,8 +61,6 @@ describe('the reader’s record is in the navigation', () => {
 
 describe('the destinations are described in a learner’s words', () => {
   it('does not describe the opponents as "trait vectors"', () => {
-    // Seen in the menu, the footer and the 404 page: a data-structure term on the one line a
-    // newcomer reads to decide whether to open the section.
     for (const destination of [...NAV_DESTINATIONS, RECORD_DESTINATION]) {
       assert.doesNotMatch(destination.summary, /vector/iu, destination.href);
     }

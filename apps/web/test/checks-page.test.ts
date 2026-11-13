@@ -1,9 +1,6 @@
 /**
- * `/checks` names a test or a document behind every claim, and each one has to exist.
- *
- * The list moved here from the home page in the 4.0 re-identity. Its whole argument is "a claim
- * nobody can check is an assertion", so a command that was renamed or a document that was moved
- * would turn the page into exactly that, silently: it is prose, and nothing else reads it.
+ * `/checks` names a test or a document behind every claim, and each one has to exist. The page is
+ * prose that nothing else reads, so a renamed command would go stale silently.
  */
 
 import assert from 'node:assert/strict';

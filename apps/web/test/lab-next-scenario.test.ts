@@ -1,14 +1,7 @@
 /**
- * "Next scenario" must point somewhere for every scenario but the last.
- *
- * ## The failure this is written against
- *
- * `nextHrefAfter` on the scenario page looked the current id up in `LAB_SCENARIO_SUMMARIES`, the
- * bundled fixture's six scenarios, whose ids (`flop-flush-draw-price`, …) are not ids the API
- * serves. So for every one of the thirty-six real scenarios the lookup missed, the function returned
- * null, and the "Next scenario" button never rendered — measured on the running app at commit
- * 308fadf: zero `Next scenario` links after committing on `fl-small-straight-beats-trips`, at 360
- * and at 1440.
+ * "Next scenario" must point somewhere for every scenario but the last. The page once looked the id
+ * up in the six bundled fixtures, whose ids the API does not serve, so the button never rendered for
+ * any of the 36 real scenarios.
  */
 
 import assert from 'node:assert/strict';

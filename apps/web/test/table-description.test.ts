@@ -1,13 +1,8 @@
 /**
  * `/play` says who is at the table the reader joined, and its lede claims nothing the table is not.
- *
- * Audit at 308fadf: the page read "Six-handed table… A private table against five bots" over a
- * private table with two bots, the reader and three empty chairs, whose room line said "3 at the
- * table". The lede is rendered before any room exists, so it now says what is true of every table
- * the page can seat a reader at, and the room line says which one this is.
- *
- * The rooms below are the three this page builds or reaches: `BOT_TABLE_REQUEST` as created,
- * `FRIENDS_TABLE_REQUEST` as created, and a friend's private table after a second person joined.
+ * The lede renders before any room exists, so it says what is true of every table, and the room line
+ * says which one this is. The rooms are `BOT_TABLE_REQUEST`, `FRIENDS_TABLE_REQUEST`, and a friend's
+ * table after a second person joined.
  */
 
 import assert from 'node:assert/strict';

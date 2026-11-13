@@ -1,20 +1,8 @@
 /**
- * A card on `/legends` points at the page's universal disclaimer instead of repeating it, and that
- * is the ONLY thing it may stop printing.
- *
- * ## Why this changed
- *
- * Measured on the running build at 360px: the universal disclaimer was printed in full thirteen
- * times — once above the grid and once per card — for 5,202 of the page's 19,174px (27%), and the
- * first "Play this style" sat at y=3,422, 5.3 screens down. At 768 the same blocks were 2,562px.
- *
- * ## What must not change
- *
- * ADR 0011: a profile is never shown without its framing. So these assert the narrow shape of the
- * exception — an entry is replaced only when it is byte-identical to the text already printed above,
- * it is replaced by a visible pointer rather than by nothing, and every entry specific to a card
- * (attribution, course) is still printed in full. The real disclaimer constants are used rather
- * than placeholders, because the property is about those strings.
+ * A card on `/legends` points at the page's universal disclaimer instead of repeating it (it was 27%
+ * of the page at 360px), and that is the ONLY thing it may stop printing. ADR 0011: a profile is never
+ * shown without its framing, so an entry is replaced only when byte-identical to the text above, by a
+ * visible pointer. The real disclaimer constants are used, because the property is about those strings.
  */
 
 import assert from 'node:assert/strict';

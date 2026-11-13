@@ -1,11 +1,8 @@
 /**
- * A slow navigation says the press was taken, on the page it was pressed on.
- *
- * The audit at 6b3886e: a hand replay took 1722–1839 ms to first byte, and a router click from
- * `/legends` to `/legends/compare` left the old page frozen for about 750 ms, with nothing on screen
- * to say anything had happened. `loading.tsx` is refused by `app-shell-streaming.test.ts`, for
- * reasons that still hold, so the feedback is `NavigationPending` in the shell. Its decisions are
- * driven here; its wiring cannot be (no DOM under `node --test`, ADR 0008) and is held to source.
+ * A slow navigation says the press was taken, on the page it was pressed on (a replay took up to
+ * 1839 ms to first byte). `loading.tsx` is refused by `app-shell-streaming.test.ts`, so the feedback
+ * is `NavigationPending` in the shell. Its wiring has no DOM under `node --test` (ADR 0008) and is
+ * held to source.
  */
 
 import assert from 'node:assert/strict';
@@ -24,12 +21,10 @@ const read = (path: string): string => readFileSync(new URL(`../src/${path}`, im
 
 describe('which presses start the message', () => {
   it('a replay row and the compare link, the two the audit timed (REGRESSION)', () => {
-    // A plain anchor on the hand list: the browser loads the replay document.
     assert.equal(
       shouldShowPending({ destination: at('/review/hand_1'), current: at('/review'), documentLoad: true }),
       true,
     );
-    // A `Link` on /legends: the router takes it, and the pathname changes when it lands.
     assert.equal(
       shouldShowPending({
         destination: at('/legends/compare?profiles=a,b'),
@@ -52,7 +47,6 @@ describe('which presses start the message', () => {
   });
 
   it('a GET form whose action is the page it is on, once its fields are the query (REGRESSION)', () => {
-    // The compare picker on a bare /legends/compare: the action alone equals the current URL.
     const current = at('/legends/compare');
     const destination = formDestination('/legends/compare', current.href, [
       ['difficulty', 'standard'],
@@ -61,7 +55,7 @@ describe('which presses start the message', () => {
     ]);
     assert.equal(destination.search, '?difficulty=standard&profiles=calling-station&profiles=maniac');
     assert.equal(shouldShowPending({ destination, current, documentLoad: true }), true);
-    // The action alone is what the first version used, and it said "same page".
+    // The action alone equals the current URL, which is what the first version compared.
     assert.equal(
       shouldShowPending({ destination: at('/legends/compare'), current, documentLoad: true }),
       false,
@@ -96,8 +90,7 @@ describe('which presses start the message', () => {
   });
 
   it('not a router press the age gate bounces back to the URL already shown (REGRESSION, PR #35)', () => {
-    // Devin's case: Play in the header, pressed on the gate it redirects to. The 303 lands on this
-    // exact URL, so nothing changes and nothing withdrew the message for fifteen seconds.
+    // The 303 lands on this exact URL, so nothing changes and nothing would withdraw the message.
     const toPlay = { destination: at('/play'), documentLoad: false } as const;
     assert.equal(shouldShowPending({ ...toPlay, current: at('/age-check?next=/play') }), false);
     assert.equal(shouldShowPending({ ...toPlay, current: at('/age-check?next=%2Fplay') }), false, 'encoded');
@@ -113,8 +106,7 @@ describe('which presses start the message', () => {
   });
 
   it('still a router press from the gate that lands somewhere the shell sees change', () => {
-    // A bare /age-check bounces to /age-check?next=/play: the query changes, and the landing key
-    // includes the query, so the message is withdrawn. Another destination lands elsewhere.
+    // The landing key includes the query, so a bounce that changes it withdraws the message.
     const cases: readonly (readonly [string, string])[] = [
       ['/play', '/age-check'],
       ['/play', '/age-check?next=/play&declined=yes'],
@@ -176,7 +168,6 @@ describe('the wiring', () => {
   });
 
   it('withdraws the message when the URL lands, query included (REGRESSION, PR #35)', () => {
-    // The query is what changes when the gate bounces /age-check to /age-check?next=/play.
     assert.match(component, /const search = useSearchParams\(\);/u);
     assert.match(component, /const landed = `\$\{pathname\}\?\$\{search\.toString\(\)\}`;/u);
     assert.match(component, /seenLanding\.current = landed;[\s\S]{0,200}setMessage\(null\);/u);

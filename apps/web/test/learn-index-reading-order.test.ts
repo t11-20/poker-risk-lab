@@ -1,24 +1,8 @@
 /**
- * The number on a lesson card is the step "Next" takes it to, and the card is the target.
- *
- * ## The defect (UX audit at 6b3886e, M1)
- *
- * `/learn` numbered its cards 01–17 down a topic-grouped display order and told the reader "the
- * numbering is a route through the material". Each lesson's "Next" followed `lessonsInReadingOrder()`
- * instead, and measured by visiting all seventeen lessons and reading each Next href the route was
- * 1→2→4→6→7→9→10→13→11→12→15→3→5→8→14→16→17: Lesson 2 sent a reader to Lesson 4, Lesson 15 back to
- * Lesson 3. Next cannot follow the old numbers (`learn-next-lesson.test.ts` shows that order skips a
- * prerequisite), so the index is numbered by reading order.
- *
- * The negative control is the old `buildCurriculum`: put back, "is the reading order" fails with
- * `all-ins-and-side-pots` at position 3 instead of 12, and "Next opens the next number" fails on
- * Lesson 2.
- *
- * ## Also here
- *
- * - The "Start here" sentence over a lesson with no prerequisites (Minor 8).
- * - The tap targets on `/learn`, the lesson page and `/lab` (Minor 1), held as the stylesheet rules
- *   that fixed them — `test:layout` measures glyphs, and a 17px-tall link is not a glyph defect.
+ * The number on a lesson card is the step "Next" takes it to, and the card is the target. Next follows
+ * `lessonsInReadingOrder()`, and `learn-next-lesson.test.ts` shows the old topic order skips a
+ * prerequisite, so the index is numbered by reading order. Against the old `buildCurriculum`, Lesson 2's
+ * Next led to Lesson 4. Tap targets are held as stylesheet rules, because `test:layout` measures glyphs.
  */
 
 import assert from 'node:assert/strict';
@@ -53,7 +37,6 @@ const FROM_FILES: readonly LessonSummary[] = lessons().map((lesson) => ({
   completed: false,
 }));
 
-/** A value the test needs to exist, failing loudly rather than asserting it with `!`. */
 function present<T>(value: T | null | undefined, what: string): T {
   assert.ok(value !== null && value !== undefined, what);
   return value;
@@ -61,13 +44,11 @@ function present<T>(value: T | null | undefined, what: string): T {
 
 describe('the index is numbered in reading order', () => {
   it('reads a non-empty curriculum', () => {
-    // A sweep of nothing is not a pass.
     assert.ok(READING.length > 10, 'the content package carries the curriculum');
     assert.equal(FROM_FILES.length, READING.length);
   });
 
-  // Three inputs: file order (what a cold build hands it), reading order (what the API serves —
-  // `routes/content.ts` lists `lessonsInReadingOrder()`), and the offline fixture.
+  // File order (a cold build), reading order (the API, via `routes/content.ts`), and the offline fixture.
   const inputs: readonly (readonly [string, readonly LessonSummary[]])[] = [
     ['the content package in file order', FROM_FILES],
     [
@@ -144,8 +125,6 @@ describe('"Start here" over a lesson with no prerequisites', () => {
   });
 
   it('does not claim its (absent) prerequisites are marked read', () => {
-    // The audit's instance: a reader with nothing read, Lesson 1 suggested, and the panel saying
-    // "Everything this lesson assumes is already marked read."
     const fresh = buildCurriculum([summary('one', [], false), summary('two', ['one'], false)], {
       completionKnown: true,
     });
@@ -178,7 +157,6 @@ describe('"Start here" over a lesson with no prerequisites', () => {
   });
 });
 
-/** The declarations of the first top-level rule whose selector list is exactly `selector`. */
 function rule(css: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
   const match = new RegExp(`(?:^|\\n)${escaped} \\{([^}]*)\\}`, 'u').exec(css);
@@ -216,8 +194,7 @@ describe('tap targets (Minor 1)', () => {
   });
 
   it('does not touch links inside lesson prose', () => {
-    // The floor is for links that stand alone. A link in a paragraph that grew to 44px would push
-    // its line apart from the lines around it.
+    // A link in a paragraph that grew to 44px would push its line apart from the lines around it.
     assert.doesNotMatch(learnCss, /\.prl-prose a[^{]*\{[^}]*min-block-size/u);
   });
 });

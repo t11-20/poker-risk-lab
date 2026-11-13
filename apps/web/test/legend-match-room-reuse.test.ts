@@ -1,22 +1,8 @@
 /**
- * Plain `/play` opens a bot table, never the legend match the reader just left.
- *
- * ## The defect
- *
- * A legend match links to the bot table ("open the bot table", `/play`) for playing with somebody
- * you know. Following it could leave the reader at the legend match under "Six-handed table"
- * (Devin Review on #24), by two separate paths:
- *
- *  - **No remount.** `/play?profile=…` and `/play` are one route. A client-side navigation between
- *    them re-renders `PlayPage` with new `searchParams` and React keeps `<LiveTable>` where it was,
- *    so `useLiveTable` kept its `roomId` and its open socket to the legend room. Only the heading,
- *    the lede and `legendMatch` (now undefined) changed; `start()` returns early at `ready`.
- *  - **Remount or reload.** `openPracticeRoom` with no `legendMatch` calls `chooseRoom` with the
- *    tab's remembered room — the legend room, remembered when the match opened — and even without
- *    that memory its fallback takes any owned room with a bot seated, which the match is.
- *
- * PR #25's `retirePracticeTables` does not reach either: it runs on `POST /rooms` and
- * `POST /legends/matches`, and reusing a room makes no request at all.
+ * Plain `/play` opens a bot table, never the legend match the reader just left. `/play?profile=…` and
+ * `/play` are one route, so React kept `<LiveTable>` and its socket across the navigation, and
+ * `chooseRoom` took the remembered legend room on a reload. `retirePracticeTables` reaches neither,
+ * because reusing a room makes no request.
  */
 
 import assert from 'node:assert/strict';
@@ -65,9 +51,8 @@ function room(id: string, name: string, maxSeats: number, bots: readonly string[
   };
 }
 
-// `POST /legends/matches` with the one profile the web client sends: `maxSeats` is profiles + 1 and
-// the name is the server's own. Calling Station on purpose — it is also a `BOT_TABLE` profile, so a
-// rule keyed on which profiles are seated could not tell this room from the bot table.
+// `maxSeats` is profiles + 1. Calling Station is also a `BOT_TABLE` profile, so a rule keyed on the
+// seated profiles could not tell this room from the bot table.
 const LEGEND_MATCH = room('room-legend', 'Legends practice', 2, ['calling-station']);
 const BOT_TABLE = room('room-bots', BOT_TABLE_REQUEST.name, BOT_TABLE_REQUEST.maxSeats, [
   'tight-aggressive',

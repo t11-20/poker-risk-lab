@@ -1,19 +1,8 @@
 /**
- * A reader who busts is told so in the decision band, not only in the card a screen above.
- *
- * ## The defect (audit at 6b3886e, M4)
- *
- * The out-of-units notice rendered only in the connection card, which sits above the table: at the
- * moment of a bust it was at y -1,203..-780 at 390x844, and above a Deal at -558 at 1440x900. On
- * screen were STACK 0, "went all in" and the showdown — the result, not that the reader was out, and
- * not what to do about it.
- *
- * ## What is checked, and how
- *
- * `TableStage.tsx` and `LiveTable.tsx` import `@prl/ui`, whose entry re-exports `.tsx`, and this
- * runner cannot load that (see `lib/coach-body.ts`), so the wiring is read from source. Each
- * predicate is also run against the text it replaced, where it must fail. The browser half — the
- * notice on screen beside the result — is measured, and recorded in the commit that added this.
+ * A reader who busts is told so in the decision band, not only in the card a screen above (at
+ * 390x844 that card was at y -1,203 at the moment of a bust). Both components import `@prl/ui`, which
+ * this runner cannot load, so the wiring is read from source and each predicate is run against the
+ * text it replaced, where it must fail.
  */
 
 import assert from 'node:assert/strict';
@@ -25,17 +14,14 @@ import { fileURLToPath } from 'node:url';
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const read = (...parts: readonly string[]): string => readFileSync(join(SRC, ...parts), 'utf8');
 
-/** The live table hands the band a notice exactly when the roster says the reader is out. */
 const handed = (source: string): boolean =>
   /\{\.\.\.\(live\.outOfUnits \? \{ decisionNotice: <OutOfUnitsAtTheTable \/> \} : \{\}\)\}/u.test(source);
 
-/** The band renders whatever notice it was handed, inside `.prl-play__decision`. */
 const rendered = (source: string): boolean => {
   const band = /function DecisionBand\([\s\S]*?\n\}\n/u.exec(source)?.[0] ?? '';
   return band.includes('className="prl-play__decision"') && band.includes('{props.notice}');
 };
 
-/** The band's copy of the notice says the reader is out and carries the way on. */
 function bandNotice(source: string): string {
   const body = /function OutOfUnitsAtTheTable\(\): ReactElement \{([\s\S]*?)\n\}\n/u.exec(source)?.[1] ?? '';
   return body.replace(/\s+/gu, ' ');

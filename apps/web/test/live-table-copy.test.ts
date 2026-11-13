@@ -1,15 +1,4 @@
-/**
- * What the live table says to a reader who is out of units, and three sentences that were wrong.
- *
- *   - A seated reader with a zero stack is recognised from the roster. The server deals them out
- *     and keeps them seated; the page said "Your seat: seat 1" and kept "Deal the next hand" enabled,
- *     dealing bot-only hands with no word about why.
- *   - The decision acknowledgement read "The server applied it at sequence 11".
- *   - The Coach-ready sentence said the panel was "below the table on a narrow screen", which on a
- *     phone is a bottom sheet.
- *   - A refused invite code showed "(invite_code_invalid)" after the server's own sentence, and the
- *     refusal panel and the refused-decision alert did the same with every other code.
- */
+/** What the live table says to a reader out of units, and sentences that leaked protocol detail. */
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -56,12 +45,7 @@ describe('a seated reader with nothing left is out of units', () => {
     assert.equal(outOfUnits({ room: null, userId: ME, seat: 0 }), false);
   });
 
-  // Review on PR #27: after a units reset the notice stayed and Deal stayed disabled. The client half
-  // of the answer is that nothing here remembers the bust — it is re-read from every frame — so the
-  // `seating` frame PR #25's `LiveTable.restack` publishes clears it. That frame still carries the
-  // finished hand, whose view says 0 at the reader's seat; only the roster has the reset figure. This
-  // held before the review too: it guards the property the fix relies on, and is not a regression
-  // demonstration.
+  // Nothing remembers the bust; it is re-read from every frame, and only the roster has the reset figure.
   it('clears on the frame that shows the reset stack at the seat, though the last hand said 0', () => {
     const finished = { handId: 'hand-9', street: 'complete', seats: [{ seat: 0, isSelf: true, stack: 0 }] };
     const frame = (revision: number, stack: number): WsServerMessage =>
@@ -84,8 +68,6 @@ describe('a seated reader with nothing left is out of units', () => {
   });
 
   it('offers a way on that works when a reset does not reach the seat', () => {
-    // Before PR #25 a reset left the live seat at 0, and a reset made while standing, then a seat,
-    // was the way to the reset units. The notice used to end at "reset them … to play on".
     const source = readFileSync(
       join(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'src'), 'app', 'play', 'LiveTable.tsx'),
       'utf8',
@@ -114,8 +96,6 @@ describe('the sentences say true things in the reader’s words', () => {
     assert.doesNotMatch(acked.submission?.message ?? '', /sequence|\d/u);
   });
 
-  // Audit at 308fadf: the hint read "…the hyphens are part of the code and are not", a sentence that
-  // stopped half way. Fixed before this pin was written; the pin is so it stays fixed.
   it('says what to do with the hyphens in an invite code, in a whole sentence', () => {
     const source = readFileSync(new URL('../src/app/play/LiveTable.tsx', import.meta.url), 'utf8');
     const hint = /className="prl-field__hint" id=\{hintId\}>([\s\S]*?)<\/p>/u.exec(source)?.[1];
@@ -132,9 +112,7 @@ describe('the sentences say true things in the reader’s words', () => {
     assert.doesNotMatch(COACH_READY_ANNOUNCEMENT, /\d/u);
   });
 
-  // Audit at 308fadf: "That invite code is not valid. (invite_code_invalid)" under the field, and the
-  // same shape in the refusal panel and the refused-decision alert. Driven through the reducer and
-  // the one function every REST refusal goes through, rather than read out of the source.
+  // Driven through the reducer and `refusalSentence`, the path every REST refusal takes.
   it('does not show a contract code after any refusal (REGRESSION)', () => {
     const CODE = /\([a-z]+(?:_[a-z]+)+\)|\b[a-z]+_[a-z_]+\b/u;
     const refused = new ApiRequestError({
@@ -174,14 +152,7 @@ describe('the sentences say true things in the reader’s words', () => {
   });
 });
 
-/**
- * The reader's own seat is "you" wherever the table narrates it.
- *
- * Audit at 308fadf: "How the hand ended" read "Guest 12D91B wins 1529 from the pot." to the reader
- * who was Guest 12D91B, and the live region said their blinds and their folds the same way. The
- * sentences below are the server's shapes (`apps/api/src/rooms/narration.ts`); the roster is the
- * one `room()` above builds, with the reader at seat 0 as "Guest 12D91B".
- */
+/** The reader's own seat is "you" in the server's sentence shapes (`apps/api/src/rooms/narration.ts`). */
 describe('the table narrates the reader’s own seat as “you”', () => {
   const welcomed = tableReducer(EMPTY_TABLE_STATE, {
     kind: 'frame',
@@ -256,16 +227,8 @@ describe('the table narrates the reader’s own seat as “you”', () => {
 });
 
 /**
- * "You" is decided by the seat, never by the name alone.
- *
- * Review on PR #33 (Devin): display names are not unique — `createGuest` takes any name, and seats
- * are by user id — and the first version of this rewrite matched on the reader's name. So a reader
- * named Alex was told the other Alex's fold was theirs, a spectator named Alex was told every Alex's
- * blind was theirs, and "Dr. Alex posts the small blind" read "Dr. You post the small blind". Each
- * case below failed against that version.
- *
- * The hand is opened with a `state` frame carrying a view, as the server does, so `viewerSeat` is
- * the seat that decides — not the chair the welcome named.
+ * "You" is decided by the seat, never by the name, because display names are not unique. The hand
+ * opens with a `state` frame carrying a view, so `viewerSeat` decides, not the chair the welcome named.
  */
 describe('the table says “you” only about the reader’s own seat', () => {
   type Member = { readonly userId: string; readonly displayName: string; readonly seat: number | null };
@@ -279,7 +242,6 @@ describe('the table says “you” only about the reader’s own seat', () => {
 
   type Dealt = { readonly seat: number; readonly playerId: string };
 
-  /** A hand in progress dealt to `seats`, as the reader at `viewerSeat` is sent it. */
   function dealt(
     members: readonly Member[],
     seats: readonly Dealt[],
@@ -307,7 +269,6 @@ describe('the table says “you” only about the reader’s own seat', () => {
     );
   }
 
-  /** The common case: the hand was dealt to exactly the members holding a seat. */
   function inHand(members: readonly Member[], viewerSeat: number | null, ...events: readonly unknown[]) {
     const seats = members.flatMap((member) =>
       member.seat === null ? [] : [{ seat: member.seat, playerId: member.userId }],
@@ -353,10 +314,8 @@ describe('the table says “you” only about the reader’s own seat', () => {
       { userId: 'usr_other', displayName: 'Dr. Alex', seat: 1 },
     ];
     const detail = 'Dr. Alex posts the small blind, 5. Alex posts the big blind, 10.';
-    // Both sentences are left alone: once another name contains the reader's, a seatless sentence
-    // opening on it may be either of them, and the server's wording is the one that is certainly true.
+    // Once another name contains the reader's, a seatless sentence may be either, so it stays as sent.
     assert.equal(inHand(doctor, 0, { kind: 'forcedBets', detail }).announcement, detail);
-    // The reader's own action still has its seat, which settles it.
     const mine = { kind: 'action', seat: 0, description: 'Alex checks', wasAutomatic: false };
     assert.equal(inHand(doctor, 0, mine).announcement, 'You check');
   });
@@ -376,15 +335,12 @@ describe('the table says “you” only about the reader’s own seat', () => {
     );
   });
 
-  // The chair is not the hand: `PlayerView.viewerSeat` is null for a reader who sat down after the
-  // deal, and this used to fall through to the chair they took, which the hand dealt to somebody else.
+  // `PlayerView.viewerSeat` is null for a reader who sat down after the deal; the chair is not the hand.
   it('does not take the chair the reader sat down in mid-hand for the seat they were dealt', () => {
     const latecomer: readonly Member[] = [
       { userId: ME, displayName: 'Alex', seat: 2 },
       { userId: 'usr_other', displayName: 'Sam', seat: 1 },
     ];
-    // Robin was dealt seat 2 and stood up; the reader has since taken that chair, and was dealt nothing.
-    // The server's fold for Robin's seat is Robin's.
     const hand = [
       { seat: 1, playerId: 'usr_other' },
       { seat: 2, playerId: 'usr_robin' },
@@ -396,7 +352,6 @@ describe('the table says “you” only about the reader’s own seat', () => {
 
   it('leaves the seatless sentences alone when a player dealt into the hand is not in the roster', () => {
     const left: readonly Member[] = [{ userId: ME, displayName: 'Alex', seat: 0 }];
-    // The roster the page last saw no longer has the other player; the hand it is narrating does.
     const hand = [
       { seat: 0, playerId: ME },
       { seat: 1, playerId: 'usr_gone' },
