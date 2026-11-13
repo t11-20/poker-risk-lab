@@ -37,6 +37,7 @@
 import type { LegendDifficulty, LegendDifficultyDto } from '@prl/contracts';
 import { Button, Chip, cx } from '@prl/ui';
 import type { ReactElement } from 'react';
+import { coachWords } from '@/lib/legend-match-copy.ts';
 import { ScopedDifficultyNote } from './LegendDifficultyScope.tsx';
 
 /** The query parameter this control writes. Shared with `parseDifficulty` in `legends-data.ts`. */
@@ -54,10 +55,20 @@ export interface DifficultyPickerProps {
   readonly hidden?: readonly { readonly name: string; readonly value: string }[];
   readonly legend?: string;
   readonly className?: string;
+  /** A fragment target, for a page that links to the picker from above it. */
+  readonly id?: string;
 }
 
 export function DifficultyPicker(props: DifficultyPickerProps): ReactElement {
-  const { difficulties, selected, action, hidden = [], legend = 'How the opponent plays', className } = props;
+  const {
+    difficulties,
+    selected,
+    action,
+    hidden = [],
+    legend = 'How the opponent plays',
+    className,
+    id,
+  } = props;
 
   return (
     /*
@@ -66,7 +77,13 @@ export function DifficultyPicker(props: DifficultyPickerProps): ReactElement {
       failure — the compare page has two forms. Naming both makes them distinguishable in a screen
       reader's landmark list instead of "form, form".
     */
-    <form action={action} aria-label={legend} className={cx('prl-legend-difficulty', className)} method="get">
+    <form
+      action={action}
+      aria-label={legend}
+      className={cx('prl-legend-difficulty', className)}
+      id={id}
+      method="get"
+    >
       {hidden.map((field) => (
         <input key={`${field.name}:${field.value}`} name={field.name} type="hidden" value={field.value} />
       ))}
@@ -91,7 +108,7 @@ export function DifficultyPicker(props: DifficultyPickerProps): ReactElement {
                 <p className="prl-legend-difficulty__description">{difficulty.description}</p>
                 <span className="prl-legend-difficulty__coach">
                   <Chip tone={difficulty.coachAvailable ? 'accent' : 'caution'}>
-                    {difficulty.coachAvailable ? 'Coach available while you play' : 'Coach in review only'}
+                    {coachWords(difficulty.coachAvailable)}
                   </Chip>
                 </span>
               </label>
@@ -110,7 +127,7 @@ export function DifficultyPicker(props: DifficultyPickerProps): ReactElement {
             the compare page, where the setting changes the figures themselves — and with scripts
             off, the first sentence is the one that holds.
           */}
-          <ScopedDifficultyNote following="Every Play link on this page starts a match at the option you tick. Applying it also puts it in the address bar, so the page can be shared exactly as it was read.">
+          <ScopedDifficultyNote following="Every Play button and link on this page starts a match at the option you tick. Applying it also puts it in the address bar, so the page can be shared exactly as it was read.">
             The setting is applied when you submit, not while you are moving through the options, and it stays
             in the address bar so a spot can be shared exactly as it was read.
           </ScopedDifficultyNote>

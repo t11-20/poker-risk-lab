@@ -48,6 +48,7 @@ import {
   useState,
 } from 'react';
 import { DIFFICULTIES, legendMatchHref, profileHref } from '@/lib/legend-links.ts';
+import { coachWords } from '@/lib/legend-match-copy.ts';
 
 /** The radio group's `name`. Same string as `DIFFICULTY_PARAM` in `DifficultyPicker.tsx`. */
 const DIFFICULTY_NAME = 'difficulty';
@@ -147,4 +148,41 @@ export function ScopedDifficultyNote({
   const [running, setRunning] = useState(false);
   useEffect(() => setRunning(true), []);
   return <>{inScope && running ? following : children}</>;
+}
+
+/** Just enough of a `LegendDifficultyDto` to name it: no description crosses to the client. */
+export interface SettingName {
+  readonly id: LegendDifficulty;
+  readonly label: string;
+  readonly coachAvailable: boolean;
+}
+
+/**
+ * The "Start a match" form's `difficulty` field. A hidden input that follows the tick exactly as the
+ * Play links do, so the form above the picker and the cards below it can never start two different
+ * settings. Without a scope, or before hydration, it is the applied setting — the one the visible
+ * sentence beside it names.
+ */
+export function ScopedDifficultyInput({
+  name,
+  difficulty,
+}: {
+  readonly name: string;
+  readonly difficulty: LegendDifficulty;
+}): ReactElement {
+  return <input name={name} type="hidden" value={useDifficulty(difficulty)} />;
+}
+
+/** The setting the form will start, by name and by what it does to the Coach, following the tick. */
+export function ScopedSettingName({
+  settings,
+  difficulty,
+}: {
+  readonly settings: readonly SettingName[];
+  readonly difficulty: LegendDifficulty;
+}): ReactElement {
+  const chosen = useDifficulty(difficulty);
+  const setting = settings.find((candidate) => candidate.id === chosen);
+  // A deployment whose difficulties list lacks the ticked id still gets the id, never a blank.
+  return <>{setting === undefined ? chosen : `${setting.label}, ${coachWords(setting.coachAvailable)}`}</>;
 }

@@ -61,3 +61,18 @@ export function legendMatchCopy(input: LegendMatchCopyInput): LegendMatchCopy {
       'and not a copy of anyone.',
   };
 }
+
+/**
+ * What a setting does to the Coach, in the words the picker's chip uses. One copy, because the
+ * "Start a match" form names the setting it will start in this same sentence, and a form that said
+ * "Coach available" above a chip that said "Coach in review only" would be two answers to the one
+ * question a learner actually feels.
+ *
+ * Here and not in `LegendDifficultyScope.tsx`, which is where it was first written: a function
+ * exported from a `'use client'` module reaches a server component as a client REFERENCE, not as a
+ * function, and `DifficultyPicker` (a server component) calling it took `/legends` down with "This
+ * screen did not load" on the production build. A module with no directive is callable from both.
+ */
+export function coachWords(coachAvailable: boolean): string {
+  return coachAvailable ? 'Coach available while you play' : 'Coach in review only';
+}

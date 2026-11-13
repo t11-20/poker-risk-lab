@@ -288,6 +288,80 @@
   gap: var(--prl-space-7);
 }
 
+/**
+ * "Start a match" — the form under the head (`LegendQuickStart.tsx`).
+ *
+ * Level 1, the picker's material: a control group, not an object. The twelve cards stay the only
+ * elevated things on the page, which is the hierarchy the header of this file is about; the accent
+ * is spent on the one primary button inside it rather than on the panel.
+ *
+ * The row is capped at two card floors. Uncapped at 1440 the select stretched to 1,100px, a field
+ * whose longest value is "Disciplined Mixed-Format Specialist" — a control that wide reads as a
+ * search box. The button sits on the select's baseline row (`align-items: end`), not centred
+ * against the label above the select as well.
+ */
+.prl-legend-quick {
+  display: grid;
+  gap: var(--prl-space-5);
+  padding: var(--prl-space-8);
+  border: 1px solid var(--prl-edge);
+  border-block-start-color: var(--prl-edge-lit);
+  border-block-end-color: var(--prl-edge-shade);
+  border-radius: var(--prl-radius-3);
+  background-color: var(--prl-surface-raised);
+  box-shadow: var(--prl-elevation-0);
+}
+
+.prl-legend-quick__title {
+  margin: 0;
+  font-size: var(--prl-type-heading);
+}
+
+.prl-legend-quick__framing,
+.prl-legend-quick__setting {
+  margin: 0;
+  max-width: var(--prl-measure);
+  color: var(--prl-text-secondary);
+  font-size: var(--prl-type-body-sm);
+}
+
+.prl-legend-quick__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--prl-space-5);
+  max-width: calc(2 * var(--prl-legend-card-min));
+}
+
+/**
+ * The field never gets narrower than the longest archetype name needs in a CLOSED select, and the
+ * button wraps under it first. A native select cuts its value off at the arrow with no ellipsis, and
+ * `test:layout` cannot see it (an `<option>` is never measured). Measured in Chrome with
+ * `field-sizing: content`: "High-Variance Tournament Aggressor" needs 322px. At a 15rem basis the
+ * button sat beside a 268px select at 430 and eight of the twelve names were cut; the card floor
+ * (24rem) is past 322 with room for a longer name.
+ */
+.prl-legend-quick__field {
+  flex: 1 1 var(--prl-legend-card-min);
+}
+
+/**
+ * On a phone the form is not a panel, it is the section under the head.
+ *
+ * Boxed, the select was the panel's padding and border narrower than the page, and the same
+ * measurement cut two names at 375 (309px of 322 needed) and four at 360 (294). Unboxed it is the
+ * page's width — 343 at 375, 328 at 360 — and every name fits. The heading and the head's strong
+ * rule above it already say where it starts.
+ */
+@media (width < 600px) {
+  .prl-legend-quick {
+    padding: var(--prl-space-0);
+    border: 0;
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
 /* ==========================================================================================
    2. THE DISCLAIMERS
    ==========================================================================================
@@ -1012,6 +1086,13 @@
  * The floor, so nobody tries again here: with no picker at all the first Play is at y=2,333, three
  * and a half screens. The rest of the depth is the framing and the card, whose order is a guardrail
  * (`LegendCard.tsx`), so "two screens" is not reachable from the picker alone.
+ *
+ * What did reach it was not a smaller picker but a second way in: "Start a match" under the head
+ * (`LegendQuickStart.tsx`, section 1), an opponent select and a Play button that follow this
+ * picker's tick. Measured on the production build, 2026-11-13: its Play is at y=741 at 375x812 and
+ * at 360x640, above the 812 fold, where the first card's was at 2,869 and 2,938; at 1440x900 it is
+ * at 488 where the first card's was at 1,968. This rule still earns its 247px for the reader who
+ * scrolls on to choose from the cards.
  */
 @media (width < 600px) {
   .prl-legend-difficulty__option:not(:has(.prl-legend-difficulty__control:checked))
