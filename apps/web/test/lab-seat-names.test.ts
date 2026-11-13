@@ -5,6 +5,10 @@
  * straight through as the seat's name, so the plate printed the position twice — "BTN / BTN",
  * "CO / CO" — on every seat of all 36 scenarios, and nothing on the table said which plate was the
  * reader's opponent. Seen on `/lab/fl-same-cards-under-the-gun` in a screenshot at 1440 wide.
+ *
+ * The reader's own plate said "Hero" — a word in none of the glossary's terms, on the one plate the
+ * live table and the offline Lab fixture both call "You". It now says "You" here as well; with the old
+ * `scenario-view.ts` the role case fails on every scenario.
  */
 
 import assert from 'node:assert/strict';
@@ -39,7 +43,7 @@ describe('Lab seat names', () => {
   it('names the reader and the opponents by role', () => {
     for (const scenario of all) {
       for (const seat of scenario.seats) {
-        assert.equal(scenarioSeatName(seat), seat.isHero === true ? 'Hero' : 'Opponent', `${scenario.id}`);
+        assert.equal(scenarioSeatName(seat), seat.isHero === true ? 'You' : 'Opponent', `${scenario.id}`);
       }
     }
   });

@@ -284,7 +284,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           oddsRatio: 1.5,
           equitySurplus: -0.12311666666666654,
           explanation:
-            "Hero risks 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before hero's own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.7% equity is 12.3 points short of it.",
+            'You risk 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before your own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.7% equity is 12.3 points short of it.',
         },
         candidates: [
           {
@@ -469,7 +469,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           cleanCards: ['Kh', 'Jh', 'Qh', 'Th', '6h', '7h', '3h', '4h'],
           dirtyCards: ['2h', '8d', '8s', '8c', '9d', '9s', '9c'],
           explanation:
-            'On Ah 5h 2c hero holds 9h 8h — high card ace, nine eight kickers — for 43% equity against "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo" (227 combinations still possible). Of the 47 cards that can come next, 8 are clean and 7 are dirty, which is 15 outs in total. Clean means hero\'s equity after that card is at least 90%; dirty means at least 50% but below 90%.',
+            'On Ah 5h 2c you hold 9h 8h — high card ace, nine eight kickers — for 43% equity against "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo" (227 combinations still possible). Of the 47 cards that can come next, 8 are clean and 7 are dirty, which is 15 outs in total. Clean means your equity after that card is at least 90%; dirty means at least 50% but below 90%.',
         },
         equity: {
           heroEquity: 0.43323988786543854,
@@ -479,7 +479,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           ruleOfThumb: {
             estimate: 0.32,
             errorPoints: 0.5476410730804773,
-            note: "8 outs with two cards to come, times 4, is roughly 32% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut overstates by 0.5 points here — 32% against an exact 31.5%. Fine as a rough read, but do not hang a marginal call on it. The comparison is against the exact chance of one of those 8 clean cards arriving (Two cards to come, 8 outs, 47 cards unseen. Count the misses instead of the hits: 39 cards do not help. The turn misses 39/47 of the time, and with one miss now gone the river misses 38/46 of the time, so both cards miss (39/47) x (38/46) = 68.5% of the time. Hitting at least one is whatever is left: 1 - 68.5% = 31.5%. Adding 8/47 + 8/46 instead would count every run-out that hits twice twice over, and overstate the chance.), not against hero's equity: hitting and winning are different questions, and the 7 dirty outs are exactly the gap between them. The shortcut is an approximation and this is its error, stated rather than hidden.",
+            note: '8 outs with two cards to come, times 4, is roughly 32% — the rule of 2 and 4. It works because one card out of the 46 or so you have not seen is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves your hand but hands an opponent a better one at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut overstates by 0.5 points here — 32% against an exact 31.5%. Fine as a rough read, but do not hang a marginal call on it. The comparison is against the exact chance of one of those 8 clean cards arriving (Two cards to come, 8 outs, 47 cards unseen. Count the misses instead of the hits: 39 cards do not help. The turn misses 39/47 of the time, and with one miss now gone the river misses 38/46 of the time, so both cards miss (39/47) x (38/46) = 68.5% of the time. Hitting at least one is whatever is left: 1 - 68.5% = 31.5%. Adding 8/47 + 8/46 instead would count every run-out that hits twice twice over, and overstate the chance.), not against your equity: hitting and winning are different questions, and the 7 dirty outs are exactly the gap between them. The shortcut is an approximation and this is its error, stated rather than hidden.',
           },
           perPlayer: [
             {
@@ -503,7 +503,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           oddsRatio: 3,
           equitySurplus: 0.18323988786543854,
           explanation:
-            "Hero risks 65 to win the 195 already in the middle, a price of 3 to 1. Calling breaks even at 65 / (195 + 65) = 25.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 195 is what is in the middle before hero's own 65 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 43.3% equity, a 18.3 point surplus.",
+            'You risk 65 to win the 195 already in the middle, a price of 3 to 1. Calling breaks even at 65 / (195 + 65) = 25.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 195 is what is in the middle before your own 65 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 43.3% equity, a 18.3 point surplus.',
         },
         candidates: [
           {
@@ -669,7 +669,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           cleanCards: ['6c', '6d', '6s', 'Th', 'Jh', 'Qh', 'Kh', '3h', '4h', '6h', '2h', '7h'],
           dirtyCards: [],
           explanation:
-            'On Ah 5h 2c 7d hero holds 9h 8h — high card ace, nine eight kickers — for 32% equity against "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo" (223 combinations still possible). Of the 46 cards that can come next, 12 are clean and 0 are dirty, which is 12 outs in total. Clean means hero\'s equity after that card is at least 90%; dirty means at least 50% but below 90%.',
+            'On Ah 5h 2c 7d you hold 9h 8h — high card ace, nine eight kickers — for 32% equity against "22+, A2s+, K9s+, Q9s+, J9s+, T9s, 98s, A9o+, KTo+, QJo" (223 combinations still possible). Of the 46 cards that can come next, 12 are clean and 0 are dirty, which is 12 outs in total. Clean means your equity after that card is at least 90%; dirty means at least 50% but below 90%.',
         },
         equity: {
           heroEquity: 0.32139217284957194,
@@ -679,7 +679,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           ruleOfThumb: {
             estimate: 0.24,
             errorPoints: -2.086956521739129,
-            note: "12 outs with one card to come, times 2, is roughly 24% — the rule of 2 and 4. It works because one card off a stub of about 46 cards is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves hero but hands an opponent a better hand at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut understates by 2.1 points here — 24% against an exact 26.1%. That is enough to flip a marginal call into a fold or the other way round, so use the exact figure for this decision. The comparison is against the exact chance of one of those 12 clean cards arriving (One card to come. 12 of the 46 unseen cards win the hand, so the chance is 12/46 = 26.1%. With a single card there is nothing to correct for: the count of outs over the count of unseen cards is the probability.), not against hero's equity: hitting and winning are different questions, and the dirty-out count is zero here only because every out is clean. The shortcut is an approximation and this is its error, stated rather than hidden.",
+            note: '12 outs with one card to come, times 2, is roughly 24% — the rule of 2 and 4. It works because one card out of the 46 or so you have not seen is worth a little over 2%, so 2% per out per card is close enough to do in your head. Count clean outs only: a card that improves your hand but hands an opponent a better one at the same time is not an out, and counting it is a bigger error than anything the shortcut itself does. The shortcut understates by 2.1 points here — 24% against an exact 26.1%. That is enough to flip a marginal call into a fold or the other way round, so use the exact figure for this decision. The comparison is against the exact chance of one of those 12 clean cards arriving (One card to come. 12 of the 46 unseen cards win the hand, so the chance is 12/46 = 26.1%. With a single card there is nothing to correct for: the count of outs over the count of unseen cards is the probability.), not against your equity: hitting and winning are different questions, and the dirty-out count is zero here only because every out is clean. The shortcut is an approximation and this is its error, stated rather than hidden.',
           },
           perPlayer: [
             {
@@ -703,7 +703,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           oddsRatio: 3,
           equitySurplus: 0.07139217284957194,
           explanation:
-            "Hero risks 130 to win the 390 already in the middle, a price of 3 to 1. Calling breaks even at 130 / (390 + 130) = 25.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 390 is what is in the middle before hero's own 130 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 32.1% equity, a 7.1 point surplus.",
+            'You risk 130 to win the 390 already in the middle, a price of 3 to 1. Calling breaks even at 130 / (390 + 130) = 25.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 390 is what is in the middle before your own 130 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 32.1% equity, a 7.1 point surplus.',
         },
         candidates: [
           {
@@ -890,7 +890,7 @@ export const REVIEW_HAND_SHOWDOWN: HandReviewResponse = {
           oddsRatio: 3.6,
           equitySurplus: 0.7679745493107105,
           explanation:
-            "Hero risks 200 to win the 720 already in the middle, a price of 3.60 to 1. Calling breaks even at 200 / (720 + 200) = 21.7% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 720 is what is in the middle before hero's own 200 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 98.5% equity, a 76.8 point surplus.",
+            'You risk 200 to win the 720 already in the middle, a price of 3.60 to 1. Calling breaks even at 200 / (720 + 200) = 21.7% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 720 is what is in the middle before your own 200 goes in — counting the call inside the pot understates the equity a call needs. You clear that with 98.5% equity, a 76.8 point surplus.',
         },
         candidates: [
           {
@@ -1124,7 +1124,7 @@ export const REVIEW_HAND_FOLDED: HandReviewResponse = {
           oddsRatio: 1.5,
           equitySurplus: -0.12216666666666665,
           explanation:
-            "Hero risks 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before hero's own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.8% equity is 12.2 points short of it.",
+            'You risk 20 to win the 30 already in the middle, a price of 1.50 to 1. Calling breaks even at 20 / (30 + 20) = 40.0% equity: with less than that, calling loses units over many repetitions of this spot; with more, it gains them. The 30 is what is in the middle before your own 20 goes in — counting the call inside the pot understates the equity a call needs. You do not clear that: 27.8% equity is 12.2 points short of it.',
         },
         candidates: [
           {

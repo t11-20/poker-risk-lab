@@ -434,11 +434,11 @@ export function icmVsChipEv(input: {
   const divergence = icmEv - chipEv * prizePerChip;
 
   const explanation =
-    `Hero (player ${heroIndex}) wins this spot ${(winProbability * 100).toFixed(1)}% of the time, going ` +
+    `You (player ${heroIndex}) win this spot ${(winProbability * 100).toFixed(1)}% of the time, going ` +
     `from ${stackNow.toLocaleString('en-US')} chips to ${stackIfWin.toLocaleString('en-US')}, and loses it ` +
     `${(loseProbability * 100).toFixed(1)}% of the time, going to ` +
     `${stackIfLose.toLocaleString('en-US')}. In chips that is ${chipEv >= 0 ? '+' : ''}${chipEv.toFixed(2)} ` +
-    `on average. In prize equity it moves hero from ${equityNow.toFixed(2)} units to an average of ` +
+    `on average. In prize equity it moves you from ${equityNow.toFixed(2)} units to an average of ` +
     `${(equityNow + icmEv).toFixed(2)}, a change of ${icmEv >= 0 ? '+' : ''}${icmEv.toFixed(2)} units. ` +
     `Converting the chip figure at the flat rate of ${prizePerChip.toFixed(5)} units per chip would have ` +
     `predicted ${(chipEv * prizePerChip).toFixed(2)} units, so the prize ladder is worth ` +
@@ -585,7 +585,7 @@ export function pushFoldChipEv(input: {
   const equityResult = equity(
     {
       players: [
-        { label: 'hero', range: exactRange(heroCards) },
+        { label: 'you', range: exactRange(heroCards) },
         { label: "the big blind's calling range", range: callerRange },
       ],
       board: [],
@@ -610,11 +610,11 @@ export function pushFoldChipEv(input: {
   const halfWidth = equityResult.confidence?.halfWidthPoints ?? 0;
 
   const explanation =
-    `Hero holds ${cardsToString(heroCards)} and shoves ${bigBlinds(stackBb)} from the small blind. The big ` +
+    `You hold ${cardsToString(heroCards)} and shove ${bigBlinds(stackBb)} from the small blind. The big ` +
     `blind is assumed to call with "${callerRangeNotation}" — ${callingCombos} of the ` +
     `${availableCombos} two-card combinations they can hold — so they fold ` +
-    `${(foldProbability * 100).toFixed(1)}% of the time. Folded through, hero wins the ` +
-    `${bigBlinds(wonWhenFoldedTo)} already posted by the big blind. Called, hero takes ` +
+    `${(foldProbability * 100).toFixed(1)}% of the time. When they fold, you win the ` +
+    `${bigBlinds(wonWhenFoldedTo)} already posted by the big blind. Called, you take ` +
     `${(equityWhenCalled * 100).toFixed(1)}% of a ${2 * stackBb} big blind pot, worth ` +
     `${(2 * stackBb * equityWhenCalled).toFixed(2)}, against the ${stackBb} put in — a net of ` +
     `${netWhenCalled >= 0 ? '+' : ''}${netWhenCalled.toFixed(2)}. Weighting those: pushing is worth ` +
@@ -626,10 +626,10 @@ export function pushFoldChipEv(input: {
   const assumptions = [
     'Chip EV only. No prize ladder, no ICM, no later hands — pass the same spot to icmVsChipEv to see ' +
       'what a payout structure does to it, because it often reverses the answer.',
-    'Heads-up: hero in the small blind, one big blind behind, nobody else in the hand.',
-    `The big blind covers hero, so a call makes the pot exactly ${2 * stackBb} big blinds with nothing ` +
+    'Heads-up: you in the small blind, one big blind behind, nobody else in the hand.',
+    `The big blind has at least as many chips as you, so a call makes the pot exactly ${2 * stackBb} big blinds with nothing ` +
       'returned.',
-    `The caller's hand is uniform over the ${availableCombos} combinations that exclude hero's two cards. ` +
+    `The caller's hand is uniform over the ${availableCombos} combinations that exclude your two cards. ` +
       `They call with all ${callingCombos} combinations in the stated range and fold every other one, so ` +
       `the ${(foldProbability * 100).toFixed(1)}% fold frequency is a property of that assumed range — ` +
       'not a read on any person, and not what a real opponent does.',
@@ -637,10 +637,10 @@ export function pushFoldChipEv(input: {
       'so treat the range as the input it is.',
     'The shove is all-in, so there is no postflop play and no further betting to model.',
     sampled
-      ? `Hero's equity when called is estimated from ${equityResult.trials.toLocaleString('en-US')} sampled ` +
+      ? `Your equity when called is estimated from ${equityResult.trials.toLocaleString('en-US')} sampled ` +
         `run-outs, 95% within ±${halfWidth.toFixed(2)} percentage points, which moves the chip EV of the ` +
         `push by at most ±${((2 * stackBb * callProbability * halfWidth) / 100).toFixed(3)} big blinds.`
-      : "Hero's equity when called is computed by enumerating every remaining board, so it carries no " +
+      : 'Your equity when called is computed by enumerating every remaining board, so it carries no ' +
         'sampling error.',
     'Blinds, antes and stacks are free, valueless practice units. Nothing here converts to money.',
   ];

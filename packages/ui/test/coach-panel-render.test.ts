@@ -288,7 +288,7 @@ const ALREADY_AHEAD: CoachReport = {
     cleanCards: ['2d', '2h', '2s', '5c', '5h', 'Ad', 'As', '3c', '3d', '3h'],
     dirtyCards: ['4c', '4d', '4h', '4s', '6c', '6d', '6h', '6s', '7c', '7d'],
     explanation:
-      'On Ah 5s 2c hero holds Ac 5d — two pair, aces and fives — for 88% equity against a wide range. ' +
+      'On Ah 5s 2c you hold Ac 5d — two pair, aces and fives — for 88% equity against a wide range. ' +
       'Of the 47 cards that can come next, 10 are clean and 37 are dirty, which is 47 outs in total.',
   },
   equity: {

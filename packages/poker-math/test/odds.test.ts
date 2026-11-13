@@ -89,7 +89,7 @@ test('breakEvenEquity for a pot of 100 with 50 to call is exactly one third', ()
   assert.equal(odds.breakEvenEquity, 1 / 3);
   assert.equal(odds.oddsRatio, 2);
   assert.match(odds.explanation, /33\.3%/);
-  assert.match(odds.explanation, /before hero's own 50 goes in/, 'the exclusion is stated for the learner');
+  assert.match(odds.explanation, /before your own 50 goes in/, 'the exclusion is stated for the learner');
 });
 
 test('the price a bet lays the caller is 1 / (ratio + 1) for every sizing', () => {

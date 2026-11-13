@@ -695,7 +695,10 @@ test('push/fold assumptions say it is chip EV only and name the opponent model',
   assert.ok(joined.includes('chip ev only'), 'must say the prize ladder is not in the figure');
   assert.ok(joined.includes('icmvschipev'), 'must point at the ICM-aware function');
   assert.ok(joined.includes('heads-up'), 'must state the heads-up framing');
-  assert.ok(joined.includes('covers hero'), 'must state that the big blind covers');
+  assert.ok(
+    joined.includes('at least as many chips as you'),
+    'must state that the big blind covers the shove',
+  );
   assert.ok(joined.includes('1225'), 'must state the size of the caller’s hand space');
   assert.ok(joined.includes('no postflop play'), 'must state that an all-in has no postflop play');
   assert.ok(joined.includes('money'), 'must state the units are valueless practice units');

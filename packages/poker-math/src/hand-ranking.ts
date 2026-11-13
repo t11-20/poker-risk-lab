@@ -206,7 +206,7 @@ export function computeStrengthTable(
       `Each figure is estimated from ${samplesPerClass.toLocaleString('en-US')} sampled run-outs, not from ` +
         'exhaustive enumeration, so each carries a fraction of a percentage point of sampling noise.',
       'Strength here means exactly one thing: the share of the pot the class wins all-in and heads-up ' +
-        'against a hand drawn uniformly from the 1,225 combinations hero does not hold.',
+        'against a hand drawn uniformly from the 1,225 combinations you do not hold.',
       'Position, stack depth, the number of opponents and postflop playability are not modelled at all. ' +
         'All-in equity is not playability: 22 beats AKo in an all-in more often than it loses, and is ' +
         'still the harder hand to play for a deep stack.',

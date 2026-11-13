@@ -83,7 +83,7 @@ const POSITION_LABELS: ReadonlySet<string> = new Set<PositionLabel>([
  */
 export function scenarioSeatName(seat: ScenarioSeat): string {
   if (!POSITION_LABELS.has(seat.label)) return seat.label;
-  return seat.isHero === true ? 'Hero' : 'Opponent';
+  return seat.isHero === true ? 'You' : 'Opponent';
 }
 
 /** A pair of cards, or null when the notation does not parse into exactly two. */

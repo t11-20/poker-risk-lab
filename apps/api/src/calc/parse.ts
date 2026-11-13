@@ -278,7 +278,7 @@ function parseBoard(text: string | undefined, heroCards: readonly Card[]): Card[
   for (const card of board) {
     if (held.has(card)) {
       throw fieldError(
-        { board: 'the board repeats a card hero is holding; one card cannot be in two places' },
+        { board: 'the board repeats a card you are holding; one card cannot be in two places' },
         'board overlapped heroCards',
       );
     }
@@ -356,7 +356,7 @@ function parseNotationOpponent(
     throw fieldError(
       {
         [field]:
-          'every hand in this range uses a card hero or the board already holds, so the range is ' +
+          'every hand in this range uses a card you or the board already hold, so the range is ' +
           'empty — widen it or check the board',
       },
       `opponent ${index} range was fully blocked`,
@@ -447,7 +447,7 @@ function assertExactHoldingsFit(opponents: readonly OpponentPlan[], blockers: re
         throw fieldError(
           {
             [`opponents.${index}`]:
-              `${cardsToString([card])} is already held by hero, the board, or another opponent — ` +
+              `${cardsToString([card])} is already held by you, the board, or another opponent — ` +
               'one card cannot be in two places',
           },
           `opponent ${index} reused a known card`,

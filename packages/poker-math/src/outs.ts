@@ -404,8 +404,8 @@ function describeBeaters(beaters: readonly CategoryCount[]): string {
  * a dead card sound like progress, so those cards get the neutral wording.
  */
 function heroHandClause(before: Standing, after: Standing): string {
-  if (after.heroCategory > before.heroCategory) return `makes hero ${after.heroPhrase}`;
-  return `leaves hero with ${after.heroPhrase}`;
+  if (after.heroCategory > before.heroCategory) return `gives you ${after.heroPhrase}`;
+  return `leaves you with ${after.heroPhrase}`;
 }
 
 /** How the opponent's one known hand compares. Only used when the range is a hand. */
@@ -455,7 +455,7 @@ function rangeHelpSentence(before: Standing, after: Standing): string | null {
     return 'They were behind before this card, so this card is what flipped it';
   }
   return (
-    'This card helps the opponent too: it takes the part of the range that beats hero from ' +
+    'This card helps the opponent too: it takes the part of the range that beats you from ' +
     `${before.behind} of ${before.combos} combinations to ${after.behind} of ${after.combos}`
   );
 }
@@ -475,7 +475,7 @@ function buildNote(args: {
   if (help !== null) sentences.push(help);
   const risk = riskSentence(after, equityAfter, boardComplete);
   if (risk !== null) sentences.push(risk);
-  sentences.push(`Hero's equity after this card is ${formatPercent(equityAfter)}`);
+  sentences.push(`Your equity after this card is ${formatPercent(equityAfter)}`);
 
   return `${sentences.join('. ')}.`;
 }
@@ -592,7 +592,7 @@ function heroEquityOn(
 ): HeroEquity {
   const spec: EquitySpec = {
     players: [
-      { label: 'hero', range: heroRange },
+      { label: 'you', range: heroRange },
       { label: 'the opponent', range: opponent },
     ],
     board,
@@ -643,14 +643,14 @@ function describeOpponent(opponent: ParsedRange, legal: readonly Combo[]): strin
 function alreadyAheadNote(equityNow: number, cleanThreshold: number, aheadThreshold: number): string | null {
   if (equityNow >= cleanThreshold) {
     return (
-      'Hero is already at or above the clean threshold before any card arrives, so this is not a drawing ' +
-      'spot: the counts are cards that keep hero in front, not cards that rescue the hand'
+      'You are already at or above the clean threshold before any card arrives, so this is not a drawing ' +
+      'spot: the counts are cards that keep you in front, not cards that rescue the hand'
     );
   }
   if (equityNow >= aheadThreshold) {
     return (
-      'Hero is already in front before any card arrives — equity now is above the same threshold a card ' +
-      'has to clear to count as an out — so read the counts as cards that keep hero ahead rather than ' +
+      'You are already in front before any card arrives — your equity now is above the same threshold a ' +
+      'card has to clear to count as an out — so read the counts as cards that keep you ahead rather than ' +
       'as the size of a draw'
     );
   }
@@ -685,7 +685,7 @@ function countSentence(args: {
   }
   return (
     `${preamble} — but none of them is an out and there is no outs count here, deliberately: an out is ` +
-    'a card that rescues a hand that is behind, and hero is not behind'
+    'a card that rescues a hand that is behind, and yours is not behind'
   );
 }
 
@@ -703,7 +703,7 @@ function buildExplanation(args: {
   readonly refusal: OutsCountRefusal | null;
 }): string {
   const sentences = [
-    `On ${cardsToString(args.board)} hero holds ${cardsToString(args.heroCards)} — ` +
+    `On ${cardsToString(args.board)} you hold ${cardsToString(args.heroCards)} — ` +
       `${args.standingNow.heroPhrase} — for ${formatPercent(args.equityNow)} equity against ${args.opponentText}`,
     countSentence({
       cleanCount: args.cleanCount,
@@ -711,7 +711,7 @@ function buildExplanation(args: {
       cardsConsidered: args.cardsConsidered,
       refusal: args.refusal,
     }),
-    `Clean means hero's equity after that card is at least ${formatPercent(args.cleanThreshold)}; dirty ` +
+    `Clean means your equity after that card is at least ${formatPercent(args.cleanThreshold)}; dirty ` +
       `means at least ${formatPercent(args.aheadThreshold)} but below ${formatPercent(args.cleanThreshold)}`,
   ];
   // The honest paragraph that was already here, kept. It is the sentence that explains
@@ -746,7 +746,7 @@ function buildAssumptions(args: {
       : `Every one of the ${args.legalNow.length} combinations in "${args.opponent.notation}" is treated as equally likely; a real opponent does not play every hand in a range the same way, so this is the range assumption rather than a prediction.`,
   );
   notes.push(
-    `"Clean" means hero equity of at least ${formatPercent(args.cleanThreshold)} after the card and "dirty" at least ${formatPercent(args.aheadThreshold)} but below that. Both thresholds are a modelling choice, not a rule of poker — move them and the counts move with them.`,
+    `"Clean" means your equity is at least ${formatPercent(args.cleanThreshold)} after the card and "dirty" at least ${formatPercent(args.aheadThreshold)} but below that. Both thresholds are a modelling choice, not a rule of poker — move them and the counts move with them.`,
   );
   notes.push(
     'Equity after each card is computed by enumerating every remaining board exactly, so there is no sampling error in these figures.',
@@ -766,7 +766,7 @@ function buildAssumptions(args: {
   const blocked = declared - args.legalNow.length;
   if (args.legalNow.length > 1 && blocked > 0) {
     notes.push(
-      `The opponent cannot hold a card hero can see, so ${blocked} of the ${declared} combinations in "${args.opponent.notation}" are removed as blocked, leaving ${args.legalNow.length}.`,
+      `The opponent cannot hold a card you can see, so ${blocked} of the ${declared} combinations in "${args.opponent.notation}" are removed as blocked, leaving ${args.legalNow.length}.`,
     );
   }
   if (args.opponentHeld.length > 0) {
