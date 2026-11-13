@@ -463,6 +463,19 @@ function readLogLevel(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): Log
   const value = trimmed(env, 'LOG_LEVEL')?.toLowerCase();
   if (value === undefined) return fallback;
   const match = LOG_LEVELS.find((candidate) => candidate === value);
+  if (match === 'silent' && nodeEnv === 'production') {
+    // A refusal and not a warning, because a warning about this cannot be delivered: `silent`
+    // gives Fastify no logger at all (`buildLoggerOptions`), so the boot's `configuration warning`
+    // lines, `failed to start`, `uncaught exception; exiting` and every schema verdict after boot
+    // go nowhere. Measured with NODE_ENV=production on a port another process held: `info` wrote
+    // `failed to start` and exit 1; `silent` exited 1 with zero bytes on stdout and on stderr.
+    // `fatal` is the quietest production level, and it still says why the process died.
+    collect.problems.push(
+      'LOG_LEVEL=silent is not allowed in production: the process would log nothing, including why ' +
+        'it failed to start or crashed. Use fatal for the quietest level that still does.',
+    );
+    return fallback;
+  }
   if (match !== undefined) return match;
   collect.problems.push(`LOG_LEVEL must be one of ${LOG_LEVELS.join(', ')}, got "${value}"`);
   return fallback;

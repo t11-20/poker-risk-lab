@@ -159,6 +159,20 @@ describe('loadConfig — invalid values are named', () => {
     expectProblem(baseEnv({ LOG_LEVEL: 'chatty' }), 'LOG_LEVEL');
   });
 
+  it('refuses LOG_LEVEL=silent in production, and names the level that still logs a crash', () => {
+    // `silent` gives Fastify no logger at all, so a production process that failed to start exited
+    // 1 with nothing on stdout or stderr. Measured on a port another process held; see readLogLevel.
+    const problems = expectProblem(productionEnv({ LOG_LEVEL: 'silent' }), 'LOG_LEVEL=silent');
+    assert.ok(
+      problems.some((problem) => problem.includes('fatal')),
+      'the refusal should name the fix',
+    );
+    assert.equal(loadConfig(productionEnv({ LOG_LEVEL: 'fatal' })).logLevel, 'fatal');
+    // Outside production `silent` is how a test or a quiet local run asks for no output.
+    assert.equal(loadConfig(baseEnv({ LOG_LEVEL: 'silent' })).logLevel, 'silent');
+    assert.equal(loadConfig(baseEnv({ NODE_ENV: 'development', LOG_LEVEL: 'silent' })).logLevel, 'silent');
+  });
+
   it('requires DATABASE_URL', () => {
     const env = baseEnv();
     const withoutUrl: EnvRecord = { ...env, DATABASE_URL: undefined };
