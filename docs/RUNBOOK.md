@@ -460,8 +460,9 @@ cp .env.example .env               # if you have not already
 node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 # paste into SESSION_COOKIE_SECRET in .env
 
-docker compose up -d postgres
-pnpm run db:migrate && pnpm run db:seed
+# This ran `db:migrate` straight after `docker compose up -d postgres`, which is the race
+# scripts/db-wait.mjs exists for: a fresh volume restarts Postgres once during initdb.
+pnpm run db:setup                  # postgres up, wait until it answers, migrate, seed
 
 docker compose up -d --build
 ```
@@ -529,7 +530,7 @@ Full list with descriptions in `.env.example`. The ones that matter:
 
 | Variable | Read by | Notes |
 | --- | --- | --- |
-| `SESSION_COOKIE_SECRET` | api | ≥ 32 bytes. The server **refuses to boot in production** with a short, default or example value, and `docker-compose.yml` refuses to start without it at all. |
+| `SESSION_COOKIE_SECRET` | api | ≥ 32 bytes. The server **refuses to boot in production** with a short, default or example value, and `docker-compose.yml` refuses to start without it at all. Outside production the `.env.example` value boots, with a `configuration warning` saying sessions are signed with a public development secret. |
 | `PUBLIC_WEB_ORIGIN` | api | Comma-separated allowlist of the origin **the browser uses** — behind a proxy that is the proxy's public origin, not the app's internal one. Used for CORS **and** the WebSocket `Origin` check. Getting this wrong is how cross-site WebSocket hijacking happens. No trailing slash, no path, no wildcard: all four are rejected at boot. |
 | `HOST` | api | Bind address. Defaults to `127.0.0.1`, which is right on a laptop and wrong in a container. Both images set `0.0.0.0` themselves; do not override it back without reading the comment in `Dockerfile.api`. |
 | `DATABASE_URL` | api, scripts | Connect as a login role that is a **member of** `prl_app` — `prl_app` itself is `NOLOGIN`. See §5. |
@@ -755,7 +756,9 @@ what the engine produces. The fix is `pnpm run fixtures:regenerate`, never editi
 **The API starts, but nothing that needs the database works.** A `DATABASE_URL` with a stale
 password, or naming a database that was never created, is not refused at boot: config validation
 checks that the variable is present and well-formed, not that the server answers, so the log says
-`Server listening` and `GET /api/v1/health` is 200. Ask the endpoint that does check:
+`Server listening` and `GET /api/v1/health` is 200. Earlier in the same boot log is the clue —
+`database schema not verified at boot` — and every feature route answers 503
+`service_unavailable` until the ledger can be read (§5). Ask the endpoint that does check:
 `curl -s localhost:3001/api/v1/ready` answers 503 with `"database did not answer"` (measured with a
 wrong password and with a database name that does not exist; it takes about five seconds, the
 connect timeout). `pnpm run db:verify` connects with `DATABASE_URL`, as the API does, and names
@@ -763,9 +766,10 @@ the real error — `password authentication failed for user "prl_api"`, `databas
 exist`. `db:migrate` is not the check: it prefers `DATABASE_MIGRATION_URL`, which can be right while
 `DATABASE_URL` is wrong.
 
-**The API refuses to boot.** Read the message — config validation lists every problem at
-once. The usual cause is a missing or too-short `SESSION_COOKIE_SECRET`. If it names migrations
-instead, the database is behind the build: `pnpm run db:migrate` (§5).
+**The API refuses to boot.** Exit 78. Read the message — config validation lists every problem at
+once. Under `NODE_ENV=production` the usual cause is a missing, short or placeholder
+`SESSION_COOKIE_SECRET`; outside production those three boot with a warning instead. If it names
+migrations, the database is behind the build: `pnpm run db:migrate` (§5).
 
 **`docker compose up` stops with "required variable SESSION_COOKIE_SECRET is missing".** Working
 as intended: there is no default. §6, step two.
@@ -937,7 +941,8 @@ gets no API address at all.
 that is a decision about not giving a serving process schema-change rights, and it means the
 deploy pipeline needs somewhere else to run them from. Any of:
 
-* a CI job on the release commit, with `DATABASE_URL` naming the **`prl_deployer`** role (§5);
+* a CI job on the release commit, with `DATABASE_MIGRATION_URL` naming the **`prl_deployer`** role
+  (§5) — `migrate.mjs` reads it first and falls back to `DATABASE_URL` only when it is unset;
 * a one-shot job/container built from the repo at the same commit;
 * an operator on a bastion, from a checkout at that commit.
 
@@ -1195,6 +1200,9 @@ log driver, or a sidecar. Points that matter when you configure it:
 * Every line has a request id, and API error responses return the same id. That correlation is the
   main reason to keep them.
 * Set retention deliberately. Hand history lives in PostgreSQL; logs are for incidents.
+* `LOG_LEVEL=silent` refuses to boot under `NODE_ENV=production`. It switched the logger off
+  entirely, so a process that could not start exited 1 with nothing on stdout or stderr; `fatal` is
+  the quietest level that still says why a process died.
 
 ### 11.6 Health and rollout
 
