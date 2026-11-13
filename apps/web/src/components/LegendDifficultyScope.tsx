@@ -212,6 +212,12 @@ export function ScopedSettingName({
  * `initial` is the opponent the URL carried, which is what the field says before this code runs and
  * with scripts off; it renders nothing when there is neither, so a page nobody has chosen on does not
  * grow a parameter.
+ *
+ * With scripts off, an opponent picked since the page loaded is NOT carried: two GET forms cannot
+ * share a field without code, and the only no-script cure is a second setting control inside "Start
+ * a match", which `LegendQuickStart.tsx` turns down as two answers to one question. The direction it
+ * fails in is the safe one: after Apply the select visibly shows the profile it will submit, directly
+ * above Play, so what is on screen is what is dealt — the reader re-picks, nothing is mis-dealt.
  */
 export function ScopedOpponentInput({ initial }: { readonly initial: string | null }): ReactElement | null {
   const opponent = useContext(ScopeContext)?.opponent ?? initial;
