@@ -1,16 +1,6 @@
 /**
- * The motion primitives, in one place.
- *
- * Three hooks and the pure functions behind them. There is no animation library here and
- * there will not be one: the whole surface is a reveal, a count-up and a preference read,
- * and every other animation in the app is CSS (§5.4 — "prefer `@keyframes` and `transition`
- * over JS"). An animation library would be a dependency, a bundle, and a second easing
- * vocabulary competing with `tokens.css`.
- *
- * The pure modules are exported alongside the hooks on purpose. They are how anything else
- * that needs to *decide* about motion — a page-level boot sequence, a future chart — asks the
- * same question and gets the same answer, instead of re-reading `matchMedia` with a slightly
- * different fallback.
+ * The motion primitives. No animation library, because everything else is CSS (§5.4).
+ * The pure decisions are exported so other callers ask the same question as the hooks.
  */
 
 export { driveCountUp, type FrameClock } from './count-up-driver.ts';

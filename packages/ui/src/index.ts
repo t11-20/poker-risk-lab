@@ -1,35 +1,12 @@
 /**
- * `@prl/ui` — the shared React components and native CSS for the web client.
- *
- * ## Consumed as source, not as a build
- *
- * `apps/web` lists this package in Next.js's `transpilePackages`, so what ships is the
- * `.ts`/`.tsx` in `src/`. There is no `dist/`, no bundler config here, and no build step
- * to forget before a change shows up in the dev server. That is why:
- *
- *  - relative imports carry their real extension (`./cards.ts`,
- *    `./components/PlayingCard.tsx`) —
- *    that is what lets Node and Next resolve them without a resolver plugin;
- *  - `'use client'` lives at the top of the individual component files that need it, so
- *    the client boundary is per component rather than swallowing the whole package;
- *  - the stylesheet is imported separately (`import '@prl/ui/styles.css'`), because CSS
- *    has to reach the document, not the module graph of a component.
- *
- * ## What is deliberately not here
- *
- * No data fetching, no WebSocket, no router, no global state. Every component in this
- * package is a function of its props. That keeps the hidden-information boundary intact
- * (nothing here can ask for a card it was not given) and it is what makes the components
- * usable in a lesson, in a scenario, in a live table and in hand review without three
- * variants of each.
+ * `@prl/ui`, consumed as source through Next's `transpilePackages`, so there is no build step.
+ * Relative imports carry their real extension, and `'use client'` is per component file.
+ * Every component is a function of its props (no fetching, sockets, router or global state), so
+ * nothing here can ask for a card it was not given.
+ * The stylesheet is not re-exported. Import `@prl/ui/styles.css` in the root layout, because a CSS
+ * side effect in a barrel is pulled in or tree-shaken unpredictably.
  */
 
-// -- Design system -----------------------------------------------------------
-// The stylesheet is NOT re-exported from here. `import '@prl/ui/styles.css'` in the app's
-// root layout: a CSS side effect inside a component barrel would be pulled in (or tree-
-// shaken out) unpredictably depending on which component a page happens to import.
-
-// -- Pure helpers ------------------------------------------------------------
 export {
   type BetBounds,
   clampBetTo,
@@ -54,13 +31,10 @@ export {
   SUIT_KEYS,
   type SuitKey,
 } from './cards.ts';
-// -- Components --------------------------------------------------------------
 export {
   ActionBar,
   type ActionBarProps,
-  // Exported for `apps/web`'s HandReplay, which had its own two-condition copy and drifted:
-  // Chrome does not always land on `document.body` when it blurs a control that just became
-  // disabled, and a rescue that does not also treat `<html>` as abandoned never runs.
+  // For `apps/web`'s HandReplay, whose own copy missed that Chrome can leave focus on `<html>`.
   browserAbandonedFocus,
 } from './components/ActionBar.tsx';
 export {
@@ -118,9 +92,6 @@ export {
   type UnitsOptions,
 } from './format.ts';
 export { type Keyed, withKeys } from './keys.ts';
-// -- Motion ------------------------------------------------------------------
-// The hooks plus the pure decisions behind them, so anything outside this package that has to
-// judge whether to animate asks the same question and gets the same answer.
 export {
   BROWSER_REVEAL_HOST,
   COUNT_DURATION_MS,
@@ -151,16 +122,8 @@ export {
   useReveal,
   watchForReveal,
 } from './motion/index.ts';
-// -- The render-boundary "is this an outs count?" guard ----------------------
-// Exported for the same reason the probability guard below is: the rule ("a count is only called
-// outs where a card could be one") belongs to every surface that shows one, and a second copy of
-// `equity < 0.5` in `apps/web` is exactly the drift this package exists to prevent.
+// The render-boundary guards are exported so `apps/web` never keeps a second, drifting copy.
 export { ALREADY_AHEAD_EQUITY, countsAsOuts } from './outs-count.ts';
-// -- The render-boundary probability guard -----------------------------------
-// Exported, not kept private to the components, because the rule it encodes ("a probability that
-// is not a probability is never drawn") belongs to every surface that renders one — including the
-// app's own pages. A second, subtly different copy of `value >= 0 && value <= 1` somewhere in
-// `apps/web` would be exactly the drift this package exists to prevent.
 export {
   formatProbability,
   isProbabilityDifference,
@@ -172,15 +135,7 @@ export {
   normaliseProbabilityPoints,
   PROBABILITY_TOLERANCE,
 } from './probability.ts';
-// -- Chart geometry ----------------------------------------------------------
-// Pure, deterministic, and exported because the next polar chart should reuse these rather
-// than re-derive the trigonometry with a different idea of where zero is.
-//
-// The whole public surface of `radar.ts` is here, deliberately. A partial re-export is the
-// failure mode this barrel exists to prevent: a caller who can reach `RADAR_VIEWBOX` but not
-// `radarViewBox` widens the window by hand, and one who cannot reach `RADAR_LABEL_GUTTER`
-// picks their own number for the label margin — at which point two charts in the same app
-// disagree about where the frame is. Either the module is reusable or it is not.
+// All of `radar.ts`, because a partial re-export makes callers hand-roll the frame and gutter.
 export {
   axisAngle,
   axisLabelAnchor,
@@ -203,11 +158,8 @@ export {
   roundCoordinate,
   summariseAxes,
 } from './radar.ts';
-// What each seat did on the street in progress, for the plate's status line.
 export { lastActionsThisStreet } from './seat-actions.ts';
-// Who did what on the street, as one line for the decision band.
 export { STREET_SUMMARY_LIMIT, type StreetSummary, streetSummary } from './street-summary.ts';
-// -- Table types, projected out of the wire contract -------------------------
 export type {
   ActionName,
   LegalAction,
