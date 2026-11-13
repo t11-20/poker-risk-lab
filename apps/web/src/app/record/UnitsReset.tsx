@@ -52,8 +52,10 @@ export function UnitsReset(): ReactElement {
       if (token === null) {
         setReset({
           state: 'failed',
+          // The CSRF token every write carries could not be fetched. The learner cannot act on the
+          // word "token" (UX audit at 6b3886e, M5); what they can do is reload.
           message:
-            'This page could not get a security token from the server, so nothing was sent. Reload and try again.',
+            'Something went wrong before anything was sent, so nothing changed. Reload the page and try again.',
         });
         return;
       }

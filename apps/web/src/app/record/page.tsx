@@ -129,19 +129,25 @@ export default async function RecordPage(): Promise<ReactElement> {
       <header className="prl-page-head">
         <p className="prl-label">Your record</p>
         <h1 className="prl-page-head__title prl-display-2">What you have actually done</h1>
+        {/*
+          Why there is no score, in the learner's words. The reason it is a FACT and not a design choice
+          that could be quietly reversed: `prl` has no column a score, percentage or streak could be
+          stored in, and `ProgressResponse` has no field one could be sent in. That sentence used to be
+          the visible copy (UX audit at 6b3886e, M5), which told a first-time learner about a database.
+        */}
         <p className="prl-page-head__standfirst">
           Six counts and two lists, and nothing else. There is no score on this page, no percentage complete,
-          no streak and no rank — not because they were left out, but because the database has no column one
-          could be stored in and the response type has no field one could be sent in.
+          no streak and no rank, and there is nowhere in Poker Risk Lab for one to be kept: what you have done
+          is counted, never graded.
         </p>
       </header>
 
       {record.state === 'signedOut' ? (
-        <Callout tone="insight" title="There is no session to read a record with">
-          A record belongs to one learner, so there is no anonymous version of this page to show you — an
-          empty one would look like a record of having done nothing, which is a different claim. Opening the
-          table creates a guest session in one request, with no email and no password, and everything you do
-          from then on is counted here. <Link href="/play">Open a table</Link>, or{' '}
+        <Callout tone="insight" title="This browser has no record yet">
+          A record belongs to one learner, and this browser has not started one — so there is nothing to show
+          you here, and an empty page would look like a record of having done nothing, which is a different
+          claim. Opening a table starts a guest session straight away, with no email and no password, and
+          everything you do from then on is counted here. <Link href="/play">Open a table</Link>, or{' '}
           <Link href={LEARN_PATH}>start reading</Link>.
         </Callout>
       ) : null}
@@ -193,8 +199,11 @@ export default async function RecordPage(): Promise<ReactElement> {
             </dl>
           )}
 
+          {/* Topics are derived from the content bundle when this page is read, not stored against the
+              record, so a retired lesson contributes no topic rather than breaking the count. That was the
+              visible note (UX audit at 6b3886e, M5); the learner only needs what counts as a topic. */}
           <p className="prl-note">
-            {`Topics are derived from the content bundle when this page is read, not stored against your record — so a lesson that is retired contributes no topic rather than breaking the count. ${pluralise(record.progress.topicsTouched.length, 'topic')} so far.`}
+            {`A topic counts once you have finished a lesson or tried a scenario in it. ${pluralise(record.progress.topicsTouched.length, 'topic')} so far.`}
           </p>
         </Panel>
       ) : null}

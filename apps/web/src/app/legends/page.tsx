@@ -49,15 +49,27 @@ export const metadata: Metadata = {
     'the others. Not real people, and not copies of anyone.',
 };
 
+/**
+ * What the naming mode means for the reader, in their words.
+ *
+ * `namingMode` is an operator setting (`resolveNamingMode` in `@prl/poker-ai`): `archetype`, the
+ * default, or an opt-in `attributed`. These used to say "This deployment shows archetype names
+ * only", and the chip above them read "Naming: archetype" — the config key and its value, shown to
+ * a learner who has never heard of either (UX audit at 6b3886e, M5).
+ */
 const NAMING_NOTE: Readonly<Record<'archetype' | 'attributed', string>> = {
   archetype:
-    'This deployment shows archetype names only, which is the default. Each name describes a style: ' +
-    'the sixteen trait values beneath it are the whole model, and nothing about what you can learn ' +
-    'here depends on whose name is on the seat.',
+    'Each profile is named for the style it plays. The sixteen trait values beneath the name are the ' +
+    'whole model, and nothing about what you can learn here depends on whose name is on the seat.',
   attributed:
-    'This deployment has opted into attributed names. Where one is shown it appears BENEATH the ' +
-    'archetype name and always reads "(modelled style)", because the archetype is the profile and ' +
-    'the attributed name is only a mnemonic for it. No profile reproduces how any person plays.',
+    'Some profiles also show a person’s name. Where one does, it appears BENEATH the style name and ' +
+    'always reads "(modelled style)", because the style is the profile and the name is only a memory ' +
+    'aid for it. No profile reproduces how any person plays.',
+};
+
+const NAMING_CHIP: Readonly<Record<'archetype' | 'attributed', string>> = {
+  archetype: 'Named by style',
+  attributed: 'Named by style, some with a person’s name',
 };
 
 /** The page-level framing block's fragment, which every card's one-line pointer links to. */
@@ -87,7 +99,7 @@ export default async function LegendsPage({
         </p>
         <div className="prl-legend-head__meta">
           <Chip>{pluralise(profiles.data.profiles.length, 'profile')}</Chip>
-          <Chip tone="accent">{`Naming: ${namingMode}`}</Chip>
+          <Chip tone="accent">{NAMING_CHIP[namingMode]}</Chip>
         </div>
         <nav className="prl-legend-nav" aria-label="Other legends screens">
           <Link href={compareHref(DEFAULT_COMPARE_PROFILE_IDS, difficulty)}>Compare styles on one spot</Link>

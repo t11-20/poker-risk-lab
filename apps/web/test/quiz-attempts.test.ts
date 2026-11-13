@@ -116,6 +116,6 @@ describe('whose verdict the learner is shown', () => {
     // and a sentence implying otherwise is a lie about the learner's own record.
     assert.match(VERDICT_SOURCE_NOTE.local, /nothing was recorded/u);
     assert.doesNotMatch(VERDICT_SOURCE_NOTE.pending, /recorded/u);
-    assert.match(VERDICT_SOURCE_NOTE.server, /recorded/u);
+    assert.match(VERDICT_SOURCE_NOTE.server, /Recorded on your record/u);
   });
 });

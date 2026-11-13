@@ -242,11 +242,15 @@ export type VerdictSource = 'server' | 'anonymous' | 'local' | 'pending';
  * teaches nothing.
  */
 export const VERDICT_SOURCE_NOTE: Readonly<Record<VerdictSource, string>> = {
-  server:
-    'This is the server’s own comparison, made against a figure it computed when you answered — and the one it recorded as a question you have answered.',
+  // Each of these used to open "This is the server’s own comparison, made against a figure it
+  // computed when you answered" — true, and shown after every answer to a learner who has no reason
+  // to know there is a server (UX audit at 6b3886e, M5). Which party compared is `source`'s job and
+  // the precedence is `resolvedVerdict`'s; the sentence keeps only what the learner can act on:
+  // whether the answer was kept.
+  server: 'Recorded on your record as a question you have answered.',
   anonymous:
-    'This is the server’s own comparison, made against a figure it computed when you answered. Nothing was recorded, because there is no session to attach it to — answers count towards your record once this browser is carrying one, and opening a table creates a guest session in one request, with no email and no password.',
-  pending: 'Asking the server for its comparison. What is shown is the same comparison made in your browser.',
+    'Nothing was recorded, because this browser has no guest session to keep it on. Answers count towards your record once it has one — opening a table starts a guest session straight away, with no email and no password.',
+  pending: 'Checking your answer. What is shown was worked out in your browser, the same way.',
   local:
-    'The server could not be reached, so this comparison was made in your browser and nothing was recorded. It is the same comparison the server makes.',
+    'Your answer could not be sent, so this was worked out in your browser and nothing was recorded. It is the same comparison either way.',
 };

@@ -904,7 +904,7 @@ const LEARN_CHECKS = [
   },
   {
     id: 'J1.3',
-    what: 'every topic group is a level-2 or level-3 heading and no level is skipped',
+    what: 'every group of lessons is a level-2 or level-3 heading and no level is skipped',
     decide: (e) => {
       const belowTheTitle = e.headings.filter((heading) => heading.level > 1);
       if (belowTheTitle.length < 5) {
@@ -976,6 +976,17 @@ export const QUIZ_VERDICT_OPENING =
 // `apps/web/src/lib/quiz-verdict.ts`. `ax-assertions.test.mjs` drives this with the app's own sentence.
 export const NUMERIC_VERDICT_OPENING = /^\S.* is (?:within ±.*? of|more than ±.*? from) the computed .*?\./u;
 
+/**
+ * Presses the multiple-choice question's "Check answer", which is what answers it. False when the
+ * button is missing or still disabled, which J2.5 reports rather than reading a region nobody wrote.
+ */
+const PRESS_CHECK_ANSWER_JS = `(() => {
+  const button = document.querySelector('.prl-learn-quiz__check');
+  if (button === null || button.disabled) return false;
+  button.click();
+  return true;
+})()`;
+
 async function gatherQuiz(page) {
   const evidence = { title: await page.evaluate('document.title') };
   evidence.panelHeading = (await axFor(page, '.prl-learn-quiz .prl-panel__title'))[0] ?? null;
@@ -987,8 +998,14 @@ async function gatherQuiz(page) {
   evidence.answerGroup = (await axFor(page, '.prl-learn-quiz__options'))[0] ?? null;
   evidence.answerOptions = await axFor(page, '.prl-learn-quiz__options input[type="radio"]');
 
-  // 2.5 — answer the multiple-choice question and read the region it writes into.
-  const answered = await page.evaluate(
+  // 2.5 — select an option, read the region (selecting must not answer), then press "Check answer"
+  // and read the region it writes into.
+  //
+  // The radios used to answer on change, so a keyboard reader arrowing through the group answered
+  // and posted every option on the way (UX audit at 6b3886e, Minor 2). Two evaluates rather than
+  // one: React applies the selection on the next render, and a click on the button in the same
+  // task would land on a button that is still disabled.
+  const selected = await page.evaluate(
     `(() => {
       const radio = document.querySelector('.prl-learn-quiz__options input[type="radio"]');
       if (radio === null) return false;
@@ -996,7 +1013,11 @@ async function gatherQuiz(page) {
       return true;
     })()`,
   );
-  evidence.choiceAnswered = answered;
+  await page.settle(600);
+  evidence.verdictOnSelect = selected
+    ? await page.evaluate(`document.querySelector('.prl-learn-quiz__verdict')?.textContent ?? null`)
+    : null;
+  evidence.choiceAnswered = selected ? await page.evaluate(PRESS_CHECK_ANSWER_JS) : false;
   await page.settle(900);
   evidence.choiceVerdict =
     (await liveRegions(page)).find((region) => QUIZ_VERDICT_OPENING.test(region.text)) ?? null;
@@ -1202,9 +1223,15 @@ const QUIZ_CHECKS = [
   },
   {
     id: 'J2.5',
-    what: 'answering writes the verdict and its source sentence into one polite region',
+    what: 'selecting an option answers nothing; "Check answer" writes the verdict into one polite region',
     decide: (e) => {
-      if (!e.choiceAnswered) return fail('no radio option on the quiz to answer');
+      if (typeof e.verdictOnSelect === 'string' && e.verdictOnSelect.trim() !== '') {
+        return fail(
+          `selecting an option answered it before "Check answer" was pressed: "${e.verdictOnSelect.slice(0, 60)}". ` +
+            'A keyboard reader arrowing through the group answers every option on the way',
+        );
+      }
+      if (!e.choiceAnswered) return fail('no "Check answer" control to press after selecting an option');
       if (e.choiceVerdict === null) {
         return fail('answering wrote no verdict into any live region, so a reader is told nothing');
       }
@@ -1377,6 +1404,9 @@ async function gatherQuizReview(page, baseUrl) {
       evidence.runs.push(run);
       continue;
     }
+    // Selecting is not answering: the chips only appear once "Check answer" is pressed.
+    await page.settle(600);
+    run.checked = await page.evaluate(PRESS_CHECK_ANSWER_JS);
     await page.settle(900);
     run.chose = await page.evaluate(
       `(() => {
@@ -1390,6 +1420,8 @@ async function gatherQuizReview(page, baseUrl) {
         return { lesson, wanted };
       })()`,
     );
+    await page.settle(600);
+    run.rechecked = await page.evaluate(PRESS_CHECK_ANSWER_JS);
     await page.settle(900);
     run.verdict = await page.evaluate(
       `(${SPOKEN_TEXT_JS})(document.querySelector('.prl-learn-quiz__verdict'))`,
@@ -1433,6 +1465,11 @@ const QUIZ_REVIEW_CHECKS = [
       }
       for (const run of [matched, missed]) {
         const label = run.takeTheLessonAnswer ? 'the matching run' : 'the non-matching run';
+        if (run.checked === false || run.rechecked === false) {
+          return fail(
+            `${label} selected an option and found no "Check answer" to press, so nothing was answered`,
+          );
+        }
         if (run.chose === null || run.chose === undefined) {
           return fail(
             `${label} could not find the lesson's own answer on the page, so it diverged from nothing`,

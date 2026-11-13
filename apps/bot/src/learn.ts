@@ -32,6 +32,7 @@ import {
   type Quiz,
   type QuizQuestion,
   type RangeSpec,
+  TOPIC_LABELS,
   TOPICS,
   type Topic,
 } from '@prl/contracts';
@@ -59,21 +60,7 @@ export type QuizUnit = NumericQuestion['unit'];
 // Topics and quizzes
 // ---------------------------------------------------------------------------
 
-/** `TOPIC_LABELS` in `apps/web/src/lib/lab-labels.ts`, which says why a slug transform cannot work. */
-const TOPIC_LABELS: Readonly<Record<Topic, string>> = {
-  'rules-and-flow': 'Rules and flow',
-  'positions-and-blinds': 'Positions and blinds',
-  'hand-reading-and-outs': 'Hand reading and outs',
-  'probability-and-equity': 'Probability and equity',
-  'pot-odds-and-ev': 'Pot odds and EV',
-  'bet-sizing-and-spr': 'Bet sizing and SPR',
-  'fold-equity-and-bluffing': 'Fold equity and bluffing',
-  ranges: 'Ranges',
-  'variance-and-bankroll': 'Variance and bankroll',
-  tournaments: 'Tournaments',
-  'risk-psychology': 'Risk psychology',
-};
-
+/** The shared names in `@prl/contracts`, so the bot calls a topic what the web app calls it. */
 export function topicLabel(topic: Topic): string {
   return TOPIC_LABELS[topic];
 }

@@ -348,6 +348,18 @@
 }
 
 /**
+ * "New here? Start with the 6 Intro scenarios" — a standalone link, so a full target.
+ *
+ * It sat alone on its line at 271x17 (UX audit at 6b3886e, Minor 1), on the one route a first-time
+ * visitor is most likely to tap. The product's floor for a control is `--prl-target-min`.
+ */
+.prl-lab-start-link {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--prl-target-min);
+}
+
+/**
  * The question is the card. It is what a reader scans thirty-six of, so it is set at the reading
  * size rather than one step under it.
  */

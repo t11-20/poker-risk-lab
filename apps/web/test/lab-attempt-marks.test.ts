@@ -71,8 +71,8 @@ describe('the Scenario Lab index', () => {
     const source = read('app', 'lab', 'page.tsx');
     assert.match(
       source,
-      /nothing here knows which of them you have attempted/u,
-      'the "Fixture data" note has to name the per-reader claim it cannot make, the way ' +
+      /it does not know which of them you have attempted/u,
+      'the "Bundled copy" note has to name the per-reader claim it cannot make, the way ' +
         'LESSONS_FALLBACK does for the read/unread marks',
     );
   });

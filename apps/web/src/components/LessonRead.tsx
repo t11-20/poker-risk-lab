@@ -86,7 +86,7 @@ function RecordedAt({ iso }: { readonly iso: string }): ReactElement {
       {Number.isNaN(at.getTime()) ? null : (
         <>
           {' '}
-          The server stamped it <time dateTime={iso}>{at.toLocaleString()}</time>.
+          Recorded at <time dateTime={iso}>{at.toLocaleString()}</time>.
         </>
       )}{' '}
       <Link href={RECORD_PATH}>See your record</Link>.
@@ -150,11 +150,13 @@ export function LessonRead(props: LessonReadProps): ReactElement {
       title="Mark this lesson as read"
       headingLevel={2}
     >
+      {/* Why opening the page does not count, which is the module header's PROD-028: a prefetch, a
+          crawler and a back-button all look the same to the API. That clause was the visible copy (UX
+          audit at 6b3886e, M5); a learner needs the rule, not the HTTP. */}
       <p className="prl-prose">
-        Nothing on this page decides that for you. Opening a lesson is not reading it — a prefetch, a crawler
-        and a back-button all look the same to the server — so your record only counts the lessons you say you
-        have finished. It is counted, never scored: there is no percentage complete and nowhere for one to be
-        stored.
+        Nothing on this page decides that for you. Opening a lesson is not the same as reading it, so your
+        record only counts the lessons you say you have finished. It is counted, never scored: there is no
+        percentage complete.
       </p>
       <div className="prl-stack">
         <p className="prl-btn-row">

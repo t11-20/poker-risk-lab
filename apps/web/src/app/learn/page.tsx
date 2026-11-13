@@ -1,13 +1,19 @@
 /**
- * The curriculum index: seventeen lessons as a numbered syllabus, grouped by topic.
+ * The curriculum index: seventeen lessons as a numbered syllabus, in reading order.
  *
- * ## The numbering is the point
+ * ## The numbering is the point, so it is the route "Next" takes
  *
- * `01 … 17` down the page, derived from the display order by `buildCurriculum` rather than stored
- * in the content. A flat list of seventeen links is a list; the same seventeen with numbers, topic
- * groups, prerequisites and reading times is a system a learner can hold in their head and refer
- * to out loud ("I'm on 06"). That is §1's "numbering turns a list into a system", applied to the
- * screen it was written for.
+ * `01 … 17` down the page, derived from the reading order by `buildCurriculum` rather than stored
+ * in the content. A flat list of seventeen links is a list; the same seventeen with numbers,
+ * prerequisites and reading times is a system a learner can hold in their head and refer to out
+ * loud ("I'm on 06"). That is §1's "numbering turns a list into a system", applied to the screen it
+ * was written for.
+ *
+ * It only works if the numbers are the route. They used to count down a topic-grouped display
+ * order while each lesson's "Next" followed reading order, so the lead's "the numbering is a route
+ * through the material" sent Lesson 2's reader to Lesson 4 (UX audit at 6b3886e, M1). The cards are
+ * now in reading order under Intro / Core / Advanced headings, and the topic is a chip on each card;
+ * `learn-curriculum.ts` has the reasoning and `test/learn-index-reading-order.test.ts` the guard.
  *
  * ## Nothing is locked, and nothing is scored
  *
@@ -56,6 +62,8 @@ import {
   type CurriculumEntry,
   DIFFICULTY_GLYPHS,
   DIFFICULTY_LABELS,
+  startHereNote,
+  topicLabel,
 } from '@/lib/learn-curriculum.ts';
 import { GLOSSARY_PATH, lessonHref, loadLessonList, READABLE_LESSON_IDS } from '@/lib/learn-data.ts';
 import { readerCallOptions } from '@/lib/server-session.ts';
@@ -96,7 +104,9 @@ function EntryCard({
         </h3>
         <p className="prl-learn-entry__summary">{summary.summary}</p>
         <div className="prl-row prl-learn-entry__chips">
-          <DifficultyChip difficulty={summary.difficulty} />
+          {/* The topic, not the difficulty: the group heading above already says the difficulty,
+              and the topic is what the old topic headings used to tell a reader. */}
+          <Chip>{topicLabel(summary.topic)}</Chip>
           <Chip>{pluralise(summary.estimatedMinutes, 'minute')}</Chip>
           {/* `=== true`, not truthiness: `null` means nobody asked, and a "read" tick on a lesson
               nobody checked would be the same lie in the opposite direction. */}
@@ -168,9 +178,9 @@ export default async function LearnPage(): Promise<ReactElement> {
         </span>
         <h1 className="prl-display-2">The curriculum</h1>
         <p className="prl-learn-page__lead">
-          Seventeen lessons, in the order the ideas depend on one another. Each one states what it assumes you
-          have read, and none of them is locked — the numbering is a route through the material, not a gate
-          across it.
+          Seventeen lessons, numbered in the order the ideas depend on one another, and the Next button at the
+          end of each lesson follows the same numbers. Each one states what it assumes you have read, and none
+          of them is locked — the numbering is a route through the material, not a gate across it.
         </p>
         <p className="prl-learn-page__lead">
           Every figure inside a lesson is computed while you read it, from the situation the lesson describes,
@@ -229,16 +239,9 @@ export default async function LearnPage(): Promise<ReactElement> {
           actions={<DifficultyChip difficulty={start.summary.difficulty} />}
         >
           <p className="prl-learn-start__summary">{start.summary.summary}</p>
-          <p className="prl-note">
-            {/* Three states, because `unlocked` has three. The third used to be rendered as the
-                second — "the earliest lesson you have not marked read" — about a reader this page
-                had never asked after. */}
-            {start.unlocked === true
-              ? 'Everything this lesson assumes is already marked read.'
-              : start.unlocked === false
-                ? 'This is the earliest lesson in the syllabus you have not marked read. Its prerequisites are listed on its card below.'
-                : 'This is the first lesson in the syllabus, not a suggestion based on what you have read — this page has no way to know that. It assumes nothing, so it is the safe place to start if you are new.'}
-          </p>
+          {/* Three states of `unlocked`, and a fourth: a lesson with no prerequisites, over which
+              "everything it assumes is marked read" was vacuously true and read as a claim. */}
+          <p className="prl-note">{startHereNote(start)}</p>
           <Link className="prl-btn prl-btn--primary prl-btn--lg" href={lessonHref(start.summary.id)}>
             {`Read lesson ${formatIndex(start.position)}`}
           </Link>
@@ -246,7 +249,7 @@ export default async function LearnPage(): Promise<ReactElement> {
       )}
 
       {curriculum.groups.map((group) => (
-        <section className="prl-learn-group" key={group.topic}>
+        <section className="prl-learn-group" key={group.key}>
           <header className="prl-learn-group__head">
             <h2 className="prl-learn-group__title">{group.label}</h2>
             <p className="prl-learn-group__meta">

@@ -79,7 +79,9 @@ export const RECORD_EXPLANATIONS: Readonly<Record<RecordFigureName, string>> = {
   handsPlayed:
     'Seats you held in hands that finished. A hand still in progress has not been played yet, which is also why it contributes nothing to the figure below.',
   unitsNetLifetime:
-    'The sum of your per-hand results in free practice units. This is not a balance — there is no balance column anywhere in this product — and it is as likely to be negative as positive. That is what variance looks like.',
+    // "There is no balance column anywhere in this product" was the visible wording; the fact is
+    // `apps/web/test/legal-pages.test.ts`'s to hold, and the learner only needs that it is not money.
+    'The sum of your per-hand results in free practice units. This is not a balance — nothing in Poker Risk Lab holds money or a balance — and it is as likely to be negative as positive. That is what variance looks like.',
 };
 
 /** The record, as a value, with the reasons it might not be here. */

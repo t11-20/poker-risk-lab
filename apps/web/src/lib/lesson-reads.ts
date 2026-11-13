@@ -144,13 +144,13 @@ export function lessonReadNote(outcome: LessonReadOutcome): string {
       );
     case 'anonymous':
       return (
-        'Nothing was recorded, because there is no session to attach it to. A record belongs to one ' +
-        'learner, and this browser is not carrying one — opening a table creates a guest session in ' +
-        'one request, with no email and no password, and everything you do from then on is counted.'
+        'Nothing was recorded, because this browser has no guest session to keep it on. A record ' +
+        'belongs to one learner — opening a table starts a guest session straight away, with no email ' +
+        'and no password, and everything you do from then on is counted.'
       );
     case 'unavailable':
       return (
-        'The server could not be reached, so nothing was recorded. Nothing else about this lesson ' +
+        'That could not be sent, so nothing was recorded. Nothing else about this lesson ' +
         'changed, and pressing the button again is safe.'
       );
   }

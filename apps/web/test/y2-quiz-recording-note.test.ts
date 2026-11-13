@@ -104,7 +104,7 @@ describe('the sentence beside the verdict', () => {
   it('only claims a recording in the one state where a row exists', () => {
     // The precise failure: before the fix there was no `anonymous` source, so this sentence — the
     // one that says the answer was recorded — was printed for every signed-out learner.
-    assert.match(VERDICT_SOURCE_NOTE.server, /it recorded as a question you have answered/u);
+    assert.match(VERDICT_SOURCE_NOTE.server, /Recorded on your record as a question you have answered/u);
 
     for (const source of ['anonymous', 'local'] as const) {
       assert.match(
@@ -114,7 +114,7 @@ describe('the sentence beside the verdict', () => {
       );
       assert.doesNotMatch(
         VERDICT_SOURCE_NOTE[source],
-        /it recorded as a question you have answered/u,
+        /Recorded on your record/u,
         `${source} must not make the claim reserved for an answer that was stored`,
       );
     }
@@ -125,8 +125,10 @@ describe('the sentence beside the verdict', () => {
     const note = VERDICT_SOURCE_NOTE.anonymous;
     // Said once, at the point it matters, and it names the remedy rather than only the problem —
     // the same three parts as the sibling sentence in `lesson-reads.ts`.
-    assert.match(note, /no session to attach it to/u);
-    assert.match(note, /guest session in one request/u);
+    // The remedy was "a guest session in one request"; "in one request" is how the API sees it, not
+    // the learner (UX audit at 6b3886e, M5). The claim pinned is the same: a table starts one, now.
+    assert.match(note, /no guest session to keep it on/u);
+    assert.match(note, /opening a table starts a guest session straight away/u);
     assert.match(note, /no email and no password/u);
     // …and it is not a demand. The product is guest-first on purpose.
     assert.doesNotMatch(note, /sign in|log in|create an account|you must|you need to/iu);
@@ -136,8 +138,8 @@ describe('the sentence beside the verdict', () => {
     // Two endpoints, one rule. If these ever diverge, one of the two screens is describing a
     // different product from the other.
     const lesson = lessonReadNote({ state: 'anonymous' });
-    assert.match(lesson, /no session to attach it to/u);
-    assert.match(VERDICT_SOURCE_NOTE.anonymous, /no session to attach it to/u);
+    assert.match(lesson, /no guest session to keep it on/u);
+    assert.match(VERDICT_SOURCE_NOTE.anonymous, /no guest session to keep it on/u);
   });
 });
 

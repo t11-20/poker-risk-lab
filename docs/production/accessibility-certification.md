@@ -629,7 +629,7 @@ arrives.
 |---|---|---|---|---|
 | 1.1 | auto | Load `/learn` | The title **"Learn — Poker Risk Lab"** is announced. | |
 | 1.2 | auto | VO + Command + H (or `H`) to the first heading | A single level-1 heading naming the curriculum is announced, with its level. | |
-| 1.3 | auto | Continue by heading | Each topic group announces as a heading at level 2 or 3, in an order that never skips a level. | |
+| 1.3 | auto | Continue by heading | Each group of lessons (Intro, Core, Advanced) announces as a heading at level 2 or 3, in an order that never skips a level. | |
 | 1.4 | auto | Rotor → Links (or `K`) | Every lesson link announces the lesson's title. No link announces as a bare number, a glyph, or "link". | |
 | 1.6 | auto | Read the figures at the top (VO + Right / Down) | Each figure announces a **label and a value together** ("Lessons, 17"), never a bare number. | |
 
@@ -645,7 +645,7 @@ arrives.
 | 2.2 | auto | Read to the quiz | The quiz panel announces as a heading, and the question prompt as a level-3 heading. | |
 | 2.3 | auto | Read the question's position | The heading announces **"Question 1 of 5"** before the prompt. | |
 | 2.4 | auto | Tab into the answer group | The group announces its purpose ("Choose one answer") and each option announces its own text. The prompt is **not** read twice. | |
-| 2.5 | auto | Select an option (Arrow keys, then Space if needed) | Within a moment, politely and without interrupting: **"That matches the answer this lesson gives…"** or **"That is not the answer this lesson gives…"**, followed by the sentence about what was recorded. | |
+| 2.5 | auto | Select an option (Arrow keys, then Space if needed), then Tab to **Check answer** and press it | Selecting announces nothing and answers nothing. After the press, within a moment, politely and without interrupting: **"That matches the answer this lesson gives…"** or **"That is not the answer this lesson gives…"**, followed by the sentence about what was recorded. | |
 | 2.6 | auto | 2.5 again, on a **numeric** question: type letters into the answer field | The field announces itself as **invalid**, and the correction — "That is not a number this question can be checked against…" — is announced **with the field**, before the tolerance hint. | |
 | 2.7 | auto | Clear the field and type a number, then activate "Check against the computed figure" | The comparison is announced politely as one message ("… is within ±… of the computed …" or "… is more than ±… from the computed …"), including the sentence about whether anything was recorded. Hearing the recording sentence *without* the verdict in front of it is a FAIL. | |
 | 2.8 | auto | Activate "Next question" | The reading cursor moves to the new question's heading and announces **"Question 2 of 5"** followed by the new prompt. Being moved to a heading that announces only the prompt is a FAIL — the reader cannot tell whether they advanced. | |
