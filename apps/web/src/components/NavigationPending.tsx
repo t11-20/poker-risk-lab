@@ -11,9 +11,13 @@
  *    sees, and the next slow route would need somebody to remember. `window` rather than `document`
  *    because a bubbling listener there runs after React's own on the document, so `defaultPrevented`
  *    already says whether `Link` took the press.
- *  - **Withdrawn when the pathname changes**, which is the router's navigation landing; on
- *    `pageshow`, because a document restored from the back-forward cache comes back with whatever
- *    it was showing when it was left; and after `PENDING_CEILING_MS` regardless.
+ *  - **Withdrawn when the URL the shell renders changes**, pathname or query, which is the router's
+ *    navigation landing; on `pageshow`, because a document restored from the back-forward cache
+ *    comes back with whatever it was showing when it was left; and after `PENDING_CEILING_MS`
+ *    regardless. The query is in it because the age gate answers a router press with a redirect
+ *    that can change only the query (`/age-check` to `/age-check?next=/play`), and a pathname-only
+ *    key left the message up for the whole ceiling (Devin on PR #35). A redirect to the URL already
+ *    shown changes nothing at all, so `shouldShowPending` does not start the message for one.
  *  - **A polite status region that is always in the tree and empty at rest.** A live region that
  *    arrives already holding its text is announced by nothing, and an empty one says nothing. It is
  *    not the route announcer and does not repeat it: this says a press was taken, the announcer says
@@ -23,6 +27,7 @@
  * `prefers-reduced-motion: no-preference` in `nav.css`.
  */
 
+import { useSearchParams } from 'next/navigation';
 import { type ReactElement, useEffect, useRef, useState } from 'react';
 import {
   formDestination,
@@ -40,16 +45,18 @@ export function NavigationPending({ pathname }: NavigationPendingProps): ReactEl
   const [message, setMessage] = useState<string | null>(null);
   const timers = useRef<{ show?: number; ceiling?: number }>({});
 
-  // A changed pathname is the router's navigation landing, which is when the message must go. The
-  // comparison is what makes `pathname` a real dependency rather than a trigger nothing reads.
-  const seenPathname = useRef(pathname);
+  // A changed URL is the router's navigation landing, which is when the message must go. The
+  // comparison is what makes `landed` a real dependency rather than a trigger nothing reads.
+  const search = useSearchParams();
+  const landed = `${pathname}?${search.toString()}`;
+  const seenLanding = useRef(landed);
   useEffect(() => {
-    if (seenPathname.current === pathname) return;
-    seenPathname.current = pathname;
+    if (seenLanding.current === landed) return;
+    seenLanding.current = landed;
     window.clearTimeout(timers.current.show);
     window.clearTimeout(timers.current.ceiling);
     setMessage(null);
-  }, [pathname]);
+  }, [landed]);
 
   useEffect(() => {
     const clear = (): void => {

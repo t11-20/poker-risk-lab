@@ -17,8 +17,10 @@
  * reader is still looking at, by `components/NavigationPending.tsx` — and this module is the part
  * of it that can be tested without a browser.
  *
- * A leaf module with no imports, so it loads under `node --test`.
+ * Its one import is `age-gate.ts`, itself a leaf, so this still loads under `node --test`.
  */
+
+import { ageCheckLocation } from './age-gate.ts';
 
 /** Below this a navigation is quick enough that a message would only flash. */
 export const PENDING_DELAY_MS = 400;
@@ -45,17 +47,46 @@ export interface PendingInput {
 /**
  * Whether to start the pending message for this press.
  *
- * A router navigation is announced only when it changes the pathname, because the pathname is the
- * one change the shell can see arriving (`usePathname`) and so the one it can withdraw the message
- * on; a search-only router change would leave it standing until the ceiling. A document load is
- * announced whatever it changes, because the page it was said on is about to be replaced.
+ * A document load is announced whatever it changes, because the page it was said on is about to be
+ * replaced. A router navigation is announced only when it changes the pathname and will not land on
+ * the URL already shown: the shell withdraws the message when the URL it renders changes
+ * (`NavigationPending` keys on pathname and query), so a router landing that changes nothing is one
+ * nothing could withdraw it on, and it would stand over an idle page until `PENDING_CEILING_MS`.
+ *
+ * A router change of the query alone is still not announced. None of the presses the audit timed is
+ * one; the landing key that could now withdraw it arrived for the age gate below, not for them.
  */
 export function shouldShowPending(input: PendingInput): boolean {
   const { destination, current, documentLoad } = input;
   if (destination.origin !== current.origin) return false;
   // Same page, or a fragment on it: nothing is loaded.
   if (destination.pathname === current.pathname && destination.search === current.search) return false;
-  return documentLoad || destination.pathname !== current.pathname;
+  if (documentLoad) return true;
+  if (destination.pathname === current.pathname) return false;
+  return !landsWhereItWasPressed(destination, current);
+}
+
+/**
+ * Whether the age gate would send this router press back to the URL it was pressed on.
+ *
+ * Devin on PR #35: on `/age-check?next=/play`, the header's Play link is a router navigation to
+ * `/play`, which `proxy.ts` answers with a 303 to `/age-check?next=/play` — the URL already on
+ * screen. The press started the message, the pathname never changed, and "Loading the page…" stood
+ * over the gate for the full fifteen seconds. Nothing on the page changes when that navigation
+ * lands, so no landing signal the shell has could withdraw it; the fix is not to say it.
+ *
+ * The bounce is predictable because it is the gate's own `ageCheckLocation`, so this asks the gate
+ * rather than restating its URL. Compared as parsed parameters, so `next=%2Fplay` and `next=/play`
+ * are the same page. Whether the destination is gated at all is not knowable here (scope, mode and
+ * the minimum age are server configuration), so it is assumed gated. The safe direction is silence:
+ * a reader who has passed the gate and is still sitting on it gets no message for a Play press,
+ * where the other direction leaves a false "loading" up for everybody who has not.
+ */
+function landsWhereItWasPressed(destination: URL, current: URL): boolean {
+  const bounce = new URL(ageCheckLocation(destination.pathname, destination.search), current);
+  return (
+    bounce.pathname === current.pathname && bounce.searchParams.toString() === current.searchParams.toString()
+  );
 }
 
 /**

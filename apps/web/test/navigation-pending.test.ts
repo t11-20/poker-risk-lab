@@ -88,10 +88,56 @@ describe('which presses start the message', () => {
     }
   });
 
-  it('not a router change of the query alone, which nothing could withdraw it on', () => {
+  it('not a router change of the query alone, which no press the audit timed is', () => {
     assert.equal(
       shouldShowPending({ destination: at('/lab?topic=pot-odds'), current: at('/lab'), documentLoad: false }),
       false,
+    );
+  });
+
+  it('not a router press the age gate bounces back to the URL already shown (REGRESSION, PR #35)', () => {
+    // Devin's case: Play in the header, pressed on the gate it redirects to. The 303 lands on this
+    // exact URL, so nothing changes and nothing withdrew the message for fifteen seconds.
+    const toPlay = { destination: at('/play'), documentLoad: false } as const;
+    assert.equal(shouldShowPending({ ...toPlay, current: at('/age-check?next=/play') }), false);
+    assert.equal(shouldShowPending({ ...toPlay, current: at('/age-check?next=%2Fplay') }), false, 'encoded');
+    // The destination's query travels in `next`, so it must match too.
+    assert.equal(
+      shouldShowPending({
+        destination: at('/play?table=t1'),
+        current: at('/age-check?next=%2Fplay%3Ftable%3Dt1'),
+        documentLoad: false,
+      }),
+      false,
+    );
+  });
+
+  it('still a router press from the gate that lands somewhere the shell sees change', () => {
+    // A bare /age-check bounces to /age-check?next=/play: the query changes, and the landing key
+    // includes the query, so the message is withdrawn. Another destination lands elsewhere.
+    const cases: readonly (readonly [string, string])[] = [
+      ['/play', '/age-check'],
+      ['/play', '/age-check?next=/play&declined=yes'],
+      ['/learn', '/age-check?next=/play'],
+      ['/play', '/age-check?next=/review'],
+    ];
+    for (const [destination, current] of cases) {
+      assert.equal(
+        shouldShowPending({ destination: at(destination), current: at(current), documentLoad: false }),
+        true,
+        `${destination} from ${current}`,
+      );
+    }
+  });
+
+  it('a document load to the gated page from the gate, which replaces the page it was said on', () => {
+    assert.equal(
+      shouldShowPending({
+        destination: at('/play'),
+        current: at('/age-check?next=/play'),
+        documentLoad: true,
+      }),
+      true,
     );
   });
 });
@@ -129,8 +175,12 @@ describe('the wiring', () => {
     );
   });
 
-  it('withdraws the message when the pathname lands', () => {
-    assert.match(component, /seenPathname\.current = pathname;[\s\S]{0,200}setMessage\(null\);/u);
+  it('withdraws the message when the URL lands, query included (REGRESSION, PR #35)', () => {
+    // The query is what changes when the gate bounces /age-check to /age-check?next=/play.
+    assert.match(component, /const search = useSearchParams\(\);/u);
+    assert.match(component, /const landed = `\$\{pathname\}\?\$\{search\.toString\(\)\}`;/u);
+    assert.match(component, /seenLanding\.current = landed;[\s\S]{0,200}setMessage\(null\);/u);
+    assert.match(component, /\}, \[landed\]\);/u);
   });
 
   it('keeps an empty status region in the tree at rest, so the message is announced', () => {
