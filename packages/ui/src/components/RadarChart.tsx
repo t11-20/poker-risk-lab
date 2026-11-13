@@ -1,45 +1,8 @@
 /**
- * The trait radar, as inline SVG.
- *
- * ## No chart library, and no canvas
- *
- * A radar is sixteen coordinates and a polygon. A charting dependency would be a reviewed
- * supply-chain event, a bundle, and a second styling vocabulary competing with `tokens.css`,
- * in exchange for arithmetic that fits in `radar.ts` and is unit-tested there. Canvas is the
- * other tempting answer and is worse: a canvas is one opaque bitmap to a screen reader, it
- * does not inherit a colour token, and it needs a device-pixel-ratio dance to stay sharp.
- *
- * SVG also means the whole picture is styled from the stylesheet — the accent stroke, the
- * 12%-alpha fill, the hairline rings — so this component sets **geometry and nothing else**.
- * `vector-effect="non-scaling-stroke"` keeps a hairline exactly one hairline wide however the
- * SVG is scaled, which is the one thing geometry cannot express.
- *
- * ## The accessibility structure, which is most of this component
- *
- * A radar chart is a picture of a table, and to a screen reader it is nothing at all. So:
- *
- *  - the `<svg>` is `role="img"` with an `aria-label` summarising the shape — how many axes,
- *    the average, the extremes — which is what tells a reader whether to read further;
- *  - beside it, **the full table is always rendered**, visually hidden: axis marker, trait
- *    name, value. Not a `<figcaption>`, not a tooltip, not a summary sentence pretending to be
- *    the data. The numbers *are* the content, and a profile is literally a set of numbers, so
- *    anything less would be hiding the subject of the component.
- *
- * The rings and spokes carry no information the table does not, and children of `role="img"`
- * are ignored anyway, so nothing inside the SVG is announced.
- *
- * ## Why axis labels have a mode
- *
- * The wire labels are sentences ("Value-heavy vs bluff-heavy", "Adjusts to stack depth"). Six
- * of those around a ring is legible; sixteen is a thicket, at any size — SVG text does not
- * wrap and scaling the chart scales the overlap with it. So `axisLabels="index"` draws the
- * numbered markers `01…16` instead, and the hidden table maps every marker to its trait. No
- * information is lost in any mode, because the table is not a fallback.
- *
- * `text` mode also widens the `viewBox` so the words have somewhere to go, rather than relying
- * on an `overflow: visible` rule in a stylesheet this component cannot see.
- *
- * Deterministic for a given input, and server-render safe: no state, no effects, no clock.
+ * The trait radar as inline SVG. No chart library and no canvas, which is one opaque bitmap to a
+ * screen reader. This component sets geometry only; the stylesheet draws it.
+ * The `<svg>` is `role="img"` with a shape summary, and the full table is always rendered visually
+ * hidden beside it. `axisLabels="index"` draws `01…16` markers, because sixteen sentence labels overlap.
  */
 
 import type { LegendTraitAxis } from '@prl/contracts';
@@ -68,7 +31,7 @@ export type RadarAxisLabels = 'text' | 'index' | 'none';
 
 export interface RadarChartProps {
   readonly axes: readonly LegendTraitAxis[];
-  /** Names the chart, e.g. the profile's archetype. The shape summary is appended for the label. */
+  /** Names the chart, e.g. the profile's archetype. The shape summary is appended. */
   readonly label?: string;
   readonly axisLabels?: RadarAxisLabels;
   readonly className?: string;
@@ -82,8 +45,7 @@ export function RadarChart(props: RadarChartProps): ReactElement {
   const summary = summariseAxes(axes);
 
   if (axes.length === 0) {
-    // A radar with no axes is not an empty chart, it is a missing profile. Saying so is more
-    // use to a reader than three rings around nothing.
+    // No axes means a missing profile, so say so rather than draw rings around nothing.
     return (
       <div className={cx('prl-radar', className)}>
         <p className="prl-radar__empty">{summary}</p>
@@ -92,8 +54,7 @@ export function RadarChart(props: RadarChartProps): ReactElement {
   }
 
   const count = axes.length;
-  // Word labels need room outside the ring; two-character markers do not. The window widens,
-  // the chart itself does not move — see `radarViewBox`.
+  // Word labels need room outside the ring. The window widens; the chart does not move.
   const viewBox = radarViewBox(axisLabels === 'text' ? RADAR_LABEL_GUTTER : 0);
   const shape = polygonPoints(axes.map((axis) => axis.value));
 
@@ -153,10 +114,6 @@ export function RadarChart(props: RadarChartProps): ReactElement {
           </g>
         )}
       </svg>
-      {/*
-        The chart's content in full, for anyone who cannot see the chart. Always rendered, never
-        collapsed, and deliberately not a `<figcaption>`: this is data, not a caption.
-      */}
       <table className="prl-visually-hidden">
         <caption>{label === undefined ? 'Trait values' : `${label}: trait values`}</caption>
         <thead>

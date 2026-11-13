@@ -1,70 +1,13 @@
 /**
- * One seat at the table: who is there, what they have behind, what they have in front, and
- * whether the decision is theirs.
- *
- * Extracted out of `PokerTable` because a seat is the densest object on the screen and it has
- * four separate correctness rules of its own — hidden cards, the three-cue active state, what a
- * status means once the hand is over, and forced colors — none of which is easy to see when it is
- * a nested function in a 300-line table.
- *
- * ## 1. A face-down card is face-down because the SERVER said nothing
- *
- * `faceDown` is derived from `seat.holeCards === null`, never from a flag this component owns.
- * `null` means "you are not entitled to see these", which is exactly the condition for drawing a
- * back — so "should I show these cards?" is not a question this component can get wrong. The
- * placeholder value is `-1`, not `0`: `PlayingCard` short-circuits on `faceDown` before it decodes
- * anything, but `0` is a real card (the two of clubs), and leaving real card integers in the props
- * of a hidden card is how an accidental leak starts. `-1` is not a card, so there is nothing here
- * to leak.
- *
- * ## 2. Whose turn it is, marked THREE ways at once
- *
- * Whose turn it is is the single most important fact on the screen, so it never depends on
- * noticing a colour:
- *
- *   1. an accent edge on the seat plate (`.prl-seat--to-act`),
- *   2. a `TO ACT` chip whose content is the literal words,
- *   3. the draining turn-timer ring, when the caller has a deadline to render.
- *
- * Under `forced-colors: active` the plate's hairline is drawn with `background-color` and is
- * therefore repainted out of existence, so components.css gives the active seat a real border plus
- * an outline in `Highlight`. Under `prefers-reduced-motion` the ring stops draining and reads as a
- * full accent ring — a state rather than a clock — and the seconds remain as text inside it. Each
- * of the three cues survives at least one of those conditions killing the others.
- *
- * ## 3. A settled hand is described in the past tense, and wears no live badges
- *
- * `SeatStatus` describes a seat's participation *in the current hand*, and the engine keeps sending
- * it after the hand is over — `street: 'complete'` with everybody's last status still on them. Read
- * as present tense that is wrong on every unfolded seat.
- *
- * Measured on the built app at `/play?state=complete` — the settled fixture, and the same component
- * the live table draws when the last frame of a hand arrives. Two seats read **"in the hand"** and
- * the viewer's own seat, which had just won the main pot with an ace-high flush, read **"all in"**
- * and wore an **"all in" chip**. Nothing was in any hand: the pot had been awarded.
- *
- * So `complete` gets its own wording, and the chip — which is a badge about the seat's live state,
- * "this seat has no decisions left in this hand" — is not drawn at all, because that is true of
- * every seat once the hand is over and on the winner it reads as money still in the middle.
- *
- * `showdown` is deliberately NOT included: the cards are down but the pot has not been awarded, so
- * a seat that has not folded genuinely is still in the hand.
- *
- * ## 4. Folded and sitting-out swap the SURFACE, never the opacity
- *
- * That rule lives in the stylesheet, but it is worth knowing here: `opacity: 0.6` on a whole plate
- * dims the text with it and silently takes a 4.5:1 label under the floor. A folded seat is still
- * information — how many players are left, and who — so it stays legible.
- *
- * ## `as`
- *
- * The table places its opponents in a `<ul>` and the viewer's own seat outside it (so the two can
- * be re-flowed independently below 900px), so this renders either an `<li>` or a `<div>`. The
- * element carries the absolute placement in the oval layout, which is why the choice is a prop
- * rather than a wrapper: a wrapper would take the positioning and the plate would sit inside it.
- *
- * Server-render safe: no state, no effects, no `window`. The turn ring's countdown is a client
- * component and marks its own boundary.
+ * One seat at the table.
+ * 1. `faceDown` comes from `holeCards` being `null`, the server's silence. The placeholder is `-1`,
+ *    not `0`, because 0 is the two of clubs.
+ * 2. The seat to act has three cues (accent edge, `TO ACT` chip, turn ring), so each survives forced
+ *    colors or reduced motion removing another.
+ * 3. On `complete` the status is past tense and the live "all in" chip is dropped, because the engine
+ *    still sends last statuses after the pot is awarded. `showdown` is not settled.
+ * 4. Folded seats swap the surface, never the opacity, which would take a 4.5:1 label under the floor.
+ * `as` is a prop, not a wrapper, because the element carries the oval placement.
  */
 
 import type { ReactElement } from 'react';
@@ -77,51 +20,24 @@ import { type TurnClock, TurnTimer } from './TurnTimer.tsx';
 
 export interface SeatProps {
   readonly seat: SeatView;
-  /**
-   * The phase the hand is in, from `PlayerView.street`.
-   *
-   * Required rather than defaulted: `SeatStatus` alone cannot say whether "all in" is a commitment
-   * still standing or something that happened, and a component that guessed "still playing" would
-   * be wrong in exactly the state a reader is most likely to be looking at — the settled frame at
-   * the end of a hand. See rule 3 in the module comment.
-   */
+  /** Required, because `SeatStatus` alone cannot say whether "all in" still stands (rule 3). */
   readonly street: Street;
-  /** Display name. `playerId` is an opaque id and is never shown. */
+  /** `playerId` is opaque and never shown. */
   readonly name: string;
-  /**
-   * Place on the oval, 0-based, with 0 at the bottom (where the viewer sits). Ignored by the
-   * stacked layout, which flows seats in DOM order.
-   */
+  /** 0-based, with 0 at the bottom where the viewer sits. Ignored by the stacked layout. */
   readonly ringIndex: number;
-  /** How many seats share the oval. */
   readonly ringCount: number;
-  /**
-   * The server's turn deadline, when this seat is the one to act and the caller has one. `null`
-   * renders the other two active cues without a ring, which is the correct rendering for a
-   * spectator view or a table with no clock.
-   */
+  /** `null` renders the other two active cues without a ring. */
   readonly turn?: TurnClock | null;
-  /** Cards to ring, e.g. the five that made a hand in review. */
   readonly highlightedCards?: readonly number[];
-  /**
-   * What the ring MEANS, e.g. "part of the winning hand". Announced, not drawn: the accent border and
-   * the corner notch are cues only a sighted reader gets, so the phrase joins the card's accessible
-   * name. Why a card is marked is the caller's knowledge, which is why it is a prop and not a default.
-   */
+  /** Joins each ringed card's accessible name, because the ring is a visual cue only. */
   readonly highlightLabel?: string;
-  /**
-   * What this seat last did on the street in progress — "raised to 124", "called 10" — from
-   * `lastActionsThisStreet`. Shown in place of "in the hand" on the status line, so the plate grows
-   * by nothing; absent, the line says what it always said. Ignored once the hand is settled, where
-   * the past-tense status is the whole story. See `../seat-actions.ts` for why it exists.
-   */
+  /** Replaces "in the hand" on the status line (`../seat-actions.ts`). Ignored once settled. */
   readonly lastAction?: string | null;
-  /** `li` inside the opponents list, `div` for the viewer's own plate. */
   readonly as?: 'li' | 'div';
   readonly className?: string;
 }
 
-/** What a seat's status means while the hand is still being played. */
 const STATUS_TEXT: Readonly<Record<SeatStatus, string>> = {
   active: 'in the hand',
   folded: 'folded',
@@ -129,12 +45,7 @@ const STATUS_TEXT: Readonly<Record<SeatStatus, string>> = {
   sittingOut: 'sitting out',
 };
 
-/**
- * And what it means once the pot has been awarded. See rule 3 in the module comment.
- *
- * Past tense for the two that were about a hand in progress, unchanged for the two that were not:
- * "folded" already describes something that happened, and a seat sitting out is still sitting out.
- */
+/** Past tense for the two statuses that described a hand in progress. */
 const SETTLED_STATUS_TEXT: Readonly<Record<SeatStatus, string>> = {
   active: 'still in at the end',
   folded: 'folded',
@@ -142,7 +53,7 @@ const SETTLED_STATUS_TEXT: Readonly<Record<SeatStatus, string>> = {
   sittingOut: 'sitting out',
 };
 
-/** The pot has been awarded and nobody is in anything. `showdown` is not this; see rule 3. */
+/** The pot has been awarded. `showdown` is not this. */
 function isSettled(street: Street): boolean {
   return street === 'complete';
 }
@@ -154,20 +65,12 @@ const STATUS_CLASS: Readonly<Record<SeatStatus, string>> = {
   sittingOut: 'prl-seat--sitting-out',
 };
 
-/** See rule 1 in the module comment: not a card, so there is no value to leak. */
 const FACE_DOWN_PAIR: readonly number[] = [-1, -1];
 
 /**
- * A seat's place on the oval, as percentages of the field.
- *
- * Screen coordinates, so y grows downward and `PI / 2` is the bottom of the ellipse — which is
- * where ring index 0 lands, and that is where a player expects to be sitting.
- *
- * The radii are 38% / 36% rather than 50% because a seat is positioned by its *centre*
- * (`translate: -50% -50%` in the CSS), so the ring has to leave half a plate of margin inside the
- * field or the outermost seats hang over the edge. These two numbers are paired with the derived
- * `min-height` in the `@container prl-table` block of components.css, which works through the
- * arithmetic. Change one and the six-handed layout starts to overlap; change both together.
+ * Screen coordinates, so `PI / 2` puts ring index 0 at the bottom. The radii leave half a plate of
+ * margin, because seats are positioned by their centre. They pair with the `min-height` in the
+ * `@container prl-table` block of components.css. Change both together.
  */
 const RING_RADIUS_X = 38;
 const RING_RADIUS_Y = 36;
@@ -180,13 +83,12 @@ export function seatRingPosition(index: number, count: number): StyleWithVars {
   return { '--prl-seat-x': `${x.toFixed(2)}%`, '--prl-seat-y': `${y.toFixed(2)}%` };
 }
 
-/** The status line: the last action this street when there is one, otherwise the status. */
 function statusLine(status: SeatStatus, settled: boolean, lastAction: string | null): string {
   if (settled) return SETTLED_STATUS_TEXT[status];
   return lastAction !== null && status !== 'sittingOut' ? lastAction : STATUS_TEXT[status];
 }
 
-/** Not after a name that already says it: every fixture names the reader "You", which read "You (you)". */
+/** Skipped after a name that already says it. Fixtures name the reader "You", which read "You (you)". */
 function needsSelfMarker(isSelf: boolean, name: string): boolean {
   return isSelf && name !== 'You';
 }
@@ -205,17 +107,8 @@ export function Seat(props: SeatProps): ReactElement {
   else if (isHoldingCards) cards = FACE_DOWN_PAIR;
 
   /**
-   * This seat is holding cards the caller asked to ring — at a settled table, the winner.
-   *
-   * An ADDED class, never a renamed one, and it states nothing the plate did not already state:
-   * `PlayingCard` puts the caller's phrase ("part of the winning hand") into each ringed card's
-   * accessible name, and the ring is already drawn on the cards themselves. What was missing was
-   * anything at the PLATE level, so a settled six-max table showed five plates and a sixth that
-   * looked identical except for two small rings 130px inside it. `styles/play.css` section 12.3
-   * draws the plate for it; a stylesheet that does not know about the class loses nothing.
-   *
-   * Deliberately NOT called `--won`. Why the cards are marked is the caller's knowledge (that is
-   * what `highlightLabel` is for), and hand review marks cards for reasons other than winning.
+   * The plate-level mark for a seat holding ringed cards (`styles/play.css` section 12.3). Not called
+   * `--won`, because review marks cards for reasons other than winning.
    */
   const marked =
     highlightedCards !== undefined &&
@@ -249,27 +142,19 @@ export function Seat(props: SeatProps): ReactElement {
               <span className="prl-visually-hidden">dealer button</span>
             </span>
           ) : null}
-          {/* Cue 2 of 3. The words are the information; the accent is the third cue on top. */}
           {seat.isToAct ? (
             <Chip tone="accent" pill>
               to act
             </Chip>
           ) : null}
-          {/*
-            A live badge, so it is gone once the hand is. "All in" on this plate means the seat has
-            put its stack in and has no decisions left in this hand — true of every seat after the
-            pot is awarded, and on the seat that just WON the pot it reads as a commitment still
-            outstanding. The status line below keeps the fact in the past tense.
-          */}
+          {/* A live badge, gone once the hand is settled. On the winner it read as a stake still out. */}
           {seat.status === 'allIn' && !settled ? (
             <Chip tone="caution" pill>
               all in
             </Chip>
           ) : null}
-          {/* Cue 3 of 3, and only when there is a real server deadline to draw. */}
           {seat.isToAct && turn !== null ? (
-            /* Phrased two ways because the seat's own name is the subject: "Ada's turn timer" reads
-               correctly, "You turn timer" does not. */
+            /* "Ada's turn timer" reads correctly, "You turn timer" does not. */
             <TurnTimer clock={turn} label={seat.isSelf ? 'Your turn timer' : `${name} turn timer`} />
           ) : null}
         </span>
@@ -280,8 +165,7 @@ export function Seat(props: SeatProps): ReactElement {
         {needsSelfMarker(seat.isSelf, name) ? <span className="prl-seat__you">{' (you)'}</span> : null}
       </p>
 
-      {/* Each pair in its own `div`, which `<dl>` allows, so a wrapping row can break between
-          pairs and never between a label and its figure. */}
+      {/* One `div` per pair, so a wrapping row breaks between pairs, never inside one. */}
       <dl className="prl-seat__stats">
         <div className="prl-seat__stat">
           <dt className="prl-seat__stat-label">Stack</dt>
@@ -290,19 +174,13 @@ export function Seat(props: SeatProps): ReactElement {
         <div className="prl-seat__stat">
           <dt className="prl-seat__stat-label">
             {'In front'}
-            {/* Compact on screen, unambiguous read aloud: "in front" is the table term for exactly
-                this street's commitment, and a learner should not have to already know that. */}
             <span className="prl-visually-hidden">{' this street'}</span>
           </dt>
           <dd className="prl-seat__stat-value">{formatChips(seat.committedThisStreet)}</dd>
         </div>
       </dl>
 
-      {/* The status line carries the last action rather than a new line beside it: an oval of six
-          13rem plates has no height to spare (`components.css`, the `@container prl-table` block),
-          and "raised to 124" is a more useful thing to say about an active seat than "in the hand".
-          A folded seat still says "folded" — its last action this street, or its status from an
-          earlier one, which is the same word. */}
+      {/* The last action rides on the status line, because six 13rem plates have no height to spare. */}
       <p className="prl-seat__status">{statusLine(seat.status, settled, lastAction)}</p>
 
       {seat.status === 'sittingOut' ? null : (

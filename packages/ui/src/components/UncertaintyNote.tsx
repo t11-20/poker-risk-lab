@@ -1,25 +1,6 @@
 /**
- * How the numbers were produced and how far they can be trusted.
- *
- * Renders `UncertaintyNote` from `@prl/contracts`: the method, a plain-language
- * summary, the confidence interval, and the named limitations.
- *
- * ## Rules this component enforces, not just displays
- *
- *  - **Never collapsed.** Like `AssumptionList`, there is no toggle. An error bar
- *    behind a disclosure control is an error bar nobody reads.
- *  - **The interval line is always present.** For `monte-carlo` it shows the interval;
- *    for `exact-enumeration` it says there is no sampling error, which is a different
- *    statement from "no interval was reported" and must not be conflated with it.
- *  - **A sampled figure with a missing interval is called out as such.** `null`
- *    `confidenceInterval` on a Monte Carlo result is a gap in the data, and the reader
- *    is told to treat the figure as approximate rather than being shown a bare number.
- *
- * The imported contract type is aliased to `UncertaintyNoteData` because the component
- * and the type would otherwise share a name — the type is the payload, this is the
- * thing that draws it.
- *
- * Server-render safe: no state, no effects.
+ * How the numbers were produced and how far they can be trusted. Never collapsed. The interval line
+ * is always present, and a sampled figure with no interval is called out as approximate.
  */
 
 import type { UncertaintyNote as UncertaintyNoteData } from '@prl/contracts';
@@ -38,14 +19,7 @@ export interface UncertaintyNoteProps {
   readonly className?: string;
 }
 
-/**
- * The method, as a chip.
- *
- * §6.2 asks for the method beside every figure, and the glyphs are chosen to carry the actual
- * distinction in shape alone: `=` for a figure that is exactly this, `≈` for one that is
- * approximately this. A reader who cannot tell the accent chip from the info chip can still
- * tell an enumeration from a sample.
- */
+/** The glyphs carry the method in shape alone, `=` for exact and `≈` for sampled (§6.2). */
 const METHOD_CHIP: Readonly<
   Record<
     UncertaintyNoteData['method'],
@@ -57,21 +31,9 @@ const METHOD_CHIP: Readonly<
 };
 
 /**
- * The interval sentence. Written as a function so the cases are visibly exhaustive rather
- * than buried in nested ternaries inside JSX.
- *
- * ## Why the figures are range-checked here too
- *
- * Both halves of an interval have a range they cannot leave, and each is checked against its
- * own: `level` is a probability (0..1, rendered as a percentage), `halfWidthPoints` is
- * already in percentage points (±100 at the very widest, since that is the entire span the
- * figure lives on). A `level` of 1.6 renders as "160% confidence interval" — an impossible
- * claim about certainty, sitting directly under the equity it is supposed to qualify, which
- * is the worst possible place for one. See `../probability.ts`: the producer refuses these at
- * source, and this refuses them again at the point they would be read.
- *
- * A refused interval does not fall back to the exact-enumeration sentence. "There is no
- * sampling error" would be a *stronger* claim than the one being withdrawn.
+ * Both figures are range-checked again here (`../probability.ts`), because a `level` of 1.6 renders as
+ * a 160% confidence interval. A refused interval never falls back to the no-sampling-error sentence,
+ * which would be a stronger claim.
  */
 function intervalSentence(note: UncertaintyNoteData): string {
   const interval = note.confidenceInterval;

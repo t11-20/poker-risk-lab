@@ -1,115 +1,24 @@
 /**
- * The Coach panel — the centrepiece of the app, and the most information-dense surface in it.
+ * The Coach panel. It renders a `CoachReport`, and every number a learner sees comes through here.
  *
- * It renders a `CoachReport`: equity, pot odds, outs, the candidate actions with their EVs, a
- * suggestion, the stack context, the teaching notes, the assumptions and the uncertainty. Every
- * number the app shows a learner comes through here, which is why this component has hard rules
- * rather than styling preferences.
+ * Always visible, never collapsible: the equity with its method and interval, the pot odds and
+ * break-even equity, the suggestion with its confidence, the assumptions and the uncertainty note.
+ * An assumption one click away is an assumption nobody reads. Detail (the EV table, outs card by card,
+ * explanatory prose, derivations, teaching notes) goes in `<details>`, which works without JavaScript.
  *
- * ============================================================================================
- * WHAT MAY BE COLLAPSED, AND WHAT MAY NEVER BE
- * ============================================================================================
+ * Rules:
+ * 1. The method chip is unconditional, with an `=` or `≈` glyph so it survives without colour.
+ * 2. A Monte Carlo figure always carries its interval, or a warning that it has none.
+ * 3. The suggestion is never called "correct", "optimal", "best", "GTO" or "solved". Low confidence
+ *    is shown as prominently as high, and the disclaimer under it is part of the component.
+ * 4. Clean and dirty outs differ by swatch, count and words, never by colour alone.
+ * 5. Every figure rendered as a percentage passes a range check (`../probability.ts`) before it reaches
+ *    a formatter, independently of the producer, because a report arrives as plain JSON past caches and
+ *    fixtures. A stale `estimate: 1.6` once printed "160.0%". Prose fields are the producer's job.
+ * 6. A count is called "outs" only where `countsAsOuts` (`../outs-count.ts`) says a card could be one.
  *
- * Progressive disclosure with a hard boundary, and the boundary is a product rule rather than a
- * layout choice.
- *
- * **Always visible, never collapsible:**
- *   - the equity figure *with its method and its interval*
- *   - the pot odds and the break-even equity
- *   - the suggestion with its confidence
- *   - **the assumptions** (`AssumptionList`, which has no toggle by design)
- *   - the uncertainty note (`UncertaintyNote`, likewise)
- *
- * Hiding the assumptions behind a control would let a learner read a number without its caveats,
- * which is the exact failure this product exists to prevent. An assumption one click away is an
- * assumption nobody reads.
- *
- * **Collapsible**, in `<details>`/`<summary>`:
- *   - the per-action EV table
- *   - the card-by-card outs breakdown (the *counts* stay visible)
- *   - the paragraphs explaining the outs counts and the stack context (the *figures* stay visible;
- *     the price's own sentence does not collapse, because it is the pot odds in words)
- *   - the derivations — the formulas and the rule-of-2-and-4 comparison
- *   - the teaching notes
- *
- * `<details>` rather than a custom toggle: free keyboard support, free screen-reader semantics, and
- * it works with JavaScript disabled. Nothing in this panel needs JS to be readable.
- *
- * ============================================================================================
- * THE OTHER RULES. Do not "improve" these away.
- * ============================================================================================
- *
- * 1. **A bare percentage with no method is a bug, not a style choice.** The method chip is
- *    unconditional: `EXACT` for an enumeration, `MONTE CARLO` for a sample, each with a glyph
- *    (`=` / `≈`) so the distinction survives without colour.
- *
- * 2. **A Monte Carlo figure always carries its interval**, at `--prl-type-label` beside the value,
- *    via `Metric`'s `interval` slot: `41.2 % ± 0.35 points`. If the report arrives without a
- *    half-width, the panel says so *in a warning* and tells the reader to treat the figure as
- *    approximate — it never prints a bare sampled number as though it were exact.
- *
- * 3. **The suggestion is never called "correct", "optimal", "best", "GTO" or "solved".** It is a
- *    reading of the spot, with a confidence, a size range, a reason, and a list of what would
- *    change it. `CoachSuggestion.confidence` may be `'low'`, and low confidence is displayed as
- *    prominently as high. The disclaimer under it is part of the component, not decoration a page
- *    can drop.
- *
- * 4. **Clean and dirty outs are distinguished by shape, pattern AND words**, never by colour: a
- *    solid accent swatch against a 45-degree hatch, each with its own numeric count and a sentence
- *    spelling out the consequence. "Dirty" is a term of art hiding a real trap — a card that
- *    improves your hand and still loses — so the label says so rather than assuming the reader
- *    knows the jargon.
- *
- * 5. **A probability that is not a probability is never drawn.** Every figure this panel renders
- *    as a percentage passes `isProbabilityFraction` (or its sibling for differences and for
- *    already-scaled points) *before* it reaches a formatter, and a value outside the range is
- *    replaced by a refusal that says why. See `RefusedFigure` below and the long note in
- *    `../probability.ts`.
- *
- *    This is not redundant with the producer's check, and the distinction matters enough to
- *    write down. `@prl/poker-math` refuses an impossible figure where it is *computed*
- *    (`coach.ts` returns `already-ahead` / `no-clean-outs` / `not-a-probability`, and
- *    `assertProbabilityFraction` throws) — but a `CoachReport` arrives here as plain JSON, past a
- *    cache, a fixture file and a deserialiser. Fed the stale value `estimate: 1.6` this panel
- *    used to print "The rule of 2 and 4 estimates 160.0%": a 160% probability, in the app's own
- *    authoritative voice, in a product whose entire premise is never being confidently wrong
- *    about probability. The computation was right and the page was still wrong, because the
- *    presentation layer had no guard. It has one now, and it is deliberately independent of the
- *    producer's, so that a future regression upstream cannot reach a learner's eyes.
- *
- *    What this guard does NOT cover: prose the report supplies verbatim — `explanation`,
- *    `derivation`, `reason`, `note`, the teaching notes, the assumptions and the limitations. A
- *    sentence is not a figure and cannot be range-checked; those strings are the producer's
- *    responsibility. Every number the *panel itself* turns into text is checked here.
- *
- * 6. **A count is only called "outs" where a card could be one.** The same shape as rule 5, one
- *    level up: a figure can be a perfectly good number and still be the wrong ANSWER to the
- *    question its label asks. On a made hand every unseen card clears the equity bar that defines
- *    an out, so this panel headed a flopped two pair "OUTS — 47 CARDS IN TOTAL" — every card in
- *    the deck, from a section whose own lesson teaches that an out rescues a hand that is behind.
- *    `countsAsOuts` in `../outs-count.ts` decides, here, from hero's equity; the counts still
- *    show, the word and the sum do not. Read the long note in that file before changing this.
- *
- * ============================================================================================
- * Structure and reading order
- * ============================================================================================
- *
- * The panel emits an `h2` for its own title and `h3` for its sections. It never emits an `h1`: a
- * page owns its single `h1`, and this panel does not know whether it is the page's subject.
- *
- * Reading order is: what the situation is -> what the numbers are -> what follows from them -> what
- * they assumed. The suggestion deliberately comes *after* the equity and the price rather than at
- * the top. A learner who reads top to bottom meets the reasoning before the conclusion; a learner
- * who scrolls to the conclusion has passed the reasoning on the way.
- *
- * Two figures here count up on change — the equity and the EV of the suggested line — because "what
- * changed?" is one of the four questions the design system allows an animation to answer. The count-up's
- * accessibility contract lives in `Metric`: the true value is in the DOM from the first render, the
- * interpolating copy is `aria-hidden`, and the count is skipped entirely under
- * `prefers-reduced-motion`. Each counting figure also owns a small atomic live region, which is why
- * only the figures worth announcing get one — see the note above the break-even metric.
- *
- * Server-render safe: no state, no effects, no `window`. `Metric` marks its own client boundary.
+ * The panel emits `h2` and `h3`, never `h1`. The suggestion comes after the equity and the price, so a
+ * reader meets the reasoning before the conclusion.
  */
 
 import type {
@@ -125,11 +34,8 @@ import type { ReactElement } from 'react';
 import { parseCardText } from '../cards.ts';
 import { cx } from '../cx.ts';
 /**
- * `formatPercent` is deliberately NOT imported here any more, and that absence is load-bearing.
- * Every percentage this panel renders now goes through `formatProbability`, which returns `null`
- * for a value that is not a probability instead of a string. Reaching for `formatPercent` again
- * would silently re-open the hole described in rule 5 above; if you find yourself needing it,
- * the figure you are rendering is either not a probability or the guard is in the wrong place.
+ * `formatPercent` is deliberately not imported. Every percentage goes through `formatProbability`,
+ * which returns `null` for a value that is not a probability (rule 5).
  */
 import {
   describeSpr,
@@ -178,13 +84,7 @@ const CONFIDENCE_WORD: Readonly<Record<CoachSuggestion['confidence'], string>> =
   reasonable: 'reasonable confidence',
 };
 
-/**
- * The method chip. Rule 1: this is never conditional.
- *
- * The glyphs carry the distinction in shape alone — `=` for a figure that *is* this, `≈` for one
- * that is approximately this — so a reader who cannot separate the accent chip from the info chip
- * can still separate an enumeration from a sample.
- */
+/** Rule 1. Never conditional. */
 const METHOD_CHIP: Readonly<
   Record<EquitySummary['method'], { readonly label: string; readonly glyph: string }>
 > = {
@@ -192,13 +92,7 @@ const METHOD_CHIP: Readonly<
   'monte-carlo': { label: 'monte carlo', glyph: '≈' },
 };
 
-/**
- * What the trial count is counting: an enumeration counts boards, a sample counts trials.
- *
- * Both forms are spelled out rather than left to `pluralise`'s append-an-s rule, because the noun here
- * is a PHRASE and the plural belongs on its head word: `pluralise` given "trial sampled" produces
- * "80,000 trial sampleds".
- */
+/** Spelled out, because `pluralise` would produce "80,000 trial sampleds". */
 const TRIAL_NOUN: Readonly<Record<EquitySummary['method'], { readonly one: string; readonly many: string }>> =
   {
     'exact-enumeration': { one: 'board enumerated', many: 'boards enumerated' },
@@ -207,26 +101,14 @@ const TRIAL_NOUN: Readonly<Record<EquitySummary['method'], { readonly one: strin
 
 interface RefusedFigureProps {
   readonly label: string;
-  /** The figure, named as the reader would name it: "your share of the pot". */
+  /** The figure as the reader would name it, e.g. "your share of the pot". */
   readonly what: string;
 }
 
 /**
- * What stands where a figure would have been, when the figure was not a probability.
- *
- * Three decisions in here, each of which is the difference between a useful refusal and a
- * confusing hole:
- *
- *  - **The label stays.** Removing the whole tile would leave the reader wondering whether the
- *    panel has an equity section at all. The question is still asked; only the answer is withheld.
- *  - **The offending value is not printed, in any form.** Not as "160.0%", not as "1.6", not in
- *    an `aria-label`. A wrong probability recited inside an apology is still a wrong probability
- *    on the page, and it is exactly what a screen-reader user — least able to notice the figure is
- *    absurd — would hear. `test/coach-panel-render.test.ts` scans attributes as well as text for
- *    precisely this reason.
- *  - **It says which kind of absence this is.** "not a probability" rather than "—" or "n/a":
- *    the figure was not missing, it arrived and was rejected, and a bug reporter needs to be able
- *    to tell those apart.
+ * Stands where a figure that was not a probability would have been. The label stays. The offending
+ * value is never printed, not even in an attribute (`test/coach-panel-render.test.ts` scans both).
+ * It says "not a probability" rather than a dash, because the figure arrived and was rejected.
  */
 function RefusedFigure({ label, what }: RefusedFigureProps): ReactElement {
   return (
@@ -244,7 +126,6 @@ function evSign(ev: number): 'positive' | 'negative' | 'neutral' {
   return ev > 0 ? 'positive' : 'negative';
 }
 
-/** `Metric`'s tone from an EV's sign. Redundant with the sign in the text, which is the point. */
 function evTone(ev: number): 'favourable' | 'adverse' | 'neutral' {
   const sign = evSign(ev);
   if (sign === 'positive') return 'favourable';
@@ -253,11 +134,8 @@ function evTone(ev: number): 'favourable' | 'adverse' | 'neutral' {
 }
 
 /**
- * The candidate the suggestion is talking about, so its EV can be shown beside it.
- *
- * Matched on the action, then narrowed by the size range when the suggestion has one — a report may
- * carry several raise sizes as separate candidates. Returns `null` rather than guessing
- * when nothing matches: an EV attributed to the wrong line is worse than no EV at all.
+ * Matched on the action, then narrowed by the size range. `null` rather than a guess, because an EV
+ * attributed to the wrong line is worse than none.
  */
 function candidateForSuggestion(
   candidates: readonly ActionCandidate[],
@@ -274,7 +152,6 @@ function candidateForSuggestion(
   return matches[0] ?? null;
 }
 
-/** Renders an out card as a real card where the string parses, a text chip where it does not. */
 function OutCard({ text }: { readonly text: string }): ReactElement {
   const card = parseCardText(text);
   if (card === null) return <Chip mono>{text}</Chip>;
@@ -285,23 +162,13 @@ interface OutsBucketProps {
   readonly kind: 'clean' | 'dirty';
   readonly count: number;
   /**
-   * False when hero is already in front, so these cards are not outs.
-   *
-   * The consequence sentence has to change with it, and this is not a wording preference.
-   * "These improve your hand but can still lose" is simply FALSE of most of the 37 cards a
-   * flopped two pair sees: a blank does not improve two pair, it just fails to beat it. The
-   * bucket still means something real — the card leaves hero in front but not safe — and that
-   * is what it says instead.
+   * False when hero is already in front. The consequence sentence changes with it, because a blank
+   * does not improve two pair.
    */
   readonly areOuts: boolean;
 }
 
-/**
- * One bucket's headline: swatch, word, count, consequence. Rule 4.
- *
- * The card faces are NOT here — they are in the collapsible breakdown. The count is the part a
- * decision needs; the identity of each card is the part a review wants.
- */
+/** Rule 4. The card faces are in the collapsible breakdown. The count is what a decision needs. */
 function OutsBucket({ kind, count, areOuts }: OutsBucketProps): ReactElement {
   const meaning = areOuts
     ? kind === 'clean'
@@ -313,8 +180,6 @@ function OutsBucket({ kind, count, areOuts }: OutsBucketProps): ReactElement {
   return (
     <div className={cx('prl-outs__bucket', `prl-outs__bucket--${kind}`)}>
       <div className="prl-outs__bucket-head">
-        {/* Solid swatch for clean, 45-degree hatch for dirty. The swatch is the redundant cue; the
-            label and the count are the information. */}
         <span className="prl-outs__swatch" aria-hidden="true" />
         <span className="prl-outs__bucket-label">{kind === 'clean' ? 'Clean' : 'Dirty'}</span>
       </div>
@@ -326,24 +191,14 @@ function OutsBucket({ kind, count, areOuts }: OutsBucketProps): ReactElement {
 
 interface OutsSectionProps {
   readonly outs: OutsBreakdown | null;
-  /**
-   * Hero's equity before any card arrives — the figure that decides whether this section has an
-   * outs count at all. See `../outs-count.ts`.
-   */
+  /** Decides whether this section has an outs count at all (`../outs-count.ts`). */
   readonly heroEquity: number;
 }
 
 /**
- * The outs section, or the reason there is not an outs count in it.
- *
- * **The headline number must never contradict the lesson that names it.** `countsAsOuts` decides
- * which of the two headings this is, at the render boundary and independently of what the report's
- * own prose claims — a stale fixture whose `explanation` still reads "which is 47 outs in total"
- * gets a heading that refuses anyway, and the reader can see the two disagree.
- *
- * The counts and the card lists survive the refusal, deliberately. They are true — 10 cards leave
- * hero comfortably in front, 37 leave hero in front and beatable — and dropping them would trade a
- * misleading number for a missing one. What is withheld is the word "outs" and the sum.
+ * Rule 6. `countsAsOuts` picks the heading at the render boundary, whatever the report's own prose
+ * claims. The counts and card lists survive a refusal because they are true. Only the word and the sum
+ * are withheld.
  */
 function OutsSection({ outs, heroEquity }: OutsSectionProps): ReactElement {
   if (outs === null) {
@@ -368,8 +223,6 @@ function OutsSection({ outs, heroEquity }: OutsSectionProps): ReactElement {
         <OutsBucket kind="clean" count={outs.clean} areOuts={areOuts} />
         <OutsBucket kind="dirty" count={outs.dirty} areOuts={areOuts} />
       </div>
-      {/* The counts are the boundary; the paragraphs explaining them are detail. Open, the order
-          is the one these paragraphs always had relative to each other. */}
       <Disclose summary={areOuts ? 'Which cards, and why' : 'Why there is no outs count'}>
         {areOuts ? (
           <p className="prl-coach__prose">{outs.explanation}</p>
@@ -393,18 +246,13 @@ interface EquitySectionProps {
   readonly equity: EquitySummary;
   /** Pre-formatted `± 0.35 points`, or `null` when the report carried no half-width. */
   readonly interval: string | null;
-  /** Equity minus break-even, as a fraction. Rendered as the metric's delta (§6.5). */
+  /** Equity minus break-even, as a fraction (§6.5). */
   readonly surplus: number;
 }
 
 /**
- * Which side of break-even the margin is on, in the word the delta prints after its figure.
- *
- * It was always "over", so a call that is not priced in read "▼ −27.0 points over the break-even
- * equity" — measured on the Lab at 308fadf — with the glyph and the sign saying under and the words
- * saying over. The word is decided at the precision `Metric` shows the figure (one decimal of a
- * point, the `percent` default), so a margin `Metric` renders flat because it rounds to 0.0 reads
- * "at", never "0.0 points under".
+ * The delta's preposition. It was always "over", so a call not priced in read "▼ −27.0 points over".
+ * Decided at `Metric`'s one-decimal precision, so a margin that rounds to 0.0 reads "at".
  */
 function surplusPreposition(surplus: number): 'over' | 'under' | 'at' {
   if (Number((Math.abs(surplus) * 100).toFixed(1)) === 0) return 'at';
@@ -413,18 +261,11 @@ function surplusPreposition(surplus: number): 'over' | 'under' | 'at' {
 
 function EquitySection({ equity, interval, surplus }: EquitySectionProps): ReactElement {
   const method = METHOD_CHIP[equity.method];
-  // `exactOptionalPropertyTypes`: an absent `interval` and `interval: undefined` are different
-  // types, so the property is added only when there is one.
   const intervalProps = interval === null ? {} : { interval };
 
   /**
-   * Rule 5, on the delta specifically.
-   *
-   * The surplus is a DIFFERENCE of two probabilities, so its range is -1..1 and it is
-   * legitimately negative — a call that is not priced in. `isProbabilityFraction` would reject
-   * every one of those, which is how a guard gets a reputation for false alarms and then gets
-   * deleted. Checked separately from the equity too, so one bad delta does not take a perfectly
-   * good headline figure down with it.
+   * Rule 5 for the delta. A difference of probabilities is legitimately negative, so it uses
+   * `isProbabilityDifference`. Checked apart from the equity, so one bad delta keeps the headline.
    */
   const deltaProps = isProbabilityDifference(surplus)
     ? { delta: { value: surplus, label: `${surplusPreposition(surplus)} the break-even equity` } }
@@ -434,7 +275,6 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
     <section className="prl-coach__section prl-coach__section--equity">
       <div className="prl-coach__section-head">
         <h3 className="prl-coach__section-heading">Equity</h3>
-        {/* Rule 1: unconditional. */}
         <Chip
           className="prl-coach__method"
           tone={equity.method === 'exact-enumeration' ? 'accent' : 'info'}
@@ -444,8 +284,7 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
         </Chip>
       </div>
 
-      {/* Rule 5. `Metric` formats internally, so the check has to happen before it is handed
-          the value — there is no point at which a `Metric` could decline on the panel's behalf. */}
+      {/* Rule 5. `Metric` formats internally, so the check happens before it gets the value. */}
       {isProbabilityFraction(equity.heroEquity) ? (
         <Metric
           label="Your share of the pot"
@@ -467,17 +306,8 @@ function EquitySection({ equity, interval, surplus }: EquitySectionProps): React
 }
 
 /**
- * The price, and the pot it is a price into.
- *
- * `potOdds.pot` is the pot hero can actually WIN, which is below `potTotal` exactly when hero is
- * all-in for less than the bet in front of them: the excess of that bet is a side pot hero is not
- * eligible for. `potTotal` is taken separately rather than subtracted out of a single figure,
- * because a reader looking at 320 chips in the middle and a tile saying "50 in the middle" has been
- * handed two numbers that cannot both be right and no way to tell which is.
- *
- * So the tile names both, and says which is which. The Coach's own prose underneath explains why
- * the side pot is out of reach; this is the figure that stops the two contradicting each other on
- * the face of the panel.
+ * `potOdds.pot` is the pot hero can win, below `potTotal` when hero is all-in for less than the bet.
+ * The tile names both, so the panel never shows two pot sizes that seem to contradict.
  */
 function PriceSection({
   potOdds,
@@ -492,14 +322,9 @@ function PriceSection({
       <h3 className="prl-coach__section-heading">The price</h3>
 
       {/*
-        No `countUp` here, and that is a decision rather than an omission. Three figures on this screen
-        count up — the pot, the equity, and the EV of the suggested line — and each one owns a small
-        atomic live region so that its SETTLED value is announced exactly once and a mid-count value
-        never is. Break-even moves whenever the price moves, so counting it too would announce the same
-        event a fourth time. Four polite announcements for one change is not more accessible than one.
+        No `countUp`. The pot, the equity and the suggested EV already announce a change, and break-even
+        moves with the price, so counting it would announce the same event a fourth time.
       */}
-      {/* Rule 5. This is the figure the whole "should I call?" question turns on, so a wrong one
-          here would misprice every decision the reader makes from this panel. */}
       {isProbabilityFraction(potOdds.breakEvenEquity) ? (
         <Metric
           label="Break-even equity"
@@ -513,16 +338,8 @@ function PriceSection({
       )}
 
       {/*
-        Two shapes for one member, because `oddsRatio` is `number | null` and the two cases are
-        different *kinds* of thing rather than two values of one kind.
-
-        With a price, it is a figure: `Metric` with `format="odds"` and no `unit`, because
-        `formatOdds` already renders "2.9 to 1" and a unit of "to 1" would print it twice.
-
-        With nothing to call there is no figure at all — no "X to 1" exists — so it is a
-        sentence, in a `StatTile`, which takes text. Passing "no cost to continue" to `Metric`
-        is not possible: its `value` is a number, and that is the type doing its job. What must
-        never appear here is "0 to 1" (a real price, and the worst one) or "null".
+        `oddsRatio` is `number | null`. A price is a `Metric` with no unit, since `formatOdds` already
+        says "to 1". With nothing to call it is a sentence in a `StatTile`. Never "0 to 1" or "null".
       */}
       {potOdds.oddsRatio === null ? (
         <StatTile
@@ -555,9 +372,7 @@ function PriceSection({
 
 function StackSection({ stack }: { readonly stack: StackContext }): ReactElement {
   const spr = describeSpr(stack.spr);
-  // Rule 5. `formatProbability` returns `null` rather than a string for a value that is not a
-  // probability, which is what makes the second branch impossible to forget: a `string | null`
-  // will not go into `StatTile`'s `value` without the caller saying what happens instead.
+  // Rule 5. `formatProbability` returns `null`, so the refusal branch cannot be forgotten.
   const potSizedBetPrice = formatProbability(stack.potOddsOfferedByPotSizedBet);
   return (
     <section className="prl-coach__section">
@@ -584,23 +399,9 @@ function StackSection({ stack }: { readonly stack: StackContext }): ReactElement
 }
 
 /**
- * The EV table, in a focusable scroll container.
- *
- * That container is two accessibility rules disagreeing, and this is the resolution.
- *
- * A table's columns cannot wrap, so on a narrow screen this scrolls sideways. axe's
- * `scrollable-region-focusable` (WCAG 2.1.1 Keyboard) requires a scrollable region to be reachable
- * by keyboard, and for a region with no focusable content inside, that means `tabindex="0"` on the
- * container — without it a keyboard user simply cannot bring the right-hand columns into view.
- *
- * Biome's `noNoninteractiveTabindex` objects to tab stops on non-interactive elements. That is a
- * good general heuristic with a documented exception for exactly this case, so the WCAG-mapped rule
- * wins and the suppression is annotated at the line. The container is a `<section>` with an
- * `aria-label` so the tab stop announces what it is instead of being a silent one.
- *
- * The alternative — `display: block` on the rows at narrow widths, the usual "responsive table"
- * trick — was rejected: it strips the table role from the accessibility tree in every current
- * browser, trading a sighted-user layout problem for a screen-reader comprehension problem.
+ * The EV table scrolls sideways on a narrow screen, so its container is a tab stop. axe
+ * `scrollable-region-focusable` (WCAG 2.1.1) requires that, and it outranks `noNoninteractiveTabindex`.
+ * The `aria-label` names the stop. Block-display rows were rejected, because they drop the table role.
  */
 const EV_TABLE_LABEL = 'Expected value of each action. Scrolls sideways on a narrow screen.';
 
@@ -633,8 +434,7 @@ function CandidateTable({ candidates }: { readonly candidates: readonly ActionCa
         <tbody>
           {candidates.map((candidate, position) => {
             const key = keyed[position]?.key ?? candidate.action;
-            // Rule 5. Both extras are assumptions stated as probabilities, and an assumption the
-            // reader cannot check is exactly the kind of figure that must not be invented.
+            // Rule 5. Both extras are assumptions stated as probabilities.
             const extras: string[] = [];
             if (candidate.foldEquityAssumed !== undefined) {
               const folds = formatProbability(candidate.foldEquityAssumed);
@@ -677,7 +477,6 @@ function CandidateTable({ candidates }: { readonly candidates: readonly ActionCa
 
 interface SuggestionBlockProps {
   readonly suggestion: CoachSuggestion;
-  /** The candidate the suggestion refers to, when one could be matched to it. */
   readonly candidate: ActionCandidate | null;
 }
 
@@ -688,14 +487,11 @@ function SuggestionBlock({ suggestion, candidate }: SuggestionBlockProps): React
   return (
     <div className="prl-suggestion">
       <div className="prl-suggestion__head">
-        {/* Never "the correct play". This wording is a product requirement, not a preference. */}
+        {/* Never "the correct play". This wording is a product requirement. */}
         <span className="prl-suggestion__label">One reading of this spot</span>
         <p className="prl-suggestion__action">
           {ACTION_WORD[suggestion.action]}
-          {/* A RANGE, not a single number: sizing is not that precise, and printing one figure
-              would claim a precision the analysis does not have. Unless every size of the action
-              is the same one, an all-in being the usual case: then "700 units to 700 units" said
-              nothing a single figure does not, and read as a mistake on /legends/compare. */}
+          {/* A range, because one figure claims false precision. Equal ends (often all-in) print once. */}
           {range === undefined
             ? ''
             : range.min === range.max
@@ -748,7 +544,6 @@ interface DiscloseProps {
   readonly children: ReactElement | readonly ReactElement[];
 }
 
-/** One collapsible block. `<details>` gives the keyboard and screen-reader behaviour for free. */
 function Disclose({ summary, children }: DiscloseProps): ReactElement {
   return (
     <details className="prl-disclose">
@@ -759,35 +554,11 @@ function Disclose({ summary, children }: DiscloseProps): ReactElement {
 }
 
 /**
- * The rule-of-2-and-4 comparison, or the reason there is not one. **This is the line the P0 was
- * found on**, so it is spelled out rather than inlined as a ternary in the JSX.
- *
- * ## The units, which have been wrong in both directions
- *
- * `rule.estimate` is a FRACTION, like every other probability on this contract, so `formatPercent`
- * is the right renderer and the multiplication happens exactly once. `@prl/poker-math` used to
- * publish it in percentage points instead — 36 rather than 0.36 — and this line rendered a
- * nine-out flush draw as "3,600.0%". `errorPoints` beside it is already scaled, which is what its
- * name says, so it goes through `formatPoints` and is NOT multiplied. Swapping the two formatters
- * is the whole bug, in both directions.
- *
- * ## Three answers, not two, and they are genuinely different things
- *
- *  1. `rule === null` — **the engine withheld it.** The Coach declines the shortcut where it
- *     cannot mean anything: a made hand, no clean outs, or an out count whose multiple would
- *     exceed 100%. That is a considered answer and the reason lands in the teaching notes below.
- *  2. A figure arrived that is **not a probability** — the *panel* withholds it. This is the case
- *     the audit found: fed the stale fixture value `estimate: 1.6`, this line printed "The rule of
- *     2 and 4 estimates 160.0%", unconditionally, because it formatted whatever it was handed.
- *  3. A figure arrived and it is a probability — state it, with its error.
- *
- * Cases 1 and 2 must not share a sentence. "The engine decided this shortcut does not apply" and
- * "something upstream sent a number that cannot be true" are different facts, and the second is a
- * defect the reader is entitled to recognise as one.
- *
- * `rule.note` is deliberately absent from case 2. It is prose written to explain a figure that is
- * not being shown, and a note reading "9 outs times 4 is roughly 180%" would put the impossible
- * percentage straight back on the page through the one channel this guard cannot range-check.
+ * The rule-of-2-and-4 line. `rule.estimate` is a fraction and `errorPoints` is already in points, so
+ * swapping their formatters is the bug in either direction ("3,600.0%" once).
+ * Three cases that must not share a sentence: `null` (the engine declined the shortcut), a figure that
+ * is not a probability (the panel withholds it), and a real figure. `rule.note` is left out of the
+ * second case, because it could restate the impossible percentage.
  */
 function RuleOfThumbLine({ rule }: { readonly rule: EquitySummary['ruleOfThumb'] }): ReactElement {
   if (rule === null) {
@@ -829,26 +600,14 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
   const isSampled = equity.method === 'monte-carlo';
 
   /**
-   * Rule 5, on the error bar.
-   *
-   * A half-width is in percentage POINTS, so its own impossible range is ±100: an error bar wider
-   * than the whole 0..100 span it is drawn on describes nothing, and "41.2 % ± 4,000.00 points"
-   * is the same class of untruth as a 160% probability — it just does not carry a `%` sign, which
-   * is precisely why it would have survived a scan that only looks for percentages.
-   *
-   * A refused interval collapses to `null`, which routes it into the existing "sampled without an
-   * error bar" path rather than inventing a new one. The callout below then says *which* absence
-   * it is, because "none was reported" and "one was reported and could not be true" are different
-   * problems for whoever has to fix it.
+   * Rule 5 for the error bar. A half-width is in points, so beyond ±100 it describes nothing. A refused
+   * interval becomes `null` and takes the no-error-bar path, and the callout says which absence it is.
    */
   const halfWidth =
     reportedHalfWidth !== null && isProbabilityPoints(reportedHalfWidth) ? reportedHalfWidth : null;
   const intervalWasRefused = reportedHalfWidth !== null && halfWidth === null;
 
-  /**
-   * Rule 2. Two decimals rather than one: the interval is often a fraction of a point, and rounding
-   * `± 0.35` to `± 0.4` overstates the uncertainty of a long run and understates a short one.
-   */
+  /** Rule 2. Two decimals, because rounding `± 0.35` to `± 0.4` misstates the uncertainty. */
   const intervalText = halfWidth === null ? null : `± ${formatPoints(Math.abs(halfWidth), { decimals: 2 })}`;
 
   const outs = report.outs;
@@ -859,11 +618,8 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
   return (
     <div className={cx('prl-coach', className)}>
       {/*
-        A `<div>`, not a `<header>`. This panel's root is a `<div>`, and HTML-AAM maps a `<header>`
-        that is not inside `article`, `aside`, `main`, `nav` or `section` to the `banner` role — so a
-        `<header>` here would put a SECOND unnamed banner landmark on every page that renders the
-        Coach, next to the site header (axe `landmark-unique`). Pages own landmarks in this codebase;
-        components do not create them. The heading below is what carries the outline.
+        A `<div>`, not a `<header>`, which outside a sectioning element maps to a second `banner`
+        landmark (axe `landmark-unique`). Pages own landmarks.
       */}
       <div className="prl-coach__header">
         <span className="prl-eyebrow">Coach</span>
@@ -883,14 +639,9 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
         </Callout>
       ) : null}
 
-      {/* ---- always visible ------------------------------------------------------------- */}
       {/*
-        The two figures a decision turns on, then the reading of the spot, then the detail behind
-        them. The reading was the last always-visible block, below outs and stack context, at the
-        bottom of a rail that scrolls for several screens. It is not first either, and that was tried:
-        its reason and its "what would change this" list are about 1,100px on their own, and leading
-        with them pushed the equity figure to 1,480px down the rail - the reading above the very
-        numbers it says it follows from. Measured in Chrome against the built app.
+        The two figures a decision turns on, then the reading, then the detail. Leading with the reading
+        pushed the equity 1,480px down the rail (measured in Chrome).
       */}
       <div className="prl-coach__grid">
         <EquitySection equity={equity} interval={intervalText} surplus={report.potOdds.equitySurplus} />
@@ -904,14 +655,12 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
         <StackSection stack={report.stackContext} />
       </div>
 
-      {/* ---- collapsible: detail, never caveats ----------------------------------------- */}
       <div className="prl-coach__disclosures">
         <Disclose summary={`What each action is worth (${pluralise(report.candidates.length, 'line')})`}>
           <CandidateTable candidates={report.candidates} />
         </Disclose>
 
-        {/* The same refusal as the section heading, for the same reason: this summary is the other
-            place the panel puts a number next to the word "outs". */}
+        {/* Rule 6 again. This summary also puts a number next to the word "outs". */}
         {outs === null ? null : (
           <Disclose
             summary={
@@ -977,7 +726,7 @@ export function CoachPanel(props: CoachPanelProps): ReactElement {
         )}
       </div>
 
-      {/* Neither of these can be collapsed. See the boundary at the top of this file. */}
+      {/* Neither can be collapsed. See the top of this file. */}
       <AssumptionList items={report.assumptions} headingLevel={3} />
       <UncertaintyNote note={report.uncertainty} headingLevel={3} />
     </div>
