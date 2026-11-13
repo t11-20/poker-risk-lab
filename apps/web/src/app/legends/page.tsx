@@ -22,7 +22,8 @@
  *    fixture and says that in a warning, because sample numbers presented as live ones would be
  *    fabrication in a product about how much a number can be trusted.
  *
- * The page owns the single `h1`; the cards emit `h3` under the grid's `h2`.
+ * The page owns the single `h1`; "Start a match" and the grid each own an `h2`, and the cards emit
+ * `h3` under the grid's.
  */
 
 import { Callout, Chip, pluralise } from '@prl/ui';
@@ -32,12 +33,14 @@ import type { ReactElement } from 'react';
 import { DifficultyPicker } from '@/components/DifficultyPicker.tsx';
 import { LegendCard } from '@/components/LegendCard.tsx';
 import { LegendDifficultyScope } from '@/components/LegendDifficultyScope.tsx';
+import { LegendQuickStart } from '@/components/LegendQuickStart.tsx';
 import {
   compareHref,
   DEFAULT_COMPARE_PROFILE_IDS,
   LEGENDS_HAND_REVIEW_PATH,
   LEGENDS_PATH,
   loadLegendProfiles,
+  MATCH_PROFILE_PARAM,
   parseDifficulty,
   type SearchParams,
 } from '@/lib/legends-data.ts';
@@ -75,6 +78,9 @@ const NAMING_CHIP: Readonly<Record<'archetype' | 'attributed', string>> = {
 /** The page-level framing block's fragment, which every card's one-line pointer links to. */
 const FRAMING_ID = 'what-these-profiles-are';
 
+/** The difficulty picker's fragment, which "Start a match" links to for changing the setting. */
+const SETTING_ID = 'how-the-opponent-plays';
+
 export default async function LegendsPage({
   searchParams,
 }: {
@@ -83,6 +89,13 @@ export default async function LegendsPage({
   const params = await searchParams;
   const difficulty = parseDifficulty(params['difficulty']);
   const profiles = await loadLegendProfiles();
+  // The opponent "Apply setting" carried back from "Start a match" (`ScopedOpponentInput`), kept
+  // only when it is a profile this page lists: an unknown id would be a select showing one name and
+  // a hidden field submitting another.
+  const asked = params[MATCH_PROFILE_PARAM];
+  const opponent =
+    profiles.data.profiles.find((profile) => profile.id === (Array.isArray(asked) ? asked[0] : asked))?.id ??
+    null;
   const { namingMode, universalDisclaimer, difficulties } = profiles.data;
 
   return (
@@ -92,10 +105,15 @@ export default async function LegendsPage({
           04
         </span>
         <h1 className="prl-legend-head__title prl-display-2">AI Legends: opponent profiles</h1>
+        {/*
+          It used to end "chosen to contrast with the others so you can feel the difference between
+          styles rather than read about it" — the universal disclaimer's own clause, word for word, which
+          the framing block prints a screen later. At 375px the repeat was two of the standfirst's six
+          lines standing between the head and "Start a match". The contrast is the framing's to state.
+        */}
         <p className="prl-legend-head__standfirst">
-          Each profile is a set of sixteen trait values — how many hands it plays, how hard it bets, how much
-          it cares about position — chosen to contrast with the others so you can feel the difference between
-          styles rather than read about it.
+          Each opponent is sixteen trait values — how many hands it plays, how hard it bets, how much it cares
+          about position — and no two are set alike.
         </p>
         <div className="prl-legend-head__meta">
           <Chip>{pluralise(profiles.data.profiles.length, 'profile')}</Chip>
@@ -114,24 +132,49 @@ export default async function LegendsPage({
       )}
 
       {/*
-        The framing, above every card. Same treatment as the per-card disclaimers — inline prose at
-        body-sm, never collapsed — so a reader meets it before the first profile rather than after
-        the last one.
-      */}
-      <div className="prl-legend-disclaimers prl-legend-disclaimers--wide" id={FRAMING_ID}>
-        <span className="prl-legend-disclaimers__title prl-label">What these profiles are</span>
-        <ul className="prl-legend-disclaimers__list">
-          <li className="prl-legend-disclaimers__item">{universalDisclaimer}</li>
-          <li className="prl-legend-disclaimers__item">{NAMING_NOTE[namingMode]}</li>
-        </ul>
-      </div>
-
-      {/*
-        One scope around the picker and the cards, so every Play link follows the ticked option
-        before "Apply setting" is pressed. See `LegendDifficultyScope.tsx` for the measurement.
+        One scope from here to the last card, so every way of starting a match — the form under the
+        head and each card's Play link — follows the picker's ticked option before "Apply setting" is
+        pressed. See `LegendDifficultyScope.tsx` for the measurement. It is `display: contents`, so
+        the page grid's gaps fall exactly where they did.
       */}
       <LegendDifficultyScope>
-        <DifficultyPicker action={LEGENDS_PATH} difficulties={difficulties} selected={difficulty} />
+        {/*
+          The first thing a reader can press to play, directly under the head. At 375px the first
+          card's Play was at y=2,869; see `LegendQuickStart.tsx` for why this sits above the framing.
+        */}
+        <LegendQuickStart
+          difficulty={difficulty}
+          framingHref={`#${FRAMING_ID}`}
+          profiles={profiles.data.profiles.map((profile) => ({
+            id: profile.id,
+            archetypeName: profile.disclosure.archetypeName,
+          }))}
+          selected={opponent}
+          settingHref={`#${SETTING_ID}`}
+          settings={difficulties.map(({ id, label, coachAvailable }) => ({ id, label, coachAvailable }))}
+        />
+
+        {/*
+          The framing, above every card. Same treatment as the per-card disclaimers — inline prose at
+          body-sm, never collapsed — so a reader meets it before the first profile rather than after
+          the last one. "Start a match" above it is not a profile: it carries the one-line pointer to
+          this block, as every card does.
+        */}
+        <div className="prl-legend-disclaimers prl-legend-disclaimers--wide" id={FRAMING_ID}>
+          <span className="prl-legend-disclaimers__title prl-label">What these profiles are</span>
+          <ul className="prl-legend-disclaimers__list">
+            <li className="prl-legend-disclaimers__item">{universalDisclaimer}</li>
+            <li className="prl-legend-disclaimers__item">{NAMING_NOTE[namingMode]}</li>
+          </ul>
+        </div>
+
+        <DifficultyPicker
+          action={LEGENDS_PATH}
+          difficulties={difficulties}
+          carryOpponent={{ initial: opponent }}
+          id={SETTING_ID}
+          selected={difficulty}
+        />
 
         <section className="prl-legend-section">
           <h2>The profiles</h2>

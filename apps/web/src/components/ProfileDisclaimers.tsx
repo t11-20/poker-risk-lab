@@ -56,7 +56,7 @@ export interface ProfileDisclaimersProps {
 }
 
 /** The pointer's sentence. The same fact as the universal disclaimer, in one line. */
-const POINTER_TEXT =
+export const POINTER_TEXT =
   'An educational strategy simulation of a style — not a real person, and not a copy of anyone.';
 
 export function ProfileDisclaimers(props: ProfileDisclaimersProps): ReactElement {
