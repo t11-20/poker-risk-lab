@@ -653,7 +653,7 @@ export function buildHypotheticalState(spot: HypotheticalSpot): HandState {
   const priorStreets = spot.pot - spot.toCall;
   if (priorStreets < 0) {
     throw new AppError('invalid_request', {
-      fields: { pot: 'must include the bet hero is facing, so it cannot be smaller than toCall' },
+      fields: { pot: 'must include the bet you are facing, so it cannot be smaller than toCall' },
       logDetail: `pot ${spot.pot} is smaller than toCall ${spot.toCall}`,
     });
   }
@@ -898,7 +898,7 @@ export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesR
     entries,
     trials,
     takeaway:
-      'Each profile answered the same spot, reconstructed heads-up with hero on the button and any ' +
+      'Each profile answered the same spot, reconstructed heads-up with you on the button and any ' +
       'earlier-street money split evenly between the two seats. Where two of these styles disagree, ' +
       'that disagreement is the lesson: the maths above is identical for all of them, so the spread ' +
       'comes from what each style is willing to do with the same price.',
