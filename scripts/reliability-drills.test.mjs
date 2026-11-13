@@ -1,61 +1,9 @@
 #!/usr/bin/env node
 /**
- * Tests for the reliability-drill suite's own judgement.
- *
- * Run with:  node --test scripts/reliability-drills.test.mjs
- * Also run by:  pnpm run test:scripts
- *
- * ## What these exist to prevent
- *
- * A failure-injection suite is a machine for producing green ticks about disasters, and every
- * one of those ticks is a claim somebody will quote. The drills themselves cannot be run here —
- * they spawn servers and stop containers — but everything that turns an observation into a
- * VERDICT is pure, lives in `scripts/drills/invariants.mjs`, and is tested below. The four
- * specific defects being guarded against:
- *
- * 1. **A hidden-information scanner that finds nothing.** The most valuable assertion in the
- *    suite is "nothing the client received named a deck, a salt or a cursor", and a scanner with
- *    a typo in its key list makes that sentence true of every run for ever. So every forbidden
- *    key is fed to it and asserted to fire, and the one salt a client is legitimately allowed to
- *    hold — a `RevealedCard` proof for a card that is already public — is asserted NOT to.
- *
- * 2. **A chip ledger that cannot see a missing chip.** Conservation is the assertion that would
- *    catch a corrupted settlement after a crash, so a fabricated ledger with one chip created
- *    and one destroyed is fed to it, and both are asserted to be found. The real per-view
- *    sequence measured from a live hand is pinned alongside, because the settled view counts its
- *    chips differently (see `chipLedger`) and the first version of that function reported chip
- *    creation on every hand that finished.
- *
- * 3. **A skip that quietly passes.** The suite's exit-code contract says a drill that could not
- *    run fails the run unless it was named in `--exclude`. That rule is one `??` away from
- *    inverting, and a suite that silently skips is a suite that lies, so it is pinned here.
- *
- * 4. **Routes drifting out from under the harness.** The harness cannot import `@prl/contracts`,
- *    so its route table is a copy — and `scripts/load-test.mjs` has already shipped one of those
- *    with three wrong paths that no test noticed. Every path is cross-checked against the
- *    manifest in `apps/api/test/wiring.test.ts`, which is itself written out by hand rather than
- *    derived from the router.
- *
- * ## Would this fail if the behaviour broke?
- *
- * Checked by breaking each one on purpose while writing them:
- *
- *   - the secret scanner: one entry was deleted from `FORBIDDEN_KEYS` in the implementation and
- *     this file failed with `"shuffleCursor" reached a client and the scanner said nothing`. The
- *     list here is written out rather than imported, so it cannot shrink in step with the thing
- *     it checks.
- *   - the chip ledger: the `settled` branch was removed from the implementation, and three of
- *     these tests failed — the positive control (a real hand, which the double-counted pot makes
- *     look like chip creation) and the settlement-corruption control (whose one missing chip the
- *     double-count now hides). The mid-hand creation control still fired. That is the pair
- *     needed: one test proves the checker detects corruption, another proves it does not invent
- *     it, and a third proves the corruption it detects is not masked.
- *   - the exit-code contract: `runPassed` is asserted false for a skip and true for the same
- *     list with the skip removed, so an implementation that treated skip as success fails.
- *   - the route table: `ROUTES.joinRoom` was pointed at `/api/v1/rooms/:roomId/join` and the
- *     cross-check failed by name. It also asserts it read a non-empty manifest and compared a
- *     non-empty set, so a manifest that stopped being found would fail rather than pass
- *     vacuously.
+ * Tests for the pure verdict functions in `scripts/drills/invariants.mjs`, the exit-code rule, the
+ * harness route table, the psql argv and the cleanup ordering. Each negative control was checked by
+ * breaking the implementation. Deleting `shuffleCursor` from `FORBIDDEN_KEYS` failed with
+ * `"shuffleCursor" reached a client and the scanner said nothing`.
  */
 
 import assert from 'node:assert/strict';
@@ -89,13 +37,7 @@ import { drillContext, runPassed, selectDrills } from './reliability-drills.mjs'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-/**
- * Every key `scanForSecrets` must refuse, written out here rather than imported.
- *
- * Importing the module's own list would make this test a restatement of the implementation: it
- * would pass for any list, including an empty one. Written out, deleting an entry from the
- * implementation fails this test.
- */
+/** Written out, not imported, so deleting an entry from the implementation fails this test. */
 const FORBIDDEN = [
   'deck',
   'deckOrder',
@@ -144,8 +86,7 @@ describe('the hidden-information scanner', () => {
   });
 
   it('permits the salt of a card that is already public, in a real proof', () => {
-    // The shape `RevealedCard` actually has on the wire, cards included: `Card` is a NUMBER in
-    // the engine, so a socket frame carries integers and a REST body carries notation.
+    // `Card` is a number in the engine, so a socket frame carries integers and REST carries notation.
     const reveal = {
       commitment: { algorithm: 'sha256', root: 'a'.repeat(64), context: 'hand_x' },
       complete: false,
@@ -222,12 +163,7 @@ describe('the structural hole-card check', () => {
     assert.match(findings[0], /seat 1 exposed hole cards on street "turn"/);
   });
 
-  /**
-   * POSITIVE CONTROL for the showdown clause: a genuine showdown, whose `result.showdowns`
-   * names the seat whose cards are visible. This is the shape `redactFor` produces at
-   * `street: 'complete'` for a hand that went to the end, and it must stay silent — a checker
-   * that fired here would fire on every finished hand and be turned off within a week.
-   */
+  /** Positive control. A checker that fired on every finished hand would be turned off. */
   it('accepts opponent cards at a completed showdown that names the seat', () => {
     const view = {
       street: 'complete',
@@ -244,28 +180,14 @@ describe('the structural hole-card check', () => {
   });
 
   /**
-   * NEGATIVE CONTROL for the second clause of the rule.
-   *
-   * The documented rule is "once the street is complete, only the cards of seats that SHOWED
-   * DOWN". The implementation carried only the first clause, so any non-null `holeCards` on a
-   * completed view passed. The test that used to sit here asserted `[]` against a completed
-   * view with no `result` at ALL — vacuous twice over: it neither supplied a showdown list nor
-   * could have distinguished a checker that read one from a checker that did not, and it
-   * pinned the gap in place.
-   *
-   * This is the leak the clause exists to catch, and it is the worst kind: a hand that ends by
-   * folding produces an EMPTY showdown list by construction, so a folder's cards reaching the
-   * table tells every observer whether they were bluffing.
-   *
-   * Confirmed to fail against the old code: with the `showedDown` set removed from
-   * `visibleCardCheck`, this case returns `[]` and the assertion below fails with
-   * `findings.length` 0, while the two positive controls still pass.
+   * Negative control for the showdown clause. A fold-out has an empty showdown list, so a folder's
+   * cards on a completed view are a leak. With the `showedDown` set removed from `visibleCardCheck`
+   * this returned `[]`.
    */
   it('fires when a completed hand exposes the cards of a seat that folded', () => {
     const view = {
       street: 'complete',
       viewerSeat: 0,
-      // A fold-out: the hand finished, and nobody tabled anything.
       result: { showdowns: [] },
       seats: [seat(0, { holeCards: [1, 2], isSelf: true }), seat(1, { holeCards: [3, 4] })],
     };
@@ -275,8 +197,7 @@ describe('the structural hole-card check', () => {
   });
 
   it('fires for the seat that did not show, and stays quiet for the one that did', () => {
-    // A river call between three seats where one had already folded. Distinguishes a checker
-    // that reads the showdown list from one that fires on every completed view.
+    // Distinguishes a checker that reads the showdown list from one that fires on every completed view.
     const view = {
       street: 'complete',
       viewerSeat: 0,
@@ -292,14 +213,7 @@ describe('the structural hole-card check', () => {
     assert.match(findings[0], /seat 2 exposed hole cards on a completed hand/);
   });
 
-  /**
-   * A completed view carrying opponent cards and NO showdown list cannot justify them.
-   *
-   * `redactFor` populates `result` on every `street: 'complete'` view, so this shape means
-   * either a serialiser that dropped the field or a frame that was assembled somewhere else —
-   * and "I cannot tell whether this was shown, therefore it is fine" is precisely the reasoning
-   * that produced the original gap.
-   */
+  /** `redactFor` sets `result` on every complete view, so missing it cannot justify opponent cards. */
   it('fires when a completed view carries opponent cards with no showdown list at all', () => {
     const view = {
       street: 'complete',
@@ -325,12 +239,8 @@ describe('the structural hole-card check', () => {
 
 describe('the chip ledger', () => {
   /**
-   * A real hand, measured.
-   *
-   * Captured from a live two-seat table during `ws-disconnect-mid-hand`: 200 units a seat, blinds
-   * of 1 and 2, a check-down to a river the small blind won. The last row is the one that matters
-   * — at `street: complete` the pot has been paid into the stacks and `committedTotal` is NOT
-   * zeroed, so stacks plus commitments is 404 for a hand in which no chip was ever created.
+   * Captured from `ws-disconnect-mid-hand`: 200 a seat, blinds 1 and 2. At `complete` the pot is in
+   * the stacks and `committedTotal` is not zeroed, so stacks plus commitments is 404.
    */
   const REAL_HAND = [
     { label: 'r4', street: 'preflop', stacks: [199, 198], committed: [1, 2] },
@@ -440,7 +350,7 @@ describe('the settled-hand check', () => {
 
   it('fires when more proofs are published than cards became public', () => {
     const broken = review();
-    // Five board cards plus two showdown seats is nine; ten is one card nobody was shown.
+    // Board plus two showdown seats is nine cards. Ten is one card nobody was shown.
     broken.reveal.cards = Array.from({ length: 10 }, (_unused, index) => ({
       index,
       card: index,
@@ -478,7 +388,7 @@ describe('recovery bounds and log evidence', () => {
 });
 
 describe('the exposition reader', () => {
-  /** A verbatim excerpt of this service's own `GET /metrics`, captured during `pool-exhaustion`. */
+  /** Verbatim `GET /metrics` excerpt captured during `pool-exhaustion`. */
   const SCRAPE = `# HELP prl_db_probe_duration_seconds Time for the readiness probe.
 # TYPE prl_db_probe_duration_seconds histogram
 prl_db_probe_duration_seconds_bucket{le="0.001"} 2
@@ -497,8 +407,6 @@ prl_db_pool_max 2
   });
 
   it('answers null for a series that is absent, and not zero', () => {
-    // The distinction the pool drill depends on: a metric nobody feeds and a metric reading zero
-    // look identical on a graph and mean completely different things.
     const absent = metricValue(SCRAPE, 'prl_worker_tasks_total');
     assert.equal(absent, null);
     assert.notEqual(absent, 0);
@@ -511,9 +419,8 @@ prl_db_pool_max 2
 
 describe('the scratch-database guard', () => {
   it('refuses to create anything not named prl_drills_*', async () => {
-    // The single most dangerous line in the suite: `create database` cannot be parameterised, and
-    // the same helper is used by `dropScratchDatabase`. A name that slipped through here would be
-    // a `drop database` aimed at whatever it named.
+    // `create database` cannot be parameterised and `dropScratchDatabase` uses the same check, so a
+    // name that slipped through would aim `drop database` at it.
     for (const name of ['poker_risk_lab', 'postgres', 'prl_drills', 'prl_drills_x; drop database y']) {
       await assert.rejects(
         () => createScratchDatabase('container', 'postgresql://u:p@h:1/db', name),
@@ -578,11 +485,7 @@ describe('the drill registry and the exit-code contract', () => {
 });
 
 describe('the route table the harness speaks to', () => {
-  /**
-   * Cross-checked against `apps/api/test/wiring.test.ts`, which writes its manifest out by hand
-   * rather than deriving it from the router — so a route that moves breaks a test there, and a
-   * harness pointing at the old path breaks here.
-   */
+  /** `wiring.test.ts` writes its manifest by hand, so a stale harness path fails here. */
   it('names only paths the API is asserted to serve', () => {
     const source = readFileSync(join(REPO_ROOT, 'apps', 'api', 'test', 'wiring.test.ts'), 'utf8');
     const manifest = new Set([...source.matchAll(/url:\s*'(\/api\/v1[^']*)'/g)].map((match) => match[1]));
@@ -590,8 +493,7 @@ describe('the route table the harness speaks to', () => {
 
     let checked = 0;
     for (const [name, path] of Object.entries(ROUTES)) {
-      // `/metrics` is served by `app.ts` outside the versioned prefix and is deliberately absent
-      // from the feature-route manifest.
+      // `/metrics` is outside the versioned prefix and the feature-route manifest.
       if (!path.startsWith('/api/v1')) continue;
       checked += 1;
       assert.ok(manifest.has(path), `ROUTES.${name} is "${path}", which the API does not serve`);
@@ -600,25 +502,9 @@ describe('the route table the harness speaks to', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The database password never travels in argv
-// ---------------------------------------------------------------------------
-
 /**
- * `psql` runs inside the Postgres container over `docker exec`, and the password used to be
- * passed as `-e PGPASSWORD=<secret>` — in the argument vector. `/proc/<pid>/cmdline` is
- * world-readable on Linux, so for the life of every one of those execs any user on the host
- * could read the database password out of `ps`. It also reaches process accounting and any `ps`
- * output somebody pastes into a bug report.
- *
- * `scripts/backup.mjs` already did this correctly (`'-e', 'PGPASSWORD'` bare, with the value in
- * the child's environment) and says why above its `toolCommand`. This is the same shape.
- *
- * ## Would this fail against the old code?
- *
- * Yes — checked by running it against the previous argv. `assert.equal(withSecret, [])` failed
- * with `[ '-e', 'PGPASSWORD=pa55w0rd-in-argv' ]`, naming the exact element. The password used
- * here is a distinctive literal so a partial match cannot hide it.
+ * `-e PGPASSWORD=<secret>` would put the password in `/proc/<pid>/cmdline`. Against the old argv
+ * this failed with `[ '-e', 'PGPASSWORD=pa55w0rd-in-argv' ]`.
  */
 describe('the psql invocation', () => {
   const SECRET = 'pa55w0rd-in-argv';
@@ -631,9 +517,7 @@ describe('the psql invocation', () => {
   });
 
   it('forwards PGPASSWORD from the environment with a bare -e', () => {
-    // The positive control for the assertion above: an implementation that simply DROPPED the
-    // password would also pass "not in argv", and would then fail to authenticate. This pins
-    // that the secret is still delivered, by the other route.
+    // Positive control. Dropping the password would also pass "not in argv" and fail to authenticate.
     const at = command.args.indexOf('PGPASSWORD');
     assert.ok(at > 0, `the argv must forward PGPASSWORD by name; got ${command.args.join(' ')}`);
     assert.equal(command.args[at - 1], '-e', 'the bare -e form is what makes docker forward it');
@@ -656,26 +540,9 @@ describe('the psql invocation', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// A drill that cannot start its server must not leak the child
-// ---------------------------------------------------------------------------
-
 /**
- * `startServer` waits up to thirty seconds for the API's own listening line, and the child it
- * spawned is `detached: true` — its own process group, unreachable from the rejection, which
- * carries a message and not a pid.
- *
- * The registration used to sit AFTER that await, so it ran only when the start succeeded. A
- * server that never printed a listening address left a live API process holding a port and a
- * pool of database connections for as long as the machine stayed up, and the next run failed
- * somewhere that had nothing to do with the cause. The file header promises every drill cleans
- * up after itself INCLUDING ON FAILURE; that was the one case where it did not.
- *
- * ## Would this fail against the old code?
- *
- * Yes, and it was confirmed that way: with the `cleanups.push` moved back below the await, the
- * first assertion fails with `cleanups.length` 0 — the drill context finished with nothing
- * registered and the stub child never stopped.
+ * The detached child is unreachable from `startServer`'s rejection. With `cleanups.push` moved back
+ * below the await, the first assertion failed with `cleanups.length` 0.
  */
 describe('the cleanup ledger a drill is handed', () => {
   const BASE = {
@@ -688,7 +555,6 @@ describe('the cleanup ledger a drill is handed', () => {
   it('registers a spawned API child for cleanup before the start can reject', async () => {
     const cleanups = [];
     let stopped = 0;
-    /** A server that spawns and then never reports a listening address, exactly as the real one. */
     const neverListens = async (options) => {
       options.onSpawn({
         stop: () => {
@@ -696,7 +562,7 @@ describe('the cleanup ledger a drill is handed', () => {
           return Promise.resolve();
         },
       });
-      // The await is what made the old ordering wrong: anything after it is not reached.
+      // Anything after this await was not reached under the old ordering.
       await new Promise((resolve) => setImmediate(resolve));
       throw new Error('the server did not report a listening address in 30s.');
     };
@@ -710,9 +576,7 @@ describe('the cleanup ledger a drill is handed', () => {
   });
 
   it('registers exactly one cleanup for a server that DOES start', async () => {
-    // The positive control. A context that registered nothing would pass the assertion above's
-    // sibling only by accident, and a context that registered twice would kill a healthy server
-    // twice during teardown.
+    // Positive control. Registering twice would kill a healthy server twice during teardown.
     const cleanups = [];
     let stopped = 0;
     const starts = (options) => {
@@ -738,8 +602,7 @@ describe('the cleanup ledger a drill is handed', () => {
     let seen = null;
     const capture = (options) => {
       seen = options;
-      // A stub that records nothing: this case is about what `drillContext` FORWARDS, and the
-      // ledger's contents are asserted by the two cases above.
+      // This case checks what `drillContext` forwards. The two cases above check the ledger.
       options.onSpawn({ stop: () => Promise.resolve() });
       return Promise.resolve({});
     };
