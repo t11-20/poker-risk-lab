@@ -3,84 +3,17 @@
 /**
  * A quiz, one question at a time.
  *
- * ## There is no score in this file, and that is the design
+ * There is no score, by design (`docs/PRODUCT-GUARDRAILS.md`). Nothing counts matches, `01 / 05` is
+ * wayfinding, and the end shows only `reviewAdvice`. Nothing is labelled "correct". Numeric targets
+ * are computed from `@prl/poker-math`, never stored (ADR 0006).
  *
- * `Quiz` in `@prl/contracts` has no score field, no pass mark, no streak counter and no
- * percentage, and its doc comment says the absence is deliberate. This component does not
- * reintroduce any of it. Concretely, and checkably:
+ * Every graded answer is posted (`lib/quiz-attempts.ts`) and the server's verdict is shown when it
+ * answered. A failed POST never throws. `VERDICT_SOURCE_NOTE` says who made the comparison, and says
+ * "recorded" only when a row exists.
  *
- *  - nothing counts how many answers matched, so nothing can be displayed;
- *  - `01 / 05` is wayfinding, the same as a page number — it says where you are, never how you
- *    are doing;
- *  - an answer that does not match costs nothing: the explanation opens, a link to the lesson
- *    appears, and the learner moves on or goes back at their own choosing;
- *  - the end of the quiz shows `reviewAdvice` and nothing else. No summary, no tally, no
- *    "you got 3".
- *
- * The reason is in `docs/PRODUCT-GUARDRAILS.md`: reward the reasoning, never the outcome. A
- * score turns a reflection tool into a slot machine with homework, and it teaches a learner to
- * optimise for the number instead of for understanding.
- *
- * ## Nothing is labelled "correct"
- *
- * Multiple choice says "the answer this lesson gives"; numeric says "within ±N of the computed
- * value". Both are precise about *what* the comparison is, which "correct" is not — the
- * lesson's answer is the lesson's answer, and a numeric answer is judged against a figure
- * computed here, to a tolerance the question itself declares.
- *
- * ## Numeric answers are computed, never stored
- *
- * `expectedFromResult` derives the target from the question's `calculation` and `field` using
- * `@prl/poker-math`. The content contains no answer to read (ADR 0006), so a question cannot
- * drift out of step with the maths the lesson taught. The working is shown after answering, not
- * before.
- *
- * ## The answer goes to the server, and the server's comparison is the one displayed
- *
- * This file used to grade every answer in the browser and send nothing at all, which had two
- * consequences. `prl.quiz_attempts` was never written, so `quizQuestionsAnswered` in
- * `GET /me/progress` could not be anything but zero however much work a learner did. And the
- * comparison on screen was nobody's record of anything — there was no server answer for it to
- * agree or disagree with.
- *
- * Both are fixed by `src/lib/quiz-attempts.ts`: every graded answer is posted, and the verdict
- * shown is the server's whenever the server answered. Where it did not, the local comparison
- * stands in and the screen says plainly that nothing was recorded — see `VERDICT_SOURCE_NOTE`. A
- * failed POST must never take a lesson down with it, which is why nothing on this path throws.
- *
- * ## "Recorded" is only said when a row exists
- *
- * The sentence under a verdict used to claim the server had recorded the question for every
- * successful call, including the signed-out one — the product's default state — where the route
- * answers 200 and deliberately stores nothing. `QuizAttemptResponse.recorded` now carries that
- * difference and `resolvedVerdict` turns it into a fourth source, `'anonymous'`, whose sentence
- * says what actually happened and how a learner who wants their answers kept gets a session. It is
- * said once, under the answer, and never as a banner or a gate: this quiz is worth doing signed
- * out, and it is not worth nagging anybody through.
- *
- * A `decision` question is still not sent. There is no answer to record for one; see
- * `DecisionQuestion` below.
- *
- * ## Focus
- *
- * Moving to another question is a keystroke or a click by the learner, so focus follows them to
- * the new question's heading — that is navigation, and leaving focus on a button whose label
- * just changed is worse. Answering, by contrast, moves nothing: the feedback is announced by an
- * `aria-live` region, because a reader who is mid-sentence should not be dragged elsewhere.
- *
- * The heading carries the position as visually-hidden text — "Question 2 of 5." before the prompt —
- * precisely because focus lands there. Without it, pressing "Next question" announced the new prompt
- * and nothing else: a reader had no way to tell whether they had advanced one question or five, and
- * the `01 / 05` counter that answers it is in the panel's action slot, which focus never visits. The
- * counter stays where it is for a reader who is browsing rather than being moved.
- *
- * ## The verdict regions are `role="status"`, not a bare `aria-live`
- *
- * Both of them hold two pieces of text: the comparison, and the sentence saying who made it
- * (`VERDICT_SOURCE_NOTE`). With `aria-live="polite"` alone the region is not atomic, so a change
- * announces only the text node that changed — a learner could hear "Nothing was recorded, because
- * you are not signed in." with no verdict in front of it. `role="status"` carries an implicit
- * `aria-atomic="true"`, which is what makes the whole sentence arrive as one message.
+ * A step change moves focus to the question heading, which carries "Question N of M" as hidden text.
+ * Answering moves nothing. The verdict regions are `role="status"`, so the verdict and its source
+ * note are read as one atomic message.
  */
 
 import type { ContentId, Quiz, QuizQuestion } from '@prl/contracts';
@@ -117,12 +50,8 @@ type Answer = QuizAnswer;
 export interface QuizRunnerProps {
   readonly quiz: Quiz;
   /**
-   * The `id` of the lesson's title on THIS page, which "Re-read" scrolls and moves focus to. `null`
-   * when the quiz stands alone.
-   *
-   * An id and not a URL. This used to be `lessonHref` — the lesson's own path — rendered as a
-   * `<Link>` to the page it was already on, and a same-URL navigation does nothing: measured
-   * against the running build, scrollY 10050 before the tap and 10050 after, history unchanged.
+   * The id of the lesson title on this page, which "Re-read" scrolls to and focuses. `null` when the
+   * quiz stands alone. An id, not a URL, because a same-URL `<Link>` does nothing.
    */
   readonly lessonTitleId: string | null;
   readonly lessonTitle: string | null;
@@ -131,14 +60,9 @@ export interface QuizRunnerProps {
 }
 
 /**
- * "Re-read <lesson>": a same-document fragment link that also moves focus.
- *
- * A plain `<a>`, not `next/link`, because this never leaves the document: native fragment
- * navigation scrolls with the root's `scroll-padding` so the title clears the sticky header, and
- * makes `:target` match. Focus is moved by hand as well because not every browser moves it to a
- * fragment target on its own, and a keyboard reader who followed the link should continue from the
- * top of the lesson rather than from the quiz they left. `preventScroll`, because the fragment
- * navigation that follows does the scrolling, and does it with the header offset applied.
+ * A same-document fragment link that also moves focus. A plain `<a>`, so native fragment navigation
+ * applies `scroll-padding` and `:target`. Focus is moved by hand because not every browser does it,
+ * with `preventScroll` because the fragment navigation does the scrolling.
  */
 function ReReadLink(props: {
   readonly targetId: string;
@@ -158,21 +82,14 @@ function ReReadLink(props: {
 }
 
 /**
- * The verdict's mark, as attributes the stylesheet draws — not as a child of the live region.
- *
- * The mark is `::before { content: attr(data-mark) / "" }`, so it is painted and never spoken, and
- * it is not in the region's `textContent`. A child `<span aria-hidden>` was tried first and is
- * silent too, but it puts "◆" at the front of the region's text, and `test:ax` reads a live region
- * by its `textContent` and anchors on the sentence's first word ("That matches…"), as a reader's
- * announcement does. The region also stays `:empty` until answered, which its box depends on.
+ * The mark is painted by `::before { content: attr(data-mark) / "" }`, so it is never spoken and is
+ * not in the region's `textContent`, which `test:ax` anchors on. The region stays `:empty` until answered.
  */
 function verdictMarkAttributes(matched: boolean): { 'data-matched': string; 'data-mark': string } {
   return { 'data-matched': String(matched), 'data-mark': verdictMarker(matched) };
 }
 
-// ---------------------------------------------------------------------------
 // Multiple choice
-// ---------------------------------------------------------------------------
 
 function MultipleChoice(props: {
   readonly question: Extract<QuizQuestion, { kind: 'multipleChoice' }>;
@@ -181,28 +98,19 @@ function MultipleChoice(props: {
   readonly onAnswer: (answer: Answer) => void;
 }): ReactElement {
   const { question, answer, server, onAnswer } = props;
-  /** The option the learner last CHECKED — what the verdict, chips and note describe. */
+  /** The option the learner last CHECKED, which the verdict, chips and note describe. */
   const chosen = answer?.kind === 'choice' ? answer.index : null;
   const answered = chosen !== null;
   /**
-   * The option the radio group is on, which is not yet an answer.
-   *
-   * The radios used to answer on `onChange`, and a radio group changes on every arrow key: a keyboard
-   * reader moving through four options answered, and posted, three of them on the way — "not the
-   * answer", "matches", "not the answer" — and one stray tap revealed "the answer this lesson gives"
-   * (UX audit at 6b3886e, Minor 2). Selecting is now only selecting; "Check answer" is the answer.
-   * Seeded from the checked answer because this component remounts per question (`key` in
-   * `questionBody`), so paging back shows the option that was checked.
+   * The option the radio group is on, which is not yet an answer. A radio group changes on every
+   * arrow key, so answering on change posted each option passed. Seeded from the checked answer
+   * because this remounts per question.
    */
   const [selected, setSelected] = useState<number | null>(chosen);
-  // Keys from the option text, with an occurrence counter, rather than from the position: an
-  // index key makes React reuse the wrong radio if a question is ever re-ordered, and the
-  // position is still available as the `index` argument for the logic that genuinely needs it.
+  // Keyed by option text with an occurrence counter, so a re-ordered question cannot reuse a radio.
   const options = withKeys(question.options, 'option');
 
-  // The server's comparison when there is one, this page's when there is not. `correctIndex` still
-  // decides which option carries the "the answer this lesson gives" chip, because that is a fact
-  // about the option rather than about what the learner did.
+  // The server's comparison when there is one. `correctIndex` still picks the lesson-answer chip.
   const resolved = resolvedVerdict(server, chosen === question.correctIndex);
   const verdict = !answered
     ? ''
@@ -213,11 +121,7 @@ function MultipleChoice(props: {
   return (
     <div className="prl-stack">
       <fieldset className="prl-learn-quiz__options">
-        {/*
-          "Choose one answer", not the prompt again. The prompt is already the `h3` immediately
-          above this group, and a legend that repeats it makes a screen reader read the whole
-          question twice — once as the heading, once as the group's name.
-        */}
+        {/* Not the prompt again, which is the heading just above. */}
         <legend className="prl-visually-hidden">Choose one answer</legend>
         {options.map((entry, index) => {
           const isChoice = chosen === index;
@@ -254,11 +158,8 @@ function MultipleChoice(props: {
         })}
       </fieldset>
       {/*
-        Disabled until an option is selected, as the numeric branch's button is until a number is
-        typed. Focus stays on it after a press: the verdict is announced by the region below, and
-        moving the caret would drag a reader away from the control they will press again if they
-        change their mind. "Check again" mirrors the numeric branch, and re-sends — that is an
-        attempt the learner asked for, and `record` mints a new answer object so it is posted.
+        Focus stays on the button after a press, because the region below announces the verdict.
+        "Check again" re-sends, and `record` mints a new answer object so it is posted.
       */}
       <div className="prl-btn-row">
         <Button
@@ -272,14 +173,7 @@ function MultipleChoice(props: {
           {!answered ? 'Check answer' : selected === chosen ? 'Check again' : 'Check this answer'}
         </Button>
       </div>
-      {/*
-        The live region is in the DOM from the first render, empty, rather than appearing with
-        its text. A region that arrives at the same moment as its content is missed by several
-        screen readers, which is the difference between feedback being announced and being
-        silently added below the fold.
-
-        `role="status"` for the atomic half — see the module comment.
-      */}
+      {/* Mounted empty on first render so it is announced. `role="status"` makes it atomic. */}
       <p
         aria-live="polite"
         className="prl-learn-quiz__verdict"
@@ -293,11 +187,8 @@ function MultipleChoice(props: {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Numeric
-// ---------------------------------------------------------------------------
 
-/** The working: the figure, its method, and the derivation the library wrote. */
 function Working(props: {
   readonly result: CalculationResult;
   readonly expected: ExpectedAnswer;
@@ -337,14 +228,7 @@ function Working(props: {
   );
 }
 
-/**
- * What stands in for a numeric question whose target could not be computed.
- *
- * `role="alert"`, because this block REPLACES the question: a reader who cannot see the screen is
- * otherwise left waiting at a field that has silently gone away. It is mounted only in the failure
- * state, which is what makes an alert fire — an always-present region whose text merely changes is
- * announced far less reliably.
- */
+/** `role="alert"` because this replaces the question. Mounted only on failure, so it fires on insertion. */
 function Unmarkable(props: { readonly reason: string; readonly explanation: string }): ReactElement {
   return (
     <div className="prl-error" role="alert">
@@ -358,14 +242,7 @@ function Unmarkable(props: { readonly reason: string; readonly explanation: stri
   );
 }
 
-/**
- * The sentence about one numeric answer.
- *
- * `against` is the figure the comparison was actually made against — the server's when the server
- * made it — so the number quoted here is always the number that produced the verdict beside it.
- * Pulled out of the component because a comparison written inline next to five other conditionals
- * is where a precedence gets quietly reversed.
- */
+/** `against` is the figure the comparison was made against, the server's when the server made it. */
 function numericVerdict(input: {
   readonly submitted: { readonly value: number } | null;
   readonly against: { readonly value: number; readonly tolerance: number } | undefined;
@@ -377,7 +254,6 @@ function numericVerdict(input: {
   if (against === undefined) {
     return 'The computed figure is not available, so there is nothing to compare your answer with.';
   }
-  // The wording lives in `lib/quiz-verdict.ts`, where a test can read it.
   return numericVerdictSentence({
     yours: formatQuizValue(submitted.value, unit),
     computed: formatQuizValue(against.value, unit),
@@ -394,20 +270,11 @@ function NumericQuestion(props: {
 }): ReactElement {
   const { question, answer, server, onAnswer } = props;
   const { outcome, pending } = useCalculationOutcome(question.calculation);
-  // Seeded from the recorded answer so that coming back to a question shows what was typed.
-  // Mounting fresh per question is what makes the initialiser correct — see the `key` in
-  // `questionBody`.
+  // Seeded from the recorded answer. Correct because each question mounts fresh (`key` in `questionBody`).
   const [draft, setDraft] = useState(() => (answer?.kind === 'number' ? answer.raw : ''));
   /**
-   * Whether the browser is holding text it could not parse as a number.
-   *
-   * Tracked separately from `draft` because it CANNOT be derived from it. An `<input type="number">`
-   * reports `value === ''` for anything it failed to parse — type "one third" and the characters
-   * are on screen while `event.target.value` is the empty string — so a check written against the
-   * draft alone can never fire, which is exactly what the first version of this fix got wrong. The
-   * only signal that anything was typed is `validity.badInput`, and without it the field looks
-   * empty, the button disables, and nothing anywhere says why. That is the "announce or silently
-   * clamp without marking the field" the audit named.
+   * Tracked apart from `draft` because a number input reports `value === ''` for text it cannot
+   * parse. `validity.badInput` is the only signal that something was typed.
    */
   const [badInput, setBadInput] = useState(false);
   const inputId = `${question.id}-value`;
@@ -427,38 +294,22 @@ function NumericQuestion(props: {
 
   const target = expected === null ? null : expected.expected;
   const parsed = Number(draft);
-  // `!badInput` is stated rather than relied upon: a number field sanitises an unparseable value to
-  // the empty string, so the draft check already covers it today — but that is the platform's rule
-  // and not this component's, and "the button was enabled for text that is not a number" is not a
-  // defect worth inheriting if a browser ever keeps the characters.
+  // `!badInput` is stated so the button never depends on the browser sanitising the value.
   const canCheck = !pending && !badInput && draft.trim() !== '' && Number.isFinite(parsed);
 
   /**
-   * The field is marked invalid when what is in it is not a number this question can be answered
-   * with — and only then.
-   *
-   * "Invalid" here means the INPUT, never the answer. An answer outside the tolerance is a correct
-   * use of this field, and marking it `aria-invalid` would tell a screen reader the learner had
-   * typed something malformed — which is both false and the closest thing to a mark this product
-   * allows itself.
-   *
-   * Two conditions, because there are two ways to get text that is not a number into this field:
-   * `badInput` is the browser holding characters it could not parse (see the state above), and the
-   * second covers a draft that survives as a string but does not produce a finite number.
+   * Marks the INPUT invalid, never the answer. An answer outside the tolerance is not malformed, and
+   * `aria-invalid` on it would read as a mark.
    */
   const malformed = badInput || (draft.trim() !== '' && !Number.isFinite(parsed));
   const describedBy = malformed ? `${invalidId} ${hintId}` : hintId;
 
-  // The server's comparison when it answered, this page's when it did not. `resolvedVerdict` keeps
-  // that precedence in one place, shared with the multiple-choice branch.
   const localMatch = submitted !== null && target !== null && withinTolerance(submitted.value, target);
   const resolved = resolvedVerdict(server, localMatch);
-  // `gradedAnswer` rather than `server.state === 'live'`: a signed-out learner's answer is graded by
-  // the server and stored nowhere, which is the `'anonymous'` state — a `=== 'live'` test here would
-  // quietly show them this page's figure while the server's own sat unread in the reply.
+  // `gradedAnswer` rather than `server.state === 'live'`, because a signed-out answer is graded but not
+  // stored ('anonymous'), and a `=== 'live'` test would show this page's figure instead.
   const graded = gradedAnswer(server);
-  // The tolerance travels with the figure for the same reason: the band the sentence states has to
-  // be the band that produced the verdict, so it is the server's when the server's figure is used.
+  // The tolerance comes from the same source as the figure, so the stated band produced the verdict.
   const against =
     graded !== null && graded.expected !== null
       ? { value: graded.expected.value, tolerance: graded.expected.tolerance }
@@ -478,11 +329,7 @@ function NumericQuestion(props: {
         <label className="prl-field__label" htmlFor={inputId}>
           {`Your answer, in ${QUIZ_UNIT_WORDS[question.unit]}`}
         </label>
-        {/*
-          Editable after checking, on purpose. There is no score, so there is nothing to protect
-          by locking the field — and a learner who wants to try the arithmetic a second way should
-          not have to reload the page to do it.
-        */}
+        {/* Editable after checking. With no score there is nothing to protect by locking it. */}
         <input
           className="prl-input prl-number"
           id={inputId}
@@ -498,10 +345,8 @@ function NumericQuestion(props: {
           }}
         />
         {/*
-          The correction comes FIRST in `aria-describedby`, so a reader who has just been told the
-          field is invalid hears why before hearing the tolerance rule again. It is rendered only
-          while it applies rather than hidden with CSS: an always-present description that is
-          sometimes irrelevant is read out on every visit to the field.
+          First in `aria-describedby`, so the reason is heard before the tolerance. Rendered only while
+          it applies, because a present but irrelevant description is read on every visit.
         */}
         {malformed ? (
           <p className="prl-field__error" id={invalidId}>
@@ -546,18 +391,11 @@ function NumericQuestion(props: {
   );
 }
 
-// ---------------------------------------------------------------------------
 // Decision
-// ---------------------------------------------------------------------------
 
 /**
- * A decision question has no answer in the contract, and that is right.
- *
- * There is no `correctAction` field on a `decision` question, because a poker action is not
- * right or wrong — it is consistent or inconsistent with an analysis whose assumptions you can
- * read. So this asks the learner to decide in the Scenario Lab, where the figures are computed
- * live and the assumptions are on screen, and then offers the reasoning. Marking it would be
- * claiming an authority the product explicitly declines.
+ * A decision question has no answer in the contract, because an action is only consistent or not
+ * with an analysis. The learner decides in the Scenario Lab, then reads the reasoning.
  */
 function DecisionQuestion(props: {
   readonly question: Extract<QuizQuestion, { kind: 'decision' }>;
@@ -585,17 +423,9 @@ function DecisionQuestion(props: {
   );
 }
 
-// ---------------------------------------------------------------------------
 // The runner
-// ---------------------------------------------------------------------------
 
-/**
- * Dispatch by question kind.
- *
- * Every branch carries `key={question.id}`, which is load-bearing rather than tidy: without it
- * React keeps one `NumericQuestion` instance alive across two consecutive numeric questions, and
- * the state seeded from the previous answer would carry over into the next question's input.
- */
+/** Every branch carries `key={question.id}`, or state seeded from one answer leaks into the next. */
 function questionBody(
   question: QuizQuestion,
   answer: Answer | undefined,
@@ -624,11 +454,11 @@ function questionBody(
       />
     );
   }
-  // No `server` prop: a decision question is not graded and nothing is posted for it.
+  // No `server` prop, because a decision question is not graded and nothing is posted for it.
   return <DecisionQuestion key={question.id} question={question} answer={answer} onAnswer={onAnswer} />;
 }
 
-/** Nothing has been answered yet. One object so the identity is stable across renders. */
+/** One object so the identity is stable across renders. */
 const IDLE_VERDICT: QuizVerdict = { state: 'idle' };
 
 export function QuizRunner(props: QuizRunnerProps): ReactElement {
@@ -640,13 +470,8 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
   /** The first render must not steal focus; only a step *change* moves it. */
   const mounted = useRef(false);
   /**
-   * The answer object each question has already been posted for.
-   *
-   * Identity, not value: `record` mints a fresh object on every press, so "the learner pressed
-   * Check again with the same number" is a new answer and is posted again — which is what they
-   * asked for — while merely paging back to a question they answered ten minutes ago is not. A ref
-   * rather than state because nothing renders from it, and putting it in state would re-run the
-   * effect that writes it.
+   * The answer object each question was posted for. Identity, not value, because `record` mints a
+   * fresh object per press, so "Check again" posts and paging back does not.
    */
   const posted = useRef(new Map<ContentId, Answer>());
 
@@ -654,14 +479,7 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
   const onReview = step >= total;
   const question = onReview ? undefined : quiz.questions[step];
 
-  /**
-   * Focus follows a step change, and only a step change.
-   *
-   * `step` is the effect's *trigger* rather than a value it reads, which is why the linter cannot
-   * see that it belongs in the list. Removing it would leave a keyboard reader on a "next" button
-   * while the question above it changed silently. The `mounted` guard is what stops the first
-   * render pulling focus into the middle of a lesson someone is reading.
-   */
+  /** Focus follows a step change only. `mounted` stops the first render pulling focus. */
   // biome-ignore lint/correctness/useExhaustiveDependencies: `step` is the trigger; without it focus stops following navigation
   useEffect(() => {
     if (!mounted.current) {
@@ -682,26 +500,15 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
   const currentAnswer = question === undefined ? undefined : answers.get(question.id);
 
   /**
-   * One controller for every attempt this runner sends, aborted when the runner goes away.
-   *
-   * Deliberately NOT one per question. A per-question controller would be cleaned up by React the
-   * moment the learner pressed "Next question", which would abort the POST for the answer they had
-   * just given — the attempt would be lost for exactly the learner who works quickly. Unmount is
-   * the only moment at which nobody is waiting for the answer any more.
+   * One controller for the runner, aborted on unmount. One per question would abort the POST for the
+   * answer just given when the learner pressed "Next question".
    */
   const submissions = useRef<AbortController | null>(null);
   useEffect(() => () => submissions.current?.abort(), []);
 
   /**
-   * Sends the answer, once per answer.
-   *
-   * The guard is on object IDENTITY, and `record` mints a fresh object on every press: pressing
-   * "Check again" is a new attempt and is sent again, while paging back to a question answered ten
-   * minutes ago sends nothing. Re-sending on navigation would be harmless to the count the server
-   * derives — it counts DISTINCT questions — but it would write rows nobody asked for.
-   *
-   * Nothing here throws and nothing here can fail the render: `submitQuizAttempt` returns the
-   * failure as a value, and the screen keeps its own comparison and says so.
+   * Posts each answer object once (see `posted`). Nothing here throws, because `submitQuizAttempt`
+   * returns a failure as a value.
    */
   useEffect(() => {
     if (question === undefined || currentAnswer === undefined) return;
@@ -735,16 +542,7 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
           What to do with all that
         </h3>
         <p className="prl-learn-quiz__advice">{quiz.reviewAdvice}</p>
-        {/*
-          This used to read "nothing was recorded as a result", which was true only because the
-          answers were never sent anywhere. They are sent now, so the sentence says what is actually
-          kept — and, more usefully, what is not: there is no total, and the schema has no column
-          one could be stored in.
-
-          It then said "If you are signed in, each question you answered is stored as one row", to a
-          learner who has no sign-in and no reason to think in rows (UX audit at 6b3886e, M5). The
-          condition that actually applies is a guest session, which opening a table starts.
-        */}
+        {/* Says what is kept and what is not. The condition is a guest session, not a sign-in. */}
         <p className="prl-note">
           Nothing here was scored. Once this browser has a guest session — opening a table starts one — each
           question you answer is kept on your record: the question, your answer, and whether it matched. The
@@ -753,11 +551,7 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
           Risk Lab for a mark out of five to live. These questions exist to make your own reasoning visible to
           you, which a score actively gets in the way of.
         </p>
-        {/*
-          "Next" leads, because the end of a quiz is the end of a lesson and this panel used to offer
-          every way back and none forward. On the last lesson there is no next and the curriculum is
-          the way on.
-        */}
+        {/* "Next" leads, because the end of a quiz is the end of a lesson. */}
         <div className="prl-btn-row">
           {nextLesson === null ? null : (
             <Link
@@ -803,9 +597,7 @@ export function QuizRunner(props: QuizRunnerProps): ReactElement {
       }
     >
       <h3 className="prl-learn-quiz__heading" ref={headingRef} tabIndex={-1}>
-        {/* Where the caret lands on every step change, so this is where the position has to be
-            said. Hidden rather than drawn: the panel already shows `01 / 05` beside the title, and
-            printing it twice would be noise for everybody who can see it. */}
+        {/* Focus lands here each step, so it says the position. Hidden, since `01 / 05` is drawn. */}
         <span className="prl-visually-hidden">{`Question ${String(step + 1)} of ${String(total)}. `}</span>
         {question.prompt}
       </h3>

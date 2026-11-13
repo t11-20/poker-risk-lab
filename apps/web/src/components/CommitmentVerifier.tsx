@@ -1,93 +1,20 @@
 'use client';
 
 /**
- * The commitment verifier: re-runs the deck proof **in the reader's own browser**.
+ * The commitment verifier: re-runs the deck proof in the reader's own browser.
  *
- * ============================================================================
- * WHY THIS RUNS CLIENT-SIDE, AND WHY THAT IS THE ENTIRE POINT
- * ============================================================================
+ * The server's verdict alone is worthless, because a dishonest server would vouch for itself. So
+ * `lib/deck-proof.ts` runs the engine's `verifyDeckReveal` client-side and this shows both answers.
+ * `checkDeckProof` first binds the reveal to the published root and context, because a payload's
+ * proofs always verify against the root they carry (`test/deck-proof-binding.test.ts`).
  *
- * The server already verified the reveal and sent its verdict in
- * `HandReviewResponse.verification`. Rendering that verdict alone would be worthless: a server that
- * dealt dishonestly is exactly the server whose self-assessment cannot be trusted. The value of a
- * commitment scheme is that **somebody other than the server can check it**, so `lib/deck-proof.ts`
- * runs `verifyDeckReveal` from `@prl/poker-engine` — the same function the server ran, byte for
- * byte — against the published Merkle root, in the browser, and this component shows both answers
- * side by side.
+ * Through `lib/deck-proof.ts` this is the only engine code in the browser bundle. Next's bundler
+ * supplies `crypto` and `Buffer`, checked in a real browser on a nine-position proof. A hand-rolled
+ * SHA-256 could disagree with the server's.
  *
- * If they ever disagree, the reader is looking at the most important thing this app could tell them.
- *
- * ## "Against the published Merkle root" was once a claim this file did not keep
- *
- * It called `verifyDeckReveal(parsed.reveal)`. That function takes ONE argument and checks the
- * proofs against the root and context carried *inside the payload it is checking*, and this
- * component never compared either with the `commitmentRoot` / `commitmentContext` props it prints
- * above. So a reveal belonging to a different commitment verified perfectly against itself, the
- * chip read "proof holds", and the callout told the reader their browser had "arrived at the root
- * above" — a value it had never computed and never looked at. The only thing standing between the
- * reader and that sentence was the server's own check in `apps/api/src/review/build-review.ts`,
- * which is the exact dependency the paragraph above says this screen exists to remove.
- *
- * The binding is now checked first, in `checkDeckProof`, and a reveal that is not this hand's gets
- * its own outcome and its own words: `other-hand` says the proof is about a different deal, which
- * is not the same claim as `mismatch` ("this hand's proofs do not reach this hand's root"). See
- * that module's header, and `test/deck-proof-binding.test.ts`, which drives the reproduction
- * against real commitments.
- *
- * ## The one place the engine is allowed into the browser bundle
- *
- * `packages/ui/src/view-types.ts` explains at length why `@prl/ui` does not depend on
- * `@prl/poker-engine`: the engine's module graph contains the shuffler, the deck commitment and
- * `HandState`, and the browser has no business linking against the rules engine. That reasoning
- * still holds everywhere else — `src/lib/hand-replay.ts` runs on the server for exactly this reason
- * — and this component, through `lib/deck-proof.ts`, is the deliberate exception: client-side
- * verification is not achievable any other way. What crosses the boundary is a pure function over
- * data the server already published; nothing here can ask the engine for a card it was not given.
- *
- * ### The `node:crypto` question, answered by measurement rather than assumption
- *
- * (The engine import lives in `lib/deck-proof.ts` now; everything below is about the same import
- * and the same bundle, one module along.)
- *
- * `verifyDeckReveal` hashes with `node:crypto`'s `createHash` and walks the proof with `Buffer`,
- * neither of which exists in a browser. Next 16's client bundler supplies both (`crypto` maps to its
- * bundled `crypto-browserify`, and `Buffer` is provided by a `ProvidePlugin`), so the import
- * resolves and the Merkle walk runs. This was checked in a real browser against the real
- * nine-position proof in `src/fixtures/review.ts`, not inferred from the bundler's source: the
- * empty-reveal case short-circuits before it hashes anything, so a fold-out hand would have "passed"
- * without ever exercising SHA-256.
- *
- * No dependency was added and no bundler alias was needed. If a future bundler change breaks the
- * resolution the build fails loudly at that import, which is the right failure — the alternative,
- * a hand-rolled SHA-256 in app code, would be a second hash implementation that could silently
- * disagree with the server's.
- *
- * ============================================================================
- * AN EMPTY REVEAL IS A RESULT, NOT A FAILURE
- * ============================================================================
- *
- * This is the part most likely to be got wrong, so it is worth stating plainly.
- *
- * A hand that ends with everybody folding has **nothing to prove**. No board card was dealt and
- * nobody showed, so no card legitimately became public, so the reveal contains zero positions and
- * `verifyDeckReveal` returns `ok: true` with an empty list. That is the correct outcome.
- *
- * Revealing more would mean publishing the hole cards of players who folded — and whether a folder
- * was bluffing or holding a monster is precisely the information the whole scheme exists to keep
- * sealed. A verifier that painted this red would be teaching the reader that the honest case looks
- * broken, and after a week of that they would stop reading the indicator at all. So the empty case
- * gets its own state, its own words, and the same calm treatment as a nine-position proof: it says
- * what was proved (nothing), why there was nothing (nobody showed), and why proving more would be
- * the bug rather than the fix.
- *
- * ## What the proof does and does not establish
- *
- * Stated on screen, not just here, because a verifier that overclaims is worse than none. It proves
- * each revealed card sat at that deck position and was fixed before the first action, so a server
- * could not reorder undealt cards mid-hand. It does **not** prove the deck was *chosen* fairly: the
- * server generates the deck and the salts, so a dishonest one could grind candidate decks before
- * committing. Ruling that out needs entropy the server cannot predict, and that is an accepted,
- * documented limitation rather than something this component may quietly imply away.
+ * An empty reveal is a result, not a failure. A hand where everybody folded has nothing public to
+ * prove, and revealing more would publish folded hole cards. The proof shows cards were fixed before
+ * the first action. It does not show the deck was chosen fairly, and the screen says so.
  */
 
 import type { HandReviewResponse } from '@prl/contracts';
@@ -108,12 +35,7 @@ export interface CommitmentVerifierProps {
   readonly className?: string;
 }
 
-/**
- * The props say WHICH hand this is, and they are load-bearing rather than decorative.
- *
- * They are what `checkDeckProof` binds the reveal to. Printing them beside a result computed
- * without them is the defect described in the header.
- */
+/** The root and context props are what `checkDeckProof` binds the reveal to. */
 export function CommitmentVerifier(props: CommitmentVerifierProps): ReactElement {
   const { commitmentRoot, commitmentContext, reveal, serverVerification, className } = props;
   const [check, setCheck] = useState<DeckProofCheck>({ state: 'pending' });
@@ -121,12 +43,8 @@ export function CommitmentVerifier(props: CommitmentVerifierProps): ReactElement
   const rootId = useId();
 
   useEffect(() => {
-    // In an effect, not a lazy `useState` initialiser: an initialiser also runs during the server
-    // render, and then "checked in your browser" would be a claim the component could not support.
-    // Running it here means the `checked` state is only ever reached client-side.
-    //
-    // The two published values go in with the payload. Without them this is a check of the reveal
-    // against itself, which is what it used to be.
+    // In an effect, not a `useState` initialiser, which also runs on the server and would make
+    // "checked in your browser" untrue.
     setCheck(checkDeckProof(reveal, commitmentRoot, commitmentContext));
   }, [reveal, commitmentRoot, commitmentContext]);
 
@@ -157,10 +75,7 @@ export function CommitmentVerifier(props: CommitmentVerifierProps): ReactElement
         <dd className="prl-mono prl-verifier__hash">{commitmentContext}</dd>
         <dt className="prl-label">Proved in your browser</dt>
         <dd className="prl-verifier__count">
-          {/*
-            "0 of 52" would be a lie in the `other-hand` case: it reads as a check that ran and
-            found nothing, when no hash was computed at all. The row says which of the two it is.
-          */}
+          {/* "0 of 52" would read as a check that ran, so `other-hand` says nothing was checked. */}
           {check.state === 'pending' ? 'checking…' : null}
           {check.state === 'not-this-hand' ? 'not checked — this proof is for another hand' : null}
           {check.state === 'pending' || check.state === 'not-this-hand'
@@ -186,12 +101,7 @@ export function CommitmentVerifier(props: CommitmentVerifierProps): ReactElement
 
       {outcome === 'proved' ? (
         <Callout tone="insight" title={`${pluralise(proved, 'position')} proved against the published root`}>
-          {/*
-            The first sentence is the one that used to be untrue. "Arrived at the root above" is only
-            a claim worth making if the root above is the root the walk was checked against, and
-            nothing compared them — see the header. The comparison is now stated, in order, because
-            it is the step that makes the rest of the paragraph mean anything.
-          */}
+          {/* The binding check is stated first, because it is what makes the rest true. */}
           {`Your browser first checked that the reveal names the same Merkle root and the same hand context as the ones published above, and refused to go any further unless they matched. Then it recomputed each leaf hash from the card, its salt and its deck position, walked the six sibling hashes up the tree, and arrived at that same root — ${pluralise(
             proved,
             'time',
@@ -212,15 +122,9 @@ export function CommitmentVerifier(props: CommitmentVerifierProps): ReactElement
       ) : null}
 
       {/*
-        A proof of a DIFFERENT deal. Deliberately not folded into `mismatch`, and deliberately not
-        softened into `unreadable`: those two say "this hand's proofs do not reach this hand's root"
-        and "there was nothing to check", and this says neither. The payload is well formed and its
-        hashes may be perfectly sound — for some other hand. Nothing has been established about the
-        hand on this page, and nothing has been disproved about it either, and the wording has to
-        leave the reader with exactly that and not a shade more.
-
-        `role="alert"` for the same reason `mismatch` has one: the reader is on this page to find
-        out whether the deal is on the record, and the answer is that this page cannot tell them.
+        A proof of a different deal, distinct from `mismatch` and `unreadable`. Nothing is established
+        or disproved about this hand. `role="alert"` as for `mismatch`, because the page cannot answer
+        the reader's question.
       */}
       {outcome === 'other-hand' ? (
         <div className="prl-error" role="alert">
@@ -336,13 +240,7 @@ const CHIP_TONE: Readonly<Record<DeckProofOutcome, 'neutral' | 'favourable' | 'a
   unreadable: 'caution',
 };
 
-/**
- * A glyph as well as a tone, so the state never depends on hue.
- *
- * `other-hand` and `mismatch` share the adverse tone and must NOT share a glyph: they are the two
- * results that mean something is wrong, they mean different things, and a reader who distinguishes
- * chips by shape would otherwise see one state where there are two.
- */
+/** A glyph as well as a tone. `other-hand` and `mismatch` share a tone, so they must not share a glyph. */
 const CHIP_GLYPH: Readonly<Record<DeckProofOutcome, string>> = {
   pending: '…',
   proved: '✓',
@@ -352,7 +250,7 @@ const CHIP_GLYPH: Readonly<Record<DeckProofOutcome, string>> = {
   unreadable: '?',
 };
 
-/** The label is the state. See `Chip`: a chip never conveys its meaning by colour. */
+/** The label is the state. See `Chip`, where a chip never conveys its meaning by colour. */
 const CHIP_LABEL: Readonly<Record<DeckProofOutcome, string>> = {
   pending: 'checking',
   proved: 'proof holds',
