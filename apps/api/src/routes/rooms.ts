@@ -1,39 +1,12 @@
 /**
- * Rooms and the "Play a Legend" endpoints.
+ * Rooms and the "Play a Legend" endpoints. A thin layer over `src/rooms/registry.ts`, so REST and
+ * the socket `sit` frame run the same method.
  *
- * A thin HTTP layer. Every decision that matters — who may see a room, who may sit, what a table
- * does next — belongs to `src/rooms/registry.ts` and the engine, so that the socket transport and
- * this one cannot drift: `POST /rooms/:roomId/sit` and a `sit` frame run the same method.
- *
- * ## The invite code is returned exactly once
- *
- * `POST /rooms` is the only response in this API that carries one. Only `sha256(code)` is stored
- * (`rooms.invite_code_hash`), so it cannot be recovered later — the owner shares it now or creates
- * another room. `logging.ts` censors `inviteCode` and anything matching `/invite/i`, which is why
- * it may pass through this file at all.
- *
- * ## One answer for "no such room" and "not your room"
- *
- * Every room endpoint answers `room_not_found_or_not_permitted` for both. A distinguishable "it
- * exists but you may not see it" is a free way to confirm a room id, and room ids appear in links
- * people share.
- *
- * ## The Legends endpoints always return the full disclosure
- *
- * `ProfileDisclosureDto.disclaimers` is a required, non-empty array, and every response here goes
- * through `profileDisclosure()` — the one function that produces a display name — so there is no
- * path that returns a profile's name without the framing that says it is an educational simulation
- * and not a real person. `resolveNamingMode()` decides which name is shown, and its default is
- * `archetype`: the safe mode is the one a deployer gets by not thinking about it.
- *
- * ## `deterministicSeed` seeds the opponents, not the deal
- *
- * `CreateLegendMatchRequest.deterministicSeed` asks for a reproducible session. It is honoured for
- * the part that can be: each bot's decision stream. It is deliberately NOT used for dealing — cards
- * come from `createSecureRandom()` on every table, every hand records `randomSourceKind: 'csprng'`,
- * and the deterministic generator is a test-and-teaching tool the server must not be able to reach
- * (see the note in `@prl/poker-engine`'s `rng.ts`). So the same seed reproduces how the profiles
- * play, not which cards arrive.
+ * `POST /rooms` returns the invite code once. Only `sha256(code)` is stored, and `logging.ts`
+ * censors `inviteCode`. "No such room" and "not your room" share one answer so a room id cannot
+ * be confirmed. Every Legends response goes through `profileDisclosure()`, defaulting to the
+ * `archetype` naming mode. `deterministicSeed` seeds bot decisions only. Cards always come from
+ * `createSecureRandom()`.
  */
 
 import { scenarioById } from '@prl/content';
@@ -94,18 +67,9 @@ import {
 import { createAuthStore } from './auth.ts';
 import { registerLegendStatsRoute } from './legends.ts';
 
-// ---------------------------------------------------------------------------
-// Local schemas
-// ---------------------------------------------------------------------------
-
 /**
- * Schemas for the endpoints `@prl/contracts` does not carry one for.
- *
- * The Legends request bodies have wire *types* in `legends.ts` but no JSON Schema, so these are
- * written here, closed and bounded like every schema in the contract package. They are passed as
- * objects rather than registered with an `$id`, because a schema that only one route uses does not
- * need to be addressable — and adding an `$id` here would put a second definition of the contract
- * in a place nobody looking for the contract would find.
+ * Schemas for Legends bodies that `@prl/contracts` types but does not schema. Passed inline with
+ * no `$id`, so the contract has no second addressable definition.
  */
 const PROFILE_ID_PARAMS = {
   type: 'object',
@@ -167,7 +131,7 @@ const COMPARE_BODY = {
   },
 } as const;
 
-/** Board lengths a street must have. The engine would reject anything else anyway. */
+/** Board length per street. */
 const BOARD_LENGTH: Readonly<Record<'preflop' | 'flop' | 'turn' | 'river', number>> = {
   preflop: 0,
   flop: 3,
@@ -175,12 +139,7 @@ const BOARD_LENGTH: Readonly<Record<'preflop' | 'flop' | 'turn' | 'river', numbe
   river: 5,
 };
 
-/** Trials per profile when the client does not ask. */
 const DEFAULT_COMPARE_TRIALS = 12;
-
-// ---------------------------------------------------------------------------
-// Request body types, as the schemas above accept them
-// ---------------------------------------------------------------------------
 
 interface LegendMatchBody {
   readonly profileIds: readonly string[];
@@ -216,10 +175,6 @@ export interface RoomRoutesOptions {
   readonly sessionStore?: SessionStore;
 }
 
-// ---------------------------------------------------------------------------
-// The routes
-// ---------------------------------------------------------------------------
-
 export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPluginAsync {
   return async (app) => {
     const registry = options.registry ?? roomRegistry();
@@ -230,33 +185,20 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
     if (store !== null) await app.register(sessionPlugin, { store });
 
     app.addHook('onClose', async () => {
-      // Only the registry this module created. A registry passed in belongs to its owner, and
-      // closing somebody else's tables on our way out would be a surprise.
-      //
-      // `shutdown()` rather than `closeAll()`, and the difference is a whole deploy. Both close
-      // every table; only this one waits for the room LEASES to be given back. A process that exits
-      // without releasing leaves every room it was serving unopenable — by its own replacement —
-      // until each lease expires, which is `LEASE_TTL_MS` of "that table will not open" on every
-      // single deploy. It never rejects, so it cannot turn a shutdown into a hang.
+      // Only a registry this module created. `shutdown()` waits for room leases to be released,
+      // otherwise the replacement process cannot open those rooms until `LEASE_TTL_MS` passes.
+      // It never rejects, so shutdown cannot hang.
       if (ownsRegistry) await registry.shutdown();
     });
 
-    /** The caller, as every room operation wants them. */
     const principalOf = (request: Parameters<typeof requireSession>[0]): RoomPrincipal => {
       const session = requireSession(request);
       return { userId: session.user.id, displayName: session.user.displayName };
     };
 
-    // -----------------------------------------------------------------------
-    // Rooms
-    // -----------------------------------------------------------------------
-
     /**
-     * `POST /rooms` — a private table, and its invite code, once.
-     *
-     * Bots asked for in the body are seated immediately, from seat 1 upwards, leaving seat 0 for
-     * the owner. Each gets a real user row, because a seat is a seat whoever occupies it: the same
-     * membership, hand-seat and action shapes apply, and no query needs a special case.
+     * `POST /rooms`. Requested bots take seats from 1 upwards, leaving seat 0 for the owner. Each
+     * bot gets a real user row, so no query needs a special case.
      */
     app.post<{ Body: CreateRoomRequest }>(
       '/rooms',
@@ -279,9 +221,8 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
           await seatRequestedBots(registry, made.room, body.bots ?? []);
           return made;
         };
-        // A table whose bots fill every chair but the owner's is a practice table, and a learner
-        // holds one of those at a time — see `RoomRegistry.retirePracticeTables` for the units it
-        // used to mint. A table with a free chair is for people and is never retired by this.
+        // Bots in every chair but the owner's make a practice table, and a learner holds one at a
+        // time (`RoomRegistry.retirePracticeTables`). A table with a free chair is never retired here.
         const bots = (body.bots ?? []).reduce((total, entry) => total + entry.count, 0);
         const created =
           bots > 0 && bots + 1 === body.maxSeats
@@ -292,7 +233,7 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
       },
     );
 
-    /** `POST /rooms/join` — by invite code. Joining a room you are already in is not an error. */
+    /** Joining a room you are already in is not an error. */
     app.post<{ Body: JoinRoomRequest }>(
       '/rooms/join',
       { schema: { body: { $ref: 'prl:joinRoomBody#' } } },
@@ -303,15 +244,12 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
       },
     );
 
-    /** `GET /rooms` — the rooms this learner owns or is sitting at. */
     app.get('/rooms', async (request): Promise<RoomListResponse> => {
       const principal = principalOf(request);
       const rows = await registry.store.listForUser(principal.userId);
       const members = await registry.store.membersOfRooms(rows.map((row) => row.id));
       const rooms: RoomSummary[] = rows.map((row) => {
-        // A room with a live table in this process reports what is actually happening at it; one
-        // without reports the durable record. Both are honest; they differ in freshness, and the
-        // live one is the fresher.
+        // A live table in this process is fresher than the durable record.
         const live = registry.get(row.id);
         if (live !== null) return toRoomSummary(live);
         return summaryFromRows(
@@ -322,7 +260,6 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
       return { rooms };
     });
 
-    /** `GET /rooms/:roomId` — one room, if the caller is a member or its owner. */
     app.get<{ Params: { roomId: string } }>(
       '/rooms/:roomId',
       { schema: { params: { $ref: 'prl:roomIdParams#' } } },
@@ -333,7 +270,6 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
       },
     );
 
-    /** `POST /rooms/:roomId/sit` — take a seat, if the units are there and it is free. */
     app.post<{ Params: { roomId: string }; Body: SitRequest }>(
       '/rooms/:roomId/sit',
       { schema: { params: { $ref: 'prl:roomIdParams#' }, body: { $ref: 'prl:sitBody#' } } },
@@ -346,11 +282,8 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
     );
 
     /**
-     * `POST /rooms/:roomId/leave` — stand up and leave the table.
-     *
-     * Leaving mid-hand is not a way to avoid a bet: the seat folds at its turn and is released when
-     * the hand completes. The summary that comes back is the table as it now is, which for a
-     * mid-hand departure still shows the seat holding its folded cards.
+     * Leaving mid-hand folds the seat at its turn and releases it when the hand completes, so the
+     * returned summary can still show the seat holding folded cards.
      */
     app.post<{ Params: { roomId: string } }>(
       '/rooms/:roomId/leave',
@@ -363,19 +296,10 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
       },
     );
 
-    // -----------------------------------------------------------------------
-    // Legends
-    // -----------------------------------------------------------------------
-
     /**
-     * `GET /legends/profiles` — the selector.
-     *
-     * No session required: this is teaching material, like a lesson. Every card carries its
-     * disclosure, and the universal disclaimer is returned separately so the UI can show it once
-     * above the whole list as well as with each profile.
+     * No session required. The universal disclaimer is returned separately so the UI can show it
+     * once above the list as well as on each card.
      */
-    // Not `async`: nothing here awaits, and Fastify sends a handler's return value whether or not
-    // it is a promise.
     app.get('/legends/profiles', (): LegendProfilesResponse => {
       const mode = resolveNamingMode();
       const profiles: LegendProfileCardDto[] = PROFILES.map((profile) => {
@@ -402,21 +326,9 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
     });
 
     /**
-     * `GET /legends/profiles/:profileId` — "what can I learn from this player?"
-     *
-     * Built by `learnFromSummary` in `@prl/poker-ai` rather than assembled here. This handler used
-     * to construct the response inline, and that is how it drifted: the generator knows which of
-     * the sixteen axes a wire-shaped observation can honestly be compared against — two of them
-     * declare a CONDITIONAL quantity that no observer on the other side of the table can measure —
-     * and an inline copy silently did not.
-     *
-     * `observed` is null, and `observedBasis` with it. Measured frequencies here mean the reader's
-     * OWN session against this profile, and three things block that today: the durable rows cannot
-     * name seven of the twelve profiles, `bluffFrequency` asks what a bet was made with, and the
-     * action log has no `raiseWasAvailable`. The field's comment in `@prl/contracts` carries the
-     * list. What a simulation of the model actually did is measurable, and is served under a name
-     * that says so by `GET /legends/profiles/:profileId/stats` — putting it here instead would make
-     * `learnFromSummary` generate "across N hands you have seen" about hands nobody played.
+     * Built by `learnFromSummary`, because two of the sixteen axes are conditional quantities an
+     * observer cannot measure and an inline copy drifted. `observed` is null, and the blockers are
+     * listed on the field in `@prl/contracts`. Simulated figures are served by the `/stats` route.
      */
     app.get<{ Params: { profileId: string } }>(
       '/legends/profiles/:profileId',
@@ -432,9 +344,7 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
             others: PROFILES,
           }),
           observedBasis: null,
-          // `learnFromSummary` names other profiles by their archetype name, which is safe in both
-          // modes but is not the name this deployment shows. Re-derived through `profileDisclosure`
-          // so an attributed deployment's contrast section matches the rest of its own pages.
+          // Re-derived through `profileDisclosure` so contrasts use this deployment's naming mode.
           contrasts: PROFILES.filter((other) => other.naming.id !== profile.naming.id).map((other) => ({
             otherProfileId: other.naming.id,
             otherDisplayName: profileDisclosure(other.naming, mode).displayName,
@@ -444,16 +354,10 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
       },
     );
 
-    // `GET /legends/profiles/:profileId/stats` — declared traits against a stored measurement of
-    // what the model actually did. Registered from `routes/legends.ts`, which owns the runs.
+    // Owned by `routes/legends.ts`.
     registerLegendStatsRoute(app, PROFILE_ID_PARAMS);
 
-    /**
-     * `POST /legends/matches` — a private room with profiles already seated.
-     *
-     * The match is an ordinary invite-only room, so the table UI, the hand history and the review
-     * are unchanged. The learner takes seat 0 by sitting down as they would anywhere else.
-     */
+    /** An ordinary invite-only room, so the table UI, history and review are unchanged. */
     app.post<{ Body: LegendMatchBody }>(
       '/legends/matches',
       { schema: { body: LEGEND_MATCH_BODY } },
@@ -470,10 +374,8 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
         }
         const plan = planLegendSeats(body.profileIds, mode, maxSeats);
 
-        // The previous practice table is retired before the new room exists, so it cannot retire
-        // itself, and the whole build — room and bots — runs as one turn per learner, so two tabs
-        // cannot each keep one. Every match the web client starts used to leave the previous one
-        // open, and the header grew by 1,000 per match — see `RoomRegistry.retirePracticeTables`.
+        // Retire the previous practice table first, as one turn per learner, so two tabs cannot each
+        // keep one (`RoomRegistry.retirePracticeTables`).
         const created = await registry.replacePracticeTable(principal.userId, async () => {
           const made = await registry.createRoom(principal, {
             name: 'Legends practice',
@@ -489,14 +391,10 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
             const durable = {
               profileId: durableProfile(seat.profileId),
               difficulty: body.difficulty,
-              // Seeds the opponent's decisions, never the deal. See the file comment. The RESOLVED
-              // seed is what is stored, not `body.deterministicSeed`: it is the value the runner is
-              // given below, so a rehydrated seat reproduces this exact decision stream.
+              // Store the resolved seed so a rehydrated seat replays the same decision stream.
               seed: seedFor(roomId, seat.seat, body.deterministicSeed),
             };
-            // The full seat, durably. This used to write `persistableProfile(...)`, which answered
-            // `unknown` for seven of the twelve profiles — so a restart forgot which Legend the
-            // learner had chosen to play. Migration 0003 widened the column; this writes to it.
+            // The full profile id, so a restart remembers which Legend was chosen (migration 0003).
             await registry.store.addMember({
               roomId,
               userId: user.id,
@@ -526,12 +424,7 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
       },
     );
 
-    /**
-     * `POST /legends/compare` — the same spot, several styles.
-     *
-     * Expensive: each trial runs a policy, and a postflop policy samples equity. It takes the
-     * expensive rate limit for the same reason the equity endpoints do.
-     */
+    /** Each trial runs a policy and may sample equity, so it takes the expensive rate limit. */
     app.post<{ Body: CompareBody }>(
       '/legends/compare',
       { config: app.expensiveRateLimit, schema: { body: COMPARE_BODY } },
@@ -550,11 +443,7 @@ export function createRoomRoutes(options: RoomRoutesOptions = {}): FastifyPlugin
   };
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** The profile, or `content_not_found`: an unknown profile id is a bad link, not a bad request. */
+/** An unknown profile id is a bad link, so `content_not_found`. */
 function profileById(profileId: string) {
   try {
     return requireProfile(profileId);
@@ -574,18 +463,9 @@ function difficultyDto(difficulty: LegendDifficulty): LegendDifficultyDto {
 }
 
 /**
- * Checks the caller may see the room, then opens its live table.
- *
- * Both failures are one answer: `room_not_found_or_not_permitted`, whether the room does not exist
- * or the caller is nobody in it.
- *
- * The order is the part worth arguing about. Opening first and checking afterwards would be shorter
- * and would let a stranger who guessed a room id make this process build a live table — a
- * `HandState`, a timer, a bot runner — before being told no. So the membership check runs against
- * the durable rows first, and only a caller who belongs here gets a table built for them.
- *
- * `ensureOpen` is what makes a room usable after a restart: the row is durable, the table is not,
- * and the first request from a member rebuilds the table from the roster.
+ * One answer, `room_not_found_or_not_permitted`, for a missing room and a stranger.
+ * Membership is checked against durable rows first, so a guessed room id never makes this process
+ * build a live table. `ensureOpen` rebuilds the table from the roster after a restart.
  */
 async function openRoomFor(registry: RoomRegistry, roomId: string, userId: string): Promise<LiveRoom> {
   const refuse = (): never => {
@@ -607,7 +487,6 @@ async function openRoomFor(registry: RoomRegistry, roomId: string, userId: strin
   return registry.require(roomId, userId);
 }
 
-/** Seats the bots a `POST /rooms` body asked for, from seat 1 upwards. */
 async function seatRequestedBots(
   registry: RoomRegistry,
   room: LiveRoom,
@@ -626,16 +505,13 @@ async function seatRequestedBots(
     }
     const displayName = names[index] ?? botDisplayName(profile.naming.id);
     const user = await registry.store.createBotUser(displayName);
-    // A table created through `POST /rooms` has no difficulty field, so its bots play the
-    // middle setting: the style as designed, with the sizing variation a real opponent shows.
+    // `POST /rooms` has no difficulty field, so these bots play the middle setting.
     const durable = {
       profileId: durableProfile(profile.naming.id),
       difficulty: 'realistic' as const,
       seed: seedFor(room.record.id, seat, undefined),
     };
-    // Persisted before the runner is told, and persisted in FULL: the durable row is what a
-    // restart reads, so a seat the row cannot describe is a seat the next process cannot put
-    // back. See `rooms/bot-profile.ts`.
+    // Persisted in full before the runner is told, since the row is what a restart reads.
     await registry.store.addMember({
       roomId: room.record.id,
       userId: user.id,
@@ -647,13 +523,7 @@ async function seatRequestedBots(
   }
 }
 
-/**
- * The spot to compare on: either a Scenario Lab situation or an ad-hoc one.
- *
- * A scenario is read through `@prl/content`'s own `readSituation`, so a comparison and the Scenario
- * Lab's own analysis are talking about exactly the same numbers rather than two readings of the
- * same JSON.
- */
+/** A Scenario Lab situation or an ad-hoc one. */
 function spotFor(body: CompareBody): HypotheticalSpot {
   if (body.scenarioId !== undefined) return spotFromScenario(body.scenarioId);
   const situation = body.situation;

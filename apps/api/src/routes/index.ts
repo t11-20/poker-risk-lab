@@ -1,45 +1,13 @@
 /**
- * The route manifest, and the shared state the route modules expect somebody to have wired.
+ * The route manifest, plus the process-wide wiring no single route module can do for itself.
  *
- * `app.ts` deliberately does not import a single route module — it owns the order plugins are
- * registered in and nothing else — and `server.ts` is a boot sequence. This file is the seam
- * between them: it names every route module once, in one order, and it does the two pieces of
- * process-wide wiring that no individual module can do for itself.
- *
- * ## Why the session plugin is registered here and not by each module
- *
- * `registerRoutes` gives every module its own encapsulated child instance, and Fastify's
- * `decorateRequest` is scoped to the instance it is called on. So `sessionPlugin` registered
- * inside `routes/auth.ts` decorates the *auth* child and nothing else, and every other module
- * that reads `request.session` sees a property that was never defined:
- *
- * - `routes/hands.ts` answers `internal_error` (it checks `hasRequestDecorator` and says so).
- * - `routes/progress.ts` answers `not_authenticated` to everybody, forever.
- * - `routes/content.ts` degrades to the anonymous view, so no lesson ever shows as completed.
- *
- * None of those failures is visible in a module's own tests, because each test harness registers
- * a session layer at the root before registering the module — which is exactly what this does
- * with the real plugin. `sessionPlugin` is marked `skip-override` and guards on
- * `hasRequestDecorator('session')`, so the registrations inside `routes/auth.ts`,
- * `routes/rooms.ts` and `ws/hub.ts` become no-ops rather than a second lookup per request. The
- * root registration is the one that runs.
- *
- * `/health` and `/ready` are registered by `buildApp` *before* this runs, and Fastify binds a
- * route's hooks at the moment the route is added, so neither probe pays for session resolution.
- * That is the behaviour we want, and it is why this must not move into `buildApp`.
- *
- * ## Why the registry is created here
- *
- * `roomRegistry()` is a process-wide singleton whose *first* call decides its dependencies
- * (`shared ??= new RoomRegistry(options)`). Its `archive` defaults to `noopArchive`, which
- * writes nothing — so a server whose first call is the bare `roomRegistry()` in `routes/rooms.ts`
- * plays hands that are never persisted, and `GET /hands` is empty forever. `postgresArchive`
- * exists for exactly this and had no caller. So the registry is constructed here, before any
- * route module can ask for it, with the archive bound and `onProblem` pointed at the app logger
- * instead of the default no-op that swallowed it.
- *
- * ORDERING: `registerApiRoutes` must run after `configureDatabase` and before anything else calls
- * `roomRegistry()`.
+ * `sessionPlugin` is registered on the root because `decorateRequest` is scoped per instance. Inside
+ * `routes/auth.ts` alone, every other module would see no `request.session`. The registrations in
+ * auth, rooms and `ws/hub.ts` are no-ops once this one runs.
+ * `/health` and `/ready` are added in `buildApp` before this, so they skip session resolution.
+ * The registry is built here because its first `roomRegistry()` call fixes its dependencies, and
+ * the bare default archives nothing.
+ * ORDERING: run after `configureDatabase` and before anything else calls `roomRegistry()`.
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -60,13 +28,7 @@ import roomRoutes from './rooms.ts';
 
 export { authRoutes, calcRoutes, contentRoutes, handsRoutes, progressRoutes, roomRoutes, wsHub };
 
-/**
- * Every route module, in registration order.
- *
- * The order matches `EXPECTED_ROUTE_MODULES` in `app.ts`. It is not load-bearing — no module
- * depends on another's hooks, and the paths do not overlap — but keeping the two lists in the
- * same order means a missing module is visible by reading them side by side.
- */
+/** Same order as `EXPECTED_ROUTE_MODULES` in `app.ts`, so the two lists compare side by side. */
 export const API_ROUTE_MODULES: readonly RouteModule[] = [
   authRoutes,
   contentRoutes,
@@ -77,87 +39,36 @@ export const API_ROUTE_MODULES: readonly RouteModule[] = [
   wsHub,
 ];
 
-/**
- * Wires the shared state and registers every route module under `API_PREFIX`.
- *
- * One call, so the order above cannot be got wrong by a later edit: the session plugin has to be
- * on the root instance before the first module is registered, and the registry has to exist
- * before the first module asks for it.
- */
+/** One call, so the session plugin and the registry always exist before the first module registers. */
 export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
-  // The process-wide instance, the same one `buildApp` gave the HTTP hook and the `/metrics`
-  // route. Read once here rather than inside the hook so that every notice from every table in
-  // this process lands on one registry.
+  // The same instance `buildApp` gave the HTTP hook and `/metrics`, so every table reports to one registry.
   const metrics = app.appMetrics;
 
-  // Lazily bound: `postgresArchive` takes a getter, so building the registry never touches the
-  // pool. A failed write then surfaces as a logged archive failure on a live table rather than
-  // as a crash at boot.
+  // `postgresArchive` takes a getter, so building the registry never touches the pool.
   roomRegistry({
     metrics,
     archive: postgresArchive(getSql),
-    // ######################################################################
-    // ## THIS LINE IS WHAT MAKES "ONE API PROCESS PER ROOM" REAL.         ##
-    // ######################################################################
-    //
-    // Without it the registry defaults to `ownership: null`, which is the behaviour every
-    // database-free test needs and is exactly what this file's header describes going wrong for the
-    // archive: a permissive default, silently taken by production, and nobody notices for months.
-    // The failure here is worse than an empty `GET /hands`. Two API processes — a second replica, or
-    // the few seconds of a rolling deploy where the new container is healthy and the old one has not
-    // drained — would each hold their own deck and pot for the same room, and whichever settlement
-    // landed second would destroy the chips the other one paid out, with no error anywhere.
-    //
-    // Bound lazily through `getSql`, like the archive, so registering routes still touches no pool.
-    // `test/wiring.test.ts` asserts that the assembled app's registry enforces a lease, because
-    // losing this one line would leave every test green.
+    // The lease that makes one API process per room real. The default `ownership: null` lets two
+    // processes (a second replica, or a rolling deploy) deal separate decks for one room, silently.
+    // `test/wiring.test.ts` asserts the assembled registry enforces a lease.
     ownership: postgresRoomOwnership(getSql),
-    // ######################################################################
-    // ## THIS LINE IS WHAT MAKES `PRL_ENROLMENT_REQUIRED` REAL.           ##
-    // ######################################################################
-    //
-    // `enforced` gates taking a seat, and nothing else — `/learn`, the Lab, the glossary, the
-    // Legends pages, creating a room and joining one by invite code all stay open, because that is
-    // the surface somebody deciding whether to enrol is browsing. `off`, the default and the state
-    // of every deployment that predates this, passes null and the registry behaves exactly as it
-    // always did.
-    //
-    // Bound lazily through `getSql` like the archive and the lease, so registering routes still
-    // touches no pool. The read it eventually makes is SELECT-only by GRANT and not by convention:
-    // `prl_app` cannot enrol anybody even if a future handler tried to
-    // (`db/migrations/0006_cohort_enrolments.sql`).
-    //
-    // `test/wiring.test.ts` asserts this correspondence in BOTH directions — enforced binds one,
-    // off binds none — because the failure of losing this line is silent and looks like success:
-    // an enforcing deployment that seats everybody, with every test still green.
+    // `enforced` gates taking a seat and nothing else. `prl_app` holds SELECT only on enrolments
+    // (`db/migrations/0006_cohort_enrolments.sql`). `test/wiring.test.ts` asserts enforced binds
+    // one and off binds none.
     ...(app.appConfig.enrolmentRequired === 'enforced'
       ? { entitlement: postgresSeatEntitlement(getSql) }
       : {}),
-    // A lone learner at a table of bots gets this long to act, so the Coach panel can actually be
-    // read before the clock folds them. Threaded from config rather than read inside `LiveTable`,
-    // so a test constructing a table directly can still vary it.
+    // Longer clock for a lone learner among bots, so the Coach panel can be read. Configurable for tests.
     learnerTurnSeconds: app.appConfig.learnerTurnSeconds,
     onProblem: (message, detail) => {
-      // Logged first and unchanged: the log line is where the room id, the seat and the underlying
-      // error live, and it is the thing somebody reads once an alert has fired.
       app.log.warn({ ...detail }, message);
-      // Then counted, by the typed `event` rather than by the prose. `recordProblem` decides which
-      // events are seat-actor failures and which are already counted at their source — see
-      // `classifyProblem` in `observability/telemetry.ts` for why each one is in the class it is.
-      // Doing the classification there rather than with a switch here keeps one list of events,
-      // exhaustively checked by the compiler, instead of two that can disagree.
+      // `classifyProblem` in `observability/telemetry.ts` owns the single list of events.
       recordProblem(detail.event, metrics);
     },
   });
 
-  // `getSql()` rather than a getter, because `sessionPlugin` needs the store now — which is why
-  // this must run after `configureDatabase`.
-  //
-  // `routes/auth.ts` builds an equivalent store for its own handlers, so there are two of these
-  // objects in a running server. That costs nothing and is not worth threading a parameter to
-  // avoid: `createAuthStore` is a set of closures over the `sql` handle with no state and no
-  // connections of its own, so both are views onto the one pool. What would matter is two *pools*,
-  // and `db.ts` refuses that outright.
+  // `getSql()` now, not a getter, because `sessionPlugin` needs the store at registration.
+  // `routes/auth.ts` builds a second store. Both are stateless closures over one pool.
   await app.register(sessionPlugin, { store: createAuthStore(getSql()).sessions });
 
   await registerRoutes(app, API_ROUTE_MODULES);
