@@ -1,173 +1,37 @@
 #!/usr/bin/env node
 /**
- * Verifies that the alerts in `docs/production/alerts.md` fire, route and arrive.
+ * Verifies that the alerts in `docs/production/alerts.md` fire, route and arrive. This is
+ * `pnpm run alerts:verify`. A rule that was never evaluated fails silently (a renamed metric, a
+ * wrong `job` label, an unrouted severity), so seven checks run against a real Prometheus and
+ * Alertmanager.
  *
- * This is what `pnpm run alerts:verify` does.
+ * 1. Loaded. Every rule is live with no evaluation error, has `severity: page` or `ticket`, and names
+ *    a runbook whose Detection section names the alert back (see `runbookNamingProblems`).
+ * 2. Agreed. Names and severities match between the rules file and `docs/production/alerts.md`.
+ * 3. Grounded. Every `prl_*` series is in a live API scrape, every `alertmanager_*` series in an
+ *    Alertmanager scrape (with `up{job="prl-alertmanager"} == 1`), and every `probe_*` series in
+ *    Prometheus' query API. The API read retries, because check 6 bans this loopback address.
+ * 4. Evaluable. Prometheus executes every expression.
+ * 5. Delivered. `ApiDown` is provoked by stopping the API and must reach the paging tier, then resolve.
+ * 6. Delivered the other way. `RateLimitBans` must reach the ticket tier and not the pager.
+ * 7. Dead man's switch. `Watchdog` (`expr: vector(1)`) pings its own receiver repeatedly, never a
+ *    human tier, and stopping Alertmanager produces a silence that is detected.
  *
- * ## The gap this closes
+ * Checks 5 and 6 assert over both transports, webhook and SMTP. `startSmtpSink` is a real SMTP
+ * server in `node:net`, and the envelope, `Subject:` and quoted-printable body are asserted per tier.
  *
- * `docs/production/alerts.md` ends with a sentence it earned: *"Provoking a rule
- * and watching it fire is the only evidence that it is wired correctly. Until that
- * has been done against a real Prometheus, this file describes intent — and says
- * so."* Two independent release reviews of this project then recorded the same
- * finding from the other side — "alert delivery UNVERIFIED", "no Alertmanager in
- * staging compose" — and both were correct. Twenty-two rules existed as PromQL in
- * a markdown file, and not one of them had ever been evaluated.
+ * Not proved: that a provider accepts this deployment's credentials, that a phone watches the
+ * address, that a person is awake (`pnpm run alerts:ack`), or that the watcher outside this host is
+ * watching (`scripts/alert-preflight.mjs` refuses a heartbeat URL that names this machine). The
+ * unprovoked rules are only loaded, agreed, grounded and evaluable.
  *
- * A rule that has never been evaluated fails in ways prose cannot show. A metric
- * renamed in `observability/metrics.ts` leaves the expression syntactically
- * perfect and permanently false. A `job` label that does not match the scrape
- * config disables `ApiDown` — the alert whose entire job is to notice that
- * everything else stopped reporting. A severity label nobody routes on sends a
- * page to a ticket queue. Each of those is silent, and each is checked below.
+ * `deploy/staging/observability/alertmanager.yml` is untracked and rendered here from
+ * `alertmanager.template.yml` with `PRL_ALERT_*` values. Overriding a destination off this host
+ * makes the delivery checks fail, so the run prints which values were overridden.
  *
- * ## The seven checks, and why each one is separate
- *
- * 1. **Loaded** — every rule in `alert-rules.yml` is present in a live Prometheus
- *    with no evaluation error, carries `severity: page` or `severity: ticket`, and
- *    names a runbook that exists on disk **and that names the alert back**, in its
- *    Detection section. The second half was missing, and six of twenty-nine rules
- *    opened a runbook that had never heard of them — including `HandsFailing`, a
- *    page, opening the hidden-card incident runbook and its "roll back to the last
- *    digest". See `runbookNamingProblems`.
- * 2. **Agreed** — the alert names and severities in the rules file and in
- *    `docs/production/alerts.md` are the same set. The document is the reasoning;
- *    the file is the behaviour. Two sets that drift is how a threshold gets
- *    changed in one place.
- * 3. **Grounded** — every `prl_*` series an expression mentions appears in a live
- *    scrape of the API, and every `alertmanager_*` series appears in a live scrape of
- *    Alertmanager. This is the invariant that document states in its own second
- *    paragraph: *"If a name below does not appear in a live scrape of GET /metrics,
- *    the rule is wrong."* Read with a retry budget, because check 6 floods the limiter
- *    from the same loopback address this reads from, and the ban outlives the run that
- *    caused it. The Alertmanager half also asserts `up{job="prl-alertmanager"} == 1`:
- *    a series that exists and is not being scraped grounds a rule that can never fire,
- *    and `AlertmanagerNotificationsFailing` is the one rule whose silence nothing else
- *    here could report. A third half, added with the blackbox probe: every `probe_*`
- *    series is grounded against Prometheus' query API rather than a scrape, because
- *    nothing exports those — they are manufactured per scrape by the exporter making a
- *    request through the front door. A rules file naming none of them is a deployment
- *    where the proxy, TLS and the page server can all be dead with every alert green.
- * 4. **Evaluable** — every expression is executed by Prometheus. A rule that
- *    cannot be parsed or that references a label set that does not exist is a rule
- *    that will never fire, and it looks identical to a quiet one.
- * 5. **Delivered** — `ApiDown` is provoked for real: the API container is stopped,
- *    the rule is watched through pending into firing, Alertmanager is watched for
- *    the alert, and a receiver on this host is watched for the notification. Then
- *    the API is restored and the resolved notification is watched for too. The
- *    notification must arrive on the PAGING path and not the ticket one, which is
- *    what makes it a test of the two-tier rule rather than of a webhook.
- * 6. **Delivered the other way too** — `RateLimitBans` is provoked, and must reach
- *    the ticket tier and not the pager. Half a routing rule is not a routing rule.
- * 7. **The dead man's switch** — the `Watchdog` rule fires permanently, its
- *    notification arrives repeatedly on its own third destination, it never reaches
- *    a human tier, and then Alertmanager is STOPPED and the absence is watched for
- *    and detected. That last part is the only check in this file whose subject is a
- *    thing not happening.
- *
- * Every delivery in 5 and 6 is checked over BOTH transports the receivers declare:
- * an HTTP webhook, and email over SMTP.
- *
- * ## Check 7, and the one failure nothing in band can report
- *
- * Checks 1 to 6 all share an assumption, and `AlertmanagerNotificationsFailing` and
- * `AlertmanagerDown` share it too: that a report about a broken alerting system can
- * be delivered by the alerting system. `docs/production/runbooks/alerting-blind.md`
- * names the case where it cannot — both delivery paths broken at once — and says
- * plainly that no rule can close it, because the channel carrying the report is the
- * channel that failed.
- *
- * A dead man's switch inverts the direction. `Watchdog` is `expr: vector(1)`: always
- * firing, routed to a third receiver whose destination is a machine outside this
- * deployment whose only job is to notice that the pings stopped. Nothing is wrong
- * when a ping arrives. Everything is wrong when they stop, and the report is made by
- * something that did not depend on the thing that failed.
- *
- * What check 7 can prove locally is the emitting half, and it proves all of it: the
- * rule fires, the route sends it to its own receiver and to neither human tier, the
- * notifications keep arriving with measured gaps inside a watcher's grace period,
- * and — with Alertmanager stopped — the silence is detected while Prometheus goes on
- * reporting the same alerts firing to nobody, and the pings resume when it returns.
- *
- * What it cannot prove is the watching half, and no amount of code here can: a
- * watcher on this host dies with the host it is watching. That is one URL,
- * `PRL_ALERT_HEARTBEAT_WEBHOOK_URL`, and `scripts/alert-preflight.mjs` refuses to let
- * a release be promoted while it still names this machine — so the firing half cannot
- * ship alone, which was the stated reason this repository had no switch at all.
- *
- * ## The SMTP half, and why it is the part that closes the blocker
- *
- * Until this existed, both receivers were `webhook_configs` pointing at a sink
- * this script runs, and every document about them ended the same way: "production
- * replaces two URLs; the hop that ends at somebody's phone is unrehearsed". That
- * was true and it was a hole. A webhook proves Alertmanager can POST JSON. It does
- * not prove that the thing a real deployment configures — a receiver that speaks a
- * mail protocol to a relay it does not control — is even syntactically reachable
- * from this configuration, because nothing here had ever spoken that protocol.
- *
- * So `startSmtpSink` below is a real SMTP server: `220` on connect, `250` to
- * `EHLO`, `MAIL FROM` and `RCPT TO`, `354` to `DATA`, capture to `\r\n.\r\n`,
- * `221` to `QUIT`. Two hundred lines of `node:net` and no dependency. Alertmanager
- * cannot tell it from a smarthost, and what it captures is the message a provider
- * would have received: envelope sender, envelope recipients, `Subject:`, and a
- * quoted-printable body. All four are asserted, against the tier the routing was
- * supposed to choose.
- *
- * ## What this does NOT prove
- *
- * That a pager rings. An SMTP transaction to a sink this process controls proves
- * the transport and the message — that Alertmanager's email path is configured,
- * reachable, correctly addressed per tier, and produces a message with the alert
- * in it. It proves nothing whatever about what happens after a relay accepts the
- * mail. Three things remain unrehearsed and they are now nameable:
- *
- *   * that a provider accepts this deployment's credentials — no API key and no
- *     SMTP submission password is exercised here, because the sink asks for
- *     neither and inventing one would rehearse somebody else's account;
- *   * that the address configured is one a phone actually watches — an
- *     email-to-SMS gateway that has been decommissioned looks exactly like one
- *     that works, from this end;
- *   * that a person is awake. Nothing a repository can run proves that, and check 7
- *     does not change it — a dead man's switch narrows the question from "is anybody
- *     watching" to "is the watcher this deployment named still watching", which is
- *     answered by `pnpm run alerts:ack` and a human typing a code.
- *
- * It also proves nothing about the twenty-six rules it does not provoke. Checks 1
- * to 4 say they are loaded, agreed, grounded and evaluable, which is a great deal
- * more than a markdown file said and a great deal less than "tested".
- * `docs/production/alerts.md` § Verifying these rules lists how to provoke each of
- * them by hand.
- *
- * ## Where the destinations come from
- *
- * `deploy/staging/observability/alertmanager.yml` is no longer tracked. It is
- * rendered here from `alertmanager.template.yml` before the overlay comes up, the
- * same way `metrics-token` is written from `PRL_STAGING_METRICS_TOKEN`, so that a
- * deployment points its alerts at its own pager by setting `PRL_ALERT_*` variables
- * rather than by editing a file in a checkout and hoping the edit survives.
- * `alertmanagerValues` lists every variable and its rehearsal default.
- *
- * The verification asserts against the values it rendered with. Overriding a
- * destination to something outside this host is therefore expected to FAIL the
- * delivery checks — the sinks cannot observe a notification that went to
- * PagerDuty — and the run says which values were overridden so that the failure
- * reads as "you pointed it elsewhere" rather than as "delivery is broken".
- *
- * ## Why it stops the API rather than fabricating an alert
- *
- * Alertmanager has an API that accepts an alert directly, and using it would make
- * this finish in five seconds. It would also skip Prometheus entirely — the scrape,
- * the rule, the `for` duration and the label that routes it — which is most of what
- * can be wrong. `ApiDown` is the right rule to provoke because it is the only one
- * whose condition is reachable without generating load, and because it is keyed on
- * `up`, so it also proves the scrape itself works.
- *
- * The cost is time. `max_over_time(up[2m]) == 0` cannot be true until two minutes of
- * failed scrapes have accumulated, and only then does `for: 2m` start counting, so
- * the firing is a little over four minutes after the container stops; with the
- * recovery, the resolved notification and the ticket-tier provocation after it, a
- * whole run is six to seven minutes and the staging API is stopped for about four.
- * Staging is disposable and that is the point of having one.
+ * It stops the API rather than posting to Alertmanager's API, so the scrape, rule, `for` and routing
+ * label are all exercised. `max_over_time(up[2m]) == 0` plus `for: 2m` fires a little over four
+ * minutes after the stop, and a whole run takes six to seven minutes.
  *
  * Usage:
  *     pnpm run alerts:verify
@@ -189,10 +53,6 @@ import { createServer as createSocketServer } from 'node:net';
 import { basename, join } from 'node:path';
 import { bold, dim, green, measureUntil, REPO_ROOT, red, run, yellow } from './drills/harness.mjs';
 
-// ---------------------------------------------------------------------------
-// Where everything lives
-// ---------------------------------------------------------------------------
-
 const STAGING_ENV = join(REPO_ROOT, 'deploy', 'staging', '.env.staging');
 const OBSERVABILITY = join(REPO_ROOT, 'deploy', 'staging', 'observability');
 const RULES_FILE = join(OBSERVABILITY, 'alert-rules.yml');
@@ -211,59 +71,23 @@ const COMPOSE = [
   join(REPO_ROOT, 'docker-compose.observability.yml'),
 ];
 
-/** The port the webhook sink listens on. It matches the rendered receiver URLs. */
 const SINK_PORT = 9099;
 
-/**
- * The port the SMTP sink listens on.
- *
- * One below the webhook sink so that "the alerting rehearsal is holding two ports"
- * is one thing to remember rather than two. Not 25: binding a privileged port
- * would need root, and Alertmanager is told the port explicitly by
- * `smtp_smarthost`, so there is nothing to gain from the well-known one.
- */
+/** Not 25, which would need root. Alertmanager is told the port by `smtp_smarthost`. */
 const SMTP_SINK_PORT = 9098;
 
-/**
- * The path on the webhook sink that the dead man's switch pings.
- *
- * A third path on the same sink rather than a third server, because what makes it a
- * separate destination is the ROUTE that chose it, and the route is what check 7
- * asserts: a `Watchdog` notification arriving on `/page` would be the heartbeat
- * waking somebody every twenty seconds, which is the failure this design is against.
- */
+/** A path rather than a server, because the route that chose it is what check 7 asserts. */
 const HEARTBEAT_PATH = '/heartbeat';
 
-/**
- * Whether the API container is stopped right now.
- *
- * Read by the interrupt handler below. A `finally` block does not run when the process is
- * signalled, and the one thing this script must never do is leave somebody's staging API
- * stopped because they pressed Ctrl-C during the two minutes it waits for `ApiDown`.
- */
+/** Read by the interrupt handler, because `finally` does not run on a signal. */
 let apiStopped = false;
 
-/**
- * The same, for the Alertmanager container that check 7 stops on purpose.
- *
- * Check 7's negative control is a dead man's switch actually firing: Alertmanager is
- * stopped, the heartbeat goes quiet, and the silence is detected. A Ctrl-C inside that
- * window would otherwise leave the overlay half up, and `--keep-up` would hand the next
- * run an Alertmanager that is not running for a reason nothing recorded.
- */
+/** The same, for the Alertmanager that check 7 stops on purpose. */
 let alertmanagerStopped = false;
 
 const options = {
   skipProvoke: process.argv.includes('--skip-provoke'),
-  /**
-   * Checks 1-4 and 7, without stopping the staging API.
-   *
-   * The dead man's switch needs no provocation — it is already firing — but it does
-   * need about three minutes of wall clock to show several arrivals and one detected
-   * silence. Bundling it with `--skip-provoke` would have made that flag stop being
-   * the thirty-second one, and leaving it out of a fast path would have made the
-   * heartbeat the slowest thing in the file to iterate on. So it gets its own.
-   */
+  // Checks 1-4 and 7. The heartbeat needs about three minutes, so it is kept out of `--skip-provoke`.
   onlyHeartbeat: process.argv.includes('--only-heartbeat'),
   keepUp: process.argv.includes('--keep-up'),
   renderConfig: process.argv.includes('--render-config'),
@@ -273,10 +97,6 @@ const options = {
     return at === -1 ? null : (process.argv[at + 1] ?? null);
   })(),
 };
-
-// ---------------------------------------------------------------------------
-// Reporting
-// ---------------------------------------------------------------------------
 
 const checks = [];
 
@@ -298,19 +118,8 @@ function section(title) {
   console.log(bold(`\n${title}`));
 }
 
-// ---------------------------------------------------------------------------
-// Reading the two sources of truth
-// ---------------------------------------------------------------------------
-
 /**
- * Alert names and severities as the RULES file states them.
- *
- * Parsed with a line scanner rather than a YAML library on purpose: this
- * repository ships no YAML parser, adding one to read a file it also writes would
- * be a dependency for nothing, and the shape being read is two keys in a known
- * order. A malformed rules file does not have to be diagnosed here — Prometheus
- * refuses to start on one, which is a louder and more accurate error than
- * anything this could produce.
+ * Line-scanned, because the repo ships no YAML parser and Prometheus refuses a malformed file itself.
  *
  * @returns {Map<string, {severity: string|null, runbook: string|null}>}
  */
@@ -323,17 +132,13 @@ export function alertsInRulesFile(text) {
     const alert = /^\s*-\s*alert:\s*(\S+)\s*$/.exec(line);
     if (alert !== null) {
       current = { severity: null, runbook: null };
-      // A rule item's keys are indented two past the `-`. Recording that lets every later match
-      // be scoped to this rule rather than to "anywhere below it", which is what stopped the
-      // prose inside an annotation from being read as configuration.
+      // Later matches are scoped to this rule's key indent, so annotation prose is not read as config.
       keyIndent = indent + 2;
       found.set(alert[1], current);
       continue;
     }
     if (current === null) continue;
-    // Any new list item at or above the rule's own indent ends this rule — including
-    // `- record:`, which is an ordinary thing to put in a Prometheus rules file and which used
-    // to leave `current` pointing at the previous alert.
+    // Any list item above the key indent ends the rule, including `- record:`.
     if (/^\s*-\s/.test(line) && indent < keyIndent) {
       current = null;
       keyIndent = -1;
@@ -347,27 +152,13 @@ export function alertsInRulesFile(text) {
   return found;
 }
 
-/** Leading-space count, which is the only structure a line scanner over YAML can rely on. */
 function indentOf(line) {
   return (line.match(/^\s*/) ?? [''])[0].length;
 }
 
 /**
- * Alert names and severities as the DOCUMENT states them.
- *
- * The document's own convention, used consistently by every entry:
- *
- *     ### `ApiDown` — page
- *
- * A heading that does not match is not silently ignored — it simply is not an
- * alert, and check 2 then reports the difference between the two sets, which is
- * the same failure seen from the other end.
- *
- * `heartbeat` is the third value and there is exactly one rule with it. It is
- * matched here rather than being special-cased so that the document and the rules
- * file are still compared by the same mechanism as everything else — a `Watchdog`
- * documented as a `page` has to fail check 2, because that is a real and tempting
- * mistake and it would deliver a notification to a human every twenty seconds.
+ * Headings shaped `### \`ApiDown\` — page`. `heartbeat` is matched like any severity, so a
+ * `Watchdog` documented as `page` fails check 2.
  *
  * @returns {Map<string, string>} name -> severity
  */
@@ -380,15 +171,6 @@ export function alertsInDocument(text) {
   return found;
 }
 
-/**
- * The body of one `## ` section of a runbook, or null if it has no such heading.
- *
- * Every file in `docs/production/runbooks/` has the same seven sections in the same
- * order and its README says so — Symptoms, Detection, Immediate containment,
- * Diagnosis, Recovery, Verification, Escalation. That structure is what makes
- * `runbookNamingProblems` able to ask a sharper question than "is this name
- * anywhere in the file".
- */
 export function runbookSection(text, heading) {
   const match = new RegExp(`^##\\s+${heading}\\s*$`, 'm').exec(text);
   if (match === null) return null;
@@ -398,43 +180,11 @@ export function runbookSection(text, heading) {
 }
 
 /**
- * Every rule's runbook is asked whether it has heard of the alert that opens it.
- *
- * ## The incident this is for
- *
- * `existsSync(rule.runbook)` — the check directly above this one — asks whether the
- * annotation points at a file. It cannot ask whether the file is about this alert,
- * and for six of twenty-nine rules it was not. Measured against the tree this check
- * was written into: `HandsFailing` (**page**) opened `hidden-card-incident.md`,
- * whose first instructions are "treat any credible suspicion as an incident at page
- * severity, stop the affected surface, roll back to the last digest, notify the
- * incident owner immediately, even out of hours". `HandsFailing`'s own description
- * says `interrupted_by_restart` after a deploy is expected once. So the alert most
- * likely to fire benignly at 3am opened the runbook most likely to cause a
- * production rollback, and `api-unhealthy.md` — which lists `HandsFailing` in its
- * Detection table with the right first move — was one line away in the annotation.
- *
- * This is the `seat-release` mistake repeating with a different mechanism.
- * `alerts.md` records that one: `SeatReleaseFailing` fired as `ArchiveFailing`, and
- * "an operator was told hand history was being lost, with that runbook, when what
- * had failed was freeing a chair". There the wrong runbook came from a wrong metric;
- * here it comes from a wrong annotation, and nothing was checking either.
- *
- * ## Why the Detection section and not the whole file
- *
- * A whole-file substring search is satisfied by a cross-reference. `websocket-spike.md`
- * could mention `RateLimitBans` in a "see also" line and pass, while an operator
- * following its containment steps would still be reading about socket origins during a
- * ban wave. Every runbook's Detection section is the table that says *which alerts open
- * this file and what each one means*, so requiring the name there requires somebody to
- * have decided this runbook treats this alert. Measured: at the time this was written
- * all twenty-three correctly-routed rules already appeared in their runbook's Detection
- * section, and all six wrong ones appeared nowhere in their file at all — so the
- * stricter question costs nothing and is much harder to satisfy by accident.
- *
- * Rules whose `runbook:` is absent or points at a missing file are skipped here: the
- * check above already reports those, and reporting them twice as two different faults
- * is how a report gets read as noise.
+ * Asks each rule's runbook whether its Detection section names the alert. `existsSync` alone let
+ * six of twenty-nine rules open the wrong runbook, including `HandsFailing` (a page) opening
+ * `hidden-card-incident.md` and its "roll back to the last digest". The Detection section is used
+ * rather than the whole file so a "see also" line cannot satisfy it. Missing runbooks are reported by
+ * the check above and skipped here.
  *
  * @param {Map<string, {severity: string|null, runbook: string|null}>} declared
  * @param {(path: string) => string|null} readRunbook — null when the file is missing
@@ -446,8 +196,7 @@ export function runbookNamingProblems(declared, readRunbook) {
     if (rule.runbook === null) continue;
     const text = readRunbook(rule.runbook);
     if (text === null) continue;
-    // Word boundaries by hand: `\b` would match `Failing` inside `TableActorFailing`
-    // in the other direction too, and an alert name is [A-Za-z0-9_] throughout.
+    // Explicit boundaries, so `Failing` does not match inside `TableActorFailing`.
     const names = (haystack) => new RegExp(`(?<![A-Za-z0-9_])${alert}(?![A-Za-z0-9_])`).test(haystack);
     const detection = runbookSection(text, 'Detection');
     if (detection === null) {
@@ -465,15 +214,8 @@ export function runbookNamingProblems(declared, readRunbook) {
 }
 
 /**
- * Every `prl_*` series name an expression mentions, with histogram suffixes
- * resolved back to the metric family.
- *
- * `prl_http_request_duration_seconds_bucket` is not a metric, it is one of the
- * three series a histogram named `prl_http_request_duration_seconds` exports, and
- * a scrape lists the family in its `# TYPE` line. Stripping the suffix is what
- * makes "does this metric exist" answerable from the exposition's type lines
- * rather than from a substring search, which would answer yes for a name that is
- * merely a prefix of a real one.
+ * Histogram suffixes are stripped so the name is checked against the scrape's `# TYPE` lines, not
+ * by substring, which would accept a prefix of a real name.
  */
 export function seriesReferencedBy(expression) {
   const names = new Set();
@@ -483,21 +225,7 @@ export function seriesReferencedBy(expression) {
   return names;
 }
 
-/**
- * The same question for the series Alertmanager exports about ITSELF.
- *
- * `seriesReferencedBy` matches `prl_*` and only `prl_*`, which was complete until the
- * rules file gained `AlertmanagerNotificationsFailing` — a rule on
- * `alertmanager_notifications_failed_total`, a name this repository does not own and
- * therefore cannot check by reading `metrics.ts`. Leaving it ungrounded would have made
- * check 3 pass over a rule whose series name it never looked at, which is the exact hole
- * that check exists to close: an expression on a series that does not exist is
- * syntactically perfect, evaluates without error, and is permanently false.
- *
- * A separate function rather than a widened regex, because the two are grounded against
- * two different scrapes — the API's exposition and Alertmanager's — and merging them
- * would mean looking for one system's names in the other's output.
- */
+/** Separate from `seriesReferencedBy` because these are grounded against Alertmanager's own scrape. */
 export function alertmanagerSeriesReferencedBy(expression) {
   const names = new Set();
   for (const match of expression.matchAll(/\balertmanager_[a-z0-9_]+/g)) {
@@ -507,19 +235,9 @@ export function alertmanagerSeriesReferencedBy(expression) {
 }
 
 /**
- * And the same question again for the series the BLACKBOX probe produces.
- *
- * A third function for a third reason, and the reason is that `probe_*` series exist
- * in neither exposition the other two read. They are not exported by anything: they
- * are manufactured per scrape, by the exporter, as the result of a request it makes
- * on Prometheus' behalf. So they are grounded against Prometheus' own query API in
- * check 3 rather than against a `/metrics` read, and a name that never appears there
- * is a rule that can never fire — the same failure as the other two, arrived at from
- * a direction neither of them looks in.
- *
- * These are the rules that close the blind spot named in prometheus.yml: with the API
- * scraped directly on the compose network, a dead proxy, an expired certificate or a
- * dead page server leaves every `prl_*` rule green while the site is dark.
+ * `probe_*` series exist in no exposition. The blackbox exporter makes them per scrape, so check 3
+ * grounds them against Prometheus' query API. They cover a dead proxy, an expired certificate or a
+ * dead page server, which leave every `prl_*` rule green.
  */
 export function probeSeriesReferencedBy(expression) {
   const names = new Set();
@@ -529,7 +247,6 @@ export function probeSeriesReferencedBy(expression) {
   return names;
 }
 
-/** Every `expr:` in the rules file, keyed by the alert it belongs to. */
 export function expressionsInRulesFile(text) {
   const found = new Map();
   const lines = text.split('\n');
@@ -545,11 +262,8 @@ export function expressionsInRulesFile(text) {
       continue;
     }
     if (current === null) continue;
-    // Same scoping as `alertsInRulesFile`: a new list item ends the rule, and only a key at the
-    // rule's own key indent is this rule's `expr`. Without the second half, an `expr:`-shaped
-    // line inside an `annotations: description: |` block — and this document's prose does quote
-    // expressions — silently replaced the real one, and every downstream check then passed
-    // against text nobody deployed.
+    // Only an `expr:` at this rule's key indent counts. Annotation prose quotes expressions, and one
+    // once replaced the real `expr`.
     if (/^\s*-\s/.test(line) && indent < keyIndent) {
       current = null;
       keyIndent = -1;
@@ -558,11 +272,7 @@ export function expressionsInRulesFile(text) {
     const raw = /^\s*expr:\s*(.*)$/.exec(line);
     if (raw === null || indent !== keyIndent) continue;
     const value = raw[1].trim();
-    // Anything but a block-scalar indicator is the expression itself. Written as
-    // an explicit comparison rather than a negative lookahead: the lookahead
-    // spelling of this backtracked over the space after `expr:` and captured the
-    // literal indicator ` >-` as seven rules' entire query, which Prometheus
-    // answered 400 to — the check caught it, and this is what it caught.
+    // An explicit comparison, not a lookahead. The lookahead version captured ` >-` as seven rules' query.
     if (value !== '' && !/^[>|][-+]?$/.test(value)) {
       found.set(current, unquote(value));
       continue;
@@ -571,9 +281,7 @@ export function expressionsInRulesFile(text) {
       const body = [];
       for (let scan = index + 1; scan < lines.length; scan++) {
         const scanned = lines[scan];
-        // A blank line inside a folded scalar is a paragraph break, not a terminator. Breaking
-        // on it truncated `HttpErrorRateHigh` to its numerator — still valid PromQL, so every
-        // check passed while the threshold the alert is about was never seen by anything.
+        // A blank line in a folded scalar is a paragraph break. Stopping there truncated `HttpErrorRateHigh`.
         if (scanned.trim() === '') continue;
         if (indentOf(scanned) <= indent) break;
         body.push(scanned.trim());
@@ -584,13 +292,7 @@ export function expressionsInRulesFile(text) {
   return found;
 }
 
-/**
- * Strips one matched pair of surrounding quotes.
- *
- * `expr: "prl_a > 1"` is ordinary YAML. Passed through verbatim, Prometheus parses the quotes as
- * a STRING LITERAL expression and answers `status: success` — so the evaluation check went green
- * for a rule that had never been evaluated.
- */
+/** Prometheus parses a quoted `expr` as a string literal and answers success without evaluating it. */
 function unquote(value) {
   const trimmed = value.trim();
   if (trimmed.length < 2) return trimmed;
@@ -599,48 +301,17 @@ function unquote(value) {
   return trimmed;
 }
 
-// ---------------------------------------------------------------------------
-// Rendering alertmanager.yml
-// ---------------------------------------------------------------------------
-
 /**
- * Every destination a deployment can set, and what the rehearsal uses instead.
- *
- * The defaults are all local on purpose: two paths on this script's webhook sink,
- * and this script's SMTP sink. That is what makes `pnpm run alerts:verify` work in
- * a fresh checkout with nothing configured, and it is also the reason the defaults
- * cannot quietly become production's — `host.docker.internal` and a `.invalid`
- * domain are both unroutable anywhere that matters, so a deployment that forgot to
- * configure this fails to deliver loudly rather than delivering to a stranger.
- *
- * `PRL_ALERT_SMTP_PASSWORD` is deliberately NOT in this map. It is written to a
- * file that Alertmanager reads through `smtp_auth_password_file`, never
- * substituted into the rendered YAML, because the rendered YAML is the artefact
- * somebody pastes into a bug report.
+ * The defaults are local sinks and a `.invalid` domain, so a fresh checkout can rehearse and an
+ * unconfigured deployment fails loudly. `PRL_ALERT_SMTP_PASSWORD` is not here. It goes to the file
+ * read by `smtp_auth_password_file`, never into the rendered YAML.
  */
 export const ALERT_DESTINATION_DEFAULTS = {
   PRL_ALERT_PAGE_WEBHOOK_URL: `http://host.docker.internal:${SINK_PORT}/page`,
   PRL_ALERT_TICKET_WEBHOOK_URL: `http://host.docker.internal:${SINK_PORT}/ticket`,
-  /**
-   * The dead man's switch, and the one destination whose rehearsal default being
-   * local is a bigger lie than the others.
-   *
-   * `/page` pointing at this host merely means no human was paged by a test. A
-   * heartbeat pointing at this host means the watcher dies with the thing it is
-   * watching, which is the whole mechanism inverted. Check 7 proves everything that
-   * happens on THIS side of that URL — the rule fires, routes to its own receiver,
-   * arrives on a schedule, and its absence is detected — and `alert-preflight.mjs`
-   * refuses to let a release be promoted while this value still names this machine.
-   */
+  // `alert-preflight.mjs` refuses to promote while this still names this machine.
   PRL_ALERT_HEARTBEAT_WEBHOOK_URL: `http://host.docker.internal:${SINK_PORT}${HEARTBEAT_PATH}`,
-  /**
-   * How often the heartbeat is re-sent.
-   *
-   * 20 s in the rehearsal, so that a verification run can watch several arrivals and
-   * one detected silence inside a couple of minutes. A deployment sets whatever its
-   * snitch expects and the constraint is the same either way: comfortably inside the
-   * watcher's grace period, because the watcher pages on the gap.
-   */
+  // 20s lets a run see several arrivals and one silence. It must sit inside the watcher's grace period.
   PRL_ALERT_HEARTBEAT_INTERVAL: '20s',
   PRL_ALERT_PAGE_EMAIL_TO: 'oncall@staging.poker-risk-lab.invalid',
   PRL_ALERT_TICKET_EMAIL_TO: 'tickets@staging.poker-risk-lab.invalid',
@@ -651,14 +322,7 @@ export const ALERT_DESTINATION_DEFAULTS = {
   PRL_ALERT_SMTP_USERNAME: '',
 };
 
-/**
- * The values this run will render with, and which of them the environment supplied.
- *
- * The second half is not cosmetic. Every delivery check below asserts against these
- * values, and a run that has been pointed at a real pager cannot observe its own
- * notifications — so the overrides are printed, and the failure then reads as "you
- * sent it somewhere this cannot watch" instead of as "delivery is broken".
- */
+/** Overrides are reported, because a run pointed at a real pager cannot observe its notifications. */
 export function alertmanagerValues(env = process.env) {
   const values = {};
   const overridden = [];
@@ -670,14 +334,7 @@ export function alertmanagerValues(env = process.env) {
   return { values, overridden };
 }
 
-/**
- * Configuration that would render into valid YAML and notify nobody.
- *
- * Checked before rendering rather than after, because every one of these produces
- * an Alertmanager that starts, reports itself healthy, accepts alerts, routes them
- * correctly and drops them on the floor. That is the failure this whole file exists
- * to make impossible, and it is not detectable from the outside.
- */
+/** Each of these renders valid YAML for an Alertmanager that accepts alerts and drops them. */
 export function destinationProblems(values) {
   const problems = [];
   for (const tier of ['PAGE', 'TICKET']) {
@@ -702,16 +359,7 @@ export function destinationProblems(values) {
       `PRL_ALERT_SMTP_REQUIRE_TLS must be exactly true or false, not ${JSON.stringify(values.PRL_ALERT_SMTP_REQUIRE_TLS)}`,
     );
   }
-  /**
-   * The heartbeat, which unlike the two human tiers may not be dropped.
-   *
-   * Every other destination announces its own absence the first time something fires:
-   * an unset pager is noticed during the first incident, loudly and by the person who
-   * was not woken. A heartbeat with nowhere to go announces nothing, ever — the rule
-   * fires forever, the route matches, the receiver has no `webhook_configs` in it, and
-   * the notification is dropped inside Alertmanager. From every dashboard here that is
-   * identical to a healthy month, which is the exact failure the switch exists for.
-   */
+  // A heartbeat with nowhere to go is dropped inside Alertmanager and looks like a healthy month.
   if (values.PRL_ALERT_HEARTBEAT_WEBHOOK_URL === '') {
     problems.push(
       "PRL_ALERT_HEARTBEAT_WEBHOOK_URL is empty, so the dead man's switch would fire forever into " +
@@ -729,14 +377,7 @@ export function destinationProblems(values) {
   return problems;
 }
 
-/**
- * A Prometheus duration in milliseconds, or `null`.
- *
- * Only the units this file can produce, which is the point: `PRL_ALERT_HEARTBEAT_INTERVAL`
- * is validated above and then converted here, and check 7 sizes every budget it waits on
- * from the result. A verification that hard-coded twenty seconds would quietly stop
- * testing the thing it claims to test the moment a deployment changed the interval.
- */
+/** Check 7 sizes its budgets from this, so a changed interval is still tested. */
 export function durationMs(text) {
   const parsed = /^(\d+)(ms|[smh])$/.exec(text.trim());
   if (parsed === null) return null;
@@ -745,26 +386,9 @@ export function durationMs(text) {
 }
 
 /**
- * `alertmanager.template.yml` with the deployment's values in it.
- *
- * Two directives, both spelled as YAML comments so the template still reads as the
- * file it becomes:
- *
- *   * `${NAME}` — substituted. A name with no value is an ERROR rather than an
- *     empty string. `url: ` is accepted by Alertmanager and notifies nobody, which
- *     is the whole class of defect this file is against.
- *   * `# @if NAME` … `# @endif` — the enclosed lines survive only when `NAME` has a
- *     non-empty value. That is what makes each destination independently optional,
- *     so a deployment that pages by email and tickets by webhook emits exactly
- *     those two blocks rather than two more pointing at nothing.
- *
- * A comment line is copied through untouched. The template's header is several
- * screens of prose explaining what each variable is FOR, and that prose has to be
- * able to write `${PRL_ALERT_PAGE_EMAIL_TO}` without the renderer helpfully
- * replacing it with an address — a documentation table that silently becomes a
- * list of one deployment's real destinations is worse than no table. It also means
- * the reasoning survives into the rendered file, which is the copy an operator
- * actually opens.
+ * Two directives, spelled as YAML comments. `${NAME}` is substituted, and an empty value is an
+ * error because `url: ` notifies nobody. `# @if NAME` … `# @endif` keeps its lines only when `NAME`
+ * is non-empty. Comment lines are copied untouched, so the template's prose can name variables.
  *
  * @param {string} template
  * @param {Record<string, string>} values
@@ -817,22 +441,11 @@ export function renderAlertmanagerConfig(template, values) {
 }
 
 /**
- * Renders the config and the password file, replacing whatever is there.
- *
- * `rmSync` first, and both files rewritten every run, for the reason the token
- * file gives below: Docker resolves a missing bind-mount source by creating a
- * DIRECTORY, so an interrupted run leaves one here and the next container reports
- * it as unreadable configuration rather than as a stale mount.
- *
- * The password file is written even when empty. The mount is unconditional in
- * `docker-compose.observability.yml` — a conditional bind mount is not a thing
- * compose has — so the file has to exist whether or not anything reads it.
+ * `rmSync` first, because Docker creates a directory for a missing bind-mount source. The password
+ * file is written even when empty because the compose mount is unconditional.
  */
 function writeAlertmanagerConfig(values) {
-  // A banner, because the rendered file looks exactly like a file somebody could
-  // edit and it is deleted at the end of every run. Without this, the first
-  // reasonable thing an operator does with a broken destination — open it and fix
-  // the URL — is work that disappears the next time anything renders.
+  // The rendered file is deleted every run, so edits to it are lost.
   const banner = [
     '# GENERATED — do not edit.',
     '#',
@@ -845,18 +458,12 @@ function writeAlertmanagerConfig(values) {
   ].join('\n');
   const rendered = banner + renderAlertmanagerConfig(readFileSync(TEMPLATE_FILE, 'utf8'), values);
   rmSync(CONFIG_FILE, { force: true, recursive: true });
-  // 0644, not 0600: the rendered file holds destinations, not credentials, and the
-  // container reads it as an unprivileged user. The one credential in this feature
-  // is the SMTP password, and it is in the file below at 0600.
+  // 0644, because it holds destinations, not credentials. The password file below is 0600.
   writeFileSync(CONFIG_FILE, rendered, { mode: 0o644 });
   rmSync(SMTP_PASSWORD_FILE, { force: true, recursive: true });
   writeFileSync(SMTP_PASSWORD_FILE, process.env.PRL_ALERT_SMTP_PASSWORD ?? '', { mode: 0o600 });
   return rendered;
 }
-
-// ---------------------------------------------------------------------------
-// HTTP
-// ---------------------------------------------------------------------------
 
 async function getJson(url) {
   const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
@@ -867,27 +474,9 @@ async function getJson(url) {
 const PROMETHEUS = `http://127.0.0.1:${process.env.PRL_STAGING_PROMETHEUS_PORT ?? 9090}`;
 const ALERTMANAGER = `http://127.0.0.1:${process.env.PRL_STAGING_ALERTMANAGER_PORT ?? 9093}`;
 
-// ---------------------------------------------------------------------------
-// The webhook sink
-// ---------------------------------------------------------------------------
-
 /**
- * A receiver, on this host, that records what Alertmanager sent it and on which
- * path.
- *
- * The path is the assertion. The rendered route tree sends `severity: page` to the
- * paging receiver and `severity: ticket` to the ticket one, and in the rehearsal those
- * are `/page` and `/ticket` on this sink — so a `page` alert arriving on `/ticket` — or
- * on both — is the two-tier rule in `docs/production/alerts.md` not being
- * implemented, which is invisible to every other check here.
- *
- * `/heartbeat` is the third path, and the same reasoning is why it is a path on this
- * sink rather than a second server: what makes the dead man's switch a separate
- * destination is the ROUTE that chose it, and the route is the thing worth asserting.
- *
- * Exported, and taking a port, so that `alert-ack-page.mjs` can raise the same
- * receiver when it rehearses an acknowledged page against the local defaults. Two
- * copies of a webhook recorder is how one of them stops recording the path.
+ * Records what Alertmanager sent and on which path. The path is the assertion. `/page`, `/ticket`
+ * and `/heartbeat` are the three routes. Exported so `alert-ack-page.mjs` uses the same recorder.
  */
 export function startSink(port = SINK_PORT) {
   const received = [];
@@ -910,15 +499,11 @@ export function startSink(port = SINK_PORT) {
   });
   return new Promise((done, failed) => {
     server.on('error', failed);
-    // 0.0.0.0, not loopback: the notification arrives from inside a container, so
-    // it reaches this process over the host gateway address rather than over
-    // 127.0.0.1, and a loopback-only listener would never see it. Nothing else is
-    // exposed by this — the port is open for the seconds this script runs.
+    // 0.0.0.0, because the notification comes from a container over the host gateway.
     server.listen(port, '0.0.0.0', () => done({ received, close: () => server.close() }));
   });
 }
 
-/** Notifications that name this alert with this status, on this path. */
 export const notificationsFor = (received, path, alertname, status) =>
   received.filter(
     (entry) =>
@@ -927,40 +512,15 @@ export const notificationsFor = (received, path, alertname, status) =>
       (entry.payload?.alerts ?? []).some((alert) => alert?.labels?.alertname === alertname),
   );
 
-// ---------------------------------------------------------------------------
-// The dead man's switch, as arithmetic
-// ---------------------------------------------------------------------------
-
-/**
- * The instants a heartbeat ping arrived, in milliseconds since the epoch.
- *
- * Read off the same sink every other notification lands on, filtered to the
- * heartbeat PATH — because the path is what the route chose, and a `Watchdog` that
- * arrived on `/page` is not a heartbeat, it is somebody's phone ringing every twenty
- * seconds. Status is asserted as `firing` for the same reason `send_resolved: false`
- * is set on that receiver: this alert never resolves, and a resolved notification
- * arriving would be the last thing a watcher heard.
- */
+/** Status must be `firing`. This alert never resolves, and the receiver sets `send_resolved: false`. */
 export const heartbeatArrivals = (received, path = HEARTBEAT_PATH) =>
   notificationsFor(received, path, 'Watchdog', 'firing').map((entry) => Date.parse(entry.at));
 
-/** The gaps between consecutive arrivals, in milliseconds. */
 export const heartbeatGaps = (arrivals) => arrivals.slice(1).map((at, index) => at - arrivals[index]);
 
 /**
- * What is wrong with a run of heartbeat arrivals, or `null` if nothing is.
- *
- * This is the whole of the local half of a dead man's switch, and it is a pure
- * function so that its failure modes can be constructed in a test rather than waited
- * for: `alert-delivery.test.mjs` drives it with no arrivals, with one arrival, and
- * with a gap past the deadline. A watcher whose alarm has never been seen to sound
- * is the purest possible decoration, and this one's alarm is three lines below.
- *
- * `minimum` is 3 rather than 1 deliberately. One arrival proves the route; it does
- * not prove the thing the mechanism depends on, which is that the notification KEEPS
- * coming. A `repeat_interval` that Alertmanager silently rounded up, or a receiver
- * that fired once at `group_wait` and never again, both deliver exactly one ping and
- * both are a dead man's switch that has already failed at the moment it is installed.
+ * Pure, so the test can drive no arrivals, one, and an overdue gap. `minimum` is 3, because one
+ * arrival proves the route but not that the pings keep coming.
  *
  * @param {number[]} arrivals epoch milliseconds, ascending
  * @param {{deadlineMs: number, minimum?: number}} bounds
@@ -979,32 +539,20 @@ export function heartbeatProblem(arrivals, { deadlineMs, minimum = 3 }) {
 }
 
 /**
- * Waits until the heartbeat has been silent for longer than the deadline.
- *
- * The active half of the mechanism, and the reason it is a function rather than a
- * comparison at the end: a dead man's switch does not detect absence by looking back
- * over a log, it detects it by a timer that nothing reset. This polls, and it returns
- * the moment the silence exceeds the deadline — which is what a snitch does, and what
- * check 7's negative control demonstrates actually happening.
- *
- * Returns the observed silence in milliseconds, or `null` if a ping arrived inside the
- * budget, in which case the absence was NOT detected and the caller must fail.
+ * Polls until the heartbeat has been silent past the deadline. Returns the silence in ms, or `null`
+ * if a ping arrived inside the budget, which the caller must fail.
  *
  * @param {() => number[]} arrivals a fresh read each poll; the sink is cumulative
  */
 export async function watchForSilence(arrivals, deadlineMs, budgetMs) {
   const startedAt = Date.now();
   const seen = arrivals();
-  // Measured from the LAST PING and not from the moment this was called, because that
-  // is what a watcher outside the deployment can see. It has no idea when anybody
-  // started watching; it knows only how long it has been since it was last told
-  // anything, and that is the number its grace period is compared against.
+  // Measured from the last ping, which is all an outside watcher can see.
   const lastPing = seen.length > 0 ? seen[seen.length - 1] : startedAt;
   const before = seen.length;
   for (;;) {
     const now = Date.now();
-    // A ping arriving after the watch began resets the timer, exactly as it resets a
-    // snitch's, and it means the silence was not real.
+    // A new ping resets the timer, as it would a snitch's.
     if (arrivals().length > before) return null;
     const silence = now - lastPing;
     if (silence > deadlineMs) return silence;
@@ -1013,24 +561,9 @@ export async function watchForSilence(arrivals, deadlineMs, budgetMs) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// The SMTP sink
-// ---------------------------------------------------------------------------
-
 /**
- * Undoes the transfer encoding Alertmanager applies to a mail body.
- *
- * Quoted-printable exists because SMTP is a line protocol with a 998-character
- * limit, and it does two things a naive `includes()` cannot survive: it escapes
- * bytes as `=XX`, and it breaks long lines with a soft break — an `=` immediately
- * before the newline, which is not part of the content.
- *
- * That soft break is the reason this function is here rather than being skipped as
- * over-engineering. Alertmanager's default HTML body is one very long line of
- * inline-styled markup, so the alert name in it is not merely likely to be split
- * across a line boundary, it is likely to be split MID-WORD — and an assertion
- * that `ApiDown` appears in the body would then fail against a message that
- * contains it, which is the worst kind of test.
+ * Alertmanager's HTML body is one long line, so quoted-printable soft breaks split the alert name
+ * mid-word and a raw `includes()` would miss it.
  */
 export function decodeQuotedPrintable(text) {
   return text
@@ -1039,13 +572,7 @@ export function decodeQuotedPrintable(text) {
 }
 
 /**
- * An RFC822 message split into its headers and its decoded body.
- *
- * Header folding is undone (a continuation line begins with whitespace and belongs
- * to the header above it), names are lowercased, and the body is quoted-printable
- * decoded whole. Decoding the body but NOT the headers is deliberate: a MIME
- * boundary parameter is full of `=`-followed-by-hex-looking text and decoding it
- * would corrupt exactly the header that says how to read the rest.
+ * Only the body is decoded. A MIME boundary parameter looks like `=XX` escapes and would be corrupted.
  *
  * @param {string} raw the message as it arrived, without the terminating dot
  */
@@ -1070,43 +597,17 @@ export function parseMessage(raw) {
 }
 
 /**
- * A real SMTP server, on this host, that records the messages Alertmanager sends it.
- *
- * ## Why write one rather than assert on Alertmanager's own logs
- *
- * Because the log line says "sent"; the message says what was sent. Everything that
- * can be wrong about the email path after "sent" — the wrong recipient for the
- * tier, a subject with no alert name in it, an empty body from a broken template,
- * a `from` a relay will reject — is invisible in a log and unmissable in the
- * captured RFC822.
- *
- * And because SMTP is small enough to answer honestly. The dialogue below is the
- * whole of what a submission relay must do for a client that is not authenticating:
- * greet, accept a hello, take an envelope, take a body terminated by a lone dot,
- * say goodbye. Alertmanager's client is Go's `net/smtp` and it cannot tell this
- * from a smarthost, which is the point — what lands in `received` is the message a
- * provider would have received, not an approximation of one.
- *
- * ## What is deliberately NOT advertised
- *
- * `STARTTLS` and `AUTH`. A sink with no certificate that advertised STARTTLS would
- * make Alertmanager negotiate TLS and fail, and one that advertised AUTH would
- * invite this script to invent a credential — which is the thing the whole feature
- * refuses to do. `PRL_ALERT_SMTP_REQUIRE_TLS` therefore defaults to `false` for the
- * rehearsal and the template says, in the file, that a deployment must set it.
- *
- * Exported, and taking a port, so that `alert-delivery.test.mjs` can drive the whole
- * dialogue over a real socket with no containers. A protocol bug in here would
- * otherwise surface only six minutes into a run that had already stopped the API.
+ * A real SMTP server that records what Alertmanager sends. A log says "sent", while the captured
+ * RFC822 shows the recipient, subject and body. Go's `net/smtp` cannot tell it from a smarthost.
+ * `STARTTLS` and `AUTH` are not advertised, since the sink has no certificate and no credential to
+ * check. Exported, with a port, so the test drives the dialogue over a real socket.
  */
 export function startSmtpSink(port = SMTP_SINK_PORT) {
   const received = [];
   const server = createSocketServer((socket) => {
     socket.setEncoding('utf8');
     socket.on('error', () => {
-      // Deliberately empty. A mail client that vanishes mid-transaction is not this
-      // script's problem, and an unhandled ECONNRESET on a socket would take the whole
-      // run down during the two minutes it is waiting for something else.
+      // Empty on purpose. An unhandled ECONNRESET would end the whole run.
     });
 
     let buffer = '';
@@ -1120,10 +621,7 @@ export function startSmtpSink(port = SMTP_SINK_PORT) {
       buffer += chunk;
       for (;;) {
         if (inData) {
-          // The terminator is `<CRLF>.<CRLF>`, and the leading CRLF may be the one
-          // that ended the last header rather than anything in `buffer` — a message
-          // whose body is empty ends with the dot arriving first. Prefixing a CRLF
-          // makes both cases the same search instead of two.
+          // A leading CRLF makes an empty body, where the dot arrives first, the same search.
           const haystack = `\r\n${buffer}`;
           const at = haystack.indexOf('\r\n.\r\n');
           if (at === -1) break;
@@ -1133,9 +631,7 @@ export function startSmtpSink(port = SMTP_SINK_PORT) {
           received.push({
             from: envelope.from,
             recipients: envelope.recipients,
-            // Dot-unstuffing: a body line that begins with `.` was sent with two, so
-            // that it could not be mistaken for the terminator. Undoing it here means
-            // what is stored is the message, not the wire encoding of it.
+            // Dot-unstuffing, so the stored text is the message rather than its wire encoding.
             raw: message.replace(/\r\n\.\./g, '\r\n.').replace(/^\.\./, '.'),
             at: new Date().toISOString(),
           });
@@ -1150,9 +646,7 @@ export function startSmtpSink(port = SMTP_SINK_PORT) {
         const verb = line.split(/[\s:]/, 1)[0].toUpperCase();
         const address = /<([^>]*)>/.exec(line)?.[1] ?? null;
         if (verb === 'EHLO') {
-          // Multi-line 250: every line but the last is `250-`. Nothing here is
-          // optional decoration — `net/smtp` parses these into the extension set it
-          // will then use, and a malformed continuation is a client-side error.
+          // Every line but the last is `250-`. `net/smtp` parses these into its extension set.
           socket.write('250-prl-alert-sink\r\n250-8BITMIME\r\n250 SIZE 33554432\r\n');
         } else if (verb === 'HELO') {
           say('250 prl-alert-sink');
@@ -1175,9 +669,7 @@ export function startSmtpSink(port = SMTP_SINK_PORT) {
           socket.end();
           return;
         } else {
-          // Includes STARTTLS and AUTH, which are not advertised and so should never
-          // arrive. Refusing them explicitly means a client that tries anyway gets a
-          // protocol answer rather than a hang, and the run fails with a reason.
+          // Covers STARTTLS and AUTH, so a client that tries them gets an answer instead of a hang.
           say('502 5.5.1 Command not implemented');
         }
       }
@@ -1185,10 +677,8 @@ export function startSmtpSink(port = SMTP_SINK_PORT) {
   });
   return new Promise((done, failed) => {
     server.on('error', failed);
-    // 0.0.0.0 for the same reason as the webhook sink: the connection is opened from
-    // inside the alertmanager container and arrives over the host gateway address.
-    // The bound port is handed back rather than assumed: the test drives this on an
-    // ephemeral port so it can never collide with a verification run in another shell.
+    // 0.0.0.0 for the container's host-gateway connection. The bound port is returned because the
+    // test uses an ephemeral one.
     server.listen(port, '0.0.0.0', () =>
       done({ received, port: server.address().port, close: () => server.close() }),
     );
@@ -1196,19 +686,8 @@ export function startSmtpSink(port = SMTP_SINK_PORT) {
 }
 
 /**
- * Messages that carry this alert, with this status, to every one of these recipients.
- *
- * Four assertions in one filter, and they are all the same assertion: the message
- * that reached this address is the one the routing intended.
- *
- *   * the envelope recipients — what the relay would actually deliver to, which is
- *     the tier. A page in the ticket inbox is this filter returning nothing.
- *   * `[FIRING` / `[RESOLVED` at the head of the subject — Alertmanager's default
- *     subject template, and the difference between an incident opening and closing.
- *   * the alert name in the subject, which is what a phone shows on a locked screen
- *     and often the only part anybody reads at 3am.
- *   * the alert name in the decoded body, which is what proves the body is the
- *     alert rather than a template that rendered to nothing.
+ * Matches on envelope recipients (the tier), `[FIRING`/`[RESOLVED` at the head of the subject, and
+ * the alert name in both subject and decoded body.
  *
  * @param {string} to a recipient list as `email_configs.to` spells it, comma-separated
  */
@@ -1217,10 +696,7 @@ export const emailsFor = (received, to, alertname, status) => {
     .split(',')
     .map((address) => address.trim())
     .filter((address) => address !== '');
-  // No address means no messages to it. Without this, `every` over an empty list is
-  // vacuously true and a tier with no email destination would match EVERY captured
-  // message — turning the "a ticket did not also page" assertion into a guaranteed
-  // failure for a deployment that pages by webhook alone.
+  // Without this, `every` over no addresses matches every message.
   if (wanted.length === 0) return [];
   const marker = status === 'firing' ? '[FIRING' : '[RESOLVED';
   return received
@@ -1236,18 +712,7 @@ export const emailsFor = (received, to, alertname, status) => {
     });
 };
 
-/**
- * Waits for the message this tier's routing should have produced, and reports it.
- *
- * Skipping rather than failing when a tier has no email address is the only honest
- * answer for a deployment that pages by webhook alone: there is nothing to wait for,
- * and a red check against a destination nobody configured teaches people to ignore
- * red checks — the same failure mode as an alert that cries wolf.
- *
- * The detail line carries the envelope and the subject rather than a duration alone,
- * because that is the evidence: the addresses are what the routing chose, and the
- * subject is what a locked screen would show.
- */
+/** Skips, rather than fails, a tier with no email address, as for a webhook-only deployment. */
 async function expectEmail(mail, to, alertname, status, name, budgetMs) {
   if (to === '') {
     note(`${name}: skipped — this tier has no email destination configured`);
@@ -1270,10 +735,6 @@ async function expectEmail(mail, to, alertname, status, name, budgetMs) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Compose
-// ---------------------------------------------------------------------------
-
 const compose = (args) => run('docker', ['compose', ...COMPOSE, ...args]);
 
 async function apiIsHealthy() {
@@ -1282,15 +743,8 @@ async function apiIsHealthy() {
 }
 
 /**
- * The one destination combination worth shouting about that is not an error.
- *
- * `smtp_require_tls: false` is correct for the rehearsal — the sink has no
- * certificate — and dangerous anywhere else, because an alert body is not
- * innocuous: Alertmanager's default template names the instance, the job, the
- * threshold that tripped and the runbook path, which together are a description of
- * how to attack this deployment while it is already unwell. Refusing the
- * combination outright would be wrong (a relay on the same host is a legitimate
- * deployment); saying nothing would be worse.
+ * `smtp_require_tls: false` is right for the local sink and dangerous elsewhere, since the body names
+ * the instance, job, threshold and runbook. A same-host relay is legitimate, so this warns.
  */
 function warnIfCleartextToARemoteRelay(values) {
   const local = /^(?:host\.docker\.internal|localhost|127\.0\.0\.1|\[::1\]):/;
@@ -1299,10 +753,6 @@ function warnIfCleartextToARemoteRelay(values) {
   note(yellow(`PRL_ALERT_SMTP_REQUIRE_TLS is false and the relay is ${values.PRL_ALERT_SMTP_SMARTHOST}.`));
   note(yellow('An alert body names the instance, the threshold and the runbook. Set it to true.'));
 }
-
-// ---------------------------------------------------------------------------
-// The run
-// ---------------------------------------------------------------------------
 
 async function main() {
   console.log(bold('\nPoker Risk Lab — alert delivery verification'));
@@ -1316,9 +766,8 @@ async function main() {
     return 1;
   }
 
-  // `--render-config` exists so that the compose command in
-  // docker-compose.observability.yml's header can be run by hand. It writes the same
-  // two files this run would and stops, touching no container and no port.
+  // Writes the two files a run would, so the compose command in docker-compose.observability.yml's
+  // header can be run by hand.
   if (options.renderConfig) {
     writeAlertmanagerConfig(values);
     console.log(dim(`\n  wrote ${CONFIG_FILE}`));
@@ -1349,13 +798,8 @@ async function main() {
     sink = await startSink();
     mail = await startSmtpSink();
   } catch (error) {
-    // Almost always a previous run still holding a port — including a `--keep-up` run. An
-    // unhandled EADDRINUSE stack is a poor way to say that, and it also skipped the summary and
-    // the `--out` report entirely.
-    //
-    // Closing the webhook sink here matters now that there are two: the SMTP sink is the one
-    // more likely to collide, and without this the first listener stayed open for the life of
-    // the process and made the NEXT run fail on the other port instead.
+    // Usually a previous run, often `--keep-up`, still holding a port. Close the webhook sink too, or
+    // the next run fails on the other port.
     sink?.close();
     console.log(
       red(`\n  a notification sink could not listen on ${SINK_PORT}/${SMTP_SINK_PORT}: ${error.message}`),
@@ -1369,26 +813,14 @@ async function main() {
   let broughtUp = false;
 
   try {
-    // The credential Prometheus scrapes with. Written every run rather than kept, so a rotated
-    // token in .env.staging cannot leave a stale one behind, and 0600 because it is the
-    // credential that reads every metric this deployment has.
-    //
-    // Inside the `try`: it used to be written before `startSink()`, which rejects when the sink
-    // port is already in use, and that rejection propagates out of `main` before the `finally`
-    // that deletes the file — so the token was left on disk on the one failure most likely to
-    // recur. The header's claim that it is never left behind was false on exactly that path.
-    //
-    // The `rmSync` first is the other half. Docker resolves a bind-mount source that does not
-    // exist by creating a DIRECTORY, and the teardown removes this file, so an interrupted run
-    // leaves a directory here. Prometheus then answers every scrape with "unable to read
-    // authorization credentials: is a directory", which reads as a bad token rather than as a
-    // stale mount — it cost an hour once already.
+    // Written every run, at 0600, so a rotated token never leaves a stale one. It is written inside
+    // the `try` so the `finally` deletes it when a sink port is busy. `rmSync` first, because Docker
+    // creates a directory for a missing bind-mount source, and Prometheus then reports "is a
+    // directory" as if the token were bad.
     rmSync(TOKEN_FILE, { force: true, recursive: true });
     writeFileSync(TOKEN_FILE, `${token}\n`, { mode: 0o600 });
 
-    // The configuration Alertmanager loads, rendered from the template for the same
-    // reasons and with the same lifetime as the token above. The rendered text is kept
-    // so that the check below can compare it with what the running process reports.
+    // The rendered text is kept so the check below can compare it with the running process.
     const rendered = writeAlertmanagerConfig(values);
 
     section('Bringing up Prometheus and Alertmanager beside the staging stack');
@@ -1404,17 +836,8 @@ async function main() {
       note(yellow('a destination outside this host cannot be observed here, and its check will fail'));
     }
     warnIfCleartextToARemoteRelay(values);
-    // `--force-recreate`, and it is not belt and braces. Docker resolves a bind-mount source
-    // that does not exist by creating a DIRECTORY, and the teardown below removes the token file.
-    // A container left over from an interrupted run therefore holds a directory at
-    // /etc/prometheus/metrics-token, `up -d` sees no configuration change and reuses it, and
-    // every scrape then fails with "unable to read authorization credentials: is a directory" —
-    // which reads as a bad token rather than as a stale mount. Recreating the containers costs
-    // about a second and makes the mount resolve against the file this run just wrote.
-    //
-    // `blackbox` is named explicitly, like the other two: compose would start it anyway as a
-    // dependency of nothing, which is to say not at all. A probe that is not running is the
-    // blind spot it exists to close, and it looks exactly like a healthy origin.
+    // `--force-recreate`, or a container from an interrupted run keeps a directory mounted at
+    // /etc/prometheus/metrics-token. `blackbox` is named because nothing depends on it.
     const up = await compose(['up', '-d', '--force-recreate', 'prometheus', 'alertmanager', 'blackbox']);
     if (up.code !== 0) {
       fail('compose up', up.stderr.trim().split('\n').slice(-3).join(' | '));
@@ -1435,26 +858,12 @@ async function main() {
     }
     pass('both services ready', `${(ready / 1000).toFixed(1)}s`);
 
-    /**
-     * The rendered configuration, read back out of the RUNNING Alertmanager.
-     *
-     * Not a formality. Everything about the template could be right and still not be
-     * what is loaded: a stale container reusing an old mount, a bind mount that
-     * resolved to a directory, a render that wrote somewhere else. This asks the
-     * process itself what its destinations are, and it is the only check here that
-     * runs under `--skip-provoke` — which makes the fast path able to catch a
-     * receiver that has quietly lost a transport.
-     */
+    // Asks the running Alertmanager what it loaded, which catches a stale mount. It also runs under
+    // `--skip-provoke`.
     const status = await getJson(`${ALERTMANAGER}/api/v2/status`);
     const liveConfig = status?.config?.original ?? '';
-    /**
-     * A webhook `url` comes back as `<secret>`, because Alertmanager types it as one
-     * and redacts it from every API — which is correct, and is why this compares two
-     * things rather than one. The email recipient and the smarthost are not secrets
-     * and are compared by value; the webhooks are compared by SHAPE, counting the
-     * blocks in the live config against the blocks this run rendered. A receiver that
-     * lost a transport changes that count, which is the failure worth catching.
-     */
+    // Webhook URLs come back as `<secret>`, so webhooks are compared by count of blocks and the email
+    // recipient and smarthost by value.
     const blocks = (text, key) => (text.match(new RegExp(`${key}:`, 'g')) ?? []).length;
     const shapeProblems = [];
     for (const key of ['webhook_configs', 'email_configs']) {
@@ -1479,8 +888,7 @@ async function main() {
       );
     }
 
-    // The first scrape has to land before any expression can evaluate against
-    // real data. One scrape interval plus a margin.
+    // One scrape interval plus a margin before any expression has real data.
     const scraped = await measureUntil(
       async () => {
         const result = await getJson(`${PROMETHEUS}/api/v1/query?query=up%7Bjob%3D%22prl-api%22%7D`);
@@ -1499,19 +907,8 @@ async function main() {
     const declared = alertsInRulesFile(rulesText);
     const expressions = expressionsInRulesFile(rulesText);
 
-    /**
-     * The parse itself, checked before anything is built on it.
-     *
-     * Every check below is a `filter(...).length === 0` over what these two parsers returned, and
-     * an empty set satisfies all of them: with `declared` empty the report reads "the two sets are
-     * identical — 0 alerts", "every expression evaluates — 0 expressions", and passes. That turns
-     * every parser bug into a green run, which is the opposite of what a verification is for —
-     * `secret-scan.mjs` states the same principle for itself ("a sweep of nothing proves nothing").
-     *
-     * `expressions.size === declared.size` is the cheap half and catches most of it: a rule whose
-     * `alert:` line the scanner missed, or an `expr` that landed on the wrong rule, changes one
-     * count and not the other.
-     */
+    // Every check below is a `filter(...).length === 0`, which an empty parse passes. So the parse
+    // must be non-empty and `expressions.size` must equal `declared.size`.
     if (declared.size === 0) {
       fail(
         'the rules file parsed to at least one alert',
@@ -1530,16 +927,9 @@ async function main() {
     }
     pass('the rules file parses', `${declared.size} alerts, ${expressions.size} expressions`);
 
-    // --- Check 1: loaded ---------------------------------------------------
     section('1. Every rule is loaded, has a severity, and names a runbook that exists');
-    /**
-     * Prometheus reports `health: "unknown"` for a rule it has loaded and not yet
-     * evaluated, and the first evaluation is up to one `evaluation_interval`
-     * away. Reading the rules the instant the container is ready therefore found
-     * fourteen of twenty-two "unhealthy" with `lastError: undefined`, which is
-     * not an error — it is a question asked too early. So wait for every rule to
-     * have been evaluated once, and only then judge the health.
-     */
+    // A loaded rule reports `health: "unknown"` until its first evaluation, so wait for every rule to
+    // be evaluated once before judging health.
     const readRules = async () => {
       const loaded = await getJson(`${PROMETHEUS}/api/v1/rules`);
       const rules = new Map();
@@ -1588,17 +978,8 @@ async function main() {
       );
     }
 
-    /**
-     * Exactly one rule may be a heartbeat, and it is `Watchdog`.
-     *
-     * A separate check because the one above would pass with fifteen of them. The
-     * heartbeat destination is a machine that counts pings and pages on their absence,
-     * so it can carry precisely one signal — a second rule routed there is an incident
-     * delivered to something with no way to report it, and worse, a rule that CAN stop
-     * firing on that route makes the snitch alarm for a reason that is not the one it
-     * exists for. Once a dead man's switch has cried wolf it gets a longer grace
-     * period, and then it is decoration.
-     */
+    // Exactly one heartbeat, `Watchdog`. Another rule on that route makes the snitch alarm for the
+    // wrong reason.
     const heartbeats = bySeverity('heartbeat').map(([name]) => name);
     if (heartbeats.length !== 1 || heartbeats[0] !== 'Watchdog') {
       fail(
@@ -1621,8 +1002,7 @@ async function main() {
       pass('every runbook annotation exists on disk');
     }
 
-    // A file existing is not a file about this alert. See `runbookNamingProblems`: six of
-    // twenty-nine rules opened a runbook that had never heard of them, one of them a page.
+    // See `runbookNamingProblems`.
     const naming = runbookNamingProblems(declared, (path) => {
       const full = join(REPO_ROOT, path);
       return existsSync(full) ? readFileSync(full, 'utf8') : null;
@@ -1639,7 +1019,6 @@ async function main() {
       );
     }
 
-    // --- Check 2: the document and the rules agree -------------------------
     section('2. The rules file and docs/production/alerts.md describe the same alerts');
     const documented = alertsInDocument(readFileSync(ALERTS_DOC, 'utf8'));
     const onlyInDoc = [...documented.keys()].filter((name) => !declared.has(name));
@@ -1664,24 +1043,9 @@ async function main() {
       pass('the severities agree');
     }
 
-    // --- Check 3: every metric named exists in a live scrape ---------------
     section('3. Every series the rules name appears in a live scrape');
-    /**
-     * Read with a retry budget, and the reason is check 6.
-     *
-     * The exposition is fetched from INSIDE the api container over its own loopback
-     * address, and so is the rate-limit flood that check 6 uses to provoke
-     * `RateLimitBans` — same address, same bucket. A ban outlives the run that caused
-     * it by the length of the limiter's window, so a second `alerts:verify` started
-     * within about a minute of the first found its own `/metrics` read answered 429
-     * and reported "no # TYPE lines came back", which reads as a broken API rather
-     * than as this script's own previous flood.
-     *
-     * Retrying is the honest fix rather than a workaround: the question this check
-     * asks is "does the API export these series", and a 429 is not an answer to it.
-     * The budget is bounded, so an API that genuinely exports nothing still fails —
-     * ninety seconds later, with the same message.
-     */
+    // Retried, because check 6 floods the limiter from this same loopback address and the ban
+    // outlasts the run. A 429 is not an answer. The budget is bounded, so a real gap still fails.
     let exported = new Set();
     const read = await measureUntil(
       async () => {
@@ -1728,18 +1092,8 @@ async function main() {
       }
     }
 
-    /**
-     * The other exposition: Alertmanager's own.
-     *
-     * Two conditions, one check, and both are required — because either alone passes
-     * for the wrong reason. Reading Alertmanager's `/metrics` proves the series the
-     * `alerting-itself` rules name really are exported by this version; asserting
-     * `up{job="prl-alertmanager"} == 1` proves Prometheus is actually scraping them.
-     * Without the second, a scrape job that was deleted or misnamed leaves the rules
-     * evaluating against a series that will never have a sample, which is silent, and
-     * `AlertmanagerNotificationsFailing` is the one rule whose silence cannot be
-     * reported by anything else in this file.
-     */
+    // Both the `/metrics` read and `up{job="prl-alertmanager"} == 1` are required. Without the second,
+    // `AlertmanagerNotificationsFailing` could never fire and nothing would report it.
     const alertmanagerSeries = new Map();
     for (const [name, expression] of expressions) {
       for (const series of alertmanagerSeriesReferencedBy(expression)) alertmanagerSeries.set(series, name);
@@ -1767,9 +1121,7 @@ async function main() {
       ([series]) => !alertmanagerExported.has(series),
     );
     if (alertmanagerSeries.size === 0) {
-      // Reached only if the alerting-itself rules were deleted, and then this check has
-      // examined nothing. A grounding of zero series is not a pass, for the same reason
-      // the parse guard above is not.
+      // A grounding of zero series is not a pass.
       fail(
         'every alertmanager_* series exists and Prometheus is scraping Alertmanager',
         'no rule names an alertmanager_* series, so nothing watches the alerting system itself',
@@ -1798,21 +1150,8 @@ async function main() {
       );
     }
 
-    /**
-     * The third exposition: the probe's, which is not an exposition at all.
-     *
-     * `probe_*` series are manufactured per scrape by the blackbox exporter as the
-     * result of a request it makes through the front door — nothing exports them, so
-     * they are grounded against Prometheus' query API rather than a `/metrics` read.
-     *
-     * The empty case fails, and it is the most important branch in this check. Nothing
-     * else in this file can notice the blind spot prometheus.yml describes: the API is
-     * scraped directly on the compose network, so a dead proxy, unreadable TLS material,
-     * an expired certificate or a dead page server leaves `up{job="prl-api"}` at 1,
-     * `prl_readiness_state` at 1 and every counter merely flat, and no rule keys on the
-     * absence of traffic. Every learner sees a dead site and every alert is green. If no
-     * rule names a `probe_*` series, that hole is open again and this says so.
-     */
+    // The empty case fails. The API is scraped on the compose network, so without a `probe_*` rule a
+    // dead proxy, TLS or page server leaves every alert green.
     const probeSeries = new Map();
     for (const [name, expression] of expressions) {
       for (const series of probeSeriesReferencedBy(expression)) probeSeries.set(series, name);
@@ -1838,10 +1177,7 @@ async function main() {
         90_000,
         1_000,
       );
-      // Each series is asked for by name, with the job selector the rules use. A name
-      // that is real but scraped under a different job label is a rule that never fires,
-      // and it looks identical to a quiet one — the same failure the `job` selector on
-      // ApiDown has, which is why that one is checked this way too.
+      // Asked with the rules' job selector, since a real name under another job never fires.
       const probeUnknown = [];
       for (const [series, alert] of probeSeries) {
         const result = await getJson(
@@ -1862,7 +1198,6 @@ async function main() {
       }
     }
 
-    // --- Check 4: every expression evaluates -------------------------------
     section('4. Every expression evaluates against the live data');
     const broken = [];
     for (const [name, expression] of expressions) {
@@ -1876,7 +1211,6 @@ async function main() {
     if (broken.length > 0) fail('every expression evaluates', broken.join('; '));
     else pass('every expression evaluates', `${expressions.size} expressions`);
 
-    // --- Check 5: delivery, end to end -------------------------------------
     if (options.skipProvoke || options.onlyHeartbeat) {
       section('5. Delivery');
       const flag = options.skipProvoke ? '--skip-provoke' : '--only-heartbeat';
@@ -1893,10 +1227,8 @@ async function main() {
         fail('the API could be stopped', stopped.stderr.trim());
       } else {
         try {
-          // Six minutes, not four. `max_over_time(up[2m]) == 0` cannot be true until two minutes
-          // of failed scrapes have accumulated, and only THEN does `for: 2m` start counting — so
-          // the earliest possible firing is a little over four minutes after the container stops,
-          // and a four-minute budget times out on a rule that is working.
+          // Six minutes. `for: 2m` starts only after `max_over_time(up[2m])` has two minutes of
+          // failures, so firing comes a little over four minutes after the stop.
           const firing = await measureUntil(
             async () => {
               const result = await getJson(`${PROMETHEUS}/api/v1/rules?type=alert`);
@@ -1934,16 +1266,7 @@ async function main() {
           if (delivered === null) fail('the paging receiver was notified', 'no POST to /page named ApiDown');
           else pass('the paging receiver was notified', `${(delivered / 1000).toFixed(0)}s later, on /page`);
 
-          /**
-           * The same notification, over the other transport — and the one that is not a
-           * webhook to a sink pretending to be a provider.
-           *
-           * Alertmanager opened a TCP connection to `startSmtpSink`, spoke EHLO, MAIL
-           * FROM, RCPT TO and DATA, and delivered a message. What is asserted is that
-           * message: the envelope recipient is the PAGING address, the subject is
-           * Alertmanager's firing subject naming this alert, and the decoded body
-           * contains it too. A mail relay would have accepted exactly these bytes.
-           */
+          // The same notification over SMTP. Asserts the paging address, the firing subject, and the body.
           await expectEmail(
             mail,
             values.PRL_ALERT_PAGE_EMAIL_TO,
@@ -1964,9 +1287,7 @@ async function main() {
           }
         }
 
-        // A resolved notification is not a formality: a receiver that only ever
-        // sees firings leaves an incident open in whatever it feeds, and
-        // `send_resolved` is off by default in several Alertmanager receivers.
+        // `send_resolved` is off by default in several receivers. A missing resolve leaves an incident open.
         const resolved = await measureUntil(
           () => notificationsFor(sink.received, '/page', 'ApiDown', 'resolved').length > 0,
           180_000,
@@ -1976,10 +1297,6 @@ async function main() {
           fail('the resolved notification arrived', 'nothing with status=resolved reached /page');
         else pass('the resolved notification arrived', `${(resolved / 1000).toFixed(0)}s after recovery`);
 
-        // And the resolved message, for the same reason: an inbox that only ever
-        // receives openings is an inbox somebody stops trusting. `[RESOLVED]` is the
-        // head of Alertmanager's own subject template, so this asserts the message
-        // says so rather than merely that another one arrived.
         await expectEmail(
           mail,
           values.PRL_ALERT_PAGE_EMAIL_TO,
@@ -1989,22 +1306,10 @@ async function main() {
           180_000,
         );
 
-        /**
-         * The routing assertion, and the reason both receivers exist — checked LAST.
-         *
-         * It used to run the instant the first `/page` notification landed, which is before a
-         * duplicate could possibly have reached `/ticket`: that route has a `group_wait` of its
-         * own, so a wrong-path notification would arrive seconds after the snapshot was taken.
-         * It passed whether or not routing worked. `sink.received` is cumulative, so asking here
-         * — after the firing round trip, the recovery and the resolved notification — costs
-         * nothing and actually tests `continue: false`, which `alertmanager.template.yml` calls the
-         * important line.
-         */
+        // Checked last, after the ticket route's own `group_wait`, so a duplicate on `/ticket` has had
+        // time to arrive. This tests `continue: false`.
         const wrongPath = notificationsFor(sink.received, '/ticket', 'ApiDown', 'firing');
-        // The mail half of the same question. `continue: false` is one setting and it
-        // governs both transports at once, so a broken route would put a duplicate in
-        // the ticket INBOX as readily as on the ticket webhook — and the inbox is the
-        // one somebody has to triage by hand.
+        // `continue: false` governs both transports, so check the ticket inbox too.
         const wrongInbox = emailsFor(mail.received, values.PRL_ALERT_TICKET_EMAIL_TO, 'ApiDown', 'firing');
         if (wrongPath.length > 0 || wrongInbox.length > 0) {
           fail(
@@ -2019,24 +1324,9 @@ async function main() {
         }
       }
 
-      /**
-       * Check 6: the OTHER tier.
-       *
-       * Everything above proves the paging half. Until this existed, the ticket receiver had
-       * never received anything — so "a page did not also raise a ticket" was consistent with a
-       * ticket route that was broken, misconfigured or pointed at nothing, and half the two-tier
-       * rule at the top of `docs/production/alerts.md` was asserted only by its own absence.
-       *
-       * `RateLimitBans` is the right rule to provoke for it: `increase(...[15m]) > 0` with no
-       * `for:`, so one recorded ban is enough and the whole thing takes a scrape interval rather
-       * than four minutes. It is also a rule an operator genuinely wants to trust, since it is the
-       * one that distinguishes a script from a busy person.
-       *
-       * The flood runs INSIDE the api container, against its own loopback address. Through the
-       * proxy it would be keyed on the forwarded client address and would consume the same guest
-       * budget the smoke test needs; from in here it is one bucket, deterministic, and touches
-       * nothing a later run depends on.
-       */
+      // Check 6. `RateLimitBans` has no `for:`, so one ban fires it within a scrape interval. The
+      // flood runs inside the api container on its own loopback, so it is one bucket and does not
+      // spend the smoke test's guest budget.
       section('6. RateLimitBans, provoked: a ticket must reach the ticket receiver and not the pager');
       const flood = await run('docker', [
         'compose',
@@ -2046,9 +1336,8 @@ async function main() {
         'api',
         'node',
         '-e',
-        // 700 requests: the shipped defaults are a 300/minute global limit and a ban 200 past it,
-        // so a ban is recorded somewhere past 500. Sequential on purpose — a burst of 700 parallel
-        // sockets measures the accept queue rather than the limiter.
+        // 700 sequential requests. The defaults are 300/minute and a ban 200 past it, so a ban lands
+        // past 500. Parallel sockets would measure the accept queue.
         "const base='http://127.0.0.1:'+(process.env.PORT||3001)+'/api/v1/ready';" +
           '(async()=>{let banned=0,ok=0;for(let i=0;i<700;i+=1){' +
           'const r=await fetch(base).catch(()=>null);if(r===null)continue;' +
@@ -2063,9 +1352,7 @@ async function main() {
       } else {
         pass('the limiter was driven past its ban threshold', flood.stdout.trim().split('\n').pop() ?? '');
 
-        // The metric first: if no ban was recorded there is nothing for the rule to fire on, and a
-        // silent `RateLimitBans` would then be correct rather than broken. Distinguishing the two
-        // is the difference between a test and a coin toss.
+        // The metric first, so a silent rule with no ban is not reported as broken.
         const banned = await measureUntil(
           async () => {
             const result = await getJson(
@@ -2101,9 +1388,7 @@ async function main() {
             180_000,
           );
 
-          // The mirror of the assertion above, and the half that was never tested: a ticket must
-          // not wake anybody up. Checked on both transports, because an email to the paging
-          // address at 3am is a page whatever the routing table calls it.
+          // A ticket must not page, on either transport.
           const paged = notificationsFor(sink.received, '/page', 'RateLimitBans', 'firing');
           const pagedByMail = emailsFor(
             mail.received,
@@ -2123,7 +1408,6 @@ async function main() {
       }
     }
 
-    // --- Check 7: the dead man's switch ------------------------------------
     if (options.skipProvoke) {
       section("7. The dead man's switch");
       note('--skip-provoke: the heartbeat was NOT observed. This run does not show that the');
@@ -2132,31 +1416,14 @@ async function main() {
     } else {
       section("7. The dead man's switch: the heartbeat, its rhythm, and its silence");
       const intervalMs = durationMs(values.PRL_ALERT_HEARTBEAT_INTERVAL) ?? 20_000;
-      /**
-       * The grace period a watcher would page on, and the number this whole section is
-       * sized from.
-       *
-       * Three intervals, because a snitch that alarms on ONE missed ping alarms on a
-       * deploy, a leader election, or a slow flush — and a dead man's switch that has
-       * cried wolf once is given a longer grace period by the person it woke, which is
-       * how it becomes decoration. Three is the smallest number that survives a single
-       * missed beat and still bounds the blind window at a minute at these settings.
-       */
+      // Three intervals, so one missed beat does not alarm and the blind window stays near a minute.
       const deadlineMs = 3 * intervalMs;
       note(
         `interval ${values.PRL_ALERT_HEARTBEAT_INTERVAL}, deadline ${(deadlineMs / 1000).toFixed(0)}s ` +
           `(3 intervals) → ${values.PRL_ALERT_HEARTBEAT_WEBHOOK_URL}`,
       );
 
-      /**
-       * The rule itself, asked of Prometheus rather than inferred from a notification.
-       *
-       * `vector(1)` has no `for:` and no dependency on a scrape, so it must be firing
-       * the first time it is evaluated and every time after. Reading its state here
-       * separates "the heartbeat is not arriving because the rule is not firing" from
-       * "the heartbeat is not arriving because delivery is broken", which are the two
-       * halves of this section and have completely different runbooks.
-       */
+      // Asked of Prometheus, to separate "the rule is not firing" from "delivery is broken".
       const watchdogFiring = await measureUntil(
         async () => {
           const result = await getJson(`${PROMETHEUS}/api/v1/rules?type=alert`);
@@ -2195,16 +1462,8 @@ async function main() {
         );
       }
 
-      /**
-       * The rhythm, which is the part that makes it a heartbeat rather than a
-       * notification that happened once.
-       *
-       * A `repeat_interval` that Alertmanager rounded up to `group_interval`, or a
-       * receiver that fired at `group_wait` and never again, both deliver a first ping
-       * that looks perfect. The watcher then pages on the second missed beat of a
-       * cadence nobody configured. So this waits for three and reports the measured
-       * gaps rather than the configured ones.
-       */
+      // Three arrivals, with measured gaps. A rounded-up `repeat_interval` or a single `group_wait`
+      // ping both produce a perfect first ping.
       const rhythm = await measureUntil(() => arrivals().length >= 3, 5 * intervalMs + 60_000, 1_000);
       const measured = arrivals();
       const problem = heartbeatProblem(measured, { deadlineMs });
@@ -2219,15 +1478,7 @@ async function main() {
         );
       }
 
-      /**
-       * And it must not be a page or a ticket, which is the routing half of the whole
-       * argument for a third destination.
-       *
-       * A Watchdog delivered to the pager is a notification to a human every twenty
-       * seconds, forever. That is not a smaller version of the right answer, it is the
-       * fastest way to make the pager unreadable — and it would pass every other check
-       * in this file, because the notification did arrive and the alert was routed.
-       */
+      // A Watchdog on the pager notifies a human every twenty seconds and passes every other check.
       const heartbeatPaged = notificationsFor(sink.received, '/page', 'Watchdog', 'firing');
       const heartbeatTicketed = notificationsFor(sink.received, '/ticket', 'Watchdog', 'firing');
       const heartbeatMailed = [
@@ -2248,44 +1499,21 @@ async function main() {
         );
       }
 
-      /**
-       * The negative control, and the reason this section is not decoration.
-       *
-       * Alertmanager is stopped. Every rule in the file keeps evaluating in Prometheus
-       * and not one of them can reach anybody — including `AlertmanagerDown`, whose
-       * whole subject is the thing that just happened. The only signal that leaves this
-       * deployment is the one that stops, and this waits for a watcher's grace period
-       * to elapse over it.
-       *
-       * The staging API is untouched here. Alertmanager is a container this script
-       * created and will remove, which is what makes stopping it a fair test rather
-       * than an intrusion into somebody's deployment.
-       */
+      // The negative control. Alertmanager is stopped and every rule keeps evaluating with nobody
+      // reached. Alertmanager is this script's own container, so stopping it is fair.
       const stoppedManager = await compose(['stop', 'alertmanager']);
       alertmanagerStopped = stoppedManager.code === 0;
       if (stoppedManager.code !== 0) {
         fail('Alertmanager could be stopped for the negative control', stoppedManager.stderr.trim());
       } else {
-        // Three seconds for anything already on the wire to land, so that the counts
-        // below are of the silence rather than of the moment before it.
+        // Three seconds for in-flight pings to land.
         await new Promise((done) => setTimeout(done, 3_000));
         const webhooksBefore = sink.received.length;
         const mailsBefore = mail.received.length;
-        /**
-         * How many pings there were to lose, recorded BEFORE the silence is watched for.
-         *
-         * Without this the check goes green over nothing, and it was observed doing
-         * exactly that: a run whose heartbeat was routed to a path this sink does not
-         * watch failed the two checks above and then reported "silent for 15s, past the
-         * 15s deadline" — true, vacuous, and green. A watcher that has never heard
-         * anything cannot tell "stopped" from "never started", and this repository's own
-         * rule for every sweep applies here too: a sweep of nothing is not a pass.
-         */
+        // Recorded first. A heartbeat routed to an unwatched path once reported a vacuous green silence.
         const pingsBeforeStop = arrivals().length;
         const silence = await watchForSilence(arrivals, deadlineMs, deadlineMs + 90_000);
-        // What Prometheus thinks, while nothing is being delivered. This is the exact
-        // shape of the incident `alerting-blind.md` opens with: the rules are perfect,
-        // the evaluation is perfect, and the deployment is blind.
+        // The incident `alerting-blind.md` opens with. Rules fire and nothing is delivered.
         const stillFiring = await getJson(`${PROMETHEUS}/api/v1/alerts`)
           .then((result) => (result?.data?.alerts ?? []).filter((a) => a.state === 'firing').length)
           .catch(() => -1);
@@ -2311,9 +1539,7 @@ async function main() {
               `${mail.received.length - mailsBefore} email(s) of any kind in that window`,
           );
         }
-        // The other half of a detector worth having: it must also be able to say
-        // "recovered". A watcher stuck in the alarm state is as useless as one stuck
-        // quiet, and this is also what restores the container for `--keep-up`.
+        // The detector must also see recovery. This also restores the container for `--keep-up`.
         const restartedManager = await compose(['start', 'alertmanager']);
         if (restartedManager.code === 0) alertmanagerStopped = false;
         if (restartedManager.code !== 0) {
@@ -2346,9 +1572,7 @@ async function main() {
     }
     if (!options.keepUp) {
       rmSync(TOKEN_FILE, { force: true, recursive: true });
-      // The rendered config and the password file go with the containers that read
-      // them. `--keep-up` keeps all three, because a container whose mounted config
-      // has been deleted underneath it is a confusing thing to inherit.
+      // `--keep-up` keeps all three, so no container loses its mounted config.
       rmSync(CONFIG_FILE, { force: true, recursive: true });
       rmSync(SMTP_PASSWORD_FILE, { force: true, recursive: true });
     }
@@ -2369,17 +1593,7 @@ async function main() {
   } else {
     console.log(red(bold(`${failed.length} of ${checks.length} check(s) failed.`)));
   }
-  /**
-   * Whether the checks a closing paragraph is about actually passed.
-   *
-   * Both paragraphs below are conditional, and both had to become so after being
-   * caught claiming things the run had just disproved: a `--skip-provoke` log said
-   * "both tiers were delivered" three lines under a warning that delivery was not
-   * verified, and a run whose heartbeat never arrived still ended with "its absence was
-   * detected here". A summary that contradicts its own checks is worse than no summary,
-   * because the summary is the part that gets pasted into a report and the checks are
-   * the part that does not.
-   */
+  /** Closing paragraphs are conditional, so a summary never claims what the run disproved. */
   const allPassed = (pattern) =>
     checks.filter((check) => pattern.test(check.name)).every((check) => check.ok);
 
@@ -2421,14 +1635,7 @@ async function main() {
       destinations: values,
       overridden,
       checks,
-      /**
-       * The heartbeat, as measurements rather than as a pass.
-       *
-       * The gaps are the evidence a reader of a release artefact actually wants: a
-       * dead man's switch is a claim about a cadence, and "PASS" says nothing about
-       * whether the cadence was the configured one. These are the intervals that were
-       * observed between real notifications arriving at a real receiver.
-       */
+      // The observed gaps, since the claim is about a cadence.
       heartbeat: {
         path: HEARTBEAT_PATH,
         intervalMs: durationMs(values.PRL_ALERT_HEARTBEAT_INTERVAL),
@@ -2445,14 +1652,7 @@ async function main() {
         alerts: (entry.payload?.alerts ?? []).map((alert) => alert?.labels?.alertname ?? null),
         at: entry.at,
       })),
-      // The captured mail, as evidence rather than as a pass/fail.
-      //
-      // The body is excerpted rather than included whole: Alertmanager's default
-      // template is ten kilobytes of inline-styled HTML per message, and pasting three
-      // of those into a release artefact would bury the four lines a reader is
-      // actually checking. The excerpt is the label block, which is where the alert
-      // name lives — so the report shows that the message CONTAINED the alert rather
-      // than only asserting that it did.
+      // The label block only. The default template is ten kilobytes of HTML per message.
       emails: mail.received.map((entry) => {
         const { headers, body } = parseMessage(entry.raw);
         return {
@@ -2484,22 +1684,15 @@ async function main() {
   return failed.length === 0 ? 0 : 1;
 }
 
-// `import.meta.main` is Node 24 and this file is also imported by its test, which
-// must not bring a compose stack up on import.
+// The test imports this file and must not bring a compose stack up.
 if (import.meta.main) {
-  // Ctrl-C during the two-minute wait would otherwise leave the staging API stopped, because
-  // a signal does not run a `finally`. Restart it, say so, and exit non-zero — an interrupted
-  // verification is not a passed one.
+  // A signal does not run `finally`, so restart the API and exit non-zero.
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => {
       if (apiStopped) {
         console.log(yellow(`\n  ${signal}: restarting the staging API before exiting.`));
         spawnSync('docker', ['compose', ...COMPOSE, 'start', 'api'], { stdio: 'inherit' });
       }
-      // Check 7 stops Alertmanager on purpose for about a minute. A Ctrl-C inside that
-      // window is the one way this script can leave the overlay half up, and `--keep-up`
-      // would then hand the next run an Alertmanager that is down for a reason nothing
-      // wrote anywhere.
       if (alertmanagerStopped) {
         console.log(yellow(`  ${signal}: restarting Alertmanager before exiting.`));
         spawnSync('docker', ['compose', ...COMPOSE, 'start', 'alertmanager'], { stdio: 'inherit' });
