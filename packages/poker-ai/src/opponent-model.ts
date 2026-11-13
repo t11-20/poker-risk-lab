@@ -1,125 +1,24 @@
 /**
- * What a seat has been *seen* to do, and what a policy is allowed to conclude from it.
+ * What a seat has been seen to do, and what a policy may conclude from it. This gives
+ * `traits.exploitativeAdaptation` something to act on, and the input types make cheating unrepresentable.
  *
- * This is the file that gives `traits.exploitativeAdaptation` something to act on. It is
- * also the easiest place in the whole feature to accidentally cheat, so most of the design
- * below is about making cheating unrepresentable rather than merely absent.
+ * `observeHandComplete` takes a `PlayerView`, never a `HandState`. Shown hands come from
+ * `view.result.showdowns`, never `SeatView.holeCards`, which always holds the observer's own cards. A
+ * fold-out records nothing. `observeAction` takes a `PublicActionEvent`, which has no card field.
+ * Tests assert two seats' views of one hand produce identical observations.
  *
- * ## 1. The input types are the information boundary
+ * Several policies read one `OpponentObservations`, so every update rebuilds and freezes. Rebuilding is
+ * the guarantee because `Object.freeze` does not block `Map.set`. Windows are capped at 64 bet sizes and
+ * 32 shown hands.
+ * `observeHandComplete` moves the per-hand counters from `view.actions`. `observeAction` moves the
+ * per-action counters, which need the price at decision time. A caller with only views gets zero
+ * aggression stats rather than a second copy of `mayRaise`. The `vpip`/`pfr` denominator is hands where
+ * the seat acted preflop, not hands dealt (see `stats.ts`).
  *
- * Two entry points take data in, and neither of them *can* carry a hidden card:
- *
- *   - `observeHandComplete` takes a **`PlayerView`, never a `HandState`**. This is the
- *     single most important line in the file. `PlayerView` is the output of
- *     `redactFor(state, { viewerSeat })`, and its `result.showdowns` list holds exactly the
- *     hands that were actually turned over. A hand that ends when everybody folds produces
- *     an empty showdown list, so nothing is recorded — which is correct, and a serious leak
- *     if gotten wrong: knowing whether a folder was bluffing is the information the game is
- *     played over. Taking a `HandState` here would hand this module the deck, the deck
- *     cursor, the commitment salts and every seat's hole cards, and the only thing between
- *     that and a cheating opponent model would be a reviewer's attention.
- *
- *   - `observeAction` takes a `PublicActionEvent`, which has no card field. Not "a field
- *     callers are asked not to fill" — no field at all. The event is built by whatever
- *     drives the match, which on the server legitimately holds the whole `HandState`; the
- *     point is that a privileged builder still has nowhere to put a secret. Every field on
- *     it (who acted, on which street, what it cost, what the pot was, whether a raise was
- *     legal) is something every seat at a real table can see.
- *
- * `test/opponent-model.test.ts` asserts the fold-out case directly, and asserts that two
- * different seats' views of the same hand produce identical observations — which is what
- * "public information only" actually means, and is a stronger claim than any type gives.
- *
- * The trap that was specifically avoided: `SeatView.holeCards` is **not** the source of
- * showdown hands. It is non-null for the recipient's own seat at all times, so building
- * `showdownHands` from `view.seats` would quietly record the observer's own cards on every
- * hand, including hands that never reached a showdown. The cards come from
- * `view.result.showdowns`, which the engine populates only for seats that showed.
- *
- * ## 2. Immutable updates, because observations are shared
- *
- * One `OpponentObservations` is attached to a match and read by several policies during the
- * same hand. Shared mutable counters would produce cross-contamination that is very hard to
- * trace: seat 3's policy increments a counter, seat 4's policy sees a different table than
- * the one it was handed, and the bug reproduces only under a particular seating order. So
- * every function here returns a new object, every update rebuilds the `Map`, and what comes
- * back is `Object.freeze`d so a caller that tries to mutate shared state fails at the point
- * of the mistake rather than somewhere downstream.
- *
- * `Object.freeze` on a `Map` does not block `map.set`, so the freeze is not the guarantee —
- * rebuilding is. The freeze catches the other half (pushing onto `betSizeSamples`, patching
- * a counter) and costs nothing at these sizes. `OpponentModel` at the bottom of the file is
- * the one mutable thing here, and it is a handle that swaps whole snapshots, not a mutable
- * counter.
- *
- * ## 3. Bounded memory, because a session is long
- *
- * `betSizeSamples` and `showdownHands` are bounded windows: newest last, oldest dropped at
- * the cap. An unbounded history is a slow memory leak that only shows up in the sessions
- * you most want to work — a learner playing a few hundred hands against six seats. The caps
- * are 64 and 32, and each says on itself why that number and what the cap costs.
- *
- * ## 4. Per-hand counters versus per-action counters
- *
- * `vpip` is a share of *hands*, not of actions. A seat that calls preflop and then calls
- * again facing a 3-bet has entered one pot, not two. So the two kinds of counter are moved
- * by different functions, and the split is a feature rather than an accident:
- *
- *   - The four per-hand counters (`handsSeen`, `handsVoluntarilyEntered`, `preflopRaises`,
- *     `showdownsReached`) are moved by `observeHandComplete`, which derives them from
- *     `view.actions` — the public action log the view already carries. It needs nothing
- *     else, so **a caller that only ever hands over completed views still gets correct
- *     entry statistics.**
- *   - The per-action counters (`bets` … `timesFacingBet`, `betSizeSamples`) are moved by
- *     `observeAction`, because they need the price and the pot at the moment of the action,
- *     which the log does not carry and which a caller has for free at decision time.
- *
- * A caller that provides only views therefore gets entry statistics and *zero* aggression
- * statistics — which is honest degradation. The alternative was to reconstruct the price and
- * the legality of a raise by replaying the log against a copy of the betting rules, and a
- * second implementation of `mayRaise` that drifts from `betting.ts` would be worse than an
- * absent statistic in every way.
- *
- * The denominator for `vpip` and `pfr` is **hands in which this seat was seen to act before
- * the flop**, not hands dealt. `stats.ts` explains the trap at length and it applies
- * unchanged here: the button rotates, a seat in the blinds frequently never gets a turn, and
- * dividing by hands dealt blends the seat's entry threshold with the rate at which the table
- * denied it a decision.
- *
- * ## 5. A small sample is the lesson, not an inconvenience
- *
- * The whole app teaches that a small sample says very little, so this module must not
- * pretend to know things after twelve hands. Three mechanisms, in increasing strength:
- *
- *   - `derivedStats` returns **`null`** below `MINIMUM_HANDS_FOR_STATS` (20). At 20 hands
- *     the 95% half-width on any frequency is already ±0.22, so the interval is wider than
- *     the entire span of styles the profile set contains (VPIP 0.15 to 0.50). A number there
- *     could only mislead, and `null` says "unknown" in the type rather than in a footnote.
- *   - `reliability` bands the sample: `insufficient` / `indicative` / `reasonable`. There is
- *     deliberately no band above `reasonable`. Counting public actions never earns "certain".
- *   - `readWeight` multiplies `exploitativeAdaptation` by a reliability weight, and **both**
- *     channels out of this module go through it: `exploitAdjustments` for the multipliers and
- *     `estimateRange` for the assumed range. An `insufficient` sample therefore produces
- *     exactly neutral multipliers *and* exactly the neutral range, however high
- *     `exploitativeAdaptation` is. The learner still sees the frequencies and the interval —
- *     that is the teaching moment — but the model does not act on them. Gating one channel
- *     and not the other is the failure this is written down to prevent: the range is the
- *     larger of the two effects, because a decision is priced against it.
- *
- * ## 6. What this model is not
- *
- * It is frequency counting. There is no prior, no posterior and no per-statistic uncertainty
- * model; the confidence half-width is the worst-case binomial interval at p = 0.5 over the
- * observed hand count, conservative and deliberately one number so nobody reads the
- * narrowest of seven intervals. `estimateRange` maps one tightness number onto a
- * top-percentage slice of a *computed* strength ordering (`topPercentRange` in
- * `@prl/poker-math`, measured from all-in equity against a random hand, never transcribed
- * from a published chart). It knows nothing about board texture, and it does not remove
- * hands an earlier line rules out. Every figure it produces carries that in `assumptions`.
- *
- * Nothing in this file scores a decision, and nothing in it describes a person. The
- * learner-facing strings are third-person statements about the model and go through
- * `assertNoImpersonation` at generation time, not in a test.
+ * `derivedStats` is null below 20 hands, `reliability` never goes above `reasonable`, and `readWeight`
+ * gates both `exploitAdjustments` and `estimateRange`, so an `insufficient` sample is exactly neutral.
+ * This is frequency counting with no prior. The half-width is the worst-case binomial at p = 0.5.
+ * `estimateRange` slices the computed `topPercentRange` ordering and ignores board texture.
  */
 
 import { cardToString, type PlayerView } from '@prl/poker-engine';
@@ -131,86 +30,42 @@ export class ObservationError extends Error {
   override readonly name = 'ObservationError';
 }
 
-// ---------------------------------------------------------------------------
-// Bounds, bands and reference points — all named, all justified
-// ---------------------------------------------------------------------------
-
 /**
- * How many bet sizes are kept per seat.
- *
- * 64 is enough for the mean to mean something: the standard error of a mean over 64 samples
- * is an eighth of the per-sample spread, which separates "this seat bets a third of the pot"
- * from "this seat bets three quarters of it" comfortably. It is also small enough that six
- * seats hold at most 384 numbers no matter how long the session runs.
- *
- * The cap has a consequence worth stating rather than discovering: the average is a
- * **window** average over recent sizing, not a lifetime one. For an opponent model that is
- * the more useful statistic anyway — a seat that changed gear fifty hands ago should read as
- * its current gear — but `averageBetSizeAsPotFraction` says so in its own assumptions.
+ * 64 samples give a standard error of an eighth of the spread, and six seats hold at most 384 numbers.
+ * The average is over this recent window, not the lifetime.
  */
 export const BET_SIZE_SAMPLE_CAP = 64;
 
-/**
- * How many shown-down hands are kept per seat.
- *
- * Showdowns are rare — a seat shows maybe one hand in four or five — so 32 covers something
- * like 150 hands of history, which is past the point where `reliability` reaches
- * `reasonable`. Each entry is two short strings, so the worst case for a six-seat table is a
- * few hundred small strings.
- */
+/** A seat shows about one hand in four or five, so 32 covers about 150 hands of history. */
 export const SHOWDOWN_HAND_CAP = 32;
 
 /**
- * Below this many observed hands, `derivedStats` returns `null` rather than a frequency.
- *
- * At n = 20 the 95% half-width at the worst case p = 0.5 is 1.96 x 0.5 / sqrt(20) = 0.219.
- * The profile set spans VPIP 0.15 to 0.50, a range of 0.35 — narrower than the 0.44-wide
- * interval a 20-hand sample carries. So below 20 hands every observed frequency is
- * consistent with every style in the game, and returning a number would be inventing a read.
- * Twelve hands, the figure the brief calls out, is comfortably inside this floor.
+ * At n = 20 the worst-case 95% half-width is 1.96 x 0.5 / sqrt(20) = 0.219. The interval is wider
+ * than the 0.35 VPIP span of the profile set, so any figure below this would be invented.
  */
 export const MINIMUM_HANDS_FOR_STATS = 20;
 
-/**
- * At 40 hands the half-width falls to 0.155, so the interval (0.31 wide) finally fits inside
- * the 0.35 span of styles and the extremes become separable. That is what `indicative`
- * means: tight can be told from loose, and nothing finer.
- */
+/** Half-width 0.155. Tight can be told from loose, and nothing finer. */
 export const INDICATIVE_MINIMUM_HANDS = 40;
 
-/**
- * At 150 hands the half-width is 0.080, so two styles about 0.16 apart are separable —
- * roughly the gap between neighbouring profiles rather than opposite ones. That is what
- * `reasonable` means. It is the top band on purpose: there is no `certain`.
- */
+/** Half-width 0.080. Profiles about 0.16 apart separate. The top band on purpose. */
 export const REASONABLE_MINIMUM_HANDS = 150;
 
 export const RELIABILITY_LEVELS = ['insufficient', 'indicative', 'reasonable'] as const;
 
-/** How much of a read the sample size supports. Never rises above `reasonable`. */
 export type Reliability = (typeof RELIABILITY_LEVELS)[number];
 
-/**
- * How much of the raw adjustment survives at each band.
- *
- * `insufficient` is 0 rather than "a little", because a little of a meaningless number is
- * still meaningless, and a model that leans on a 25-hand sample is exactly the mistake this
- * app exists to teach against.
- */
+/** `insufficient` is 0, because a little of a meaningless number is still meaningless. */
 const RELIABILITY_WEIGHT: Readonly<Record<Reliability, number>> = {
   insufficient: 0,
   indicative: 0.5,
   reasonable: 1,
 };
 
-/** 1.959963…, the 95% multiplier. Shared with `stats.ts` so the two agree exactly. */
+/** Shared with `stats.ts` so the two agree exactly. */
 const Z_95 = normalTwoSidedCriticalValue(0.05);
 
-/**
- * The tightness assumed when there is no usable sample: `baselineTraits().vpip` of 0.25,
- * expressed as tightness. Using the baseline profile's own entry rate keeps the neutral
- * assumption consistent with the rest of the package rather than inventing a second one.
- */
+/** `baselineTraits().vpip` of 0.25, expressed as tightness. */
 const NEUTRAL_TIGHTNESS = 0.75;
 
 /** Reference points the raw exploit signals are measured against. */
@@ -219,10 +74,6 @@ const NEUTRAL_AGGRESSION = 0.5;
 const NEUTRAL_SHOWDOWN_RATE = 0.28;
 const NEUTRAL_LIMP_RATE = 0.08;
 
-// ---------------------------------------------------------------------------
-// What goes in: public actions only
-// ---------------------------------------------------------------------------
-
 export const OBSERVABLE_STREETS = ['preflop', 'flop', 'turn', 'river'] as const;
 export type ObservableStreet = (typeof OBSERVABLE_STREETS)[number];
 
@@ -230,28 +81,16 @@ export const OBSERVABLE_ACTIONS = ['fold', 'check', 'call', 'bet', 'raise'] as c
 export type ObservableAction = (typeof OBSERVABLE_ACTIONS)[number];
 
 /**
- * One action, as everybody at the table saw it.
- *
- * There is deliberately no field for a card, a deck, a cursor or a salt. That is the whole
- * security property of this module: the builder of these events may hold privileged state,
- * and still has nowhere to put a secret.
- *
- * The fields are unioned rather than loosely typed as `string` because a caller constructing
- * an event already holds the engine's own `BettingStreet` and `ActionType`, which are these
- * exact unions — so the stronger type costs nothing and buys exhaustiveness.
- * (`estimateRange` goes the other way, and says why on its own signature.)
+ * One action as everybody at the table saw it. No field can hold a card, deck, cursor or salt, so a
+ * privileged builder has nowhere to put a secret.
  */
 export interface PublicActionEvent {
-  /** Which hand this action belongs to, so a hand cannot be counted twice. */
+  /** Lets a hand be refused if counted twice. */
   readonly handId: string;
   readonly seat: number;
   readonly street: ObservableStreet;
   readonly action: ObservableAction;
-  /**
-   * Chips this seat had to add to match the bet, 0 when checking was free. Only its sign is
-   * consumed — "was this seat facing a bet" — so a builder that cannot cap it at the seat's
-   * stack may leave it uncapped.
-   */
+  /** Chips needed to match, 0 when checking was free. Only the sign is used, so it may be uncapped. */
   readonly toCall: number;
   /** Total pot before the action, including this street's commitments. */
   readonly potBefore: number;
@@ -260,18 +99,11 @@ export interface PublicActionEvent {
   /** True when the preflop bet level was above the big blind, i.e. facing a raise. */
   readonly facingPreflopRaise: boolean;
   /**
-   * True when the engine offered this seat a bet or a raise. It is the denominator of the
-   * 3-bet rate, and it is not the same as "the seat had chips": after a short all-in
-   * `mayRaise` is false and re-raising is genuinely unavailable, so counting that turn as a
-   * declined 3-bet opportunity would understate the seat's 3-bet frequency. Read it off
-   * `view.legalActions` or `legalActions(state, seat)`; never guess it.
+   * Whether the engine offered a bet or raise. The 3-bet denominator. After a short all-in `mayRaise` is
+   * false, so read it from `legalActions`, never from the stack.
    */
   readonly raiseWasAvailable: boolean;
 }
-
-// ---------------------------------------------------------------------------
-// What is accumulated
-// ---------------------------------------------------------------------------
 
 /** One hand a seat actually turned over, with the public fact of who drove the betting. */
 export interface ShownHand {
@@ -279,32 +111,14 @@ export interface ShownHand {
   readonly wasAggressor: boolean;
 }
 
-/**
- * Counters over PUBLIC actions only. There is deliberately no field for a card, except
- * `showdownHands`, which holds only hands that were actually turned over.
- *
- * Which counters move when: see §4 of the module comment. In short, `observeHandComplete`
- * moves the four per-hand counters and appends to `showdownHands`; `observeAction` moves
- * everything else.
- */
+/** Counters over public actions only. `showdownHands` holds only hands actually turned over. */
 export interface SeatObservations {
   readonly seat: number;
-  /**
-   * Hands in which this seat was seen to act before the flop. NOT hands dealt: a seat that
-   * never got a turn cannot have declined to enter, and counting those hands would measure
-   * button rotation instead of the seat's entry threshold.
-   */
+  /** Hands where this seat acted preflop, not hands dealt, so button rotation is not measured. */
   readonly handsSeen: number;
-  /**
-   * Of those, hands in which it called, bet or raised preflop. Checking the big-blind option
-   * is not entering: those chips were forced in.
-   */
+  /** Called, bet or raised preflop. Checking the big-blind option is not entering. */
   readonly handsVoluntarilyEntered: number;
-  /**
-   * Of those, hands in which it bet or raised preflop. A **hand** count, not an action count
-   * — the name is ambiguous and this is the reading that keeps `pfr <= vpip` true by
-   * construction. Preflop raise *actions* are inside `bets` and `raises`.
-   */
+  /** A hand count, not an action count, so `pfr <= vpip` holds by construction. */
   readonly preflopRaises: number;
   readonly threeBets: number;
   readonly threeBetOpportunities: number;
@@ -316,23 +130,13 @@ export interface SeatObservations {
   readonly foldsFacingBet: number;
   readonly timesFacingBet: number;
   readonly showdownsReached: number;
-  /** Bet sizes seen, as pot fractions. Bounded window of `BET_SIZE_SAMPLE_CAP`, newest last. */
+  /** Pot fractions, newest last, capped at `BET_SIZE_SAMPLE_CAP`. */
   readonly betSizeSamples: readonly number[];
-  /**
-   * Only hands actually SHOWN at showdown. Never inferred, never peeked. Bounded window of
-   * `SHOWDOWN_HAND_CAP`, newest last.
-   */
+  /** Only hands shown at showdown, newest last, capped at `SHOWDOWN_HAND_CAP`. */
   readonly showdownHands: readonly ShownHand[];
 }
 
-/**
- * Which hand is being observed, and whether it has been folded into the counters.
- *
- * Carries no card and no per-seat state — an id and a flag. It exists so that a hand cannot
- * be counted twice and so that a caller feeding actions out of order gets an error rather
- * than a quietly wrong denominator. Double counting is the one bug here that corrupts every
- * rate at once while looking completely normal.
- */
+/** Lets a hand be refused if counted twice, which would corrupt every rate while looking normal. */
 export interface HandProgress {
   readonly handId: string;
   readonly completed: boolean;
@@ -340,7 +144,7 @@ export interface HandProgress {
 
 export interface OpponentObservations {
   readonly bySeat: ReadonlyMap<number, SeatObservations>;
-  /** Hands folded into the counters by `observeHandComplete`. Per-seat counts are `handsSeen`. */
+  /** Hands completed by `observeHandComplete`. Per-seat counts are `handsSeen`. */
   readonly handsObserved: number;
   readonly currentHand: HandProgress | null;
 }
@@ -354,13 +158,7 @@ function freezeObservations(observations: OpponentObservations): OpponentObserva
   return Object.freeze(observations);
 }
 
-/**
- * Freezes a seat record and everything reachable inside it.
- *
- * Cheap at these sizes (at most 64 numbers and 32 two-string entries) and worth it: a policy
- * that tries to push a sample onto a shared window throws at the push instead of corrupting
- * another policy's view of the table.
- */
+/** Freezing makes a push onto a shared window throw at the push. */
 function freezeSeat(seat: SeatObservations): SeatObservations {
   Object.freeze(seat.betSizeSamples);
   for (const entry of seat.showdownHands) {
@@ -392,23 +190,12 @@ function emptySeatObservations(seat: number): SeatObservations {
   });
 }
 
-/**
- * Appends to a bounded window, dropping the oldest entry at the cap.
- *
- * Not a true ring buffer, and calling it one would mislead: a ring buffer exists to avoid
- * reallocating, and every update here allocates anyway because the structure is immutable
- * (§2). What is preserved is the property that actually matters — the length never exceeds
- * `cap`, whatever the session length.
- */
+/** Appends, dropping the oldest at the cap. Not a ring buffer, since every update allocates anyway. */
 function pushBounded<T>(window: readonly T[], value: T, cap: number): readonly T[] {
   if (cap < 1) throw new ObservationError(`a bounded window needs a cap of at least 1, received ${cap}`);
   if (window.length < cap) return [...window, value];
   return [...window.slice(window.length - cap + 1), value];
 }
-
-// ---------------------------------------------------------------------------
-// Observing
-// ---------------------------------------------------------------------------
 
 function assertNonNegativeNumber(value: number, field: string): void {
   if (!Number.isFinite(value) || value < 0) {
@@ -437,13 +224,7 @@ function validateEvent(event: PublicActionEvent): void {
   assertNonNegativeNumber(event.amountPaid, 'amountPaid');
 }
 
-/**
- * Checks that this event belongs to a hand that is still open.
- *
- * Rejecting rather than silently reopening a finished hand is the point: re-observing a hand
- * doubles every per-action counter it contributed to, which is invisible in review and shows
- * up as a model that is confidently wrong about every opponent.
- */
+/** Refuses to reopen a finished hand, which would double every per-action counter. */
 function assertHandIsOpen(observations: OpponentObservations, handId: string): void {
   const current = observations.currentHand;
   if (current === null || current.handId !== handId) return;
@@ -458,7 +239,7 @@ function assertHandIsOpen(observations: OpponentObservations, handId: string): v
 function applyEventToSeat(previous: SeatObservations, event: PublicActionEvent): SeatObservations {
   const aggressive = event.action === 'bet' || event.action === 'raise';
   const facingBet = event.toCall > 0;
-  // A 3-bet opportunity needs both halves: facing a raise, and a re-raise actually legal.
+  // Facing a raise with a re-raise legal.
   const threeBetSpot = event.street === 'preflop' && event.facingPreflopRaise && event.raiseWasAvailable;
   const sized = aggressive && event.potBefore > 0;
   return freezeSeat({
@@ -483,7 +264,7 @@ function applyEventToSeat(previous: SeatObservations, event: PublicActionEvent):
   });
 }
 
-/** Records one public action. Returns a new object; the input is untouched. */
+/** Returns a new object; the input is untouched. */
 export function observeAction(
   observations: OpponentObservations,
   event: PublicActionEvent,
@@ -502,13 +283,7 @@ export function observeAction(
   });
 }
 
-/**
- * Which seat made the last bet or raise of the hand, or null if it was checked down.
- *
- * Public: read off the action log every seat can see. Used only to label a shown hand as the
- * aggressor's, which is what makes a showdown record teach anything — "this seat showed that
- * after driving the betting three streets" is a lesson; a bare pair of cards is not.
- */
+/** The last bettor or raiser from the public log, or null when checked down. Labels a shown hand. */
 function lastAggressorSeat(view: PlayerView): number | null {
   let seat: number | null = null;
   for (const logged of view.actions) {
@@ -517,7 +292,6 @@ function lastAggressorSeat(view: PlayerView): number | null {
   return seat;
 }
 
-/** The three per-hand facts, derived from the public action log and nothing else. */
 interface PreflopLatch {
   readonly enteredVoluntarily: boolean;
   readonly raisedPreflop: boolean;
@@ -531,7 +305,6 @@ function preflopLatches(view: PlayerView): ReadonlyMap<number, PreflopLatch> {
     const aggressive = type === 'bet' || type === 'raise';
     const previous = latches.get(logged.seat);
     latches.set(logged.seat, {
-      // Calling, betting and raising are voluntary. Checking the big-blind option is not.
       enteredVoluntarily: (previous?.enteredVoluntarily ?? false) || aggressive || type === 'call',
       raisedPreflop: (previous?.raisedPreflop ?? false) || aggressive,
     });
@@ -550,15 +323,8 @@ function assertHandNotAlreadyComplete(observations: OpponentObservations, handId
 }
 
 /**
- * Folds a finished hand into the counters.
- *
- * **Takes a `PlayerView`, not a `HandState`, and that is the reason it exists in this
- * shape.** A `PlayerView` has already been through `redactFor`, so hole cards are present
- * only for seats that actually showed at a completed showdown — plus the recipient's own,
- * which this function never reads (see §1). A `HandState` would carry the deck, the deck
- * cursor, the commitment salts and every seat's cards, and an opponent model that can reach
- * them is an opponent model that cheats. A hand that ends by folding has an empty
- * `result.showdowns`, so it records no showdown hands at all.
+ * Folds a finished hand into the counters. Takes a `PlayerView` so only shown hands are reachable,
+ * never the deck, salts or other seats' cards.
  */
 export function observeHandComplete(
   observations: OpponentObservations,
@@ -588,8 +354,7 @@ export function observeHandComplete(
     );
   }
 
-  // The ONLY source of cards in this module. `result.showdowns` is the engine's list of hands
-  // that were actually turned over; it is empty when everybody folded.
+  // The only source of cards in this module. Empty when everybody folded.
   for (const showdown of view.result?.showdowns ?? []) {
     const previous = bySeat.get(showdown.seat) ?? emptySeatObservations(showdown.seat);
     const shown: ShownHand = {
@@ -613,72 +378,43 @@ export function observeHandComplete(
   });
 }
 
-// ---------------------------------------------------------------------------
-// Derived frequencies
-// ---------------------------------------------------------------------------
-
 /**
- * Frequencies for one seat, with the sample size attached to every one of them.
- *
- * Denominators, because a frequency without one is not a measurement:
- *
- * | field                       | numerator                    | denominator                     |
- * |-----------------------------|------------------------------|---------------------------------|
- * | vpip                        | hands entered voluntarily    | `handsSeen`                     |
- * | pfr                         | hands bet or raised preflop  | `handsSeen`                     |
- * | threeBetFrequency           | preflop re-raises            | turns facing a raise with a
- *                                                                re-raise legal                   |
- * | aggressionFrequency         | bets + raises                | bets + raises + calls + folds   |
- * | foldToBetFrequency          | folds facing a bet           | turns facing a bet              |
- * | wentToShowdown              | hands shown down             | `handsSeen`                     |
- * | averageBetSizeAsPotFraction | Σ (chips added / pot before) | sizes in the bounded window     |
+ * Frequencies for one seat with the sample size attached. Denominators:
+ * vpip, pfr and wentToShowdown over `handsSeen`; threeBetFrequency over turns facing a raise with a
+ * re-raise legal; aggressionFrequency over bets + raises + calls + folds; foldToBetFrequency over turns
+ * facing a bet; averageBetSizeAsPotFraction over the bounded window.
  */
 export interface DerivedSeatStats {
   readonly seat: number;
   readonly handsSeen: number;
-  /** Every action recorded for this seat, all streets. A sanity check on the caller. */
+  /** Every action recorded for this seat, all streets. */
   readonly actionsObserved: number;
   readonly vpip: number;
   readonly pfr: number;
   readonly threeBetFrequency: number;
   /**
-   * The conventional aggression frequency: (bets + raises) / (bets + raises + calls +
-   * folds). Checks are excluded, which is the convention and also the honest choice here — a
-   * public observer cannot tell a check made with a monster from one made with air, and
-   * `checks` is still carried raw on `SeatObservations` for anyone who wants it. Note this is
-   * NOT the same quantity as `SeatSimulationStats.aggressionFrequency` in `stats.ts`, which
-   * divides by turns where the engine offered aggression — a denominator only a privileged
-   * observer has.
+   * Checks are excluded by convention, since an observer cannot tell what a check was made with. Not the
+   * same as `SeatSimulationStats.aggressionFrequency`, which divides by turns where aggression was offered.
    */
   readonly aggressionFrequency: number;
   readonly foldToBetFrequency: number;
   /**
-   * Shown-down hands over `handsSeen`. A hand-history tracker divides by hands that saw a
-   * flop, which reads higher; a public observer cannot always tell who saw one, because an
-   * all-in seat sees a flop without acting. Clamped to 1 for the same reason: a seat can
-   * reach a showdown in a hand where it never acted preflop.
+   * Shown-down hands over `handsSeen`, not over flops seen, because an all-in seat sees a flop without
+   * acting. Clamped to 1 because a seat can reach showdown without acting preflop.
    */
   readonly wentToShowdown: number;
   readonly averageBetSizeAsPotFraction: number;
-  /**
-   * 0 plays every hand, 1 plays none. Exactly `1 - vpip`, so it carries no information vpip
-   * does not — it exists because tightness is the direction `estimateRange` reasons in, and
-   * an invertible definition means nothing is lost on the round trip.
-   */
+  /** 0 plays every hand, 1 plays none. Exactly `1 - vpip`; `estimateRange` reasons in this direction. */
   readonly tightness: number;
-  /**
-   * Half-width of a 95% interval on a frequency over `handsSeen` observations, at the worst
-   * case p = 0.5. Deliberately conservative and deliberately one number: a per-field
-   * interval would invite reading the narrowest one.
-   */
+  /** Worst-case 95% half-width at p = 0.5 over `handsSeen`. One number so nobody reads the narrowest. */
   readonly confidenceHalfWidth: number;
   readonly reliability: Reliability;
-  /** Learner-facing, third person about the model. Checked at generation time. */
+  /** Learner-facing, about the model. Checked at generation time. */
   readonly sampleNote: string;
   readonly assumptions: readonly string[];
 }
 
-/** A rate with no observations is 0, not NaN — the count is reported alongside it. */
+/** 0 rather than NaN; the count is reported alongside. */
 function ratio(numerator: number, denominator: number): number {
   return denominator === 0 ? 0 : numerator / denominator;
 }
@@ -744,13 +480,8 @@ function buildAssumptions(seat: number): readonly string[] {
 }
 
 /**
- * Frequencies for one seat, or `null` when the sample is too small to say anything.
- *
- * Returning `null` below `MINIMUM_HANDS_FOR_STATS` is the honest answer, not a convenience:
- * at 12 hands every frequency is consistent with every style the game contains, so a number
- * would be a read the data does not support. The caller has to handle "unknown", which is
- * exactly the discipline this app teaches. `neutralStats` is there for callers that must
- * always have something — a policy needs *a* range even on hand one.
+ * Null below `MINIMUM_HANDS_FOR_STATS`, so the caller must handle "unknown". Use `neutralStats` when
+ * a value is required.
  */
 export function derivedStats(observations: OpponentObservations, seat: number): DerivedSeatStats | null {
   const seen = observations.bySeat.get(seat);
@@ -783,13 +514,8 @@ export function derivedStats(observations: OpponentObservations, seat: number): 
 }
 
 /**
- * What to assume about a seat nothing is known about.
- *
- * Every frequency is the reference point the exploit signals are measured against, so it
- * produces exactly neutral adjustments and the baseline 25% entry range. It exists so there
- * is one code path rather than two: a policy calls `derivedStats(obs, seat) ?? neutralStats(seat)`
- * and never branches on whether it has a read. `confidenceHalfWidth` is 1 — the whole range,
- * matching `stats.ts` — because zero observations support zero precision.
+ * Every frequency sits at the exploit reference point, so the result is exactly neutral. Use as
+ * `derivedStats(obs, seat) ?? neutralStats(seat)`. `confidenceHalfWidth` is 1, matching `stats.ts`.
  */
 export function neutralStats(seat: number): DerivedSeatStats {
   return {
@@ -811,18 +537,11 @@ export function neutralStats(seat: number): DerivedSeatStats {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Tightness to a range
-// ---------------------------------------------------------------------------
-
 export const RANGE_STREETS = ['preflop', 'flop', 'turn', 'river'] as const;
 export const FACING_ACTIONS = ['none', 'check', 'call', 'bet', 'raise', 'threeBet'] as const;
 export type FacingAction = (typeof FACING_ACTIONS)[number];
 
-/**
- * How many rounds of betting a seat's range has continued through by each street. Preflop is
- * 0: the entry range has survived no postflop betting yet.
- */
+/** Rounds of betting the range has survived by each street. */
 const STREETS_OF_BETTING: Readonly<Record<string, number>> = {
   preflop: 0,
   flop: 1,
@@ -831,14 +550,8 @@ const STREETS_OF_BETTING: Readonly<Record<string, number>> = {
 };
 
 /**
- * How the action a seat has taken moves its estimated range, relative to what it entered
- * with.
- *
- * The only claim these numbers make is the **ordering**: a 3-bet represents a narrower range
- * than a raise, which is narrower than a bet, which is narrower than a check. They are not
- * solver outputs and there is no chart behind them. Checking widens because a check is the
- * cheapest action available and therefore filters a range the least — but see
- * `estimateRange`, which never lets widening carry a range past what the seat entered with.
+ * Only the ordering is claimed, narrowest first: 3-bet, raise, bet, check. No chart or solver
+ * behind it. `estimateRange` never lets a check widen past the entry range.
  */
 const FACING_ACTION_MULTIPLIER: Readonly<Record<FacingAction, number>> = {
   none: 1,
@@ -850,23 +563,13 @@ const FACING_ACTION_MULTIPLIER: Readonly<Record<FacingAction, number>> = {
 };
 
 /**
- * Bounds on how fast a range narrows per street of betting.
- *
- * The per-street keep factor is `1 - foldToBetFrequency`, which is observed rather than
- * assumed: a seat that folds to 40% of the bets it faces keeps roughly 60% of its range each
- * time it continues. It is clamped because the compounding is unforgiving — below 0.55 a
- * river range would be a sixth of the entry range, which is more precision than counting
- * folds can support, and above 0.90 the range would barely narrow at all across three
- * streets of betting.
+ * The per-street keep factor is the observed `1 - foldToBetFrequency`, clamped. Below 0.55 a river range
+ * is a sixth of entry, more precision than counting supports; above 0.90 it barely narrows.
  */
 const MIN_STREET_KEEP = 0.55;
 const MAX_STREET_KEEP = 0.9;
 
-/**
- * The narrowest range this model will claim: the top 2%, around the strongest dozen classes.
- * Narrowing past that from frequency counting alone would assert a read no count of public
- * actions supports.
- */
+/** The top 2%, about the strongest dozen classes. Counting public actions supports nothing narrower. */
 const MIN_RANGE_PERCENT = 2;
 
 function streetsOfBettingFor(street: string): number {
@@ -889,10 +592,6 @@ function facingMultiplierFor(facingAction: string): number {
   );
 }
 
-// ---------------------------------------------------------------------------
-// How much of a read is allowed to reach a decision, in one place
-// ---------------------------------------------------------------------------
-
 function assertAdaptation(adaptation: number): void {
   if (!Number.isFinite(adaptation) || adaptation < 0 || adaptation > 1) {
     throw new ObservationError(
@@ -903,96 +602,34 @@ function assertAdaptation(adaptation: number): void {
 }
 
 /**
- * The single weight every read is scaled by, so there is exactly one answer to "how much of
- * what this model has watched reaches this decision".
- *
- * Two gates, multiplied, and both have to be here rather than at one call site:
- *   - `adaptation` is the profile's own `exploitativeAdaptation`, which `expressTraits` forces
- *     to 0 at the `educational` difficulty. A profile designed to play its own game regardless
- *     is unaffected by anything observed, and `docs/AI-LEGENDS.md` §8 says so on the card.
- *   - `RELIABILITY_WEIGHT` gates on the sample: an `insufficient` one contributes nothing
- *     however adaptive the profile is, because a little of a meaningless number is still
- *     meaningless.
- *
- * Both `exploitAdjustments` and `estimateRange` go through this function. That is the whole
- * point of it existing: the two are the *only* channels from the opponent model into a
- * decision, and when only one of them was gated, `educational` — where the card promises
- * "adaptation is off entirely" — still tracked what the learner had been doing, through the
- * assumed range.
+ * The one weight every read is scaled by, `exploitativeAdaptation` (0 at `educational`, see
+ * docs/AI-LEGENDS.md §8) times the reliability weight. Both channels into a decision,
+ * `exploitAdjustments` and `estimateRange`, go through it.
  */
 function readWeight(adaptation: number, reliability: Reliability): number {
   assertAdaptation(adaptation);
   return adaptation * RELIABILITY_WEIGHT[reliability];
 }
 
-/**
- * `weight` of the way from the neutral assumption to what was observed.
- *
- * The mirror of `blend`, which pulls a *multiplier* towards 1. This one pulls a *frequency*
- * towards its neutral reference, because a frequency's "no read" value is the baseline
- * profile's own number rather than 1.
- */
+/** Pulls a frequency towards its neutral reference, where `blend` pulls a multiplier towards 1. */
 function towardsObserved(neutral: number, observed: number, weight: number): number {
   return neutral + (observed - neutral) * weight;
 }
 
 /**
  * The range to assume for a seat, as a slice of the computed strength ordering.
- *
- * ## The mapping, in full
- *
- * 0. **Weight the read.** `adaptation * RELIABILITY_WEIGHT[reliability]`, the same product
- *    `exploitAdjustments` gates on, and computed by the same `readWeight`. Both observed
- *    quantities below are pulled that far from the neutral assumption towards what was
- *    actually counted, so at weight 0 every step runs on the baseline profile's own numbers
- *    and the result is a constant. This is step 0 rather than a footnote because a range *is*
- *    an adaptation: it is the single largest thing a read changes about a decision, since
- *    `assessPostflop` prices relative strength, equity and the value/bluff split against it.
- *    Scaling only the multipliers in `exploitAdjustments` and leaving this path raw is
- *    exactly the second, unscaled path `policy.ts` promises does not exist — and it made
- *    `educational`, where `adaptationEnabled` is false, track the learner anyway.
- * 1. **Entry range from tightness.** `tightness` is `1 - vpip`, so `(1 - tightness) * 100`
- *    is the seat's weighted VPIP as a percentage of hands — and a percentage of hands is
- *    exactly what `topPercentRange` consumes. The assumption being made, and it is a real
- *    one: that a seat entering 30% of hands enters with its *strongest* 30%, not a random
- *    30%.
- * 2. **Narrow by street.** Multiply by `keep ** streetsOfBetting`, where `keep` is
- *    `1 - foldToBetFrequency` clamped to [0.55, 0.90]. Observed, not assumed: a seat that
- *    folds often narrows fast, and a station barely narrows.
- * 3. **Adjust by the action faced.** A check widens, a bet narrows, a raise narrows more, a
- *    3-bet most. Ordering only — see `FACING_ACTION_MULTIPLIER`.
- * 4. **Never wider than the entry range.** A seat's range on a later street is a *subset* of
- *    the range it entered with, so step 3 can walk back towards the entry range but never
- *    past it. Missing this is the obvious bug: a 1.3x widening on a checked river would
- *    otherwise credit the seat with hands it never played preflop.
- * 5. **Clamp to [2%, 100%]** and hand the percentage to `topPercentRange`, which orders the
- *    169 starting-hand classes by measured all-in equity against a random hand. That
- *    ordering is computed in `@prl/poker-math`, never transcribed from a published chart.
- *
- * An `insufficient` sample is ignored entirely, on **every** street: `RELIABILITY_WEIGHT` is
- * 0 there, so step 0 leaves tightness at `NEUTRAL_TIGHTNESS` — the baseline profile's own 25%
- * entry rate — *and* fold-to-bet at `NEUTRAL_FOLD_TO_BET`, and a 25-hand sample cannot move
- * the range. Neutralising only tightness is not enough and the failure hides preflop: there
- * `streetsOfBetting` is 0, `keep ** 0` is 1, and a test that only checks preflop passes
- * whatever `keep` holds. Postflop the same untouched `keep` was raised to the power of the
- * street, and a 25-hand seat observed folding to nothing widened the assumed river range from
- * the neutral 56 combos (4.22% of hands) to 244 (18.40%) — 4.4x, from a sample this comment
- * has always said is ignored.
- *
- * What this ignores, and it is a lot: board texture, the hands the seat's earlier line rules
- * out, position, stack depth and the number of opponents. It is one number mapped onto one
- * slice, and `DerivedSeatStats.assumptions` travels with every figure derived from it.
- *
- * `street` and `facingAction` are `string` rather than unions on purpose. Callers pass
- * `view.street`, which is a `Street` including `showdown` and `complete`, or a wire field
- * typed as `string`; a union here would push a cast onto every call site, whereas one
- * validated lookup gives a good error instead of a silently wrong answer. The accepted
- * values are exported as `RANGE_STREETS` and `FACING_ACTIONS` for callers that want to be
- * exhaustive.
- *
- * `adaptation` is required rather than defaulted for the same reason `exploitAdjustments`
- * requires it: a default would let a caller take the observed range by forgetting to say how
- * adaptive it is, which is the bug this parameter exists to make impossible.
+ * 0. Pull tightness and fold-to-bet from neutral towards observed by `readWeight`. At weight 0 the
+ *    result is constant on every street. Neutralising only tightness hides preflop, where
+ *    `keep ** 0` is 1; postflop it once widened a 25-hand river range 4.4x (56 to 244 combos).
+ * 1. Entry percent is `(1 - tightness) * 100`, assuming a seat enters with its strongest hands.
+ * 2. Multiply by `keep ** streetsOfBetting`, `keep` being `1 - foldToBet` clamped to [0.55, 0.90].
+ * 3. Multiply by the facing-action factor.
+ * 4. Never wider than the entry range, so a checked river cannot add hands never played preflop.
+ * 5. Clamp to [2%, 100%] and pass to `topPercentRange`.
+ * Ignores board texture, earlier-line exclusions, position, stacks and opponent count.
+ * `street` and `facingAction` are strings so callers can pass `view.street` without a cast. Valid
+ * values are `RANGE_STREETS` and `FACING_ACTIONS`. `adaptation` has no default, so a caller cannot
+ * take the raw range by omission.
  */
 export function estimateRange(
   stats: DerivedSeatStats,
@@ -1014,17 +651,7 @@ export function estimateRange(
   return topPercentRange(clamp(Math.min(narrowed, entryPercent), MIN_RANGE_PERCENT, 100));
 }
 
-// ---------------------------------------------------------------------------
-// Turning a read into multipliers the policy applies
-// ---------------------------------------------------------------------------
-
-/**
- * Multipliers on the policy's own tendencies. 1 is neutral everywhere.
- *
- * They are multipliers rather than replacements so a profile keeps its own style while
- * leaning on what it has seen: an adaptation of 0.3 against a station is still the same
- * model, betting slightly thinner.
- */
+/** Multipliers on the policy's own tendencies, so a profile keeps its style. 1 is neutral. */
 export interface ExploitAdjustments {
   /** Scales `traits.bluffFrequency`. Above 1 against a seat that folds to bets. */
   readonly bluffMore: number;
@@ -1036,7 +663,7 @@ export interface ExploitAdjustments {
   readonly sizeUp: number;
   /** Scales raising rather than calling. Above 1 against a seat that enters wide and passively. */
   readonly isolateMore: number;
-  /** Third person about the model. Generated through `assertNoImpersonation`. */
+  /** About the model, checked by `assertNoImpersonation`. */
   readonly note: string;
 }
 
@@ -1049,17 +676,8 @@ interface RawSignals {
 }
 
 /**
- * The raw signals, before `adaptation` and reliability scale them.
- *
- * Each is `1 + (observed - reference) * gain`, clamped. The clamps are the honest part: a
- * seat that folded to every bet in a 40-hand sample has not proved it folds to everything, so
- * the multiplier stops well short of what the raw arithmetic would give.
- *
- * `bluffMore` and `valueBetThinner` are deliberate mirror images of one observation. That is
- * not double counting: against a seat that calls too often, the two things to change are
- * *which hands get bluffed* and *which hands get value-bet*, and they move in opposite
- * directions. `sizeUp` reads the same station from a third angle — how much it pays — which
- * is why it blends fold-to-bet with the showdown rate rather than repeating either.
+ * Raw signals before weighting. Each is `1 + (observed - reference) * gain`, clamped, because a
+ * 40-hand sample proves little. `bluffMore` and `valueBetThinner` mirror one observation on purpose.
  */
 function rawSignals(stats: DerivedSeatStats): RawSignals {
   const foldGap = stats.foldToBetFrequency - NEUTRAL_FOLD_TO_BET;
@@ -1080,14 +698,7 @@ function rawSignals(stats: DerivedSeatStats): RawSignals {
   };
 }
 
-/**
- * Scales one raw signal.
- *
- * At `weight === 0` this returns exactly 1: `(raw - 1) * 0` is 0 or -0 for any finite raw,
- * and `1 + -0` is 1. The clamps in `rawSignals` are what guarantee finiteness, which is why a
- * profile with `exploitativeAdaptation` 0 gets multipliers neutral to the bit rather than
- * neutral to a tolerance.
- */
+/** At `weight === 0` this is exactly 1. The clamps in `rawSignals` keep `raw` finite. */
 function blend(raw: number, weight: number): number {
   return 1 + (raw - 1) * weight;
 }
@@ -1118,7 +729,7 @@ function neutralNote(stats: DerivedSeatStats | null, adaptation: number): string
   );
 }
 
-/** The clauses that explain an applied adjustment, largest movement first. */
+/** Largest movement first. */
 function adjustmentClauses(stats: DerivedSeatStats, applied: RawSignals): readonly string[] {
   const foldedTo = percent(stats.foldToBetFrequency);
   const entered = percent(stats.vpip);
@@ -1177,16 +788,8 @@ function describeAdjustment(stats: DerivedSeatStats, applied: RawSignals): strin
 }
 
 /**
- * The multipliers a policy applies, scaled so that a profile with `adaptation` 0 gets exactly
- * neutral ones.
- *
- * The two gates are `readWeight`'s, and `estimateRange` is scaled by the same call: adaptation
- * off means neutral multipliers *and* the neutral range, which is what makes "adaptation is
- * off entirely" a statement about behaviour rather than about one of the two paths.
- *
- * `null` stats (no seat, or fewer than `MINIMUM_HANDS_FOR_STATS` hands) return neutral with a
- * note saying why, rather than throwing: "not enough seen yet" is a normal state for the
- * first twenty hands of every match, not an error.
+ * Scaled by `readWeight`, so `adaptation` 0 gives exactly neutral multipliers. Null stats return
+ * neutral with a note rather than throwing, since the first twenty hands of every match have no read.
  */
 export function exploitAdjustments(stats: DerivedSeatStats | null, adaptation: number): ExploitAdjustments {
   assertAdaptation(adaptation);
@@ -1206,30 +809,14 @@ export function exploitAdjustments(stats: DerivedSeatStats | null, adaptation: n
   return { ...applied, note: describeAdjustment(stats, applied) };
 }
 
-// ---------------------------------------------------------------------------
-// A handle, for callers that would rather not thread a snapshot
-// ---------------------------------------------------------------------------
-
 /**
- * The narrow read a policy consumes, one entry per opponent.
- *
- * This is the shape `policy.ts` declares as `ObservedTendencies`, kept structural rather than
- * imported so the two modules do not depend on each other. Three properties of this list are
- * deliberate and easy to get wrong:
- *
- *   1. **The model's own seat is excluded.** A model that adapted to its own frequencies would
- *      be adapting to itself, which is why `createOpponentModel` takes a seat at all.
- *   2. **Frequencies are neutral for any seat whose sample is `insufficient`**, while
- *      `handsObserved` still reports the true count. A policy that forgets to check the count
- *      therefore cannot lean on a 12-hand read. For a *display* surface use `statsFor`, which
- *      returns `null` and carries a `sampleNote` saying why.
- *   3. **Sorted by seat.** `Map` iteration follows insertion order, which depends on who acted
- *      first, so an unsorted list would make a policy's output depend on something that is not
- *      part of the situation.
+ * The read a policy consumes, structurally equal to `ObservedTendencies` in `policy.ts`. Excludes
+ * the model's own seat. Frequencies are neutral for an `insufficient` sample while `handsObserved`
+ * stays true. Sorted by seat, so output does not depend on who acted first.
  */
 export interface ObservedSeatTendencies {
   readonly seat: number;
-  /** Hands in which this seat was seen to act before the flop. The denominator of `vpip`. */
+  /** Hands where this seat acted preflop. The `vpip` denominator. */
   readonly handsObserved: number;
   readonly vpip: number;
   readonly aggressionFrequency: number;
@@ -1237,21 +824,11 @@ export interface ObservedSeatTendencies {
 }
 
 /**
- * A per-seat handle that holds the current immutable snapshot and swaps it on each
- * observation.
- *
- * The pure functions above are the authority; this is a convenience for the match runner and
- * the simulation harness, which own one of these per seat and would otherwise thread a
- * snapshot through every call. The distinction that keeps §2 true: the *snapshot* is never
- * mutated, so a snapshot already handed to a policy stays exactly as that policy received it.
- * Only the handle's pointer moves.
- *
- * Fields are assigned in the constructor body rather than through parameter properties, which
- * `erasableSyntaxOnly` forbids — that flag is what lets Node run this TypeScript with no
- * build step.
+ * A per-seat handle that swaps immutable snapshots. A snapshot already handed out never changes.
+ * Fields are assigned in the constructor because `erasableSyntaxOnly` forbids parameter properties.
  */
 export class OpponentModel {
-  /** The seat this handle belongs to. Its own actions are observed like anybody else's. */
+  /** Its own actions are observed like anybody else's. */
   readonly ownSeat: number;
   private current: OpponentObservations;
 
@@ -1263,21 +840,16 @@ export class OpponentModel {
     this.current = emptyObservations();
   }
 
-  /** The current snapshot. Safe to hand to a policy: nothing can mutate it afterwards. */
+  /** Safe to hand to a policy. Nothing can mutate it afterwards. */
   get snapshot(): OpponentObservations {
     return this.current;
   }
 
-  /** Records one public action. */
   observeAction(event: PublicActionEvent): void {
     this.current = observeAction(this.current, event);
   }
 
-  /**
-   * Folds a completed hand in, from the redacted view this seat is entitled to. Named
-   * `observe` because it is the one call a runner cannot skip: everything a model knows about
-   * entry frequencies comes from here.
-   */
+  /** Folds a completed hand in. The only source of entry frequencies. */
   observe(view: PlayerView): void {
     this.current = observeHandComplete(this.current, view);
   }
@@ -1287,15 +859,8 @@ export class OpponentModel {
   }
 
   /**
-   * Frequencies for a seat, falling back to the neutral assumption rather than `null`, for
-   * the callers that must always have something to reason with.
-   *
-   * The fallback covers the whole `insufficient` band, not just the `null` floor. Those are
-   * two different thresholds — `derivedStats` returns `null` below `MINIMUM_HANDS_FOR_STATS`
-   * (20), while `insufficient` runs to `INDICATIVE_MINIMUM_HANDS` (40) — and a `?? neutral`
-   * that only caught the first handed back raw frequencies for a 20-to-39-hand sample, which
-   * is precisely the read `ObservedSeatTendencies` promises a caller cannot lean on. The band
-   * is the authority here because it is the one every other consumer of a read gates on.
+   * Falls back to neutral for the whole `insufficient` band (below 40 hands), not just the
+   * null floor at 20, because the band is what every consumer gates on.
    */
   statsOrNeutralFor(seat: number): DerivedSeatStats {
     const stats = this.statsFor(seat);
@@ -1303,13 +868,7 @@ export class OpponentModel {
     return stats;
   }
 
-  /**
-   * The assumed continuing range for a seat, scaled by this model's own adaptation trait.
-   *
-   * `adaptation` is required for the same reason it is on `adjustmentsFor`: these are the two
-   * channels out of the opponent model, and a caller that could take one of them without
-   * stating its adaptation would reintroduce exactly the unscaled path this parameter closed.
-   */
+  /** `adaptation` is required, as on `adjustmentsFor`, so neither channel can be taken unscaled. */
   rangeFor(seat: number, street: string, facingAction: string, adaptation: number): ParsedRange {
     return estimateRange(this.statsOrNeutralFor(seat), street, facingAction, adaptation);
   }
@@ -1318,7 +877,7 @@ export class OpponentModel {
     return exploitAdjustments(this.statsFor(seat), adaptation);
   }
 
-  /** Every seat but this one, as the narrow read a policy consumes. See `ObservedSeatTendencies`. */
+  /** Every seat but this one. See `ObservedSeatTendencies`. */
   get opponents(): readonly ObservedSeatTendencies[] {
     const out: ObservedSeatTendencies[] = [];
     for (const seen of this.current.bySeat.values()) {

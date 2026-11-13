@@ -1,174 +1,69 @@
 /**
- * The trait vector: what makes one opponent play differently from another.
- *
- * ## Why a trait vector and not eleven hand-written strategies
- *
- * Eleven bespoke strategies would be eleven things to test, eleven places for a bug, and
- * no way to say *how* two of them differ. A shared decision engine driven by a numeric
- * trait vector gives three things that matter more than expressiveness:
- *
- *   1. **Comparability.** "This profile enters 42% of pots and raises 78% of those; that
- *      one enters 19% and raises 91%" is a sentence a learner can act on. It is also a
- *      radar chart, and a test assertion.
- *   2. **Testability.** A statistical test can run 20,000 deterministic hands per profile
- *      and assert that the *observed* frequencies match the *declared* traits. A
- *      hand-written strategy can only be tested against itself.
- *   3. **Honesty.** The trait vector is the whole model. Nothing is hidden in
- *      hand-tuned special cases, so the profile card can show the learner exactly what
- *      they are up against — which is the difference between an educational tool and a
- *      black box.
- *
- * ## Every trait is on a 0..1 scale, and every one is documented
- *
- * A 0..1 scale makes profiles comparable at a glance and makes the radar view meaningful
- * without per-axis rescaling. Where a trait maps onto a poker statistic with a
- * conventional range (VPIP, PFR), the mapping is stated on the field so nobody has to
- * reverse-engineer it from the engine.
- *
- * ## What these numbers are, and are not
- *
- * They are **design parameters chosen to produce contrasting, instructive styles**. They
- * are not measurements. Nobody's real VPIP is in this file. See `labelling.ts` for the
- * full framing and `profiles.ts` for the per-profile rationale.
+ * The trait vector. One shared decision engine reads it, so profiles are comparable, tests can check
+ * observed frequencies against declared traits, and the card shows the whole model.
+ * Every trait is 0..1. The values are design parameters chosen for contrast, not measurements of anyone.
  */
 
 export class TraitError extends Error {
   override readonly name = 'TraitError';
 }
 
-/**
- * A profile's playing style, entirely numeric.
- *
- * All fields are 0..1 inclusive. Read each as "how far towards the second option", so
- * 0 and 1 are both meaningful extremes rather than "off" and "on".
- */
+/** All fields are 0..1 inclusive, read as "how far towards the second option". */
 export interface Traits {
-  /**
-   * Voluntarily put money in pot. Fraction of hands the profile enters when folding is
-   * free to it. Maps roughly onto the conventional VPIP statistic: 0.15 is a very tight
-   * player, 0.5 a very loose one.
-   */
+  /** Share of hands entered when folding is free. Roughly VPIP. 0.15 is very tight, 0.5 very loose. */
   readonly vpip: number;
 
-  /**
-   * Preflop raise, as a fraction of `vpip`. 1.0 means it never limps or cold-calls —
-   * every hand it plays, it raises. 0.5 means half its entries are passive. This is
-   * expressed relative to `vpip` rather than absolutely because PFR > VPIP is
-   * impossible, and a relative field makes that unrepresentable.
-   */
+  /** Preflop raise as a share of `vpip`, so PFR above VPIP cannot be represented. */
   readonly pfrShareOfVpip: number;
 
   /**
-   * How often it takes the aggressive line (bet or raise) when aggression is available
-   * and its hand assessment is neutral. The single biggest driver of how a profile
-   * *feels* to play against.
-   *
-   * **The condition is part of the number.** This is not the profile's overall bet-and-raise
-   * frequency, and it will always read higher than one: on a hand that cannot win at showdown
-   * the model bets at `bluffFrequency` instead, which every profile declares lower, so the
-   * unconditional rate is an average of the two and lands between them. `stats.ts` measures
-   * this axis over the neutral band (`NEUTRAL_ASSESSMENT_BAND` in `policy.ts`) for that
-   * reason, and reports the unconditional rate separately rather than instead.
+   * Bet-or-raise rate on a hand the model reads as neutral. It reads higher than the overall rate,
+   * because hopeless hands bet at the lower `bluffFrequency`. `stats.ts` measures it over
+   * `NEUTRAL_ASSESSMENT_BAND` and reports the unconditional rate separately.
    */
   readonly aggressionFrequency: number;
 
-  /**
-   * How often it bets or raises with a hand that has little chance of winning at
-   * showdown. Distinct from `aggressionFrequency`: a profile can bet often *with good
-   * hands* and rarely bluff, or the reverse.
-   */
+  /** Bet-or-raise rate with a hand that rarely wins at showdown. */
   readonly bluffFrequency: number;
 
-  /**
-   * How much position changes its decisions. 0 plays the same hand identically from
-   * every seat; 1 opens dramatically wider in late position and folds far more in early
-   * position. This is the trait most worth making a learner notice, because position is
-   * the cheapest edge in poker and the easiest to ignore.
-   */
+  /** 0 plays a hand the same from every seat; 1 opens much wider late and folds more early. */
   readonly positionSensitivity: number;
 
   /**
-   * Willingness to re-raise preflop, as a multiplier on the range it would merely call
-   * with. High values produce a profile that contests openings rather than flatting.
-   *
-   * **Not a 3-bet frequency, and it cannot be read as one.** A re-raise requires entering the
-   * pot, so a profile's realised 3-bet frequency is capped by its `vpip`: a profile declaring
-   * `vpip` 0.15 and `threeBetTendency` 0.44 is not claiming to re-raise 44% of the openings it
-   * faces, which would contradict the other number on its own card. The multiplier's one
-   * frequency is `threeBetRaiseShare` in `policy.ts` — the share of the openings it plays back
-   * at that it re-raises rather than flat-calls — and that is the quantity `stats.ts` compares
-   * against.
+   * A multiplier on the preflop calling range, not a 3-bet frequency. Re-raising needs entering the pot,
+   * so the realised rate is capped by `vpip`. Its one frequency is `threeBetRaiseShare` in `policy.ts`,
+   * which is what `stats.ts` compares against.
    */
   readonly threeBetTendency: number;
 
-  /**
-   * Preferred bet size as a fraction of the pot, before other adjustments. 0 maps to a
-   * quarter pot, 1 maps to one and a half pots. Kept as a normalised trait rather than a
-   * raw fraction so it can sit on the same radar axis as everything else.
-   */
+  /** Preferred bet size. 0 is a quarter pot, 1 is one and a half pots. */
   readonly betSizingPreference: number;
 
-  /**
-   * How much it varies its sizing. 0 uses one size for everything (simple, readable,
-   * exploitable); 1 changes size with board texture and hand strength. A learner facing
-   * a 0 can start reading sizes; facing a 1 they cannot, and noticing that is the lesson.
-   */
+  /** 0 uses one size for everything; 1 varies size with texture and hand strength. */
   readonly sizingVariance: number;
 
-  /**
-   * The mix of value bets to bluffs it aims for. 0.5 is roughly balanced. Below 0.5 it
-   * bluffs more than value-bets (exploitable by calling); above, the reverse
-   * (exploitable by folding).
-   */
+  /** Value-to-bluff mix. 0.5 is roughly balanced; below bluffs more, above value-bets more. */
   readonly valueBluffBalance: number;
 
-  /**
-   * Willingness to make large bets and put opponents to a decision for a big portion of
-   * their stack. Separate from `aggressionFrequency`, which is about *how often*: this
-   * is about *how much*.
-   */
+  /** How large its bets are, where `aggressionFrequency` is how often. */
   readonly pressureTendency: number;
 
-  /**
-   * How much it changes with stack depth. 0 plays a 15 big-blind stack like a 150 big-
-   * blind stack, which is a real and instructive mistake; 1 shifts sharply towards
-   * push-or-fold as stacks shorten.
-   */
+  /** 0 plays 15bb like 150bb; 1 shifts sharply towards push-or-fold as stacks shorten. */
   readonly stackDepthAdjustment: number;
 
-  /**
-   * Where it sits between cash-game and tournament instincts. 0 is pure chip-EV cash
-   * thinking; 1 weights survival and ladder position heavily. Visible in how it treats a
-   * marginal all-in.
-   */
+  /** 0 is pure chip-EV cash thinking; 1 weights survival and ladder position heavily. */
   readonly tournamentOrientation: number;
 
-  /**
-   * Appetite for high-variance lines with thin edges. Low values pass up small edges to
-   * avoid swings; high values take every one. Deliberately distinct from aggression: a
-   * profile can be relentlessly aggressive in small pots and risk-averse in big ones.
-   */
+  /** Appetite for high-variance lines with thin edges. Independent of aggression. */
   readonly riskTolerance: number;
 
-  /**
-   * How far it moves from a fixed strategy towards attacking observed opponent
-   * tendencies. 0 plays its own game regardless; 1 adapts hard to what it has seen —
-   * only from public information, never from hidden cards.
-   */
+  /** 0 ignores opponents; 1 adapts hard to what it has seen, from public information only. */
   readonly exploitativeAdaptation: number;
 
-  /**
-   * How readily it folds a made hand to sustained aggression. Low values produce the
-   * profile that will not be moved off a pair; high values fold correctly but can be
-   * pushed around. Named for the direction that is easier to reason about.
-   */
+  /** How readily it folds a made hand to sustained aggression. */
   readonly foldToPressure: number;
 
-  /**
-   * How often it continues on later streets after taking the betting lead. Low values
-   * bet the flop and give up; high values follow through, which is what makes a profile
-   * genuinely uncomfortable to play against.
-   */
+  /** How often it keeps betting on later streets after taking the lead. */
   readonly barrelPersistence: number;
 }
 
@@ -193,7 +88,6 @@ export const TRAIT_KEYS = [
 
 export type TraitKey = (typeof TRAIT_KEYS)[number];
 
-/** Human-readable axis labels for the radar view and the profile card. */
 export const TRAIT_LABELS: Readonly<Record<TraitKey, string>> = {
   vpip: 'Hands played',
   pfrShareOfVpip: 'Raises rather than calls',
@@ -213,11 +107,7 @@ export const TRAIT_LABELS: Readonly<Record<TraitKey, string>> = {
   barrelPersistence: 'Keeps betting',
 };
 
-/**
- * What each axis means in plain language, for the learner. Written so a beginner can
- * read the radar chart without a glossary open, and so a high value never reads as
- * "better" — every trait is a trade-off, and the descriptions say what it costs.
- */
+/** Learner copy. Each says what a high value costs, so no trait reads as "better". */
 export const TRAIT_DESCRIPTIONS: Readonly<Record<TraitKey, string>> = {
   vpip: 'How many hands it plays. Playing more hands wins more small pots and loses more big ones.',
   pfrShareOfVpip:
@@ -276,11 +166,7 @@ export function baselineTraits(): Traits {
   return { ...DEFAULT_TRAITS };
 }
 
-/**
- * Validates a trait vector. Rejects out-of-range and non-finite values rather than
- * clamping, because a trait quietly clamped from 1.4 to 1.0 makes a profile behave
- * differently from what its own card claims — and the card is the teaching material.
- */
+/** Rejects rather than clamps, so a profile never behaves differently from what its card claims. */
 export function assertValidTraits(traits: Traits, where: string): void {
   for (const key of TRAIT_KEYS) {
     const value = traits[key];
@@ -299,14 +185,7 @@ export function makeTraits(overrides: Partial<Traits>, where = 'traits'): Traits
   return traits;
 }
 
-/**
- * How far apart two profiles are: mean absolute difference across all axes.
- *
- * Used by the tests to assert that the profile set genuinely spans a range of styles
- * rather than being eleven variations on one. A set where every pair scores below some
- * threshold would look diverse on a card and play identically, which is the failure this
- * catches.
- */
+/** Mean absolute difference across all axes. Tests use it to assert the profile set is diverse. */
 export function traitDistance(a: Traits, b: Traits): number {
   let total = 0;
   for (const key of TRAIT_KEYS) total += Math.abs(a[key] - b[key]);
@@ -324,42 +203,27 @@ export function biggestTraitDifferences(
     .slice(0, count);
 }
 
-// ---------------------------------------------------------------------------
-// Derived quantities the decision engine needs
-// ---------------------------------------------------------------------------
-
-/** Absolute preflop-raise frequency, which cannot exceed VPIP by construction. */
+/** Cannot exceed VPIP by construction. */
 export function preflopRaiseFrequency(traits: Traits): number {
   return traits.vpip * traits.pfrShareOfVpip;
 }
 
-/** Maps `betSizingPreference` onto an actual pot fraction: 0 → 0.25, 1 → 1.5. */
+/** 0 maps to 0.25 pot, 1 to 1.5 pot. */
 export function preferredPotFraction(traits: Traits): number {
   return 0.25 + traits.betSizingPreference * 1.25;
 }
 
-/**
- * How much position widens or tightens the entry threshold.
- *
- * Returns a multiplier on VPIP. A profile with `positionSensitivity` 0 always returns 1;
- * a highly position-aware profile plays materially more hands on the button than under
- * the gun. `relativePosition` is 0 for first to act and 1 for last.
- */
+/** A multiplier on VPIP. `relativePosition` is 0 for first to act and 1 for last. */
 export function positionalVpipMultiplier(traits: Traits, relativePosition: number): number {
   if (relativePosition < 0 || relativePosition > 1) {
     throw new TraitError(`relativePosition must be between 0 and 1, received ${relativePosition}`);
   }
-  // Spans 0.6x in the worst seat to 1.5x in the best, scaled by the trait.
+  // Spans 0.55x to 1.45x at full sensitivity.
   const swing = 0.45 * traits.positionSensitivity;
   return 1 - swing + relativePosition * 2 * swing;
 }
 
-/**
- * How much short stacks pull the profile towards committing.
- *
- * 1 means "no adjustment"; larger means more willing to get all-in. `stackInBigBlinds`
- * below about 20 is where implied odds stop existing and the adjustment starts to matter.
- */
+/** 1 means no adjustment; larger is more willing to get all-in. Ramps in below 40bb. */
 export function stackDepthCommitmentMultiplier(traits: Traits, stackInBigBlinds: number): number {
   if (!Number.isFinite(stackInBigBlinds) || stackInBigBlinds < 0) {
     throw new TraitError(

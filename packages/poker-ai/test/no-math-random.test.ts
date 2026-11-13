@@ -1,36 +1,9 @@
 /**
- * The assertion `src/policy.ts` already claimed to have.
- *
- * `policy.ts:254` documents the `random` field as:
- *
- * ```ts
- *   /** Injected. `Math.random` is banned in this package and asserted absent. *\/
- * ```
- *
- * It was not asserted absent. There was no scan anywhere in `packages/poker-ai/test/`, and the ban
- * was enforced over two of the repository's seven source trees — `apps/api/src` and
- * `packages/poker-engine/src` — neither of which is this one. A comment that describes a test that
- * does not exist is worse than no comment: it is the reason nobody wrote the test.
- *
- * ## Why it matters here specifically
- *
- * Every opponent profile's decisions come from an injected `RandomSource`, and that is what makes a
- * seeded run byte-identical — which `test/simulation/profile-differentiation.test.ts` depends on for
- * its reproduction claim, and which the load harness and the bots' teaching value depend on too. One
- * `Math.random()` reached for in a hurry inside a weighting helper would break reproducibility
- * silently: every run would still work, and no assertion anywhere would notice.
- *
- * The repository-wide version of this ban, over all seven `src/` trees including `apps/web/src`,
- * lives in `scripts/supply-chain/repo-hygiene.mjs` and runs as `pnpm run security:hygiene`. This
- * file is the package-local one, so `pnpm --filter @prl/poker-ai test` proves the claim its own
- * source makes.
- *
- * ## Every detector is proved to fail
- *
- * Same convention as `packages/poker-engine/test/rng.test.ts` and
- * `apps/api/test/server-randomness.test.ts`: the scan asserts it found files to scan, and a
- * companion test feeds the detector a violation and a prose mention and asserts it distinguishes
- * them. A guard that cannot fail is decoration.
+ * Makes true the comment on `PolicyInput.random` in `src/policy.ts`, which says `Math.random` is
+ * banned in this package and asserted absent. Every profile decision comes from an injected
+ * `RandomSource`, so one stray call would silently break seeded reproducibility. The repository-wide
+ * ban is `scripts/supply-chain/repo-hygiene.mjs`. The scan asserts it found files, and a companion
+ * test proves the detector tells a use from a prose mention.
  */
 
 import assert from 'node:assert/strict';
@@ -42,13 +15,7 @@ import { fileURLToPath } from 'node:url';
 const PACKAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC_DIR = join(PACKAGE_DIR, 'src');
 
-/**
- * Every `.ts` file under `src/`, RECURSIVELY.
- *
- * The engine's equivalent walker reads one level only, so a future `src/<subdir>/` would be skipped
- * in silence. This one recurses, and `packages/poker-engine/test/rng.test.ts` has been made to
- * recurse as well.
- */
+/** Recursive, so a future `src/<subdir>/` is not skipped. */
 function sourceFiles(dir: string = SRC_DIR): string[] {
   const found: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -63,11 +30,8 @@ function sourceFiles(dir: string = SRC_DIR): string[] {
 }
 
 /**
- * Removes block and line comments, so a prose mention of a banned API is not read as a use of it.
- *
- * Taken from `packages/poker-engine/test/rng.test.ts` unchanged, limitation included: it is not a
- * parser, so a `//` or `/*` inside a string literal would confuse it. The `[^:]` before the
- * line-comment match is what stops it eating the rest of a line after `https://`.
+ * Not a parser, so a `//` or `/*` inside a string literal confuses it. The `[^:]` stops a line
+ * comment match from eating the rest of a line after `https://`.
  */
 function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
@@ -78,8 +42,6 @@ describe('@prl/poker-ai source obeys the randomness rules', () => {
 
   it('scans a non-empty tree, so a passing result means something', () => {
     assert.ok(files.length > 5, `expected the package source under src/, found ${files.length} files`);
-    // And it reaches the file whose comment makes the claim, which is the specific thing that was
-    // never checked.
     assert.ok(
       files.some((file) => file.endsWith('policy.ts')),
       'the scan must cover policy.ts, whose comment asserts this ban',
@@ -102,9 +64,7 @@ describe('@prl/poker-ai source obeys the randomness rules', () => {
   });
 
   it('never uses the other non-deterministic sources either', () => {
-    // `randomUUID`/`randomBytes` and the two clocks are the other ways a decision stream stops being
-    // reproducible. None belongs in a policy: time comes in through the engine's state and identity
-    // through the seat.
+    // Time comes in through the engine's state and identity through the seat.
     const offences: string[] = [];
     for (const file of files) {
       const name = relative(PACKAGE_DIR, file);
@@ -112,10 +72,8 @@ describe('@prl/poker-ai source obeys the randomness rules', () => {
       for (const banned of ['randomUUID', 'randomBytes']) {
         if (code.includes(banned)) offences.push(`${name}: ${banned}`);
       }
-      // The clock is allowed in exactly one place, and only for the one field the simulation
-      // documents as varying between runs. Scoped per LINE rather than per file, so `simulate.ts`
-      // gaining a clock read that feeds a decision is still caught — which is the property being
-      // asserted, rather than "this file is trusted".
+      // The clock is allowed only for the elapsed-time field. Scoped per line, so a new clock read in
+      // `simulate.ts` that feeds a decision is still caught.
       for (const line of code.split('\n')) {
         if (!line.includes('Date.now(') && !line.includes('performance.now(')) continue;
         const isElapsedMeasurement = name === 'src/simulate.ts' && /\b(?:startedAt|elapsedMs)\b/.test(line);
@@ -130,10 +88,7 @@ describe('@prl/poker-ai source obeys the randomness rules', () => {
   });
 
   it('reads the clock exactly twice, both times to measure elapsed wall time', () => {
-    // The companion to the exception above: if the two permitted reads ever disappear the rule
-    // becomes vacuous, and if a third appears the rule above catches it. `simulate.ts` states the
-    // contract itself — "fully deterministic for a given config; the only field that varies between
-    // runs is elapsedMs" — and this is what holds it to that.
+    // If the two permitted reads disappear the rule is vacuous. A third is caught by the rule above.
     const simulate = files.find((file) => file.endsWith('src/simulate.ts'));
     assert.ok(simulate !== undefined, 'src/simulate.ts must exist for this exception to mean anything');
     const reads = stripComments(readFileSync(simulate, 'utf8'))
@@ -150,14 +105,11 @@ describe('the detector can actually fail', () => {
     assert.ok(stripComments('const x = Math.random();').includes('Math.random'));
     assert.ok(!stripComments('// mentions Math.random in prose').includes('Math.random'));
     assert.ok(!stripComments('/* mentions Math.random in a block */').includes('Math.random'));
-    // The guard that stops the line-comment rule eating a URL, and with it the rest of the line.
     assert.ok(stripComments('const u = "https://x.test"; const y = Math.random();').includes('Math.random'));
   });
 
   it('walks into a subdirectory', () => {
-    // The engine's one-level walker would return the same list whether or not `src/` had
-    // subdirectories, so this asserts the recursion itself rather than trusting it. `src/` is flat
-    // today; the walker is pointed at the package root, which is not.
+    // `src/` is flat today, so the walker is pointed at the package root to prove it recurses.
     const nested = sourceFiles(PACKAGE_DIR).map((file) => relative(PACKAGE_DIR, file));
     assert.ok(
       nested.some((file) => file.includes('/')),

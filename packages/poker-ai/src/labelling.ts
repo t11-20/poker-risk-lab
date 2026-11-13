@@ -1,41 +1,8 @@
 /**
- * How opponent profiles are named and labelled — and why this file exists at all.
- *
- * ## The problem this solves
- *
- * The learning value of "Play a Legend" comes from facing *contrasting expert styles*:
- * a player who applies relentless pressure plays nothing like one who waits for a clear
- * edge, and feeling that difference across a few hundred hands teaches something no
- * lesson can. Attaching a well-known name to a style makes it memorable.
- *
- * It also creates three risks that have nothing to do with poker:
- *
- *   1. **Misrepresentation.** A named opponent invites the reading that this software
- *      reproduces how that person actually plays, or that they endorsed it. Neither is
- *      true. These are coarse models built from *publicly discussed general tendencies*
- *      — aggression, positional awareness, willingness to bluff — not from anyone's
- *      private decision-making, hand histories, or thoughts.
- *   2. **Impersonation.** Generating a real person's inner monologue ("here Ivey is
- *      thinking...") is fabrication presented as insight. It is also the single easiest
- *      way for an educational tool to become disrespectful, and it is banned outright
- *      here — see `commentary.ts`, which can only produce third-person statements about
- *      the *model*.
- *   3. **Name, image and likeness.** Using a living person's name commercially may
- *      require permission. That is a question for a deployer, not something this
- *      codebase can answer.
- *
- * ## The design
- *
- * Every profile carries **both** an archetype name and an optional attributed name, and
- * a single configuration switch decides which the product shows.
- *
- * **The production default is `archetype`.** That is deliberate: the safe mode is the one
- * you get by not thinking about it. A deployer who wants attributed names must set the
- * variable explicitly, which is exactly the moment to have considered whether they may.
- *
- * The educational content is identical in both modes. Nothing about what a learner is
- * taught depends on whose name is on the seat — which is the strongest evidence that the
- * names are decoration and the traits are the substance.
+ * How opponent profiles are named and labelled. Named opponents risk misrepresentation, impersonation
+ * and name-and-likeness claims, so every profile carries an archetype name and an optional attributed
+ * name, and one switch picks which is shown. The default is `archetype`, so the safe mode needs no
+ * configuration. What a learner is taught is identical in both modes.
  */
 
 export class LabellingError extends Error {
@@ -43,27 +10,20 @@ export class LabellingError extends Error {
 }
 
 /**
- * `archetype` — generic style names only ("Heads-Up Pressure Specialist").
- * `attributed` — shows the attributed name alongside the archetype, always with the
- *                disclaimer. Requires an explicit opt-in.
+ * `archetype` shows generic style names only. `attributed` adds the attributed name, always with the
+ * disclaimer, and requires an explicit opt-in.
  */
 export type NamingMode = 'archetype' | 'attributed';
 
 /**
- * Resolves the naming mode from configuration.
- *
- * Reading the environment here rather than taking it as a parameter is a deliberate
- * choice: it makes the safe default unavoidable. A caller cannot forget to pass a mode
- * and accidentally get the permissive one.
- *
- * @param env the environment to read; injectable so tests do not mutate `process.env`
+ * Reads the environment itself so a caller cannot forget a mode and get the permissive one.
+ * `env` is injectable so tests do not mutate `process.env`.
  */
 export function resolveNamingMode(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): NamingMode {
   const raw = env['PRL_LEGEND_NAMING']?.trim().toLowerCase();
   if (raw === undefined || raw === '') {
-    // No configuration: archetype names. The permissive mode is never the default.
     return 'archetype';
   }
   if (raw === 'archetype') return 'archetype';
@@ -76,14 +36,7 @@ export function resolveNamingMode(
   );
 }
 
-/**
- * The disclaimer that accompanies every profile, in both modes.
- *
- * Shown in the profile selector, on the table, and in every post-hand comparison. It is
- * not a footer nobody reads: `profileDisclosure()` returns it as structured data so the
- * UI renders it inline with the profile, and there is no code path that produces a
- * profile card without it.
- */
+/** Accompanies every profile in both modes. `profileDisclosure()` returns it with the name. */
 export const UNIVERSAL_DISCLAIMER =
   'These opponents are educational strategy simulations. Each one is a configurable set of ' +
   'tendencies — how often it enters a pot, how aggressively it bets, how much it adjusts to ' +
@@ -112,10 +65,7 @@ export interface ProfileNaming {
   readonly archetypeName: string;
   /** A one-line description of the style, independent of any name. */
   readonly archetypeTagline: string;
-  /**
-   * The attributed name, when the profile has one. Present in the data regardless of
-   * mode; whether it is *shown* is decided by `displayNameFor`.
-   */
+  /** Present in the data in both modes. `profileDisclosure` decides whether it is shown. */
   readonly attributedName?: string;
   /** True for the course-derived educational profile, which uses its own disclaimer. */
   readonly isCourseDerived?: boolean;
@@ -129,21 +79,15 @@ export interface ProfileDisclosure {
   readonly tagline: string;
   /** True when an attributed name is being displayed. */
   readonly attributed: boolean;
-  /**
-   * Every disclaimer that must be rendered with this profile, in order. Never empty —
-   * `profileDisclosure` throws rather than return an unlabelled profile.
-   */
+  /** Every disclaimer to render with this profile, in order. Never empty. */
   readonly disclaimers: readonly string[];
   /** A short label for compact UI (a seat plate, a replay line). Never omits the framing. */
   readonly shortLabel: string;
 }
 
 /**
- * The single function the API and the UI use to render a profile's identity.
- *
- * There is deliberately no way to get a display name without the disclaimers: they come
- * back in the same object. A component that renders `displayName` and drops
- * `disclaimers` is visibly wrong in review, rather than quietly non-compliant.
+ * The one way the API and the UI render a profile's identity. The disclaimers come back in the same
+ * object as the display name, so there is no way to get one without the other.
  */
 export function profileDisclosure(naming: ProfileNaming, mode: NamingMode): ProfileDisclosure {
   if (naming.id === '') throw new LabellingError('a profile must have an id');
@@ -169,15 +113,9 @@ export function profileDisclosure(naming: ProfileNaming, mode: NamingMode): Prof
 }
 
 /**
- * Rejects text that impersonates rather than describes.
- *
- * Used by `commentary.ts` on every generated string, and asserted in the tests. This is
- * a guard against the failure mode that matters most in this feature: commentary that
- * drifts from "this model prefers a large bet here" into "Ivey senses weakness". The
- * second is fabrication about a real person, and once one string does it the rest follow.
- *
- * The check is intentionally crude and errs towards rejection. A false positive costs a
- * reworded sentence; a false negative ships a fabricated claim about someone.
+ * Rejects text that impersonates a person rather than describing the model. `commentary.ts` runs it
+ * on every generated string. It errs towards rejection, because a false positive costs a reworded
+ * sentence and a false negative ships a fabricated claim about someone.
  */
 const IMPERSONATION_PATTERNS: readonly { readonly pattern: RegExp; readonly why: string }[] = [
   {
@@ -193,28 +131,17 @@ const IMPERSONATION_PATTERNS: readonly { readonly pattern: RegExp; readonly why:
   { pattern: /\bfamous(?:ly)?\s+(?:said|says|quoted)\b/i, why: 'implies a quotation' },
   { pattern: /^\s*(?:I|My)\b/i, why: 'first-person voice reads as the person speaking' },
 
-  // A capitalised NAME followed by a mental-state verb. The pronoun pattern above misses
-  // "Ivey senses weakness" entirely, because there is no pronoun in it — and that sentence
-  // is the exact failure this whole guard exists to prevent, so leaving it uncaught made the
-  // guard weakest at the case it was written for.
-  //
-  // The verb list is deliberately narrow. `reads` and `knows` are excluded because the
-  // policy's own counterfactual output legitimately contains "Opponent read:", and a broader
-  // list rejected 288 correct strings. A bare mental-state verb with no name in front is also
-  // excluded: it rejected 15 authored coaching lines ("believe it", "make sense", "folds far
-  // more than feels comfortable"). Measured across all 4,955 strings this package can produce,
-  // this pattern has zero false positives.
+  // A capitalised name followed by a mental-state verb catches "Ivey senses weakness". `reads` and
+  // `knows` are left out because the policy writes "Opponent read:", and a broader list rejected 288
+  // correct strings. Zero false positives across all 4,955 strings this package can produce.
   {
     pattern: /\b\p{Lu}\p{L}+\s+(?:thinks?|feels?|believes?|senses?|intends?|wants?|remembers?)\b/u,
     why: 'attributes a mental state to a named person',
   },
 
-  // Gendered pronouns at all. Commentary describes a MODEL, which has no gender, so any
-  // he/she is either impersonating a person or mis-gendering one. The repo writes they/them
-  // for unspecified people, so this costs nothing: zero false positives across every string
-  // the package produces. It also catches "He would raise here.", which the `would` pattern
-  // above misses because `raise` is a poker verb rather than a speech verb — and broadening
-  // `would` to any verb rejected 1,206 correct strings.
+  // Any gendered pronoun. A model has no gender, and the repo writes they/them for people. This also
+  // catches "He would raise here.", which broadening `would` to any verb could only do by rejecting
+  // 1,206 correct strings.
   {
     pattern: /\b(?:he|him|his|she|her|hers|himself|herself)\b/i,
     why: 'uses a gendered pronoun — commentary describes a model, not a person',
@@ -259,8 +186,5 @@ export function assertNoImpersonation(text: string, where: string): void {
   }
 }
 
-/**
- * The phrase every piece of commentary must be able to be read as. Exported so the
- * commentary generator and its tests share one definition of the required voice.
- */
+/** The voice every piece of commentary must read as. Shared by the generator and its tests. */
 export const REQUIRED_VOICE = 'this model prefers';

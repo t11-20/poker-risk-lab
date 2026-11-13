@@ -1,32 +1,8 @@
 /**
- * `@prl/poker-ai` — educational opponent strategy profiles.
- *
- * The package's `exports` map publishes this entry point and nothing else, so this list is
- * the package's whole public surface. It existed only as a promise in `package.json` until
- * now: without this file there is no `dist/index.js`, and `import ... from '@prl/poker-ai'`
- * cannot resolve at all. Added by the rooms/WebSocket work, which is the first consumer.
- *
- * ## Why every export is named rather than `export *`
- *
- * The same reason `@prl/poker-math` gives: a wildcard hides what the package publishes and
- * silently breaks when two modules export the same name. Two of them do here, and writing
- * the list out is what surfaced them:
- *
- *   - **`SeatObservations`** exists twice: an interface in `opponent-model.ts` (the counters
- *     one live table keeps about one seat) and a class in `stats.ts` (the accumulator the
- *     simulation harness fills over thousands of hands). The live-play interface keeps the
- *     bare name because it is the one that crosses into `apps/api`; the simulation class is
- *     published as `SimulationSeatObservations`.
- *   - **`preferredPotFraction`** is defined in `traits.ts` and re-exported by `stats.ts`.
- *     It is published once, from where it is defined.
- *
- * ## What is deliberately NOT exported
- *
- * Nothing is hidden on purpose — every module's own exports are here. What is *absent* is
- * anything that would let a caller feed a policy something it must not see: there is no
- * export that takes a `HandState`, because `PolicyInput` takes a redacted `PlayerView` plus
- * the seat's own two cards, and that boundary is a type rather than a rule (see
- * `policy.ts`).
+ * `@prl/poker-ai`, educational opponent strategy profiles. The `exports` map publishes only this file.
+ * Exports are named, not `export *`, because two names collide. `SeatObservations` is the live-play
+ * interface from `opponent-model.ts`, and the simulation class in `stats.ts` is published as
+ * `SimulationSeatObservations`. No export takes a `HandState`, so a policy only sees a redacted view.
  */
 
 export {
@@ -174,7 +150,6 @@ export {
   proportionDeviationInSigmas,
   radarAxes,
   rankByObserved,
-  // Renamed on the way out: see the module comment for the collision this resolves.
   SeatObservations as SimulationSeatObservations,
   type SeatSimulationCounts,
   type SeatSimulationStats,

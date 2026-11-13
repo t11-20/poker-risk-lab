@@ -1,75 +1,16 @@
 /**
- * The sampler draws from the distribution it publishes — for every profile, at every difficulty.
+ * The sampler draws from the distribution it publishes, for all twelve profiles at all three
+ * difficulties. `profile-differentiation.test.ts` checks one combination in depth. This adds breadth
+ * because the difficulty noise mixture is renormalised per difficulty, and a regression there leaves
+ * the panel showing a distribution the bot does not play.
  *
- * ## What this adds that `profile-differentiation.test.ts` does not
+ * The expected frequencies are `decide`'s own published probabilities, and the z-score is written
+ * out here rather than taken from `stats.ts`, which is part of the package under test.
  *
- * That file already asserts this invariant, and asserts it well: 'a fixed spot produces several
- * different actions, in the proportions the policy declared' takes 3,000 seeds at one spot and holds
- * every sampled frequency inside four standard errors of the distribution `decide` reported for the
- * same spot. What it covers is one profile (`adaptive-exploiter`) at one difficulty (`realistic`) —
- * one of the thirty-six combinations the app actually ships.
- *
- * Depth there, breadth here. `PolicyDecision.distribution` is normalised *after* the difficulty
- * noise mixture (`policy.ts:1307` mixes the scores with the uniform distribution over plausible
- * actions, weighted by `DifficultySettings.noise`), and that mixture is the one step in the sampling
- * path that differs across difficulties: 0.18 at `educational`, 0.10 at `realistic`. A regression in
- * how the mixed weights are renormalised, or in how one profile's trait expression feeds them, is
- * invisible to a single-combination test and is exactly the kind of error a learner cannot detect —
- * the panel would still report a distribution, and the bot would simply not be playing it.
- *
- * So this sweeps all twelve profiles across all three difficulties, and asserts the same thing at
- * each: what came out matches what was published, within the same four-sigma band the depth test
- * uses. The band is deliberately identical so the two cannot drift apart in strictness.
- *
- * ## The independent ground truth, and why it is independent
- *
- * The expected frequencies are not a table of numbers written here, and they are not read from
- * `traits.ts` or any other source constant. They are `decide`'s own published
- * `distribution[].probability`, averaged over the same trials — so the claim under test is purely
- * internal consistency between what the policy *says* it will do and what it *does*. Nothing about
- * poker correctness is asserted, and nothing needs to be: a policy is free to publish any
- * distribution it likes, and this file only insists that it then obeys it.
- *
- * The comparison itself is a two-proportion normal deviate recomputed from the formula in this
- * file — `|p_observed - p_declared| / sqrt(p_declared (1 - p_declared) / n)` — rather than through
- * `stats.ts`'s `zStatistic` or `deviationInStandardErrors`. That independence is the point of the
- * file. `stats.ts` is itself part of the package under test, and a test that measured
- * `poker-ai`'s sampler with `poker-ai`'s own statistics would agree with a shared error in both.
- *
- * ## Provenance
- *
- * This is the surviving invariant from one of four throwaway probe suites written by the release
- * review's AI/education reviewer and since deleted by them (see `docs/reviews/agent-e-testing.md`
- * §0 for the contamination they caused, and `docs/reviews/agent-f-ai-education.md` §3 for the
- * method and the measured result: twelve profiles across three difficulties, sampled against the
- * policy's own pre-sampling distribution, worst deviation 2.57 standard errors and nothing beyond
- * four). The probe files themselves are gone; what is reconstructed here is that method, at this
- * file's own seeds and its own fixture deal, and re-measured over all 108 compared actions — worst
- * deviation **2.24 standard errors** (`adaptive-exploiter` @ `realistic`, `fold` drawn 0.1340 of the
- * time against a published 0.1179).
- *
- * The band was confirmed to be a live threshold rather than a decoration by lowering `SIGMA_LIMIT`
- * to 2 and re-running: the sweep fails, on the first comparison past the lowered band
- * (`vocal-aggressor` @ `realistic`, `fold` 0.1220 against 0.1079, 2.03 standard errors). So the
- * assertion is reached with real measurements on every combination, and the four-sigma band is
- * roughly 1.8x the largest deviation this sampler actually produces.
- *
- * The reviewer's other three probes are not reconstructed, because the permanent suite already
- * covers what they asserted: whole-`PolicyInput` read instrumentation (`no-hidden-information.test.ts`
- * checks the serialised input for hidden fields and instruments the view's read set, and
- * `opponent-model.test.ts` proves `observations` never carries an unshown hand); a two-proportion
- * z-test over a profile sweep (`stats.test.ts` recomputes the pooled statistic from first principles
- * and `profile-differentiation.test.ts` separates the extremes on VPIP, aggression and 3-bet
- * frequency at alpha = 0.001); and decision-quality outcome independence (`comparison.test.ts`,
- * 'decision quality is identical against two different outcomes').
- *
- * ## Why it lives in `test/simulation/`
- *
- * The sweep is 36 combinations x 2,000 decisions and takes about four seconds — comparable to the
- * whole of the rest of this package's default suite. `profile-differentiation.test.ts` explains the
- * rule this follows: the package's `test` script globs `test/*.test.ts`, one level only, so putting
- * a slow test in this directory is what keeps it out of every default run. It runs from
- * `pnpm --filter @prl/poker-ai test:simulation`, alongside the depth test it complements.
+ * Measured over 108 compared actions, the worst deviation is 2.24 standard errors
+ * (`adaptive-exploiter` @ `realistic`, `fold`). Lowering `SIGMA_LIMIT` to 2 fails the sweep, so the
+ * band is live. Method from `docs/reviews/agent-f-ai-education.md` §3.
+ * About four seconds, so it lives under `test/simulation/`.
  */
 
 import assert from 'node:assert/strict';
@@ -80,28 +21,19 @@ import { decide } from '../../src/policy.ts';
 import { DIFFICULTY_SETTINGS, type Difficulty, expressTraits, PROFILES } from '../../src/profiles.ts';
 import { deriveSeed } from '../../src/simulate.ts';
 
-/** Every difficulty the app ships, so a fourth one cannot be added without this list failing to compile. */
+/** Every shipped difficulty. A fourth one fails to compile here. */
 const DIFFICULTIES: readonly Difficulty[] = ['educational', 'realistic', 'expert'];
 
-/** How many heads-up deals to draw the fixture spots from. Dealt once and shared by all 36 sweeps. */
+/** Dealt once and shared by all 36 sweeps. */
 const SPOT_POOL = 400;
 
-/** Seeds per combination. 2,000 is the reviewer's figure, and puts the standard error near 0.011. */
+/** Puts the standard error near 0.011. */
 const TRIALS = 2_000;
 
-/**
- * The same band as the depth test in `profile-differentiation.test.ts`, for the same reason: with at
- * most five actions compared a four-sigma band catches a sampler that ignores its own weights while
- * leaving a suite that must not flake far from its threshold. Every seed here is fixed, so the run
- * is deterministic rather than merely unlikely to fail; the band sizes how wrong "wrong" has to be,
- * and the headroom is recorded in this file's header.
- */
+/** The same four-sigma band as the depth test. Seeds are fixed, so the run is deterministic. */
 const SIGMA_LIMIT = 4;
 
-/**
- * A spot is "mixed" when the policy itself published a real choice there. Asserting calibration at a
- * spot the policy considers trivial would compare 1.000 against 1.000 and prove nothing.
- */
+/** Calibration at a spot the policy treats as trivial compares 1.000 against 1.000. */
 const MIXED_TOP_AT_MOST = 0.85;
 const MIXED_SECOND_AT_LEAST = 0.12;
 
@@ -111,12 +43,7 @@ interface Spot {
   readonly view: ReturnType<typeof redactFor>;
 }
 
-/**
- * One heads-up preflop spot, seen by the seat that has to act.
- *
- * Its own seed base, so the spots swept here are not the ones the depth test already covers — two
- * tests of the same invariant over the same deal would share any blind spot in the fixture.
- */
+/** Its own seed base, so these spots are not the ones the depth test covers. */
 function dealSpot(handIndex: number): Spot | null {
   const started = startHand({
     handId: `calibration-${handIndex}`,
@@ -137,7 +64,6 @@ function dealSpot(handIndex: number): Spot | null {
 
 type Ask = (spot: Spot, seed: number) => ReturnType<typeof decide>;
 
-/** The first spot in the pool where this profile at this difficulty publishes a genuine mixture. */
 function firstMixedSpot(spots: readonly Spot[], ask: Ask): Spot | null {
   for (const spot of spots) {
     const sorted = ask(spot, 1)
@@ -151,12 +77,8 @@ function firstMixedSpot(spots: readonly Spot[], ask: Ask): Spot | null {
 }
 
 /**
- * |p_observed - p_declared| in units of the standard error of p_declared over `TRIALS` draws.
- *
- * Written out here rather than taken from `stats.ts` so that the measurement does not share code
- * with the package it is measuring. A declared probability of exactly 0 or 1 has no standard error,
- * so any discrepancy at all is infinitely many of them — which is the right answer: an action the
- * policy said was impossible must never be drawn, and one it said was certain must always be.
+ * Written out rather than taken from `stats.ts`. A declared 0 or 1 has no standard error, so any
+ * discrepancy is infinite, which is correct.
  */
 function standardErrors(observed: number, declared: number, trials: number): number {
   const variance = (declared * (1 - declared)) / trials;
@@ -200,10 +122,8 @@ test('every profile at every difficulty samples the distribution it publishes', 
       );
       combinations += 1;
 
-      // The published distribution is averaged over the same trials rather than read once: the
-      // policy samples its own equity assessment, so the probabilities it reports move slightly
-      // from seed to seed and a single reading would be one draw of the expectation, not the
-      // expectation.
+      // Averaged over the trials because the policy samples its own equity, so the published
+      // probabilities vary slightly by seed.
       const drawn = new Map<string, number>();
       const declared = new Map<string, number>();
       for (let trial = 0; trial < TRIALS; trial += 1) {
@@ -234,9 +154,7 @@ test('every profile at every difficulty samples the distribution it publishes', 
         );
       }
 
-      // The loop above cannot see an action the policy promised and then never played, which is the
-      // other half of the same failure and the more damaging half: the panel shows a line the bot
-      // will not take.
+      // An action the policy published but never played is the other half of the failure.
       for (const [action, published] of declared) {
         if (drawn.has(action)) continue;
         const sigmas = standardErrors(0, published, TRIALS);
@@ -251,8 +169,7 @@ test('every profile at every difficulty samples the distribution it publishes', 
     }
   }
 
-  // Coverage counters, asserted rather than logged: a sweep that silently skipped a profile, or one
-  // where every spot resolved to a single action, would otherwise pass by doing nothing.
+  // A sweep that skipped a profile, or found no mixed spot, would pass by doing nothing.
   assert.equal(
     combinations,
     PROFILES.length * DIFFICULTIES.length,
