@@ -7,8 +7,10 @@
  */
 
 import { formatPercent, formatUnits, PlayingCard } from '@prl/ui';
+import Link from 'next/link';
 import type { CSSProperties, ReactElement } from 'react';
 import type { HomeSpot as Spot } from '@/lib/home-spot.ts';
+import { lessonHref } from '@/lib/learn-data.ts';
 
 /** The places the board has not dealt yet: drawn empty so the reader sees two cards are to come. */
 const TO_COME = ['turn', 'river'] as const;
@@ -83,8 +85,13 @@ export function HomeSpot({ spot }: { readonly spot: Spot }): ReactElement {
           Your {formatUnits(spot.toCall)} would be {need} of a {formatUnits(total)} pot, so that is the share
           you need to break even. Over all {spot.runouts.toLocaleString('en-GB')} ways the turn and river can
           fall, you win {formatPercent(spot.win)}
-          {spot.tie > 0 ? ` and split the pot ${formatPercent(spot.tie)}` : ''} of the time, so the call{' '}
-          {pays ? 'pays' : 'costs'}.
+          {spot.tie > 0 ? ` and split the pot ${formatPercent(spot.tie)}` : ''} of the time.{' '}
+          {/* Equity assumes the hand reaches the river with no more betting (`equity.ts`), and a
+              turn bet can fold you out before then. So the conclusion is stated on that assumption. */}
+          If nobody bets again before the river, the call {pays ? 'pays' : 'costs'} at this price. A bet on
+          the turn can make you fold before you see that share;{' '}
+          <Link href={lessonHref('pot-odds')}>the pot odds lesson</Link> covers what later betting does to a
+          price.
         </figcaption>
       </div>
     </figure>

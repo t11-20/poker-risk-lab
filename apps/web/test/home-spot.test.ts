@@ -45,4 +45,11 @@ describe('the home page hand', () => {
       assert.doesNotMatch(source, /\d+(?:\.\d+)?\s*%/u, `${file} carries a literal percentage`);
     }
   });
+
+  it('states the assumption its conclusion rests on (PR #40 review)', () => {
+    // Equity is computed to the river with no more betting. "The call pays" without that condition
+    // is a claim the maths does not make, on the one page meant to show figures with their assumptions.
+    const source = readFileSync(join(SRC, 'components', 'HomeSpot.tsx'), 'utf8');
+    assert.match(source, /If nobody bets again before the river/u);
+  });
 });
