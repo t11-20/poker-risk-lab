@@ -1,35 +1,9 @@
 /**
- * A chair changing owner must not change who anybody's cards belong to.
- *
- * ## The defect this file exists because of
- *
- * `LiveTable` keeps a completed `HandState` alive between hands — deliberately, because the
- * terminal frame, a reconnect between deals and the archive are all built from it. `viewFor` used
- * to translate the asking user id into a seat index by looking them up in the *current* seating,
- * and hand that index to `redactFor`. Those two rosters agree right up until somebody stands and
- * somebody else takes the chair, which is the one thing that is guaranteed to happen at a poker
- * table. The new occupant of seat 3 was then handed the previous occupant's unshown hole cards,
- * marked `isSelf: true` — the exact information the per-card Merkle commitment exists to keep
- * sealed.
- *
- * ## Why no test caught it
- *
- * Not one test in the suite had a seat change owner. Every existing case seats its players once
- * and keeps them there, and in that world a seat index and a person are the same thing, so a
- * positional check and an identity check are indistinguishable. That absence was as much the
- * defect as the code; this file is the part of the fix that stays.
- *
- * ## What is covered
- *
- * The whole lifecycle of a chair, not only the reported path: a chair that changes owner between
- * hands, the same player leaving and coming back, a chair vacated *during* a hand, the finished
- * hand retained in memory while the roster moves under it, and repeated reads for one identity
- * (which is all a reconnect is at this layer — `test/ws-socket.test.ts` drives the real socket).
- *
- * The assertions are properties rather than implementation: `isSelf` on a seat must mean "that
- * seat's `playerId` IS the recipient", and hole cards may be present only for the recipient
- * themselves or for a seat that actually showed down. Both hold however entitlement is computed,
- * and both break the moment it is computed from a seat index again.
+ * A chair changing owner must not change who anybody's cards belong to. `LiveTable` keeps the
+ * finished `HandState` between hands, and `viewFor` once mapped the viewer to a seat index through
+ * the current seating, so a new occupant got the previous one's unshown cards. `isSelf` must mean
+ * that seat's `playerId` is the recipient, and cards may appear only for the recipient or a seat
+ * that showed down. `ws-socket.test.ts` drives the real socket.
  */
 
 import assert from 'node:assert/strict';
@@ -47,7 +21,7 @@ const ED = 'usr_ed';
 
 interface Harness {
   readonly table: LiveTable;
-  /** The table's own clock, so nothing here can be decided by a turn timer nobody advanced. */
+  /** So no turn timer decides anything. */
   readonly clock: ManualClock;
   readonly problems: string[];
 }
@@ -58,7 +32,6 @@ function nextActionId(): string {
   return `act-seatreuse-${String(actionCounter).padStart(4, '0')}`;
 }
 
-/** A table with nobody seated yet, so each test can compose its own seating story. */
 function emptyTable(maxSeats = 3): Harness {
   const problems: string[] = [];
   const clock = createManualClock();
@@ -83,12 +56,7 @@ function viewOf(table: LiveTable, userId: string): PlayerView {
   return view;
 }
 
-/**
- * Plays the hand out, folding `folder` at their first turn and passively otherwise.
- *
- * Whose turn it is and what is legal are both read back from the table, never assumed — the point
- * of these tests is what the table says, so a hard-coded action order would only test the test.
- */
+/** Turn order and legality are read from the table, never assumed. */
 async function playOut(table: LiveTable, folder: string, observer: string): Promise<void> {
   for (let guard = 0; guard < 40; guard += 1) {
     const view = viewOf(table, observer);
@@ -111,7 +79,6 @@ async function playOut(table: LiveTable, folder: string, observer: string): Prom
   assert.fail('the hand never completed');
 }
 
-/** Every card anywhere in a serialised view, under the keys a card can actually live in. */
 function cardsIn(view: PlayerView): Set<Card> {
   const found = new Set<Card>();
   const walk = (value: unknown, underCardKey: boolean): void => {
@@ -133,14 +100,7 @@ function cardsIn(view: PlayerView): Set<Card> {
   return found;
 }
 
-/**
- * The property this whole file is about, asserted on one view.
- *
- * `isSelf` must mean "this seat's player IS the recipient" and nothing else, and cards may be
- * present only for the recipient or for a seat that showed down. Stated this way it is indifferent
- * to how `redactFor` is written, and it fails for any implementation that decides either question
- * from a seat index once index and person have come apart.
- */
+/** Indifferent to how `redactFor` is written, and fails if either question is decided from a seat index. */
 function assertViewBelongsTo(view: PlayerView, userId: string): void {
   const shown = new Set((view.result?.showdowns ?? []).map((entry) => entry.seat));
   for (const seat of view.seats) {
@@ -164,7 +124,7 @@ function assertViewBelongsTo(view: PlayerView, userId: string): void {
   );
 }
 
-/** The hole cards the deal recorded for one player, asserted to exist so a scan cannot be vacuous. */
+/** Asserted to exist so a scan cannot be vacuous. */
 function dealtCardsOf(table: LiveTable, userId: string): readonly Card[] {
   const deal = table.archivedDeal();
   assert.ok(deal !== null, 'the table has no deal to read');
@@ -182,8 +142,7 @@ describe('a seat that changes owner', () => {
     await table.sit({ userId: CY, displayName: 'Cy', seat: 1, stack: 1_000 });
     await table.startHand();
 
-    // Ada is dealt in and folds. Nobody shows, so her two cards are sealed permanently — not
-    // merely until the hand ends.
+    // Nobody shows, so Ada's cards are sealed permanently.
     const adaCards = dealtCardsOf(table, ADA);
     await playOut(table, ADA, CY);
     const finished = viewOf(table, CY);
@@ -191,12 +150,11 @@ describe('a seat that changes owner', () => {
     assert.equal(finished.result?.showdowns.length, 0, 'this hand must end with nobody showing');
     const handId = finished.handId;
 
-    // Ada stands. The hand is over, so the chair is released at once.
     await table.stand(ADA);
     assert.equal(table.seatOf(ADA), null, 'Ada is no longer seated');
     assert.equal(table.isSeatFree(0), true, 'seat 0 is free for the next player');
 
-    // Bo takes the chair Ada just left, while the finished hand is still in memory.
+    // While the finished hand is still in memory.
     await table.sit({ userId: BO, displayName: 'Bo', seat: 0, stack: 1_000 });
     assert.equal(table.seatOf(BO), 0, 'Bo now holds the chair Ada played');
 
@@ -213,18 +171,15 @@ describe('a seat that changes owner', () => {
     }
     assertViewBelongsTo(bo, BO);
 
-    // The divergence this test turns on is real: the hand's seat 0 is Ada, the table's seat 0 is
-    // Bo. Any answer computed from the index 0 would have been Ada's.
+    // The hand's seat 0 is Ada and the table's seat 0 is Bo.
     const handSeatZero = bo.seats.find((seat) => seat.seat === 0);
     assert.equal(handSeatZero?.playerId, ADA, 'the finished hand still records Ada in seat 0');
 
-    // Ground truth: none of Ada's cards reached Bo, in any field, at any depth.
     const seen = cardsIn(bo);
     const leaked = adaCards.filter((card) => seen.has(card)).map(cardToString);
     assert.deepEqual(leaked, [], `Bo received Ada's ${leaked.join(', ')}`);
 
-    // And the scan is not vacuous: those very cards ARE detectable, in the view of the one person
-    // entitled to them. A check that could never fire would satisfy everything above.
+    // The cards are detectable in the entitled view, so the scan above can fire.
     const adaSeen = cardsIn(viewOf(table, ADA));
     assert.deepEqual(
       adaCards
@@ -251,8 +206,7 @@ describe('a seat that changes owner', () => {
     await table.stand(ADA);
     await table.sit({ userId: BO, displayName: 'Bo', seat: 0, stack: 1_000 });
 
-    // Chips belong to people. Reading the finished hand's seat 0 by index would have credited Bo
-    // with Ada's closing stack — quieter than a leaked card, and just as wrong.
+    // Reading seat 0 by index would credit Bo with Ada's closing stack.
     const bo = table.snapshot().seats.find((seat) => seat.userId === BO);
     assert.equal(bo?.stack, 1_000, 'Bo brought their own chips to the chair');
   });
@@ -268,15 +222,13 @@ describe('a seat that changes owner', () => {
     const beforeLeaving = JSON.stringify(viewOf(table, ADA));
     await table.stand(ADA);
 
-    // Standing up is not forgetting. The hand Ada played is still hers to look at.
     assert.equal(
       JSON.stringify(viewOf(table, ADA)),
       beforeLeaving,
       'leaving the table must not change what Ada may see of the hand she played',
     );
 
-    // And she comes back to a DIFFERENT chair, which under a positional check would have made her
-    // a stranger to her own hand (or, worse, an owner of somebody else's).
+    // A different chair, which a positional check would get wrong.
     await table.sit({ userId: ADA, displayName: 'Ada', seat: 2, stack: 1_000 });
     assert.equal(table.seatOf(ADA), 2);
     const returned = viewOf(table, ADA);
@@ -300,8 +252,6 @@ describe('a seat that changes owner', () => {
     await table.stand(ADA);
     await table.sit({ userId: BO, displayName: 'Bo', seat: 0, stack: 1_000 });
 
-    // A reconnect re-reads the same state for the same identity. Every read for one person must be
-    // the same answer, and two people must never be given the same answer.
     for (const userId of [ADA, CY, BO]) {
       assert.equal(
         JSON.stringify(viewOf(table, userId)),
@@ -315,7 +265,6 @@ describe('a seat that changes owner', () => {
       JSON.stringify(viewOf(table, BO)),
       'the player who held the chair and the player who holds it now must not share a view',
     );
-    // Cy played the hand and Bo did not, so the seat Cy owns must be Cy's alone.
     const cySeat = viewOf(table, CY).seats.find((seat) => seat.isSelf);
     assert.equal(cySeat?.playerId, CY);
     assert.notEqual(cySeat?.holeCards, null, 'Cy still sees the hand Cy played');
@@ -324,8 +273,7 @@ describe('a seat that changes owner', () => {
 
 describe('a seat vacated mid-hand', () => {
   it('is not released while its player still holds cards, so nobody can inherit them', async () => {
-    // Four chairs for three players, so the refusal below is `seat_taken` — the reason under test —
-    // rather than `room_full`, which would pass the assertion while proving something else.
+    // Four chairs, so the refusal is `seat_taken` and not `room_full`.
     const { table } = emptyTable(4);
     await table.sit({ userId: ADA, displayName: 'Ada', seat: 0, stack: 1_000 });
     await table.sit({ userId: CY, displayName: 'Cy', seat: 1, stack: 1_000 });
@@ -333,9 +281,7 @@ describe('a seat vacated mid-hand', () => {
     await table.startHand();
     assert.equal(table.handInProgress, true);
 
-    // Ada stands while holding a live hand. She folds at her turn and is flagged to leave, but the
-    // chair stays hers until the hand is settled — which is the structural reason the mid-hand
-    // version of this leak is unreachable rather than merely unlikely.
+    // The chair stays Ada's until the hand settles, which makes the mid-hand leak unreachable.
     await table.stand(ADA);
     assert.equal(table.handInProgress, true, 'a three-handed pot survives one fold');
     assert.equal(table.seatOf(ADA), 0, 'Ada keeps the chair until the hand settles');
@@ -365,9 +311,8 @@ describe('a seat vacated mid-hand', () => {
     await table.sit({ userId: CY, displayName: 'Cy', seat: 1, stack: 1_000 });
     await table.startHand();
 
-    // Di sits down after the deal, so she is at the table but not in the hand. She stands again
-    // while the hand is still live — the one way a chair genuinely changes owner mid-hand — and Ed
-    // takes it.
+    // Di missed the deal, then stands while the hand is live, the one way a chair changes owner
+    // mid-hand. Ed takes it.
     await table.sit({ userId: DI, displayName: 'Di', seat: 2, stack: 1_000 });
     assert.equal(viewOf(table, DI).viewerSeat, null, 'a player who missed the deal is a spectator of it');
     await table.stand(DI);
@@ -382,7 +327,6 @@ describe('a seat vacated mid-hand', () => {
     for (const seat of ed.seats) assert.equal(seat.holeCards, null);
     assertViewBelongsTo(ed, ED);
 
-    // Nor may either newcomer act into the live hand from a chair that was never dealt in.
     for (const newcomer of [ED]) {
       await assert.rejects(
         table.submitAction(newcomer, {
@@ -395,7 +339,6 @@ describe('a seat vacated mid-hand', () => {
       );
     }
 
-    // The hand itself is untouched by any of it.
     await playOut(table, ADA, CY);
     assert.equal(viewOf(table, CY).street, 'complete');
     assertViewBelongsTo(viewOf(table, CY), CY);
@@ -409,14 +352,12 @@ describe('across consecutive hands', () => {
     await table.sit({ userId: ADA, displayName: 'Ada', seat: 0, stack: 1_000 });
     await table.sit({ userId: CY, displayName: 'Cy', seat: 1, stack: 1_000 });
 
-    // Hand one: Ada plays it and folds, then leaves.
     await table.startHand();
     const adaCards = dealtCardsOf(table, ADA);
     await playOut(table, ADA, CY);
     await table.stand(ADA);
 
-    // Bo inherits the chair and plays hand two from it. Both hands' rosters now exist, one inside
-    // the retained state and one in the seating, and they disagree about who seat 0 is.
+    // The retained roster and the seating now disagree about seat 0.
     await table.sit({ userId: BO, displayName: 'Bo', seat: 0, stack: 1_000 });
     const everyone = [ADA, CY, BO, DI];
     for (const userId of everyone) assertViewBelongsTo(viewOf(table, userId), userId);
@@ -426,8 +367,6 @@ describe('across consecutive hands', () => {
     await playOut(table, BO, CY);
     for (const userId of everyone) assertViewBelongsTo(viewOf(table, userId), userId);
 
-    // Ada is not in hand two at all, and her cards from hand one are gone with the state that held
-    // them — she is now a spectator of a hand she never sat in.
     const ada = viewOf(table, ADA);
     assert.equal(ada.viewerSeat, null, 'Ada was not dealt into the second hand');
     const seen = cardsIn(ada);

@@ -1,31 +1,8 @@
 /**
- * An oversized WebSocket frame is an incident to count, not a stack trace to page on.
- *
- * ## The defect
- *
- * `@fastify/websocket` attaches `socket.on('error', (error) => fastify.log.error(error))` inside
- * its own `handleUpgrade`, before the hub's connection handler ever runs. So a frame larger than
- * `LIBRARY_PAYLOAD_CEILING` — which `ws` refuses with a `RangeError: Max payload size exceeded`
- * from `Receiver.haveLength` — produced a **level 50** log record carrying the whole stack. Any
- * client can send one at will, so that is noise on the level operators alert on, and it is a
- * small amplification primitive: a few bytes of frame becomes a multi-line error record.
- *
- * The router's own ceiling (`WS_LIMITS.maxMessageBytes`) has always handled the identical event
- * properly — count it, close the socket, one line. The two paths now agree.
- *
- * ## What is asserted, and against what
- *
- * Both ceilings are driven with real frames over a real socket, and the log is captured as
- * NDJSON from the instance's own pino stream rather than inspected through a spy — so what these
- * tests read is exactly what would have been written to a production log.
- *
- * ## Would these fail if the behaviour broke?
- *
- * Checked by reverting: with `socket.removeAllListeners('error')` deleted from `hub.ts`, `a
- * frame past the library ceiling` fails on the level-50 record it then finds, naming
- * `Max payload size exceeded`. `stacksAtErrorLevel` is additionally fed a fabricated record of
- * exactly that shape and required to report it, so a detector that had quietly stopped matching
- * could not pass by finding nothing.
+ * An oversized WebSocket frame is counted, not logged as a stack. `@fastify/websocket` attaches
+ * `socket.on('error', ...)` that logs at level 50, so any client could put a stack trace on the
+ * alerting level at will. Both ceilings are driven with real frames, and the log is read as NDJSON
+ * from the instance's own pino stream.
  */
 
 import assert from 'node:assert/strict';
@@ -44,22 +21,14 @@ import { createWsHub } from '../src/ws/hub.ts';
 import { accountFor, fixedSessionStore, seatingOnlyStore } from './helpers/live-room.ts';
 
 const ALLOWED_ORIGIN = 'http://localhost:3000';
-/** Long enough for a close handshake over loopback; short enough to fail rather than hang. */
 const CLOSE_TIMEOUT_MS = 10_000;
 
-/**
- * The library ceiling, restated here rather than imported.
- *
- * `hub.ts` derives it as `WS_LIMITS.maxMessageBytes * 4` and does not export it. Restating the
- * derivation means a change to it makes these tests fail loudly instead of silently sending a
- * frame that lands on the other side of a boundary that moved.
- */
+/** `hub.ts` derives it and does not export it. Restating it makes a change fail loudly. */
 const LIBRARY_CEILING_BYTES = WS_LIMITS.maxMessageBytes * 4;
 
 function testConfig(overrides: EnvRecord = {}): AppConfig {
   return loadConfig({
     NODE_ENV: 'test',
-    // Nothing here connects: `buildApp` gets a stub handle and the registry a fake store.
     DATABASE_URL: 'postgresql://unused:unused@127.0.0.1:5432/unused',
     PUBLIC_WEB_ORIGIN: ALLOWED_ORIGIN,
     SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
@@ -73,7 +42,6 @@ const stubDatabase: DatabaseHandle = {
   close: () => Promise.resolve(),
 };
 
-/** One pino record, as far as this file cares. */
 interface LogRecord {
   readonly level: number;
   readonly msg?: string;
@@ -81,12 +49,7 @@ interface LogRecord {
   readonly [key: string]: unknown;
 }
 
-/**
- * Records at error level or above that carry a stack.
- *
- * The detector, written as a function so the same code that reads the real log can be shown a
- * fabricated violation and required to fire on it.
- */
+/** A function so a fabricated violation can be shown to fire it. */
 function stacksAtErrorLevel(records: readonly LogRecord[]): LogRecord[] {
   return records.filter((record) => record.level >= 50 && record.err?.stack !== undefined);
 }
@@ -106,13 +69,7 @@ after(async () => {
   for (const app of openApps) await app.close();
 });
 
-/**
- * An app with the hub registered exactly as `routes/index.ts` does, logging into an array.
- *
- * The logger is replaced through `serverOptions`, which `buildApp` merges last. That is the seam
- * the option exists for: everything else about the instance — the security layer, the hook
- * order, the real `@fastify/websocket` registration — is the shipped wiring.
- */
+/** The logger is replaced through `serverOptions`, which `buildApp` merges last. The rest is shipped. */
 async function startHub(idPrefix: string): Promise<Harness> {
   const config = testConfig();
   const captured: LogRecord[] = [];
@@ -163,12 +120,10 @@ async function startHub(idPrefix: string): Promise<Harness> {
   };
 }
 
-/** Opens a socket, sends one frame of `bytes`, and reports how the server closed it. */
 async function sendOneFrameOf(harness: Harness, bytes: number): Promise<{ code: number; reason: string }> {
   const socket = new WebSocket(harness.url, {
     headers: { cookie: harness.cookie, origin: ALLOWED_ORIGIN },
-    // The client must be willing to hold what it is about to send; this is the SERVER's ceiling
-    // under test, not the client library's.
+    // The server's ceiling is under test, not the client's.
     maxPayload: bytes * 2,
   });
   openSockets.push(socket);
@@ -180,8 +135,7 @@ async function sendOneFrameOf(harness: Harness, bytes: number): Promise<{ code: 
       clearTimeout(timer);
       resolve({ code, reason: reason.toString('utf8') });
     });
-    // A refused frame surfaces on the client as an error too; the close is what is being
-    // measured, so this only has to stop an unhandled 'error' event from throwing.
+    // Only stops an unhandled 'error' event from throwing.
     socket.once('error', () => undefined);
   });
 
@@ -198,7 +152,7 @@ async function sendOneFrameOf(harness: Harness, bytes: number): Promise<{ code: 
     });
   });
 
-  // Valid JSON of the right size, so nothing can be refused for being malformed instead.
+  // Valid JSON, so nothing is refused as malformed instead.
   const padding = 'x'.repeat(Math.max(0, bytes - 40));
   socket.send(JSON.stringify({ type: 'ping', nonce: padding }));
   return closed;
@@ -209,8 +163,7 @@ describe('a frame past the library ceiling', () => {
     const harness = await startHub('lib');
     const closed = await sendOneFrameOf(harness, LIBRARY_CEILING_BYTES + 1_024);
 
-    // `ws` sends 1009 from `receiverOnError` before it emits the event this hub listens for, so
-    // 1009 is what the peer sees and `closeCodeLabel` already treats it as a known code.
+    // `ws` sends 1009 from `receiverOnError` before emitting the event this hub listens for.
     assert.equal(closed.code, 1009, 'the peer must be told the frame was too large');
 
     const records = harness.records();
@@ -231,8 +184,7 @@ describe('a frame past the library ceiling', () => {
     assert.equal(line['ceilingBytes'], LIBRARY_CEILING_BYTES, 'the line names the limit that fired');
     assert.equal(line.err, undefined, 'no error object, so pino writes no stack');
 
-    // Counted the same way the router counts its own ceiling: one metric answers "how many
-    // oversized frames", whichever limit caught it.
+    // One metric for oversized frames, whichever limit caught it.
     assert.match(
       harness.metrics.render(),
       /prl_websocket_frames_rejected_total\{reason="too_large"\} 1/,
@@ -241,9 +193,7 @@ describe('a frame past the library ceiling', () => {
   });
 
   it('has a detector that fires on the record the defect used to write', () => {
-    // NEGATIVE CONTROL. `stacksAtErrorLevel` returning an empty list above has to mean "there was
-    // no such record", not "this function no longer recognises one". Fed the exact shape pino
-    // produced from `fastify.log.error(rangeError)`, it must report it.
+    // NEGATIVE CONTROL. The exact shape pino produced from `fastify.log.error(rangeError)`.
     const asItWas: LogRecord[] = [
       { level: 30, msg: 'incoming request' },
       {
@@ -263,9 +213,7 @@ describe('a frame past the library ceiling', () => {
 
 describe('a frame past the protocol ceiling but under the library one', () => {
   it('still takes the router’s documented path, with the protocol’s own close code', async () => {
-    // The comparison that makes the change above meaningful: this is the behaviour the library's
-    // path was made to match. Under `LIBRARY_PAYLOAD_CEILING`, so `ws` hands the frame over and
-    // the router refuses it with the contract's code rather than the library's generic one.
+    // Under the library ceiling, so the router refuses with the contract's code.
     const bytes = WS_LIMITS.maxMessageBytes * 2;
     assert.ok(bytes < LIBRARY_CEILING_BYTES, 'this frame must sit between the two ceilings');
 

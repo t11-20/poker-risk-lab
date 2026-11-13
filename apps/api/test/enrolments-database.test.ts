@@ -1,39 +1,8 @@
 /**
- * Cohorts and entitlements, against a real database.
- *
- * ## Why every case here needs a schema
- *
- * Nothing in `repositories/enrolments.ts` can be usefully proved with a fake handle. The window is
- * `greatest(starts_at, cohort.starts_at)` and `least(expires_at, cohort.ends_at)` evaluated by
- * PostgreSQL against PostgreSQL's own `now()`; the "one live enrolment per person per cohort" rule
- * is a partial unique index; the atomicity of a grant and its audit entry is a transaction; and the
- * fact that the request path cannot write an enrolment is a GRANT. A fake would have to reimplement
- * all four, and would then be asserting that the reimplementation agrees with itself.
- *
- * ## Which identity runs which statement, and why it matters
- *
- * The reads — `entitlementFor`, `forUser`, `listForCohort` — run on the ORDINARY test client, which
- * in CI is `prl_ci_app`, a member of `prl_app` and nothing else. So a missing `GRANT SELECT` on
- * either new table fails this suite rather than surfacing as a 500 on the first request that asks.
- *
- * The writes run through `withAdminSql`, the migrating identity, because `prl_app` holds SELECT and
- * nothing else on both tables — that is the whole privilege argument in
- * `db/migrations/0006_cohort_enrolments.sql`, and `refuses a write from the request-path role`
- * below asserts it directly rather than taking it on trust.
- *
- * ## The shape of a negative control here
- *
- * Four of these cases exist because the mistake they catch is SILENT and expensive in the same
- * direction: somebody entitled who should not be. A revoked enrolment that still entitles, an
- * expired one that still entitles, one that entitles before it begins, and a cohort that has ended
- * but whose members are still in — none of those produces an error anywhere. They produce a person
- * with access nobody granted them, and the only thing that will ever notice is a test like this.
- *
- * The fifth is the opposite failure and is worse to ship: a unique index that forbade re-enrolment
- * after a revocation would make the revocation permanent, and the operator's only way out would be
- * to edit the row that records it.
- *
- * Skips, loudly, when there is no test database. `databaseSkip` is the suite's own mechanism.
+ * Cohorts and entitlements against a real database. The window, the one-live-enrolment index, the
+ * grant-plus-audit transaction and the SELECT-only grant are all PostgreSQL's, so a fake proves nothing.
+ * Reads run on the ordinary client (`prl_ci_app` in CI), so a missing `GRANT SELECT` fails here.
+ * Writes run through `withAdminSql`, because `prl_app` holds SELECT only on both tables.
  */
 
 import assert from 'node:assert/strict';
@@ -64,8 +33,7 @@ if (TEST_DATABASE_URL !== undefined) {
         DATABASE_POOL_MAX: '2',
       }),
     );
-    // Reads `prl.enrolments` specifically: on a database migrated before 0006 this is the error
-    // that says so, rather than a suite that fails one assertion at a time further down.
+    // On a database migrated before 0006 this fails here, not one assertion at a time below.
     await probe`select 1 from prl.enrolments limit 1`;
     client = probe;
   } catch (error) {
@@ -78,15 +46,10 @@ after(async () => {
 });
 
 describe('cohorts and entitlements, against a real database', { skip: skipReason }, () => {
-  /** The request path's handle: `prl_app` and its SELECT-only grants. Every READ goes through it. */
+  /** `prl_app` with its SELECT-only grants. Every read goes through it. */
   const sql = () => client as Sql;
 
-  /**
-   * One operator action, on the migrating identity, in one transaction.
-   *
-   * Boxed for `db.ts`'s reason: postgres.js types `begin` as `UnwrapPromiseArray<T>`, so a callback
-   * returning an array would come back with a different type from one returning a row.
-   */
+  /** Boxed because postgres.js types `begin` as `UnwrapPromiseArray<T>`. */
   function asOperator<T>(use: (tx: Db) => Promise<T>): Promise<T> {
     return withAdminSql(async (admin) => {
       const boxed = await admin.begin(async (tx) => ({ value: await use(tx) }));
@@ -96,7 +59,6 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
 
   const created: { cohorts: string[]; users: string[] } = { cohorts: [], users: [] };
 
-  /** Minutes from now, as a Date, so a fixture reads as its own timeline. */
   const at = (minutes: number): Date => new Date(Date.now() + minutes * 60_000);
 
   async function makeUser(): Promise<string> {
@@ -110,7 +72,6 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
     return id;
   }
 
-  /** A cohort whose period is wide open unless a case says otherwise. */
   async function makeCohort(period: { startsAt?: Date; endsAt?: Date | null } = {}): Promise<string> {
     const key = `probe-${randomBytes(6).toString('hex')}`;
     const cohort = await asOperator((tx) =>
@@ -126,15 +87,12 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   }
 
   after(async () => {
-    // As the schema owner: `prl_app` holds no DELETE on any of these three tables, which is the
-    // privilege model working rather than a gap in it. Users go first so the enrolments cascade,
-    // then the audit rows this suite's own operations wrote, then the cohorts they pointed at.
+    // As the schema owner, because `prl_app` holds no DELETE here. Users first so enrolments cascade.
     await withAdminSql(async (admin) => {
       if (created.users.length > 0) await admin`delete from prl.users where id in ${admin(created.users)}`;
       if (created.cohorts.length > 0) {
-        // Every entry this suite wrote names its cohort in `detail`, including `cohort.created`,
-        // so one predicate reaches all of them — and reaches the ones whose `user_id` was already
-        // NULLed by the erasure case, which the user delete above cannot.
+        // Every entry names its cohort in `detail`, which also reaches entries whose `user_id` the
+        // erasure case already NULLed.
         await admin`delete from prl.audit_log where detail->>'cohortId' in ${admin(created.cohorts)}`;
         await admin`delete from prl.enrolments where cohort_id in ${admin(created.cohorts)}`;
         await admin`delete from prl.cohorts where id in ${admin(created.cohorts)}`;
@@ -142,7 +100,6 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
     });
   });
 
-  /** One grant, with the defaults every case that is not about the grant itself wants. */
   function grantTo(
     cohortId: string,
     userId: string,
@@ -160,7 +117,7 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
     );
   }
 
-  /** The rows as they actually are, read as the schema owner so no grant can hide one. */
+  /** Read as the schema owner so no grant can hide a row. */
   function rowsFor(userId: string): Promise<readonly { id: string; revoked_reason: string | null }[]> {
     return withAdminSql(
       (admin) => admin<{ id: string; revoked_reason: string | null }[]>`
@@ -168,10 +125,6 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
       `,
     );
   }
-
-  // -------------------------------------------------------------------------
-  // The window
-  // -------------------------------------------------------------------------
 
   it('entitles a live enrolment, and says until when', async () => {
     const cohortId = await makeCohort({ endsAt: at(60 * 24 * 30) });
@@ -182,14 +135,11 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
     const entitlement = await enrolments.entitlementFor(sql(), userId);
     assert.notEqual(entitlement, null, 'a live enrolment did not entitle');
     assert.equal(entitlement?.cohortId, cohortId);
-    // The enrolment ends before the cohort does, so it is the enrolment that decides.
     assert.equal(entitlement?.until?.toISOString(), expiresAt.toISOString());
   });
 
   it("takes the cohort's end when the enrolment carries none", async () => {
-    // The operator mistake this exists for: enrol thirty people and forget --expires. Under a
-    // design where the cohort period were documentation, every one of them would be entitled
-    // forever, silently, with nothing anywhere saying so.
+    // Enrolling thirty people and forgetting --expires must not entitle them forever.
     const endsAt = at(60 * 24 * 10);
     const cohortId = await makeCohort({ endsAt });
     const userId = await makeUser();
@@ -214,19 +164,14 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
     );
 
     assert.equal(await enrolments.entitlementFor(sql(), userId), null, 'a revoked enrolment entitled');
-    // The half that is easy to get wrong in the other direction: a revocation implemented as a
-    // delete would pass the assertion above and destroy the only record of the withdrawal.
+    // A revocation implemented as a delete would pass above and destroy the record of the withdrawal.
     const rows = await rowsFor(userId);
     assert.equal(rows.length, 1, 'revocation removed the row instead of marking it');
     assert.equal(revoked?.revokedReason, 'place transferred');
     assert.equal(revoked?.revokedBy, 'J. Okafor');
     assert.notEqual(revoked?.revokedAt, null);
-    // And the operator's view of the same row. `entitled_now` is computed by `enrolmentSelect`
-    // as a SECOND expression — `revoked_at is null and <window>` — and nothing held it to the
-    // same answer as `entitlementFor`. Measured: with the `e.revoked_at is null` term dropped
-    // from `entitled_now` alone, this file passed 42 of 42; `pnpm run enrolments list` then
-    // counts a withdrawn learner in its "N entitled right now" line, which is the one number an
-    // operator reads to check that a revocation took effect.
+    // `entitled_now` is a second expression in `enrolmentSelect`. With its `e.revoked_at is null` term
+    // dropped, the rest of this file still passed, and `enrolments list` counted a withdrawn learner.
     const [record] = await enrolments.forUser(sql(), userId);
     assert.equal(record?.entitledNow, false, 'the operator view still calls a revoked place live');
     assert.notEqual(record?.revokedAt, null, 'the operator view lost the withdrawal itself');
@@ -235,8 +180,7 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   it('does not entitle an EXPIRED enrolment (NEGATIVE CONTROL)', async () => {
     const cohortId = await makeCohort();
     const userId = await makeUser();
-    // Started two hours ago, ended one minute ago. Both timestamps are in the past, which is the
-    // only way an expired row can exist: the schema refuses one that expires before it starts.
+    // The schema refuses an expiry before the start, so both timestamps are in the past.
     await grantTo(cohortId, userId, { startsAt: at(-120), expiresAt: at(-1) });
 
     assert.equal(await enrolments.entitlementFor(sql(), userId), null, 'an expired enrolment entitled');
@@ -254,8 +198,6 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   });
 
   it('does not entitle inside a cohort that has not begun (NEGATIVE CONTROL)', async () => {
-    // The same failure reached through the other clock. A class list loaded in August for a course
-    // that starts in September must not open the course in August.
     const cohortId = await makeCohort({ startsAt: at(60 * 24), endsAt: at(60 * 24 * 30) });
     const userId = await makeUser();
     await grantTo(cohortId, userId);
@@ -272,9 +214,7 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   });
 
   it('returns the entitlement that runs longest when somebody is in two cohorts', async () => {
-    // Two courses at once is ordinary, and the answer a caller needs is "until when can they get
-    // in" — so the earliest-ending row is the wrong one to return. It would name a date on which
-    // access demonstrably does not end.
+    // The caller needs "until when can they get in", so the latest-ending row must be returned.
     const userId = await makeUser();
     const shortCohort = await makeCohort({ endsAt: at(60 * 24) });
     const longCohort = await makeCohort({ endsAt: at(60 * 24 * 20) });
@@ -285,19 +225,9 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
     assert.equal(entitlement?.cohortId, longCohort, 'the shorter entitlement was reported');
   });
 
-  // -------------------------------------------------------------------------
-  // Two enrolments in one cohort, over time
-  // -------------------------------------------------------------------------
-
   it('allows a re-grant after a revocation, keeping both rows (NEGATIVE CONTROL)', async () => {
-    // ########################################################################
-    // ## THE BUG A FULL UNIQUE INDEX WOULD HAVE SHIPPED SILENTLY            ##
-    // ########################################################################
-    //
-    // `UNIQUE (cohort_id, user_id)` passes every other case in this file. It fails only here, weeks
-    // later, when a withdrawal turns out to have been wrong — and the operator's only route back
-    // would be to edit the row that records the revocation, which is the one thing that must never
-    // happen. The index is partial on `revoked_at IS NULL` precisely so this works.
+    // `UNIQUE (cohort_id, user_id)` passes every other case and fails only here. The index is
+    // partial on `revoked_at IS NULL` so a wrong withdrawal can be undone without editing its row.
     const cohortId = await makeCohort();
     const userId = await makeUser();
     await grantTo(cohortId, userId);
@@ -330,10 +260,8 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   });
 
   it('supersedes an EXPIRED enrolment rather than refusing the re-grant (NEGATIVE CONTROL)', async () => {
-    // The same silent bug in its second disguise. An index predicate cannot say "not currently
-    // effective" — `now()` is not immutable — so an expired row still occupies the unique slot, and
-    // a straight insert would answer `already_enrolled` to an operator re-enrolling somebody who is
-    // entitled to nothing at all. Both rows must survive, and the closed-out one must say why.
+    // `now()` is not immutable, so an expired row still occupies the unique slot. A straight insert
+    // would answer `already_enrolled` for somebody entitled to nothing.
     const cohortId = await makeCohort();
     const userId = await makeUser();
     await grantTo(cohortId, userId, { startsAt: at(-120), expiresAt: at(-1) });
@@ -348,23 +276,10 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
     assert.equal(rows[0]?.revoked_reason, enrolments.SUPERSEDED_REASON);
   });
 
-  // -------------------------------------------------------------------------
-  // Two operators at once
-  //
-  // The partial unique index decides who holds the slot. It does not make `grant` and `revoke`
-  // serialisable against each other, and both of the cases below were REPRODUCED against a real
-  // PostgreSQL 16 before `lockLearner` existed. Each needs two operator transactions genuinely
-  // interleaved, so each waits for a backend to actually block rather than for a timer — a case
-  // that "interleaved" without anybody blocking would pass over the defect, which is the "a sweep
-  // of nothing is not a pass" rule applied to a race.
-  // -------------------------------------------------------------------------
+  // The partial unique index does not serialise `grant` against `revoke`. Both cases below were
+  // reproduced on PostgreSQL 16 before `lockLearner` existed, and each waits for a backend to block.
 
-  /**
-   * Waits until some other backend is blocked on a lock, so the interleaving is a fact.
-   *
-   * Throws rather than proceeding: a case that never produced contention has not tested the thing
-   * it is named after, and a green result from it would be worse than no case at all.
-   */
+  /** Throws if no backend blocks, because a case with no contention has not tested the race. */
   async function untilABackendBlocks(): Promise<void> {
     const blocked = await withAdminSql(async (watcher) => {
       for (let attempt = 0; attempt < 250; attempt += 1) {
@@ -382,19 +297,10 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   }
 
   it('withdraws the place a concurrent re-grant created, instead of reporting nothing to withdraw', async () => {
-    // ## NEGATIVE CONTROL. Measured against PostgreSQL 16, two operator sessions:
-    //
-    // The learner held an EXPIRED, unrevoked enrolment, so it still occupied the partial index's
-    // slot. Operator A's `grant` closed it out and inserted a fresh UNBOUNDED one. Operator B's
-    // `revoke` blocked on the supersede's row lock, and when A committed its
-    // `update ... where revoked_at is null` re-checked the tuple it had waited for — now revoked —
-    // and matched nothing. A's new row was inserted after B's statement snapshot, so B could not
-    // see it. `revoke` returned NULL, the CLI told the operator there was nothing to withdraw, and
-    // `entitlementFor` still answered ENTITLED with no end date.
-    //
-    // No serial order produces that: grant-then-revoke withdraws the new row, revoke-then-grant
-    // withdraws the old one and returns it. Both return a record. Only the interleaving returns
-    // null, and only in the direction that keeps somebody in.
+    // NEGATIVE CONTROL, measured on PostgreSQL 16. With an expired unrevoked row in the slot, A's
+    // `grant` closed it out and inserted an unbounded row. B's `revoke` waited on A's row lock,
+    // re-checked a now-revoked tuple, and could not see A's new row. It returned NULL while
+    // `entitlementFor` still answered entitled. No serial order produces that.
     const cohortId = await makeCohort();
     const userId = await makeUser();
     await grantTo(cohortId, userId, { startsAt: at(-120), expiresAt: at(-1) });
@@ -452,23 +358,16 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   });
 
   it('withdraws an enrolment granted after the withdrawing transaction opened', async () => {
-    // ## NEGATIVE CONTROL. `now()` is `transaction_timestamp()`, not the moment the row is written.
-    //
-    // A withdrawal issued from a transaction that opened BEFORE the grant it is withdrawing wrote
-    // `revoked_at` earlier than `granted_at`, and `enrolments_revoked_after_grant` refused it with
-    // a raw 23514 that nothing here maps — aborting the operator's whole transaction, which on the
-    // bulk path is the other twenty-nine people in the class list. Reproduced with a transaction
-    // opened 400 ms ahead of the grant.
-    //
-    // Serialising `grant` and `revoke` on the learner's row makes this the ORDINARY case rather
-    // than a race, which is why the two changes belong together: every queued withdrawal now waits
-    // for a grant whose `granted_at` is ahead of its own `now()`.
+    // NEGATIVE CONTROL. `now()` is `transaction_timestamp()`. A withdrawal from a transaction opened
+    // before the grant wrote `revoked_at` before `granted_at`, and `enrolments_revoked_after_grant`
+    // aborted it with an unmapped 23514. Reproduced with a 400 ms lead. Serialising on the learner's
+    // row makes that the ordinary case.
     const cohortId = await makeCohort();
     const userId = await makeUser();
 
     await withAdminSql(async (admin) => {
       const boxed = await admin.begin(async (tx) => {
-        // Opens the transaction — and therefore fixes its `now()` — before anything is granted.
+        // Fixes this transaction's `now()` before anything is granted.
         await tx`select 1`;
         await withAdminSql((other) =>
           other.begin(async (inner) => {
@@ -498,10 +397,6 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
     assert.equal(await enrolments.entitlementFor(sql(), userId), null, 'the withdrawal did not take');
   });
 
-  // -------------------------------------------------------------------------
-  // The grant and its record are one fact
-  // -------------------------------------------------------------------------
-
   it('refuses a pool handle, so a grant cannot be written without its audit entry', async () => {
     const cohortId = await makeCohort();
     const userId = await makeUser();
@@ -519,11 +414,8 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   });
 
   it('rolls back the enrolment AND its audit entry together (NEGATIVE CONTROL)', async () => {
-    // The two halves are one fact: an entitlement nobody can account for, and a record of a grant
-    // that never happened, are both worse than the failure that produced them. This drives a
-    // transaction that grants and then fails, and asserts that NEITHER survives — which is what
-    // fails if the audit write is ever moved out of the caller's transaction to make it
-    // "best-effort".
+    // The grant and its audit entry are one fact. This fails if the audit write leaves the caller's
+    // transaction.
     const cohortId = await makeCohort();
     const userId = await makeUser();
     const marker = `deliberate failure ${randomBytes(4).toString('hex')}`;
@@ -559,25 +451,14 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
     const revoked = await audit.readRecent(sql(), { userId, event: 'enrolment.revoked' });
     assert.equal(granted.length, 1);
     assert.equal(revoked.length, 1);
-    // The authority and the external reference are the two facts an operator needs six months
-    // later, and they are the two that survive an account erasure — see the case below.
+    // Authority and reference are what survive an account erasure.
     const detail = granted[0]?.detail as Record<string, unknown>;
     assert.equal(detail['by'], 'J. Okafor');
     assert.equal(detail['reference'], 'registry-row-88');
   });
 
-  // -------------------------------------------------------------------------
-  // Least privilege, and erasure
-  // -------------------------------------------------------------------------
-
   it('refuses a write from the request-path role', async () => {
-    // `prl_app` holds SELECT and nothing else on both tables, so no HTTP handler can grant anybody
-    // anything however it is written. Asserted through the application's own connection, because
-    // that is the identity a route would have.
-    //
-    // `set local role` rather than trusting DATABASE_URL to be unprivileged: a developer's single
-    // DSN is usually the superuser the compose file creates, and this case would then assert
-    // nothing at all on the machine where it runs most often.
+    // `set local role` rather than trusting DATABASE_URL, which is usually a superuser on a dev machine.
     const cohortId = await makeCohort();
     const userId = await makeUser();
     await assert.rejects(
@@ -596,8 +477,7 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   });
 
   it('lets the request-path role read an entitlement', async () => {
-    // The other half of the same grant, and the one whose absence would be a runtime 500 rather
-    // than a security problem: a missing `GRANT SELECT` makes every entitlement check fail.
+    // A missing `GRANT SELECT` would make every entitlement check a 500.
     const cohortId = await makeCohort();
     const userId = await makeUser();
     await grantTo(cohortId, userId);
@@ -609,17 +489,8 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   });
 
   /**
-   * The seat guard, on the real schema, as `prl_app` — the whole join from a row to a refusal.
-   *
-   * `test/seat-entitlement.test.ts` proves what a `false` does to both transports and drives a real
-   * `sit` frame to prove it; what it cannot prove is that the four ways of not being entitled
-   * actually produce a `false`, because that arithmetic is `greatest(...)`/`least(...)` against
-   * PostgreSQL's own `now()` and a fake would only be agreeing with itself. This is the joint: the
-   * binding a deployment actually runs (`postgresSeatEntitlement`), on the request-path role, over
-   * every state of the window.
-   *
-   * Run under `set local role prl_app` for the reason the read case above is: a missing
-   * `GRANT SELECT` must fail here rather than as a 500 the first time somebody sits down.
+   * `postgresSeatEntitlement` on the real schema as `prl_app`, over every state of the window.
+   * `seat-entitlement.test.ts` proves what a `false` does, and this proves the window produces one.
    */
   it('is the seat guard: postgresSeatEntitlement answers false for every way of not being in', async () => {
     const live = await makeUser();
@@ -666,12 +537,8 @@ describe('cohorts and entitlements, against a real database', { skip: skipReason
   });
 
   it('takes the enrolment with the account, and leaves the record of it behind', async () => {
-    // The retention decision, asserted rather than described. `enrolments_user_id_fkey` is ON
-    // DELETE CASCADE, so the entitlement goes: it describes one person, nobody else's record is in
-    // it, and one naming an account that no longer exists entitles nobody. What survives is the
-    // operator's record in `prl.audit_log`, with `user_id` NULL — so "on whose authority, against
-    // which reference, and was it withdrawn" is still answerable about an erased account, and the
-    // person is no longer named. `docs/production/legal-register.md` §3.1 states it.
+    // `enrolments_user_id_fkey` is ON DELETE CASCADE. The operator's audit record survives with
+    // `user_id` NULL. `docs/production/legal-register.md` §3.1 states it.
     const cohortId = await makeCohort();
     const userId = await makeUser();
     const reference = `registry-row-${randomBytes(4).toString('hex')}`;

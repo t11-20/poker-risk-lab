@@ -1,26 +1,14 @@
 /**
- * The fakes a live table needs, shared by the two suites that drive one.
- *
- * `test/ws-router.test.ts` drives the protocol with no socket; `test/ws-socket.test.ts` drives it
- * over a real one. Both need the same two seams — room/member persistence and session lookup — and
- * two divergent copies of a fake are two different servers to reason about, so they live here.
- *
- * Every method that a test is not supposed to reach throws. A fake that quietly answers a call the
- * test did not intend is a fake that hides a missing assertion.
- *
- * Not a `.test.ts` file, so the runner's glob does not pick it up.
+ * The live-table fakes shared by `ws-router.test.ts` and `ws-socket.test.ts`, so there is one fake
+ * server to reason about. Every method a test should not reach throws, so a stray call cannot hide
+ * a missing assertion.
  */
 
 import type { SessionAccount, SessionStore, StoredSession } from '../../src/auth/session.ts';
 import { AppError } from '../../src/errors.ts';
 import type { RoomStore } from '../../src/rooms/registry.ts';
 
-/**
- * A room store with only the three methods seating needs.
- *
- * `seatMember`/`unseatMember` keep a `Map` so `memberOf` reports the seat the test just took —
- * which is what `registry.sitAtTable` reads back before it touches the live table.
- */
+/** `memberOf` reports the seat just taken, which `registry.sitAtTable` reads back. */
 export function seatingOnlyStore(units = 10_000): RoomStore {
   const refuse = (name: string): never => {
     throw new AppError('internal_error', { logDetail: `the fake store has no ${name}` });
@@ -70,14 +58,8 @@ export function accountFor(userId: string, displayName: string): SessionAccount 
 }
 
 /**
- * Session lookup over a fixed token table.
- *
- * The *real* `sessionPlugin` is what runs in front of this, so the cookie name, the HMAC signature
- * and the `preHandler` ordering are all the production ones — only the row lookup is replaced. That
- * is the seam the upgrade actually depends on: `hub.ts` reads `request.session` and nothing else.
- *
- * `expiresAt` is far enough out that `shouldRefresh` is false, so no test accidentally exercises the
- * sliding-expiry write path (which belongs to `test/auth.test.ts` and needs a database).
+ * Only the row lookup is replaced. The real `sessionPlugin` runs in front, and `hub.ts` reads only
+ * `request.session`. `expiresAt` is far enough out that the sliding-expiry write never runs.
  */
 export function fixedSessionStore(
   sessions: ReadonlyMap<string, { readonly sessionId: string; readonly user: SessionAccount }>,

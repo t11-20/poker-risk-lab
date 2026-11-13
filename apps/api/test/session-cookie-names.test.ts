@@ -1,28 +1,8 @@
 /**
- * The web client forwards the session cookie by NAME, so the two spellings must be the same two.
- *
- * ## Why a test rather than a comment
- *
- * A server render has no cookie jar: `credentials: 'include'` is a browser instruction and does
- * nothing in Node, so `/review` and `/review/[handId]` asked the API for one reader's private hand
- * history as an anonymous stranger and were correctly refused. Every reader saw "your history is
- * private and this page has no session to read it with" over a bundled fixture.
- *
- * The fix reads the cookie out of the incoming request and forwards it — and forwarding by name is
- * what makes it narrow. `apps/web/src/lib/session-cookie-names.ts` carries the list, deliberately, so
- * that it forwards the session cookie and NOT the CSRF secret, not a third-party cookie, and not
- * the whole `Cookie` header. The cost of that narrowness is a literal on the client side of a name
- * the server owns: rename it here and every server render silently becomes signed-out again, with
- * no error anywhere and a page that looks like a correct empty state.
- *
- * That is a failure with no symptom, which is the kind worth a test.
- *
- * ## Both spellings, because the prefix is environment-dependent
- *
- * `__Host-` is a browser-enforced guarantee that requires `Secure`, so it cannot be used over plain
- * HTTP and development gets the unprefixed name. Both are the same cookie under two naming regimes
- * and the client accepts either; this asserts the client's list is exactly the set the server can
- * emit, with nothing extra in it.
+ * Server renders forward the session cookie by name, from the list in
+ * `apps/web/src/lib/session-cookie-names.ts`, so the CSRF secret and other cookies stay behind.
+ * A rename on the server would silently make every server render signed out. The client's list
+ * must be exactly the two names the server emits, `__Host-` in production and unprefixed over HTTP.
  */
 
 import assert from 'node:assert/strict';
@@ -42,15 +22,7 @@ const CLIENT_MODULE = resolve(
   'session-cookie-names.ts',
 );
 
-/**
- * The client's list, read as source.
- *
- * It lives in `session-cookie-names.ts`, a leaf module with no imports at all — it moved out of
- * `server-session.ts` so that the proxy's guest bootstrap could use the names without dragging
- * `next/headers` into the Node runtime. Read rather than imported all the same: this package
- * cannot resolve `@prl/web`'s module graph, and this file is asserting a fact about two lists of
- * strings, which does not need a module loader.
- */
+/** Read as source, because this package cannot resolve `@prl/web`'s module graph. */
 async function clientCookieNames(): Promise<readonly string[]> {
   const source = await (await import('node:fs/promises')).readFile(CLIENT_MODULE, 'utf8');
   const match = /export const SESSION_COOKIE_NAMES = \[([^\]]*)\]/.exec(source);
@@ -82,10 +54,8 @@ describe('the web client forwards the cookie this API actually sets', () => {
   });
 
   it('does not forward the CSRF secret', async () => {
-    // Forwarding it would let a server render mint a valid token and act as the reader — a request
-    // with no user gesture behind it, which is precisely what the CSRF check exists to stop. The
-    // compare screen reaches its POST by completing its own anonymous handshake instead; see
-    // `serverCsrfHandshake` in `apps/web/src/lib/api.ts`.
+    // A server render holding the CSRF secret could act as the reader with no user gesture.
+    // The compare screen uses `serverCsrfHandshake` in `apps/web/src/lib/api.ts` instead.
     const names = await clientCookieNames();
     for (const production of [true, false]) {
       const csrf = csrfCookieName(

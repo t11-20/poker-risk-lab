@@ -1,42 +1,9 @@
 /**
- * One suite of session behaviours, run twice: against a `Map`, and against Postgres.
- *
- * ## The hole this closes
- *
- * `src/auth/session.ts` and `src/routes/auth.ts` are line-covered to the last branch, and every one
- * of those lines is exercised against an in-memory fake — `test/auth.test.ts` says so itself: "That
- * indirection is what lets every test in `test/auth.test.ts` run with no database at all — the fake
- * store is a `Map`." The fake is careful and its comments track the SQL faithfully. It is still a
- * fake, and nothing anywhere asserted that the SQL implementation behaves the way it does. A
- * hundred per cent of the coverage was over the wrong object.
- *
- * The structural fix is not "add some SQL tests". It is a single list of behaviours that BOTH
- * implementations have to satisfy, so the fake cannot drift from the thing it stands in for
- * without one of them failing. That list is `BEHAVIOURS` below, and it is run once per
- * implementation.
- *
- * Two levels, because a store can conform and the middleware still behave differently:
- *
- *   1. **The port.** `SessionStore`'s five operations, asserted identically against both.
- *   2. **The middleware over the port.** The real `sessionPlugin`, on a real `buildApp()`, driven
- *      through the same script of HTTP requests against each implementation. The two transcripts
- *      are compared for equality — that is what "identical results" means here, and it is checked
- *      rather than argued.
- *
- * ## Why the in-memory implementation is written here rather than imported
- *
- * `test/auth.test.ts`'s fake lives inside a `.test.ts` file; importing it would run that file's
- * suite as a side effect. So this one is written to the same contract, using the *production* id
- * and token generators so the two implementations produce the same shapes. If they ever disagree
- * about a behaviour, one of these two runs fails and the diff names the operation.
- *
- * ## Cleanup
- *
- * `createAuthStore` takes the pool (`Sql`), not a transaction handle, so the SQL half cannot hide
- * inside a rollback the way the other coverage files do — and should not, because a pool with
- * autocommit is how this code runs in production. Every case therefore records the accounts it
- * creates and deletes them afterwards; `prl.sessions.user_id` is `ON DELETE CASCADE`, so the
- * sessions go with them.
+ * One list of session behaviours run against a `Map` and against Postgres, so the fake cannot
+ * drift from the SQL it stands in for. It runs at the port (`SessionStore`'s five operations) and
+ * through the real `sessionPlugin`, whose two transcripts must be equal. The fake is written here
+ * because importing `auth.test.ts` would run its suite. `createAuthStore` takes the pool, so cases
+ * delete the accounts they create and `ON DELETE CASCADE` takes the sessions.
  */
 
 import assert from 'node:assert/strict';
@@ -94,34 +61,19 @@ after(async () => {
   if (client !== null) await client.end({ timeout: 5 });
 });
 
-// ---------------------------------------------------------------------------
-// What every implementation has to provide in order to be tested
-// ---------------------------------------------------------------------------
-
 interface StoreHarness {
   readonly store: SessionStore;
-  /** An account the store can open a session for. */
   readonly createUser: (displayName: string) => Promise<SessionAccount>;
-  /**
-   * Moves a session's whole lifetime back by `ms`.
-   *
-   * Both timestamps move together because `sessions_expires_after_creation` requires it, and
-   * because "an older session" is what the sliding-expiry and ceiling rules are about — not "a
-   * session that expired before it was created".
-   */
+  /** Both timestamps move together, as `sessions_expires_after_creation` requires. */
   readonly backdate: (sessionId: string, ms: number) => Promise<void>;
 }
 
 interface Implementation {
   readonly name: string;
-  /** False when this implementation can run; a reason when it cannot. */
+  /** A reason when this implementation cannot run. */
   readonly skip: string | false;
   readonly with: (run: (harness: StoreHarness) => Promise<void>) => Promise<void>;
 }
-
-// ---------------------------------------------------------------------------
-// Implementation A: a Map
-// ---------------------------------------------------------------------------
 
 interface MemorySession {
   readonly sessionId: string;
@@ -132,13 +84,7 @@ interface MemorySession {
   revokedAt: number | null;
 }
 
-/**
- * The in-memory store, written to the documented contract of each operation.
- *
- * Every body is synchronous and wrapped at the port boundary, for the reason `test/auth.test.ts`
- * gives: an `async` function with no `await` is a lint error here, and a fake whose bodies are
- * plain functions reads as a statement of the invariants it stands in for.
- */
+/** Synchronous bodies wrapped at the port, because `async` with no `await` is a lint error. */
 function memoryHarness(): StoreHarness {
   const users = new Map<string, SessionAccount>();
   const byToken = new Map<string, MemorySession>();
@@ -176,8 +122,7 @@ function memoryHarness(): StoreHarness {
     extendExpiry: (sessionId) => {
       const session = byId.get(sessionId);
       if (session === undefined || session.revokedAt !== null) return Promise.resolve(null);
-      // `least(now() + ttl, created_at + ceiling)`, and the same expression in the WHERE clause:
-      // a session already at its ceiling matches nothing and no row is written.
+      // `least(now() + ttl, created_at + ceiling)`, and a session at its ceiling matches nothing.
       const next = Math.min(
         Date.now() + SESSION_IDLE_TTL_MS,
         session.createdAt + SESSION_ABSOLUTE_TTL_SECONDS * 1_000,
@@ -219,17 +164,7 @@ function memoryHarness(): StoreHarness {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Implementation B: `createAuthStore` over Postgres
-// ---------------------------------------------------------------------------
-
-/**
- * The production binding, on the pool, with the accounts it created removed afterwards.
- *
- * `createAuthStore(sql).sessions` is exactly what `src/routes/auth.ts` hands to `sessionPlugin` in
- * a running server, so this is the object the release depends on rather than a re-implementation
- * of it.
- */
+/** `createAuthStore(sql).sessions` is exactly what `src/routes/auth.ts` hands to `sessionPlugin`. */
 async function withSqlHarness(run: (harness: StoreHarness) => Promise<void>): Promise<void> {
   const sql = client;
   assert.ok(sql !== null, 'the SQL implementation needs a database');
@@ -260,7 +195,6 @@ async function withSqlHarness(run: (harness: StoreHarness) => Promise<void>): Pr
   try {
     await run(harness);
   } finally {
-    // The accounts take their sessions with them: `sessions.user_id` is ON DELETE CASCADE.
     if (created.length > 0) await sql`delete from prl.users where id = any(${created}::text[])`;
   }
 }
@@ -278,13 +212,8 @@ const implementations: readonly Implementation[] = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// The behaviours both implementations must satisfy
-// ---------------------------------------------------------------------------
-
 const NO_FINGERPRINTS = { ipHash: null, userAgentHash: null };
 
-/** Wall-clock slack for a timestamp the database computed and this process is checking. */
 const CLOCK_SLACK_MS = 5 * 60 * 1_000;
 
 const BEHAVIOURS: readonly {
@@ -346,7 +275,6 @@ const BEHAVIOURS: readonly {
     run: async ({ store, createUser, backdate }) => {
       const user = await createUser('Ada');
       const issued = await store.create(user.id, NO_FINGERPRINTS);
-      // Past the whole idle window: the session is now expired without anybody touching it.
       await backdate(issued.sessionId, SESSION_TTL_SECONDS * 1_000 + 60_000);
       assert.equal(await store.findValidByToken(issued.token), null, 'expiry is in the lookup');
     },
@@ -357,7 +285,6 @@ const BEHAVIOURS: readonly {
       const user = await createUser('Ada');
       const issued = await store.create(user.id, NO_FINGERPRINTS);
 
-      // Halfway through the idle window: the middleware's refresh point.
       await backdate(issued.sessionId, SESSION_IDLE_TTL_MS * 0.75);
       const slid = await store.extendExpiry(issued.sessionId);
       assert.ok(slid !== null, 'a session past halfway must be extendable');
@@ -366,9 +293,7 @@ const BEHAVIOURS: readonly {
         'the new expiry is later than the one it replaced',
       );
 
-      // Now an old session: created beyond the absolute ceiling's reach. The idle window would put
-      // its expiry two months out; the ceiling is what stops it, and the ceiling is measured from
-      // `created_at` rather than from now.
+      // The ceiling is measured from `created_at`, not from now.
       const ancient = await store.create(user.id, NO_FINGERPRINTS);
       const age = (SESSION_ABSOLUTE_TTL_SECONDS - 60) * 1_000;
       await backdate(ancient.sessionId, age);
@@ -438,13 +363,8 @@ for (const implementation of implementations) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// The same script through the real middleware, against both stores
-// ---------------------------------------------------------------------------
-
 const config = testConfig();
 
-/** An app carrying the real security layer and the real `sessionPlugin` over `store`. */
 async function appWith(store: SessionStore): Promise<FastifyInstance> {
   const app = await buildApp({ config, database: stubDatabase });
   await app.register(sessionPlugin, { store });
@@ -461,7 +381,6 @@ function cookieHeader(value: string): string {
   return `${sessionCookieName(config)}=${value}`;
 }
 
-/** Whether a reply set (or cleared) the session cookie. Presence, not contents. */
 function touchedCookie(headers: Record<string, unknown>): boolean {
   const raw = headers['set-cookie'];
   const values = Array.isArray(raw) ? raw : raw === undefined ? [] : [String(raw)];
@@ -476,12 +395,8 @@ function errorCodeOf(payload: string): string {
 }
 
 /**
- * One fixed script of requests, run against whichever store it is given.
- *
- * Returns normalised lines rather than raw responses: ids, tokens and expiry timestamps differ
- * between the two implementations by construction, and comparing them would only prove that a
- * `Map` is not Postgres. What has to match is the *behaviour* — status, whether a session
- * resolved, which rejection was recorded, and whether the cookie was re-sent or cleared.
+ * Normalised lines, because ids, tokens and timestamps differ by construction. Status, resolution,
+ * rejection and cookie behaviour must match.
  */
 async function runScript(harness: StoreHarness): Promise<readonly string[]> {
   const app = await appWith(harness.store);
@@ -501,8 +416,7 @@ async function runScript(harness: StoreHarness): Promise<readonly string[]> {
       cookieTouched: touchedCookie(anonymous.headers),
     });
 
-    // Not signed by this server: refused before any lookup, and the cookie is cleared so the
-    // browser stops resending it.
+    // Not signed by this server, so refused before any lookup and the cookie is cleared.
     const forged = await app.inject({
       method: 'GET',
       url: '/whoami',
@@ -514,8 +428,7 @@ async function runScript(harness: StoreHarness): Promise<readonly string[]> {
       cookieTouched: touchedCookie(forged.headers),
     });
 
-    // Signed by this server, but resolving to no session: `session_expired`, not
-    // `not_authenticated`, so a client knows to open a fresh guest session.
+    // `session_expired`, not `not_authenticated`, so a client opens a fresh guest session.
     const unknown = app.signCookie(generateSessionToken());
     const unknownWhoami = await app.inject({
       method: 'GET',
@@ -555,11 +468,10 @@ async function runScript(harness: StoreHarness): Promise<readonly string[]> {
     record('private-signed-in', {
       status: authorised.statusCode,
       isTheUser: authorised.body.includes(user.id),
-      // Well short of halfway, so the sliding refresh must NOT fire and the cookie is not re-sent.
+      // Short of halfway, so the cookie must not be re-sent.
       cookieTouched: touchedCookie(authorised.headers),
     });
 
-    // Past halfway: the request slides the expiry and re-sends the cookie with a new Max-Age.
     await harness.backdate(issued.sessionId, SESSION_IDLE_TTL_MS * 0.75);
     const before = await harness.store.findValidByToken(issued.token);
     const refreshed = await app.inject({
@@ -600,8 +512,7 @@ describe('the real session middleware behaves identically over both stores', () 
       sql = await runScript(harness);
     });
 
-    // A positive control first: a transcript that recorded nothing, or that never got anybody
-    // signed in, would make the comparison below true and meaningless.
+    // An empty or never-signed-in transcript would make the comparison below true and meaningless.
     assert.equal(memory.length, 8, 'the script has eight steps');
     assert.ok(
       memory.some((line) => line.startsWith('private-signed-in status=200 isTheUser=true')),
@@ -619,10 +530,6 @@ describe('the real session middleware behaves identically over both stores', () 
     );
   });
 });
-
-// ---------------------------------------------------------------------------
-// Properties only the SQL implementation can have
-// ---------------------------------------------------------------------------
 
 describe('the SQL session store keeps no credential it could hand back', { skip: skipReason }, () => {
   it('stores the digest of the token and has no column for the token itself', async () => {
@@ -651,8 +558,7 @@ describe('the SQL session store keeps no credential it could hand back', { skip:
         );
       }
 
-      // The plaintext genuinely cannot be recovered: a search of every text column for it finds
-      // nothing. This is the sentence `prl.sessions` exists to make true.
+      // No text column anywhere holds the plaintext.
       const leaked = await sql<{ found: number }[]>`
         select count(*)::int as found from prl.sessions
          where id = ${issued.sessionId} and token_hash = ${Buffer.from(issued.token, 'utf8')}

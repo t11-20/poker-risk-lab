@@ -1,10 +1,4 @@
-/**
- * Two bots of one profile at one table can be told apart by name.
- *
- * The bot table seats two `tight-aggressive` bots on purpose, and both were plated "Patient
- * Technician". The narration names a seat by its display name alone, so "Patient Technician raises
- * to 40" did not say which one. Seen at a live table on `/play`.
- */
+// Two bots of one profile at one table get distinct names. The narration names a seat by name alone.
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
@@ -12,7 +6,7 @@ import { botDisplayName, botDisplayNames, LEGACY_PROFILE_IDS } from '../src/room
 
 const MAX_BOT_NAME = 24;
 
-/** The bot table's lineup, in seat order, as `BOT_TABLE` in apps/web/src/lib/table-rooms.ts asks for it. */
+/** Matches `BOT_TABLE` in apps/web/src/lib/table-rooms.ts. */
 const BOT_TABLE_PROFILES = [
   'tight-aggressive',
   'tight-aggressive',

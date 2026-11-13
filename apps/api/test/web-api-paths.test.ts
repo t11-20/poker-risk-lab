@@ -1,53 +1,9 @@
 /**
- * Every path the web client can emit, driven against a real `buildApp()`.
- *
- * ## The defect this exists for
- *
- * `apps/web` addressed `/api/…` for an entire build-out while this API served `/api/v1/…`. Two of its
- * paths were wrong in *shape* as well — `/api/scenarios` where the route is `/api/v1/content/scenarios`,
- * `/api/legends/:id/learn` where the route is `/api/v1/legends/profiles/:id` — and one named a route
- * that has never existed. Every request 404'd, the client counted a 404 as "the API is not deployed",
- * and every screen silently rendered a bundled fixture. The product shipped six fixture scenarios
- * against the API's thirty-six, and nine of seventeen lessons rendered "not available in this build".
- *
- * Nothing caught it, and no test the API had *could* have: `test:smoke` and every route test drive the
- * API's own paths, so they are structurally incapable of noticing that the client asks for different
- * ones. The only test that can is one driven from the client's constants, which is this one.
- *
- * ## Why it can't drift from the call sites
- *
- * `API_PATHS` in `@prl/contracts` is the only place `apps/web` may build a request path, and
- * `API_PATH_PROBES` is annotated `Readonly<Record<ApiPathName, ApiPathProbe>>` — so a path added to the
- * table without a probe does not compile, and a probe for a path that no longer exists does not
- * either. The last hole, a path written inline at a call site where no enumeration can see it, is
- * closed by the source scan at the bottom of this file.
- *
- * ## Why `app.inject` and not `hasRoute`
- *
- * A pattern lookup would prove a route is registered under some spelling; injecting proves the
- * concrete path a browser would send is routed. It also catches the failures a pattern lookup cannot:
- * a parameter that fails its schema, a closed query schema rejecting a field the client sends.
- *
- * `POST` probes are sent WITH a CSRF token, and that is load-bearing rather than incidental: the CSRF
- * hook runs before the not-found handler, so an unauthenticated POST to a route that does not exist
- * answers 403 and would sail past a bare "not 404" assertion. The negative control at the end proves
- * the assertion can still fail.
- *
- * The one exception is the WebSocket upgrade, and it is an exception for a reason rather than for
- * convenience: `light-my-request` has no socket, so it can neither perform a handshake nor receive a
- * `101`, and a status code injected at that path would be an assertion about nothing. It is checked
- * with `hasRoute` — sound here because the path is static, so the pattern IS the concrete path — with
- * a negative control beside it, and the handshake itself is driven from the same published constant
- * over a real socket in `ws-socket.test.ts`. The rule is that the path never goes unasserted, not
- * that every path is asserted the same way.
- *
- * ## The four paths that used to be outside this guarantee
- *
- * `POST /auth/guest`, `GET /rooms`, `POST /rooms` and the upgrade path were built by the live-table
- * client itself, in two local tables with comments explaining that they belonged in `@prl/contracts`
- * and were written locally only because that package was out of that change's scope. So the whole
- * live table — the screen with the most moving parts — sat outside the one test that proves the
- * client and the server agree about where anything is. They are published now, and covered here.
+ * Every path the web client can emit, injected into a real `buildApp()`. Route tests drive the
+ * API's own paths, so only a test driven from the client's constants can see the client asking for
+ * different ones. `API_PATH_PROBES` is typed over every `ApiPathName`, and a source scan catches
+ * inline paths. POST probes carry a CSRF token, because the CSRF hook answers 403 before the
+ * not-found handler. The WebSocket upgrade uses `hasRoute`, because `light-my-request` has no socket.
  */
 
 import assert from 'node:assert/strict';
@@ -68,12 +24,8 @@ import { TEST_DATABASE_URL } from './helpers/database.ts';
 function testConfig(overrides: EnvRecord = {}): AppConfig {
   return loadConfig({
     NODE_ENV: 'test',
-    // The real test database when there is one, and a syntactically valid URL when there is not.
-    // One probe does reach the database — `POST /auth/guest` creates an account, which is the whole
-    // of what that route does — and with no database it answers 500 rather than 404, which is still
-    // the answer of a route that exists. Every other path here either needs no database or is
-    // refused before it would reach one, and `configureDatabase` builds `postgres`' lazy client, so
-    // nothing opens a socket by construction.
+    // Only `POST /auth/guest` reaches the database, and without one it answers 500, not 404.
+    // `postgres` builds a lazy client, so nothing else opens a socket.
     DATABASE_URL: TEST_DATABASE_URL ?? 'postgresql://unused:unused@127.0.0.1:5432/unused',
     PUBLIC_WEB_ORIGIN: 'http://localhost:3000',
     SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
@@ -87,15 +39,9 @@ let app: FastifyInstance;
 let examples: ApiPathExamples;
 let csrf: { readonly token: string; readonly cookie: string };
 
-/** The web app's source tree, found from this file so the test does not depend on a working directory. */
 const WEB_SRC = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web', 'src');
 
-/**
- * The first id the API itself publishes for each parameterised path.
- *
- * Read back from the live responses rather than hard-coded, so a retired lesson or profile cannot make
- * this file fail for a reason that has nothing to do with paths.
- */
+/** Read from live responses, so a retired lesson or profile cannot fail this file. */
 async function readExamples(instance: FastifyInstance): Promise<ApiPathExamples> {
   async function firstId(url: string, key: 'lessons' | 'scenarios' | 'profiles'): Promise<string> {
     const response = await instance.inject({ method: 'GET', url });
@@ -119,14 +65,10 @@ async function readExamples(instance: FastifyInstance): Promise<ApiPathExamples>
     scenarioId: await firstId(API_PATHS.scenarios(), 'scenarios'),
     profileId: await firstId(API_PATHS.legendProfiles(), 'profiles'),
     quizId: quiz.id,
-    // No hand list to read from without a session, and none is needed: `/hands/:handId` refuses an
-    // anonymous caller long before it looks the id up. It only has to satisfy the params schema.
+    // `/hands/:handId` refuses an anonymous caller before the lookup, so it only has to satisfy the schema.
     handId: 'hand-0042',
-    // Exactly what `apps/web/src/app/review/page.tsx` sends. `prl:handListQuery` is a closed schema,
-    // so a field the client adds and the server does not accept is a 400 — which this catches.
-    // `sort` is in here so the closed query schema is proven to ACCEPT it, not merely to exist. The
-    // hand-history screen sent this parameter into a schema that had no such field, got
-    // `invalid_request`, and responded by dropping the parameter and keeping the control.
+    // Exactly what `apps/web/src/app/review/page.tsx` sends. `prl:handListQuery` is closed, so this
+    // proves it accepts `sort`.
     handsQuery: 'limit=6&sort=net-high',
   };
 }
@@ -134,11 +76,9 @@ async function readExamples(instance: FastifyInstance): Promise<ApiPathExamples>
 before(async () => {
   configureDatabase(testConfig());
   app = await buildApp({ config: testConfig() });
-  // A test-only route, mounted like the client's own paths, purely to mint a CSRF pair. Registered
-  // before the route modules so it cannot shadow one of theirs.
+  // Registered before the route modules so it cannot shadow one of theirs.
   app.get(`${API_PREFIX}/test-csrf`, (_request, reply) => ({ token: reply.generateCsrf() }));
-  // The real production wiring, so the set of registered routes is exactly the set a deployed server
-  // has — not a subset assembled by this test.
+  // The production wiring, so the registered set matches a deployed server.
   await registerApiRoutes(app);
   await app.ready();
 
@@ -156,11 +96,9 @@ before(async () => {
 after(async () => {
   await app?.close();
   await closeSharedPool();
-  // Zero grace: nothing here ever opened a connection, so there is nothing in flight to drain.
   await closeDatabase(0);
 });
 
-/** One request, shaped the way the browser shapes it. */
 async function probe(method: 'GET' | 'POST', url: string): Promise<{ status: number; body: string }> {
   const headers: Record<string, string> = { origin: 'http://localhost:3000' };
   if (method === 'POST') {
@@ -179,8 +117,6 @@ async function probe(method: 'GET' | 'POST', url: string): Promise<{ status: num
 
 describe('every path the web client can emit is a registered route', () => {
   it('agrees with the API about the version prefix', () => {
-    // `apps/api/src/app.ts` owns the mount; `@prl/contracts` publishes it to the client. If these two
-    // ever disagree, every client request 404s — which is precisely the defect this file exists for.
     assert.equal(API_PREFIX, SERVER_API_PREFIX);
   });
 
@@ -188,17 +124,7 @@ describe('every path the web client can emit is a registered route', () => {
     for (const method of spec.methods) {
       if (method === 'UPGRADE') {
         it(`UPGRADE ${name} is a registered route at exactly that path`, () => {
-          // The one path here that is not a request/response, asserted the way an upgrade can be
-          // asserted rather than by pretending it is one.
-          //
-          // `app.inject` cannot establish this: `light-my-request` has no socket, so it can neither
-          // send `Connection: Upgrade` meaningfully nor receive a `101`. Injecting anyway would
-          // assert a status code that says nothing about whether the handshake works, which is
-          // exactly the kind of assertion this file exists to not have.
-          //
-          // `hasRoute` is the honest instrument for it: the path is static, so the pattern it looks
-          // up IS the concrete path a browser opens, and a rename on the API side changes it. The
-          // negative control below proves the lookup can fail.
+          // `hasRoute` is sound here because the path is static, so the pattern is the concrete path.
           const url = spec.build(examples);
           assert.ok(
             url.startsWith(`${API_PREFIX}/`),
@@ -215,8 +141,7 @@ describe('every path the web client can emit is a registered route', () => {
             false,
             'hasRoute matched a path that does not exist, so the assertion above proved nothing',
           );
-          // And the handshake itself, over a real socket, is driven from this same constant in
-          // `apps/api/test/ws-socket.test.ts` — which is where a listening server already exists.
+          // The handshake is driven from this constant in `ws-socket.test.ts`.
         });
         continue;
       }
@@ -232,20 +157,11 @@ describe('every path the web client can emit is a registered route', () => {
             `renamed: ${body.slice(0, 200)}`,
         );
         if (method === 'GET') {
-          // For a GET the URL *is* the whole request, so a 400 means the path routed and then the
-          // endpoint rejected what it carried — a closed query schema turning away a field the client
-          // sends, a path parameter that fails its pattern. Just as fatal to the screen as a 404 and
-          // just as invisible without this assertion; it is what catches `?sort=` being appended to a
-          // `GET /hands` whose query schema has no such property.
+          // A GET 400 means the path routed and its query or params were rejected, as fatal as a 404.
           assert.notEqual(status, 400, `${url} routed but was rejected as malformed: ${body.slice(0, 300)}`);
         } else {
-          // A POST carries a body this file does not own — it is built at the call site from the
-          // contract's request type — so an empty payload legitimately answers 400 and asserting
-          // otherwise would be asserting something about the caller's payload rather than the path.
-          // What must not happen is 403: the CSRF hook runs BEFORE the not-found handler, so an
-          // untokened POST to a route that does not exist answers 403 and would slip past the check
-          // above. Seeing anything other than 403 here is what proves the token worked and that the
-          // 404 assertion was a real one.
+          // A POST body belongs to the call site, so 400 is fine here. A 403 would mean the CSRF hook
+          // answered before the not-found handler and the 404 check proved nothing.
           assert.notEqual(
             status,
             403,
@@ -257,8 +173,6 @@ describe('every path the web client can emit is a registered route', () => {
   }
 
   it('would notice a wrong path: the pre-fix client paths all 404', async () => {
-    // The negative control. Without it a change that made every assertion above vacuous — a probe
-    // table that silently built nothing, a 404 that became a 403 — would still pass.
     const wrongGets = [
       '/api/session',
       '/api/content/lessons',
@@ -266,26 +180,18 @@ describe('every path the web client can emit is a registered route', () => {
       '/api/scenarios',
       '/api/legends/profiles',
       '/api/hands',
-      // The live-table paths, unprefixed. These are the shape the client would have emitted if the
-      // four constants it used to keep locally had been written the way its first three were.
       '/api/rooms',
       '/rooms',
       '/api/v1/room',
-      // The shape errors, with the prefix corrected: these are what the client used to ask for.
+      // The shape errors, prefix corrected.
       `${API_PREFIX}/scenarios`,
       `${API_PREFIX}/legends/${examples.profileId}/learn`,
-      // `${API_PREFIX}/legends/hands/:handId/comparison` was in this list and has been removed,
-      // because it is no longer a wrong path: the Legends hand review used to render a bundled
-      // sample for every id, and the route the client had been written against genuinely did not
-      // exist. It does now, so it belongs in `API_PATH_PROBES` above, where it is asserted to
-      // route. Leaving it here would assert that a shipped endpoint is missing.
     ];
     for (const url of wrongGets) {
       const { status } = await probe('GET', url);
       assert.equal(status, 404, `${url} answered ${status}, so this test cannot detect a wrong path`);
     }
 
-    // And the same for a POST, which is the case that needs the token to be a real check at all.
     for (const url of [
       '/api/legends/compare',
       `${API_PREFIX}/legends/compare/nope`,
@@ -299,7 +205,6 @@ describe('every path the web client can emit is a registered route', () => {
   });
 });
 
-/** Every `.ts`/`.tsx` file under a directory, recursively. */
 function sourceFiles(dir: string): readonly string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir)) {
@@ -315,14 +220,8 @@ function sourceFiles(dir: string): readonly string[] {
 
 describe('the web client builds no request path outside the shared table', () => {
   it('has no literal /api path anywhere in apps/web/src', () => {
-    // The hole the probe table alone cannot close. Seven of the wrong paths lived in template literals
-    // at their call sites, where no enumeration of constants could see them, so this asserts the
-    // absence of that shape rather than the correctness of a list.
-    //
-    // Matched only where a quote or backtick opens immediately before `/api`, and only on lines that
-    // are not comments — these files document the wire in prose, and a sentence explaining why the
-    // paths moved is not a path being built. A path built from `API_PATHS` never has the literal in
-    // the source at all.
+    // Wrong paths lived in template literals at call sites, where no enumeration sees them. Matched
+    // only where a quote or backtick opens just before `/api`, and only on non-comment lines.
     const offenders: string[] = [];
     for (const file of sourceFiles(WEB_SRC)) {
       const lines = readFileSync(file, 'utf8').split('\n');

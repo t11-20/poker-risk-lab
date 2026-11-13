@@ -1,21 +1,8 @@
 /**
- * The OIDC relying party, tested with no network and no database.
- *
- * Every case here runs against a fake identity provider: an in-process `fetch` that serves a
- * discovery document, a JWKS, and a token endpoint, plus real RSA and EC keys from
- * `generateKeyPairSync` so the signatures being verified are genuine signatures.
- *
- * ## Why the failure matrix is one test per check
- *
- * A single "rejects a bad token" test passes as soon as *any* check fires, which means it keeps
- * passing after somebody deletes the `aud` comparison. So each check gets its own case, each
- * builds a token that is valid in every respect except the one under test, and each asserts the
- * specific `ErrorCode`. If a check is removed, exactly one case fails and it names the check.
- *
- * The two most important cases are `alg: 'none'` and `alg: 'HS256'`. Both are complete
- * authentication bypasses in an implementation that gets them wrong, and the HMAC one is built
- * the way the real attack is built: the token is signed with the provider's *public* key used as
- * an HMAC secret, which is a value the attacker also has.
+ * The OIDC relying party against an in-process fake provider with real RSA and EC keys. One case
+ * per check, each token valid except for the one property under test, so removing a check fails
+ * exactly the case that names it. The HS256 case signs with the provider's public JWK as the HMAC
+ * secret, as the real attack does.
  */
 
 import assert from 'node:assert/strict';
@@ -46,10 +33,6 @@ import type { OidcConfig } from '../src/config.ts';
 import { isAppError } from '../src/errors.ts';
 import { hashOidcSecret } from '../src/repositories/hashing.ts';
 
-// ---------------------------------------------------------------------------
-// The fake identity provider
-// ---------------------------------------------------------------------------
-
 const ISSUER = 'https://idp.example.test';
 const CLIENT_ID = 'poker-risk-lab-test';
 const REDIRECT_URI = 'https://api.example.test/api/v1/auth/oidc/callback';
@@ -72,7 +55,6 @@ interface TestKey {
   readonly jwk: Jwk;
 }
 
-/** A real key pair, exported as the JWK a provider would publish. */
 function makeKey(kid: string, alg: 'RS256' | 'ES256'): TestKey {
   const pair =
     alg === 'RS256'
@@ -92,11 +74,9 @@ interface TokenParts {
   readonly header?: Readonly<Record<string, unknown>>;
   readonly claims?: Readonly<Record<string, unknown>>;
   readonly key?: TestKey;
-  /** Corrupts the signature without touching anything else. */
   readonly breakSignature?: boolean;
 }
 
-/** Claims that pass every check, so each test only has to change the one it is about. */
 function goodClaims(nonce: string, nowSeconds: number): Record<string, unknown> {
   return {
     iss: ISSUER,
@@ -111,8 +91,7 @@ function goodClaims(nonce: string, nowSeconds: number): Record<string, unknown> 
 
 function signJwt(parts: TokenParts, nonce: string, nowSeconds: number): string {
   const key = parts.key ?? RSA_KEY;
-  // Typed as a loose record on purpose: half the tests here need to put a value in `alg` that a
-  // real relying party would refuse, and a narrower type would make those tests unwritable.
+  // A loose record because many tests put an `alg` here that a real relying party would refuse.
   const header: Record<string, unknown> = { alg: key.alg, typ: 'JWT', kid: key.kid, ...parts.header };
   const claims = { ...goodClaims(nonce, nowSeconds), ...parts.claims };
   const signingInput = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(claims))}`;
@@ -120,8 +99,6 @@ function signJwt(parts: TokenParts, nonce: string, nowSeconds: number): string {
 
   if (algorithm === 'none') return `${signingInput}.`;
   if (algorithm.startsWith('HS')) {
-    // The algorithm-confusion attack, built the way an attacker builds it: HMAC keyed with the
-    // provider's *public* key, which anybody can fetch from the JWKS.
     const secret = JSON.stringify(key.jwk);
     return `${signingInput}.${createHmac('sha256', secret).update(signingInput).digest('base64url')}`;
   }
@@ -139,14 +116,7 @@ function signJwt(parts: TokenParts, nonce: string, nowSeconds: number): string {
   return `${signingInput}.${encoded}`;
 }
 
-/**
- * The signature with its last byte changed, always.
- *
- * It used to SET that byte to 0x00, and the keys above are generated on every run, so the last byte
- * of a real signature is uniform: on one run in 256 it was already 0x00, the "broken" token was the
- * valid one, and "a bad signature" failed with "nothing was thrown" (CI run 42929633672). Flipping
- * every bit cannot leave a byte as it was.
- */
+/** Flips every bit of the last byte. Setting it to 0x00 left one run in 256 valid (CI run 42929633672). */
 function corruptLastByte(signature: Buffer): Buffer {
   const corrupted = Buffer.from(signature);
   const last = corrupted.length - 1;
@@ -157,7 +127,6 @@ function corruptLastByte(signature: Buffer): Buffer {
 interface ProviderOptions {
   readonly keys?: readonly TestKey[];
   readonly discoveryOverrides?: Readonly<Record<string, unknown>>;
-  /** Replaces the whole discovery document, for the malformed-document cases. */
   readonly discoveryBody?: unknown;
   readonly tokenStatus?: number;
   readonly tokenBody?: unknown;
@@ -197,10 +166,8 @@ function makeProvider(options: ProviderOptions = {}): Provider {
   const json = (value: unknown, status = 200): Response =>
     new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 
-  // Written synchronously and wrapped once, because an `async` function with no `await` in it is
-  // a lint error in this repo. The parameter types are derived from `fetch` itself rather than
-  // written out: `RequestInfo` is a DOM global that `@types/node` does not declare, and this repo
-  // compiles with `lib: ["ES2024"]`.
+  // Synchronous and wrapped once (`async` with no `await` is a lint error). Types come from `fetch`
+  // because `RequestInfo` is a DOM global absent under `lib: ["ES2024"]`.
   const respond = (input: FetchArgs[0], init: FetchArgs[1]): Response => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     calls.push(url);
@@ -233,11 +200,6 @@ function makeProvider(options: ProviderOptions = {}): Provider {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Assertion helpers
-// ---------------------------------------------------------------------------
-
-/** Runs `work`, asserts it threw an `AppError` with `code`, and returns the log detail. */
 async function rejectsWith(code: ErrorCode, work: () => Promise<unknown>): Promise<string> {
   try {
     await work();
@@ -260,7 +222,6 @@ function rejectsSyncWith(code: ErrorCode, work: () => unknown): string {
   assert.fail(`expected ${code} but nothing was thrown`);
 }
 
-/** A relying party over a fake provider, with time under the test's control. */
 function relyingParty(provider: Provider, nowMs: () => number = Date.now) {
   return createOidcRelyingParty({ config: OIDC_CONFIG, fetchImpl: provider.fetchImpl, now: nowMs });
 }
@@ -269,22 +230,15 @@ const NONCE = 'a-nonce-that-is-32-bytes-of-random-in-real-life';
 const NOW_MS = Date.UTC(2026, 7, 17, 12, 0, 0);
 const NOW_SECONDS = Math.floor(NOW_MS / 1_000);
 
-/** Mints a token and hands the provider the value its token endpoint will return. */
 function armProvider(provider: Provider, parts: TokenParts = {}, nonce = NONCE): string {
   const token = signJwt(parts, nonce, NOW_SECONDS);
   provider.setIdToken(token);
   return token;
 }
 
-// ---------------------------------------------------------------------------
-// PKCE
-// ---------------------------------------------------------------------------
-
 describe('PKCE', () => {
   it('matches the S256 test vector from RFC 7636 appendix B', () => {
-    // Locking the challenge derivation to the RFC's own vector is the only way to be sure it is
-    // base64url(sha256(ascii(verifier))) and not, say, hex or base64-with-padding — both of which
-    // produce a plausible-looking string that every provider rejects.
+    // Hex or padded base64 would look plausible and every provider would reject it.
     assert.equal(
       pkceChallengeFor('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'),
       'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
@@ -295,7 +249,6 @@ describe('PKCE', () => {
     const secrets = createAttemptSecrets();
     assert.ok(secrets.codeVerifier.length >= 43 && secrets.codeVerifier.length <= 128);
     assert.match(secrets.codeVerifier, /^[A-Za-z0-9_-]+$/);
-    // A state that doubled as a nonce would make the CSRF check and the replay check one check.
     assert.equal(new Set([secrets.state, secrets.nonce, secrets.codeVerifier]).size, 3);
     assert.equal(secrets.codeChallenge, pkceChallengeFor(secrets.codeVerifier));
   });
@@ -332,10 +285,6 @@ describe('the attempt cookie', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Redirect targets
-// ---------------------------------------------------------------------------
-
 describe('redirectAfter', () => {
   it('accepts site-relative paths', () => {
     for (const path of ['/', '/play', '/lessons/pot-odds', '/play?table=room_abc', '/a_b-c.d']) {
@@ -344,7 +293,6 @@ describe('redirectAfter', () => {
   });
 
   it('rejects everything a browser could read as another origin', () => {
-    // The four in the brief, plus the near-misses that catch a lazy check.
     for (const path of [
       'https://evil.com',
       '//evil.com',
@@ -367,17 +315,12 @@ describe('redirectAfter', () => {
   it('builds the target from our own origin and the request path only', () => {
     const origins = ['http://localhost:3000', 'https://app.example.test'];
     assert.equal(safeRedirectTarget('/play', origins), 'http://localhost:3000/play');
-    // A path that fails validation is not worth failing sign-in over; it becomes the root.
     assert.equal(safeRedirectTarget('//evil.com', origins), 'http://localhost:3000/');
     assert.equal(safeRedirectTarget(null, origins), 'http://localhost:3000/');
-    // The origin is never taken from the path, so there is no value of `path` that leaves ours.
+    // The origin never comes from the path.
     assert.equal(new URL(safeRedirectTarget('/play', origins)).origin, 'http://localhost:3000');
   });
 });
-
-// ---------------------------------------------------------------------------
-// Discovery
-// ---------------------------------------------------------------------------
 
 describe('discovery', () => {
   it('appends the well-known path to the issuer rather than replacing it', () => {
@@ -385,7 +328,6 @@ describe('discovery', () => {
       discoveryUrlFor('https://idp.example.test'),
       'https://idp.example.test/.well-known/openid-configuration',
     );
-    // A tenant path in the issuer is legitimate and must survive.
     assert.equal(
       discoveryUrlFor('https://idp.example.test/tenant/7/'),
       'https://idp.example.test/tenant/7/.well-known/openid-configuration',
@@ -479,14 +421,9 @@ describe('discovery', () => {
     const validated = validateDiscoveryDocument(document, ISSUER);
     assert.equal(validated.tokenEndpoint, `${ISSUER}/token`);
     assert.equal(validated.codeChallengeMethodsSupported, null);
-    // A trailing slash is a different string, and there is no "close enough" for an issuer.
     rejectsSyncWith('oidc_exchange_failed', () => validateDiscoveryDocument(document, `${ISSUER}/`));
   });
 });
-
-// ---------------------------------------------------------------------------
-// The authorization request
-// ---------------------------------------------------------------------------
 
 describe('the authorization URL', () => {
   it('carries every parameter the flow depends on, and no request-supplied redirect_uri', async () => {
@@ -503,25 +440,18 @@ describe('the authorization URL', () => {
     assert.equal(url.origin + url.pathname, `${ISSUER}/authorize`);
     assert.equal(url.searchParams.get('response_type'), 'code');
     assert.equal(url.searchParams.get('client_id'), CLIENT_ID);
-    // From configuration, never from a request. A request-chosen redirect_uri is how an
-    // authorization code gets delivered to somebody else's server.
+    // A request-chosen redirect_uri delivers the authorization code to somebody else's server.
     assert.equal(url.searchParams.get('redirect_uri'), REDIRECT_URI);
     assert.equal(url.searchParams.get('state'), secrets.state);
     assert.equal(url.searchParams.get('nonce'), secrets.nonce);
     assert.equal(url.searchParams.get('code_challenge'), secrets.codeChallenge);
     assert.equal(url.searchParams.get('code_challenge_method'), 'S256');
-    // Never `plain`: the verifier would travel in this very URL.
     assert.notEqual(url.searchParams.get('code_challenge_method'), 'plain');
-    // The verifier itself must not be here.
     assert.equal(url.toString().includes(secrets.codeVerifier), false);
-    // `email` is not requested: it is not an identity key here and there is nowhere to put it.
+    // `email` is not an identity key here and there is nowhere to put it.
     assert.equal(url.searchParams.get('scope'), 'openid profile');
   });
 });
-
-// ---------------------------------------------------------------------------
-// The token exchange
-// ---------------------------------------------------------------------------
 
 describe('the token exchange', () => {
   it('sends the verifier and authenticates with client_secret_basic by default', async () => {
@@ -536,7 +466,7 @@ describe('the token exchange', () => {
     const request = provider.tokenRequests[0];
     assert.ok(request !== undefined, 'the token endpoint should have been called');
     assert.ok(request.headers.get('authorization')?.startsWith('Basic '));
-    // The secret is in the header, not the body — one fewer place for a proxy log to catch it.
+    // Header, not body, so a proxy log is less likely to catch it.
     assert.equal(request.body.includes('client_secret'), false);
 
     const body = new URLSearchParams(request.body);
@@ -574,7 +504,6 @@ describe('the token exchange', () => {
       relyingParty(provider, () => NOW_MS).exchangeCode({ code: 'c', codeVerifier: 'v'.repeat(43) }),
     );
     assert.match(detail, /status 400/);
-    // The provider's own error string must not travel with the failure.
     assert.equal(detail.includes('invalid_grant'), false);
   });
 
@@ -593,10 +522,6 @@ describe('the token exchange', () => {
     );
   });
 });
-
-// ---------------------------------------------------------------------------
-// ID token verification: the happy path
-// ---------------------------------------------------------------------------
 
 describe('ID token verification', () => {
   it('accepts a well-formed RS256 token and yields (iss, sub)', async () => {
@@ -625,15 +550,10 @@ describe('ID token verification', () => {
     const verified = await relyingParty(provider, () => NOW_MS).verifyIdToken(token, {
       nonceHash: hashOidcSecret(NONCE),
     });
-    // An email address is mutable, often unverified, and reused between providers. It is not
-    // read, not returned, and not stored.
+    // Email is mutable, often unverified and reused between providers, so it is never read.
     assert.deepEqual(Object.keys(verified).sort(), ['issuer', 'nameHint', 'subject']);
   });
 });
-
-// ---------------------------------------------------------------------------
-// ID token verification: one test per check
-// ---------------------------------------------------------------------------
 
 describe('ID token verification rejects', () => {
   function verify(parts: TokenParts, options: ProviderOptions = {}, nonce = NONCE): Promise<unknown> {
@@ -648,7 +568,6 @@ describe('ID token verification rejects', () => {
   });
 
   it('a bad signature is bad whatever its last byte was', () => {
-    // The one in 256 that the old corruption missed: a signature that already ends in 0x00.
     for (const last of [0x00, 0x01, 0x7f, 0xff]) {
       const signature = Buffer.from([0x12, 0x34, last]);
       assert.notDeepEqual(corruptLastByte(signature), signature, `last byte 0x${last.toString(16)}`);
@@ -656,7 +575,6 @@ describe('ID token verification rejects', () => {
   });
 
   it('a token signed by a key the provider does not publish', async () => {
-    // Same `kid`, different key: the shape is right and only the mathematics disagrees.
     const impostor = makeKey(RSA_KEY.kid, 'RS256');
     await rejectsWith('oidc_exchange_failed', () => verify({ key: impostor }, { keys: [RSA_KEY] }));
   });
@@ -669,7 +587,7 @@ describe('ID token verification rejects', () => {
   });
 
   it('an iss that only looks like ours', async () => {
-    // Each of these passes a `startsWith`, an `endsWith` or an `includes` comparison.
+    // Each passes a `startsWith`, `endsWith` or `includes` comparison.
     for (const iss of [
       `${ISSUER}/`,
       `${ISSUER}.evil.test`,
@@ -697,8 +615,7 @@ describe('ID token verification rejects', () => {
     await rejectsWith('oidc_exchange_failed', () =>
       verify({ claims: { aud: [CLIENT_ID, 'other'], azp: 'other' } }),
     );
-    // The same token with a correct `azp` is accepted, which is what makes the two above a real
-    // check rather than a blanket refusal of multi-audience tokens.
+    // Proves the two above are a check, not a blanket refusal of multi-audience tokens.
     assert.ok(await verify({ claims: { aud: [CLIENT_ID, 'other'], azp: CLIENT_ID } }));
   });
 
@@ -707,7 +624,6 @@ describe('ID token verification rejects', () => {
       verify({ claims: { exp: NOW_SECONDS - CLOCK_SKEW_SECONDS - 1 } }),
     );
     assert.match(detail, /expired/);
-    // Just inside the skew is accepted, which proves the tolerance is applied and bounded.
     assert.ok(await verify({ claims: { exp: NOW_SECONDS - CLOCK_SKEW_SECONDS + 5 } }));
   });
 
@@ -720,7 +636,6 @@ describe('ID token verification rejects', () => {
       verify({ claims: { nbf: NOW_SECONDS + CLOCK_SKEW_SECONDS + 60 } }),
     );
     assert.match(detail, /not valid yet/);
-    // An nbf inside the skew is fine.
     assert.ok(await verify({ claims: { nbf: NOW_SECONDS + 10 } }));
   });
 
@@ -740,9 +655,7 @@ describe('ID token verification rejects', () => {
   });
 
   it('the wrong nonce, and a missing one', async () => {
-    // `oidc_state_mismatch`, not `oidc_exchange_failed`: a nonce that does not match means this
-    // token belongs to a different sign-in attempt, which is the same class of event as a bad
-    // `state` and gets the same answer.
+    // A mismatched nonce means a different sign-in attempt, the same class as a bad `state`.
     const detail = await rejectsWith('oidc_state_mismatch', () => verify({}, {}, 'a-different-nonce'));
     assert.match(detail, /nonce did not match/);
     await rejectsWith('oidc_state_mismatch', () => verify({ claims: { nonce: undefined } }));
@@ -750,7 +663,6 @@ describe('ID token verification rejects', () => {
 
   it("alg: 'none' — an unsigned token, which is whatever the caller typed", async () => {
     const detail = await rejectsWith('oidc_exchange_failed', () => verify({ header: { alg: 'none' } }));
-    // Either refusal is correct; what matters is that no unsigned token is ever believed.
     assert.match(detail, /no signature|alg was none/);
   });
 
@@ -767,9 +679,6 @@ describe('ID token verification rejects', () => {
   });
 
   it('an HMAC alg — the algorithm-confusion attack, signed with the public key', async () => {
-    // The attack in full: the token says HS256, and the "secret" is the provider's public JWK,
-    // which the attacker fetched from the same JWKS this server reads. A verifier that lets the
-    // token choose the algorithm family authenticates it.
     for (const alg of ['HS256', 'HS384', 'HS512', 'hs256']) {
       const detail = await rejectsWith('oidc_exchange_failed', () => verify({ header: { alg } }));
       assert.match(detail, /symmetric/);
@@ -783,7 +692,6 @@ describe('ID token verification rejects', () => {
         { discoveryOverrides: { id_token_signing_alg_values_supported: ['RS512', 'RS256'] } },
       ),
     );
-    // On the allowlist, but the provider says it does not sign with it.
     const detail = await rejectsWith('oidc_exchange_failed', () =>
       verify(
         { key: EC_KEY },
@@ -805,7 +713,6 @@ describe('ID token verification rejects', () => {
       party.verifyIdToken(token, { nonceHash: hashOidcSecret(NONCE) }),
     );
     assert.match(detail, /no published key matches/);
-    // One initial fetch plus one rotation refetch. Not three, and not zero.
     assert.equal(provider.calls.filter((url) => url.endsWith('/jwks')).length, 2);
   });
 
@@ -833,10 +740,6 @@ describe('ID token verification rejects', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Key rotation and the refetch floor
-// ---------------------------------------------------------------------------
-
 describe('JWKS caching', () => {
   it('serves the cached key set without refetching inside the TTL', async () => {
     const provider = makeProvider();
@@ -855,13 +758,11 @@ describe('JWKS caching', () => {
     const expect = { nonceHash: hashOidcSecret(NONCE) };
     const jwksFetches = (): number => provider.calls.filter((url) => url.endsWith('/jwks')).length;
 
-    // Populates the cache with the current key.
     await party.verifyIdToken(signJwt({}, NONCE, NOW_SECONDS), expect);
     assert.equal(jwksFetches(), 1);
 
-    // A genuine rotation. The first unknown `kid` after a successful fetch is honoured
-    // immediately: making the operator wait out a ten-minute TTL would mean every sign-in fails
-    // for ten minutes after a routine key roll.
+    // The first unknown `kid` after a successful fetch is honoured at once, or a key roll fails
+    // every sign-in for the TTL.
     provider.setKeys([ROTATED_KEY]);
     clock = NOW_MS + 1_000;
     const afterRotation = await party.verifyIdToken(
@@ -871,8 +772,7 @@ describe('JWKS caching', () => {
     assert.equal(afterRotation.subject, 'subject-0001');
     assert.equal(jwksFetches(), 2);
 
-    // A second unknown `kid` inside the floor is refused without an outbound request. This is the
-    // half that stops a forged `kid` being used as a request amplifier.
+    // A second unknown `kid` inside the floor makes no request, so a forged `kid` cannot amplify.
     const third = makeKey('rsa-3', 'RS256');
     provider.setKeys([third]);
     clock = NOW_MS + 2_000;
@@ -881,7 +781,6 @@ describe('JWKS caching', () => {
     );
     assert.equal(jwksFetches(), 2);
 
-    // Past the floor, the next rotation is picked up again.
     clock = NOW_MS + 33_000;
     const afterSecondRotation = await party.verifyIdToken(
       signJwt({ key: third }, NONCE, Math.floor(clock / 1_000)),
@@ -903,7 +802,6 @@ describe('JWKS caching', () => {
         party.verifyIdToken(signJwt({ key: ROTATED_KEY }, NONCE, Math.floor(clock / 1_000)), expect),
       );
     }
-    // Ten forged tokens, at most two fetches: the first population plus one rotation attempt.
     assert.ok(
       provider.calls.filter((url) => url.endsWith('/jwks')).length <= 2,
       `expected at most 2 JWKS fetches, saw ${provider.calls.filter((url) => url.endsWith('/jwks')).length}`,
@@ -912,8 +810,7 @@ describe('JWKS caching', () => {
 
   it('refuses a key set that is empty, oversized, or not a key set at all', async () => {
     const notASet = makeProvider();
-    // The JWKS route in the fake provider always answers `{ keys: [...] }`, so the shapes are
-    // asserted against `parseJwkSet` through an empty key list here.
+    // The fake JWKS always answers `{ keys: [...] }`, so the empty list is what reaches `parseJwkSet`.
     notASet.setKeys([]);
     await rejectsWith('oidc_exchange_failed', () =>
       relyingParty(notASet, () => NOW_MS).verifyIdToken(signJwt({}, NONCE, NOW_SECONDS), {
@@ -922,10 +819,6 @@ describe('JWKS caching', () => {
     );
   });
 });
-
-// ---------------------------------------------------------------------------
-// Key selection
-// ---------------------------------------------------------------------------
 
 describe('key selection', () => {
   const rsa: Jwk = { kty: 'RSA', kid: 'a', n: 'n', e: 'AQAB' };
@@ -949,17 +842,11 @@ describe('key selection', () => {
   it('selects by kid, and accepts a missing kid only when one key could have signed it', () => {
     assert.equal(selectJwk([rsa, ec], { alg: 'RS256', kid: 'a' }), rsa);
     assert.equal(selectJwk([rsa, ec], { alg: 'RS256', kid: 'nope' }), null);
-    // One candidate for this alg, so a token without a kid is unambiguous.
     assert.equal(selectJwk([rsa, ec], { alg: 'RS256' }), rsa);
-    // Two candidates and no kid: refused rather than "try them all", which would make every
-    // retired key still published in the set a live signing key.
+    // Trying every key would make each retired key still in the set a live signing key.
     assert.equal(selectJwk([rsa, { ...rsa, kid: 'a2' }], { alg: 'RS256' }), null);
   });
 });
-
-// ---------------------------------------------------------------------------
-// The primitives, exercised directly
-// ---------------------------------------------------------------------------
 
 describe('the verification primitives', () => {
   it('parses a compact JWS into exactly the bytes that were signed', () => {
@@ -981,10 +868,7 @@ describe('the verification primitives', () => {
   });
 
   it('compares the nonce as a digest of the same function the database stores', () => {
-    // The whole nonce check rests on this: `verifyIdTokenClaims` hashes the claim, and the value
-    // it is compared against came out of `prl.oidc_login_attempts.nonce_hash`, which
-    // `hashOidcSecret` wrote. If those two ever stop being the same function, every sign-in
-    // fails — so it is asserted rather than assumed.
+    // The stored `nonce_hash` was written by `hashOidcSecret`, so both sides must be the same function.
     const claims = goodClaims(NONCE, NOW_SECONDS);
     const verified = verifyIdTokenClaims(claims, {
       issuer: ISSUER,
@@ -1005,9 +889,7 @@ describe('the verification primitives', () => {
   });
 
   it('prefers name, then preferred_username, then given_name, then nickname', () => {
-    // Rebuilt without `name` rather than deleted from: `delete` is banned by the linter, and
-    // assigning `undefined` would not be the same thing — `readString` treats an explicit
-    // `undefined` and an absent member alike, but a future reader should not have to know that.
+    // Rebuilt rather than `delete`d, which the linter bans.
     const base = Object.fromEntries(
       Object.entries(goodClaims(NONCE, NOW_SECONDS)).filter(([key]) => key !== 'name'),
     );

@@ -1,23 +1,8 @@
 /**
- * The calculation endpoints, the planner, and the worker pool.
- *
- * Three layers, tested where each one actually lives:
- *
- * 1. **`calc/parse.ts`** is a pure function from a request body to a costed plan, so it is
- *    called directly. That is the only way to assert that an over-budget request is refused
- *    *before* anything is queued — through HTTP you can only observe that nothing ran.
- * 2. **`workers/pool.ts`** is exercised with real threads. Sharding, the pooled confidence
- *    interval, the deadline and the queue bound are all properties of the pool rather than of a
- *    route, and a pool test can assert the thing that matters most about a timeout: that the
- *    thread is gone afterwards.
- * 3. **The routes** go through `app.inject()`, which runs the whole lifecycle — rate limit, CSRF,
- *    schema validation, handler, error handler — with no socket and no port.
- *
- * No database anywhere: `buildApp` takes a `DatabaseHandle` and these tests pass a stub. Nothing
- * here needs one, because nothing in `POST /math/equity` or `POST /math/coach` touches a table.
- *
- * Every app is closed, and closing an app closes the shared pool, so no test leaves a worker
- * thread behind for the next one to inherit.
+ * The calculation endpoints, the planner and the worker pool. `calc/parse.ts` is called directly,
+ * the only way to see an over-budget request refused before anything is queued. The pool runs on
+ * real threads so a timeout can be shown to kill its thread. Routes go through `app.inject()` with
+ * a stub database. Closing an app closes the shared pool, so no worker leaks into the next test.
  */
 
 import assert from 'node:assert/strict';
@@ -48,8 +33,7 @@ function testConfig(overrides: EnvRecord = {}): AppConfig {
     DATABASE_URL: 'postgresql://poker:poker@127.0.0.1:5432/poker_risk_lab',
     PUBLIC_WEB_ORIGIN: ALLOWED_ORIGIN,
     SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
-    // Generous, so the limiter is never the reason an assertion fails. The one test that is
-    // about the limit sets its own.
+    // The one test about the limit sets its own.
     RATE_LIMIT_MAX: '5000',
     RATE_LIMIT_EXPENSIVE_MAX: '5000',
     ...overrides,
@@ -60,7 +44,6 @@ function stubDatabase(): DatabaseHandle {
   return { ping: async () => ({ ok: true }), close: async () => undefined };
 }
 
-/** An app with the calculation routes and one helper route that mints a CSRF token. */
 async function calcApp(overrides: EnvRecord = {}): Promise<FastifyInstance> {
   const app = await buildApp({ config: testConfig(overrides), database: stubDatabase() });
   app.get('/api/v1/test-csrf', async (_request, reply) => ({ token: reply.generateCsrf() }));
@@ -73,13 +56,6 @@ interface Csrf {
   readonly cookie: string;
 }
 
-/**
- * A CSRF token and its cookie.
- *
- * Both endpoints are POSTs, so the security layer requires the double-submit pair. Minting it
- * here rather than reaching around the check keeps these tests honest about what a real client
- * has to do.
- */
 async function csrfPair(app: FastifyInstance): Promise<Csrf> {
   const response = await app.inject({ method: 'GET', url: '/api/v1/test-csrf' });
   assert.equal(response.statusCode, 200);
@@ -113,7 +89,6 @@ async function post(
   return { status: response.statusCode, body: { ...body } };
 }
 
-/** The `equity` member of an `EquityResponse`, checked rather than cast. */
 function equityOf(body: Record<string, unknown>): Record<string, unknown> {
   const summary = body['equity'];
   assert.ok(typeof summary === 'object' && summary !== null, `no equity summary in ${JSON.stringify(body)}`);
@@ -137,7 +112,6 @@ function numberAt(record: Record<string, unknown>, key: string): number {
   return Number(value);
 }
 
-/** A nested object member, asserted rather than cast. */
 function objectAt(record: Record<string, unknown>, key: string): Record<string, unknown> {
   const value = record[key];
   assert.ok(
@@ -147,7 +121,6 @@ function objectAt(record: Record<string, unknown>, key: string): Record<string, 
   return { ...value };
 }
 
-/** The `assumptions` list, asserted to exist and to be non-empty. */
 function assumptionsOf(record: Record<string, unknown>): readonly string[] {
   const assumptions = record['assumptions'];
   assert.ok(Array.isArray(assumptions), 'a response must carry its assumptions');
@@ -155,7 +128,6 @@ function assumptionsOf(record: Record<string, unknown>): readonly string[] {
   return assumptions.map((note: unknown) => String(note));
 }
 
-/** A spec the worker can run without any HTTP involved. */
 function flopSpec(notation: string): WireSpec {
   return {
     heroLabel: 'you',
@@ -165,15 +137,9 @@ function flopSpec(notation: string): WireSpec {
   };
 }
 
-// ---------------------------------------------------------------------------
-// The planner
-// ---------------------------------------------------------------------------
-
 describe('calc/parse.ts — costing a request before running it', () => {
   it('counts the boards still to come', () => {
-    // Two players preflop: 52 - 4 = 48 cards, five to come.
     assert.equal(boardsPerMatchup(0, 2), 1_712_304);
-    // A flop with two players: 45 unseen, two to come.
     assert.equal(boardsPerMatchup(3, 2), 990);
     assert.equal(boardsPerMatchup(4, 2), 46 - 2);
     assert.equal(boardsPerMatchup(5, 2), 1);
@@ -183,7 +149,6 @@ describe('calc/parse.ts — costing a request before running it', () => {
     const known = parseEquityRequest({ heroCards: 'AhAs', opponents: ['KdKc'] });
     assert.equal(known.request.method, 'exact');
     assert.equal(known.request.shards, 1);
-    // 1,712,304 boards for two players is 3.42M evaluations, inside the four-million ceiling.
     assert.equal(known.plannedEvaluations, 1_712_304 * 2);
 
     const ranged = parseEquityRequest({ heroCards: 'AhAs', opponents: ['QQ+'] });
@@ -212,7 +177,7 @@ describe('calc/parse.ts — costing a request before running it', () => {
   });
 
   it('refuses an over-budget request outright rather than quietly shrinking it', () => {
-    // The schema's own maximum, against five opponents: 500,000 x 6 = 3,000,000 evaluations.
+    // 500,000 x 6 = 3,000,000 evaluations.
     const overBudget = (): unknown =>
       parseEquityRequest({
         heroCards: 'AhKh',
@@ -223,7 +188,6 @@ describe('calc/parse.ts — costing a request before running it', () => {
       assert.ok(isAppError(error), `expected an AppError, got ${String(error)}`);
       assert.equal(error.code, 'computation_rejected');
       assert.equal(error.statusCode, 422);
-      // No field detail: this is a statement about our limits, not about their payload.
       assert.equal(error.fields, undefined);
       return true;
     });
@@ -347,10 +311,6 @@ describe('calc/parse.ts — costing a request before running it', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The pool
-// ---------------------------------------------------------------------------
-
 describe('workers/pool.ts — sharding, deadlines and the queue', () => {
   it('splits samples exactly and gives every shard its own seed', () => {
     const spec = flopSpec('QQ+');
@@ -375,8 +335,7 @@ describe('workers/pool.ts — sharding, deadlines and the queue', () => {
     const pool = new WorkerPool({ size: 4, timeoutMs: 30_000 });
     try {
       const spec = flopSpec('QQ+, AKs');
-      // 20,000 samples over four shards is 5,000 per shard, and shard 0 uses the same seed as
-      // the single-shard run below — so `single` is literally one shard of `sharded`.
+      // Shard 0 uses the single-shard seed, so `single` is literally one shard of `sharded`.
       const sharded = await pool.runEquity({
         spec,
         method: 'monte-carlo',
@@ -411,11 +370,8 @@ describe('workers/pool.ts — sharding, deadlines and the queue', () => {
       const oneShard = single.confidence?.halfWidthPoints ?? 0;
       assert.ok(combined > 0 && oneShard > 0, 'a sampled result always carries an interval');
       assert.ok(combined < oneShard, 'four times the data must tighten the interval');
-      // The honest part. Sampling error falls with the square root of the sample size, so four
-      // shards buy a factor of two and not a factor of four — the combined interval is WIDER
-      // than the naive reading of "four times as much data" suggests. Recomputing from the
-      // pooled sample size is what preserves that; averaging the shards' own intervals would
-      // have reported `oneShard` for a run of 20,000.
+      // Four shards narrow the interval by two, not four. Averaging the shards' own intervals
+      // would have reported `oneShard` for a run of 20,000.
       assert.ok(
         combined > oneShard / 4,
         `combined ${combined} should be wider than a linear improvement (${oneShard / 4})`,
@@ -454,7 +410,6 @@ describe('workers/pool.ts — sharding, deadlines and the queue', () => {
       assert.equal(afterTimeout.workers, 0, 'the overrunning thread must be terminated, not left running');
       assert.equal(afterTimeout.busy, 0);
 
-      // The pool is still usable: the next submission creates a replacement thread.
       const result = await pool.runEquity(
         { spec: flopSpec('QQ+'), method: 'monte-carlo', samples: 2_000, shards: 1, seed: 3 },
         30_000,
@@ -473,8 +428,6 @@ describe('workers/pool.ts — sharding, deadlines and the queue', () => {
       const request = { spec, method: 'monte-carlo' as const, samples: 40_000, shards: 1, seed: 5 };
       const first = pool.runEquity(request);
       const second = pool.runEquity(request);
-      // The first is running on the only thread, the second is the only queue slot, so a third
-      // has nowhere to go.
       await assert.rejects(
         () => pool.runEquity(request),
         (error: unknown) => {
@@ -503,27 +456,9 @@ describe('workers/pool.ts — sharding, deadlines and the queue', () => {
   });
 
   /**
-   * A jointly-undealable set of ranges is refused on the thread, not sampled at for the budget.
-   *
-   * `calc/parse.ts :: assertDealable` states the rule — `k` opponents need `2k` distinct cards
-   * between them — and applies it to the ranges IT expanded. It expands no `top:NN` range,
-   * because that needs the three-second preflop strength table this whole file exists to keep
-   * off the event loop, so a `topPercent` opponent arrives there with an empty support set and
-   * is skipped. The check is then vacuous for a request whose opponents are all `top:NN`.
-   *
-   * The two spellings below are the SAME range: `topPercentRange(1).notation` is exactly
-   * `"AA, KK, QQ"`. Hero's `AhKh` and a board of `As Ks Qs` leave seven cards between them, and
-   * five opponents need ten. Measured on the reference machine before this guard existed:
-   *
-   *     opponents = ["AA, KK, QQ"] x5 -> refused by assertDealable in 0 ms, with a field message
-   *     opponents = ["top:1"]      x5 -> accepted, granted the 15,000 ms top:NN budget, and held
-   *                                      a WARM calculator thread for 9,431 ms before
-   *                                      `monteCarloEquity` gave up — then the same 422
-   *
-   * Nine seconds of the pool's scarcest resource for an answer of "no", on a bucket a session
-   * may hit twenty times a minute, against a pool that is one thread on a one- or two-vCPU host
-   * and that also serves hand review, the Legends comparison and the Scenario Lab. With the
-   * guard in `equity-worker.ts` the same request is refused in 1 ms and the warm thread lives.
+   * `assertDealable` in `calc/parse.ts` skips `top:NN` opponents, because it does not expand them.
+   * Five `top:1` opponents against `AhKh` on `As Ks Qs` need ten cards and seven remain. Before
+   * the guard in `equity-worker.ts` this held a warm thread for 9,431 ms before the same 422.
    */
   it('refuses jointly-undealable ranges on the thread instead of sampling for the whole budget', async () => {
     const undealable: WireSpec = {
@@ -538,7 +473,6 @@ describe('workers/pool.ts — sharding, deadlines and the queue', () => {
     };
     const pool = new WorkerPool({ size: 1, timeoutMs: 20_000 });
     try {
-      // Warmed first, so what is measured is the calculation and not the strength table.
       await pool.warm(60_000);
       const started = performance.now();
       await assert.rejects(
@@ -549,7 +483,6 @@ describe('workers/pool.ts — sharding, deadlines and the queue', () => {
           ),
         (error: unknown) => {
           assert.ok(isAppError(error), `expected an AppError, got ${String(error)}`);
-          // `EquityError` is a statement about the request, so 422 rather than 500.
           assert.equal(error.code, 'computation_rejected');
           assert.equal(error.statusCode, 422);
           assert.match(String(error.logDetail), /cannot all be dealt at once/);
@@ -564,13 +497,7 @@ describe('workers/pool.ts — sharding, deadlines and the queue', () => {
     }
   });
 
-  /**
-   * The other half of the guard: it must refuse only what genuinely cannot be dealt.
-   *
-   * The same five `top:1` opponents with a hero who blocks none of them have twelve cards
-   * between them, which is more than the ten five opponents need, so the request is answered.
-   * Without this the guard could be made to pass by refusing everything.
-   */
+  /** Twelve cards for ten needed, so this is answered. Without it the guard could refuse everything. */
   it('leaves a wide top:NN request that CAN be dealt alone', async () => {
     const dealable: WireSpec = {
       heroLabel: 'you',
@@ -596,10 +523,6 @@ describe('workers/pool.ts — sharding, deadlines and the queue', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// POST /math/equity
-// ---------------------------------------------------------------------------
-
 describe('POST /math/equity', () => {
   it('enumerates two known hands exactly and reports no interval', async () => {
     const app = await calcApp();
@@ -615,23 +538,10 @@ describe('POST /math/equity', () => {
 
       const summary = equityOf(response.body);
       assert.equal(summary['method'], 'exact-enumeration');
-      // ADR 0005 records 81.26%–82.64% across the 36 suit configurations, averaging 81.946%.
-      // AhAs against KdKc is one of them — specifically the MINIMUM, because the kings hold
-      // the two suits the aces do not and so have the cleanest run at a flush the aces cannot
-      // match. Its exact value is 0.81255489679402726, enumerated over all C(48,5) = 1,712,304
-      // boards by `packages/poker-math/test/equity-published-figures.test.ts`.
-      //
-      // This assertion used to read `> 0.8 && < 0.84`. That window is four percentage points
-      // wide on a figure whose entire spread across all 36 configurations is 1.4 points, and
-      // `docs/VERIFICATION.md` §12 named it as the reason the published equity figures were
-      // effectively unguarded. Measured 2026-08-26 with `popCount13(suitC) >= 5` changed to
-      // `>= 6` in the evaluator — i.e. club flushes silently stop existing — the AA-vs-KK
-      // average moved to 82.098% and this spot to a value the old window still accepted.
-      //
-      // The route returns `hero.equity` unrounded (`routes/calc.ts`), so the bound can be as
-      // tight as the JSON round trip allows. It is not asserted as an exact equality only
-      // because this is an HTTP test and a future serialisation change should fail in
-      // `equity-published-figures.test.ts`, where the claim lives, rather than here.
+      // AhAs vs KdKc is the minimum of ADR 0005's 36 suit configurations, exactly 0.81255489679402726
+      // (`equity-published-figures.test.ts`). The old `> 0.8 && < 0.84` window accepted an evaluator
+      // with club flushes removed. Not exact equality, so a serialisation change fails where the claim
+      // lives.
       const heroEquity = numberAt(summary, 'heroEquity');
       assert.ok(
         Math.abs(heroEquity - 0.81255489679402726) < 1e-9,
@@ -658,9 +568,7 @@ describe('POST /math/equity', () => {
     const app = await calcApp();
     try {
       const csrf = await csrfPair(app);
-      // Preflop against a range: twelve combinations times 1,712,304 boards is far past the
-      // exact ceiling, so the planner samples it. The same spot on a flop is only 23,760 boards
-      // and is enumerated exactly — which is the behaviour the previous test checks.
+      // Twelve combinations times 1,712,304 boards is past the exact ceiling, so this is sampled.
       const body = { heroCards: 'AhKh', opponents: ['QQ+, AKs'], samples: 20_000 };
       const first = await post(app, '/api/v1/math/equity', body, csrf);
       assert.equal(first.status, 200);
@@ -690,7 +598,7 @@ describe('POST /math/equity', () => {
     const app = await calcApp();
     try {
       const csrf = await csrfPair(app);
-      // The same instance the route uses: the pool is process-wide by design.
+      // The pool is process-wide.
       const pool = getSharedPool(app.appConfig);
       const before = pool.stats().submitted;
       const response = await post(
@@ -743,8 +651,7 @@ describe('POST /math/equity', () => {
   });
 
   it('answers computation_timeout when the budget runs out', async () => {
-    // The smallest budget configuration allows. Spawning a thread alone costs more than this, so
-    // the deadline is certain to fire — which is the point: the caller gets 504, not a hang.
+    // Spawning a thread alone costs more than 100 ms, so the deadline must fire and answer 504.
     const app = await calcApp({ COACH_TIMEOUT_MS: '100' });
     try {
       const csrf = await csrfPair(app);
@@ -790,12 +697,8 @@ describe('POST /math/equity', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// POST /math/coach
-// ---------------------------------------------------------------------------
-
 describe('POST /math/coach', () => {
-  /** A flop spot against one known hand: small enough to be enumerated exactly. */
+  /** Small enough to enumerate exactly. */
   const flopSpot: Record<string, unknown> = {
     heroCards: 'Th9h',
     board: 'Ah7h2c',
@@ -808,7 +711,7 @@ describe('POST /math/coach', () => {
     street: 'flop',
   };
 
-  /** A preflop spot against a range: far too large to enumerate, so it is sampled. */
+  /** Too large to enumerate, so it is sampled. */
   const preflopSpot: Record<string, unknown> = {
     heroCards: 'AhKh',
     opponents: ['QQ+, AKs, AQo+'],
@@ -853,7 +756,7 @@ describe('POST /math/coach', () => {
         assert.ok(['low', 'moderate', 'reasonable'].includes(String(advice['confidence'])));
         const changes = advice['whatWouldChangeIt'];
         assert.ok(Array.isArray(changes) && changes.length > 0, `${spot.label}: no "what would change it"`);
-        // There is no field capable of saying "correct", and there must not be one.
+        // There must never be a field that can say "correct".
         assert.equal(advice['correct'], undefined);
       }
     } finally {
@@ -876,8 +779,7 @@ describe('POST /math/coach', () => {
   });
 
   it('is the same maths a learner can check by hand', async () => {
-    // The Coach's pot-odds figure is not its own arithmetic: it is `potOdds` from the maths
-    // package, and this test recomputes it independently rather than trusting the response.
+    // Recomputed with the maths package's `potOdds` rather than trusted.
     const app = await calcApp();
     try {
       const csrf = await csrfPair(app);
@@ -892,17 +794,8 @@ describe('POST /math/coach', () => {
   });
 
   it('sends a check spot over the wire as a null price, not as a number', async () => {
-    // The defect this route shipped with, asserted where it actually happened: on the WIRE.
-    //
-    // `potOdds` reported `Infinity` for a free call and the contract declared the member `number`.
-    // `JSON.stringify(Infinity)` is `null`, so this response carried `"oddsRatio": null` against a
-    // contract that said it could not — and the client's formatter threw on it, taking the whole
-    // `/play` route down through its error boundary on every check spot. In-process tests could not
-    // see it, because in process the value really was `Infinity`.
-    //
-    // So this reads the serialised body rather than a returned object, and asserts both halves: the
-    // member is JSON `null`, and it is NOT the number 0 — a free call has no price, which is a
-    // different claim from the worst possible price.
+    // `JSON.stringify(Infinity)` is `null`, so a free call sent `"oddsRatio": null` against a
+    // `number` contract and crashed `/play`. Only the serialised body shows it. Null, and not 0.
     const app = await calcApp();
     try {
       const csrf = await csrfPair(app);
@@ -915,8 +808,6 @@ describe('POST /math/coach', () => {
       assert.equal(numberAt(odds, 'breakEvenEquity'), 0);
       assert.equal(potOdds(100, 0).oddsRatio, null, 'and the maths package agrees with what it serialised');
 
-      // The whole report survives a round trip unchanged, which is the property that was false
-      // before: re-serialising and re-parsing what the client received must be a fixed point.
       const body: unknown = result.body;
       assert.deepEqual(JSON.parse(JSON.stringify(body)), body);
     } finally {
@@ -924,10 +815,6 @@ describe('POST /math/coach', () => {
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// The wiring itself
-// ---------------------------------------------------------------------------
 
 describe('the calculation module wiring', () => {
   it('terminates every thread when the instance closes', async () => {
@@ -946,8 +833,7 @@ describe('the calculation module wiring', () => {
   });
 
   it('throws rather than pretend when a worker task is misused', async () => {
-    // `runCoach` on a pool whose worker script does not exist: the failure surfaces as an
-    // AppError with a code, never as a hang or a raw Node error reaching a client.
+    // A missing worker script must surface as a coded AppError, never a hang.
     const pool = new WorkerPool({
       size: 1,
       timeoutMs: 2_000,

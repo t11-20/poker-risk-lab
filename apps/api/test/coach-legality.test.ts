@@ -1,41 +1,8 @@
 /**
- * The Coach's action-legality guard, exercised through the production path rather than around it.
- *
- * ## Why this file exists, given that `packages/poker-math/test/coach-legality.test.ts` exists
- *
- * That file is a good test of the *library*. It builds a `CoachInput` by hand, puts
- * `legalActions` on it, and checks that nothing outside the set is published. It passed
- * throughout the period in which four of the five Coach surfaces published actions the table
- * refuses — because the defect was never in the library's filter. It was in the wiring:
- *
- *   - `CoachInput.legalActions` was optional, and the filter read
- *     `input.legalActions === undefined || input.legalActions.includes(action)`, so an absent
- *     list meant "everything is permitted";
- *   - `CoachTask`, the wire type between this API and the calculator thread, had **no field for
- *     it at all**, so the Scenario Lab, the hand review, the profile comparison and
- *     `POST /math/coach` could not have supplied one if they had tried;
- *   - only `ws/router.ts`, which calls `buildCoachReport` directly and never crosses that wire,
- *     passed one.
- *
- * A test that hands the library its own input can no more detect that than a test that calls a
- * validator directly can detect a route which forgot to call it. So every case below goes
- * through the real task builders — `coachTaskFor` for the Scenario Lab, `parseCoachRequest` for
- * `POST /math/coach`, `buildHandReview` for the hand review — and through a real `WorkerPool`
- * with real threads, which is the boundary the field used to be lost at.
- *
- * ## What each case would have caught
- *
- * 1. **Threading.** A task that permits only `fold` and `call` on a spot that plainly affords a
- *    raise. Before the fix the field did not exist on `CoachTask`, so the worker never saw it
- *    and the report contained raises. This fails if anybody stops passing it on.
- * 2. **Derivation.** A spot whose every opponent is all-in. Nothing in the pot, the price or
- *    hero's stack says so; only `opponentStacks` does. Before the fix the Scenario Lab and the
- *    ad-hoc calculator offered a bet or raise here, priced with 35% fold equity against players
- *    with no chips to fold.
- * 3. **The shipped bundle.** Every scenario in the Scenario Lab, end to end, with the count
- *    asserted so a data move cannot turn this into a test of nothing.
- *
- * No database: `buildApp` takes a stub handle, and nothing here reads a table.
+ * The Coach's legal-action guard through the production path. The library test passed while four
+ * Coach surfaces published refused actions, because `CoachTask` had no `legalActions` field and an
+ * absent list permitted everything. So every case goes through the real task builders and a real
+ * `WorkerPool`, the boundary where the field was lost. No database.
  */
 
 import assert from 'node:assert/strict';
@@ -58,13 +25,7 @@ import { persistHand } from './helpers/hand-rows.ts';
 
 const ALLOWED_ORIGIN = 'http://localhost:3000';
 
-/**
- * One pool for the whole file, closed once at the end.
- *
- * Threads are expensive to start and the shipped-bundle case submits three dozen tasks, so a
- * pool per case would spend more time on isolates than on arithmetic. The budget is generous
- * because a wide preflop range on a fresh thread pays for its strength table.
- */
+/** One pool for the file, because the shipped-bundle case submits three dozen tasks. */
 const pool = new WorkerPool({ size: 4, timeoutMs: 120_000 });
 after(async () => {
   await pool.close();
@@ -86,7 +47,7 @@ function stubDatabase(): DatabaseHandle {
   return { ping: async () => ({ ok: true }), close: async () => undefined };
 }
 
-/** Every action name the report puts in front of a learner: the rows and the headline. */
+/** The rows and the headline. */
 function actionsNamedBy(report: CoachReport): readonly string[] {
   return [...new Set([...report.candidates.map((candidate) => candidate.action), report.suggestion.action])];
 }
@@ -96,15 +57,7 @@ function outsideTheSet(report: CoachReport, legal: readonly string[]): readonly 
   return actionsNamedBy(report).filter((action) => !permitted.has(action));
 }
 
-/**
- * The shipped bundle, or a failure that says where to look.
- *
- * `@prl/content` validates on load and throws for the whole bundle, so one bad seat row takes
- * every content-reading test in the repo down with it and the stack lands in `validate.ts` with
- * no hint of which side of the boundary owns the problem. The rethrow adds that hint and nothing
- * else — the case still fails, which is correct: a Scenario Lab that cannot load is not a Scenario
- * Lab whose legality can be vouched for.
- */
+/** `@prl/content` throws for the whole bundle on load, so the rethrow names which side owns the problem. */
 function loadBundleOrExplain(): ReturnType<typeof scenarios> {
   try {
     return scenarios();
@@ -118,14 +71,7 @@ function loadBundleOrExplain(): ReturnType<typeof scenarios> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 1. The field survives the wire
-// ---------------------------------------------------------------------------
-
-/**
- * A spot with money behind on both sides, so every arithmetic test the Coach can do says a raise
- * is affordable. The only thing that can withhold one is the legal-action set.
- */
+/** Every stack check says a raise is affordable, so only the legal-action set can withhold one. */
 function affordableRaiseTask(overrides: Partial<CoachTask> = {}): CoachTask {
   return {
     kind: 'coach',
@@ -152,8 +98,6 @@ function affordableRaiseTask(overrides: Partial<CoachTask> = {}): CoachTask {
 
 describe('the legal-action set crosses the worker boundary', () => {
   it('withholds a raise the task did not permit, on a spot that plainly affords one', async () => {
-    // The regression this whole fix is about, in one case. `CoachTask` had no `legalActions`
-    // field, so this narrowing could not be expressed and the worker priced a raise anyway.
     const base = affordableRaiseTask();
 
     const permissive = await pool.runCoach({ ...base, legalActions: ['fold', 'call', 'raise'] });
@@ -174,8 +118,7 @@ describe('the legal-action set crosses the worker boundary', () => {
   });
 
   it('refuses to serve a report that names an action the task did not permit', () => {
-    // The pool's own guard. It cannot be reached with a healthy worker, which is exactly why it
-    // is asserted directly rather than left as a comment.
+    // Unreachable with a healthy worker, so asserted directly.
     const task = affordableRaiseTask({ legalActions: ['fold', 'call'] });
     const fabricated = {
       candidates: [{ action: 'raise' as const, to: 120, cost: 120, ev: 40, derivation: 'fabricated' }],
@@ -196,10 +139,6 @@ describe('the legal-action set crosses the worker boundary', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 2. A described spot with nobody left to call
-// ---------------------------------------------------------------------------
-
 describe('a spot where every opponent is all-in', () => {
   it('offers no aggression through the ad-hoc calculator, and says so end to end', async () => {
     const body = {
@@ -214,8 +153,7 @@ describe('a spot where every opponent is all-in', () => {
       bigBlind: 10,
     };
 
-    // The planner is where the set is derived for this surface, so assert the plan first: a
-    // failure here says the derivation is wrong, a failure below says it is not being applied.
+    // A failure here means the derivation is wrong. A failure below means it is not applied.
     const plan = parseCoachRequest(body);
     assert.deepEqual([...plan.task.legalActions].sort(), ['call', 'fold']);
 
@@ -235,8 +173,7 @@ describe('a spot where every opponent is all-in', () => {
         [],
         'the served report named an action nobody at that table could have taken',
       );
-      // And the reason the old code offered one anyway: it is affordable, and affordability was
-      // the only thing it checked.
+      // Affordability was the only thing the old code checked.
       assert.ok(body.heroStack - body.toCall > body.bigBlind * 10, 'hero can plainly afford a raise');
     } finally {
       await app.close();
@@ -244,9 +181,7 @@ describe('a spot where every opponent is all-in', () => {
   });
 
   it('offers no aggression in a hand review, where the opponent is all-in for real', () => {
-    // Three-handed so a seat can be all-in while a live decision remains for somebody else:
-    // seat 0 folds, the 40-chip small blind shoves, and the big blind faces 30 to call with 990
-    // behind. The engine offers that seat `fold, call` and nothing more.
+    // Seat 0 folds, the 40-chip small blind shoves, and the big blind faces 30 with 990 behind.
     const fixture = persistHand({
       handId: 'coach-legality-allin',
       roomId: 'coach-legality',
@@ -289,35 +224,22 @@ describe('a spot where every opponent is all-in', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// 3. The shipped Scenario Lab, through its own task builder
-// ---------------------------------------------------------------------------
-
 describe('every shipped scenario', () => {
   it('publishes nothing outside the legal set its own task carries', async () => {
-    // `scenarios()` and not a hand-rolled JSON read, deliberately: this case is about the
-    // production path, and the production path loads a *validated* bundle. A version of this
-    // that parsed the data files itself would keep passing while the bundle the server actually
-    // serves was unloadable, which is the shape of gate this whole fix exists to remove. So a
-    // bundle that fails validation fails this case too — with the reason attached, because the
-    // reason is not in this file.
+    // `scenarios()` rather than reading JSON, so an unloadable bundle fails this case too.
     const bundle = loadBundleOrExplain();
-    // A guard on the guard: if the bundle moves or shrinks this would pass by checking nothing.
+    // A sweep of nothing is not a pass.
     assert.ok(bundle.length >= 30, `expected the shipped Scenario Lab, found ${bundle.length}`);
 
     const failures: string[] = [];
     let withAggression = 0;
     let namedActions = 0;
 
-    // One at a time. The pool's queue is bounded (`size * QUEUE_SLOTS_PER_WORKER`) and refuses
-    // rather than growing, which is correct behaviour and would make a `Promise.all` over three
-    // dozen scenarios fail for a reason that has nothing to do with legality.
+    // One at a time. The bounded queue refuses rather than grows, so `Promise.all` would fail.
     for (const scenario of bundle) {
       const task = coachTaskFor(scenario);
       const report = await pool.runCoach(task);
 
-      // The task's own set has to agree with the spot it describes, or the filter below would be
-      // checking a report against the wrong decision point.
       const legal = [...task.legalActions];
       assert.deepEqual(
         legal,
@@ -336,8 +258,7 @@ describe('every shipped scenario', () => {
           `${scenario.id}: named ${outside.join(', ')} against a legal set of ${legal.join(', ')}`,
         );
       }
-      // The invariant the audit found violated in the other direction: no row may cost more than
-      // hero has behind. `heroStack` is chips BEHIND, so this is the right ceiling for `cost`.
+      // `heroStack` is chips behind, so it is the ceiling for `cost`.
       for (const candidate of report.candidates) {
         if (candidate.cost > task.heroStack) {
           failures.push(
@@ -352,10 +273,6 @@ describe('every shipped scenario', () => {
     assert.deepEqual(failures, [], `${failures.length} of ${bundle.length} scenarios name an illegal action`);
   });
 });
-
-// ---------------------------------------------------------------------------
-// Plumbing
-// ---------------------------------------------------------------------------
 
 async function coachApp(): Promise<FastifyInstance> {
   const app = await buildApp({ config: testConfig(), database: stubDatabase() });
@@ -380,7 +297,6 @@ async function csrfPair(app: FastifyInstance): Promise<Csrf> {
   return { token: String(payload.token), cookie: `prl_csrf=${secret.value}` };
 }
 
-/** The `report` member of a `CoachResponse`, checked rather than cast. */
 function reportOf(body: unknown): CoachReport {
   assert.ok(typeof body === 'object' && body !== null && 'report' in body, JSON.stringify(body));
   const report = (body as { readonly report: unknown }).report;

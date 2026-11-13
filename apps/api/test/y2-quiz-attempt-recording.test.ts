@@ -1,35 +1,8 @@
 /**
- * `POST /content/quizzes/:id/attempt` has to say whether it kept the answer.
- *
- * ## The defect
- *
- * A signed-out learner is this product's DEFAULT state — nothing creates a session until somebody
- * opens a table — and this route answers them 200 and stores nothing. That is deliberate and
- * right: the app is guest-first, and refusing the call would make the client's success path depend
- * on whether somebody happens to be signed in.
- *
- * What was wrong is that the 200 was indistinguishable from a member's. `QuizAttemptResponse`
- * carried `correct`, `explanation`, `expected` and `optionNotes` and no signal at all about
- * attribution, so the quiz panel told every anonymous learner:
- *
- *   > …and the one it recorded as a question you have answered.
- *
- * while `prl.quiz_attempts` held nothing of theirs and `GET /me/progress` answered them
- * `401 not_authenticated`. The product's own honesty rule, broken by the product, in its teaching
- * surface. `recorded` is the fix, and the client half is `apps/web/src/lib/quiz-attempts.ts`.
- *
- * ## What is asserted, and why it is asserted this way
- *
- * The load-bearing test is not "an anonymous reply says `recorded: false`" on its own — a route
- * that hard-coded `false` would pass that. It is that the two replies are IDENTICAL in every other
- * field and differ in exactly this one, which is the same statement as "no other field could have
- * carried this", made executable. Both halves are then checked against the table itself: the
- * signed-in claim against a row that exists, the anonymous claim against a table that did not
- * grow.
- *
- * The anonymous half needs no database and always runs. The signed-in half writes a row and is
- * skipped, with a printed reason, when `DATABASE_URL` is absent — see `test/helpers/database.ts`
- * for why a skip here is never silent.
+ * `POST /content/quizzes/:id/attempt` answers a signed-out learner 200 and stores nothing, and
+ * `recorded` says which happened. The core test is that the two replies are identical except for
+ * `recorded`, because a hard-coded `false` would pass on its own. Both claims are checked against
+ * the table. The signed-in half needs a database and skips loudly without one.
  */
 
 import assert from 'node:assert/strict';
@@ -63,10 +36,7 @@ function stubDatabase(): DatabaseHandle {
   return { ping: async () => ({ ok: true }), close: async () => undefined };
 }
 
-/**
- * Fills the seam `sessionPlugin` normally fills, so "signed in" is a property of the request
- * rather than of the auth module — which is what keeps this file testing the content route.
- */
+/** Fills the seam `sessionPlugin` normally fills, so this file tests the content route only. */
 function withSignedInCaller(app: FastifyInstance, userId: string): void {
   app.decorateRequest('session', null);
   app.decorateRequest('sessionRejection', null);
@@ -125,7 +95,6 @@ async function attempt(
   return { status: response.statusCode, body: { ...parsed } };
 }
 
-/** The first question of a given kind in the shipped bundle, so this drives real content. */
 function firstQuestion<K extends QuizQuestion['kind']>(
   kind: K,
 ): { readonly quizId: string; readonly question: Extract<QuizQuestion, { kind: K }> } {
@@ -138,10 +107,6 @@ function firstQuestion<K extends QuizQuestion['kind']>(
   }
   throw new Error(`the content bundle carries no ${kind} question`);
 }
-
-// ---------------------------------------------------------------------------
-// The anonymous caller, which is the default one
-// ---------------------------------------------------------------------------
 
 describe('an answer from a caller with no session', () => {
   it('is graded, answered 200, and says plainly that it was not recorded', async () => {
@@ -164,8 +129,7 @@ describe('an answer from a caller with no session', () => {
         'nothing was stored, and the reply has to say so — this is the field whose absence let the ' +
           'quiz panel claim a row that does not exist',
       );
-      // A boolean rather than merely falsy: `undefined` is what the old contract effectively sent,
-      // and a client reading `!response.recorded` could not tell "not stored" from "old server".
+      // `undefined` is what the old contract sent, so a client could not tell "not stored" from "old server".
       assert.equal(typeof response.body['recorded'], 'boolean');
     } finally {
       await app.close();
@@ -185,18 +149,12 @@ describe('an answer from a caller with no session', () => {
       );
       assert.equal(response.status, 200);
       assert.equal(response.body['recorded'], false);
-      // The graded half is untouched by the recording half: a signed-out learner still gets the
-      // server's own figure, which is what the panel shows them.
       assert.ok(typeof response.body['expected'] === 'object' && response.body['expected'] !== null);
     } finally {
       await app.close();
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// The signed-in caller, and the difference between the two replies
-// ---------------------------------------------------------------------------
 
 describe('the same answer from a caller with a session', () => {
   let configured = false;
@@ -224,8 +182,7 @@ describe('the same answer from a caller with a session', () => {
       const { quizId, question } = firstQuestion('multipleChoice');
       const body = { questionId: question.id, answer: { kind: 'choice', index: question.correctIndex } };
 
-      // The whole table, before either call. `prl.quiz_attempts` is append-only and shared with the
-      // dev seed, so the assertion below is about what THIS run added rather than about a count.
+      // `prl.quiz_attempts` is append-only and shared with the dev seed, so count what this run added.
       const before = await sql<{ count: string }[]>`select count(*)::text as count from prl.quiz_attempts`;
       const startingRows = Number(before[0]?.count ?? '-1');
       assert.ok(startingRows >= 0, 'could not read prl.quiz_attempts');
@@ -241,9 +198,7 @@ describe('the same answer from a caller with a session', () => {
         assert.equal(member.body['recorded'], true);
         assert.equal(guest.body['recorded'], false);
 
-        // The point of the field, stated as an assertion: everything the learner is shown is the
-        // same, and the only thing that differs is whether it was kept. No other field carried it,
-        // and none could have.
+        // Everything shown is the same. Only whether it was kept differs.
         const withoutRecorded = (answered: Answered): Record<string, unknown> => {
           const { recorded: _recorded, ...rest } = answered.body;
           return rest;
@@ -261,7 +216,6 @@ describe('the same answer from a caller with a session', () => {
           ['recorded'],
         );
 
-        // The claim, checked against the table it is a claim about.
         const rows = await sql<{ question_id: string; was_correct: boolean }[]>`
         select question_id, was_correct from prl.quiz_attempts where user_id = ${userId}
       `;
