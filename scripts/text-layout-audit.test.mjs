@@ -1,31 +1,8 @@
 #!/usr/bin/env node
 /**
- * Tests for the painted-text detectors.
- *
- * Run with:  node --test scripts/text-layout-audit.test.mjs
- * Also run by: pnpm run test:scripts
- *
- * ## What is being tested, and why it is worth testing
- *
- * `scripts/text-layout-audit.mjs` drives Chrome, and a test cannot. What it CAN test is the half
- * that decides anything: `findTextDefects()` is a pure function over rectangles, and every
- * threshold in that file is a number this test can put on either side of.
- *
- * ## Would this fail if the behaviour broke?
- *
- * The fixtures below are not invented. `collapsedCoachRow()` is the measurement Chrome returned
- * from `/play?state=decision` with the shipped defect put back into `apps/web/src/styles/play.css`
- * and the app rebuilt — a 0px content box, the word "price" needing 42.25px, and 147.52 px² of
- * glyph overlap between the label and the sentence. If the detectors stop working, these fail.
- *
- * The other half of the control is `healthyRow()` and `neighbouringLines()`: a detector that fires
- * on everything is as useless as one that fires on nothing, and only having both halves rules both
- * out. `neighbouringLines()` in particular is the real false positive that set
- * `OVERLAP_MIN_HEIGHT_SHARE` — `getClientRects` measures the font's ascent and descent rather than
- * the line box, so two correctly stacked lines of tight-leading type cross by a pixel.
- *
- * Every block that scans also asserts on the COUNT of what was examined, because "no findings" and
- * "nothing was looked at" print identically and only one of them is good news.
+ * Tests for `findTextDefects()` and its thresholds. `collapsedCoachRow()` is Chrome's real
+ * measurement of the shipped defect; `healthyRow()` and `neighbouringLines()` are the controls that
+ * must not fire. Scans also assert on how much they examined.
  */
 
 import assert from 'node:assert/strict';
@@ -46,13 +23,8 @@ import {
   WIDTHS,
 } from './text-layout-audit.mjs';
 
-// ---------------------------------------------------------------------------
-// Builders for the shape the in-page walker returns
-// ---------------------------------------------------------------------------
-
 let nextIndex = 0;
 
-/** One text-bearing element, in the shape `WALKER` actually returns. */
 function box(overrides = {}) {
   nextIndex += 2;
   const rects = overrides.rects ?? [{ x: 0, y: 0, w: 100, h: 16 }];
@@ -75,7 +47,6 @@ function box(overrides = {}) {
   };
 }
 
-/** A whole page measurement, with sensible page-level numbers. */
 function measurement(boxes, extra = {}) {
   return {
     heading: extra.heading ?? 'six-handed table',
@@ -93,12 +64,7 @@ function measurement(boxes, extra = {}) {
   };
 }
 
-/**
- * The Coach row as Chrome measured it with the defect present.
- *
- * `/play?state=decision`, dark theme, 1440px wide. The label is a grid item in a track that
- * collapsed to nothing; the value is the sentence that took the whole row.
- */
+/** Chrome's measurement of `/play?state=decision`, dark, 1440px, with the defect present. */
 function collapsedCoachRow() {
   const label = box({
     i: 100,
@@ -106,7 +72,6 @@ function collapsedCoachRow() {
     sel: 'div.prl-stat > dl.prl-stat__pair > dt.prl-stat__label.prl-label',
     tag: 'dt',
     text: 'Pot and price',
-    // Three lines, one word each, painted out of a zero-width column.
     rects: [
       { x: 1034, y: 1183.95, w: 29.02, h: 16 },
       { x: 1034, y: 1200.84, w: 30.81, h: 16 },
@@ -133,7 +98,6 @@ function collapsedCoachRow() {
   return measurement([label, value]);
 }
 
-/** The same row, laid out correctly: one column, label above value, nothing overlapping. */
 function healthyRow() {
   const label = box({
     i: 100,
@@ -163,13 +127,7 @@ function healthyRow() {
   return measurement([label, value]);
 }
 
-/**
- * Two correctly stacked lines whose glyph rectangles cross by 1.4px.
- *
- * This is the false positive that decided `OVERLAP_MIN_HEIGHT_SHARE`, observed on `/legends` on a
- * page with nothing wrong with it: `getClientRects` returns the font's ascent and descent, and
- * `--prl-leading-tight` leaves that slightly taller than the line box it sits in.
- */
+/** Two correct lines crossing by 1.4px, the `/legends` false positive that set `OVERLAP_MIN_HEIGHT_SHARE`. */
 function neighbouringLines() {
   return measurement([
     box({
@@ -246,9 +204,7 @@ describe('the collapsed Coach row, as Chrome measured it (REGRESSION)', () => {
 
 describe('a bounding-box probe would have reported this row as clear (REGRESSION)', () => {
   it('the two elements own boxes do not intersect at all', () => {
-    // This is the measurement error the gate exists for, written down as an assertion: the label's
-    // padding box is 0px wide and the value's starts at the same x, so no box-based comparison of
-    // these two elements can ever report a collision. Only the glyphs overlap.
+    // The label's box is 0px wide, so no box comparison can see this. Only the glyphs overlap.
     const { boxes } = collapsedCoachRow();
     const [label, value] = boxes;
     const hit = intersection(label.pad, value.pad);
@@ -267,9 +223,7 @@ describe('a correctly laid out row', () => {
     });
     assert.deepEqual(findings, [], `a healthy row must be clean: ${JSON.stringify(findings, null, 2)}`);
     assert.equal(counts.ownBox, 2, 'both blocks must have been measured against their own box');
-    // No pair is compared here and that is the detector working: the label's glyphs end 8px above
-    // where the value's begin, so the vertical early-exit skips them. `neighbouringLines` below is
-    // the fixture that proves a pair which COULD collide is actually compared.
+    // No pair is compared: the vertical early exit skips them. `neighbouringLines` covers a real pair.
     assert.equal(counts.pairs, 0);
   });
 
@@ -284,8 +238,6 @@ describe('a correctly laid out row', () => {
   });
 
   it('fires when the same two lines cross by a third of their height instead', () => {
-    // The other side of the threshold, so the test above is proof of a boundary rather than proof
-    // that the detector is switched off.
     const overlapping = neighbouringLines();
     overlapping.boxes[1].rects[0].y = 207;
     const { findings } = findTextDefects(overlapping, {});
@@ -297,18 +249,8 @@ describe('a correctly laid out row', () => {
 });
 
 /**
- * A box whose FIRST rectangle is not its highest one.
- *
- * The walker pushes rectangles in text-node document order, and within a node in line order, so
- * `rects[0]` is the first rect of the first text node. Usually that is the highest. It is not
- * guaranteed to be, and the collision scan's early exit is only sound if the sort key is the true
- * minimum: it stops on the first box beginning below the current one's lowest edge and concludes
- * every box after it is lower still.
- *
- * Here the ELEMENT `header > .prl-mark` owns two text nodes whose glyphs paint at y=300 and y=180 —
- * the second higher than the first. Sorted by `rects[0].y` it lands after the paragraph at y=200,
- * the scan breaks, and its real overlap with that paragraph is never compared. Sorted by the
- * topmost rect it lands first and the pair is examined.
+ * `header > .prl-mark` owns two text nodes painted at y=300 then y=180. Sorted by `rects[0].y` the
+ * scan breaks before comparing it with the paragraph at y=200.
  */
 function rectsOutOfOrder() {
   return measurement([
@@ -347,10 +289,7 @@ describe('the collision scan cannot stop early and call it clean (REGRESSION)', 
   });
 
   it('the OLD sort key would have skipped it, which is why this fixture exists', () => {
-    // Reproduces the discarded ordering over the same fixture so the control demonstrates the bug
-    // rather than merely asserting the fix. Sorted by `rects[0].y` the mark (300) follows the
-    // paragraph (200); scanning from the paragraph, the mark begins below the paragraph's lowest
-    // edge (221) and the scan breaks with the two never compared.
+    // The discarded `rects[0].y` ordering, to show the bug rather than only assert the fix.
     const { boxes } = rectsOutOfOrder();
     const byFirstRect = [...boxes].sort((a, b) => a.rects[0].y - b.rects[0].y);
     const lowest = Math.max(...byFirstRect[0].rects.map((r) => r.y + r.h));
@@ -359,7 +298,6 @@ describe('the collision scan cannot stop early and call it clean (REGRESSION)', 
       byFirstRect[1].rects[0].y > lowest,
       'the old key must trigger the early exit here, or this fixture proves nothing',
     );
-    // And under the key actually used, the order is the other way round and nothing breaks early.
     const topOf = (b) => Math.min(...b.rects.map((r) => r.y));
     const byTop = [...boxes].sort((a, b) => topOf(a) - topOf(b));
     assert.equal(byTop[0].sel, 'header > span.prl-mark');
@@ -400,9 +338,7 @@ describe('what is NOT a defect', () => {
   });
 
   it('does NOT excuse a collapsed column because some ancestor scrolls (REGRESSION)', () => {
-    // The first version of this loop skipped any element with a scrolling ancestor, and the Coach
-    // rail has one — so it was blind to the exact defect it was written for. A scroller further up
-    // does not make a zero-width column correct.
+    // A scrolling ancestor must not excuse a zero-width column. The Coach rail has one.
     const inRail = collapsedCoachRow();
     inRail.boxes[0].scrollHost = 374;
     const { findings } = findTextDefects(inRail, {});
@@ -418,8 +354,7 @@ describe('what is NOT a defect', () => {
   });
 
   it('absorbs the letter-space a tracked uppercase label adds after its last glyph', () => {
-    // Measured on `.prl-stat__unit` at 12px / 0.08em: 0.96px past the content edge, on a row that
-    // is laid out correctly. A zero tolerance would report every label in the app.
+    // Measured 0.96px on `.prl-stat__unit` at 12px/0.08em, on a correct row.
     const tracked = healthyRow();
     tracked.boxes[0].rects[0].w = tracked.boxes[0].pad.w + 0.96;
     const { findings } = findTextDefects(tracked, {});
@@ -520,7 +455,6 @@ describe('exemptions', () => {
   });
 
   it('the shipped list is empty, and every rule in it must carry a reason', () => {
-    // Empty is the measured answer today. If somebody adds one, it says why.
     for (const rule of EXEMPTIONS) {
       assert.ok(typeof rule.selector === 'string' && rule.selector.length > 0);
       assert.ok(typeof rule.why === 'string' && rule.why.length > 30, 'an exemption needs a reason');
@@ -550,8 +484,7 @@ describe('a sweep of nothing is not a pass', () => {
   });
 
   it('refuses a run where a detector examined nothing, even with pages measured', () => {
-    // The dangerous shape: the sweep looks busy, one detector fell out of the loop, and the
-    // difference between "found nothing" and "looked at nothing" is invisible in the output.
+    // A busy sweep with one detector out of the loop must still fail.
     for (const key of ['ownBox', 'clipTests', 'pairs']) {
       const problems = coverageFailures({ ...healthy, detector: { ...healthy.detector, [key]: 0 } }, []);
       assert.equal(problems.length, 1, `${key} at zero must be reported`);
@@ -578,10 +511,8 @@ describe('geometry', () => {
   it('a real overlap needs area, width and a share of the height', () => {
     const a = { x: 0, y: 0, w: 100, h: 16 };
     assert.equal(isRealOverlap(intersection(a, { x: 0, y: 0, w: 100, h: 16 }), a, a), true);
-    // 1px of height between two 16px lines is type touching, not a collision.
     const grazing = { x: 0, y: 15, w: 100, h: 16 };
     assert.equal(isRealOverlap(intersection(a, grazing), a, grazing), false);
-    // A 1px-wide sliver of full height is a rounding artefact, not a collision.
     const sliver = { x: 99, y: 0, w: 100, h: 16 };
     assert.equal(isRealOverlap(intersection(a, sliver), a, sliver), false);
   });
@@ -625,7 +556,6 @@ describe('the scope of the sweep', () => {
       assert.ok(WIDTHS.includes(control.width));
       assert.match(control.css, /\{/u);
     }
-    // The first control must be the defect this whole file exists for, put back verbatim.
     assert.match(CONTROLS[0].css, /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto/u);
     assert.equal(CONTROLS[0].route, '/play?state=decision');
   });

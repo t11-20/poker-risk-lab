@@ -1,59 +1,10 @@
 #!/usr/bin/env node
 /**
- * Tests for the pure half of the keyboard audit: what counts as a poker action, and what counts as
- * having been intercepted by the age gate.
- *
- * Run with:  node --test scripts/keyboard-audit.test.mjs
- * Also run by: pnpm run test:scripts
- *
- * ## Why this file exists
- *
- * `scripts/keyboard-audit.mjs` drives Chrome and a test cannot. What it CAN test is the part that
- * decides whether the browser run means anything: the matcher that picks the table's controls out
- * of a page, and the predicate that notices the audit was handed an interstitial instead of the
- * page it asked for. Both had already failed silently in production use, and a silent failure in a
- * matcher is indistinguishable from a clean run.
- *
- * The defect, exactly: an action button in this app is two spans, so `button.textContent` is
- * `Fold0 units`, and `/^fold\b/i` does not match it — there is no word boundary between `d` and
- * `0`. The audit reported "no action controls are on screen in this state" as a warning, a release
- * report recorded that as a benign idle table, and the one route that renders the whole decision
- * row went unchecked for two releases. A second copy of the same regex, written inside a template
- * literal where `\b` is the BACKSPACE escape rather than the word boundary, matched nothing at all.
- *
- * ## Would this fail if the behaviour broke?
- *
- * Yes, and it was checked by breaking it rather than by reasoning about it.
- *
- *   - `the matcher the audit used to have` runs the OLD predicate over the same real strings and
- *     asserts it misses two of the three controls. That block is the negative control for the whole
- *     file: if somebody restores the old boundary, the block that says the new one works fails, and
- *     this one starts passing for the wrong reason — so both halves are asserted together.
- *   - The names fed in are not invented. They are what Chrome reported for
- *     `http://127.0.0.1:3210/play?state=decision` while this was being written: three `aria-label`
- *     values and three `textContent` values, copied out of the audit's own output.
- *   - The prose block feeds the matcher strings from the same page that must NOT match — the
- *     ActionBar's own note, the table's other buttons — because a matcher that fires on everything
- *     is as useless as one that fires on nothing.
- *   - Every scan asserts the size of the set it examined, because "nothing wrong was found" and
- *     "nothing was examined" read identically in a passing report.
- *
- * Six reverts have been run against the real files, and the numbers are what came back. The first
- * three were measured when this file held 18 tests and re-measured on 2026-08-26 at 21:
- *
- *   - `actionControlName` back to `textContent` only and `isPokerActionName` back to
- *     `/^(fold|check|call|bet|raise|all.?in)\b/i`  →  5 of 21 tests failed.
- *   - `landedOnAgeGate` loosened to `landedPath.includes(AGE_GATE_PATH)`  →  2 of 21 failed.
- *   - `actionControls: 'required'` deleted from the fixture route in ROUTES  →  1 of 21 failed.
- *
- * The last three are for the gate-wiring block at the bottom, added when `test:keyboard` gained a
- * server lifecycle and became one of `verify`'s gates:
- *
- *   - `test:keyboard` removed from the `for gate in ...` clause of `verify`  →  1 of 21 failed.
- *   - `--start --with-api` dropped from the `test:keyboard` script  →  1 of 21 failed.
- *   - its port changed from 3464 to 3456, which `test:ax` already holds  →  1 of 21 failed.
- *
- * Restoring each one returned the file to 21 passing.
+ * Tests for the pure half of `scripts/keyboard-audit.mjs`, the poker-action matcher, the age gate
+ * predicate, and the gate wiring in `package.json`. An action button's `textContent` is
+ * `Fold0 units`, and `/^fold\b/i` misses it, so the old matcher checked one button in three.
+ * The names below are what Chrome reported for `/play?state=decision`. Reverting the matcher fails
+ * 5 of 21 tests.
  */
 
 import assert from 'node:assert/strict';
@@ -73,33 +24,20 @@ import {
   ROUTES,
 } from './keyboard-audit.mjs';
 
-// ---------------------------------------------------------------------------
-// The real thing, as the browser reports it
-// ---------------------------------------------------------------------------
-
-/**
- * A stand-in for a DOM button: `getAttribute` and `textContent`, which is all the matcher touches.
- *
- * Deliberately not a DOM node. The matcher has to run in two places — here, and inside the page
- * after being stringified — and anything it can reach in one and not the other is a difference
- * waiting to be found in production instead of here.
- */
+// Not a DOM node, because the matcher also runs stringified in the page.
 const button = (ariaLabel, textContent) => ({
   getAttribute: (name) => (name === 'aria-label' ? ariaLabel : null),
   textContent,
 });
 
-/** The decision row at `/play?state=decision`, copied out of Chrome. */
 const DECISION_ROW = [
   button('fold, costs 0 units, gives up the hand and any claim on the pot', 'Fold0 units'),
   button('call 35 units', 'Call35 units'),
   button('raise to 70 units, 70 units out of your stack', 'Raise to 7070 units'),
 ];
 
-/** The same three controls if their labels were ever removed: two spans and nothing else. */
 const DECISION_ROW_UNLABELLED = DECISION_ROW.map((control) => button(null, control.textContent));
 
-/** Buttons and prose on the same screens that must not be taken for a decision. */
 const NOT_ACTIONS = [
   'Folding costs nothing and gives up any claim on the pot.',
   'Deal me in',
@@ -119,7 +57,6 @@ const NOT_ACTIONS = [
   'Bettors are not tracked here',
 ];
 
-/** The matcher as it was, for the negative control. */
 const oldIsPokerActionName = (name) => /^(fold|check|call|bet|raise|all.?in)\b/i.test(name);
 const oldActionControlName = (control) => (control.textContent ?? '').replace(/\s+/gu, ' ').trim();
 
@@ -153,8 +90,7 @@ describe('finding the decision row', () => {
   });
 
   it('matches every control in it from the two-span text alone', () => {
-    // This is the case the audit actually met, and the one it could not see: `Fold0 units` has no
-    // word boundary between the word and the cost.
+    // `Fold0 units` has no word boundary between the word and the cost.
     const matched = DECISION_ROW_UNLABELLED.map(actionControlName).filter(isPokerActionName);
     assert.deepEqual(matched, ['Fold0 units', 'Call35 units', 'Raise to 7070 units']);
   });
@@ -166,8 +102,7 @@ describe('finding the decision row', () => {
   });
 
   it('still recognises the actions this app does not currently render', () => {
-    // Check, bet and all-in are legal actions the engine offers in other spots. They are not on the
-    // fixture route, so nothing in the browser run would notice if the matcher lost them.
+    // Not on the fixture route, so the browser run would not notice if these were lost.
     for (const name of ['check, costs 0 units, stays in the hand', 'Bet to 200', 'All in', 'all-in']) {
       assert.equal(isPokerActionName(name), true, `${name} must be recognised as a poker action`);
     }
@@ -176,9 +111,7 @@ describe('finding the decision row', () => {
 
 describe('the matcher the audit used to have', () => {
   it('missed two of the three controls, which is why the boundary changed', () => {
-    // The negative control for this whole file. If the old boundary comes back, the block above
-    // fails and this one keeps passing — so the two are read together, and this one states the
-    // exact damage: a check that examined one button out of three and reported a pass.
+    // The negative control. The old matcher sees one button of three.
     const seen = DECISION_ROW_UNLABELLED.map(oldActionControlName).filter(oldIsPokerActionName);
     assert.deepEqual(
       seen,
@@ -188,10 +121,7 @@ describe('the matcher the audit used to have', () => {
   });
 
   it('would have been right if it had ever been given a label', () => {
-    // Worth stating plainly, because "the regex was made looser" is the wrong lesson to take from
-    // this fix. `\b` is perfectly correct about `fold, costs 0 units` — a comma IS a word boundary.
-    // The fault was reading `textContent`, where the cost runs straight into the word; reading the
-    // accessible name is the substantive change, and the boundary only matters for the fallback.
+    // `\b` is right about `fold, costs`. The fault was reading `textContent`.
     assert.equal(oldIsPokerActionName('fold, costs 0 units, gives up the hand'), true);
     assert.equal(oldIsPokerActionName('Fold0 units'), false);
     assert.equal(isPokerActionName('Fold0 units'), true);
@@ -200,10 +130,7 @@ describe('the matcher the audit used to have', () => {
 
 describe('the matcher survives being stringified into the page', () => {
   it('carries no reference to anything outside itself', () => {
-    // `MATCHER_SOURCE` injects these two functions into the browser with `String(fn)`, where there
-    // is no module scope. A closure over a module-level constant would throw a ReferenceError in
-    // Chrome and be reported as "page threw" on every route — or, worse, be caught somewhere and
-    // read as "no controls found". `new Function` reproduces exactly that scope: globals only.
+    // `new Function` reproduces the page's scope, which has globals and no module bindings.
     const injected = new Function(
       `const prlActionName = ${String(actionControlName)};
        const prlIsAction = ${String(isPokerActionName)};
@@ -240,10 +167,6 @@ describe('every route says what it expects to find', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The age gate
-// ---------------------------------------------------------------------------
-
 describe('noticing that the gate answered instead of the page', () => {
   it('fires when a route was replaced by the interstitial', () => {
     assert.equal(landedOnAgeGate('/play', '/age-check'), true);
@@ -252,13 +175,12 @@ describe('noticing that the gate answered instead of the page', () => {
   });
 
   it('does not fire when the gate is the page that was asked for', () => {
-    // Otherwise the interstitial could never be audited as itself, which is the one honest way to
-    // cover it.
+    // So the interstitial can be audited as itself.
     assert.equal(landedOnAgeGate('/age-check', '/age-check'), false);
   });
 
   it('does not fire on a path that merely starts with the same letters', () => {
-    // The rule `age-gate.ts` states at its own `matchesPrefix`: segments, never `includes`.
+    // Segments, never `includes`, as `age-gate.ts` states at `matchesPrefix`.
     assert.equal(landedOnAgeGate('/play', '/age-checkers'), false);
     assert.equal(landedOnAgeGate('/play', '/play'), false);
     assert.equal(landedOnAgeGate('/learn', '/learn/pot-odds'), false);
@@ -267,16 +189,13 @@ describe('noticing that the gate answered instead of the page', () => {
 
 describe('the declaration the harness seeds', () => {
   it('is accepted by the gate itself, for every threshold the gate can hold', () => {
-    // The point of the whole exercise: the cookie the harness sets and the cookie the proxy reads
-    // have to be the same cookie. Asserted by feeding the harness's own header to the gate's own
-    // predicate rather than by eyeballing two string literals in two files.
+    // The harness's cookie must be the one the proxy reads, so feed it to the gate's own predicate.
     const header = ageDeclarationCookies('https://lab.example')
       .map((cookie) => `${cookie.name}=${cookie.value}`)
       .join('; ');
     for (const minimum of [13, 18, 21, AGE_GATE_MINIMUM_CEILING]) {
       assert.equal(hasAgeDeclaration(header, minimum), true, `a gate set to ${minimum} refused the seed`);
     }
-    // And the configuration cannot ask for more than the ceiling, because it clamps.
     const config = readAgeGateConfig({ PRL_AGE_GATE: 'on', PRL_AGE_GATE_MINIMUM_AGE: '99' });
     assert.equal(hasAgeDeclaration(header, config.minimumAge), true);
   });
@@ -300,8 +219,7 @@ describe('the declaration the harness seeds', () => {
   });
 
   it('declares a value the gate can parse at all', () => {
-    // `readDeclaredAge` refuses anything that is not one to three digits, and a refused cookie is
-    // an audit of the interstitial. Cheap to assert, impossible to notice otherwise.
+    // `readDeclaredAge` refuses anything but one to three digits.
     for (const cookie of ageDeclarationCookies('https://lab.example')) {
       assert.match(cookie.value, /^\d{1,3}$/u);
       assert.equal(cookie.path, '/');
@@ -309,38 +227,22 @@ describe('the declaration the harness seeds', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The gate wiring
-//
-// `test:keyboard` was a finished, thorough audit that ran NOWHERE for as long as it existed:
-// `grep -rl 'test:keyboard' .github/workflows/` matched nothing and `pnpm run verify` did not list
-// it, because it had no `--start` and `docs/RUNBOOK.md` told a person to bring up two servers by
-// hand first. `scripts/release-gate-coverage.mjs` now holds the workflows to the gate list. What it
-// cannot see is the two properties below, both of which would turn a wired gate back into a
-// decoration — a run that starts no servers, and a run whose server fights another gate's.
-// ---------------------------------------------------------------------------
-
 describe('the gate starts its own servers, on a port nothing else claims', () => {
   const PACKAGE_JSON = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
   it('runs the audit with a lifecycle rather than expecting one to be there', () => {
     const script = PACKAGE_JSON.scripts['test:keyboard'];
     assert.ok(typeof script === 'string' && script !== '', 'package.json has no `test:keyboard`');
-    // `--with-api` is not decoration here: the private-table journey folds a real hand over a real
-    // socket, and without an API every one of its checks reports "is the API running?".
+    // The private-table journey needs an API.
     assert.match(script, /--start\b/u);
     assert.match(script, /--with-api\b/u);
     assert.match(script, /scripts\/keyboard-audit\.mjs/u);
   });
 
   it('claims a port no other gate in package.json claims', () => {
-    // Two gates on one port is a flake that only appears when somebody runs them at once, which is
-    // exactly what `pnpm run verify` does. Read off the scripts rather than off a comment, because
-    // a comment listing the port map is the thing that goes stale.
-    //
-    // The API port is deliberately NOT in this sweep: `test:a11y`, `test:ax` and `test:keyboard` all
-    // start an API on 3001 and must, because `apps/web/next.config.ts` freezes the `/api/*` rewrite
-    // destination into the build. They run as separate steps, never at once.
+    // Two gates on one port collide under `verify`. Read off the scripts, not a comment. The API port
+    // is left out, because `test:a11y`, `test:ax` and `test:keyboard` all need 3001 since
+    // `apps/web/next.config.ts` freezes the `/api/*` rewrite, and they never run at once.
     const claimed = new Map();
     const collisions = [];
     for (const [name, body] of Object.entries(PACKAGE_JSON.scripts)) {
@@ -359,8 +261,7 @@ describe('the gate starts its own servers, on a port nothing else claims', () =>
   });
 
   it('is one of the gates `verify` actually runs', () => {
-    // The whole point. `release-gate-coverage.mjs` proves the workflows match this list; nothing
-    // else proves this list contains the keyboard at all.
+    // Nothing else proves `verify` lists the keyboard gate.
     const gates = /for\s+gate\s+in\s+([^;]+);\s*do/u.exec(PACKAGE_JSON.scripts.verify);
     assert.notEqual(gates, null, 'the `verify` script no longer has a `for gate in ...; do` clause');
     assert.ok(

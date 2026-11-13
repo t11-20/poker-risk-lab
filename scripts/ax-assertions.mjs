@@ -1,177 +1,30 @@
 #!/usr/bin/env node
 /**
- * The half of `docs/production/accessibility-certification.md` that a machine can actually decide,
- * one check per assertion ID, run against the rendered accessibility tree in real Chrome.
+ * The rows of `docs/production/accessibility-certification.md` a machine can decide, one check per
+ * assertion ID, run against the computed accessibility tree in real Chrome by
+ * `scripts/ax-tree-audit.mjs` (`pnpm run test:ax`).
  *
- * This module is the check registry. `scripts/ax-tree-audit.mjs` owns the browser, the servers and
- * the reporting, and drives this; `pnpm run test:ax` is the gate both live behind. This is a private
- * module of that one gate, not a library two gates share — the warning in `ax-tree-audit.mjs` about
- * a gate that can be broken from a distance is about sharing across gates, and there is no second
- * consumer here.
+ * Each entry in `ASSERTION_ROUTES` is one page visit. `gather` drives the page with real keys and
+ * returns plain-JSON evidence, and each `check` decides from that evidence alone, so
+ * `ax-assertions.test.mjs` can feed it synthetic evidence and watch it refuse.
  *
- * ## The failure this exists to end
- *
- * The certification document holds 72 manual assertions and every release report this project has
- * produced records the same verdict for all of them: UNVERIFIED, because nobody has sat down with a
- * screen reader. That is true and it is also the wrong shape of true. A large share of those 72 are
- * not really about speech at all — they are about an accessible name, a role, an ARIA state, a
- * live region's politeness, where focus lands, whether a heading outline skips a level. Those are
- * facts about the rendered accessibility tree. Leaving them in a manual session that has never been
- * run means a regression in ANY of them — a removed `aria-label`, a live region flipped to
- * assertive, a control that drops focus on the floor when it disables itself — ships silently and
- * waits for a human session that never comes.
- *
- * So the 72 are split. The 70 whose whole subject is a DOM/ARIA fact are checked here, on every
- * run, and a regression fails `pnpm run verify`. The 2 that are left stay with the person, and
- * `pnpm run certify:screen-reader` now presents only those: two states no honest fixture reaches
- * (6.7 and 8.3).
- *
- * ## Three of them were answerable, and the reason each had been left was wrong
- *
- * Added 2026-08-26, each with the measurement that moved it:
- *
- *   - **2.4** was `person` for "the prompt is **not** read twice", which reads as a fact about the
- *     utterance and is a fact about the tree. A reader announces a group's name on entering it, so
- *     the prompt is heard a second time if and only if it appears in a second accessible name —
- *     the group's, or an option's. `QuizRunner` already says this where its legend is written; the
- *     check asserts it. Measured: group name "Choose one answer", four options each named by its
- *     own text, the prompt in exactly one accessible name.
- *   - **2.9** was `person` because "no score is announced anywhere" is unbounded over WORDINGS. It
- *     is bounded over CAUSES: a score is a function of what the learner got right. `gatherQuizReview`
- *     walks the quiz to its review panel twice from a fresh load, answering the first question with
- *     the lesson's own answer once and with another option once, and requires the two ends to read
- *     identically. Nothing that depends on correctness can survive that, in any wording.
- *   - **3.19** was `person` because provoking a server refusal was said to need "a second actor
- *     racing the same seat". It needs one task. `disabled` comes from React state and is applied on
- *     the next render, so two `click()`s inside one task both reach `act`, each minting its own
- *     `actionId`, and both frames leave over one socket in order. Measured against the running
- *     server: the second click saw `disabled === false` and the server answered "It is not your
- *     turn to act. (not_your_turn). Nothing was applied." — assertively, and the only interruption
- *     in the whole hand.
- *
- * ## Four more were not certification limits at all, but DEFECTS filed as one
- *
- * 3.3 said "A new hand was dealt." never reaches the DOM and asked a reviewer to decide whether
- * hearing the blinds instead was a PASS. That is a bug with a checklist item wrapped round it, and
- * a check that had existed would have found it: the table's narration region was not in the
- * document when a hand was dealt, and the deal sentence was destroyed by the forced bets of the
- * same table notice. Both are fixed in the application, and J3.3 below is what keeps them fixed.
- * 8.2 said the bundled-copy path needs the API down for a process this gate shares with everything
- * else — true, and the conclusion does not follow: the gate now runs a second web app that has no
- * API behind it. Neither row was ever about speech.
- *
- * **4.2 and 7.4 joined them on 2026-08-26, and the certification had already written down why.** It
- * said of 4.2 that a machine could answer it, that the answer was that nothing announced the filter
- * count, and that closing it was a product change rather than a certification one. It said of 7.4
- * that making the background `inert` "would then make the row `auto` by construction". Both product
- * changes were made, both measurements were re-taken first and both held:
- *
- *   - **4.2.** A GET submit on `/lab` replaces the document, so there is no surviving context to
- *     write into a live region — measured, the `window` marker was gone, `document.title` was
- *     byte-identical, and the summary region took zero mutations because it arrived already holding
- *     its sentence. A filtered view now carries the count in its title, which is the one thing a new
- *     document announces without JavaScript. J4.2 below checks that the submit is still a document
- *     load (a client-side query change would announce nothing at all), and reads the count off the
- *     page's own summary rather than recomputing it.
- *   - **7.4.** Measured: 29 of 34 content-bearing elements behind the open sheet were still
- *     non-ignored nodes. `MobileNav` now marks every subtree that is not the sheet `inert` while it
- *     is open. J7.4 below is a negative over the whole background, with a floor under the sweep, and
- *     it holds the sheet's un-inertable ancestors and its one deliberate exemption to their own
- *     stricter terms.
- *
- * ## "Needs a live table" was a statement about this gate, not about speech
- *
- * Nineteen of those 70 were with the person until this module grew three fixtures, and every one of
- * them was refused for a fixture reason rather than an un-automatable one:
- *
- *   - **A live table over a real socket** (`gatherLiveTable`). `/play?state=decision` renders the
- *     table's component tree without a server, so the connection never changes state, no blind is
- *     ever posted, the turn is never yours and no hand ever completes. The fixture opens a guest
- *     session, creates a private room with five bots, deals, folds when the decision arrives, and
- *     lets the hand finish — through the screens, with real key presses.
- *   - **A hand this run played, replayed** (`gatherReplay`). The scrubbable replay is at
- *     `/review/<handId>` and needs a hand in a database; the demo route renders a different
- *     component with no face-down card and no timeline in it. The fixture reads back the hand the
- *     live table just played, as the reader's own history.
- *
- *   - **A web app with no API behind it** (`gatherBundledCopy`). The bundled-copy path is taken by
- *     the WEB SERVER's own fetch, so blocking `/api/*` in the browser — which is how 3.20 is
- *     driven — leaves the server render untouched and the page still arrives with live data in it.
- *     `ax-tree-audit.mjs` starts a second `next start` off the same build with `PRL_API_ORIGIN`
- *     pointed at a port nothing can be listening on, and one route visits it.
- *
- * What is still refused is refused on its merits, and section 5 of the certification document lists
- * both with one line each: 6.7 needs a server that lies about a deal, and 8.3 needs a build with a
- * deliberate `throw` in the root layout.
- *
- * ## What this does NOT claim
- *
- * A check here does not certify its assertion. It establishes that the fact the assertion rests on
- * is still true. That is exactly the difference between `test:ax` and a certification, stated at
- * length in `ax-tree-audit.mjs`'s header and in section 1 of the certification document, and it is
- * not softened by there being more checks. What the split buys is that a REGRESSION now fails a
- * gate instead of waiting for a manual session, and that the manual session is a half-hour rather
- * than an afternoon.
- *
- * The split is conservative on purpose. Where an assertion mixes a checkable fact with a claim
- * about speech, the whole row stays with the person unless the speech half follows from a
- * structural property the check actually asserts — 2.4 is the only row that has ever been moved
- * under that carve-out, and 6.7 is the counter-example that stays: both of its halves are
- * structural, one of them is unreachable, and half a row is not a covered row. Overclaiming here is
- * worse than a smaller automated set: a row that has been dropped from the human session and is
- * only half covered by a machine is a row nobody checks. Nothing here moved on the strength of a
- * check that had not been run against a build with the defect deliberately restored.
- *
- * ## Shape
- *
- * Each entry in `ASSERTION_ROUTES` is one page visit. `gather` DRIVES: it navigates, presses real
- * keys through Chrome's input pipeline, waits, and returns one plain-JSON evidence object. Each
- * `check` then DECIDES, as a pure function of that evidence.
- *
- * That split is not tidiness. It means one scripted interaction serves several assertions (opening
- * the navigation sheet answers five of journey 7), the decisions are readable next to the sentence
- * they came from, and — the part that matters — every `decide` can be handed synthetic evidence by
- * `scripts/ax-assertions.test.mjs` and shown to REFUSE it. A checker that has only ever been shown
- * a correct page is a checker nobody has tested.
- *
- * `id` is the assertion ID from the document, and `scripts/screen-reader-certify.test.mjs` asserts
- * that the set of IDs here is EXACTLY the set of rows the document marks `auto`. Neither side can
- * move alone: delete a check and the doc still marks the row machine-covered, so the row would fall
- * out of the automated set AND out of the human session at once. That test is the control against
- * exactly that.
+ * A check here does not certify its row. It proves the DOM/ARIA fact the row rests on still holds.
+ * `scripts/screen-reader-certify.test.mjs` asserts the IDs here are exactly the rows the document
+ * marks `auto`.
  */
 
-// ---------------------------------------------------------------------------
-// Shared vocabulary
-// ---------------------------------------------------------------------------
-
-/**
- * Words that must never appear in the accessible name of a card the server chose to hide.
- *
- * Ranks and suits, as `packages/ui/src/cards.ts` spells them. Matched on word boundaries so
- * "face-down card" does not trip on anything, and so a name like "Ada hole cards" is not read as a
- * leak — "cards" is not a rank.
- *
- * It lives here rather than in `ax-tree-audit.mjs` so that the per-journey card audit and assertion
- * 3.8 cannot drift apart into two different ideas of what a leak looks like.
- */
+// Ranks and suits as `packages/ui/src/cards.ts` spells them, on word boundaries. Shared with the
+// per-journey card audit so the two leak checks cannot drift.
 export const CARD_VALUE_WORDS =
   /\b(ace|king|queen|jack|ten|nine|eight|seven|six|five|four|three|two|deuce|hearts?|diamonds?|clubs?|spades?)\b/iu;
 
-/** A card named the way `packages/ui/src/cards.ts` names a revealed one: rank, "of", suit. */
 export const CARD_NAMED_IN_WORDS =
   /^(ace|king|queen|jack|ten|nine|eight|seven|six|five|four|three|two) of (hearts|diamonds|clubs|spades)\b/iu;
 
 const pass = (detail) => ({ ok: true, detail });
 const fail = (detail) => ({ ok: false, detail });
 
-/**
- * True when a computed name tells a reader nothing beyond the role they were going to hear anyway.
- *
- * The three cases the document names in G5 and 1.4: nothing at all, a bare number or glyph (an
- * index span that escaped its `aria-hidden`), and the role word itself. "3" and "›" are names; they
- * are not names anybody can act on.
- */
+// Empty, a bare number or glyph, or the role word itself (G5, 1.4).
 export function isBareName(name) {
   const trimmed = (name ?? '').trim();
   if (trimmed.length === 0) return true;
@@ -179,15 +32,8 @@ export function isBareName(name) {
   return /^(link|button|image|graphic|icon)$/iu.test(trimmed);
 }
 
-/**
- * True when an action button's name is a sentence rather than a word welded to a number.
- *
- * 3.14 is explicit that "a button that announces a run-together string of the word and a number is
- * a FAIL". That is not hypothetical: the visible label and the cost are two spans, so this
- * control's `textContent` really is "Fold0 units", and it is only the `aria-label` on it that makes
- * it a sentence. A letter immediately followed by a digit is the signature of the `aria-label`
- * having been dropped and the text content taking over.
- */
+// A letter directly followed by a digit means the `aria-label` was dropped and `textContent`
+// ("Fold0 units") took over (3.14).
 export function announcesActionAndCost(name) {
   const trimmed = (name ?? '').trim();
   if (!/^(fold|check|call|bet to|raise to)\b/iu.test(trimmed)) return false;
@@ -195,7 +41,6 @@ export function announcesActionAndCost(name) {
   return /\d[\d,]*\s+units?\b/iu.test(trimmed);
 }
 
-/** Every heading level in document order, checked for a skipped level. Returns null when clean. */
 export function skippedHeadingLevel(levels) {
   let previous = null;
   for (const level of levels) {
@@ -205,21 +50,10 @@ export function skippedHeadingLevel(levels) {
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Page-side probes
-// ---------------------------------------------------------------------------
-
 /**
- * Installed at document start, before any framework code runs.
- *
- * G9 asserts the app's announcer says NOTHING on a full document load — the browser and the reader
- * already say the title, and an app that says it again is the duplicate G8 exists to forbid. An
- * observer attached after the page has settled cannot tell "never wrote" from "wrote and was
- * cleared", so it has to be attached before hydration. `Page.addScriptToEvaluateOnNewDocument` is
- * the only place early enough.
- *
- * It records every DISTINCT non-empty text the announcer has held, with the milliseconds since the
- * document started, which is what G7 (arrives within about a second) and G8 (exactly once) read.
+ * Installed at document start. G9 asserts the announcer says nothing on a full load, and an observer
+ * attached later cannot tell "never wrote" from "wrote and was cleared". It records each distinct text
+ * with its time, for G7 and G8.
  */
 export const ANNOUNCER_PROBE = `
 (() => {
@@ -252,48 +86,14 @@ export const ANNOUNCER_PROBE = `
 `;
 
 /**
- * Every write into every live region, in order, installed before any framework code runs.
+ * Every write into every live region, recorded from document start, because the live table replaces
+ * most sentences within milliseconds ("You chose to fold." was overwritten 6ms later).
  *
- * ## Why the announcement surface has to be RECORDED rather than read
- *
- * The live table says most of what it says once and replaces it a second later. Measured on a real
- * hand: "You chose to fold." was written at 13,248ms and the next table event overwrote it 6ms
- * later. A check that reads the regions after the hand sees the last sentence and nothing else, so
- * every assertion about what the table said during the hand — the connection going live, the blinds
- * before the bots, the turn sentence, the Coach arriving, the hand completing — would be checking a
- * page that has already stopped saying it.
- *
- * So this observes the whole document from `Page.addScriptToEvaluateOnNewDocument` and appends one
- * entry per DISTINCT text a region has held, with the milliseconds since the document started.
- * `ANNOUNCER_PROBE` does the same thing for the route announcer alone and is kept separate: G7/G8/G9
- * are about one region whose politeness and duplication are the subject, and merging them would
- * make those three read a haystack.
- *
- * ## Three details that are each load-bearing
- *
- * **`characterDataOldValue`, and the `recovered` flag on what it produces.** React coalesces two
- * state changes that arrive in one task into a single render, so a sentence can be replaced before
- * it ever reaches the DOM. Where the DOM itself was written twice in one batch the observer only
- * sees the final text, and the old value is the only record that the first one existed. Recovering
- * it is what lets a check distinguish "was said and replaced" from "was never said" — the
- * distinction assertion 3.3 rests on.
- *
- * Every recovered entry is marked `recovered: true`, and that marking is the point. A recovered
- * value is a string that was in a React element's props and never in a painted DOM: Chrome posts a
- * live-region notification from the commit and reads the region's text when it services it, so an
- * intermediate value inside one commit is never announced by anything. A check that accepted a
- * recovered entry as an announcement would pass while a screen-reader user heard nothing, which is
- * the exact failure 3.3 was filed as.
- *
- * **A mutation count per region.** A polite region re-written with the SAME text produces no change
- * of text and is still a re-announcement in several readers. Assertion 3.6 — the turn sentence is
- * announced once per turn, on an app that pushes whole-state frames several times a second — is
- * therefore a question about mutations, not about text. Counting both is the only way to answer it.
- *
- * **A key that survives two regions of the same class.** The table's narration and the decision
- * band's turn sentence are both `div.prl-live-region[role=status]`; keyed on their own class alone
- * they would be one region, and 3.6 would count the table's narration as re-announcements of the
- * turn. The key is the nearest three ancestor class names, which tells them apart.
+ * - `characterDataOldValue` recovers a text replaced inside one React commit. Such entries carry
+ *   `recovered: true`, because nothing announced them and no check may count them (3.3).
+ * - A mutation count per region, because a same-text rewrite is still a re-announcement (3.6).
+ * - The key is the nearest three ancestor class names, because the table narration and the turn
+ *   sentence share a class.
  */
 export const SPEECH_PROBE = `
 (() => {
@@ -379,14 +179,12 @@ export const SPEECH_PROBE = `
 })();
 `;
 
-/** Every live-region write and mutation this document has recorded so far. */
 const speechSoFar = (page) =>
   page.evaluate('window.__prlSpeech ?? { log: [], mutations: [] }').then((speech) => ({
     log: speech.log ?? [],
     mutations: speech.mutations ?? [],
   }));
 
-/** Every non-ignored AX node, flattened to the fields these checks read. */
 async function axNodes(page) {
   const nodes = await page.axTree();
   return nodes.filter((node) => node.ignored !== true).map((node) => axShape(node));
@@ -412,7 +210,6 @@ function axShape(node) {
   };
 }
 
-/** The computed AX nodes for one selector, plus each element's own markup. */
 async function axFor(page, selector) {
   const found = await page.axFor(selector);
   return found.map((entry) => ({
@@ -422,15 +219,8 @@ async function axFor(page, selector) {
   }));
 }
 
-/**
- * The computed AX node for whatever currently holds the DOM caret.
- *
- * Read through a stamped attribute rather than from the full tree, for the reason
- * `ax-tree-audit.mjs` documents at length: Chrome 151 keeps `focused` on `RootWebArea` after a
- * `tabindex="-1"` landing place is focused, so the full tree answers "the document is focused" for
- * a caret that is demonstrably on a named status node. `getPartialAXTree` on the real
- * `activeElement` answers the question that was actually asked.
- */
+// Through `getPartialAXTree` on `activeElement`, because Chrome 151's full tree keeps `focused` on
+// RootWebArea after a `tabindex="-1"` landing is focused.
 async function focusedAx(page) {
   const where = await page.evaluate(
     `(() => {
@@ -455,15 +245,8 @@ async function focusedAx(page) {
   };
 }
 
-/**
- * Every `Metric` under one root, as the four things a reader is entitled to hear about a figure.
- *
- * `Metric` in `@prl/ui` has two shapes and only one of them puts the value in the tree as text: a
- * counting figure hides the animated number from assistive technology and carries the real one in a
- * visually-hidden node that reads "label: value unit interval". A check written against the visible
- * value alone would report every counted figure on the site as unnamed, so both shapes are read
- * here and the decisions below accept either.
- */
+// `Metric` has two shapes. A counting figure hides the animated number and carries the real one in a
+// visually hidden readout, so both shapes are read.
 const METRICS_JS = `((root) => {
   const tidy = (el) => (el === null ? null : (el.textContent ?? '').replace(/\\s+/gu, ' ').trim());
   const hidden = (el) => el === null || el.closest('[aria-hidden="true"]') !== null;
@@ -490,17 +273,12 @@ const METRICS_JS = `((root) => {
   });
 })`;
 
-/**
- * What a reader hears about one figure, whichever shape it is in: the label, then the number.
- *
- * Returns a sentence describing the defect, or null when the figure is announced whole.
- */
+// Returns a sentence describing the defect, or null when the figure is announced whole.
 export function figureDefect(figure) {
   const label = (figure.label ?? '').trim();
   if (label === '' || figure.labelHidden) return 'a figure reaches the tree with no label beside it';
   const spoken = (figure.spoken ?? '').trim();
   if (figure.valueHidden || figure.value === null) {
-    // The counting shape. The visible number is decoration; the hidden readout is the figure.
     if (spoken === '') return `"${label}" hides its value from the tree and offers no readout instead`;
     if (!spoken.startsWith(`${label}:`)) return `"${label}" is announced as "${spoken}", without its label`;
     if (!/\d/u.test(spoken)) return `"${label}" announces "${spoken}", which carries no figure`;
@@ -526,12 +304,7 @@ const LIVE_REGIONS_JS = `
     className: el.className,
   }))`;
 
-/** Every live region on the page, as the reader's own announcement surface. */
 const liveRegions = (page) => page.evaluate(`(() => (${LIVE_REGIONS_JS}))()`);
-
-// ---------------------------------------------------------------------------
-// Journey: global (the site shell), at a desktop width
-// ---------------------------------------------------------------------------
 
 const SHELL_TITLE = 'Poker Risk Lab — a decision laboratory for poker';
 const LEARN_TITLE = 'Learn — Poker Risk Lab';
@@ -563,14 +336,14 @@ async function gatherGlobal(page) {
     .filter((node) => node.role === 'radio' && !node.hidden)
     .map((node) => ({ name: node.name, checked: node.checked }));
 
-  // --- G2: the first Tab stop, and where Enter on it puts the caret ---------
+  // G2
   await page.evaluate('document.body.focus(); document.activeElement && document.activeElement.blur()');
   await page.press('Tab');
   evidence.firstTabStop = await focusedAx(page);
   await page.press('Enter');
   evidence.afterSkipLink = await focusedAx(page);
 
-  // --- G7, G8, G10: a REAL client-side navigation ---------------------------
+  // G7, G8, G10: a real client-side navigation.
   const target = await page.evaluate(
     `(() => {
       const link = [...document.querySelectorAll('nav[aria-label="Primary"] a')]
@@ -746,9 +519,7 @@ const GLOBAL_CHECKS = [
       if (e.announcerOnLoad === null) {
         return fail('the announcer probe never installed, so this run proved nothing about the load');
       }
-      // Silence is only evidence when there was something that could have spoken. Without this,
-      // G9 is the one check in the registry that passes a page which rendered nothing at all —
-      // which is exactly what the blanket control in `ax-assertions.test.mjs` caught it doing.
+      // Silence is only evidence when the announcer exists. Without this G9 passed a blank page.
       const region = e.announcer[0];
       if (e.announcer.length !== 1 || region.live !== 'polite') {
         return fail(
@@ -784,7 +555,6 @@ const GLOBAL_CHECKS = [
   },
 ];
 
-/** Shared by G3 and the journey routes: landmark inventory and uniqueness. */
 function decideLandmarks(landmarks) {
   const counted = (role) => landmarks.filter((landmark) => landmark.role === role);
   for (const [role, expected] of [
@@ -820,7 +590,6 @@ function decideLandmarks(landmarks) {
   );
 }
 
-/** Shared by G4 and 1.2/1.3: one h1, and no level skipped in document order. */
 function decideHeadingOutline(headings) {
   const levelOnes = headings.filter((heading) => heading.level === 1);
   if (levelOnes.length !== 1) {
@@ -837,7 +606,6 @@ function decideHeadingOutline(headings) {
   return pass(`h1 "${levelOnes[0].name}", ${headings.length} heading(s), no level skipped`);
 }
 
-/** Roles whose nodes must carry a computed accessible name. Mirrors `ax-tree-audit.mjs`. */
 const NAMED_ROLES = new Set([
   'button',
   'checkbox',
@@ -856,10 +624,6 @@ const NAMED_ROLES = new Set([
   'textbox',
   'treeitem',
 ]);
-
-// ---------------------------------------------------------------------------
-// Journey 1 — Learn, the curriculum index
-// ---------------------------------------------------------------------------
 
 async function gatherLearn(page) {
   const nodes = await axNodes(page);
@@ -965,21 +729,12 @@ const LEARN_CHECKS = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Journey 2 — a lesson and its quiz
-// ---------------------------------------------------------------------------
-
 export const QUIZ_VERDICT_OPENING =
   /^(That matches the answer this lesson gives|That is not the answer this lesson gives)\./u;
-// "35.0 % is more than ±1.5 % from the computed 33.3 %." / "… is within ±1.5 % of the computed …".
-// It read "… is outside the tolerance of 33.3 %", which named the target as the tolerance; see
-// `apps/web/src/lib/quiz-verdict.ts`. `ax-assertions.test.mjs` drives this with the app's own sentence.
+// "35.0 % is more than ±1.5 % from the computed 33.3 %." See `apps/web/src/lib/quiz-verdict.ts`.
 export const NUMERIC_VERDICT_OPENING = /^\S.* is (?:within ±.*? of|more than ±.*? from) the computed .*?\./u;
 
-/**
- * Presses the multiple-choice question's "Check answer", which is what answers it. False when the
- * button is missing or still disabled, which J2.5 reports rather than reading a region nobody wrote.
- */
+// False when the button is missing or disabled, which J2.5 reports.
 const PRESS_CHECK_ANSWER_JS = `(() => {
   const button = document.querySelector('.prl-learn-quiz__check');
   if (button === null || button.disabled) return false;
@@ -992,19 +747,12 @@ async function gatherQuiz(page) {
   evidence.panelHeading = (await axFor(page, '.prl-learn-quiz .prl-panel__title'))[0] ?? null;
   evidence.promptHeading = (await axFor(page, '.prl-learn-quiz__heading'))[0] ?? null;
 
-  // 2.4 — read BEFORE anything is answered. Answering inserts the chips and the note under each
-  // option, and a check that read the group afterwards would be reading a different group from the
-  // one the assertion's step ("Tab into the answer group") arrives at.
+  // 2.4: read before answering, because answering adds chips and notes to the group.
   evidence.answerGroup = (await axFor(page, '.prl-learn-quiz__options'))[0] ?? null;
   evidence.answerOptions = await axFor(page, '.prl-learn-quiz__options input[type="radio"]');
 
-  // 2.5 — select an option, read the region (selecting must not answer), then press "Check answer"
-  // and read the region it writes into.
-  //
-  // The radios used to answer on change, so a keyboard reader arrowing through the group answered
-  // and posted every option on the way (UX audit at 6b3886e, Minor 2). Two evaluates rather than
-  // one: React applies the selection on the next render, and a click on the button in the same
-  // task would land on a button that is still disabled.
+  // 2.5: selecting must not answer, then "Check answer" writes the region. Two evaluates, because React
+  // applies the selection on the next render and the button is still disabled in the same task.
   const selected = await page.evaluate(
     `(() => {
       const radio = document.querySelector('.prl-learn-quiz__options input[type="radio"]');
@@ -1025,7 +773,7 @@ async function gatherQuiz(page) {
     QUIZ_VERDICT_OPENING.test(region.text),
   ).length;
 
-  // 2.8 — advance, and see where the caret lands.
+  // 2.8
   const advanced = await page.evaluate(
     `(() => {
       const next = [...document.querySelectorAll('.prl-learn-quiz__nav button')]
@@ -1045,23 +793,9 @@ async function gatherQuiz(page) {
 }
 
 /**
- * 2.6 and 2.7, on the first numeric question the quiz offers.
- *
- * Two things about the input, both measured rather than assumed.
- *
- * First, it has to arrive through Chrome's own key pipeline. Setting `.value = 'abc'` on an
- * `<input type="number">` is silently discarded by the DOM — the element reports an empty value and
- * `validity.badInput` never becomes true — so a check written that way would type nothing, see no
- * error, and report a pass for a field it never made invalid.
- *
- * Second, what gets typed is `1e` and not the `abc` the assertion's recipe names. Chrome's number
- * field FILTERS bare letters out at the editing layer: measured in Chrome 151, three real `a`/`b`/`c`
- * key events left the field at `value: ""`, `badInput: false`, `aria-invalid` absent — nothing had
- * happened, and a check that typed them would have reported the app broken when it is the browser
- * refusing the keystroke. `1e` is a partial exponent, which Chrome does accept into the buffer and
- * does report as `badInput`, so it is the malformed answer this browser can actually be given. The
- * claim the assertion makes — a refused answer says so, and says WHY before it says what the
- * tolerance is — is the same claim either way; the recipe is not.
+ * 2.6 and 2.7 on the first numeric question. Input goes through Chrome's key pipeline, because
+ * `.value = 'abc'` is discarded. It types `1e`, because Chrome 151 filters bare letters out of a number
+ * field and `1e` is a partial exponent it accepts and reports as `badInput`.
  */
 async function gatherNumericQuestion(page, evidence) {
   const field = await page.evaluate(
@@ -1094,7 +828,7 @@ async function gatherNumericQuestion(page, evidence) {
   );
   evidence.numericInvalidAx = (await axFor(page, '.prl-learn-quiz__numeric input[type="number"]'))[0] ?? null;
 
-  // 2.7 — a real number, then the comparison.
+  // 2.7
   await page.selectAllAndType('.prl-learn-quiz__numeric input[type="number"]', '33');
   await page.settle(400);
   const checked = await page.evaluate(
@@ -1166,9 +900,7 @@ const QUIZ_CHECKS = [
           'the answer options are not a group in the computed tree, so entering them announces nothing',
         );
       }
-      // The role, not only the name. A `generic` container carrying an `aria-label` computes a name
-      // that no reader announces on entry, so it would satisfy every other clause here and tell the
-      // reader nothing — which is the same silence as having no group at all.
+      // A `generic` container with an `aria-label` is not announced on entry, so the role must be a group.
       if (!['group', 'radiogroup'].includes(e.answerGroup.role)) {
         return fail(
           `the answer options sit inside a "${e.answerGroup.role}", which is not a role a reader ` +
@@ -1191,14 +923,7 @@ const QUIZ_CHECKS = [
       if (bare.length > 0) {
         return fail(`${bare.length} of ${options.length} options announce no text of their own`);
       }
-      // The half of this row that is about the UTTERANCE, decided structurally.
-      //
-      // "The prompt is not read twice" has exactly one cause inside the tree: the prompt appearing
-      // in a second accessible name. A group labelled by the prompt is re-announced on entry by
-      // every reader; an option whose name carries the prompt repeats it once per option.
-      // `QuizRunner` says so where the legend is written — "a legend that repeats it makes a screen
-      // reader read the whole question twice" — and this is that comment as a check. What is left
-      // over is a reader re-reading anything at all on request, which is not a property of this page.
+      // "The prompt is not read twice" has one cause in the tree, the prompt in a second accessible name.
       const prompt = (e.promptHeading?.name ?? '').replace(/^Question \d+ of \d+\.\s*/u, '').trim();
       if (prompt.length < 12) {
         return fail(
@@ -1329,46 +1054,12 @@ const QUIZ_CHECKS = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Journey 2.9 — the end of a quiz, run twice
-// ---------------------------------------------------------------------------
-
 /**
- * 2.9 — "no score, tally or mark out of five is announced anywhere" — decided by DIFFERENCE.
- *
- * ## Why the obvious check is the wrong one, and why this row sat with the person
- *
- * The certification recorded this as an unbounded negative over speech, and added that "the
- * end-of-quiz panel's own prose about there being no mark out of five defeats every textual scan".
- * The second half of that is measurably false — the panel spells the number as a word ("nowhere in
- * this product for a mark out of five to live"), so no digit-shaped scan trips on it — but the
- * first half is the real problem and a scan does not solve it. A scan is a list of the wordings
- * somebody thought of. "You matched three of the five" defeats a digit pattern; "well done" is a
- * verdict with no number in it at all. A negative decided by a wording list is a negative that
- * passes anything the list did not anticipate, which is exactly the proxy-for-a-judgement shape
- * this repository has been bitten by before.
- *
- * ## What is decided instead
- *
- * A score is a function of what the learner got right. So the quiz is run to its review panel
- * TWICE, from a fresh load each time, diverging in exactly one place: the first question is
- * answered with the lesson's own answer in one run and with a different option in the other. Every
- * other question is skipped, identically, in both. If any figure anywhere on the page were derived
- * from correctness — a tally, a percentage, a mark, a grade, a sentence of praise, in digits or in
- * words or in a live region — the two runs would differ, because the number of matched answers
- * differs by exactly one. They must be identical.
- *
- * That is a decision procedure rather than a pattern list: it cannot be defeated by a wording
- * nobody thought of, because it never looks at the wording. What it does not cover is a figure that
- * does NOT depend on correctness — "5 questions answered" is a tally the row also forbids and it
- * would be identical in both runs — so the panel is separately required to carry no `N of M` or
- * `N%` shape. The differential is the load-bearing half; the shape scan is a second, weaker guard
- * over the one thing the differential cannot see.
- *
- * The run is compared over `main` rather than the whole document, deliberately: the shell's units
- * pill is fetched asynchronously and can settle as `assumed` in one run and `known` in the next,
- * which is a difference about the API's latency and not about the quiz. Nothing outside `main`
- * knows what was answered.
+ * 2.9, decided by difference. A wording scan only catches the wordings somebody thought of, but a
+ * score depends on correctness. So the quiz runs to its review panel twice, differing only in whether
+ * the first answer is right, and `main` must read identically. A separate shape scan covers tallies
+ * that do not depend on correctness. Only `main` is compared, because the units pill settles
+ * asynchronously.
  */
 const SPOKEN_TEXT_JS = `((root) => {
   if (root === null) return null;
@@ -1377,10 +1068,8 @@ const SPOKEN_TEXT_JS = `((root) => {
   return (copy.textContent ?? '').replace(/\\s+/gu, ' ').trim();
 })`;
 
-/** The shapes a tally takes when it is written in digits. See the header: the weaker of the two halves. */
 const TALLY_SHAPE = /\b\d[\d,]*\s*(?:\/|of|out of)\s*\d[\d,]*\b|\b\d[\d,]*\s*%/u;
 
-/** How many "Next question"/"Finish" presses it can take to walk out of a quiz. */
 const QUIZ_STEP_LIMIT = 12;
 
 async function gatherQuizReview(page, baseUrl) {
@@ -1389,9 +1078,7 @@ async function gatherQuizReview(page, baseUrl) {
     const run = { takeTheLessonAnswer };
     await page.goto(`${baseUrl}/learn/pot-odds`);
     await page.settle(700);
-    // Answer once with whatever is first, only so that the chips appear and the lesson's own answer
-    // can be read off the page. Which option carries it is a fact about the question, and this
-    // gate has no business knowing the answer key.
+    // Answer with the first option only to reveal which option is the lesson's answer.
     run.opened = await page.evaluate(
       `(() => {
         const radios = [...document.querySelectorAll('.prl-learn-quiz__options input[type="radio"]')];
@@ -1404,7 +1091,6 @@ async function gatherQuizReview(page, baseUrl) {
       evidence.runs.push(run);
       continue;
     }
-    // Selecting is not answering: the chips only appear once "Check answer" is pressed.
     await page.settle(600);
     run.checked = await page.evaluate(PRESS_CHECK_ANSWER_JS);
     await page.settle(900);
@@ -1427,7 +1113,6 @@ async function gatherQuizReview(page, baseUrl) {
       `(${SPOKEN_TEXT_JS})(document.querySelector('.prl-learn-quiz__verdict'))`,
     );
 
-    // Out through the quiz's own control, skipping the rest — identically in both runs.
     for (let step = 0; step < QUIZ_STEP_LIMIT; step += 1) {
       const advanced = await page.evaluate(
         `(() => {
@@ -1486,8 +1171,7 @@ const QUIZ_REVIEW_CHECKS = [
           );
         }
       }
-      // The divergence, proved rather than assumed. Two runs that answered the same way would agree
-      // about everything including a score, and this check would pass a scoreboard.
+      // Two runs that answered the same way would agree about a score too.
       if (matched.chose.wanted === missed.chose.wanted) {
         return fail('both runs picked the same option, so nothing about correctness differed between them');
       }
@@ -1533,7 +1217,6 @@ const QUIZ_REVIEW_CHECKS = [
   },
 ];
 
-/** Where two strings first differ, with a little either side. For a failure message that can be read. */
 export function firstDifference(left, right) {
   const a = left ?? '';
   const b = right ?? '';
@@ -1542,10 +1225,6 @@ export function firstDifference(left, right) {
   const from = Math.max(0, at - 30);
   return `…${a.slice(from, at + 50)}…` + ` / …${b.slice(from, at + 50)}…`;
 }
-
-// ---------------------------------------------------------------------------
-// Journey 3 — the poker table and the Coach, at a desktop width
-// ---------------------------------------------------------------------------
 
 const POT_READOUT = /^Pot: [\d,]+ units?$/u;
 
@@ -1597,18 +1276,8 @@ async function gatherTable(page) {
   return evidence;
 }
 
-/**
- * The board's caption, and whether it really arrives before the cards it describes.
- *
- * Read as reading order rather than as the `<figure>`'s accessible name, and that is a correction
- * rather than a shortcut. Chrome does not compute a figure's name from its `figcaption` at all:
- * measured in Chrome 151 against `<figure><figcaption>plain caption</figcaption>…</figure>`, the
- * figure's computed name is the empty string, with or without the caption being visually hidden,
- * and only an explicit `aria-label` names it. So a check written against the group's NAME would
- * report a defect against markup that is correct, and send somebody to add an `aria-label` that
- * duplicates the caption. What 3.9 actually asks — that the board is announced as a whole before
- * the cards are met one at a time — is a question about reading order, and this is that question.
- */
+// Read as reading order, because Chrome 151 computes an empty name for a `<figure>` from its
+// `figcaption`. 3.9 is about the board being announced before its cards.
 function boardCaption(page) {
   return page.evaluate(
     `(() => {
@@ -1630,20 +1299,9 @@ function boardCaption(page) {
   );
 }
 
-/**
- * Each action control's computed name, alongside the `aria-label` it is supposed to come from.
- *
- * Both halves, and the second one is not redundant — it is what makes this check able to fail. The
- * visible label and the cost are two separate spans, so removing the `aria-label` leaves the button
- * named from its own content. Measured in Chrome 151: with the label removed the computed name is
- * `"Fold 0 units"`, because accname joins the two spans with a space. That reads well enough to
- * satisfy any pattern written against the NAME alone, and the actual regression — a reader losing
- * "gives up the hand and any claim on the pot", and the whole sentence form 3.14 asks for — sails
- * through. Found by breaking the component: the first version of this check passed a build with
- * every action `aria-label` deleted.
- *
- * So the check asserts the name is the label the app authored, and that the label is a sentence.
- */
+// The computed name and its `aria-label` source. Without the label accname gives "Fold 0 units",
+// which passes a name-only pattern. The first version of this check passed a build with every
+// action `aria-label` deleted.
 function actionButtons(page) {
   return page.evaluate(
     `(() => [...document.querySelectorAll('button.prl-action-btn')].map((button) => ({
@@ -1658,7 +1316,6 @@ async function potReadout(page) {
   return regions.find((region) => POT_READOUT.test(region.text))?.text ?? null;
 }
 
-/** Fold with a real Enter, then read the announcement surface and the caret. */
 async function actAtTheTable(page, evidence) {
   const target = await page.evaluate(
     `(() => {
@@ -1903,10 +1560,6 @@ const TABLE_CHECKS = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Journey 3, continued — the narrow-width analysis disclosure
-// ---------------------------------------------------------------------------
-
 async function gatherTableNarrow(page) {
   const evidence = {};
   evidence.handle = (await axFor(page, 'button.prl-play__handle'))[0] ?? null;
@@ -1946,81 +1599,29 @@ const TABLE_NARROW_CHECKS = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Journey 3, continued — a LIVE table, over a real socket
-//
-// The fixture routes `/play?state=...` render this screen's component tree without a server, which
-// is what the eleven assertions below used to be blocked on: a connection that never changes state,
-// blinds that never arrive, a turn that is never yours, a decision no server answers and a hand
-// that never completes. Everything here is driven against `/play` itself — a guest session, a
-// private room with five bots, a real WebSocket, a real hand — and read out of the live-region log
-// `SPEECH_PROBE` keeps.
-//
-// Two facts about this fixture that are easy to get wrong and expensive to debug:
-//
-//   - The API must allow this audit's own origin. `PUBLIC_WEB_ORIGIN` is one allowlist for CORS and
-//     for the socket's `Origin` check, so an API started with a developer's `.env` answers every
-//     browser-side call from `127.0.0.1:3456` with `forbidden` and the table never opens.
-//     `ax-tree-audit.mjs` sets it on the API it starts; with `--no-start` it is the operator's.
-//   - The reader must be new. Chrome keeps its profile between runs, so a second run reuses the
-//     room the first left the reader seated in, and "Deal me in" finds a seat already held.
-// ---------------------------------------------------------------------------
+// A live table over a real socket with a guest session, a private room with five bots and one hand, read
+// from the `SPEECH_PROBE` log. The API must allow this audit's origin in `PUBLIC_WEB_ORIGIN`.
 
-/** Where each of the three regions this journey listens to lives, as a `SPEECH_PROBE` key. */
 const CONNECTION_REGION = /prl-play__connection-lines/u;
-// `prl-play__table`, not `prl-table`: the narration region is mounted by `TableStage` rather than
-// by `PokerTable`, because `PokerTable` is not rendered until a view exists and a live region that
-// is inserted already holding its first sentence is announced by nothing. See 3.3.
+// `prl-play__table`, because `TableStage` mounts the narration region before `PokerTable` exists.
+// A region inserted already holding its sentence is announced by nothing (3.3).
 const TABLE_REGION = /prl-play__table>prl-live-region/u;
 const TURN_REGION = /prl-play__decision>prl-live-region/u;
 
-/** How long 3.6 sits on its own turn without acting. The assertion says ten seconds; this is it. */
 const TURN_DWELL_MS = 10_000;
 
-/**
- * How far short of `TURN_DWELL_MS` a measured dwell may fall and still count as ten seconds.
- *
- * ## Why there is a tolerance at all
- *
- * The dwell is `setTimeout(10_000)` bracketed by two `Date.now()` reads, and neither end is exact.
- * `setTimeout` is a *minimum* by specification, timer resolution is coarsened by browsers and by
- * the platform, and `Date.now()` is a wall clock that can be stepped by NTP mid-measurement. One
- * run of this gate failed with
- *
- *     the run waited 9999ms on its own turn, not the 10000ms this assertion asks for
- *
- * — a one millisecond shortfall, in a release gate, on a check about whether a live region was
- * rewritten. That is a false failure: nothing the assertion is about could differ between 9,999ms
- * and 10,000ms of state frames, and a gate that fails on a 1ms wall-clock shortfall costs more
- * than it catches — the cost being that a red `verify` stops meaning "something is wrong".
- *
- * ## Why it is 250ms and not larger
- *
- * The guard this bound protects is real and is stated in the failure message: a SHORT wait can miss
- * a re-announcement and then report a silence it never observed. 250ms is two orders of magnitude
- * below the ten seconds being asked for (2.5%) and far below the interval at which this app pushes
- * whole-state frames, so a dwell inside the tolerance has still seen many frames. Anything that
- * genuinely cut the dwell short — a `settle` that returned early, a `dwellMs` that was never
- * passed, a hand that ended — is off by seconds, not by milliseconds, and is still caught.
- */
+// `setTimeout` is a minimum and `Date.now()` can be stepped, and the gate once failed on a 9999ms
+// dwell. 250ms is 2.5% of the dwell, and anything that genuinely cut it short is off by seconds.
 const TURN_DWELL_TOLERANCE_MS = 250;
 
-/** The reader's own decision, echoed by the reducer. `spokenDecision` in `use-live-table.ts`. */
 const FOLD_ECHO = /^You chose to fold\./u;
 
-/** The sentence 3.3 is about, at the front of whatever else the deal brought with it. */
 const DEALT_ANNOUNCEMENT = /^A new hand was dealt\./u;
 
 const entriesFrom = (log, region) => (log ?? []).filter((entry) => region.test(entry.key ?? ''));
 
-/**
- * Focus an enabled control whose name matches, then press Enter on it.
- *
- * A real key through Chrome's input pipeline rather than `element.click()`, for the reason the
- * journey audit gives at length: a synthesised click does not exercise the keyboard path, and the
- * focus rescues this screen depends on are written against a browser that blurs a control it has
- * just removed. Returns the name it pressed, or null when nothing matched.
- */
+// Real Enter rather than `click()`, because the focus rescues depend on the keyboard path. Returns
+// the name pressed, or null.
 async function pressControl(page, pattern) {
   const name = await page.evaluate(
     `(() => {
@@ -2039,7 +1640,6 @@ async function pressControl(page, pattern) {
   return name;
 }
 
-/** True when no enabled control on the page answers to `pattern` any more. */
 function controlGone(page, pattern) {
   return page.evaluate(
     `(() => {
@@ -2050,7 +1650,6 @@ function controlGone(page, pattern) {
   );
 }
 
-/** Poll the page until `expression` is true, or give up. Returns whether it became true. */
 async function waitInPage(page, expression, seconds) {
   for (let attempt = 0; attempt < seconds * 4; attempt += 1) {
     await page.settle(250);
@@ -2061,10 +1660,8 @@ async function waitInPage(page, expression, seconds) {
 
 const ENABLED_ACTION = `[...document.querySelectorAll('button.prl-action-btn')].some((b) => !b.disabled)`;
 
-/** The controls that mean the socket is live and the table is the reader's to drive by hand. */
 const MANUAL_CONTROL = /^(Take seat \d+|Deal the next hand|Stand up)$/u;
 
-/** What `/play` is showing while it decides how it starts: a `tableStartPath` input. */
 const TABLE_START_JS = `(() => {
   const named = (b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').replace(/\\s+/gu, ' ').trim();
   const text = document.body.innerText;
@@ -2081,24 +1678,9 @@ const TABLE_START_JS = `(() => {
 })()`;
 
 /**
- * Which of its two starting states `/play` settled into: `first visit`, `reconnected`, or null while
- * it is still deciding.
- *
- * ## Why there are two
- *
- * Since PR #32 a tab that remembers a room (`prl.play.roomId`) reconnects to it on load, and offers
- * the manual controls instead of "Deal me in" — the reader may be mid-hand, so nothing is sent on
- * their behalf. Every fixture here that played a SECOND hand in one tab pressed "Deal me in", found
- * none, and played nothing: CI run 43245665934 failed 6.7 with one boardless hand in the history
- * after two drives that pressed no control at all, and the run before it passed only because the
- * one hand it already had happened to reach a flop.
- *
- * ## Why "Reconnecting" is waited out
- *
- * "Deal me in" is on screen, enabled, while the reconnect is in flight (`phase` is still `idle`), and
- * pressing it then does work — it rejoins the remembered room and deals. But the run would then
- * record a first visit for a page that was reconnecting, and which state a check was measured in is
- * the thing a pass line has to be able to say.
+ * `first visit`, `reconnected`, or null while deciding. Since PR #32 a tab that remembers a room
+ * reconnects and offers the manual controls instead of "Deal me in" (CI run 43245665934 failed 6.7 on
+ * this). "Reconnecting" is waited out so a pass line can say which state it measured.
  */
 export function tableStartPath(snapshot) {
   if (snapshot === null || snapshot === undefined || snapshot.reconnecting) return null;
@@ -2108,7 +1690,6 @@ export function tableStartPath(snapshot) {
   return null;
 }
 
-/** Poll `/play` until `tableStartPath` names its state, or give up with what it last showed. */
 async function settleTableStart(page, seconds) {
   const started = Date.now();
   let snapshot = null;
@@ -2121,7 +1702,6 @@ async function settleTableStart(page, seconds) {
   return { path: null, snapshot, waitedMs: Date.now() - started };
 }
 
-/** The part of a drive's evidence a check that only needed a hand reports. See `describeDrive`. */
 export function summariseDrive(evidence) {
   return {
     path: evidence.path ?? null,
@@ -2132,11 +1712,7 @@ export function summariseDrive(evidence) {
   };
 }
 
-/**
- * One drive as a clause: which state the page started in, what was pressed, and whether a hand came
- * of it. A drive that dealt nothing says so in capitals, because that is a fixture that has stopped
- * working and every row downstream of it would otherwise be blamed on the screen it never reached.
- */
+// A drive that dealt nothing says so in capitals, so downstream rows are not blamed on the screen.
 export function describeDrive(drive) {
   const screen = (snapshot) =>
     `status ${JSON.stringify(snapshot?.status ?? null)}, controls ${JSON.stringify(
@@ -2159,30 +1735,15 @@ export function describeDrive(drive) {
   return `${drive.path}: ${pressed}, ${drive.complete ? 'played to completion' : 'dealt, never completed'}`;
 }
 
-/** Every drive a fixture made to get its hand, as one clause for a pass or a failure line. */
 export function describeDrives(drives) {
   if (drives.length === 0) return 'a hand already in this session, none played for it';
   return `${drives.length} hand(s) played for it — ${drives.map(describeDrive).join('; ')}`;
 }
 
 /**
- * Press "Deal me in", let it sit and deal, fold when the decision arrives, and let the hand finish.
- *
- * The product's own path, pressed the way a reader presses it — the same journey `scripts/smoke-test.mjs`
- * drives over a bare socket, driven here through the screen instead, because what is being asserted
- * is what the screen said while it happened.
- *
- * `fresh` clears the cookie jar first, which the live-table route needs and the replay route must
- * not do: it is reading back a hand that belongs to the session it already has.
- *
- * `decide` is how the decision is made when the turn arrives. It defaults to one Fold pressed with
- * a real Enter key; 3.19 substitutes a double press, which is the only fixture that reaches a
- * server refusal. See `foldTwiceInOneTask`.
- *
- * It starts from either state `/play` can open in — see `tableStartPath`. A first visit presses
- * "Deal me in"; a tab that reconnected takes the seat if it is offered and presses "Deal the next
- * hand". `evidence.path` says which, and a drive that settled into neither returns with `dealt`
- * null and the screen it was looking at in `evidence.start`, never a hand it did not play.
+ * "Deal me in", fold when the decision arrives, and let the hand finish, through the screen. `fresh`
+ * clears cookies, which the replay route must not do. `decide` defaults to one Fold. 3.19 passes a
+ * double press. A drive that settled into neither start state returns `dealt` null.
  */
 async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0, decide = foldOnce } = {}) {
   const evidence = {
@@ -2203,12 +1764,7 @@ async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0, decide
   evidence.path = evidence.start.path;
   if (evidence.path === null) return { ...evidence, ...(await speechSoFar(page)) };
 
-  // Read BEFORE the press, because that is the last moment a reader can be the one who starts the
-  // hand: "Deal me in" sits and deals by itself, and on a machine with the API beside it the whole
-  // chain finishes inside one `settle`. See 3.3 — the narration region has to already be in the
-  // document when the hand starts, or the sentence arrives with the region that holds it and no
-  // assistive technology is notified of a change. Reading it in the idle state also holds the
-  // region to existing before anything has been asked for, which is stricter than the old read.
+  // Read before the press, because the narration region must exist before the hand starts (3.3).
   evidence.regionsBeforeDeal = await page.evaluate(
     'window.__prlSpeechRegions ? window.__prlSpeechRegions() : []',
   );
@@ -2233,11 +1789,7 @@ async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0, decide
   );
   if (!evidence.socketLive) return { ...evidence, ...(await speechSoFar(page)) };
 
-  // The seat and the deal are this page's to send now, not the reader's — but they still unmount
-  // and remount controls under a caret that was put on the status line, so the end of the chain is
-  // a step of its own for 3.2: nothing left to press, and the caret not dropped on the way. A
-  // session already seated at its own room (the replay route's) converges on the same state, which
-  // is the point of `DealIn` taking a held seat or a hand in progress as already done.
+  // Seat and deal unmount controls under the caret, so the end of the chain is a step for 3.2.
   const handInProgress = await waitInPage(page, '/A hand is in progress/u.test(document.body.innerText)', 45);
   evidence.dealt = handInProgress ? evidence.opened : null;
   if (evidence.dealt === null) return { ...evidence, ...(await speechSoFar(page)) };
@@ -2249,17 +1801,8 @@ async function driveLiveHand(page, baseUrl, { fresh = false, dwellMs = 0, decide
   return finishLiveHand(page, evidence, { dwellMs, decide });
 }
 
-/**
- * At a table the page reconnected to: the seat if it is offered, then the deal. True once a hand is
- * in progress, whoever started it.
- *
- * A hand already being played when the page came back is taken as dealt — the same convergence
- * `DealIn` has for a held seat — and nothing is pressed for it. "Deal the next hand" is waited for
- * ENABLED rather than pressed on sight: it renders disabled until the first frame says the table is
- * between hands, and a single `pressControl` against that frame would find nothing and deal nothing.
- * It disables rather than unmounting, so it pushes no `steps` entry: 3.2's "gone" is about a control
- * that was removed under the caret, and this one never is.
- */
+// "Deal the next hand" renders disabled until the first frame, so it is waited for enabled. It
+// disables rather than unmounting, so it pushes no `steps` entry.
 async function dealAtReconnectedTable(page, evidence) {
   const named = `(b) => (b.getAttribute('aria-label') ?? b.textContent ?? '').replace(/\\s+/gu, ' ').trim()`;
   const enabledDeal =
@@ -2270,10 +1813,7 @@ async function dealAtReconnectedTable(page, evidence) {
   evidence.socketLive = true;
   let needsDeal = !evidence.start.snapshot.inProgress;
   if (!needsDeal) {
-    // A hand in progress is only this reader's to play if a decision of theirs can still arrive. A
-    // tab that comes back after folding, or standing, watches the bots finish and is never offered
-    // one, so `finishLiveHand` would wait out its whole budget for nothing (Devin Review on #32).
-    // Wait for either: a decision means the hand is usable; the hand ending means deal a new one.
+    // A tab that returns after folding is never offered a decision, so also stop when the hand ends.
     await waitInPage(page, `${ENABLED_ACTION} || ${over} || ${enabledDeal}`, 90);
     needsDeal = (await page.evaluate(ENABLED_ACTION)) !== true;
     evidence.joinedInProgress = needsDeal ? 'watched it finish, then dealt' : 'had a decision in it';
@@ -2290,14 +1830,13 @@ async function dealAtReconnectedTable(page, evidence) {
   return evidence.dealt !== null;
 }
 
-/** The half of a drive both starting states share: the turn, the decision, the end of the hand. */
 async function finishLiveHand(page, evidence, { dwellMs, decide }) {
   evidence.reachedTurn = await waitInPage(page, ENABLED_ACTION, 60);
   if (!evidence.reachedTurn) return { ...evidence, ...(await speechSoFar(page)) };
   const opened = await speechSoFar(page);
   evidence.turnOpenedAt = entriesFrom(opened.log, TURN_REGION).at(-1)?.at ?? null;
 
-  // 3.6: ten seconds on your own turn, doing nothing, while the server pushes whole-state frames.
+  // 3.6
   if (dwellMs > 0) {
     const started = Date.now();
     await page.settle(dwellMs);
@@ -2312,32 +1851,13 @@ async function finishLiveHand(page, evidence, { dwellMs, decide }) {
   return { ...evidence, ...(await speechSoFar(page)) };
 }
 
-/** One Fold, through Chrome's own key pipeline. What a reader does, and what 3.15 and 3.16 read. */
 const foldOnce = (page) => pressControl(page, /^fold\b/iu);
 
 /**
- * Two decisions out of one seat before the controls can disable themselves — the fixture for 3.19.
- *
- * ## Why this is not the race the document said it was
- *
- * 3.19 was `person` because "provoking a server refusal needs a decision the server rejects, and
- * this client disables the controls the instant one is sent" — with the conclusion that the only
- * remaining route was a second actor racing the same seat. The premise is right about a human and
- * wrong about a task: `disabled` arrives from React state, so it is applied on the NEXT render, and
- * two `click()`s inside one task both reach `act`, which mints a fresh `actionId` for each. Both
- * frames go out over one socket, in order. Measured against the running server: the second click
- * saw `button.disabled === false`, and the server answered
- * `"It is not your turn to act. (not_your_turn). Nothing was applied."` — a real refusal of a real
- * second decision, with no second actor anywhere.
- *
- * A real Enter key cannot do this and that is not a shortcoming of the fixture: two key events are
- * two tasks by construction, and by the second one the control is genuinely disabled. The keyboard
- * path to a decision is what 3.15 and 3.16 press; what 3.19 is about is the fate of the second one.
- *
- * The refusal code is deliberately not pinned. Which one the server picks depends on where the hand
- * got to between the two frames — `not_your_turn` once the fold has moved the action on,
- * `stale_action_sequence` if it has not — and 3.19 is about the refusal being heard, not about
- * which refusal it was.
+ * Two decisions before the controls disable, the fixture for 3.19. `disabled` is applied on the next
+ * render, so two `click()`s in one task both reach `act`. Measured, the server answered "It is not
+ * your turn to act. (not_your_turn). Nothing was applied." The refusal code is not pinned, because it
+ * depends on timing.
  */
 async function foldTwiceInOneTask(page, evidence) {
   const result = await page.evaluate(
@@ -2363,11 +1883,9 @@ async function foldTwiceInOneTask(page, evidence) {
 const gatherLiveTable = (page, baseUrl) =>
   driveLiveHand(page, baseUrl, { fresh: true, dwellMs: TURN_DWELL_MS });
 
-/** 3.19's own hand, played to the same turn and then acted on twice. */
 const gatherRefusedDecision = (page, baseUrl) =>
   driveLiveHand(page, baseUrl, { fresh: true, decide: foldTwiceInOneTask });
 
-/** The sentence `statusSentence` prints while the session and the room are being found. */
 const PREPARING = /^Preparing: reading your session/u;
 const LIVE_STATUS = /^Live\. Everything on this screen is the server/u;
 
@@ -2376,9 +1894,7 @@ const LIVE_TABLE_CHECKS = [
     id: 'J3.1',
     what: 'the connection status is announced politely as it changes, preparing then live',
     decide: (e) => {
-      // Every row of this journey is about a FIRST visit, and the drive cleared the cookie jar to
-      // make one. A page that reconnected anyway resumed a table with no session behind it, which
-      // `resumeRememberedTable` exists never to do — said as that, not as a missing button.
+      // The drive cleared cookies, so a reconnect resumed a table with no session behind it.
       if (e.path === 'reconnected') {
         return fail(
           '/play reconnected to a table the tab remembered although the cookie jar had just been ' +
@@ -2403,13 +1919,7 @@ const LIVE_TABLE_CHECKS = [
         );
       }
       if (live < 0) {
-        /*
-          The one non-accessibility reason this fails, named because it costs an hour otherwise:
-          `PUBLIC_WEB_ORIGIN` is one allowlist for CORS and for the socket's `Origin` check, so an
-          API started with a developer's `.env` answers every browser-side call from this audit's
-          origin with `forbidden` and no table ever opens. `ax-tree-audit.mjs` sets it on the API it
-          starts; with `--no-start` it is whatever the running API was given.
-        */
+        // `PUBLIC_WEB_ORIGIN` must allow this audit's origin, or every call answers `forbidden`.
         const refused = (e.log ?? []).some((entry) => /forbidden|not authenticated/iu.test(entry.text));
         return fail(
           'the status region never announced that the table went live, so a reader who cannot see ' +
@@ -2476,30 +1986,12 @@ const LIVE_TABLE_CHECKS = [
   },
   {
     /*
-      3.3 was `person` because the sentence was measurably never announced, which is a defect rather
-      than a certification limit — see `onEventFrame` in `apps/web/src/lib/use-live-table.ts`. This
-      check is what stops it coming back, and every clause of it was written against a run that
-      passed a weaker version of the same check:
-
-        - **the narration region must already EXIST when the hand is dealt.** A live region inserted
-          already holding its sentence is not announced: the platform is notified of a CHANGE to a
-          region it knows about, and a moment earlier there was no region. Measured on this gate
-          before the fix — at the moment "Deal the next hand" was pressed the document's only live
-          regions were the route announcer, the connection line, the invite and join notes, the
-          decision band's turn region and the footer statement;
-        - **the entry must be one the region was observed HOLDING** (`recovered !== true`). A value
-          recovered from `characterData` old values existed inside one React commit and never
-          painted, so nothing was ever notified of it;
-        - **it must not stand alone.** This is the clause the first version of this check lacked,
-          and a deliberately broken build passed without it. `handStarted` and `forcedBets` are two
-          events of ONE table notice, so with the region mounted the run recorded two writes for one
-          notice: "A new hand was dealt." and then the blinds, milliseconds apart. `role="status"`
-          is atomic and a polite region is read when the notification is serviced, not when it is
-          posted, so the reader hears the last text and the deal is lost exactly as before — the
-          only difference being that the loss is now visible to a probe. One notice must be one
-          write, so the text that opens with the deal has to carry what the deal brought with it;
-        - **it must be said once.** A sentence left in front of the table's later narration is read
-          again on every event for the rest of the hand — the defect 3.17 catches, in reverse.
+      3.3 must not regress (`onEventFrame` in `apps/web/src/lib/use-live-table.ts`):
+        - the narration region exists when the hand is dealt;
+        - the entry was observed held (`recovered !== true`);
+        - it does not stand alone, because `handStarted` and `forcedBets` are one notice and a second
+          write replaces the deal before a reader hears it;
+        - it is said once.
     */
     id: 'J3.3',
     what: 'the deal is announced politely, once, in a region the page already had',
@@ -2638,9 +2130,7 @@ const LIVE_TABLE_CHECKS = [
     what: 'the turn sentence is announced once, and ten seconds of state frames do not repeat it',
     decide: (e) => {
       if (!e.reachedTurn) return fail('the hand never reached this seat, so nothing was dwelt on');
-      // Not `< TURN_DWELL_MS`: `setTimeout` is a minimum, `Date.now()` is a wall clock, and this
-      // gate has failed on a ONE millisecond shortfall. See `TURN_DWELL_TOLERANCE_MS` for the
-      // measurement and for why the bound is still worth having.
+      // See `TURN_DWELL_TOLERANCE_MS`.
       if (e.dwellMs < TURN_DWELL_MS - TURN_DWELL_TOLERANCE_MS) {
         return fail(
           `the run waited ${e.dwellMs}ms on its own turn, more than ${TURN_DWELL_TOLERANCE_MS}ms short ` +
@@ -2661,8 +2151,7 @@ const LIVE_TABLE_CHECKS = [
             'same turn over and over until the reader turns live regions off',
         );
       }
-      // The stronger half. A region rewritten with the SAME text changes nothing here and is still
-      // a re-announcement in several readers, so the mutation count is what settles it.
+      // A same-text rewrite is still a re-announcement, so mutations decide it.
       const churn = (e.mutations ?? []).filter(
         (entry) =>
           TURN_REGION.test(entry.key ?? '') &&
@@ -2765,22 +2254,10 @@ const LIVE_TABLE_CHECKS = [
   },
 ];
 
-/** The heading `SUBMISSION_TITLE.rejected` prints when the refusal came from the server. */
 const SERVER_REFUSED = /The server refused it/u;
 
-/**
- * The wording the server itself supplied, as `onErrorFrame` renders it: the heading, the server's
- * sentence, then "Nothing was applied."
- *
- * Matched as a shape rather than as a string. Which refusal arrives depends on where the hand got
- * to between the two frames, and pinning `not_your_turn` would fail the gate on a timing difference
- * that changes nothing about what a reader is told.
- *
- * It used to key on the `(code)` the sentence ended with. The page no longer prints a contract code
- * after a refusal (audit at 308fadf: "(invite_code_invalid)", "(insufficient_units)" shown to a
- * reader), so what is required now is a sentence of the server's own between the heading and the
- * last one — and a code in the text is a failure rather than the evidence.
- */
+// A shape, not a string, because which refusal arrives depends on timing. A contract code in the
+// text fails, because the page stopped printing codes after the audit at 308fadf.
 const SERVER_REFUSAL_REASON = /The server refused it\s*(\S[\s\S]*?[.!?])\s*Nothing was applied\./u;
 const CONTRACT_CODE = /\([a-z]+(?:_[a-z]+)+\)/u;
 
@@ -2837,9 +2314,6 @@ const REFUSED_DECISION_CHECKS = [
             "the server's own wording. A reader is told something was refused and not what",
         );
       }
-      // "…and it is the only thing on this screen that interrupts." An assertive region that fires
-      // for anything else is what teaches a reader to turn the whole surface off, which costs them
-      // this announcement — the one that matters.
       const otherInterruptions = writes.filter(
         (entry) =>
           (entry.live === 'assertive' || entry.role === 'alert') &&
@@ -2858,15 +2332,8 @@ const REFUSED_DECISION_CHECKS = [
   },
 ];
 
-/**
- * Journey 3.20 — the table with no API behind it.
- *
- * The recipe is "stop the API, then reload `/play`". Stopping the API this gate started would also
- * take out `/lab`, the hand the replay route reads back, and every other assertion in the run, so
- * what is stopped instead is the browser's ability to reach it: `Network.setBlockedURLs` refuses
- * every `/api/*` request and the socket upgrade with it. From the page's side that is the same
- * fact — the fetch fails, the socket never opens — and it is the failure the screen has to survive.
- */
+// 3.20: `Network.setBlockedURLs` refuses `/api/*` and the socket, so the API stays up for the other
+// assertions.
 async function gatherTableOffline(page, baseUrl) {
   const evidence = {};
   try {
@@ -2877,8 +2344,7 @@ async function gatherTableOffline(page, baseUrl) {
     await page.settle(4000);
     Object.assign(evidence, await speechSoFar(page));
   } finally {
-    // Always, even when the page could not be driven: a run that left the API blocked would score
-    // every route after it as an outage and report those failures against pages that are correct.
+    // Always unblock, or every later route scores as an outage.
     await page.blockUrls([]).catch((error) => {
       console.log(`  could not clear the URL block: ${error.message}`);
     });
@@ -2924,17 +2390,8 @@ const TABLE_OFFLINE_CHECKS = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Journey 6 — the hand replay, on a hand this run actually played
-//
-// `/review/<handId>` needs a hand in a database and a session that holds a seat in it, which is why
-// all seven of these rows were `person`: `/legends/hand-review/demo` renders `PostHandComparison`,
-// a different component, with no face-down card and no timeline in it. The fixture is a hand played
-// through `/play` by the same browser — the reader's own history, read back the way the product
-// reads it.
-// ---------------------------------------------------------------------------
+// Journey 6: the replay of a hand this browser played, read back from `/review/<handId>`.
 
-/** Every hand this browser's session can see, newest first, asked for as the app asks. */
 const listHands = (page) =>
   page
     .evaluate(
@@ -2945,15 +2402,7 @@ const listHands = (page) =>
     )
     .then((ids) => ids ?? []);
 
-/**
- * A replayable hand, played if this session has none that will do.
- *
- * "That will do" is one property, and it is the one journey 6 turns on: at least one seat whose
- * cards were never shown, so the replay renders a real face-down card for 6.6 to check. A hand
- * where every seat showed proves nothing about hiding — and saying so is better than passing.
- * Bounded at three attempts because a fixture that plays hands until it likes one is a gate that
- * can run forever.
- */
+// A hand with at least one seat never shown, for 6.6. Bounded at three attempts.
 async function handForReplay(page, baseUrl) {
   const tried = [];
   const drives = [];
@@ -3016,19 +2465,14 @@ async function gatherReplay(page, baseUrl) {
     .map((entry) => entry.name);
   evidence.total = await page.evaluate(`document.querySelectorAll('.prl-timeline__marker').length`);
 
-  // The timeline is one tab stop with a roving tabindex, so the caret goes to the marker that is
-  // current and the arrow keys do the rest — the reader's own key press, dispatched for real.
   await page.evaluate(
     `(() => {
       const marker = document.querySelector('.prl-timeline__marker[tabindex="0"]');
       if (marker !== null) marker.focus();
     })()`,
   );
-  // Home first, so the three presses below start from step 1 as they always did. The replay now
-  // OPENS on the reader's own first decision (`openingStepIndex` in `src/lib/replay-steps.ts`), and
-  // in a hand where that decision is the second-to-last action — the big blind folding to a raise —
-  // three right-arrows from there would run off the end and J6.3 would fail a hand rather than the
-  // product. Home itself is what J6.4 checks, separately, further down.
+  // Home first, because the replay opens on the reader's first decision and three right-arrows could
+  // run off the end.
   await page.press('Home');
   await page.settle(300);
   evidence.scrub = [];
@@ -3055,8 +2499,7 @@ async function gatherReplay(page, baseUrl) {
   await page.settle(500);
   evidence.atHome = (await speechSoFar(page)).log;
 
-  // 6.5: walk the transport to the last step with Enter, which is where "Next decision" disables
-  // itself under the caret and the browser drops focus to <body> unless something rescues it.
+  // 6.5: "Next decision" disables itself at the last step.
   const reached = await page.evaluate(
     `(() => {
       const next = [...document.querySelectorAll('.prl-replay__transport button')]
@@ -3093,7 +2536,6 @@ async function gatherReplay(page, baseUrl) {
 
 const REPLAY_STEP = /^Step (\d+) of (\d+)\. /u;
 
-/** The step sentences one press wrote, from the replay's own polite region. */
 const stepWrites = (log) => (log ?? []).filter((entry) => REPLAY_STEP.test(entry.text));
 
 const REPLAY_CHECKS = [
@@ -3288,46 +2730,15 @@ const REPLAY_CHECKS = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Journey 6.7 — the deck proof that does NOT check out
-//
-// 6.7 has two halves and only one of them was reachable. "Its result announces as a sentence" is on
-// screen for every hand; "a verification failure announces as an alert" needs a reveal whose proofs
-// do not reach its own hand's published root, and the certification document refused three routes to
-// one on their merits: the browser cannot be made to receive a corrupted reveal (the review page is
-// a server component, so the fetch that matters is the WEB SERVER's), the product must not contain a
-// switch that lies about a deal (that is the single thing `CommitmentVerifier` exists to detect), and
-// a hand-built `HandReviewResponse` would be a check of the gate's own fixture that goes stale
-// against `packages/contracts` the moment either side moves.
-//
-// The fourth route was written down in §5 and not taken: a third web app off the same build whose
-// `PRL_API_ORIGIN` points at a pass-through proxy. `scripts/review-proxy.mjs` forwards the REAL
-// API's REAL review response with one hex digit of one salt flipped — a splice into the response
-// TEXT, so every other byte is the API's — and that reaches `mismatch` honestly. It never authors a
-// payload, so there is nothing here to go stale.
-//
-// The failure this route is built against is the fixture's, not the application's: a proxy that
-// silently forwarded the bytes unchanged would render a perfectly good proof, and a screen with no
-// alert on it cannot tell that apart from a defect. So the proxy records every response it corrupted
-// and every one it refused, with reasons, and the check below will not read anything off the screen
-// until that log names the hand that is on it. A hand everybody folded out of proves no deck
-// position, which is the CORRECT outcome for such a hand and exactly the payload with no byte to
-// flip — it is the common case, not a corner one.
-// ---------------------------------------------------------------------------
+// Journey 6.7: `scripts/review-proxy.mjs` forwards the real review response with one hex digit of
+// one salt flipped. A proxy that forwarded unchanged bytes would pass silently, so the check reads
+// nothing until the proxy's log names the hand on screen.
 
-/** `verifyDeckReveal`'s own words when a leaf hash no longer walks to the published root. */
 const PROOF_FAILED_REASON = /position \d+ does not prove against the published root/u;
 
-/** The sentence the verifier renders while the check has not run yet. Only ever server-side. */
 const VERIFIER_PENDING = 'Recomputing the deck proof in your browser.';
 
-/**
- * The verifier as a reader gets it: the chip, the outcome block, and the published facts.
- *
- * `spoken` strips every `aria-hidden` decoration before reading the text, which is the standard 8.2
- * already holds its notice to: a result carried by a glyph and a tone colour is a visual-only badge
- * however loud it looks, and 6.7 asks for a sentence.
- */
+// `spoken` strips `aria-hidden` decoration, because a glyph and colour are not a sentence (8.2).
 const VERIFIER_PROBE = `(() => {
   const tidy = (value) => (value ?? '').replace(/\\s+/gu, ' ').trim();
   const spoken = (el) => {
@@ -3358,7 +2769,6 @@ const VERIFIER_PROBE = `(() => {
   };
 })()`;
 
-/** One reading of the verifier, from the DOM and from the computed tree at the same moment. */
 async function readVerifier(page) {
   const shape = await page.evaluate(VERIFIER_PROBE);
   if (shape === null) return { present: false };
@@ -3373,22 +2783,14 @@ async function readVerifier(page) {
     ...shape,
     alertAx,
     noteAx,
-    // Decided against the TREE rather than against `textContent`, for the reason 8.2 gives: a
-    // sentence that is on screen and not in the tree is unreadable to the thing that reads screens.
+    // Decided against the tree, as 8.2 is.
     treeText: nodes.map((node) => node.name).filter((name) => name.length > 0),
   };
 }
 
 /**
- * Render a page SERVER-SIDE and answer three questions about the HTML, without navigating to it.
- *
- * Two jobs in one request. It is the candidate probe — the web server's own fetch goes through the
- * proxy, so this is what makes the proxy see a review at all — and it is the evidence that the
- * verdict is computed in the BROWSER. `CommitmentVerifier` runs `checkDeckProof` in an effect and
- * says why where it does it: an initialiser would also run during the server render, and then
- * "checked in your browser" would be a claim the component could not support. An alert that arrived
- * inside the document would also be an alert nothing announces — the 3.3 defect, in the one branch
- * on this screen that is allowed to interrupt.
+ * Render a page server-side. This makes the proxy see a review, and proves the verdict is computed in
+ * the browser, because an alert already in the server HTML would be announced by nothing.
  */
 const renderedHtml = (page, path) =>
   page.evaluate(
@@ -3412,7 +2814,6 @@ const renderedHtml = (page, path) =>
        .catch((error) => ({ reached: false, why: String(error) }))`,
   );
 
-/** Every hand this session can see, newest first, with how many board cards it dealt. */
 const listHandSummaries = (page) =>
   page
     .evaluate(
@@ -3423,14 +2824,7 @@ const listHandSummaries = (page) =>
     )
     .then((hands) => hands ?? []);
 
-/**
- * What every read of the hand list amounted to, counted by hand id rather than by read.
- *
- * The first version counted a boardless hand once per READ and the list's length as a maximum, so
- * CI run 43245665934 reported "Of 1 hand(s) in this session 3 dealt no board card" — one hand, read
- * three times. A failure message that does not add up is one nobody believes, and this one was
- * otherwise the most useful line in the run.
- */
+// Counted by hand id. CI run 43245665934 counted one hand read three times as three.
 export function tallyListedHands(reads) {
   const listed = new Set();
   const boardless = new Set();
@@ -3444,29 +2838,10 @@ export function tallyListedHands(reads) {
 }
 
 /**
- * Act until the hand is over, and never fold. The fixture that puts a byte in the reveal.
- *
- * ## The flake this exists to end, with the measurement
- *
- * A reveal proves the board cards that were dealt plus the hole cards of anybody who showed
- * (`publicPositions` in `packages/poker-engine/src/machine.ts`). So a hand that ends before the
- * flop proves NOTHING — correctly, and that is the whole point of a per-card Merkle tree — and has
- * no byte to flip. The first version of this route reused whatever hands the session had, all of
- * them played by `foldOnce`: the hero folds immediately and whether a board is ever dealt is then a
- * fact about five bots. Measured over seven consecutive `test:ax` runs, one of them failed — three
- * hands in a row ended preflop and the row refused, correctly and uselessly. A gate that goes red
- * once in seven for a reason that is not a defect teaches people to re-run it, which costs more
- * than the row is worth.
- *
- * A hero who never folds ends the hand preflop only by winning it uncontested from the big blind:
- * a call cannot be folded out, and the big blind behind a call can always check, which deals a
- * flop. So this is the same fixture family as `foldOnce` and `foldTwiceInOneTask` — the product's
- * own controls, real Enter keys — chosen so that the state 6.7 needs is reached by the rules rather
- * than by luck.
- *
- * Check before call, because a check is free and a call is not: the hero has 1,000 units and a bot
- * may shove, and calling a shove is fine (it goes to showdown, which reveals more, not less) but
- * checking is what a hand mostly offers.
+ * Play a hand without folding, so it reaches a flop and the reveal has a byte to flip. A reveal
+ * proves only dealt board cards and shown hole cards. Reusing fold-first hands failed one run in
+ * seven. A hero who calls or checks reaches a flop by the rules. Check before call, because a check
+ * is free.
  */
 async function stayInTheHand(page, evidence) {
   let first = null;
@@ -3475,9 +2850,7 @@ async function stayInTheHand(page, evidence) {
     const acted = (await pressControl(page, /^check\b/iu)) ?? (await pressControl(page, /^call\b/iu));
     if (acted === null) break;
     first ??= acted;
-    // Wait for the controls to go down before waiting for them to come back. Without this the next
-    // poll can still see the PREVIOUS turn's enabled buttons — `disabled` arrives from React state,
-    // which is exactly the window 3.19 uses on purpose to get a decision refused.
+    // Wait for the controls to go down first, or the next poll sees the previous turn's buttons.
     await waitInPage(page, `!(${ENABLED_ACTION})`, 10);
     if (!(await waitInPage(page, `${ENABLED_ACTION} || ${over}`, 60))) break;
     if ((await page.evaluate(over)) === true) break;
@@ -3486,13 +2859,7 @@ async function stayInTheHand(page, evidence) {
   return first;
 }
 
-/**
- * A hand whose reveal has a byte to flip, played if this session has none.
- *
- * Bounded at three attempts for the reason `handForReplay` gives: a fixture that plays hands until
- * it likes one is a gate that can run forever. Every candidate is recorded with what the proxy made
- * of it, so a run that finds nothing says which hands it looked at and why each was refused.
- */
+// Bounded at three attempts. Every candidate is recorded with what the proxy made of it.
 async function findCorruptibleHand(page, proxiedBase, honestBase, proxy) {
   const tried = [];
   const reads = [];
@@ -3503,23 +2870,16 @@ async function findCorruptibleHand(page, proxiedBase, honestBase, proxy) {
     reads.push(hands);
     for (const hand of hands) {
       if (tried.some((entry) => entry.id === hand.id)) continue;
-      // Read off the list, so a hand that cannot possibly work costs nothing. A hand that dealt no
-      // board card and had no showdown proves no deck position — see `stayInTheHand` for the whole
-      // arithmetic — and rendering it would only produce a refusal this already knows about.
+      // A hand with no board card proves no deck position. See `stayInTheHand`.
       if (hand.board === 0) continue;
       const html = await renderedHtml(page, `/review/${hand.id}`);
       const record = proxy.log.mutated.find((entry) => entry.handId === hand.id) ?? null;
-      // Matched on the PATH, not by taking the last entry: a refusal recorded for some other hand
-      // would otherwise be reported as this hand's reason, which is a lie in a failure message and
-      // the failure message is the whole value of a refusal.
+      // Match the path, so another hand's refusal is not reported as this one's.
       const refused = proxy.log.refused.findLast((e) => e.path.endsWith(`/${hand.id}`))?.why ?? null;
       tried.push({ id: hand.id, mutated: record !== null, why: record === null ? refused : null });
       if (record !== null) return { id: hand.id, html, record, tried, drives, ...tallyListedHands(reads) };
     }
-    // Nothing in this session's history reached a flop. Play one that will: the hero stays in the
-    // hand rather than folding, which is what makes the board — and therefore the reveal — exist.
-    // Kept, not discarded: CI run 43245665934 drove twice, pressed nothing either time, and the
-    // failure could only say how many boardless hands it had counted.
+    // Nothing reached a flop, so play a hand that will.
     if (attempt < 2) {
       drives.push(summariseDrive(await driveLiveHand(page, honestBase, { decide: stayInTheHand })));
     }
@@ -3527,14 +2887,7 @@ async function findCorruptibleHand(page, proxiedBase, honestBase, proxy) {
   return { id: null, html: null, record: null, tried, drives, ...tallyListedHands(reads) };
 }
 
-/**
- * Load a replay and wait for the verifier to stop saying "checking".
- *
- * A fixed `settle` would be a race against hydration on a machine under load, and the thing being
- * waited for is exactly the thing this row is about: the verdict is computed in an effect, so it
- * does not exist until the browser has run one. Returns whether it settled; a run that timed out
- * says so rather than reporting whatever the pending screen looked like.
- */
+// Waits for the verdict, which an effect computes, rather than a fixed settle.
 async function verifierSettled(page, url) {
   await page.goto(url);
   return waitInPage(
@@ -3568,9 +2921,7 @@ async function gatherDeckProofAlert(page, proxiedBase, context) {
   evidence.record = found.record;
   evidence.html = found.html;
 
-  // The corrupted screen first, then the honest one. Both halves of 6.7 are about the SAME hand, so
-  // a run where they disagreed about which hand they were reading would be two measurements rather
-  // than one row.
+  // Both halves read the same hand.
   evidence.corruptedSettled = await verifierSettled(page, `${proxiedBase}/review/${found.id}`);
   evidence.corrupted = await readVerifier(page);
 
@@ -3586,9 +2937,7 @@ const DECK_PROOF_CHECKS = [
     decide: (e) => {
       if (e.wiring !== undefined) return fail(e.wiring);
       if (e.hand === null || e.hand === undefined) {
-        // The fixture failing, said as the fixture failing. A screen with no alert on it cannot
-        // tell "the application stopped announcing" from "the proxy served nothing corrupted", and
-        // guessing between those two is how a green check over nothing happens.
+        // Without a corruption logged, a missing alert cannot be blamed on the application.
         return fail(
           `the proxy corrupted no reveal, so nothing was checked. This session listed ${e.listed ?? 0} ` +
             `distinct hand(s) over ${e.looks ?? 0} look(s), and ${e.boardless ?? 0} of them dealt no ` +
@@ -3607,7 +2956,6 @@ const DECK_PROOF_CHECKS = [
         );
       }
 
-      // ----- the half that is on screen for every hand: the result is a sentence
       if (e.honestSettled !== true || e.corruptedSettled !== true) {
         return fail(
           `the verifier was still reading "checking" after 20s (honest ${String(e.honestSettled)}, ` +
@@ -3652,7 +3000,6 @@ const DECK_PROOF_CHECKS = [
         );
       }
 
-      // ----- the half the proxy exists for: the failure announces as an alert
       if (e.corrupted?.present !== true) return fail('no commitment verifier on the corrupted replay page');
       if (e.corrupted.chip !== 'proof failed') {
         return fail(
@@ -3693,7 +3040,6 @@ const DECK_PROOF_CHECKS = [
         return fail('the reason is in the DOM and not in the accessibility tree');
       }
 
-      // ----- the alert is INSERTED, which is what makes it an alert
       if (e.html?.reached !== true || !e.html.carriesVerifier) {
         return fail(`the server-rendered HTML could not be read: ${e.html?.why ?? 'no verifier in it'}`);
       }
@@ -3707,7 +3053,6 @@ const DECK_PROOF_CHECKS = [
         );
       }
 
-      // ----- the two answers on the page disagree, which is what the section is for
       const corruptedServer = e.corrupted.facts.find((fact) => /^The server said/iu.test(fact.label));
       if (corruptedServer === undefined || !/^verified/u.test(corruptedServer.value)) {
         return fail(
@@ -3732,24 +3077,13 @@ const DECK_PROOF_CHECKS = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Journey 4 — the Scenario Lab
-// ---------------------------------------------------------------------------
-
-/** The summary line under the filters, as a reader would hear it. */
 const LAB_SUMMARY_JS = `(() => {
   const line = document.querySelector('.prl-lab-filters__summary');
   return line === null ? null : (line.textContent ?? '').replace(/\\s+/gu, ' ').trim();
 })()`;
 
-/**
- * Every filter option, with the count the option itself declares.
- *
- * The label is built as \`\${label} (\${count})\` by \`ScenarioFilters\`, and the count is computed
- * against the OTHER two facets — so an option reading "(0)" on an already-filtered page is a
- * combination that matches nothing, which is how the empty case below is reached without this gate
- * knowing anything about the scenario catalogue.
- */
+// Each option's count is computed against the other two facets, so "(0)" finds the empty case
+// without knowing the catalogue.
 const LAB_OPTIONS_JS = `(() => [...document.querySelectorAll('form.prl-lab-filters select')].map((select) => ({
   id: select.id,
   chosen: select.value,
@@ -3760,16 +3094,9 @@ const LAB_OPTIONS_JS = `(() => [...document.querySelectorAll('form.prl-lab-filte
   }),
 })))()`;
 
-/** The marker whose disappearance proves the submit replaced the document rather than the query. */
 const LAB_CONTEXT_MARKER = 'window.__prlLabContext';
 
-/**
- * Choose a filter option, submit the form, and record what the new document says.
- *
- * `wanting` is `'fewer'` for any option that narrows the list, and `'none'` for one whose declared
- * count is zero. Both are found by reading the counts the page prints on its own options, so this
- * function knows nothing about which topics or streets exist.
- */
+// `wanting` is `'fewer'` or `'none'`, found from the counts the page prints.
 async function submitLabFilter(page, wanting) {
   await page.evaluate(`${LAB_CONTEXT_MARKER} = 'alive'; true`);
   const chosen = await page.evaluate(
@@ -3817,8 +3144,7 @@ async function submitLabFilter(page, wanting) {
     url: await page.evaluate('location.href'),
     title: await page.evaluate('document.title'),
     summary: await page.evaluate(LAB_SUMMARY_JS),
-    // Absent means the JavaScript context was destroyed, which is what a full document load does
-    // and what the whole approach below rests on.
+    // Absent means a full document load destroyed the context.
     contextSurvived: (await page.evaluate(`${LAB_CONTEXT_MARKER} ?? null`)) !== null,
     summaryIsLive: await page.evaluate(
       `(() => {
@@ -3827,20 +3153,13 @@ async function submitLabFilter(page, wanting) {
         return line.closest('[aria-live], [role="status"], [role="alert"]') !== null;
       })()`,
     ),
-    // How many times ANY live region on the new document was written to. Recorded rather than
-    // gated: it is the measurement the row was filed on, and it belongs in the run's output where
-    // the next person can read it instead of re-deriving it.
+    // Recorded, not gated.
     regionMutations: speech.mutations.length,
   };
 }
 
-/**
- * Journey 4's index, and the two submits assertion 4.2 is about.
- *
- * Three page loads rather than one, because the assertion is about what a SUBMIT produces and the
- * empty case has to be reached from an already-filtered page: an option can only read "(0)" once
- * another facet is set.
- */
+// The empty case needs an already-filtered page, because an option reads "(0)" only once another
+// facet is set.
 async function gatherLabIndex(page, baseUrl) {
   const evidence = {};
   evidence.title = await page.evaluate('document.title');
@@ -3850,13 +3169,10 @@ async function gatherLabIndex(page, baseUrl) {
   await page.goto(`${baseUrl}/lab`);
   evidence.narrowed = await submitLabFilter(page, 'fewer');
 
-  // Straight on from the narrowed view: the zero-count option only exists because a facet is
-  // already set, and starting again from `/lab` would throw that away.
   evidence.emptied = await submitLabFilter(page, 'none');
   return evidence;
 }
 
-/** What the three selects offered, for a failure message that says why nothing could be chosen. */
 function labOptionInventory(fields) {
   if (!Array.isArray(fields) || fields.length === 0) return 'nothing — the form rendered no selects';
   return fields
@@ -3867,16 +3183,9 @@ function labOptionInventory(fields) {
     .join('; ');
 }
 
-/** The count as `ScenarioFilters.scenarioCountPhrase` writes it: "14 of 36", or "all 36". */
 const LAB_COUNT_PHRASE = /(?:all\s+\d+|\d+\s+of\s+\d+)/u;
 
-/**
- * The count the page is SHOWING, read out of its own summary line.
- *
- * Read rather than computed: the point of the assertion is that the reader is told the number the
- * page is displaying, and a gate that recomputed it from the catalogue would be checking its own
- * arithmetic against the page's.
- */
+// Read from the summary, not recomputed from the catalogue.
 function labCountShown(summary) {
   const found = summary === null ? null : LAB_COUNT_PHRASE.exec(summary);
   return found === null ? null : found[0].replace(/\s+/gu, ' ');
@@ -3894,40 +3203,13 @@ const LAB_INDEX_CHECKS = [
   {
     id: 'J4.2',
     /*
-      This row was `person`, and the certification said why: a machine could answer it, the answer
-      was that NOTHING announced the count, and closing it was a product change rather than a
-      certification one. The product change has been made, so the row is here.
-
-      The defect. `ScenarioFilters` is a plain GET form and ships no JavaScript on purpose, so a
-      submit replaces the document. Measured in Chrome 151 against a production build of this app:
-      a `window` marker set before the submit was gone afterwards, `document.title` was
-      byte-identical before and after ("Scenario Lab — Poker Risk Lab", carrying nothing about the
-      filter), and the summary region on the new document took ZERO mutations because it arrived
-      already holding "Showing 14 of 36 scenarios." A live region that arrives with its text
-      announces nothing — the same fact 3.3 was fixed for. There the region could be mounted empty
-      and written into a moment later; here the context that would do the writing has been thrown
-      away by the navigation, so there is no "later" to write in.
-
-      The fix, and therefore what this checks. A new document IS announced, by its title, with no
-      JavaScript involved — that is assertion G1 — so a filtered view now puts the count there.
-      `RouteAnnouncer` cannot stand in for it: it is deliberately silent on a full load, and a
-      query-only change does not move `usePathname` at all.
-
-      The clauses, in the order they would catch a regression:
-
-        - the submit still destroys the JavaScript context. If a future edit made this a client-side
-          navigation, the title would still change and NOTHING would announce it, because the
-          announcer only speaks on a pathname change. That would be a silent regression to exactly
-          the state this row was filed in, so it fails here rather than passing on the title alone.
-        - the unfiltered title carries no count, so `/lab` still reads as 4.1 quotes it.
-        - a narrowing submit puts the page's own count in the title, and an emptying one does too.
-          The count is read off the summary line rather than recomputed, so the two cannot agree by
-          both being wrong in the same way.
-        - the empty case is reached and is not simply "0 scenarios" arriving as silence: the row
-          says a filter that narrows the list to nothing must announce that.
-
-      A sweep of nothing is refused twice over: a run where the filters offered no narrowing option,
-      or no zero-count option, fails rather than passing with two clauses unexercised.
+      4.2. The filter form is a plain GET, so a submit replaces the document and nothing can write into a
+      live region. A filtered view carries its count in the title, which a new document announces.
+        - the submit must still destroy the JavaScript context, because a client-side query change
+          would announce nothing;
+        - the unfiltered title carries no count;
+        - narrowing and emptying submits put the page's own count in the title;
+        - a run with no narrowing or zero-count option fails.
     */
     what: 'a filtered view announces its count, in the one channel a full document load has',
     decide: (e) => {
@@ -4006,9 +3288,7 @@ async function gatherScenario(page) {
   const evidence = {};
   evidence.h1 = (await axFor(page, 'h1'))[0]?.name ?? '';
 
-  // 4.3 — read BEFORE the decision. The situation is what the reader is being asked about, and
-  // after the reveal the same screen carries the analysis too; gathering it here keeps the two
-  // assertions looking at the two different things they are each about.
+  // 4.3: read before the decision, because the analysis appears after it.
   evidence.situation = await page.evaluate(
     `(() => {
       const tidy = (el) => (el === null ? null : (el.textContent ?? '').replace(/\\s+/gu, ' ').trim());
@@ -4150,13 +3430,7 @@ const SCENARIO_CHECKS = [
           `${defects.length} figure(s) are announced incompletely: ${defects.slice(0, 3).join('; ')}`,
         );
       }
-      /*
-        A bare number is the failure this row names, and "bare" is narrower than "has no unit".
-        Measured against the real analysis: "Price offered: 1.5 to 1" carries no unit and is not a
-        bare number — a ratio is stated in the form that says what it is. So a figure is bare only
-        when nothing places it AND the number is nothing but digits: no unit element, no percent, no
-        unit word, and no word in the value itself.
-      */
+      // Bare means no unit element, percent or unit word, and digits only. "1.5 to 1" is not bare.
       const bare = figures.filter((figure) => {
         const spoken = `${figure.spoken ?? ''} ${figure.value ?? ''} ${figure.unit ?? ''}`;
         if (/%|\b(units?|points?|outs?|times?|hands?|boards?|trials?|to \d)\b/iu.test(spoken)) return false;
@@ -4211,10 +3485,6 @@ const SCENARIO_CHECKS = [
     },
   },
 ];
-
-// ---------------------------------------------------------------------------
-// Journey 5 — AI Legends
-// ---------------------------------------------------------------------------
 
 async function gatherLegendsIndex(page) {
   const nodes = await axNodes(page);
@@ -4382,22 +3652,9 @@ const PROFILE_CHECKS = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Journey 7 — the navigation sheet, at a phone width
-// ---------------------------------------------------------------------------
-
 const SHEET_TAB_STOPS = 14;
 
-/**
- * The fewest content-bearing elements a page must have behind the sheet for 7.4 to mean anything.
- *
- * Not a target: a floor. The check is a negative over the whole background, and a negative over an
- * empty set is the shape of green check this repository has been bitten by. Measured on `/` at
- * 390x844: 188 elements match `BACKGROUND_CONTENT_JS` — the header, the hero, every card, the
- * footer — so twenty leaves room for the page to be redesigned and none for the sweep to stop
- * matching. Demonstrated by raising this to 500 against the real page, which failed the check with
- * "only 188 content-bearing element(s) found outside the sheet".
- */
+// A floor under 7.4's negative sweep. Measured on `/` at 390x844, 188 elements match.
 const BACKGROUND_CONTENT_FLOOR = 20;
 
 async function gatherSheet(page) {
@@ -4423,9 +3680,7 @@ async function gatherSheet(page) {
 
   evidence.background = await gatherSheetBackground(page);
 
-  // Put the caret back where the sheet put it. `gatherSheetBackground` stamps and unstamps
-  // attributes only, so it does not move focus — but Escape is read on the sheet's own key handler
-  // and a caret left anywhere else would make 7.5 a test of this fixture rather than of the sheet.
+  // Put the caret back, so 7.5 tests the sheet and not this fixture.
   await page.evaluate(`document.querySelector('.prl-sheet__close')?.focus(); true`);
   await page.press('Escape');
   await page.settle(500);
@@ -4441,15 +3696,7 @@ async function gatherSheet(page) {
   return evidence;
 }
 
-/**
- * What "content behind the sheet" IS, for a page that has no idea what its own content is.
- *
- * An element counts if it could be stopped on and read: it has a text node of its OWN (so a wrapper
- * `<div>` around a paragraph is not counted twice), or it is a control, an image, a landmark, or
- * something carrying an explicit `role`. Deliberately structural rather than a list of the things
- * this app happens to render at `/` — the assertion is about anything a future edit puts behind the
- * sheet, not about the hero links that were there when it was written.
- */
+// An element counts if it has its own text node, or is a control, image, landmark or explicit role.
 const BACKGROUND_CONTENT_JS = `(() => {
   const sheet = document.querySelector('.prl-sheet');
   if (sheet === null) return null;
@@ -4474,14 +3721,7 @@ const BACKGROUND_CONTENT_JS = `(() => {
   }));
 })()`;
 
-/**
- * Every content-bearing element outside the open sheet, and whether the accessibility tree ignores
- * it.
- *
- * `axFlagsFor` rather than `axFor`: this asks the question of the whole page, and `axFor` would
- * fetch the outer HTML of `<main>` and of every ancestor of everything inside it to decide a
- * boolean per node.
- */
+// `axFlagsFor`, because `axFor` would fetch outer HTML for every ancestor.
 async function gatherSheetBackground(page) {
   const elements = await page.evaluate(BACKGROUND_CONTENT_JS);
   if (elements === null) return null;
@@ -4489,14 +3729,11 @@ async function gatherSheetBackground(page) {
   await page.evaluate(
     `document.querySelectorAll('[data-prl-bg]').forEach((el) => el.removeAttribute('data-prl-bg')); true`,
   );
-  // Both sides are the same selector engine over the same document, so both are in document order
-  // and the two lists line up. Checked rather than assumed: if they ever did not, every verdict
-  // below would be about the wrong element and would still read as a clean pass.
+  // Both lists come from one selector over one document. Check they line up.
   if (flags.length !== elements.length) return { misaligned: { dom: elements.length, ax: flags.length } };
   return elements.map((element, index) => ({ ...element, ...flags[index] }));
 }
 
-/** Tab (or Shift+Tab) around the sheet, recording whether the caret ever leaves it. */
 async function tabAround(page, key, options = {}) {
   const stops = [];
   for (let step = 0; step < SHEET_TAB_STOPS; step += 1) {
@@ -4584,34 +3821,12 @@ const SHEET_CHECKS = [
   {
     id: 'J7.4',
     /*
-      This row was `person`, and the certification's reason for it was right about the
-      implementation and wrong about the ceiling: "whether the virtual cursor reaches those 29 nodes
-      is a fact about whether the reader honours `aria-modal`". It was, because the background was
-      only DECLARED out of scope. Measured before the fix, sheet open at 390x844 on `/`: of 34
-      content-bearing elements outside `.prl-sheet`, 29 were still non-ignored nodes in the computed
-      accessibility tree — "Skip to main content", the wordmark link, `main`, its `h1`, every hero
-      link. `MobileNav` now marks every subtree that is not the sheet `inert` while it is open, and
-      an inert subtree is not in the tree at all, so there is nothing left for a cursor to walk to
-      whatever the reader thinks of `aria-modal`. That is what makes this row decidable here.
-
-      Two things this deliberately does NOT require, because both would be false claims:
-
-        - it does not require the sheet's own ANCESTORS to be ignored. `inert` is inherited and a
-          descendant cannot opt out of it, so inerting `<header>` — where both the trigger and the
-          sheet live — would inert the sheet inside it. What is required of them instead is that
-          they are containers: an ancestor that is still in the tree must carry no text of its own,
-          so reading it reaches a landmark boundary and nothing else. Measured: the one survivor is
-          `<header aria-label="Site">`, a banner with no text of its own.
-        - it does not require the route announcer to be ignored, and it requires it to be EMPTY.
-          `MobileNav` spares it on purpose (see `INERT_EXEMPT` there): it is the one region outside
-          the sheet that still has something to say, because a back-button navigation announces the
-          new route while the sheet is still open. Sparing it is only free while it is empty, which
-          is what this asserts — and it asserts that it is the ONLY thing spared, so a second
-          exemption cannot be added quietly.
-
-      A sweep of nothing is refused: a run that found fewer than twenty content-bearing elements
-      behind the sheet has not looked at the page, and a page with no background is not a page this
-      assertion has been proved against.
+      7.4. `MobileNav` makes everything outside the open sheet `inert`. Measured before the fix: 29 of 34
+      content-bearing elements behind the sheet were still in the tree.
+        - the sheet's ancestors cannot be inert, because `inert` is inherited. They must carry no text
+          of their own;
+        - the route announcer is spared (`INERT_EXEMPT`) and must be empty and the only exemption;
+        - fewer than `BACKGROUND_CONTENT_FLOOR` elements fails.
     */
     what: 'nothing behind the open sheet is left in the accessibility tree for a cursor to walk to',
     decide: (e) => {
@@ -4745,10 +3960,6 @@ function decideTrap(stops, label) {
   return pass(`${stops.length} ${label} presses, all inside`);
 }
 
-// ---------------------------------------------------------------------------
-// Journey 8 — the failure paths
-// ---------------------------------------------------------------------------
-
 async function gatherMissingHand(page) {
   const nodes = await axNodes(page);
   return {
@@ -4789,23 +4000,9 @@ const MISSING_HAND_CHECKS = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Journey 8, continued — the page a reader gets when the API is not there
-//
-// 8.2 was `person` for a reason that reads like an impossibility and is a fixture: "the
-// bundled-copy path is taken by the WEB SERVER's own fetch, not the browser's, so reaching it needs
-// the API to be down for a process this gate shares with every other assertion". Both halves are
-// true and the conclusion does not follow — the gate can run a SECOND web server. It is the same
-// build, on its own port, with `PRL_API_ORIGIN` pointing at a port nothing can be listening on, and
-// nothing else in the run goes near it. See `OFFLINE_WEB_ORIGIN` in `ax-tree-audit.mjs`.
-//
-// What that buys is the real path rather than a simulation of it: `loadLessonList` gets a transport
-// error from its own `fetch`, `isApiUnavailable` says so, and `/learn` renders `LEARN_LESSON_LIST_
-// FIXTURE` with `fallbackReason` set — exactly what a reader would get from a deployment whose API
-// is down.
-// ---------------------------------------------------------------------------
+// 8.2: a second web app whose `PRL_API_ORIGIN` points at nothing, so `/learn` renders its bundled
+// copy. See `OFFLINE_WEB_ORIGIN` in `ax-tree-audit.mjs`.
 
-/** The phrase every fixture fallback in `apps/web/src/lib/learn-data.ts` is built on. */
 const BUNDLED_COPY_NOTICE = /bundled copy|content service is not reachable/iu;
 
 async function gatherBundledCopy(page) {
@@ -4840,9 +4037,7 @@ async function gatherBundledCopy(page) {
   return {
     notice,
     noticeAx: ax[0] ?? null,
-    // The sentence as the TREE carries it, which is the half a source scan cannot make: a `role=
-    // "note"` takes no accessible name from its contents, so the evidence that a reader gets the
-    // words is that the words are in the tree as text.
+    // A `role="note"` takes no name from its contents, so the words must appear in the tree as text.
     spokenInTree: nodes.filter((node) => BUNDLED_COPY_NOTICE.test(node.name)).map((node) => node.name),
     headings: nodes
       .filter((node) => node.role === 'heading')
@@ -4897,9 +4092,7 @@ const BUNDLED_COPY_CHECKS = [
             'reading',
         );
       }
-      // The badge test, and it is the one the row actually turns on. Strip every `aria-hidden`
-      // glyph and what is left must still be a sentence; a tone marker plus a coloured border is a
-      // visual-only badge however loud it looks.
+      // With `aria-hidden` glyphs stripped, what is left must still be a sentence.
       if (!BUNDLED_COPY_NOTICE.test(e.notice.spoken) || e.notice.spoken.length < 40) {
         return fail(
           `with every decorative glyph removed the notice reads "${e.notice.spoken}", which is not a ` +
@@ -4918,17 +4111,7 @@ const BUNDLED_COPY_CHECKS = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// The registry
-// ---------------------------------------------------------------------------
-
-/**
- * One entry per page visit, in the order the certification document walks them.
- *
- * `viewport` is a real device-metrics override rather than a window resize, because the two
- * narrow-width journeys are decided by `matchMedia` and a container query, and a headless window
- * that was merely made small does not always move either.
- */
+// One entry per page visit, in the order the certification document walks them.
 export const ASSERTION_ROUTES = [
   { key: 'global', title: 'Global (G1–G10)', path: '/', gather: gatherGlobal, checks: GLOBAL_CHECKS },
   { key: 'learn', title: 'J1 Learn', path: '/learn', gather: gatherLearn, checks: LEARN_CHECKS },
@@ -4940,11 +4123,7 @@ export const ASSERTION_ROUTES = [
     checks: QUIZ_CHECKS,
   },
   {
-    /*
-      2.9 gets its own page visit because it needs two of them: the quiz is walked to its review
-      panel twice from a fresh load, and the runs differ in exactly one answer. See
-      `gatherQuizReview` for why the row is decided by difference rather than by a scan.
-    */
+    // 2.9 needs two page visits. See `gatherQuizReview`.
     key: 'quiz-review',
     title: 'J2 Guided practice, at the end of the quiz',
     path: '/learn/pot-odds',
@@ -4966,14 +4145,7 @@ export const ASSERTION_ROUTES = [
     gather: gatherTableNarrow,
     checks: TABLE_NARROW_CHECKS,
   },
-  /*
-    The live table, and it is placed before the replay deliberately.
-
-    Both routes can stand alone — the replay plays a hand of its own when the session has none — but
-    run in this order the replay reads back the hand this one just played, which is one hand rather
-    than two and about twenty seconds of gate. The order is an optimisation, not a dependency; a run
-    of `--assertions replay` alone is still a complete check of journey 6.
-  */
+  // Before the replay, so the replay reads back this hand instead of playing one (about 20s).
   {
     key: 'live-table',
     title: 'J3 Table and Coach, over a live socket',
@@ -4996,15 +4168,7 @@ export const ASSERTION_ROUTES = [
     checks: REPLAY_CHECKS,
   },
   {
-    /*
-      6.7's corrupted reveal, and it sits here for the same session reason the replay does.
-
-      `origin: 'proxied'` is the second route that does not run against the app under test: a third
-      `next start` off the same build whose `PRL_API_ORIGIN` points at `scripts/review-proxy.mjs`,
-      which forwards the real API's real review response with one hex digit of one salt flipped. It
-      reads the hands THIS session already has, so it must come before `live-refusal` clears the
-      cookie jar — and it plays a hand of its own only when none of them proved a deck position.
-    */
+    // 6.7. It reads this session's hands, so it must run before `live-refusal` clears the cookies.
     key: 'deck-proof-alert',
     title: 'J6 Hand review, with one byte of the reveal flipped',
     origin: 'proxied',
@@ -5012,14 +4176,7 @@ export const ASSERTION_ROUTES = [
     gather: gatherDeckProofAlert,
     checks: DECK_PROOF_CHECKS,
   },
-  /*
-    3.19's hand, and it must come AFTER the replay.
-
-    It clears the cookie jar and plays a hand of its own, so a session sitting between it and the
-    replay would be a different reader's — the replay would find no hand of its own to read back
-    and would have to play one, which is twenty seconds of gate for nothing. Ordering only; the
-    route stands alone.
-  */
+  // 3.19 clears the cookies, so it runs after the replay.
   {
     key: 'live-refusal',
     title: 'J3 Table and Coach, a decision the server refuses',
@@ -5065,12 +4222,7 @@ export const ASSERTION_ROUTES = [
     checks: MISSING_HAND_CHECKS,
   },
   {
-    /*
-      `origin: 'offline'` is the only route that does not run against the app under test. It runs
-      against a second `next start` off the same build whose `PRL_API_ORIGIN` points at nothing, so
-      the web server's own fetch fails and the page renders its bundled copy — which is the state
-      8.2 is about and the one thing blocking `/api/*` in the browser cannot produce.
-    */
+    // 8.2 runs against the second web app, whose API origin points at nothing.
     key: 'bundled-copy',
     title: 'J8 Failure paths, with no API behind the web server',
     origin: 'offline',
@@ -5080,14 +4232,7 @@ export const ASSERTION_ROUTES = [
   },
 ];
 
-/**
- * Every assertion ID this module claims to cover, sorted.
- *
- * `scripts/screen-reader-certify.test.mjs` asserts this is EXACTLY the set of rows the
- * certification document marks `auto`. That is the control against the split rotting: a check
- * deleted here, or a row re-marked there, fails a test rather than quietly leaving an assertion
- * covered by nobody.
- */
+// `screen-reader-certify.test.mjs` asserts this equals the rows the document marks `auto`.
 export const ASSERTION_IDS = ASSERTION_ROUTES.flatMap((route) =>
   route.checks.map((check) => check.id),
 ).sort();

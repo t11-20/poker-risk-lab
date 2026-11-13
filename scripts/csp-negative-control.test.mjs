@@ -1,22 +1,7 @@
 #!/usr/bin/env node
 /**
- * The pure half of `scripts/csp-negative-control.mjs`, held to its own standard.
- *
- * The browser half of that script cannot be unit-tested — the whole point of it is that it needs a
- * real rendering engine — so everything that CAN be decided without one is factored out and checked
- * here: the argument parser, the markup builder, the violation matcher and the verdict builder.
- *
- * The centre of this file is the matcher's NEGATIVE CONTROL. `matchesViolation` is the function that
- * turns "the browser said something" into "the browser refused THIS injection FOR THIS reason", and
- * a matcher that has only ever been shown things it should accept is a matcher nobody has tested.
- * So it is shown real reports captured from a real run — the exact objects Chrome 151 produced
- * against this app's production policy — and it is also shown reports from the wrong case and from
- * an unrelated directive entirely, and it must refuse those. A matcher that accepts the wrong
- * evidence is how five injections that were never made get reported as five injections refused.
- *
- * The other assertion worth naming is the one over `CASES`: every case must have an injection in the
- * markup that carries its flag. Without it, a case could be added to the table, never injected, and
- * pass forever on the silence of a thing that was never done.
+ * The pure half of `scripts/csp-negative-control.mjs`. The matcher is shown reports Chrome 151 really
+ * produced and must refuse those from the wrong case or an unrelated directive.
  */
 
 import assert from 'node:assert/strict';
@@ -34,15 +19,10 @@ import {
   WRONG_NONCE,
 } from './csp-negative-control.mjs';
 
-/** A nonce of the shape `src/proxy.ts` mints: 16 random bytes, base64. */
 const REAL_NONCE = 'krFOO6/YxWTzC8Ndhu+cig==';
 const REMOTE_URL = 'http://127.0.0.1:62081/injected.js';
 
-/**
- * Violation reports captured verbatim from a real run: Chrome 151.0.7922.170, `next start` of this
- * app, the production policy. Kept as data rather than invented, so the matcher is tested against
- * what a browser actually emits and not against what this file imagines it emits.
- */
+/** Captured verbatim from Chrome 151.0.7922.170 against `next start` with the production policy. */
 const REAL_REPORTS = {
   inline: {
     effectiveDirective: 'script-src-elem',
@@ -85,10 +65,6 @@ const expectationFor = (id, blockedUri) => {
   return { directives: testCase.directives, blockedUri: blockedUri ?? testCase.blockedUri };
 };
 
-// ---------------------------------------------------------------------------
-// matchesViolation — the negative control
-// ---------------------------------------------------------------------------
-
 test('matchesViolation fires on the real report for each case', () => {
   assert.equal(matchesViolation(REAL_REPORTS.inline, expectationFor('inline-no-nonce')), true);
   assert.equal(matchesViolation(REAL_REPORTS.inline, expectationFor('inline-wrong-nonce')), true);
@@ -98,9 +74,7 @@ test('matchesViolation fires on the real report for each case', () => {
 });
 
 test('matchesViolation does NOT fire on an unrelated violation', () => {
-  // The one the manual browser check in docs/audit/blocker-remediation.md used: an image from an
-  // origin the policy does not allow. A real violation, a real directive, and nothing whatsoever to
-  // do with any injection this control makes.
+  // An off-policy image: a real violation unrelated to any injection.
   const unrelated = {
     effectiveDirective: 'img-src',
     violatedDirective: 'img-src',
@@ -117,14 +91,11 @@ test('matchesViolation does NOT fire on an unrelated violation', () => {
 });
 
 test('matchesViolation does not let one case be satisfied by another case evidence', () => {
-  // Both are `script-src` on a Level 3 client, and only `blockedURI` tells them apart. This is the
-  // assertion that stops the eval case passing on the inline case's violation.
+  // Both are `script-src` on CSP3. Only `blockedURI` stops the eval case passing on the inline one.
   assert.equal(matchesViolation(REAL_REPORTS.evaluation, expectationFor('inline-no-nonce')), false);
   assert.equal(matchesViolation(REAL_REPORTS.inline, expectationFor('eval')), false);
-  // The event handler and an inline element both block "inline"; only the directive separates them.
   assert.equal(matchesViolation(REAL_REPORTS.eventHandler, expectationFor('inline-no-nonce')), false);
   assert.equal(matchesViolation(REAL_REPORTS.inline, expectationFor('event-handler-attribute')), false);
-  // The right directive for the remote case, but some other URL.
   assert.equal(
     matchesViolation(
       { effectiveDirective: 'script-src-elem', blockedURI: 'http://127.0.0.1:1/other.js' },
@@ -135,8 +106,7 @@ test('matchesViolation does not let one case be satisfied by another case eviden
 });
 
 test('matchesViolation accepts the CSP Level 2 report shape', () => {
-  // An older client has no `effectiveDirective`, and its `violatedDirective` may carry the whole
-  // directive including its source list. Only the directive name is compared.
+  // A CSP2 `violatedDirective` may carry its source list. Only the name is compared.
   assert.equal(
     matchesViolation(
       { violatedDirective: "script-src 'self' 'nonce-abc'", blockedURI: 'inline' },
@@ -150,13 +120,8 @@ test('matchesViolation refuses anything that is not a report', () => {
   for (const value of [null, undefined, 'script-src', 42, []]) {
     assert.equal(matchesViolation(value, expectationFor('eval')), false);
   }
-  // A report with neither field is not evidence of anything.
   assert.equal(matchesViolation({ blockedURI: 'eval' }, expectationFor('eval')), false);
 });
-
-// ---------------------------------------------------------------------------
-// The case table
-// ---------------------------------------------------------------------------
 
 test('every case is distinct, named, and attributable', () => {
   assert.equal(new Set(CASES.map((entry) => entry.id)).size, CASES.length);
@@ -165,8 +130,6 @@ test('every case is distinct, named, and attributable', () => {
     assert.ok(testCase.directives.length > 0, `${testCase.id} names no directive`);
     assert.ok(testCase.title.length > 0, `${testCase.id} has no title`);
   }
-  // Exactly one case is filled in per run, and it is the one whose blocked URI is an address this
-  // harness only learns when it opens a socket.
   assert.deepEqual(
     CASES.filter((entry) => entry.blockedUri === null).map((entry) => entry.id),
     ['remote-script'],
@@ -175,8 +138,7 @@ test('every case is distinct, named, and attributable', () => {
 
 test('every case that the markup is responsible for actually appears in the markup', () => {
   const markup = attackMarkup({ nonce: REAL_NONCE, remoteScriptUrl: REMOTE_URL });
-  // The remote case's flag is set by the body the disallowed origin serves, not by the markup, so it
-  // is the one exception — and it is named rather than skipped silently.
+  // The remote case's flag is set by the disallowed origin's body, so it is the named exception.
   for (const testCase of CASES) {
     if (testCase.id === 'remote-script') {
       assert.ok(markup.includes(REMOTE_URL), 'the remote case has no <script src> in the markup');
@@ -186,16 +148,11 @@ test('every case that the markup is responsible for actually appears in the mark
   }
 });
 
-// ---------------------------------------------------------------------------
-// attackMarkup
-// ---------------------------------------------------------------------------
-
 test('attackMarkup stamps the real nonce on the probe and nothing else', () => {
   const markup = attackMarkup({ nonce: REAL_NONCE, remoteScriptUrl: REMOTE_URL });
   assert.equal(markup.split(REAL_NONCE).length - 1, 1, 'the real nonce appears more than once');
   assert.ok(markup.includes(`<script nonce="${REAL_NONCE}">`));
   assert.ok(markup.includes(`<script nonce="${WRONG_NONCE}">`));
-  // The un-nonced injection must carry no nonce attribute at all.
   assert.ok(markup.includes('<script>window.__prlCspInlineNoNonceRan = true;</script>'));
   assert.ok(markup.includes(`id="${EVENT_HANDLER_ELEMENT_ID}"`));
   assert.ok(markup.includes('onclick="window.__prlCspEventHandlerRan = true"'));
@@ -203,8 +160,7 @@ test('attackMarkup stamps the real nonce on the probe and nothing else', () => {
 
 test('attackMarkup produces balanced script elements', () => {
   const markup = attackMarkup({ nonce: REAL_NONCE, remoteScriptUrl: REMOTE_URL });
-  // A `</script>` inside an inline script body would end the element early and turn the rest of the
-  // probe into text, which is a whole run silently proving nothing.
+  // A `</script>` inside an inline body would end the element early.
   assert.equal((markup.match(/<script\b/g) ?? []).length, (markup.match(/<\/script>/g) ?? []).length);
   assert.equal((markup.match(/<script\b/g) ?? []).length, 4);
 });
@@ -215,8 +171,6 @@ test('attackMarkup refuses to run without a real nonce', () => {
 });
 
 test('attackMarkup refuses when the deployment nonce IS the wrong nonce', () => {
-  // The wrong-nonce case would be indistinguishable from the correct one, so the run stops rather
-  // than reporting a refusal it cannot attribute.
   assert.throws(() => attackMarkup({ nonce: WRONG_NONCE, remoteScriptUrl: REMOTE_URL }), /static nonce/);
 });
 
@@ -224,10 +178,6 @@ test('the wrong nonce is well-formed and is not the real one', () => {
   assert.notEqual(WRONG_NONCE, REAL_NONCE);
   assert.match(WRONG_NONCE, /^[A-Za-z0-9+/]+={0,2}$/);
 });
-
-// ---------------------------------------------------------------------------
-// injectAttackMarkup
-// ---------------------------------------------------------------------------
 
 test('injectAttackMarkup splices before the last </body> and changes nothing else', () => {
   const html = '<!doctype html><html><body><p>hello</p></body></html>';
@@ -239,7 +189,6 @@ test('injectAttackMarkup splices before the last </body> and changes nothing els
 });
 
 test('injectAttackMarkup uses the LAST </body>, not the first', () => {
-  // A page whose own content mentions the string must still be attacked at its real end.
   const html = '<body><code>&lt;/body&gt;</code>x</body>y</body></html>';
   const out = injectAttackMarkup(html, 'MARK');
   assert.equal(out.lastIndexOf('MARK') < out.lastIndexOf('</body>'), true);
@@ -250,10 +199,6 @@ test('injectAttackMarkup uses the LAST </body>, not the first', () => {
 test('injectAttackMarkup THROWS rather than returning the document unchanged', () => {
   assert.throws(() => injectAttackMarkup('<p>no body element here</p>', 'MARK'), /no <\/body>/);
 });
-
-// ---------------------------------------------------------------------------
-// buildVerdict
-// ---------------------------------------------------------------------------
 
 const passEntry = (kind) => ({ level: 'pass', kind, label: 'x', detail: '' });
 const failEntry = (kind) => ({ level: 'fail', kind, label: 'x', detail: 'y' });
@@ -276,7 +221,7 @@ test('buildVerdict fails on any failure', () => {
 });
 
 test('buildVerdict fails when nothing was injected, even with zero failures', () => {
-  // The run that fell over before it attacked anything. Zero failures, and it must not be a pass.
+  // A run that fell over before it attacked anything.
   const verdict = buildVerdict([passEntry('positive')]);
   assert.equal(verdict.passed, false);
   assert.equal(verdict.exitCode, 1);
@@ -305,10 +250,6 @@ test('buildVerdict ignores context notes', () => {
   assert.equal(verdict.passes, 2);
   assert.equal(verdict.passed, true);
 });
-
-// ---------------------------------------------------------------------------
-// parseArgs
-// ---------------------------------------------------------------------------
 
 test('parseArgs defaults', () => {
   const options = parseArgs([]);
@@ -372,17 +313,11 @@ test('parseArgs throws the REASON, not "invalid"', () => {
   assert.throws(() => parseArgs(['--with-api']), /only means anything with --start/);
 });
 
-// ---------------------------------------------------------------------------
-// The age gate
-// ---------------------------------------------------------------------------
-
 test('landedOnAgeGate matches by segment, never by substring', () => {
   assert.equal(landedOnAgeGate('/', '/age-check'), true);
   assert.equal(landedOnAgeGate('/', '/age-check/next'), true);
-  // The failure the segment rule exists to prevent.
   assert.equal(landedOnAgeGate('/', '/age-checkers'), false);
   assert.equal(landedOnAgeGate('/', '/learn'), false);
-  // Asking for the gate and getting the gate is not an interception.
   assert.equal(landedOnAgeGate('/age-check', '/age-check'), false);
 });
 
@@ -403,6 +338,5 @@ test('ageDeclarationCookies seeds every name over HTTPS, marked secure', () => {
   const https = ageDeclarationCookies('https://poker.example');
   assert.ok(https.some((cookie) => cookie.name.startsWith('__Host-')));
   for (const cookie of https) assert.equal(cookie.secure, true);
-  // One value satisfies any threshold the gate can be configured with, so every cookie carries it.
   assert.equal(new Set(https.map((cookie) => cookie.value)).size, 1);
 });
