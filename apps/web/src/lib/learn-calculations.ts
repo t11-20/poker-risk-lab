@@ -351,7 +351,7 @@ function resolveRuleOf24(calculation: Extract<LiveCalculation, { kind: 'ruleOf24
     formula: {
       expression: 'estimate = outs × 2 (one card to come)\nestimate = outs × 4 (two cards to come)',
       explanation:
-        'Each unseen card is roughly a fiftieth of the stub, so each out is worth about two points per card still to come.',
+        'Each unseen card is roughly one in fifty of the cards left in the deck, so each out is worth about two points per card still to come.',
     },
     derivation: estimate.explanation,
     caveat: estimate.caveat,
