@@ -45,12 +45,17 @@ import {
   announcesActionAndCost,
   CARD_NAMED_IN_WORDS,
   CARD_VALUE_WORDS,
+  describeDrive,
+  describeDrives,
   figureDefect,
   isBareName,
   NUMERIC_VERDICT_OPENING,
   QUIZ_VERDICT_OPENING,
   SPEECH_PROBE,
   skippedHeadingLevel,
+  summariseDrive,
+  tableStartPath,
+  tallyListedHands,
 } from './ax-assertions.mjs';
 
 const everyCheck = ASSERTION_ROUTES.flatMap((route) => route.checks);
@@ -1113,6 +1118,16 @@ describe('NEGATIVE CONTROL — 3.1, the connection that never says it is live', 
     assert.equal(check.decide(HEALTHY_HAND()).ok, true);
   });
 
+  it('fires when the cleared tab reconnected instead of offering a first visit', () => {
+    // A drive with a cleared cookie jar that still came back to a table resumed one with no session
+    // behind it. Said as that, rather than as "no Deal me in control", which sends a reader looking
+    // for a page that did not render.
+    const evidence = { ...HEALTHY_HAND(), path: 'reconnected', opened: null };
+    const verdict = check.decide(evidence);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /reconnected to a table the tab remembered/u);
+  });
+
   it('fires when the status region never announces the connection is up', () => {
     const evidence = HEALTHY_HAND();
     evidence.log = evidence.log.filter((entry) => !/^Live\./u.test(entry.text));
@@ -1413,8 +1428,9 @@ describe('NEGATIVE CONTROL — 3.18, the hand that ends in silence', () => {
 describe('NEGATIVE CONTROL — 3.19, a refusal nobody is interrupted for', () => {
   const check = checkFor('J3.19');
   const DECISION = regionKey('prl-play__stage', 'prl-play__main', 'prl-play__decision');
-  const REFUSAL =
-    '▲Watch outThe server refused itIt is not your turn to act. (not_your_turn). Nothing was applied.';
+  // Measured in Chrome 151 with "(not_your_turn)" after the server's sentence; the page has since
+  // stopped printing contract codes (audit at 308fadf), and this is the same alert without it.
+  const REFUSAL = '▲Watch outThe server refused itIt is not your turn to act. Nothing was applied.';
 
   /**
    * The hand 3.19's fixture plays: everything `HEALTHY_HAND` records, plus a second decision out of
@@ -1458,6 +1474,21 @@ describe('NEGATIVE CONTROL — 3.19, a refusal nobody is interrupted for', () =>
     const verdict = check.decide(evidence);
     assert.equal(verdict.ok, false);
     assert.match(verdict.detail, /carries the heading and none of/u);
+  });
+
+  it('fires when the refusal reads a contract code out after the server’s sentence', () => {
+    const evidence = REFUSED_HAND();
+    evidence.log = evidence.log.map((entry) =>
+      entry.live === 'assertive'
+        ? {
+            ...entry,
+            text: '▲Watch outThe server refused itIt is not your turn to act. (not_your_turn). Nothing was applied.',
+          }
+        : entry,
+    );
+    const verdict = check.decide(evidence);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /reads a contract code out/u);
   });
 
   it('fires when something else on the screen interrupts as well', () => {
@@ -1897,6 +1928,40 @@ describe('NEGATIVE CONTROL — 6.7, a failing deck proof nobody is interrupted f
     assert.ok(refuses(check, evidence));
   });
 
+  it('says, when it fails, how many DISTINCT hands it saw and what each drive pressed (REGRESSION)', () => {
+    // CI run 43245665934: "Of 1 hand(s) in this session 3 dealt no board card", after two drives
+    // that found no "Deal me in" on a reconnected page and pressed nothing. Neither half was said.
+    const evidence = SEEN_TWICE();
+    evidence.hand = null;
+    evidence.record = null;
+    evidence.proxy = { reviews: 0, refused: [] };
+    evidence.tried = [];
+    const board0 = [{ id: 'hand_a', board: 0 }];
+    Object.assign(evidence, tallyListedHands([board0, board0, board0]));
+    const stuck = { path: 'reconnected', pressed: [], dealt: null, complete: false, start: null };
+    evidence.drives = [stuck, stuck];
+    const verdict = check.decide(evidence);
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.detail, /listed 1 distinct hand\(s\) over 3 look\(s\), and 1 of them dealt no/u);
+    assert.match(verdict.detail, /2 hand\(s\) played for it — reconnected: pressed nothing, DEALT NOTHING/u);
+  });
+
+  it('names the hand it checked and how that hand was reached, when it passes', () => {
+    const evidence = SEEN_TWICE();
+    evidence.drives = [
+      {
+        path: 'reconnected',
+        pressed: ['Deal the next hand'],
+        dealt: 'Deal the next hand',
+        complete: true,
+        start: null,
+      },
+    ];
+    const verdict = check.decide(evidence);
+    assert.equal(verdict.ok, true);
+    assert.match(verdict.detail, /reconnected: pressed "Deal the next hand", played to completion/u);
+  });
+
   it('fires when the fixture is not wired into the run at all', () => {
     const evidence = SEEN_TWICE();
     evidence.wiring = 'the corrupting proxy was not wired into this run';
@@ -2163,5 +2228,110 @@ describe('J2.5: selecting is not answering', () => {
 
   it('fails when there is no "Check answer" to press', () => {
     assert.ok(refuses(check, { ...answered, choiceAnswered: false }));
+  });
+});
+
+describe('NEGATIVE CONTROL — the live-hand fixture, from either state /play opens in', () => {
+  const snapshot = (overrides = {}) => ({
+    reconnecting: false,
+    inProgress: false,
+    status: '',
+    controls: [],
+    ...overrides,
+  });
+  const button = (name, enabled = true) => ({ name, enabled });
+
+  it('reads a first visit off an enabled "Deal me in"', () => {
+    assert.equal(tableStartPath(snapshot({ controls: [button('Deal me in')] })), 'first visit');
+  });
+
+  it('reads a reconnect off the manual controls, a disabled deal included', () => {
+    // "Deal the next hand" renders disabled until a frame says the table is between hands, and it
+    // is still the page telling us it reconnected.
+    assert.equal(
+      tableStartPath(snapshot({ controls: [button('Deal the next hand', false), button('Stand up')] })),
+      'reconnected',
+    );
+    assert.equal(tableStartPath(snapshot({ controls: [button('Take seat 1')] })), 'reconnected');
+  });
+
+  it('waits while the page says it is reconnecting, though "Deal me in" is enabled (REGRESSION)', () => {
+    // `phase` is still `idle` during the reconnect, so "Deal me in" is on screen and pressable. A
+    // reader of the controls alone records a first visit for a page that was reconnecting.
+    // Demonstrated: with the `reconnecting` test removed from `tableStartPath`, this returns
+    // 'first visit'.
+    assert.equal(tableStartPath(snapshot({ reconnecting: true, controls: [button('Deal me in')] })), null);
+  });
+
+  it('settles on nothing that is neither state: a disabled button, "Try again", or no page', () => {
+    assert.equal(tableStartPath(snapshot({ controls: [button('Deal me in', false)] })), null);
+    assert.equal(tableStartPath(snapshot({ controls: [button('Try again')] })), null);
+    assert.equal(tableStartPath(snapshot()), null);
+    assert.equal(tableStartPath(null), null);
+  });
+
+  it('counts a boardless hand once however many times the list is read (REGRESSION)', () => {
+    // The old tally added one per read and took the list length as a maximum: 1 hand, 3 boardless.
+    const board0 = [{ id: 'hand_a', board: 0 }];
+    assert.deepEqual(tallyListedHands([board0, board0, board0]), { looks: 3, listed: 1, boardless: 1 });
+    assert.deepEqual(tallyListedHands([board0, [{ id: 'hand_b', board: 3 }, ...board0]]), {
+      looks: 2,
+      listed: 2,
+      boardless: 1,
+    });
+    assert.deepEqual(tallyListedHands([]), { looks: 0, listed: 0, boardless: 0 });
+  });
+
+  it('says a drive that dealt nothing in capitals, and which controls it pressed', () => {
+    const drive = summariseDrive({ path: 'first visit', opened: 'Deal me in', dealt: null, complete: false });
+    assert.equal(describeDrive(drive), 'first visit: pressed "Deal me in", DEALT NOTHING');
+    const reconnected = summariseDrive({
+      path: 'reconnected',
+      opened: null,
+      sat: 'Take seat 1',
+      dealPressed: 'Deal the next hand',
+      dealt: 'Deal the next hand',
+      complete: true,
+    });
+    assert.equal(
+      describeDrive(reconnected),
+      'reconnected: pressed "Take seat 1" then "Deal the next hand", played to completion',
+    );
+  });
+
+  it('says what a reconnected table showed when no hand came of it', () => {
+    const drive = summariseDrive({
+      path: 'reconnected',
+      sat: null,
+      dealt: null,
+      complete: false,
+      start: {
+        path: 'reconnected',
+        after: snapshot({ status: 'Live.', controls: [button('Deal the next hand', false)] }),
+      },
+    });
+    assert.match(
+      describeDrive(drive),
+      /DEALT NOTHING — the page then showed .*Deal the next hand \(disabled\)/u,
+    );
+  });
+
+  it('says what the page showed when it settled into neither state', () => {
+    const drive = summariseDrive({
+      path: null,
+      start: {
+        path: null,
+        waitedMs: 45_000,
+        snapshot: snapshot({ status: 'Ready to connect.', controls: [button('Deal the next hand', false)] }),
+      },
+    });
+    const said = describeDrive(drive);
+    assert.match(said, /never settled/u);
+    assert.match(said, /"Ready to connect\."/u);
+    assert.match(said, /Deal the next hand \(disabled\)/u);
+  });
+
+  it('says no hand was played when none was needed, rather than claiming one', () => {
+    assert.equal(describeDrives([]), 'a hand already in this session, none played for it');
   });
 });

@@ -208,6 +208,9 @@ export function persistHand(options: PersistHandOptions): PersistedHand {
     bet_level_after: logged.betLevelAfter,
     pot_after: logged.potAfter,
     was_automatic: logged.wasAutomatic,
+    // The engine's log has no reason: that is the live table's (`ArchivedAction`). Null is what a
+    // row archived before migration 0009 holds, and these hands contain no automatic action anyway.
+    automatic_reason: null,
   }));
 
   const hand: PersistedHandRow = {

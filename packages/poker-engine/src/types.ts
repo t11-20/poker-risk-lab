@@ -113,7 +113,11 @@ export interface LoggedAction {
   readonly betLevelAfter: number;
   /** Total pot after the action, including all previous streets. */
   readonly potAfter: number;
-  /** True when the server acted for a player who ran out of time. */
+  /**
+   * True when the server acted for the seat rather than its player: its clock ran out, or the player
+   * had already stood up holding cards. The engine is told only that; which of the two it was is the
+   * live table's (`ArchivedAction.automaticReason` in `apps/api/src/rooms/table.ts`).
+   */
   readonly wasAutomatic: boolean;
   readonly actionId: string | null;
 }

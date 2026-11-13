@@ -37,7 +37,7 @@ import {
   RoomRegistry,
   type RoomStore,
 } from '../src/rooms/registry.ts';
-import { LiveTable } from '../src/rooms/table.ts';
+import { type ArchivedAction, LiveTable } from '../src/rooms/table.ts';
 import { createManualClock, type ManualClock, TurnTimer } from '../src/rooms/timers.ts';
 import { createRoomRoutes } from '../src/routes/rooms.ts';
 
@@ -528,6 +528,62 @@ describe('the live table', () => {
     assert.ok(folded !== undefined, 'standing up mid-hand must produce a fold');
     assert.equal(folded.action.type, 'fold');
     assert.equal(folded.wasAutomatic, true);
+  });
+
+  /**
+   * Both of the table's automatic paths wrote `wasAutomatic: true` and nothing else, so the archive
+   * could not tell them apart and the hand review printed "The clock ran out and the server acted"
+   * beside the fold of a reader who had pressed "Stand up". The reason is what the archive writes
+   * to `hand_actions.automatic_reason` (migration 0009), so it is asserted on the notice the
+   * archive reads, not on the view.
+   */
+  it('tells the archive WHY it acted: the clock, or a player who had already stood up', async () => {
+    const archived = async (
+      drive: (table: LiveTable, clock: ManualClock) => Promise<void>,
+    ): Promise<readonly ArchivedAction[]> => {
+      const { table, clock } = await headsUp();
+      const seen: ArchivedAction[] = [];
+      table.subscribe((notice) => {
+        seen.push(...notice.loggedActions);
+      });
+      await table.startHand();
+      await drive(table, clock);
+      assert.ok(seen.length > 0, 'a sweep of nothing is not a pass');
+      return seen;
+    };
+    const reasons = (actions: readonly ArchivedAction[]): readonly unknown[] =>
+      actions.map((action) => [action.action.type, action.wasAutomatic, action.automaticReason]);
+
+    const timedOut = await archived(async (_table, clock) => {
+      clock.advance(30_001);
+      await Promise.resolve();
+    });
+    assert.deepEqual(reasons(timedOut), [['fold', true, 'timeout']]);
+
+    // The seat to act stands up: it folds at once, and no clock was involved.
+    const stoodUp = await archived(async (table) => {
+      await table.stand(actorOf(table));
+    });
+    assert.deepEqual(reasons(stoodUp), [['fold', true, 'departed']]);
+
+    // The WAITING seat stands up, the other one calls, and the fold comes when the action reaches
+    // the departed seat — inside the call's own mutation, which is the path that must not borrow the
+    // submitted action's reason (null) or the timer's.
+    const stoodUpWaiting = await archived(async (table) => {
+      const actor = actorOf(table);
+      await table.stand(actor === 'usr_a' ? 'usr_b' : 'usr_a');
+      const view = table.viewFor(actor);
+      assert.ok(view !== null);
+      await table.submitAction(actor, {
+        action: { type: 'call' },
+        actionId: 'action-before-departed-fold',
+        expectedSequence: view.actionSequence,
+      });
+    });
+    assert.deepEqual(reasons(stoodUpWaiting), [
+      ['call', false, null],
+      ['fold', true, 'departed'],
+    ]);
   });
 
   it('releases its timer when the room closes', async () => {

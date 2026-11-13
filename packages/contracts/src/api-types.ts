@@ -545,6 +545,32 @@ export interface HandReviewSeat {
   readonly showedDown: boolean;
 }
 
+/**
+ * Why the server made a decision for a seat, when it did.
+ *
+ * There are exactly two places in `apps/api/src/rooms/table.ts` that apply an action nobody
+ * submitted, and each is one of these:
+ *
+ *  - `timeout` — the seat's clock ran out (`applyTimeout`): check if that is free, otherwise fold.
+ *    A dropped connection is this too: nothing stands a seat up when its socket closes, so the clock
+ *    is what reaches it.
+ *  - `departed` — the player had already stood up, left the room, or started another practice table
+ *    while still holding cards here (`runAutomaticActions`), so the seat folds when the action
+ *    reaches it. A choice the player made, not a clock.
+ *
+ * An all-in run-out and a seat sitting out make no decision at all, so neither has a reason here.
+ *
+ * ## Why this exists
+ *
+ * The hand review only had `wasAutomatic`, and printed "The clock ran out and the server acted" for
+ * every automatic decision — including the fold the server makes for a reader who pressed "Stand up"
+ * mid-hand. The live table had already stopped saying that (it can see the `seatTimedOut` event);
+ * the review, read back from `prl.hand_actions`, could not, because nothing recorded which it was.
+ */
+export const AUTOMATIC_REASONS = ['timeout', 'departed'] as const;
+
+export type AutomaticReason = (typeof AUTOMATIC_REASONS)[number];
+
 export interface HandReviewDecision {
   readonly sequence: number;
   readonly street: string;
@@ -554,6 +580,16 @@ export interface HandReviewDecision {
   readonly amountPaid: number;
   readonly potBefore: number;
   readonly wasAutomatic: boolean;
+  /**
+   * Why the server decided, when `wasAutomatic`. Null when it did not — and ALSO null for an
+   * automatic decision archived before the reason was recorded (`db/migrations/0009`): those rows
+   * say only that the server acted, and a client must say no more than that rather than guess.
+   *
+   * Added beside `wasAutomatic` rather than replacing it, and without a `PROTOCOL_VERSION` bump: the
+   * change is additive, a client that ignores it reads exactly what it read before, and the bump is
+   * for breaking changes, which the server answers by refusing the client.
+   */
+  readonly automaticReason: AutomaticReason | null;
   /**
    * Computed at review time for the requesting user's own decisions only. Analysing
    * an opponent's decision would require their hole cards, which the server will

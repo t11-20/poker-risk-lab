@@ -198,7 +198,8 @@ describe('a fold the server made for the reader stays on screen', () => {
   it('does not narrate that fold as a clock running out, and still narrates a real one that way', () => {
     const left = drive([welcome(), state(1, READER_DEADLINE, SERVER_TIME), ...stoodUp]);
     assert.doesNotMatch(left.announcement, /clock|time/u);
-    assert.match(left.announcement, /^Guest 12D91B folds \(the server acted for this seat\)$/u);
+    // The reader's own fold, in the reader's words — see `inReadersWords` in `use-live-table.ts`.
+    assert.match(left.announcement, /^You fold \(the server acted for you\)$/u);
     const expired = drive([welcome(), state(1, READER_DEADLINE, SERVER_TIME), ...timedOut]);
     assert.match(expired.announcement, /the clock ran out/u);
   });
@@ -235,7 +236,8 @@ describe('how the hand ended keeps the showdown', () => {
   it('lists what was shown, then who was paid', () => {
     const table = drive([welcome(), showdown, complete]);
     assert.deepEqual(table.summary, [
-      'Guest 12D91B shows high card king, queen ten kickers.',
+      // The reader is Guest 12D91B, so their own line is put to them as "you".
+      'You show high card king, queen ten kickers.',
       'Reading Pressure shows flush, ace high.',
       'Reading Pressure wins 1622 from the main pot.',
       'Reading Pressure wins 646 from side pot 1.',

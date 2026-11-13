@@ -435,7 +435,11 @@ function nextActor(state: HandState, from: SeatIndex): SeatIndex | null {
 }
 
 export interface ApplyActionOptions {
-  /** True when the server acted for a player who ran out of time. */
+  /**
+   * True when the server acted for the seat rather than its player: its clock ran out, or the player
+   * had already stood up holding cards. The engine is told only that; which of the two it was is the
+   * live table's (`ArchivedAction.automaticReason` in `apps/api/src/rooms/table.ts`).
+   */
   readonly automatic?: boolean;
   readonly actionId?: string | null;
 }
