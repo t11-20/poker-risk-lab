@@ -1,14 +1,7 @@
 /**
- * Tests for outs analysis.
- *
- * Every expected number below is derived by hand, in a comment, from card counting —
- * never by running the implementation and pasting what came out. Most scenarios are
- * set on the TURN on purpose: with one card to come and a known opponent hand, hero's
- * equity after a card can only be 1 (hero wins that river), 0.5 (a chop) or 0, so the
- * whole result reduces to "how many of the 44 remaining cards win", which is
- * countable on paper. The flop scenarios then check the interesting part — that a
- * card can put hero in front and still leave hero beatable — and their expectations
- * are stated as exact fractions with the count of losing rivers spelled out.
+ * Every expected number is derived by hand from card counting, never pasted from a run.
+ * Most spots are on the turn against a known hand, so equity after a card is 1, 0.5 or 0 and the
+ * result is a count of the 44 rivers. The flop spots state exact fractions with the losing rivers.
  */
 
 import assert from 'node:assert/strict';
@@ -18,16 +11,11 @@ import type { CardOutcome, OutsResult } from '../src/outs.ts';
 import { computeOuts, OutsError, outsSummaryFor } from '../src/outs.ts';
 import { exactRange, parseRange } from '../src/ranges.ts';
 
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
-/** Labels in the order the result returned them (best equity first, then card id). */
+/** Labels in result order, best equity first, then card id. */
 function labelsInOrder(outcomes: readonly CardOutcome[]): string[] {
   return outcomes.map((outcome) => outcome.label);
 }
 
-/** Labels as a set, for assertions where the display order is not the point. */
 function labelSet(outcomes: readonly CardOutcome[]): string[] {
   return [...outcomes.map((outcome) => outcome.label)].sort();
 }
@@ -39,7 +27,6 @@ function outcomeFor(result: OutsResult, label: string): CardOutcome {
   return found;
 }
 
-/** Floating point comparison against an exact rational expectation. */
 function closeTo(actual: number, expected: number, what: string): void {
   assert.ok(
     Math.abs(actual - expected) < 1e-12,
@@ -47,7 +34,6 @@ function closeTo(actual: number, expected: number, what: string): void {
   );
 }
 
-/** Every result must partition the cards it considered, with equities in range. */
 function assertInvariants(result: OutsResult): void {
   assert.equal(
     result.clean.length + result.dirty.length + result.neutral.length,
@@ -59,11 +45,7 @@ function assertInvariants(result: OutsResult): void {
   assert.equal(result.totalOuts, result.cleanCount + result.dirtyCount);
   assert.equal(result.method, 'exact-per-card');
 
-  // The refusal and the sentence that carries it are one decision, and this is the
-  // invariant that keeps them one. A result may say "N outs in total" or it may carry a
-  // refusal; never both, and never neither. The panel headline that read "OUTS — 47 CARDS
-  // IN TOTAL" over a flopped two pair was the second failure of exactly this pair: the
-  // caveat was in the paragraph, the word "outs" was still on the number.
+  // A result says "N outs in total" or carries a refusal, never both and never neither.
   const refused = result.refusal !== null;
   assert.equal(
     /outs in total/.test(result.explanation),
@@ -98,21 +80,12 @@ function assertInvariants(result: OutsResult): void {
   );
 }
 
-// ---------------------------------------------------------------------------
-// 1. a bare nut flush draw where every flush card wins
-// ---------------------------------------------------------------------------
-
 test('a bare nut flush draw against a hand it dominates has exactly 9 clean outs', () => {
   // Hero Ah 6h on Kh 9h 4s 2c against Kd 9c (two pair, kings and nines).
-  //
-  // Hearts: 13 in the deck, 4 visible (Ah, 6h, Kh, 9h), so 9 remain and none of
-  // them is in the opponent's hand. Each makes hero an ace-high flush; the opponent
-  // holds no heart and the board has no pair, so no river card can give them a full
-  // house — a flush wins every time.
-  //
-  // Hero cannot win any other way: pairing the ace or the six still loses to two
-  // pair, and A-6 with K-9-4-2 cannot make a straight. So hero wins on exactly 9 of
-  // the 44 unseen cards and equityNow = 9/44.
+  // 13 hearts less 4 visible (Ah, 6h, Kh, 9h) = 9, none held by the opponent. Each makes an
+  // ace-high flush, and the unpaired board gives them no full house, so each wins.
+  // Pairing the ace or the six still loses to two pair, and A-6 with K-9-4-2 makes no straight.
+  // Hero wins on exactly 9 of 44, so equityNow = 9/44.
   const result = computeOuts({
     heroCards: parseCards('Ah 6h'),
     board: parseCards('Kh 9h 4s 2c'),
@@ -127,8 +100,6 @@ test('a bare nut flush draw against a hand it dominates has exactly 9 clean outs
   assert.deepEqual(labelsInOrder(result.clean), ['2h', '3h', '4h', '5h', '7h', '8h', 'Th', 'Jh', 'Qh']);
   closeTo(result.equityNow, 9 / 44, 'equityNow');
 
-  // On the river the answer is binary: a heart wins the whole pot, anything else
-  // wins none of it.
   for (const outcome of result.clean) closeTo(outcome.equityAfter, 1, `${outcome.label} after`);
   for (const outcome of result.neutral) closeTo(outcome.equityAfter, 0, `${outcome.label} after`);
 
@@ -136,30 +107,14 @@ test('a bare nut flush draw against a hand it dominates has exactly 9 clean outs
   assert.match(result.explanation, /9 are clean and 0 are dirty/);
 });
 
-// ---------------------------------------------------------------------------
-// 2. flush cards that also complete a straight for the opponent
-// ---------------------------------------------------------------------------
-
 test('flush cards that complete a straight flush for the opponent are not outs at all', () => {
-  // Hero Ah Kh on 8h 9h 6c 2d against 7h 6h — they have a pair of sixes plus an
-  // open-ended straight draw and a flush draw, so hero is behind with ace-king high.
-  //
-  // "Nine outs to the nut flush" is wrong twice over here.
-  //
-  // First, the opponent is holding two of hero's hearts: 13 hearts less Ah, Kh, 8h,
-  // 9h, 7h, 6h leaves SEVEN — 2h, 3h, 4h, 5h, Th, Jh, Qh.
-  //
-  // Second, two of those seven complete a straight for them, and because their
-  // straight is in hearts it is a STRAIGHT FLUSH, which beats hero's flush:
+  // Hero Ah Kh on 8h 9h 6c 2d against 7h 6h (pair of sixes, straight and flush draws).
+  // 13 hearts less Ah, Kh, 8h, 9h, 7h, 6h leaves 7 (2h, 3h, 4h, 5h, Th, Jh, Qh).
+  // Two of those make them a straight flush, which beats hero's flush:
   //   5h  ->  5h 6h 7h 8h 9h
   //   Th  ->  6h 7h 8h 9h Th
-  // The other five hearts give them only a nine-high flush against hero's ace-high
-  // flush, so hero wins those.
-  //
-  // Hero's other outs are the overcards: three aces and three kings each make a pair
-  // that beats their pair of sixes (the board is 8-9-6-2 with no pair, so they cannot
-  // improve past one pair on a blank river).
-  //
+  // The other five give them only a nine-high flush.
+  // Three aces and three kings each pair hero above their sixes on the unpaired board.
   // Winners: 5 hearts + 3 aces + 3 kings = 11 of 44, so equityNow = 11/44 = 0.25.
   const result = computeOuts({
     heroCards: parseCards('Ah Kh'),
@@ -186,7 +141,6 @@ test('flush cards that complete a straight flush for the opponent are not outs a
     'Qh',
   ]);
 
-  // The exact split of the seven flush cards: five win, two lose outright.
   const flushCards = ['2h', '3h', '4h', '5h', 'Th', 'Jh', 'Qh'];
   const good = flushCards.filter((label) => outcomeFor(result, label).classification === 'clean');
   const bad = flushCards.filter((label) => outcomeFor(result, label).classification === 'neutral');
@@ -196,29 +150,21 @@ test('flush cards that complete a straight flush for the opponent are not outs a
     closeTo(outcomeFor(result, label).equityAfter, 0, `${label} after`);
     assert.match(outcomeFor(result, label).note, /straight flush/);
   }
-  // Nothing here is merely "dirty": on the river a card either wins or it does not.
   assert.equal(result.dirty.length, 0);
 });
 
 test('nine flush cards can be worth zero clean outs and eight dirty ones', () => {
-  // The headline claim of the module, on a flop this time. Hero Ah Qh on Kh 7h 2c
-  // against Kd Kc — a set of kings.
-  //
-  // Nine hearts remain (13 less Ah, Qh, Kh, 7h). Each of the other eight makes hero
-  // an ace-high flush on the turn, but the set is live for a full house on the river.
-  // Take 3h: the board is Kh 7h 2c 3h and they hold Kd Kc, so they win with
+  // Hero Ah Qh on Kh 7h 2c against Kd Kc, a set of kings.
+  // Nine hearts remain (13 less Ah, Qh, Kh, 7h). Eight make an ace-high flush on the turn, but the
+  // set is live for a full house on the river. After 3h (board Kh 7h 2c 3h) they win with
   //   the last king (Ks)         1 card   -> four of a kind
   //   any seven (7c 7d 7s)       3 cards  -> kings full
   //   any deuce (2d 2h 2s)       3 cards  -> kings full
   //   any three (3c 3d 3s)       3 cards  -> kings full
   // = 10 of the 44 remaining cards, so hero's equity after 3h is 34/44 = 0.7727.
-  // That is well under the 0.90 clean threshold: a dirty out.
-  //
-  // The ninth heart, 2h, pairs the board immediately: they have kings full of deuces
-  // against hero's flush, so hero loses outright and it is not an out at all.
-  //
-  // Hero has nothing else: an ace or a queen pairs into a set, and A-Q with K-7-2
-  // cannot make a straight.
+  // That is under 0.90, a dirty out.
+  // 2h pairs the board, giving them kings full of deuces, so it is not an out.
+  // An ace or a queen pairs into a set, and A-Q with K-7-2 makes no straight.
   const result = computeOuts({
     heroCards: parseCards('Ah Qh'),
     board: parseCards('Kh 7h 2c'),
@@ -236,21 +182,11 @@ test('nine flush cards can be worth zero clean outs and eight dirty ones', () =>
   assert.match(outcomeFor(result, '4h').note, /full house/, 'the note must say what still beats the flush');
 });
 
-// ---------------------------------------------------------------------------
-// 3. an open-ended straight draw
-// ---------------------------------------------------------------------------
-
 test('an open-ended straight draw has 8 outs, all clean against a set it beats', () => {
-  // Hero 9c 8d on 7s 6h 2c 3d against 7d 7c (a set of sevens; the board's 7s makes
-  // three). Hero has 9-8-7-6 and needs a five or a ten: 4 + 4 = 8 cards, none of
-  // them held by the opponent.
-  //
-  // Every one of the eight is clean. The board 7-6-2-3 has no pair, and neither a
-  // five nor a ten pairs it, so their set can never become a full house on the card
-  // that makes hero's straight — and a straight beats three of a kind.
-  //
-  // Hero has no other winner: pairing the nine or the eight still loses to the set,
-  // and the board is rainbow (s, h, c, d) so no flush is possible for anyone.
+  // Hero 9c 8d on 7s 6h 2c 3d against 7d 7c (a set of sevens). Hero has 9-8-7-6 and needs a five
+  // or a ten, 4 + 4 = 8 cards, none held by the opponent.
+  // Neither pairs the 7-6-2-3 board, so the set cannot fill up, and a straight beats a set.
+  // Pairing the nine or eight loses to the set, and the rainbow board allows no flush.
   // equityNow = 8/44.
   const result = computeOuts({
     heroCards: parseCards('9c 8d'),
@@ -266,22 +202,14 @@ test('an open-ended straight draw has 8 outs, all clean against a set it beats',
   for (const outcome of result.clean) closeTo(outcome.equityAfter, 1, `${outcome.label} after`);
   assert.match(outcomeFor(result, '5c').note, /straight/);
 
-  // The fourth seven is not an out for hero and must not be counted as one: it gives
-  // them four of a kind.
+  // The fourth seven gives them four of a kind.
   assert.equal(outcomeFor(result, '7h').classification, 'neutral');
 });
 
-// ---------------------------------------------------------------------------
-// 4. a gutshot
-// ---------------------------------------------------------------------------
-
 test('a gutshot has 4 outs', () => {
-  // Hero Jc Tc on 9h 7d 2c 5s against 9c 9s (a set of nines). Hero has J-T-9-7 and
-  // only an eight fills it: exactly 4 cards, all live.
-  //
-  // Each eight makes 7-8-9-T-J, which beats three of a kind, and no eight pairs the
-  // board (9-7-2-5) so the set cannot boat up on the same card. Hero has three clubs
-  // (Jc, Tc, 2c) and so cannot flush. Pairing a jack or a ten loses to the set.
+  // Hero Jc Tc on 9h 7d 2c 5s against 9c 9s (a set of nines). Only the 4 eights fill J-T-9-7.
+  // Each makes 7-8-9-T-J, and no eight pairs the 9-7-2-5 board, so the set cannot fill up.
+  // Three clubs (Jc, Tc, 2c) cannot flush. Pairing a jack or a ten loses to the set.
   // equityNow = 4/44.
   const result = computeOuts({
     heroCards: parseCards('Jc Tc'),
@@ -296,25 +224,14 @@ test('a gutshot has 4 outs', () => {
   assert.deepEqual(labelSet(result.clean), ['8c', '8d', '8h', '8s']);
   closeTo(result.equityNow, 4 / 44, 'equityNow');
 
-  // 4/44 is 9.1%, and the explanation must show the figure rather than round it to
-  // a flat "9%".
+  // 4/44 is 9.1%, not a flat "9%".
   assert.match(result.explanation, /9\.1% equity/);
 });
 
-// ---------------------------------------------------------------------------
-// 5. a hand that is already ahead
-// ---------------------------------------------------------------------------
-
 test('a hand that is already ahead is reported as such, not as a 43-out draw', () => {
-  // Hero Kh Kd on Kc 7h 2c 3d against 7c 7d. Hero has three kings, they have three
-  // sevens, and the board is unpaired.
-  //
-  // Only one river beats hero: 7s, which makes them four of a kind (hero's kings
-  // full of sevens is second best). Every other card leaves hero in front — 43 of
-  // 44 — so equityNow = 43/44 and the "clean" bucket holds 43 cards.
-  //
-  // That count is literally correct and would be badly misleading if it were read as
-  // a draw, so the result has to say out loud that hero is not drawing.
+  // Hero Kh Kd on Kc 7h 2c 3d against 7c 7d, set over set on an unpaired board.
+  // Only 7s beats hero (four sevens over kings full). The other 43 of 44 leave hero in front, so
+  // equityNow = 43/44 and 43 cards are clean.
   const result = computeOuts({
     heroCards: parseCards('Kh Kd'),
     board: parseCards('Kc 7h 2c 3d'),
@@ -334,8 +251,7 @@ test('a hand that is already ahead is reported as such, not as a 43-out draw', (
     'the assumptions must carry the same warning as the explanation',
   );
 
-  // Cards that "improve" hero are not treated as rescues: a deuce makes kings full
-  // and the note says hero was already in front of the hand it beats.
+  // A deuce makes kings full, and the note does not call it a rescue.
   const boat = outcomeFor(result, '2d');
   assert.equal(boat.classification, 'clean');
   closeTo(boat.equityAfter, 1, '2d after');
@@ -343,16 +259,8 @@ test('a hand that is already ahead is reported as such, not as a 43-out draw', (
 });
 
 test('two pair on the flop reports no outs count at all, and still reports the cards', () => {
-  // THE DEFECT, exactly as a learner met it. Hero Ac 5d on Ah 5s 2c — two pair, aces and
-  // fives — against a wide continuing range. Hero is a long way in front before any card
-  // arrives, so the equity-threshold definition degenerates: EVERY one of the 47 unseen
-  // cards leaves hero at or above the 50% a card has to reach to count, and the panel
-  // headed the section "OUTS — 47 CARDS IN TOTAL". 47 is the whole rest of the deck.
-  //
-  // Counting from the board rather than from the implementation: hero holds 2 cards, the
-  // board holds 3, so 52 - 5 = 47 cards can come next. That is the number the old
-  // explanation published as an outs count, which is what makes it the wrong number for
-  // the word: it is not a property of hero's hand at all.
+  // Hero Ac 5d on Ah 5s 2c, two pair against a wide range. Every one of the 52 - 5 = 47 unseen
+  // cards leaves hero above 50%, and the panel once called that 47 outs.
   const heroCards = parseCards('Ac 5d');
   const board = parseCards('Ah 5s 2c');
   const result = computeOuts({
@@ -370,36 +278,26 @@ test('two pair on the flop reports no outs count at all, and still reports the c
     'every card clears the bar, which is what makes the count meaningless as outs',
   );
 
-  // The refusal, stated rather than implied.
   assert.notEqual(result.refusal, null, 'a made hand must not carry an outs count');
   assert.ok(!result.explanation.includes('47 outs'), `"47 outs" is back: ${result.explanation}`);
   assert.match(result.explanation, /none of them is an out/);
   assert.match(result.explanation, /rescues a hand that is behind/);
 
-  // The honest paragraph is kept. Suppressing the number is not licence to stop
-  // explaining, and the explanation is where the counts get their real meaning.
+  // The explanation still says what the counts are.
   assert.match(result.explanation, /already in front/);
   assert.ok(
     result.assumptions.some((note) => note.includes('cards that keep you ahead')),
     'the assumptions still say what the counts are',
   );
 
-  // The classifications survive: withholding the word must not throw the data away.
   assert.equal(result.clean.length + result.dirty.length + result.neutral.length, 47);
   assert.ok(result.cleanCount > 0 && result.dirtyCount > 0, 'both buckets still hold cards');
 });
 
 test('a hand that is genuinely behind still gets its textbook count', () => {
-  // The control, and the half of this that a suppression must not break. Hero 9h 8h on
-  // Ah 5h 2c against the same wide range — the flush-draw spot from
-  // `apps/web/src/fixtures/review.ts`.
-  //
-  // Fifteen candidates, counted from the deck: the 9 unseen hearts that complete the
-  // flush, plus the 3 remaining nines and the 3 remaining eights that pair hero up. The
-  // 8/7 clean-dirty split between them is the thresholds' work; the 15 is card counting.
-  //
-  // Hero is BEHIND at 43%, which is the precondition an out needs, so this count is a
-  // count of outs and the explanation says so in the words the lesson uses.
+  // The control. Hero 9h 8h on Ah 5h 2c against the same range, the flush-draw spot from
+  // `apps/web/src/fixtures/review.ts`. Hero is behind at 43%.
+  // 15 = 9 unseen hearts + 3 nines + 3 eights. The 8/7 clean-dirty split is the thresholds' work.
   const heroCards = parseCards('9h 8h');
   const board = parseCards('Ah 5h 2c');
   const result = computeOuts({
@@ -418,10 +316,8 @@ test('a hand that is genuinely behind still gets its textbook count', () => {
 });
 
 test('the refusal moves with the threshold it is defined against', () => {
-  // The bar is a parameter, not a law, and the refusal has to be measured against the
-  // same one the cards were. Hero 9c 8d against 9h 8s on 7s 6h 2c 3d chops every river,
-  // so equityNow is exactly 0.5 — sitting precisely ON the default bar, which is
-  // inclusive, so this is refused.
+  // Hero 9c 8d against 9h 8s on 7s 6h 2c 3d chops every river, so equityNow is exactly 0.5, on the
+  // inclusive default bar, so this is refused.
   const spot = {
     heroCards: parseCards('9c 8d'),
     board: parseCards('7s 6h 2c 3d'),
@@ -433,9 +329,7 @@ test('the refusal moves with the threshold it is defined against', () => {
   assert.notEqual(atTheBar.refusal, null, 'the bar is inclusive at the bottom, for cards and for hero');
   assert.equal(atTheBar.refusal?.threshold, 0.5);
 
-  // Raise the bar above a chop and hero is no longer "already ahead" of it — so the same
-  // 44 cards become a countable (and empty) set of outs again. Refusing on a hard-coded
-  // 0.5 instead of the threshold in force would get this backwards.
+  // Above a chop the same 44 cards are a countable, empty set of outs. A hard-coded 0.5 fails here.
   const raised = computeOuts({ ...spot, aheadThreshold: 0.51 });
   assertInvariants(raised);
   assert.equal(raised.refusal, null, 'hero is behind the raised bar, so outs are countable again');
@@ -443,18 +337,10 @@ test('the refusal moves with the threshold it is defined against', () => {
   assert.match(raised.explanation, /which is 0 outs in total/);
 });
 
-// ---------------------------------------------------------------------------
-// 6. overcards to a pair
-// ---------------------------------------------------------------------------
-
 test('two overcards to a pair are 6 outs, clean on the turn and dirty if the bar is raised', () => {
-  // Hero Ac Kd on Qh 7s 2c 3d against 9h 9c. Hero is behind with ace-king high and
-  // needs to pair: three aces and three kings, 6 cards.
-  //
-  // On the turn all six are clean. The board Q-7-2-3 is unpaired and rainbow, so a
-  // pair of nines cannot become anything better on the one remaining card, and a
-  // pair of aces or kings beats it. Hero has no straight (A-K needs both J and T)
-  // and no flush. equityNow = 6/44.
+  // Hero Ac Kd on Qh 7s 2c 3d against 9h 9c. Three aces and three kings pair hero, 6 cards.
+  // On the unpaired rainbow board nines cannot improve on the river, so all six are clean.
+  // No straight (A-K needs J and T) and no flush. equityNow = 6/44.
   const turn = computeOuts({
     heroCards: parseCards('Ac Kd'),
     board: parseCards('Qh 7s 2c 3d'),
@@ -466,8 +352,7 @@ test('two overcards to a pair are 6 outs, clean on the turn and dirty if the bar
   assert.deepEqual(labelSet(turn.clean), ['Ad', 'Ah', 'As', 'Kc', 'Kh', 'Ks']);
   closeTo(turn.equityNow, 6 / 44, 'equityNow on the turn');
 
-  // Now the same hand one card earlier, on the flop Qh 7s 2c, where the six outs are
-  // no longer perfect:
+  // The same hand on the flop Qh 7s 2c:
   //   after (say) Ah the board is Qh 7s 2c Ah and they win with either of the two
   //   remaining nines -> hero's equity is 42/44 = 0.9545.
   // Hero's equity before any card is 253/990:
@@ -488,8 +373,7 @@ test('two overcards to a pair are 6 outs, clean on the turn and dirty if the bar
   assert.equal(flop.dirtyCount, 0);
   for (const outcome of flop.clean) closeTo(outcome.equityAfter, 42 / 44, `${outcome.label} after`);
 
-  // The thresholds are a parameter, not a fact. Ask for 96% and the same six cards
-  // — unchanged, still 42/44 — become dirty outs. The total does not move.
+  // At a 96% clean bar the same six cards, still 42/44, become dirty. The total does not move.
   const strict = computeOuts({
     heroCards: parseCards('Ac Kd'),
     board: parseCards('Qh 7s 2c'),
@@ -503,20 +387,14 @@ test('two overcards to a pair are 6 outs, clean on the turn and dirty if the bar
   assert.deepEqual(labelSet(strict.dirty), labelSet(flop.clean));
 });
 
-// ---------------------------------------------------------------------------
-// 7. a counterfeit
-// ---------------------------------------------------------------------------
-
 test('a counterfeit card is not an out: the board pairing higher hands the pot over', () => {
-  // Hero 6s 5s on 9c 6d 5c 2h against Ah 9h. Hero has two pair, sixes and fives;
-  // they have a pair of nines. Hero is ahead, and 8 of the 44 rivers take it away:
+  // Hero 6s 5s on 9c 6d 5c 2h (two pair) against Ah 9h (nines). 8 of 44 rivers take it away:
   //   any ace   (Ac Ad As)  3  -> aces and nines beats sixes and fives
   //   any nine  (9d 9s)     2  -> three nines
   //   any deuce (2c 2d 2s)  3  -> nines and deuces beats sixes and fives; hero's
   //                               two pair is COUNTERFEITED by a board pair higher
   //                               than either of hero's pairs
-  // Everything else holds: a six or a five fills hero up, and no other card helps
-  // them. So hero wins 36 of 44 and equityNow = 36/44.
+  // Everything else holds, so equityNow = 36/44.
   const result = computeOuts({
     heroCards: parseCards('6s 5s'),
     board: parseCards('9c 6d 5c 2h'),
@@ -529,8 +407,7 @@ test('a counterfeit card is not an out: the board pairing higher hands the pot o
   assert.equal(result.dirtyCount, 0);
   assert.deepEqual(labelSet(result.neutral), ['2c', '2d', '2s', '9d', '9s', 'Ac', 'Ad', 'As']);
 
-  // The deuces are the teaching case: hero's hand did not get worse, the opponent's
-  // got better, and the note has to say which.
+  // On a deuce the opponent's hand improved, not hero's, and the note says so.
   for (const label of ['2c', '2d', '2s']) {
     const outcome = outcomeFor(result, label);
     assert.equal(outcome.classification, 'neutral');
@@ -538,21 +415,12 @@ test('a counterfeit card is not an out: the board pairing higher hands the pot o
     assert.match(outcome.note, /two pair, nines and deuces/);
     assert.match(outcome.note, /flipped it/);
   }
-  // Hero is in front but not safely so, and the result says that too.
   assert.match(result.explanation, /already in front/);
 });
 
-// ---------------------------------------------------------------------------
-// 8. the same cards against different ranges
-// ---------------------------------------------------------------------------
-
 test('outs are a property of the range, not of the cards: the same heart is clean or dead', () => {
-  // Hero Ah Kh on Qh 7h 2c. Nine hearts remain (13 less Ah, Kh, Qh, 7h) and three
-  // aces and three kings can pair hero up.
-  //
-  // Against JJ and TT — 12 combinations, none of which can hold a heart hero needs
-  // for the flush count and none of which can make a full house without first making
-  // a set — all 15 of those cards are clean:
+  // Hero Ah Kh on Qh 7h 2c. Nine hearts remain (13 less Ah, Kh, Qh, 7h), plus three aces and three
+  // kings. Against JJ and TT (12 combinations, no set yet) all 15 are clean:
   //   * a heart that does not pair the board (3h 4h 5h 6h 8h 9h): hero has the nut
   //     flush and an underpair can never beat it, since one more card cannot turn a
   //     pair into a full house. Equity exactly 1.
@@ -583,13 +451,12 @@ test('outs are a property of the range, not of the cards: the same heart is clea
   closeTo(outcomeFor(vsUnderpairs, 'Jh').equityAfter, 366 / 396, 'Jh against underpairs');
   closeTo(outcomeFor(vsUnderpairs, '2h').equityAfter, 40 / 44, '2h against underpairs');
 
-  // Against sets — QQ, 77 and 22, nine combinations once hero's and the board's
-  // cards are removed — the same nine hearts are worth nothing clean:
+  // Against QQ, 77 and 22 (nine combinations after blockers) none of the nine hearts is clean:
   //   * a heart that does not pair the board: hero makes the nut flush and every one
   //     of the nine combinations is a set that boats up on the last card of its own
   //     rank (1) or on any card pairing one of the three other board ranks (3 x 3),
   //     = 10 of 44 rivers, so 34/44 = 0.7727 for every combination. Dirty, not clean.
-  //   * 2h: the board pairs, and every combination beats hero's flush at once —
+  //   * 2h: the board pairs, and every combination beats hero's flush at once.
   //     QQ and 77 are full houses and 22 is four deuces. Equity 0, not an out.
   //   * an ace or a king: a pair loses to a set, so no equity at all.
   const vsSets = computeOuts({
@@ -605,8 +472,7 @@ test('outs are a property of the range, not of the cards: the same heart is clea
   for (const outcome of vsSets.dirty) closeTo(outcome.equityAfter, 34 / 44, `${outcome.label} against sets`);
   closeTo(outcomeFor(vsSets, '2h').equityAfter, 0, '2h against sets');
 
-  // The point, stated as an assertion: one card, one board, one hero hand, two
-  // ranges, two different answers.
+  // One card, one board, one hero hand, two ranges, two answers.
   assert.equal(outcomeFor(vsUnderpairs, '4h').classification, 'clean');
   assert.equal(outcomeFor(vsSets, '4h').classification, 'dirty');
   assert.equal(outcomeFor(vsUnderpairs, '2h').classification, 'clean');
@@ -624,9 +490,8 @@ test('outs are a property of the range, not of the cards: the same heart is clea
 });
 
 test('raising the clean threshold moves cards between the buckets without changing the total', () => {
-  // Same spot as above against JJ and TT. Three of the fifteen outs sit between 0.90
-  // and 0.95: Jh and Th at 366/396 = 0.9242 and 2h at 40/44 = 0.9091 (both derived
-  // in the test above). Ask for 95% and exactly those three become dirty.
+  // Same spot against JJ and TT. Three outs sit between 0.90 and 0.95, Jh and Th at 366/396 = 0.9242
+  // and 2h at 40/44 = 0.9091 (derived above). At 95% exactly those three become dirty.
   const heroCards = parseCards('Ah Kh');
   const board = parseCards('Qh 7h 2c');
   const opponent = parseRange('JJ, TT', [...heroCards, ...board]);
@@ -644,19 +509,9 @@ test('raising the clean threshold moves cards between the buckets without changi
   assert.ok(strict.assumptions.some((note) => note.includes('modelling choice')));
 });
 
-// ---------------------------------------------------------------------------
-// extra cases the definitions have to get right
-// ---------------------------------------------------------------------------
-
 test('a card that only chops sits exactly on the dirty boundary', () => {
-  // Hero 9c 8d against 9h 8s on 7s 6h 2c 3d. The two hands hold the same ranks and
-  // the board has one card of each suit, so no flush is possible for anyone and
-  // every single river produces an identical five-card hand: every card chops.
-  //
-  // A chop is a pot share of exactly 0.5, which is exactly aheadThreshold, and the
-  // definition of dirty is inclusive at the bottom — so all 44 cards are dirty outs
-  // and none is clean. That is the honest answer for a hand that cannot win: it is
-  // also a reminder that "44 outs" is meaningless without the split beside it.
+  // Hero 9c 8d against 9h 8s on 7s 6h 2c 3d. Same ranks and a rainbow board, so every river chops.
+  // A chop is exactly 0.5, the inclusive bottom of dirty, so all 44 cards are dirty and none clean.
   const result = computeOuts({
     heroCards: parseCards('9c 8d'),
     board: parseCards('7s 6h 2c 3d'),
@@ -671,7 +526,6 @@ test('a card that only chops sits exactly on the dirty boundary', () => {
   for (const outcome of result.dirty) closeTo(outcome.equityAfter, 0.5, `${outcome.label} after`);
   assert.match(outcomeFor(result, 'Kd').note, /chops/);
 
-  // Move the bar above a chop and every one of them stops being an out.
   const stricter = computeOuts({
     heroCards: parseCards('9c 8d'),
     board: parseCards('7s 6h 2c 3d'),
@@ -683,15 +537,10 @@ test('a card that only chops sits exactly on the dirty boundary', () => {
 });
 
 test('a card the range cannot exist behind is left out of the count and said so', () => {
-  // Hero Qh Qd on Js 8h 4c 2d against A-K offsuit, with Ad, Ah and As exposed as
-  // dead cards. Every A-K offsuit combination left must use the club ace: AcKd, AcKh
-  // and AcKs. So if the ace of clubs comes off the deck, the opponent cannot hold
-  // A-K at all — the card and the range assumption contradict each other, and
-  // counting the card either way would be a claim about a hand that cannot exist.
-  //
-  // Candidates are therefore 52 - 2 hero - 4 board - 3 dead - 1 impossible = 42.
-  // The four kings are the only cards that beat hero (any king gives them a pair of
-  // kings against hero's queens), and 38 cards keep hero in front.
+  // Hero Qh Qd on Js 8h 4c 2d against AKo, with Ad, Ah and As dead. Every AKo left uses Ac (AcKd,
+  // AcKh, AcKs), so if Ac comes the opponent cannot hold the range at all.
+  // Candidates are 52 - 2 hero - 4 board - 3 dead - 1 impossible = 42.
+  // The four kings beat hero's queens, and 38 cards keep hero in front.
   const heroCards = parseCards('Qh Qd');
   const board = parseCards('Js 8h 4c 2d');
   const deadCards = parseCards('Ad Ah As');
@@ -713,10 +562,7 @@ test('a card the range cannot exist behind is left out of the count and said so'
 });
 
 test('a wide range still comes back exact, and says so', () => {
-  // The widest input this function can be handed: hero Ah Kh on Qh 7h 2c against
-  // every hand. C(45,2) = 990 combinations against 44 rivers per card is 43,560
-  // units of work, far inside the exact-enumeration budget, so no figure here may
-  // be sampled.
+  // The widest input. C(45,2) = 990 combinations x 44 rivers = 43,560 units, inside the exact budget.
   const heroCards = parseCards('Ah Kh');
   const board = parseCards('Qh 7h 2c');
   const result = computeOuts({
@@ -735,15 +581,10 @@ test('a wide range still comes back exact, and says so', () => {
     result.assumptions.some((note) => note.includes('enumerating every remaining board exactly')),
     'the exactness claim must be stated, not implied',
   );
-  // Against a random hand hero is already in front with ace-king and the nut flush
-  // draw, so the result must not present its buckets as the size of a draw.
+  // Ace-king with the nut flush draw is already in front of a random hand.
   assert.ok(result.equityNow > 0.5);
   assert.match(result.explanation, /already in front/);
 });
-
-// ---------------------------------------------------------------------------
-// 9. input validation
-// ---------------------------------------------------------------------------
 
 test('bad input is rejected with a message that says what was expected', () => {
   const board = parseCards('Kh 9h 4s 2c');
@@ -790,7 +631,6 @@ test('bad input is rejected with a message that says what was expected', () => {
     'a number that is not a card',
   );
 
-  // An empty range: "AA" with all four aces accounted for elsewhere.
   assert.throws(
     () =>
       computeOuts({
@@ -802,7 +642,6 @@ test('bad input is rejected with a message that says what was expected', () => {
     'a range with nothing in it',
   );
 
-  // A range that is not empty but that hero's own cards make impossible.
   assert.throws(
     () =>
       computeOuts({
@@ -814,9 +653,7 @@ test('bad input is rejected with a message that says what was expected', () => {
     'the opponent cannot hold a card hero is holding',
   );
 
-  // Absurd, but it must fail as an OutsError rather than as an equity error from two
-  // layers down: 43 dead cards leave only 3 unseen, which cannot cover a card to come,
-  // an opponent hand and a run-out.
+  // 43 dead cards leave 3 unseen, which must fail as an OutsError, not an equity error.
   assert.throws(
     () =>
       computeOuts({
@@ -829,7 +666,6 @@ test('bad input is rejected with a message that says what was expected', () => {
     'the deck has to have something left in it',
   );
 
-  // Thresholds.
   assert.throws(() => computeOuts({ heroCards: parseCards('Ah 6h'), board, opponent, cleanThreshold: 1.5 }), {
     name: 'OutsError',
     message: /cleanThreshold must be a fraction between 0 and 1/,
@@ -851,16 +687,11 @@ test('bad input is rejected with a message that says what was expected', () => {
     'an out cannot need more equity than a clean out',
   );
 
-  // The error class is the named one, so callers can branch on it.
   assert.throws(
     () => computeOuts({ heroCards: [], board, opponent }),
     (error: unknown) => error instanceof OutsError && error.name === 'OutsError',
   );
 });
-
-// ---------------------------------------------------------------------------
-// 10. determinism
-// ---------------------------------------------------------------------------
 
 test('two identical calls produce identical results, down to the notes', () => {
   const input = {
@@ -875,7 +706,7 @@ test('two identical calls produce identical results, down to the notes', () => {
   assert.deepEqual(labelsInOrder(second.clean), labelsInOrder(first.clean));
   assert.deepEqual(labelsInOrder(second.neutral), labelsInOrder(first.neutral));
 
-  // The ordering itself is defined: best equity first, then ascending card id.
+  // Best equity first, then ascending card id.
   const ordered = [...first.clean, ...first.dirty, ...first.neutral];
   for (let index = 1; index < ordered.length; index++) {
     const previous = ordered[index - 1];
@@ -889,10 +720,6 @@ test('two identical calls produce identical results, down to the notes', () => {
     );
   }
 });
-
-// ---------------------------------------------------------------------------
-// the Coach's view of the result
-// ---------------------------------------------------------------------------
 
 test('outsSummaryFor gives the Coach the counts, the card lists and one sentence', () => {
   const result = computeOuts({
@@ -909,13 +736,9 @@ test('outsSummaryFor gives the Coach the counts, the card lists and one sentence
   assert.deepEqual([...summary.dirtyCards].sort(), ['3h', '4h', '5h', '6h', '8h', '9h', 'Jh', 'Th']);
   assert.equal(summary.explanation, result.explanation);
   assert.equal(summary.total, summary.clean + summary.dirty);
-  // The summary is a view, never a second opinion.
   assert.deepEqual(summary.dirtyCards, labelsInOrder(result.dirty));
 
-  // The refusal travels with the counts. Flattening the result is exactly where "these
-  // are not outs" would otherwise be dropped, leaving a display layer with a `total` and
-  // no way to know whether the word applies to it. Hero is drawing dead-ish here — 0% is
-  // not the case, but well under the bar — so there is a count and no refusal.
+  // Hero is well under the bar here, so there is a count and no refusal.
   assert.equal(summary.refusal, null);
   assert.equal(summary.refusal, result.refusal);
 
@@ -930,12 +753,8 @@ test('outsSummaryFor gives the Coach the counts, the card lists and one sentence
 });
 
 test('the counts agree with their verbs and their nouns (REGRESSION)', () => {
-  // "Of the 44 cards that can come next, 1 are clean and 0 are dirty, which is 1 outs in total."
-  // That sentence reached learners on nine of the thirty-six Lab scenarios. `coach.ts` has used
-  // `count === 1 ? 'is' : 'are'` all along; this file did not.
-  //
-  // The fixture is chosen to MAKE a count of one rather than hope for it: hero's set needs the one
-  // remaining eight, because the opponent holds the other.
+  // "1 are clean and 0 are dirty, which is 1 outs in total" reached 9 of 36 Lab scenarios.
+  // The fixture forces a count of one. Hero's set needs the last eight, the opponent holds the other.
   const single = computeOuts({
     heroCards: parseCards('8h 8d'),
     board: parseCards('Ah Kd Qc Js'),
@@ -948,7 +767,6 @@ test('the counts agree with their verbs and their nouns (REGRESSION)', () => {
     `a count of one was given a plural verb: "${single.explanation}"`,
   );
 
-  // And a plural count keeps the plural verb, so the fix is a rule rather than a special case.
   const many = computeOuts({
     heroCards: parseCards('Ah 6h'),
     board: parseCards('Kh 9h 4s 2c'),

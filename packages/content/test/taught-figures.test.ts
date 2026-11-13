@@ -1,42 +1,10 @@
 /**
- * Every number the teaching material asserts in PROSE, recomputed.
- *
- * ## The gap this closes
- *
- * ADR 0006 says content stores situations and never answers, and
- * `scenarios.test.ts` enforces the half of that which is machine-readable: a scenario's
- * `expectedInsight` claims are re-derived from the engine, and no computed figure may be
- * stated as prose fact. What neither of those reaches is the other kind of number — the
- * ones a lesson works through *as arithmetic a learner is meant to follow*: "13 pairs at
- * six each, which is 78", "the next raise must reach at least 100", "the short stack's
- * chance of finishing first is 100/400 = 25%". Those are not computed figures dressed up
- * as prose; they are the teaching, and they were checked by nothing.
- *
- * That is the most damaging defect this product can ship. A quiz whose stated answer is
- * wrong, or a lesson that misprices a call, is worse than a crash: a student paid to be
- * taught and was taught something false, and the app's confident tone is what makes it
- * stick.
- *
- * ## How each claim is decided
- *
- * Two assertions per entry, and both have to hold:
- *
- *   1. **The quote is still in the content.** Exactly once, in the record it names. If a
- *      lesson is reworded the entry fails loudly rather than passing over text that no
- *      longer exists — *a sweep of nothing is not a pass*, applied to a registry.
- *   2. **Every number in the quote came out of a computation.** `expect()` returns
- *      strings it DERIVED — from `@prl/poker-engine`, `@prl/poker-math`, or closed-form
- *      arithmetic written out here — and each must appear in the quote. Nothing in an
- *      entry may be a literal copied from the content it is checking; where a bare
- *      constant appears it is an input (a stack, a blind level), never an answer.
- *
- * ## And a mechanical sweep, because a registry only covers what somebody thought of
- *
- * `every quiz prompt and lesson caption states the numbers its calculation is actually
- * given` walks all 61 live calculations and numeric questions and compares the numbers in
- * the prose against the inputs the app grades against. The realistic failure it exists for
- * is an edit to one side only: a prompt changed to "the pot stands at 120" over a
- * `{ pot: 100 }` the learner is marked against.
+ * Every number the teaching prose works through as arithmetic, recomputed ("13 pairs at six each,
+ * which is 78"). `scenarios.test.ts` covers `expectedInsight`, and nothing else checked these.
+ * Each entry's quote must appear exactly once in its record, and every value `expect()` returns must
+ * be derived by the engine, poker-math or arithmetic here and appear in the quote.
+ * The second test sweeps every live calculation and numeric question for prose that states inputs
+ * other than the ones the app grades against.
  */
 
 import assert from 'node:assert/strict';
@@ -64,11 +32,6 @@ import {
 } from '@prl/poker-math';
 import { content } from '../src/index.ts';
 
-// ---------------------------------------------------------------------------
-// Where a quote has to be found
-// ---------------------------------------------------------------------------
-
-/** Every string a lesson shows a learner, in one blob. */
 function lessonText(id: string): string {
   const lesson = content().lessons.find((one) => one.id === id);
   assert.ok(lesson !== undefined, `no lesson "${id}" — the registry names a record that no longer exists`);
@@ -85,7 +48,6 @@ function lessonText(id: string): string {
   return parts.join('\n');
 }
 
-/** Every string a quiz shows a learner. */
 function quizText(id: string): string {
   const quiz = content().quizzes.find((one) => one.id === id);
   assert.ok(quiz !== undefined, `no quiz "${id}" — the registry names a record that no longer exists`);
@@ -125,27 +87,18 @@ function scenarioText(id: string): string {
   ].join('\n');
 }
 
-// ---------------------------------------------------------------------------
-// Recomputation helpers — each returns a DERIVED value, never a copied literal
-// ---------------------------------------------------------------------------
-
 const HAND_CLASSES = allHandClasses();
 const combosOf = (label: string): number => {
   const found = HAND_CLASSES.find((one) => one.label === label);
   assert.ok(found !== undefined, `no hand class "${label}"`);
   return combosOfClass(found).length;
 };
-/** Combinations of a class left once `blockers` are visible. */
 const combosLeft = (label: string, blockers: string): number =>
   parseRange(label, parseCards(blockers)).combos.length;
 
 /**
- * The minimum raise-to the RULES ENGINE computes after an opening raise.
- *
- * Not the glossary's formula re-typed — a hand actually dealt and acted on, so the lesson
- * is tied to the code that would reject a learner's raise at a real table rather than to a
- * second copy of the rule. Heads-up would put the button on the small blind, so three
- * seats: button 0, small blind 1, big blind 2, and seat 0 acts first preflop.
+ * The minimum raise-to from a hand the engine actually dealt, not a re-typed formula.
+ * Three seats, because heads-up puts the button on the small blind. Seat 0 acts first preflop.
  */
 function engineMinimumRaiseAfterOpen(smallBlind: number, bigBlind: number, openTo: number): number {
   const seats: SeatSetup[] = [0, 1, 2].map((seat) => ({ seat, playerId: `p${seat}`, stack: 10_000 }));
@@ -164,25 +117,13 @@ function engineMinimumRaiseAfterOpen(smallBlind: number, bigBlind: number, openT
   return minimumRaiseTo(opened);
 }
 
-/** The five-card category `evaluate` gives a seven-card holding, as a comparable score. */
 const scoreOf = (cards: string): number => evaluate(parseCards(cards));
 
-// ---------------------------------------------------------------------------
-// The registry
-// ---------------------------------------------------------------------------
-
 interface TaughtFigure {
-  /** Human-readable location, used in failure messages. */
   readonly where: string;
-  /** The exact sentence(s) the content must still carry. */
   readonly quote: string;
-  /** The record the quote must appear in. */
   readonly source: () => string;
-  /**
-   * The values this test DERIVES, rendered as they must appear in the quote. Every one
-   * has to be produced by computation — the point of the entry is that nothing here was
-   * copied from the content.
-   */
+  /** Derived values, rendered as they must appear in the quote. None is copied from the content. */
   readonly expect: () => readonly string[];
 }
 
@@ -201,8 +142,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
       const total = (classes: typeof HAND_CLASSES): number =>
         classes.reduce((sum, one) => sum + combosOfClass(one).length, 0);
       const everything = total(HAND_CLASSES);
-      // 1326 has to come out of the enumeration AND out of C(52,2); the lesson claims
-      // both and it is the agreement that makes the sentence worth teaching.
+      // The lesson claims 1326 from both the enumeration and C(52,2).
       assert.equal(everything, (52 * 51) / 2, 'the enumerated combinations must equal C(52,2)');
       assert.equal(HAND_CLASSES.length, 169, 'the 169 classes the sentence ends on');
       return [
@@ -237,8 +177,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
     source: () => lessonText('ranges-and-combos'),
     expect: () => {
       const unblocked = parseRange('AK').combos.length;
-      // 2d is a card the lesson does not mention, chosen so the only blocker in play is
-      // the ace of clubs the sentence is about.
+      // 2d is not a blocker, so Ac is the only one in play.
       const blocked = combosLeft('AK', 'Ac 2d');
       return [wordFor(unblocked), wordFor(unblocked - blocked), wordFor(blocked)];
     },
@@ -286,9 +225,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
       const bigBlind = 20;
       const afterSixty = engineMinimumRaiseAfterOpen(smallBlind, bigBlind, 60);
       const afterOneEighty = engineMinimumRaiseAfterOpen(smallBlind, bigBlind, 180);
-      // The two wrong answers the sentence names are what makes it teach: 80 is the
-      // increment added to the big blind rather than to the bet level, and 120 is
-      // doubling. Both must be things the engine actually refuses.
+      // The sentence names two wrong answers. 80 adds the increment to the big blind, 120 doubles.
       assert.notEqual(afterSixty, 60 + bigBlind, "80 must not be the engine's answer");
       assert.notEqual(afterSixty, 60 * 2, "120 must not be the engine's answer");
       return [
@@ -309,8 +246,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
       'The last increment was 20 (from nothing to 20), so the smallest raise adds another 20, making your total 40.',
     source: () => quizText('quiz-betting-actions'),
     expect: () => {
-      // The quiz's spot is postflop with the bet as the first aggression, which is the
-      // same arithmetic as an open over a big blind of the same size: level + increment.
+      // A postflop first bet has the same arithmetic as an open over a big blind of that size.
       const minimum = engineMinimumRaiseAfterOpen(10, 20, 40);
       assert.equal(minimum, 60, 'the engine adds the increment to the level, it does not double');
       return [String(minimum - 20), String(minimum - 20), String(minimum - 20)];
@@ -325,8 +261,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
     expect: () => {
       const unseenOnTheFlop = 52 - 2 - 3;
       const oneOut = 1 / unseenOnTheFlop;
-      // "a little more than two percent" is the claim, and it is a claim about a bound:
-      // above the shortcut's 2% and not so far above that 2% is a bad shortcut.
+      // "a little more than two percent" is a bound, above 2% and below 2.5%.
       assert.ok(oneOut > 0.02, `one out of ${unseenOnTheFlop} must be above 2%, it is ${oneOut}`);
       assert.ok(oneOut < 0.025, `one out of ${unseenOnTheFlop} must be close to 2%, it is ${oneOut}`);
       return [wordFor(unseenOnTheFlop), wordFor(unseenOnTheFlop)];
@@ -338,8 +273,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
       'There are thirteen cards of each suit. You can see four of them: two in your hand and two on the board.',
     source: () => quizText('quiz-counting-outs'),
     expect: () => {
-      // Counted off the deck rather than asserted: how many cards share a suit, and how
-      // many of them a hero with two hearts sees on a two-heart flop.
+      // Counted off the deck, two hearts in hand on a two-heart flop.
       const board = parseCards('Qh 7h 2c');
       const hero = parseCards('Ah Kh');
       const suitOf = (card: Card): number => card % 4;
@@ -357,7 +291,6 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
       'eligible for. The extra 80 from each of the larger stacks forms a side pot of 160, contested only by them.',
     source: () => quizText('quiz-all-ins-and-side-pots'),
     expect: () => {
-      // The rules engine builds the layers, so the quiz answer is the app's own answer.
       const layers = buildPotLayers([
         { seat: 0, committedTotal: 20, status: 'allIn' },
         { seat: 1, committedTotal: 100, status: 'allIn' },
@@ -388,9 +321,8 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
         { seat: 0, committedTotal: 200, status: 'allIn' },
         { seat: 1, committedTotal: 120, status: 'allIn' },
       ]);
-      // `pots.ts` returns an uncalled bet as a layer only its own contributor is eligible
-      // for rather than through `returns` — the header there explains why the two are the
-      // same thing. So the quiz's "the extra 80 is returned" is this layer.
+      // `pots.ts` returns an uncalled bet as a layer only its contributor is eligible for, not via
+      // `returns`. So "the extra 80 is returned" is this layer.
       const uncalled = layers.pots.find((pot) => pot.eligibleSeats.length === 1);
       assert.ok(
         uncalled !== undefined,
@@ -440,9 +372,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
       const shortWinsFirst = (stacks[1] as number) / chips;
       const leaderShare = ((result.equities[0] as number) / result.totalPrizePool) * 100;
       const chipShare = ((stacks[0] as number) / chips) * 100;
-      // The Malmuth–Harville working the quiz spells out has to reproduce the model's
-      // own answer for the short stack, or the explanation is teaching a different model
-      // from the one the app grades against.
+      // The quiz's Malmuth-Harville working must reproduce icmEquity for the short stack.
       const byHand = shortWinsFirst * (payouts[0] as number) + (1 - shortWinsFirst) * (payouts[1] as number);
       assert.ok(
         Math.abs(byHand - (result.equities[1] as number)) < 1e-9,
@@ -510,8 +440,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
         Math.abs(tripledBankroll.probability - tripledEdge.probability) < 1e-12,
         `tripling the bankroll gives ${tripledBankroll.probability}, tripling the edge ${tripledEdge.probability}`,
       );
-      // Both of those are the lesson's own two calculators; the claim is that they agree,
-      // and the sentence carries no figure of its own to compare against.
+      // The claim is that the lesson's two calculators agree. The sentence carries no figure.
       return [];
     },
   },
@@ -551,8 +480,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
           Math.abs(odds.breakEvenEquity - call / (pot + call)) < 1e-12,
           'break-even is call over final pot',
         );
-        // `oddsRatio` is null when there is nothing to call — no price, so no "X to 1" —
-        // which is a case the glossary sentence is not about and every spot here has a bet.
+        // `oddsRatio` is null only with nothing to call, and every spot here has a bet.
         assert.notEqual(odds.oddsRatio, null, 'a priced call must carry a ratio');
         assert.ok(
           Math.abs((odds.oddsRatio ?? Number.NaN) - pot / call) < 1e-12,
@@ -615,7 +543,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
       'K-A-2-3-4 is not a straight.',
     source: () => glossaryText('straight'),
     expect: () => {
-      // Decided by the evaluator, exhaustively verified elsewhere over all 8,192 rank masks.
+      // The evaluator is verified elsewhere over all 8,192 rank masks.
       const wheel = scoreOf('Ac 2d 3h 4s 5c');
       const sixHigh = scoreOf('2d 3h 4s 5c 6d');
       const wrap = scoreOf('Kc Ad 2h 3s 4c');
@@ -633,8 +561,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
       'straight flush, four of a kind, full house, flush, straight, three of a kind, two pair, one pair, high card',
     source: () => glossaryText('hand-ranking'),
     expect: () => {
-      // One representative per category, scored by the real evaluator and required to be
-      // strictly descending in the order the glossary lists them.
+      // One hand per category, strictly descending in the glossary's order.
       const ladder = [
         'Ac Kc Qc Jc Tc',
         '9c 9d 9h 9s 2c',
@@ -660,8 +587,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
     quote: 'roughly half the outs of an open-ended draw',
     source: () => glossaryText('gutshot'),
     expect: () => {
-      // The two out counts are themselves claims the analyser re-derives in
-      // `scenarios.test.ts`; here the claim is the RATIO between them.
+      // `scenarios.test.ts` re-derives the two counts. The claim here is their ratio.
       const outsClaimed = (scenarioId: string): number => {
         const scenario = content().scenarios.find((one) => one.id === scenarioId);
         assert.ok(scenario !== undefined, `no scenario "${scenarioId}"`);
@@ -684,8 +610,7 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
       const scenario = content().scenarios.find((one) => one.id === 'fl-board-plays-itself-river');
       assert.ok(scenario !== undefined);
       const board = scenario.board;
-      // Two deliberately worthless holdings: if both score identically, the board plays
-      // itself, which is the entire teaching point.
+      // Two worthless holdings that score identically means the board plays itself.
       const withRags = evaluate(parseCards(`${board} 2c 3d`));
       const withOtherRags = evaluate(parseCards(`${board} 2h 3s`));
       assert.equal(withRags, withOtherRags, 'the hole cards contribute nothing');
@@ -696,7 +621,6 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
         'the board alone beats three of a kind, so it is at least a straight',
       );
       assert.ok(withRags > straightNoPair, 'and it is a higher straight than nine-high');
-      // The king that makes the better straight, which the reasoning names next.
       const withKing = evaluate(parseCards(`${board} Kc 2d`));
       assert.ok(withKing > withRags, 'a king makes the king-high straight the reasoning describes');
       return [];
@@ -721,7 +645,6 @@ const TAUGHT_FIGURES: readonly TaughtFigure[] = [
   },
 ];
 
-/** Small English number words, for the sentences that spell figures out. */
 const NUMBER_WORDS: readonly string[] = [
   'zero',
   'one',
@@ -769,8 +692,7 @@ test('every numeric claim the teaching prose makes is reproduced by computation'
     const text = figure.source();
     const occurrences = text.split(figure.quote).length - 1;
     if (occurrences !== 1) {
-      // Loud rather than quiet: a registry entry that stops matching is a guard that
-      // stopped guarding, and it must fail exactly as a wrong figure would.
+      // An entry that stops matching fails exactly as a wrong figure would.
       problems.push(
         `${figure.where}: the quoted sentence appears ${occurrences} times in the content, expected once. ` +
           'Either the content was reworded (update the quote, having re-checked the maths) or the claim was ' +
@@ -794,9 +716,7 @@ test('every numeric claim the teaching prose makes is reproduced by computation'
     [],
     `taught figures that do not survive recomputation:\n  - ${problems.join('\n  - ')}`,
   );
-  // A sweep of nothing is not a pass. Entries whose `expect` returns no strings are the
-  // ones whose assertions live inside `expect` itself (an identity, an ordering); the
-  // count below is of values actually matched back into the prose.
+  // A sweep of nothing is not a pass. Entries returning [] assert inside `expect` instead.
   assert.ok(
     derivedValues >= 60,
     `expected the registry to match back at least 60 derived values, matched ${derivedValues}`,
@@ -805,10 +725,6 @@ test('every numeric claim the teaching prose makes is reproduced by computation'
     `      ${TAUGHT_FIGURES.length} taught figures recomputed, ${derivedValues} derived values matched back into the prose`,
   );
 });
-
-// ---------------------------------------------------------------------------
-// The mechanical sweep
-// ---------------------------------------------------------------------------
 
 const WORD_VALUES: Readonly<Record<string, number>> = Object.fromEntries([
   ...NUMBER_WORDS.map((word, value) => [word, value] as const),
@@ -839,13 +755,7 @@ function numbersIn(text: string): Set<number> {
   return found;
 }
 
-/**
- * The inputs a learner is told, per calculation kind.
- *
- * `outs` and `equity` are absent on purpose: their inputs are cards, and the prose names
- * them as cards ("you hold Th 9h, the board is …"), which `scenarios.test.ts` already
- * checks for legality and distinctness.
- */
+/** The inputs a learner is told, per kind. `outs` and `equity` take cards, checked in `scenarios.test.ts`. */
 const STATED_INPUTS: Readonly<Record<string, readonly string[]>> = {
   potOdds: ['pot', 'toCall'],
   ruleOf24: ['outs', 'cardsToCome'],
@@ -859,24 +769,12 @@ const STATED_INPUTS: Readonly<Record<string, readonly string[]>> = {
   equity: [],
 };
 
-/** Inputs the app expresses as a fraction and the prose as a percentage. */
 const FRACTIONAL_INPUTS = new Set(['equity', 'foldProbability', 'equityWhenCalled']);
 
 /**
- * Prose that deliberately does not restate an input, because it is the second half of a
- * pair and refers back to the first.
- *
- * The editorial convention is a real one — "the identical bet", "same edge and same
- * standard deviation, but with three times the bankroll" — and restating every input in
- * both captions would make the comparison harder to see rather than easier. So these are
- * exemptions rather than defects. What they are NOT is a blanket rule: each names the
- * phrase that earns it, and `phrase` must still be in that prose or the exemption stops
- * applying and the sweep fails. **A skip must be loud**, and an exemption armed over text
- * that no longer says what it claims is exactly the quiet kind.
- *
- * The exemption only ever excuses a number the prose OMITS. Prose stating a number that
- * disagrees with what is graded is still a failure, because the disagreeing number is in
- * `stated` and the graded one is not.
+ * Prose that is the second half of a pair and does not restate the first half's inputs.
+ * Each entry must still match its `phrase`, and an exemption that never fires fails the sweep.
+ * It excuses only an omitted number. A stated number that disagrees with the graded one still fails.
  */
 interface ProseOmission {
   readonly where: string;
@@ -936,30 +834,17 @@ const PROSE_OMISSIONS: readonly ProseOmission[] = [
   },
 ];
 
-/**
- * Out counts a caption states in words rather than digits, with the phrase that states it.
- *
- * Each entry is a claim in its own right — "a flush draw" is nine outs — so it is checked
- * against what the app grades rather than merely excused, and an entry that stops applying
- * fails the test.
- */
+/** Out counts a caption states in words. Each is checked against the graded value, not excused. */
 const OUTS_IN_WORDS: readonly { readonly phrase: string; readonly outs: number }[] = [
   { phrase: 'A flush draw with one card left to come', outs: 9 },
   { phrase: 'A large combined draw', outs: 15 },
 ];
 
-/**
- * How many cards a piece of prose says are still to come.
- *
- * This is a check, not an exemption, and it is worth more than the digit comparison it
- * replaces: a caption reading "the rule of 4" over a `cardsToCome: 1` calculation would
- * be teaching the wrong multiplier while every number on the page still agreed.
- */
+/** Catches "the rule of 4" over a `cardsToCome: 1` calculation, a wrong multiplier with every digit right. */
 function cardsToComeStatedIn(prose: string): 1 | 2 | null {
   const twoCards =
     /two cards to come|both the turn and the river|rule of 4|times four|multiply the outs by four/i;
-  // "rule of 2 and 4" is the name of the shortcut and names neither, so it is deliberately
-  // not a marker for either branch — matching it was the first thing this function got wrong.
+  // "rule of 2 and 4" is the shortcut's name and marks neither branch.
   const oneCard = /one card (left )?to come|only the river is to come/i;
   if (twoCards.test(prose) && !oneCard.test(prose)) return 2;
   if (oneCard.test(prose) && !twoCards.test(prose)) return 1;
@@ -1058,9 +943,7 @@ test('every quiz prompt and lesson caption states the numbers its calculation is
 
   assert.deepEqual(problems, [], `prose that disagrees with what is graded:\n  - ${problems.join('\n  - ')}`);
 
-  // A sweep of nothing is not a pass, twice over: the sweep must have read a real corpus,
-  // and every exemption must still be doing work. An exemption nobody uses is a hole
-  // somebody can walk back through.
+  // The sweep must read a real corpus, and every exemption must still fire.
   assert.ok(checked >= 60, `expected to sweep every live calculation and numeric question, swept ${checked}`);
   assert.ok(
     inputsCompared >= 100,

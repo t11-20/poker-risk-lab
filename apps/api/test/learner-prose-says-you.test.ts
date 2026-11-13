@@ -1,25 +1,8 @@
 /**
- * Generated prose addresses the reader as "you". It never calls them "hero".
- *
- * PR #33 made the live table narrate the reader's own seat as "You", and the scenario prompts had
- * already stopped asking "Should hero call?" (UX audit at 6b3886e, Minor 7: "hero" is in none of the
- * glossary's terms). Everything a learner reads AFTER that question kept the word: the Coach's
- * price sentence ("Hero risks 65 to win the 195 already in the middle"), its outs line ("On Ah 5h
- * 2c hero holds 9h 8h"), every per-card note ("Hero's equity after this card is 38%"), the rule of
- * 2 and 4, the ICM explanations, the Legends comparison's takeaway, and three of the Lab
- * calculator's own field errors. So a reader was "you" at the table, "you" in the question, and a
- * character called hero in the answer to it — one person, two names, one of them never defined.
- *
- * This walks every string in what those generators return, rather than a list of known sentences:
- * the defect is a word that can arrive in any field, and a list of fields is a list of the places
- * somebody has already looked. Internal identifiers are not swept — keys, `heroCards`, `heroNet`
- * and the wire contract keep their names, because the reader never sees them.
- *
- * Negative control: the sixteen source, content and fixture files this change touched, put back as
- * they were at b05ab96 (copied aside and restored, not stashed) and the packages rebuilt, fail all
- * six cases — 2,411 strings in the scenarios' Coach, analysis and outs; 4 in the pinned live-table
- * views; 202 in the odds/outs/ICM grid; 3 in the Legends comparison; all 5 field errors; 21 in the
- * web fixtures. Restored and rebuilt, all six pass.
+ * Generated prose addresses the reader as "you", never "hero", which no glossary term defines.
+ * It walks every string the generators return rather than a list of known fields, because the word
+ * can arrive in any field. Identifiers such as `heroCards` are not swept, because readers never see them.
+ * Negative control. The touched files restored to b05ab96 fail all six cases (2,411 scenario strings).
  */
 
 import assert from 'node:assert/strict';
@@ -79,7 +62,6 @@ function* stringsIn(value: unknown, path: string): Generator<readonly [string, s
   }
 }
 
-/** Collects what a sweep read, so an empty or shrunken sweep fails instead of passing. */
 class Sweep {
   read = 0;
   readonly offenders: string[] = [];
@@ -92,10 +74,7 @@ class Sweep {
     }
   }
 
-  /**
-   * `floor` is a little under what the sweep reads today, so losing a source — a fixture that stops
-   * loading, a generator whose result moved under a key nothing walks — fails instead of passing.
-   */
+  /** `floor` sits a little under today's count, so a lost source fails instead of passing. */
   assertClean(floor: number): void {
     assert.ok(
       this.read >= floor,
@@ -345,10 +324,8 @@ describe('generated prose calls the reader "you", never "hero"', () => {
     const files = readdirSync(WEB_FIXTURES).filter((file) => file.endsWith('.ts'));
     assert.ok(files.length >= 10, `${files.length} fixture modules in ${WEB_FIXTURES}`);
     for (const file of files) {
-      // Two cannot be imported here. `learn.ts` re-exports the four `learn-*` modules through the web's
-      // `@/` alias, which resolves under Next only, and those four are read directly. `table.ts`
-      // imports `parseCardText` from `@prl/ui` as a value, which is TSX — `table-fixture-figures.test.ts`
-      // reads it as text for the same reason, and so does this: its source with the comments removed.
+      // `learn.ts` re-exports the `learn-*` modules through Next's `@/` alias, and they are read
+      // directly. `table.ts` imports TSX from `@prl/ui`, so it is read as text without comments.
       if (file === 'learn.ts') continue;
       if (file === 'table.ts') {
         const code = readFileSync(join(WEB_FIXTURES, file), 'utf8')

@@ -1,56 +1,9 @@
 /**
- * Where `@prl/poker-ai` meets the engine.
- *
- * ###########################################################################
- * ##  A BOT RECEIVES ONLY `table.viewFor(botUserId)`.                      ##
- * ##                                                                       ##
- * ##  `buildPolicyInput` is the ONE place a `PolicyInput` is constructed,   ##
- * ##  and it takes a redacted `PlayerView` and nothing else. The seat's own ##
- * ##  two cards are read out of that view's own seat — the one place        ##
- * ##  `redactFor` puts them — so this file never touches a `HandState`,     ##
- * ##  never sees a deck, a cursor, a salt or another seat's cards, and has  ##
- * ##  no import through which it could. That is an architectural boundary,  ##
- * ##  not a convention: `test/bots.test.ts` asserts it by scanning a real   ##
- * ##  captured `PolicyInput` for the other seat's cards and for every       ##
- * ##  secret field name.                                                   ##
- * ###########################################################################
- *
- * ## The policy proposes; the engine decides
- *
- * `decide()` returns an action drawn from a distribution over `view.legalActions`. It is then
- * submitted through `LiveTable.submitAction`, exactly as a human's action is, so `validateAction`
- * re-derives the legal set and a bug in a policy produces a rejected action rather than an
- * illegal game. There is no privileged path for a bot.
- *
- * ## Seeded randomness, and why it is not the dealing source
- *
- * Each bot gets its own `RandomSource` derived from a seed, so a match replays identically: the
- * postflop equity estimate, the bet-size jitter and the sampling draw all come off that stream in
- * a fixed order (see `policy.ts`). It is a SplitMix32 written out here rather than imported,
- * because the engine's `createDeterministicRandomForTests` must never appear in server source —
- * it is for tests and fixed-deck teaching hands, and a server file importing it is the first step
- * towards a hand being dealt from it. **Cards are never dealt from this stream.** The table's
- * dealing source is `createSecureRandom()`, and every hand records `randomSourceKind: 'csprng'`
- * to prove it.
- *
- * `RandomSource.kind` offers only two values, so this one is labelled
- * `deterministic-test-only`: it is honest (this is not a CSPRNG) and it is inert, because the
- * label is only ever recorded by `startHand`, which this stream is never passed to.
- *
- * ## The thinking delay is for legibility, not deliberation
- *
- * A bot could answer inside a millisecond. It waits `thinkingDelayMs` first, so that a learner
- * can see whose turn it was and read what happened — the same reason a dealer pauses. It is
- * **not** a simulation of thought, it does not vary with how hard the decision is, and nothing in
- * the UI should present it as thinking. It runs on the injected clock, so a test advances it
- * rather than sleeping.
- *
- * ## What the opponent model is fed
- *
- * Public actions only, from `TableNotice.publicActions` — a type with no field for a card — and,
- * at the end of a hand, the bot's own redacted view, whose `result.showdowns` contains exactly
- * the hands that were actually turned over. A hand that ends in a fold therefore teaches the
- * model nothing about anybody's cards, which is correct.
+ * Where `@prl/poker-ai` meets the engine. A bot receives only `table.viewFor(botUserId)`.
+ * `buildPolicyInput` is the one place a `PolicyInput` is built, from a redacted view alone, and
+ * `test/bots.test.ts` scans a captured input for other seats' cards and every secret field name.
+ * Actions go through `LiveTable.submitAction` like a human's, so the engine rejects an illegal one.
+ * Decisions use a seeded stream so a match replays. Cards are never dealt from it.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -101,16 +54,10 @@ import type { ProblemHook } from '../observability/telemetry.ts';
 import type { LiveTable, TableNotice } from './table.ts';
 import type { Clock, ScheduledTask } from './timers.ts';
 
-// ---------------------------------------------------------------------------
-// Seeded randomness
-// ---------------------------------------------------------------------------
-
 /**
- * A seeded, non-cryptographic source for *decisions*, never for cards.
- *
- * SplitMix32: counter-based, small, well distributed, and not claimed to be secure. The whole
- * reason it exists is reproducibility — a Legends match run twice from the same seed produces the
- * same opponent decisions, which is what makes a teaching replay worth anything.
+ * SplitMix32 for decisions, never for cards, so a Legends match replays from its seed. Written out
+ * here because the engine's `createDeterministicRandomForTests` must never appear in server source.
+ * It is labelled `deterministic-test-only`, which only `startHand` records, and it is never passed there.
  */
 export function createSeededRandom(seed: number): RandomSource {
   let state = seed >>> 0;
@@ -126,8 +73,7 @@ export function createSeededRandom(seed: number): RandomSource {
       throw new AppError('internal_error', { logDetail: `invalid random bound ${boundExclusive}` });
     }
     if (boundExclusive === 1) return 0;
-    // Rejection sampling, for the same reason the engine does it: `x % n` favours low indices
-    // unless n divides 2^32, and a biased policy draw is a biased style.
+    // Rejection sampling, because `x % n` favours low indices unless n divides 2^32.
     const limit = Math.floor(2 ** 32 / boundExclusive) * boundExclusive;
     for (let attempt = 0; attempt < 1_000; attempt += 1) {
       const value = nextUint32();
@@ -155,25 +101,9 @@ export function seedFor(roomId: string, seat: SeatIndex, base: number | undefine
   return hash >>> 0;
 }
 
-// ---------------------------------------------------------------------------
-// Profiles: names, difficulty, disclosure
-// ---------------------------------------------------------------------------
-
 /**
- * The contract's five legacy bot names, mapped onto strategy profiles.
- *
- * `createRoomBodySchema` accepts `nit | tight-aggressive | loose-aggressive | calling-station |
- * maniac`. The Legends profile set is richer, so the two vocabularies have to meet somewhere, and
- * a table is the honest place: each legacy name picks the profile whose traits most nearly
- * describe it, and the mapping is visible rather than buried in a conditional.
- *
- * This is now a ONE-WAY table, used only to read a request. It used to have a reverse direction
- * as well — `persistableProfile`, which answered `unknown` for the seven profiles no legacy name
- * could express, because `room_members.bot_profile` was CHECK-constrained to those five. That is
- * the defect migration `0003` removes: the column holds the strategy profile's own id now, so
- * nothing has to be squeezed back through this vocabulary to be written down. See
- * `rooms/bot-profile.ts` for what replaced it and why an inexpressible id is now a refusal rather
- * than a fallback.
+ * The five legacy names `createRoomBodySchema` accepts, mapped to the nearest strategy profile.
+ * One-way, for reading a request. Since migration `0003` the column stores the profile id itself.
  */
 export const LEGACY_PROFILE_IDS: Readonly<Record<string, string>> = {
   nit: 'disciplined-specialist',
@@ -201,17 +131,10 @@ export function disclosureFor(profileId: string, mode: NamingMode): ProfileDiscl
   return profileDisclosure(requireProfile(profileId).naming, mode);
 }
 
-/** Longest a bot's display name may be: `users_display_name_shape` allows 2..24 characters. */
+/** `users_display_name_shape` allows 2..24 characters. */
 const MAX_BOT_NAME = 24;
 
-/**
- * A seat plate for a bot, inside the database's own length rule.
- *
- * Built from the profile id by whole words rather than by truncating a long archetype name mid
- * word, because "Reading Pressure Special" reads like a mistake and "Reading Pressure" does not.
- * The full display name, with its disclaimers, travels in `ProfileDisclosureDto` — this is only
- * the plate.
- */
+/** Whole words only, because "Reading Pressure Special" reads like a mistake. */
 export function botDisplayName(profileId: string): string {
   const words = profileId.split('-').map((word) => (word[0] ?? '').toUpperCase() + word.slice(1));
   let name = '';
@@ -225,16 +148,9 @@ export function botDisplayName(profileId: string): string {
 }
 
 /**
- * The plates for a table's bots, in seat order, with a profile that sits more than once numbered.
- *
- * The bot table seats two `tight-aggressive` bots on purpose (`BOT_TABLE` in
- * `apps/web/src/lib/table-rooms.ts`: one style watched twice is a policy, not a personality), and
- * both were plated "Patient Technician". The plate's position told them apart on screen, but the
- * table's narration names a seat by its display name alone, so a screen-reader user heard "Patient
- * Technician raises to 40" with no way to know which one. Seen at a live table on `/play` at 1440.
- *
- * The number is taken from the name's own 24-character allowance rather than appended past it, so a
- * long archetype loses a trailing word before it loses its number.
+ * A profile seated twice is numbered, because the narration names a seat by display name alone and
+ * `BOT_TABLE` seats two `tight-aggressive` bots. The number fits inside the 24 characters, so a long
+ * name loses a word before it loses its number.
  */
 export function botDisplayNames(profileIds: readonly string[]): readonly string[] {
   const total = new Map<string, number>();
@@ -251,12 +167,8 @@ export function botDisplayNames(profileIds: readonly string[]): readonly string[
   });
 }
 
-// ---------------------------------------------------------------------------
-// The one place a PolicyInput is built
-// ---------------------------------------------------------------------------
-
 export interface PolicyInputRequest {
-  /** Already redacted for this seat. The ONLY state a policy is given. */
+  /** Already redacted for this seat. The only state a policy is given. */
   readonly view: PlayerView;
   readonly seat: SeatIndex;
   readonly traits: Traits;
@@ -265,14 +177,7 @@ export interface PolicyInputRequest {
   readonly random: RandomSource;
 }
 
-/**
- * Assembles a `PolicyInput` from a redacted view and nothing else.
- *
- * The seat's own cards come out of `view.seats[...].holeCards` for the seat the view was built
- * for — the one place `redactFor` puts them. Reading them from anywhere else (a `HandState`, a
- * side table of "who holds what") is what this function exists to make unnecessary, and the fact
- * that it takes no other source is the boundary.
- */
+/** Hole cards come from the view's own seat, where `redactFor` puts them. No other source is taken. */
 export function buildPolicyInput(request: PolicyInputRequest): PolicyInput {
   const { view, seat } = request;
   if (view.viewerSeat !== seat) {
@@ -298,18 +203,12 @@ export function buildPolicyInput(request: PolicyInputRequest): PolicyInput {
   };
 }
 
-// ---------------------------------------------------------------------------
-// The runner
-// ---------------------------------------------------------------------------
-
-/** One bot seat at a live table. */
 export interface BotSeatSpec {
   readonly userId: string;
   readonly seat: SeatIndex;
-  /** A strategy profile id from `@prl/poker-ai`. */
   readonly profileId: string;
   readonly difficulty: Difficulty;
-  /** Fixes this seat's decision stream. Derive it with `seedFor`. */
+  /** Derive it with `seedFor`. */
   readonly seed: number;
 }
 
@@ -329,13 +228,9 @@ interface BotSeatState {
 export interface BotRunnerOptions {
   readonly table: LiveTable;
   readonly clock: Clock;
-  /** Legibility only. See the file comment. */
+  /** Legibility only. Constant, and not to be presented as thinking. Runs on the injected clock. */
   readonly thinkingDelayMs?: number;
-  /**
-   * Non-fatal problems. Typed `event` on the detail, so "a bot could not decide" and "the engine
-   * refused a bot's action" are two counters rather than two sentences — see
-   * `observability/telemetry.ts`.
-   */
+  /** Non-fatal problems, with a typed event on the detail so each is its own counter. */
   readonly onProblem?: ProblemHook;
   /** Test seam: lets a test capture the exact `PolicyInput` a bot was given. */
   readonly onDecision?: (input: PolicyInput, decision: PolicyDecision) => void;
@@ -344,12 +239,7 @@ export interface BotRunnerOptions {
 /** Long enough to be readable, short enough not to be a wait. */
 const DEFAULT_THINKING_DELAY_MS = 700;
 
-/**
- * Drives every bot seat at one table.
- *
- * One runner per table, subscribed to that table's notices. It holds no state the table does not
- * already have except each bot's own opponent model and random stream.
- */
+/** One runner per table. Its only state beyond the table's is each bot's model and random stream. */
 export class BotRunner {
   private readonly table: LiveTable;
   private readonly clock: Clock;
@@ -369,7 +259,7 @@ export class BotRunner {
     this.unsubscribe = this.table.subscribe((notice) => this.onNotice(notice));
   }
 
-  /** Registers a seat as a bot. The seat itself is taken through `LiveTable.sit`. */
+  /** The seat itself is taken through `LiveTable.sit`. */
   add(spec: BotSeatSpec): void {
     const profile = requireProfile(spec.profileId);
     this.bots.set(spec.userId, {
@@ -398,35 +288,20 @@ export class BotRunner {
     return this.bots.get(userId)?.spec.profileId ?? null;
   }
 
-  /**
-   * The whole registered spec for a seat, or null when the seat is not a bot here.
-   *
-   * `profileOf` answers a third of the question. A seat is `(profile, difficulty, seed)` and all
-   * three change how it plays, so a restart that restored only the profile would look correct and
-   * play differently — which is exactly the class of bug this accessor exists to let a test catch.
-   */
+  /** A seat plays by `(profile, difficulty, seed)`, so a test of a restart needs all three. */
   specOf(userId: string): BotSeatSpec | null {
     return this.bots.get(userId)?.spec ?? null;
   }
 
-  /** Every registered spec. Used to decide whether live Coach is offered at this table. */
   specs(): readonly BotSeatSpec[] {
     return [...this.bots.values()].map((bot) => bot.spec);
   }
 
-  /**
-   * Whether the Coach panel may run *during* a hand at this table.
-   *
-   * Expert Legends advertises Coach in review only (`DIFFICULTY_SETTINGS.expert.coachAvailable`).
-   * The match writes that difficulty onto each bot seat, so the registered specs are the fact.
-   * A table with no bots, or only educational/realistic bots, keeps live Coach. One expert seat
-   * turns it off. Unrehydrated seats are not registered and do not flip this.
-   */
+  /** One expert seat turns live Coach off (`DIFFICULTY_SETTINGS.expert.coachAvailable`). */
   coachDuringHand(): boolean {
     return this.specs().every((spec) => DIFFICULTY_SETTINGS[spec.difficulty].coachAvailable);
   }
 
-  /** Cancels every scheduled decision and stops listening. Called when the room closes. */
   stop(): void {
     this.stopped = true;
     for (const bot of this.bots.values()) bot.pending?.cancel();
@@ -434,10 +309,6 @@ export class BotRunner {
     this.unsubscribe?.();
     this.unsubscribe = null;
   }
-
-  // -----------------------------------------------------------------------
-  // Reacting to the table
-  // -----------------------------------------------------------------------
 
   private onNotice(notice: TableNotice): void {
     if (this.stopped) return;
@@ -447,13 +318,7 @@ export class BotRunner {
     }
   }
 
-  /**
-   * Feeds one bot's model from public information only.
-   *
-   * Actions first, completion second, which is the order the observer requires: folding a hand in
-   * and then observing another of its actions is rejected outright, and rightly — double counting
-   * corrupts every rate at once while looking completely normal.
-   */
+  /** Public information only. Actions before completion, because the model rejects double counting. */
   private observe(bot: BotSeatState, notice: TableNotice): void {
     for (const event of notice.publicActions) {
       try {
@@ -493,8 +358,6 @@ export class BotRunner {
     if (bot.pendingAt === at) return;
     bot.pending?.cancel();
     bot.pendingAt = at;
-    // The delay is for legibility, not deliberation: it is a constant, it does not depend on how
-    // hard the decision is, and nothing in the UI may present it as thinking.
     bot.pending = this.clock.schedule(this.thinkingDelayMs, () => {
       bot.pending = null;
       bot.pendingAt = null;
@@ -502,13 +365,7 @@ export class BotRunner {
     });
   }
 
-  /**
-   * Decides and submits, through exactly the same entry point a human uses.
-   *
-   * The view is re-read after the delay rather than captured before it: in between, the seat may
-   * have been folded by a timeout, the hand may have completed, or somebody may have acted. If
-   * the spot has moved, the decision is abandoned rather than submitted against a stale sequence.
-   */
+  /** Re-reads the view after the delay and abandons the decision if the spot has moved. */
   private async act(bot: BotSeatState, at: string): Promise<void> {
     if (this.stopped) return;
     const view = this.table.viewFor(bot.spec.userId);
@@ -539,8 +396,6 @@ export class BotRunner {
     this.onDecision?.(input, decision);
 
     try {
-      // Same path, same validation, same idempotency as a person's action. A policy that proposed
-      // something illegal is rejected by the engine here rather than trusted.
       await this.table.submitAction(bot.spec.userId, {
         action: decision.action,
         actionId: newBotActionId(),
@@ -556,14 +411,10 @@ export class BotRunner {
   }
 }
 
-/** An `actionId` for a bot, in the same alphabet the wire schema allows. */
+/** In the alphabet the wire schema allows. */
 function newBotActionId(): string {
   return `bot-${randomBytes(9).toString('base64url')}`;
 }
-
-// ---------------------------------------------------------------------------
-// Legends: seating a table of profiles
-// ---------------------------------------------------------------------------
 
 export interface LegendSeatPlan {
   readonly seat: SeatIndex;
@@ -572,12 +423,7 @@ export interface LegendSeatPlan {
   readonly disclosure: ProfileDisclosureDto;
 }
 
-/**
- * Plans the bot seats for a Legends match: the learner takes seat 0, profiles fill upwards.
- *
- * Every seat carries its full disclosure, because `ProfileDisclosureDto.disclaimers` is a
- * required non-empty array and there is deliberately no way to name a profile without it.
- */
+/** The learner takes seat 0. Every seat carries its disclosure, which a profile is never named without. */
 export function planLegendSeats(
   profileIds: readonly string[],
   mode: NamingMode,
@@ -607,10 +453,6 @@ export function planLegendSeats(
   });
 }
 
-// ---------------------------------------------------------------------------
-// Comparing profiles on one hypothetical spot
-// ---------------------------------------------------------------------------
-
 /** The situation `POST /legends/compare` asks about. Every figure is the caller's. */
 export interface HypotheticalSpot {
   readonly heroCards: readonly Card[];
@@ -628,19 +470,9 @@ const HERO_SEAT = 0;
 const OPPONENT_SEAT = 1;
 
 /**
- * Builds a `HandState` for a hypothetical spot, so that the engine — not this file — decides what
- * is legal in it.
- *
- * This is the one place in the server that constructs a state rather than dealing one, and it is
- * worth being explicit about why that is not a back door. The state never becomes a hand: it is
- * not registered, not persisted, has no room, and exists only long enough for `redactFor` to
- * produce a view whose `legalActions` came from `legalActions(state, seat)`. Synthesising a
- * `PlayerView` directly instead would mean writing out a legal-action set by hand, which is
- * exactly the duplication ADR 0002 forbids.
- *
- * The reconstruction makes three assumptions the caller cannot express, and the response says so
- * in its `takeaway`: it is heads-up, hero holds the button, and the money already in the middle
- * from earlier streets is split evenly between the two seats.
+ * The one state the server builds rather than deals, so the engine decides what is legal (ADR 0002).
+ * It is never registered or persisted. It assumes heads-up, hero on the button, and earlier streets
+ * split evenly, and the response's `takeaway` says so.
  */
 export function buildHypotheticalState(spot: HypotheticalSpot): HandState {
   const dead = [...spot.heroCards, ...spot.board];
@@ -658,9 +490,7 @@ export function buildHypotheticalState(spot: HypotheticalSpot): HandState {
     });
   }
 
-  // Two cards for the opponent, taken from what is left. They are never shown: `redactFor` nulls
-  // them for hero's view, and the state is discarded immediately afterwards. They exist because
-  // the engine's showdown and commitment machinery expects a full, distinct deck.
+  // The engine needs a full distinct deck. `redactFor` hides these from hero's view.
   const rest = orderedDeck().filter((card) => !dead.includes(card));
   const opponentCards = rest.slice(0, 2);
   const [opponentFirst, opponentSecond] = opponentCards;
@@ -710,8 +540,7 @@ export function buildHypotheticalState(spot: HypotheticalSpot): HandState {
     },
   ];
 
-  // A synthesised log entry for the bet hero is facing, so the policy answers "a bet" rather than
-  // "no action" — `facingAction` is read off the action log, as it is in a real hand.
+  // `facingAction` is read off the action log, so the bet hero faces needs an entry.
   const actions: LoggedAction[] =
     spot.toCall > 0
       ? [
@@ -742,10 +571,7 @@ export function buildHypotheticalState(spot: HypotheticalSpot): HandState {
       actionTimeoutSeconds: 30,
     },
     buttonSeat: HERO_SEAT,
-    // Heads-up the button posts the small blind, so hero holds both — which is what the response's
-    // `takeaway` already tells the caller it assumed. Recorded rather than derived because a hand
-    // dealt under the dead-button rule can have a dead button or a dead small blind, and a
-    // reconstruction has no way to know which; this one is neither.
+    // Heads-up the button posts the small blind. Recorded, because a dead-button hand can differ.
     smallBlindSeat: HERO_SEAT,
     bigBlindSeat: OPPONENT_SEAT,
     seats,
@@ -764,8 +590,7 @@ export function buildHypotheticalState(spot: HypotheticalSpot): HandState {
     actions,
     actionSequence: actions.length,
     result: null,
-    // Labelled for what it is. A hypothetical is not a fairly dealt hand and must never be
-    // mistaken for one.
+    // A hypothetical is not a fairly dealt hand.
     randomSourceKind: 'fixed-deck-scenario',
     holeCardPositions: { [HERO_SEAT]: [0, 1], [OPPONENT_SEAT]: [2, 3] },
     boardPositions: spot.board.map((_card, index) => 4 + index),
@@ -796,13 +621,7 @@ export interface CompareRequest {
 /** Trials per profile. Bounded because each trial runs a policy, and a policy samples equity. */
 export const MAX_COMPARE_TRIALS = 40;
 
-/**
- * Runs every profile through the same spot, `trials` times each, and reports the distribution.
- *
- * The distribution is the point: these styles are probabilistic, not scripted, so a single sample
- * would be a misleading answer to "what would this profile do here?". Each trial draws from the
- * same seeded stream per profile, so the answer is reproducible.
- */
+/** A distribution, because these styles are probabilistic. Seeded per profile, so reproducible. */
 export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesResponse {
   const state = buildHypotheticalState(request.spot);
   const view = redactFor(state, { viewerSeat: HERO_SEAT });
@@ -817,8 +636,6 @@ export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesR
 
     const counts = new Map<string, { count: number; readonly fractions: number[] }>();
     let last: PolicyDecision | null = null;
-    // One decision kept per action TYPE, so the explanation can be taken from a trial that actually
-    // chose the action the bar marks. See `representative` below for what went wrong without it.
     const exemplars = new Map<string, PolicyDecision>();
     for (let trial = 0; trial < trials; trial += 1) {
       const decision = decide(
@@ -854,22 +671,8 @@ export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesR
       .sort((left, right) => right.probability - left.probability);
     const modal = distribution[0];
 
-    /**
-     * The trial the explanation is taken from, chosen to MATCH the bar above it.
-     *
-     * This was `last` — whatever the final trial happened to draw — while `modalAction` and
-     * `actionDistribution` aggregate all of them. They disagree constantly, because that is what
-     * sampling a probabilistic style means: measured over 12 profiles x 33 spots, 161 of 396
-     * columns rendered a bar marked one action above a sentence beginning "This model prefers to"
-     * and naming a different one, often while reporting that action's weight as single digits.
-     * `/legends/compare`'s own default spot showed it in 6 of 12 columns — one of them marking
-     * "raise" over "prefers to fold, with 3.3% of its weight" on a set of sevens.
-     *
-     * `drivingTraits` and `whatChangedIt` came from the same trial and described the same wrong
-     * action, so all three parts of the explanation moved together and none of them contradicted
-     * each other — only the bar. Falling back to `last` keeps the old behaviour for the case that
-     * cannot happen (no exemplar for the modal action), rather than inventing a second failure.
-     */
+    // The explanation comes from a trial that chose the modal action. Taking the last trial put a
+    // different action under the bar in 161 of 396 columns (12 profiles x 33 spots).
     const representative = (modal === undefined ? undefined : exemplars.get(modal.action)) ?? last;
 
     return {
@@ -905,7 +708,6 @@ export function compareProfilesOnSpot(request: CompareRequest): CompareProfilesR
   };
 }
 
-/** The maths for the spot, identical for every profile. */
 function coachReportFor(request: CompareRequest): CoachReport {
   const spot = request.spot;
   const range = opponentRangeFor(request);
@@ -915,12 +717,7 @@ function coachReportFor(request: CompareRequest): CoachReport {
     street: spot.street,
     opponents: [{ label: 'the profile', range }],
     pot: spot.pot,
-    // A comparison spot is always heads-up, so the money hero cannot reach is one
-    // opponent's excess over hero's stack and `deriveContestablePot` is exact here —
-    // no layering needed and none available, since the spot has no per-seat street
-    // record to layer. Required rather than defaulted, deliberately: the defect this
-    // closes was the Coach pricing a call against a pot the learner cannot win, and a
-    // field with a fallback is a field the next call site forgets to think about.
+    // Always heads-up, so `deriveContestablePot` is exact. Required, so no call site forgets it.
     contestablePot: deriveContestablePot({
       pot: spot.pot,
       toCall: spot.toCall,
@@ -929,19 +726,12 @@ function coachReportFor(request: CompareRequest): CoachReport {
       opponentStacks: [spot.opponentStack],
     }),
     toCall: spot.toCall,
-    // A comparison spot is reconstructed rather than played: earlier-street money is
-    // split evenly between the two seats and lands in `pot`, so hero has nothing out
-    // on the current street. Stating it keeps the raise totals the Coach publishes
-    // legal for the spot as reconstructed.
+    // Earlier streets land in `pot`, so hero has nothing out on this street.
     heroCommittedThisStreet: 0,
     heroStack: spot.heroStack,
     opponentStacks: [spot.opponentStack],
     bigBlind: spot.bigBlind,
-    // A comparison spot has no `HandState`, so there is no `legalActions(state, seat)` to
-    // ask. Derive the set instead of omitting it: an omitted set used to mean "everything
-    // is permitted", which is how the Coach came to price a raise against an opponent with
-    // nothing behind. Passing it explicitly is also what lets the field stay required, so
-    // a future caller cannot reopen the hole by simply not thinking about it.
+    // No `HandState` to ask, so derived. An omitted set once meant everything was permitted.
     legalActions: deriveLegalActions({
       toCall: spot.toCall,
       heroCommittedThisStreet: 0,
@@ -951,13 +741,7 @@ function coachReportFor(request: CompareRequest): CoachReport {
   });
 }
 
-/**
- * A range a caller named, in either form the contract's `RANGE_PATTERN` accepts, or a `400`.
- *
- * `top:NN` is not range notation and `parseRange` rightly refuses it: it is a *percentage of the
- * computed strength ordering*, which `expandAssumedRange` turns into notation for the same parser.
- * Only its bounds are checked here, because expanding it builds the preflop strength table.
- */
+/** Only the bounds of `top:NN` are checked, because expanding it builds the preflop strength table. */
 export function opponentRangeOption(text: string): AssumedRange {
   const percent = /^top:(\d{1,3})$/.exec(text.trim());
   if (percent === null) return { kind: 'notation', notation: text };
@@ -971,7 +755,6 @@ export function opponentRangeOption(text: string): AssumedRange {
   return { kind: 'topPercent', percent: value };
 }
 
-/** Expands an assumed range, with notation the parser refuses answered as a `400` naming the field. */
 export function assumedRange(range: AssumedRange, dead: readonly Card[]): ParsedRange {
   if (range.kind === 'topPercent') return expandAssumedRange(range, dead);
   try {
@@ -1003,12 +786,11 @@ function median(values: readonly number[]): number | null {
   return before === undefined ? at : (before + at) / 2;
 }
 
-/** The wire difficulty and the package's own are the same three names; this proves it. */
+/** The wire's three names and the package's are the same, which this assignment proves. */
 export function difficultyOf(difficulty: LegendDifficulty): Difficulty {
   return difficulty;
 }
 
-/** Narrows a policy trait key to the wire's key union, which is the same list. */
 function traitKeyOf(key: PolicyDecision['drivingTraits'][number]['key']): LegendTraitKeyOnWire {
   return key;
 }

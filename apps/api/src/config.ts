@@ -1,30 +1,9 @@
 /**
- * Configuration: parsed, validated and frozen once, at startup.
- *
- * ## Why this is a single fail-fast parse and not `process.env.X` at the point of use
- *
- * A server that reads `process.env.PORT` in one file and `process.env.DATABASE_URL`
- * in another boots happily with half a configuration and then fails at 3am on the
- * first request that touches the missing half. Worse, a typo in a security-relevant
- * variable (`SESSION_COOKE_SECRET`) silently reads as `undefined`, and a plugin that
- * treats `undefined` as "feature off" quietly disables cookie signing.
- *
- * So: every variable is read here, once. Every problem is collected and reported
- * together — one boot, one complete list of what is wrong — and the result is frozen
- * so nothing can mutate configuration after the fact.
- *
- * ## Why the checks are stricter in production
- *
- * Development needs to be pleasant: a missing `SESSION_COOKIE_SECRET` gets a random
- * one for this process. Production needs to be safe: the same missing value is a
- * refusal to start. Every place the two diverge is marked, because "it worked on my
- * machine" is exactly the failure mode this file exists to prevent.
- *
- * ## Nothing here reads a file or opens a socket
- *
- * `loadConfig(env)` is a pure function of the environment record it is handed, which
- * is what makes the config tests possible without a live process environment. The
- * process-wide singleton (`getConfig()`) is a thin memoised wrapper over it.
+ * Configuration, parsed, validated and frozen once at startup.
+ * Every variable is read here, so a typo such as `SESSION_COOKE_SECRET` is caught at boot rather
+ * than read as `undefined`. Every problem is collected and reported together.
+ * Production refuses what development tolerates or substitutes, such as a missing cookie secret.
+ * `loadConfig(env)` is a pure function of the record it is given, and `getConfig()` memoises it.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -38,47 +17,12 @@ export const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', '
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
 /**
- * The shortest turn clock a person alone at a table of bots is given, in seconds.
- *
- * ## Why this number exists at all
- *
- * The product has two headline features and, at a 60-second clock, they are in direct
- * tension: you cannot read the analysis and still act. A browser-level verification pass
- * lost two hands to `seat 0 | fold | was_automatic = t` while the learner was reading the
- * Coach panel, which for a live flop runs to roughly **5,700 characters** of prose plus a
- * five-row EV table and a card-by-card table with one row per unseen card. At 200-250
- * words per minute — and slower for dense numeric material — the prose alone is around
- * four minutes of reading before a single table is looked at.
- *
- * Nothing about that was hidden: the countdown is on screen, and folding rather than
- * calling on expiry is the correct rule (`timeoutAction` in `@prl/poker-engine`). The
- * clock was simply shorter than the thing it was asking the learner to read.
- *
- * ## Why 240 and not something else
- *
- * It is the reading time of the panel, rounded to a whole number of minutes. Not longer,
- * because the clock still has a job — the number below is a floor on how long an
- * abandoned seat can hold a table, and every extra minute is a minute the other players
- * wait. Not shorter, because a clock that expires mid-panel is the defect this replaces.
- *
- * ## Why it is free, and where it therefore stops applying
- *
- * The cost of a longer clock is other people's patience, and at a table of bots there is
- * nobody to be patient: this is play money against bots with nothing at stake. That is the
- * whole justification, so `LiveTable.turnSecondsFor` applies it only where the
- * justification holds — a person with no other person waiting on them. A room with two
- * humans in it keeps the pace they agreed to, and can configure up to 300 seconds of it
- * for itself (`repositories/rooms.ts`). It is also a floor rather than a replacement: a
- * room that already allows longer keeps what it chose.
- *
- * ## Why a longer clock rather than "no clock until the learner has acted once"
- *
- * The alternative considered was leaving the first decision of a hand untimed. It was
- * rejected: the first decision is precisely when a seat is most likely to have been
- * abandoned — the tab was closed before the hand started — so an untimed first action
- * lets one absent player stall a table indefinitely, which is a worse failure than a
- * clock that is too short. The timeout mechanism stays; only its floor moves.
- *
+ * The shortest turn clock a person alone at a table of bots gets, in seconds.
+ * A live flop's Coach panel runs to about 5,700 characters plus two tables, around four minutes of
+ * reading, and a 60-second clock folded two hands while the learner read it. 240 is that reading
+ * time rounded to whole minutes. `LiveTable.turnSecondsFor` applies it only when no other person
+ * is waiting, and it is a floor, so a room with a longer clock keeps it. An untimed first action
+ * was rejected because an abandoned seat could then stall a table indefinitely.
  * Override with `LEARNER_TURN_SECONDS`.
  */
 export const DEFAULT_LEARNER_TURN_SECONDS = 240;
@@ -98,142 +42,66 @@ export interface RateLimitConfig {
   readonly expensiveMax: number;
   readonly expensiveWindowMs: number;
   /**
-   * Guest-session creation, per window. Address-keyed rather than session-keyed — see the
-   * long note above `clientKeyedRateLimit` in `plugins/security.ts` for why a route that
-   * *issues* a session cannot be limited by that session.
-   *
-   * Configurable rather than a literal because it is the one limit whose correct value
-   * genuinely differs by deployment: a public instance wants the shipped default, while a
-   * CI job or a staging smoke run drives the same address far harder than any person does
-   * and has no abuse risk to speak of. Before this was configurable, `RATE_LIMIT_MAX` in CI
-   * raised only the global bucket and had no effect here, so the one limit a test run
-   * actually hits was the one it could not tune.
+   * Guest-session creation, per window. Address-keyed, because a route that issues a session
+   * cannot be limited by that session (see `clientKeyedRateLimit` in `plugins/security.ts`).
+   * Configurable because CI and staging smoke runs drive one address far harder than a person.
    */
   readonly guestMax: number;
   readonly guestWindowMs: number;
   /**
-   * The CEILING on `/auth/oidc/start` and, separately, on `/auth/oidc/callback`, per window,
-   * per address. Address-keyed for the same reason as guests.
-   *
-   * Sized for a classroom rather than for a person, because these are the two requests a whole
-   * cohort makes in the same ten seconds and they all arrive from one campus egress address.
-   * The arithmetic is in `.env.example`: at least two per learner, a start plus one retry.
-   *
-   * This is deliberately NOT the anti-abuse control any more — `oidcFailureMax` below is. A
-   * ceiling that a cohort must fit under cannot also be the number that stops a script, which is
-   * what the shipped 15 was trying to be and why fifteen of thirty learners were refused.
+   * The ceiling on `/auth/oidc/start` and, separately, `/auth/oidc/callback`, per window, per
+   * address. Sized for a classroom behind one egress address, two per learner (`.env.example`).
+   * It is not the anti-abuse control. `oidcFailureMax` is.
    */
   readonly oidcMax: number;
   readonly oidcWindowMs: number;
   /**
-   * OIDC requests per window per address that END IN AN ERROR — a start that could not reach the
-   * provider, a callback whose state, PKCE, issuer or token exchange did not check out.
-   *
-   * This is the tight one, and the one an abusive caller actually meets: completing a sign-in
-   * needs an authorization code only the identity provider can mint, so a script's every attempt
-   * lands here while a cohort's attempts never do. Shares `oidcWindowMs` with the ceiling above,
-   * because two windows on one route would give `Retry-After` two answers.
-   *
-   * The default is 15 — the same number the shipped `RATE_LIMIT_OIDC_MAX` was, and not a
-   * coincidence: 15 failed callbacks per address per minute is exactly what the shipped
-   * configuration permitted (measured), so splitting the budget in two does not loosen the
-   * expensive path at all. It only stops a cohort's SUCCESSES from spending it.
+   * OIDC requests per window per address that end in an error.
+   * A script's every attempt lands here, because completing a sign-in needs a code only the
+   * identity provider can mint. Shares `oidcWindowMs` so `Retry-After` has one answer.
+   * The default 15 is what the old single limit permitted for failures, so splitting it loosened
+   * nothing.
    */
   readonly oidcFailureMax: number;
-  /**
-   * How far past the limit a caller may go before being blocked outright rather than
-   * merely told to slow down. Blunts a script that ignores `retryAfterSeconds`.
-   */
+  /** How far past the limit a caller may go before a block. Blunts a script ignoring `retryAfterSeconds`. */
   readonly banAfter: number;
 }
 
 /**
- * Which doors a declared cohort comes through.
- *
- * `both` is the default because it is the safe one: it checks every entrance, so an operator who
- * declares a cohort and forgets that half the class clicks "Play as guest" is told at boot rather
- * than by thirty students at once. Narrowing it is an explicit act.
+ * Which doors a declared cohort comes through. `both` is the default because it checks every
+ * entrance, so a forgotten "Play as guest" door is reported at boot.
  */
 export type CohortEntry = 'oidc' | 'guest' | 'both';
 
 /**
- * The operator's declaration of how many learners arrive together from ONE address.
- *
- * ## Why this exists at all, rather than just a comment in `.env.example`
- *
- * Every limit that a classroom trips is address-keyed, and it has to be: `POST /auth/guest` and
- * `GET /auth/oidc/callback` both ISSUE a session, so a session-keyed limit on them never
- * accumulates (measured — see `clientKeyedRateLimit` in `plugins/security.ts`). That makes a
- * campus, office or VPN egress address a single caller as far as every one of these limits is
- * concerned, and it makes the correct SIZE of those limits a fact about the deployment that this
- * process cannot discover for itself.
- *
- * An operator who gets it wrong does not find out from a log line. They find out from a cohort:
- * against the shipped defaults, thirty learners signing in through the identity provider from one
- * address produced fifteen sign-ins and fifteen 429s, the first at learner sixteen. That is a
- * discovery made in front of paying students, once, and it is the reason this is a boot refusal
- * in the same style as `RATE_LIMIT_RESET_TOKEN` rather than a warning.
- *
- * ## Why it is a declaration rather than an inference
- *
- * The limits could have been raised until nothing plausible trips them, which is the shape of fix
- * that quietly hands a script the same headroom. Instead the operator says how big the class is,
- * and `checkCohortSizing` refuses to boot when the configured limits cannot serve it. Nothing is
- * raised automatically: declaring a cohort of thirty tells you that guest creation is set to ten,
- * it does not set it to thirty behind your back. What the limits permit stays something a person
- * chose and can be held to.
- *
- * Unset (`0`) means "no cohort is declared", the shipped defaults apply and nothing is checked —
- * which is right for a public instance, where thirty accounts a minute from one address is not a
- * classroom.
+ * How many learners the operator declares will arrive together from one address.
+ * Every limit a classroom trips is address-keyed, because guest creation and the OIDC callback
+ * issue the session. Against the shipped defaults, thirty learners from one address got fifteen
+ * sign-ins and fifteen 429s. `checkCohortSizing` refuses to boot when the limits cannot serve the
+ * declared size, and raises nothing itself. `0` means none declared, right for a public instance.
  */
 export interface CohortConfig {
-  /** Learners expected to arrive together from one address. `0` when nothing was declared. */
+  /** `0` when nothing was declared. */
   readonly size: number;
-  /** Which sign-in doors that cohort uses. Only the declared ones are size-checked. */
+  /** Only the declared doors are size-checked. */
   readonly entry: CohortEntry;
 }
 
 /**
- * Whether a live enrolment is required to take a seat at a table (`PRL_ENROLMENT_REQUIRED`).
- *
- * ## What it gates, and what it deliberately does not
- *
- * `enforced` means one thing: `RoomRegistry.sitAtTable` refuses a learner for whom
- * `enrolments.entitlementFor` answers null, with `enrolment_required`. It gates TAKING A SEAT and
- * nothing else. `/learn`, the Lab, the glossary, the Legends pages, creating a room, joining one
- * by invite code and watching a table from a socket all stay exactly as open as they were, because
- * that is the surface a prospective student browses and gating it would be gating the shop window
- * rather than the course.
- *
- * ## Why the default is `off`, and why that does not make this decoration
- *
- * An open public instance is a legitimate deployment of this product — most of what it teaches is
- * free reading — and every deployment that exists today runs without an enrolment table having
- * meant anything. A default of `enforced` would turn one migration into an outage for all of them.
- *
- * The usual cost of a default-off guard is that nobody ever sees it refuse, so it rots. That is
- * closed by running staging with it ON: `docker-compose.staging.yml` sets `enforced` on the api
- * service, and `scripts/smoke-test.mjs` section 13 drives both directions over TLS — an enrolled
- * learner seated, an unenrolled one refused, over REST and over the socket — on every
- * `pnpm run staging up`. The switch's `off` behaviour is covered by the unit tests, which run the
- * whole matrix regardless of what any deployment is set to.
- *
- * ## Why an enum of two rather than a boolean
- *
- * `readBoolean` accepts `true/1/yes` and `false/0/no`, and this is a value an operator will one
- * day want a third setting for — "warn but allow", to find out how many learners a cohort list
- * missed before the class starts. A boolean would have to be replaced to get there; an enum gets
- * a value added. Nothing here promises that third value exists, and adding one means writing what
- * it does at the refusal site.
+ * Whether a live enrolment is required to take a seat (`PRL_ENROLMENT_REQUIRED`).
+ * `enforced` makes `RoomRegistry.sitAtTable` refuse a learner with no entitlement, with
+ * `enrolment_required`. Nothing else is gated, so lessons, the Lab and watching stay open.
+ * The default is `off` so the migration did not close existing open deployments. Staging runs it
+ * `enforced`, and `scripts/smoke-test.mjs` section 13 drives both directions over TLS.
+ * An enum rather than a boolean so a third value, such as warn-only, can be added.
  */
 export type EnrolmentRequirement = 'off' | 'enforced';
 
 export interface DatabaseConfig {
   readonly url: string;
-  /** Upper bound on server-side connections. See the pool note in `db.ts`. */
+  /** See the pool note in `db.ts`. */
   readonly poolMax: number;
-  /** Per-statement ceiling. A query that exceeds it is cancelled by Postgres. */
+  /** Postgres cancels a statement that exceeds it. */
   readonly statementTimeoutMs: number;
   readonly idleTimeoutSeconds: number;
   readonly connectTimeoutSeconds: number;
@@ -249,19 +117,14 @@ export interface AppConfig {
   readonly logLevel: LogLevel;
 
   /**
-   * Exact allowlist of browser origins, normalised to `scheme://host[:port]`.
-   * Used for CORS and for the WebSocket `Origin` check — one list, so the two can
-   * never disagree about who is allowed to talk to this server.
+   * Exact allowlist of browser origins, normalised to `scheme://host[:port]`. One list serves
+   * CORS and the WebSocket `Origin` check, so the two cannot disagree.
    */
   readonly webOrigins: readonly string[];
 
-  /** Secret used to sign cookies. Never logged, never returned by any route. */
+  /** Never logged, never returned by any route. */
   readonly sessionCookieSecret: string;
-  /**
-   * Whether cookies get the `Secure` attribute. Always true in production; a
-   * production boot with this false is refused, because a session cookie without
-   * `Secure` is one plaintext request away from being stolen.
-   */
+  /** A production boot with this false is refused, because a cookie without `Secure` leaks over plaintext. */
   readonly cookieSecure: boolean;
 
   readonly database: DatabaseConfig;
@@ -277,74 +140,48 @@ export interface AppConfig {
   readonly coachTimeoutMs: number;
 
   /**
-   * Floor on the turn clock of a person alone at a table of bots, in seconds.
-   *
-   * Bots keep the room's own setting, and so does a table with a second person at it. A
-   * room configured with a longer clock than this keeps it — the floor only raises a clock
-   * that is shorter than the Coach panel takes to read. See `DEFAULT_LEARNER_TURN_SECONDS`
-   * for the reasoning and `LiveTable.turnSecondsFor` for exactly where it applies.
+   * Floor on the turn clock of a person alone at a table of bots, in seconds. Bots and tables
+   * with a second person keep the room's setting. See `DEFAULT_LEARNER_TURN_SECONDS`.
    */
   readonly learnerTurnSeconds: number;
 
   readonly rateLimit: RateLimitConfig;
 
-  /** The declared classroom behind one address, and which doors it uses. See `CohortConfig`. */
   readonly cohort: CohortConfig;
 
   /**
-   * Whether a live enrolment is required to TAKE A SEAT at a table. See `EnrolmentRequirement`.
-   *
-   * Read by `routes/index.ts`, which binds the registry's entitlement port accordingly. Nothing
-   * else in the process reads it, and nothing else may: a second reader is a second place for the
-   * enforcement decision to be made, and one of them would eventually be the one nobody looks at.
+   * Read only by `routes/index.ts`, which binds the registry's entitlement port. A second reader
+   * would be a second place to make the enforcement decision.
    */
   readonly enrolmentRequired: EnrolmentRequirement;
 
   /**
-   * Whether to believe `X-Forwarded-For`.
-   *
-   * SECURITY: enabling this makes `request.ip` client-controlled unless a trusted
-   * proxy overwrites the header on the way in. A forged header defeats IP-based rate
-   * limiting and poisons the hashed client key in the logs, so leave it false unless
-   * this process is genuinely unreachable except through a proxy you control.
+   * SECURITY: makes `request.ip` client-controlled unless a trusted proxy overwrites
+   * `X-Forwarded-For`. A forged header defeats address-based rate limiting and poisons the hashed
+   * client key in logs.
    */
   readonly trustProxy: boolean;
 
   /**
-   * Bearer token required to scrape `GET /metrics`, or null when the endpoint is off.
-   *
-   * A metrics endpoint is an information disclosure surface: route names, error-code
-   * frequencies, live connection counts and process uptime together describe both the shape
-   * of the deployment and how loaded it is. So it is authenticated, and it is authenticated
-   * with a token rather than a session because the caller is a scraper, not a person.
-   *
-   * Absent means the route is never registered at all in production — not registered and
-   * answering 403, which would still confirm the service is this application. In development
-   * the route is registered without a token, and a boot warning says so.
+   * Bearer token for `GET /metrics`, or null when the endpoint is off. Metrics disclose the shape
+   * and load of the deployment, so they are authenticated, by token because the caller is a
+   * scraper. Absent in production means the route is not registered at all, since a 403 would
+   * still identify the application. Development serves it without a token and warns.
    */
   readonly metricsToken: string | null;
 
   /**
-   * Token that enables the rate-limit reset control, or null.
-   *
-   * Test isolation, and nothing else. See `RATE_LIMIT_RESET_PATH` in `plugins/security.ts`
-   * for what it does and `readRateLimitResetToken` below for why a production process
-   * carrying this variable REFUSES TO START rather than warning.
+   * Enables the rate-limit reset control, for test isolation only. Production refuses to start
+   * with it set (`readRateLimitResetToken`).
    */
   readonly rateLimitResetToken: string | null;
 
-  /** Largest request body accepted, in bytes. */
+  /** Bytes. */
   readonly bodyLimitBytes: number;
-  /** How long a single request may take before the socket is closed. */
   readonly requestTimeoutMs: number;
-  /** How long a shutdown waits for in-flight requests before giving up. */
   readonly shutdownGraceMs: number;
 
-  /**
-   * Non-fatal observations from parsing — insecure-but-tolerated development
-   * settings, defaults that were substituted. `server.ts` logs these at boot so a
-   * surprising default is visible rather than silent.
-   */
+  /** Non-fatal observations from parsing, logged by `server.ts` at boot. */
   readonly warnings: readonly string[];
 }
 
@@ -362,13 +199,11 @@ export class ConfigError extends Error {
   }
 }
 
-/** The shape `process.env` has, without depending on it. */
 export type EnvRecord = Readonly<Record<string, string | undefined>>;
 
 /**
- * Values that must never be accepted as a real secret. A secret that ships in an
- * example file, a README or a tutorial is public knowledge the moment it is written
- * down, and "we meant to change it before launch" is how sessions get forged.
+ * Never accepted as a real secret. A value in an example file or a tutorial is public the
+ * moment it is written down.
  */
 const FORBIDDEN_SECRET_SUBSTRINGS = [
   'change',
@@ -384,13 +219,12 @@ const FORBIDDEN_SECRET_SUBSTRINGS = [
   'dev-only',
 ] as const;
 
-/** The command every message about a missing or public secret tells the operator to run. */
 const GENERATE_SECRET =
   "`node -e \"console.log(require('node:crypto').randomBytes(32).toString('base64url'))\"`";
 
-/** Minimum secret length. 32 base64url characters carry ~192 bits; 32 bytes is the floor. */
+/** 32 base64url characters carry about 192 bits. */
 const MIN_SECRET_LENGTH = 32;
-/** Below this many distinct characters, a "long" secret is really a short one repeated. */
+/** Below this, a long secret is a short one repeated. */
 const MIN_SECRET_DISTINCT_CHARS = 12;
 
 interface Collector {
@@ -423,8 +257,7 @@ interface IntBounds {
 function readInt(env: EnvRecord, key: string, bounds: IntBounds, collect: Collector): number {
   const value = trimmed(env, key);
   if (value === undefined) return bounds.fallback;
-  // Number() rather than parseInt(): parseInt('3001abc') is 3001, which silently
-  // accepts a typo. Number('3001abc') is NaN, which we can report.
+  // Number() rather than parseInt(), because parseInt('3001abc') is 3001 and hides the typo.
   const parsed = Number(value);
   if (!Number.isInteger(parsed)) {
     collect.problems.push(`${key} must be an integer, got "${value}"`);
@@ -449,8 +282,7 @@ function readBoolean(env: EnvRecord, key: string, fallback: boolean, collect: Co
 function readNodeEnv(env: EnvRecord, collect: Collector): NodeEnv {
   const value = trimmed(env, 'NODE_ENV') ?? 'development';
   if ((NODE_ENVS as readonly string[]).includes(value)) {
-    // The includes() check above is the narrowing; find() keeps that provable to the
-    // compiler without a cast.
+    // find() narrows for the compiler without a cast.
     const match = NODE_ENVS.find((candidate) => candidate === value);
     if (match !== undefined) return match;
   }
@@ -464,12 +296,9 @@ function readLogLevel(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): Log
   if (value === undefined) return fallback;
   const match = LOG_LEVELS.find((candidate) => candidate === value);
   if (match === 'silent' && nodeEnv === 'production') {
-    // A refusal and not a warning, because a warning about this cannot be delivered: `silent`
-    // gives Fastify no logger at all (`buildLoggerOptions`), so the boot's `configuration warning`
-    // lines, `failed to start`, `uncaught exception; exiting` and every schema verdict after boot
-    // go nowhere. Measured with NODE_ENV=production on a port another process held: `info` wrote
-    // `failed to start` and exit 1; `silent` exited 1 with zero bytes on stdout and on stderr.
-    // `fatal` is the quietest production level, and it still says why the process died.
+    // Refused, because `silent` gives Fastify no logger, so no warning or crash reason is written.
+    // Measured with NODE_ENV=production on a taken port, `silent` exited 1 with zero bytes on
+    // stdout and stderr. `fatal` is the quietest level that still says why the process died.
     collect.problems.push(
       'LOG_LEVEL=silent is not allowed in production: the process would log nothing, including why ' +
         'it failed to start or crashed. Use fatal for the quietest level that still does.',
@@ -482,29 +311,11 @@ function readLogLevel(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): Log
 }
 
 /**
- * Normalises one origin to `scheme://host[:port]` and rejects anything that is not
- * an origin.
- *
- * A configured "origin" with a path or a trailing slash is the classic way an
- * allowlist comparison starts failing silently: the browser sends
- * `https://app.example` and the config holds `https://app.example/`, they never
- * match, and CORS mysteriously stops working. Reject it at boot instead.
- *
- * The host shape is checked for the same reason, and it is worth spelling out why an
- * entry that can never match is a problem rather than merely useless. Matching is exact
- * (`isAllowedOrigin` in `plugins/security.ts`), so `https://*.example` matches nothing
- * and the system fails closed — but it fails closed *silently*: the operator sees every
- * CORS request refused and every WebSocket closed with 4406, with no diagnostic naming
- * the cause, and `.env.example` told them a wildcard would be rejected at boot. It says
- * so because that is the right behaviour, and now it is the actual behaviour. There is
- * also one case where a wildcard is worse than inert: `safeRedirectTarget`
- * (`auth/oidc.ts`) uses `webOrigins[0]`, so a wildcard in first position produces a
- * broken post-sign-in redirect.
- *
- * A trailing dot goes the same way. `https://app.example.` is the fully-qualified form
- * of the same name and resolves to the same server, but `URL` keeps the dot and the
- * browser sends the origin without it, so it is a second spelling that matches nothing.
- * This is the trailing-slash mistake in the host instead of the path.
+ * Normalises one origin to `scheme://host[:port]` and rejects anything else.
+ * Matching is exact (`isAllowedOrigin` in `plugins/security.ts`), so a trailing slash, a path, a
+ * wildcard or a trailing dot would match nothing and fail closed with no diagnostic. A wildcard
+ * in first position would also break the post-sign-in redirect (`safeRedirectTarget` uses
+ * `webOrigins[0]`). The browser never sends the trailing dot that `URL` keeps.
  */
 export function normaliseOrigin(raw: string): { readonly origin: string } | { readonly problem: string } {
   let url: URL;
@@ -579,23 +390,10 @@ function readWebOrigins(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): r
 }
 
 /**
- * Reads the cookie-signing secret, with the production/development split spelled out.
- *
- * Production: must be present, long, and not recognisably a placeholder.
- * Elsewhere: a missing secret is replaced with a fresh random one for this process
- * (sessions do not survive a restart, which is noisy but safe), and a short secret is
- * tolerated with a warning so tests can use a fixed literal.
- *
- * A placeholder outside production is tolerated too, and it is the one case that used to be
- * tolerated in SILENCE. The README's first run is `cp .env.example .env` and then "paste a
- * generated value"; skip the paste and `.env` holds
- * `replace-me-this-example-value-is-rejected-in-production`, which is 55 characters, so the
- * length warning above never fired. The API booted with no line at all, signing every session
- * with a string anyone can read in this repository. Not a refusal, because development is
- * where that string is supposed to work — `docker-compose.yml` and `.env.example` promise a
- * refusal in production only, and a developer who skipped one step of a list should get the
- * app and a line saying what it cost them, not exit 78. A process started with
- * `NODE_ENV=production` still refuses the same value, below.
+ * Production requires a long, non-placeholder secret.
+ * Elsewhere a missing secret becomes a random per-process one, and a short or placeholder secret
+ * is tolerated with a warning. The placeholder warning exists because `.env.example`'s 55-character
+ * value passed the length check and the API booted silently signing with a public string.
  */
 function readSessionCookieSecret(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): string {
   const value = trimmed(env, 'SESSION_COOKIE_SECRET');
@@ -659,19 +457,9 @@ function readSessionCookieSecret(env: EnvRecord, nodeEnv: NodeEnv, collect: Coll
 }
 
 /**
- * Checks an operator-supplied secret that is optional but, when present, must be real.
- *
- * Shares the rules `readSessionCookieSecret` applies in production — length, distinct
- * characters, no placeholder words — because a token that guards a scrape endpoint or a
- * test control is not less of a credential than a cookie key. It is a separate function
- * rather than a refactor of that one because the two differ in the case that matters: a
- * missing `SESSION_COOKIE_SECRET` is fatal in production and substituted elsewhere, while a
- * missing value here simply means the feature is off.
- *
- * Applied in EVERY environment, not just production. The session secret is lenient outside
- * production so that a fixed literal can be used in tests; these tokens have no such need,
- * and a weak one in development is a weak one in the staging environment that copied the
- * `.env` from it.
+ * An optional secret that, when present, must pass the production rules of
+ * `readSessionCookieSecret`. Missing means the feature is off. Applied in every environment,
+ * because a weak token in development reaches the staging deployment that copies its `.env`.
  */
 function readOptionalSecret(env: EnvRecord, key: string, collect: Collector): string | null {
   const value = trimmed(env, key);
@@ -697,25 +485,10 @@ function readOptionalSecret(env: EnvRecord, key: string, collect: Collector): st
 }
 
 /**
- * Reads the rate-limit reset token, and refuses to start production if one is present.
- *
- * ## Why this is a refusal and not a warning
- *
- * The control this token unlocks empties the rate limiter's counters. Anyone holding the
- * token can therefore issue unlimited guest sessions, unlimited Monte Carlo requests and
- * unlimited sign-in attempts, by resetting between bursts — which is to say the token is
- * equivalent to turning rate limiting off, for its holder, everywhere.
- *
- * A control with that reach cannot be governed by an operator's intention to keep it out of
- * production. It has to be *impossible* there, because the realistic failure is not somebody
- * deciding to enable it: it is a `.env` copied from staging to production with one variable
- * nobody re-read. So the check is at boot, it is fatal, and there is deliberately no
- * override variable — an escape hatch with an escape hatch is just a warning again.
- *
- * The cost is real and accepted: a production-`NODE_ENV` staging deployment cannot use this
- * control, and the smoke harness there falls back to waiting out the window it consumed
- * (`scripts/smoke-test.mjs`). That fallback is slower and it is honest, which is the right
- * trade against a token that can disable a security control in production.
+ * Refuses to start production if the reset token is present.
+ * The control empties the rate limiter, so its holder has no rate limit at all. The realistic
+ * failure is a `.env` copied from staging, so the check is fatal with no override. Production-mode
+ * staging therefore waits out its windows instead (`scripts/smoke-test.mjs`).
  */
 function readRateLimitResetToken(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): string | null {
   const value = readOptionalSecret(env, 'RATE_LIMIT_RESET_TOKEN', collect);
@@ -736,14 +509,8 @@ function readRateLimitResetToken(env: EnvRecord, nodeEnv: NodeEnv, collect: Coll
 }
 
 /**
- * Reads the metrics scrape token.
- *
- * Unset is a supported posture — see `metricsToken` on `AppConfig` — so this warns rather
- * than refusing, and only in production, where the consequence is real: no `/metrics` route
- * at all, and therefore no latency, error rate, socket count or event-loop lag to look at
- * during an incident. Outside production the endpoint is served openly, which is the
- * expected development behaviour and not worth a line on every boot; a minimal valid
- * configuration is supposed to start silently.
+ * Unset is supported, so this only warns, and only in production, where it means no `/metrics`
+ * route during an incident. A minimal valid development configuration starts silently.
  */
 function readMetricsToken(env: EnvRecord, nodeEnv: NodeEnv, collect: Collector): string | null {
   const value = readOptionalSecret(env, 'METRICS_TOKEN', collect);
@@ -787,12 +554,8 @@ function readDatabase(env: EnvRecord, collect: Collector): DatabaseConfig {
 }
 
 /**
- * OIDC is all-or-nothing.
- *
- * Three of four variables present is the dangerous state: the sign-in button appears,
- * the redirect happens, and the token exchange fails in a way that looks like the
- * identity provider's fault. Either the whole flow is configured or the feature is
- * off and `oidc_not_configured` is returned honestly.
+ * All four OIDC variables or none. A partial set shows the sign-in button and then fails the
+ * token exchange in a way that looks like the identity provider's fault.
  */
 function readOidc(env: EnvRecord, collect: Collector): OidcConfig | null {
   const keys = ['OIDC_ISSUER', 'OIDC_CLIENT_ID', 'OIDC_CLIENT_SECRET', 'OIDC_REDIRECT_URI'] as const;
@@ -831,10 +594,10 @@ function readOidc(env: EnvRecord, collect: Collector): OidcConfig | null {
   };
 }
 
-/** The three legal values of `COHORT_ENTRY`, in the order the refusal message lists them. */
+/** In the order the refusal message lists them. */
 const COHORT_ENTRIES = ['both', 'oidc', 'guest'] as const;
 
-/** Parses `COHORT_ENTRY`. Defaults to the safe value, `both`; see `CohortConfig`. */
+/** Defaults to `both`. See `CohortConfig`. */
 function readCohortEntry(env: EnvRecord, collect: Collector): CohortEntry {
   const value = trimmed(env, 'COHORT_ENTRY');
   if (value === undefined) return 'both';
@@ -847,18 +610,12 @@ function readCohortEntry(env: EnvRecord, collect: Collector): CohortEntry {
   return found;
 }
 
-/** The legal values of `PRL_ENROLMENT_REQUIRED`, in the order the refusal message lists them. */
+/** In the order the refusal message lists them. */
 const ENROLMENT_REQUIREMENTS = ['off', 'enforced'] as const;
 
 /**
- * Parses `PRL_ENROLMENT_REQUIRED`. Defaults to `off`; see `EnrolmentRequirement`.
- *
- * An unrecognised value is a boot refusal rather than a fallback to the default, and the direction
- * matters more here than for most of this file. The realistic typo is `PRL_ENROLMENT_REQUIRED=true`
- * or `=on` from somebody who expected a boolean — an operator who has decided to enforce and
- * believes they have. Silently taking `off` from that would leave a cohort's tables open to the
- * whole internet while the deployment's own configuration says otherwise, and nothing anywhere
- * would say so. So it names both legal values and stops the process (exit 78).
+ * Defaults to `off`. An unrecognised value refuses to boot, because the realistic typo is `true`
+ * or `on` from an operator who meant to enforce, and falling back to `off` would leave tables open.
  */
 function readEnrolmentRequirement(env: EnvRecord, collect: Collector): EnrolmentRequirement {
   const value = trimmed(env, 'PRL_ENROLMENT_REQUIRED');
@@ -877,47 +634,16 @@ function readEnrolmentRequirement(env: EnvRecord, collect: Collector): Enrolment
 }
 
 /**
- * Requests one learner is expected to make against the OIDC ceiling inside one window.
- *
- * Two: the start that sends them to the identity provider, and the callback that brings them
- * back. `@fastify/rate-limit` gives each route its own counter, so the two do not in fact share a
- * bucket — but a learner who lands on a stale tab, presses back, or is bounced through a
- * re-consent screen makes a second start, and a ceiling with no room for that is a ceiling that
- * fails for the least confident student in the room. So the check demands two per learner on both
- * routes rather than one, and the spare is the retry.
+ * OIDC requests one learner makes per window. The start and the callback count on separate
+ * routes, and the second unit is room for one retried start (a stale tab or re-consent).
  */
 const OIDC_REQUESTS_PER_LEARNER = 2;
 
 /**
- * Refuses to boot when a declared cohort cannot get in.
- *
- * ## Why this is a refusal and not a warning
- *
- * The same argument as `readRateLimitResetToken`, pointing the other way. There, a variable that
- * must never reach production is fatal because the realistic failure is a `.env` copied without
- * being re-read. Here, a limit that is too SMALL for the class it will serve is fatal because the
- * realistic failure is nobody thinking about it at all — the shipped defaults are correct for a
- * public instance and silently wrong for a classroom, and the difference is invisible until
- * thirty students are looking at it. Measured against the shipped defaults before this check
- * existed: thirty learners from one address, fifteen sign-ins, fifteen 429s.
- *
- * A warning would be logged at boot, into the same stream as everything else, days before the
- * class. It would not be read.
- *
- * ## Why nothing is raised automatically
- *
- * Declaring `COHORT_SIZE=30` does not set `RATE_LIMIT_GUEST_MAX` to thirty. It refuses to start
- * until somebody sets it, because raising it means this deployment will create thirty accounts a
- * minute for whoever is behind that address, and that is a decision with a security consequence.
- * The point of the check is to make the decision unavoidable, not to make it invisibly.
- *
- * ## Why `both` is the default entry
- *
- * `COHORT_ENTRY` narrows which doors are checked, and the default checks all of them. An operator
- * whose class signs in through the identity provider and never touches guest accounts says so
- * (`COHORT_ENTRY=oidc`) and keeps the tight public default on guest creation. An operator who
- * says nothing gets both checked, which costs them one line of configuration and cannot cost them
- * a room full of refused students.
+ * Refuses to boot when a declared cohort cannot get in. A warning logged days before class would
+ * not be read, and the shipped defaults let fifteen of thirty learners in from one address.
+ * Nothing is raised automatically, because thirty guest accounts a minute from one address is a
+ * security decision for the operator. `COHORT_ENTRY=oidc` keeps the tight guest default.
  */
 function checkCohortSizing(
   cohort: CohortConfig,
@@ -967,23 +693,9 @@ function checkCohortSizing(
 }
 
 /**
- * The failed-outcome budget must stay below the ceiling. Checked on EVERY boot.
- *
- * ## Why this is not inside `checkCohortSizing`, which is where it used to live
- *
- * It was, and an adversarial review found that `checkCohortSizing` returns immediately when
- * `COHORT_SIZE` is 0 — the shipped default, and the state `.env.example` calls the right one for a
- * public instance. So the invariant was enforced only on the deployments that had declared a
- * classroom, and not on the deployments this budget was written to protect. Measured against the
- * code as it stood: `RATE_LIMIT_OIDC_FAILURE_MAX=10000` with the default ceiling of 60 and no
- * `COHORT_SIZE` booted cleanly, while `.env.example` said in as many words that "the process
- * refuses to boot if this is not below RATE_LIMIT_OIDC_MAX".
- *
- * The two checks were never the same kind of thing. Cohort sizing asks whether the configured
- * limits can serve a class somebody declared, and has no answer when nobody declared one. This asks
- * whether the two budgets still count different things, and the answer does not depend on who is
- * signing in: a failure budget at or above the ceiling can never refuse anything the ceiling has
- * not refused already, on any deployment at all.
+ * The failure budget must stay below the OIDC ceiling, or it can never refuse anything.
+ * Checked on every boot, outside `checkCohortSizing`, which returns early when `COHORT_SIZE` is 0.
+ * Inside it, `RATE_LIMIT_OIDC_FAILURE_MAX=10000` with a ceiling of 60 booted cleanly.
  */
 function checkSignInBudgets(rateLimit: RateLimitConfig, collect: Collector): void {
   if (rateLimit.oidcFailureMax >= rateLimit.oidcMax) {
@@ -998,15 +710,14 @@ function checkSignInBudgets(rateLimit: RateLimitConfig, collect: Collector): voi
 }
 
 /**
- * Default worker count: leave a core for the event loop, and never spawn more than
- * four. Equity work is CPU-bound, and a pool larger than the machine turns one
- * expensive request into latency for every other request.
+ * Leaves a core for the event loop and never exceeds four, because equity work is CPU-bound and a
+ * larger pool turns one expensive request into latency for every other.
  */
 function defaultMonteCarloWorkers(): number {
   return Math.max(1, Math.min(4, availableParallelism() - 1));
 }
 
-/** Parses and validates an environment record. Pure: no I/O, no process access. */
+/** Pure, with no I/O and no process access. */
 export function loadConfig(env: EnvRecord): AppConfig {
   const collect: Collector = { problems: [], warnings: [] };
 
@@ -1025,8 +736,7 @@ export function loadConfig(env: EnvRecord): AppConfig {
     );
   }
 
-  // Hoisted out of the config literal below because two checks need it before the object
-  // exists: the proxy warning here, and the literal itself.
+  // Hoisted because the proxy warning needs it before the literal exists.
   const host = trimmed(env, 'HOST') ?? '127.0.0.1';
 
   const trustProxy = readBoolean(env, 'TRUST_PROXY', false, collect);
@@ -1037,24 +747,9 @@ export function loadConfig(env: EnvRecord): AppConfig {
     );
   }
 
-  /**
-   * The other half of the proxy decision, which is easy to get wrong in the safe-looking
-   * direction.
-   *
-   * `TRUST_PROXY=false` is the right default because a forged `X-Forwarded-For` defeats
-   * address-based rate limiting. But behind a reverse proxy it produces a different failure
-   * with the same shape: `request.ip` is then the *proxy's* address for every browser in the
-   * world, so every caller lands in one bucket. The routes that key on the address rather
-   * than the session — guest creation and OIDC, see `clientKeyedRateLimit` — are exactly the
-   * ones that stop working: the whole deployment shares ten guest sign-ups per minute, and
-   * one script exhausts it for everybody. That is a self-inflicted denial of service that
-   * looks, in the logs, like the limiter working correctly.
-   *
-   * A process that binds every interface is almost always containerised behind something.
-   * The heuristic is not proof, so this is a warning rather than a refusal — but a boot line
-   * naming the consequence is worth far more than the sentence in a deployment document that
-   * nobody reads at 3am.
-   */
+  // Behind a reverse proxy with TRUST_PROXY off, `request.ip` is the proxy for every browser, so
+  // guest creation and OIDC share one address-keyed bucket for the whole deployment. Binding every
+  // interface usually means a container behind a proxy. A heuristic, so a warning.
   const bindsAllInterfaces = host === '0.0.0.0' || host === '::';
   if (!trustProxy && bindsAllInterfaces) {
     collect.warnings.push(
@@ -1071,9 +766,7 @@ export function loadConfig(env: EnvRecord): AppConfig {
     isTest,
 
     port: readInt(env, 'PORT', { min: 1, max: 65_535, fallback: 3001 }, collect),
-    // 127.0.0.1 rather than 0.0.0.0: binding every interface by default is how a
-    // development server ends up reachable from the local network. Deployments that
-    // need it (containers) set HOST explicitly, and get the proxy warning above.
+    // 127.0.0.1 by default, so a development server is not reachable from the local network.
     host,
     logLevel: readLogLevel(env, nodeEnv, collect),
 
@@ -1086,8 +779,7 @@ export function loadConfig(env: EnvRecord): AppConfig {
     oidcEnabled: false,
     oidc: null,
 
-    // 500_000 matches the ceiling in `equityBodySchema`. Keeping them equal means a
-    // request the schema accepts is never silently clamped by a lower server limit.
+    // 500_000 matches `equityBodySchema`, so a request the schema accepts is never clamped.
     monteCarloMaxSamples: readInt(
       env,
       'MONTE_CARLO_MAX_SAMPLES',
@@ -1102,12 +794,8 @@ export function loadConfig(env: EnvRecord): AppConfig {
     ),
     coachTimeoutMs: readInt(env, 'COACH_TIMEOUT_MS', { min: 100, max: 30_000, fallback: 3_000 }, collect),
 
-    // The bounds are wider than `prl.rooms.action_timeout_seconds` accepts (5..300,
-    // `repositories/rooms.ts`) on purpose: this is not a room setting, it is the floor
-    // applied on top of one, and a deployment that wants to give a learner ten minutes
-    // with the panel should not be blocked by a limit written for the per-room field.
-    // The lower bound matches that field's, so setting this to 5 turns the floor off
-    // rather than making it unreachable.
+    // Wider than the per-room `action_timeout_seconds` (5..300, `repositories/rooms.ts`) because
+    // this is a floor on top of it. The lower bound of 5 turns the floor off.
     learnerTurnSeconds: readInt(
       env,
       'LEARNER_TURN_SECONDS',
@@ -1130,9 +818,6 @@ export function loadConfig(env: EnvRecord): AppConfig {
         { min: 1_000, max: 3_600_000, fallback: 60_000 },
         collect,
       ),
-      // The shipped defaults are the values these limits have always had as literals in
-      // `routes/auth.ts`; making them configurable changed nothing about what a deployment
-      // that sets neither variable does.
       guestMax: readInt(env, 'RATE_LIMIT_GUEST_MAX', { min: 1, max: 10_000, fallback: 10 }, collect),
       guestWindowMs: readInt(
         env,
@@ -1140,12 +825,8 @@ export function loadConfig(env: EnvRecord): AppConfig {
         { min: 1_000, max: 3_600_000, fallback: 60_000 },
         collect,
       ),
-      // 60, raised from the 15 that shipped as a literal. That 15 was the ceiling AND the
-      // anti-abuse control at once, and it could not be both: a class of thirty behind one
-      // campus address needs sixty of these requests in a minute, and fifteen of them were
-      // refused. 60 = 30 learners x 2 requests, which is the arithmetic `.env.example` states
-      // and `checkCohortSizing` enforces against a declared COHORT_SIZE. The anti-abuse job
-      // moved to `oidcFailureMax`, which did NOT move.
+      // 60 = 30 learners x 2 requests, the arithmetic `checkCohortSizing` enforces. The shipped 15
+      // refused fifteen of a class of thirty. The anti-abuse limit is `oidcFailureMax`.
       oidcMax: readInt(env, 'RATE_LIMIT_OIDC_MAX', { min: 1, max: 10_000, fallback: 60 }, collect),
       oidcWindowMs: readInt(
         env,
@@ -1163,9 +844,7 @@ export function loadConfig(env: EnvRecord): AppConfig {
     },
 
     cohort: {
-      // 0 means "nothing declared": the shipped defaults apply and nothing is size-checked,
-      // which is right for a public instance where thirty accounts a minute from one address
-      // is not a classroom. See `CohortConfig`.
+      // 0 means nothing declared. See `CohortConfig`.
       size: readInt(env, 'COHORT_SIZE', { min: 0, max: 10_000, fallback: 0 }, collect),
       entry: readCohortEntry(env, collect),
     },
@@ -1177,9 +856,7 @@ export function loadConfig(env: EnvRecord): AppConfig {
 
     trustProxy,
 
-    // 64 KiB is generous for this API: the largest legitimate body is a Monte Carlo
-    // request with five ranges. Anything larger is a mistake or an attempt to make
-    // the JSON parser do the attacking.
+    // The largest legitimate body is a Monte Carlo request with five ranges.
     bodyLimitBytes: readInt(
       env,
       'BODY_LIMIT_BYTES',
@@ -1199,19 +876,16 @@ export function loadConfig(env: EnvRecord): AppConfig {
 
   const oidc = readOidc(env, collect);
 
-  // After `readOidc`, because whether an identity provider is configured is half of what makes a
-  // declared cohort servable, and before the throw so a sizing problem is reported alongside
-  // every other one rather than on the next boot.
+  // After `readOidc`, because a cohort's servability depends on OIDC, and before the throw so a
+  // sizing problem is reported with every other one.
   checkCohortSizing(config.cohort, config.rateLimit, oidc !== null, collect);
 
-  // Unconditional, and deliberately not inside the call above: that one returns early when no
-  // cohort is declared, which is every public instance. See `checkSignInBudgets`.
+  // Unconditional. See `checkSignInBudgets`.
   checkSignInBudgets(config.rateLimit, collect);
 
   if (collect.problems.length > 0) throw new ConfigError(collect.problems);
 
-  // Rebuilt rather than mutated so the exported object is genuinely immutable, and so
-  // `oidcEnabled` cannot drift from `oidc`.
+  // Rebuilt rather than mutated, so `oidcEnabled` cannot drift from `oidc`.
   return Object.freeze({
     ...config,
     oidcEnabled: oidc !== null,
@@ -1226,12 +900,7 @@ export function loadConfig(env: EnvRecord): AppConfig {
 
 let cached: AppConfig | null = null;
 
-/**
- * The process-wide configuration, parsed on first use.
- *
- * Memoised so that `loadConfig` runs exactly once even though several modules ask
- * for it, and so the random development secret is stable within one process.
- */
+/** Memoised, so the random development secret is stable within one process. */
 export function getConfig(): AppConfig {
   cached ??= loadConfig(process.env);
   return cached;

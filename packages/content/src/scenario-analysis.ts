@@ -1,32 +1,10 @@
 /**
- * Turning a stored scenario into live maths, and checking that its teaching claims
- * are actually true.
- *
- * ## Why this file exists
- *
- * Content stores *situations*, never answers (ADR 0006). That is only worth the extra
- * effort if something verifies the teaching point, and this is that something:
- * `analyseScenario` computes the real figures, and `checkScenarioClaims` asserts the
- * scenario's `expectedInsight` against them. A scenario whose claim stops being true
- * fails the build rather than quietly misleading a learner.
- *
- * ## The two kinds of claim, kept honest
- *
- * The distinction matters and is easy to blur, so it is stated here and in ADR 0006:
- *
- * * **Qualitative** claims — `equityExceedsBreakEven`, `breakEvenExceedsEquity`,
- *   `callEvSign`, `cleanOutsEquals` — are *genuine independent verification*. A human
- *   asserted a teaching point; the maths confirms or refutes it. These catch real
- *   errors.
- * * **Quantitative** claims — `equityBetween`, `breakEvenEquityBetween`, `sprBetween`,
- *   `ruleOf24ErrorAtMost`, `dirtyOutsAtLeast` — are *regression locks*. Their bounds
- *   are derived from computed output, so they detect a change in behaviour but do not
- *   independently confirm correctness. Calling them verification would overstate the
- *   guarantee.
- *
- * This module lives in `@prl/content` rather than `@prl/poker-math` because it is the
- * bridge between the two: the maths package must not know what a "scenario" is, and
- * the content package must not reimplement any maths.
+ * Turns a stored scenario into live maths and checks its `expectedInsight` against it, so a claim
+ * that stops being true fails the build (ADR 0006).
+ * Qualitative claims (`equityExceedsBreakEven`, `breakEvenExceedsEquity`, `callEvSign`,
+ * `cleanOutsEquals`) are independent verification. Quantitative ones (`*Between`,
+ * `ruleOf24ErrorAtMost`, `dirtyOutsAtLeast`) take bounds from computed output, so they are
+ * regression locks. It lives here because poker-math must not know what a scenario is.
  */
 
 import type { Scenario, ScenarioClaim } from '@prl/contracts';
@@ -67,32 +45,16 @@ export interface ScenarioSituation {
 }
 
 /**
- * Reads the situation out of a scenario.
- *
- * The pot figure is the one place a mistake would silently poison every downstream
- * number, so it is spelled out: `pot` is everything already in the middle *before*
- * hero's pending call — chips carried from earlier streets, plus everything committed
- * on this street by anyone, hero included. `toCall` is then what hero must add on top.
- */
-/**
- * The sampling this analysis is defined by, owned here because four places need the same pair.
- *
- * `analyseScenario` is what VALIDATES a scenario's claims; `routes/content.ts` is what serves the
- * numbers a student reads; `scripts/regenerate-web-fixtures.mjs` bakes them into the offline
- * fixture; and `apps/api/test/web-fixture-figures.test.ts` checks that fixture. All four have to
- * sample identically or the figure the build verifies is not the figure the page prints.
- *
- * They agreed by coincidence and by four separate literals. The test carried the comment "the
- * sample count and seed the fixture header names, and the API's own CONTENT_SAMPLES/CONTENT_SEED"
- * above its own copy, imported neither, and could not have: they were not exported. That is this
- * branch's most common defect exactly — a copy with a comment asserting an agreement nothing
- * enforces — and it was found by measuring the two analyses against each other across all 36
- * scenarios, which came back identical to the last digit (0.2836375 both, on
- * `fl-same-cards-under-the-gun`). Identical today; joined now.
+ * The sampling the claim check, `routes/content.ts`, `scripts/regenerate-web-fixtures.mjs` and
+ * `web-fixture-figures.test.ts` all import, so the figure the build verifies is the one the page prints.
  */
 export const SCENARIO_ANALYSIS_SAMPLES = 40_000;
 export const SCENARIO_ANALYSIS_SEED = 20_260_817;
 
+/**
+ * `pot` is everything in the middle before hero's pending call, this street's commitments by anyone
+ * included. `toCall` is what hero adds on top.
+ */
 export function readSituation(scenario: Scenario): ScenarioSituation {
   const hero = scenario.seats.find((seat) => seat.isHero === true);
   if (hero === undefined) throw new ScenarioAnalysisError(`scenario "${scenario.id}" has no hero seat`);
@@ -116,8 +78,7 @@ export function readSituation(scenario: Scenario): ScenarioSituation {
       opponentRange = parseRange(scenario.opponentRange.notation, blockers);
       break;
     default:
-      // topPercentRange builds its notation from the computed strength table, then goes
-      // through the same parseRange path, so there is one way to construct a range.
+      // Through the same parseRange path, so there is one way to construct a range.
       opponentRange = parseRange(topPercentRange(scenario.opponentRange.percent).notation, blockers);
       break;
   }
@@ -184,17 +145,9 @@ export function analyseScenario(scenario: Scenario, options: AnalyseOptions = {}
   const hero = result.players[0];
   if (hero === undefined) throw new ScenarioAnalysisError(`equity for "${scenario.id}" produced no hero`);
 
-  // The pot hero could actually WIN, which is `situation.pot` in every ordinary spot and less
-  // than it when hero is all-in for less than the bet in front of them: the excess of that bet is
-  // a side pot hero is not eligible for. Capping `toCall` at the stack — which the call below has
-  // always done — fixes the price hero pays and says nothing about the pot they are paying it
-  // into, and pricing the call against the whole middle is what let the Coach tell a learner they
-  // needed 8.6% where they needed 37.5%. This module is the second producer of that figure (it
-  // verifies a scenario's stated claims), so it has to answer the same way `buildCoachReport`
-  // does or a bundled claim could be checked against a price no learner is ever shown.
-  //
-  // Derived rather than layered: a scenario is a described spot with no complete per-seat record
-  // of the street — see the note in `apps/api/src/routes/content.ts`.
+  // The pot hero can win, smaller than `situation.pot` when hero is all-in short of the bet. Using
+  // the whole middle once told a learner 8.6% where 37.5% was needed. It must match
+  // `buildCoachReport`, and is derived because a scenario has no per-seat record of the street.
   const contestablePot = deriveContestablePot({
     pot: situation.pot,
     toCall: situation.toCall,
@@ -215,9 +168,7 @@ export function analyseScenario(scenario: Scenario, options: AnalyseOptions = {}
   const effective = effectiveStack(situation.heroStack, situation.opponentStacks);
   const spr = stackToPotRatio(effective.effective, Math.max(1, situation.pot)).spr;
 
-  // Outs are only well defined with cards still to come. Against a range the count is
-  // reported but the content validator refuses to let a scenario *assert* an exact
-  // clean-out count unless the opponent holding is exact — see validate.ts.
+  // validate.ts refuses an exact clean-out claim unless the opponent holding is exact.
   let outs: OutsResult | null = null;
   if (situation.cardsToCome !== null) {
     outs = computeOuts({
@@ -227,15 +178,8 @@ export function analyseScenario(scenario: Scenario, options: AnalyseOptions = {}
     });
   }
 
-  // `ruleOfThumbFor` in `@prl/poker-math` is the single gate on this shortcut, and it is
-  // used here rather than `ruleOf24Accuracy` directly for a reason this file demonstrated:
-  // the old line multiplied `totalOuts` — clean outs PLUS dirty ones, on a shortcut whose
-  // own printed explanation says to count clean outs only — and published whatever came
-  // out. One shipped scenario reaches 47 outs, and 47 x 4 is "188%", which is not a
-  // probability at all. The gate applies the shortcut only to a draw with clean outs still
-  // to come, compares it against the exact chance of hitting one of them rather than
-  // against hero's equity, and answers `null` everywhere else. `null` already means "no
-  // out count available" to the claim checker below, which is the honest reading.
+  // `ruleOfThumbFor` is the single gate, not `ruleOf24Accuracy`, because multiplying `totalOuts`
+  // once published 47 x 4 = "188%". It answers null unless clean outs remain to come.
   const ruleOf24ErrorPoints = ruleOfThumbFor(outs, situation.cardsToCome)?.errorPoints ?? null;
 
   return {
@@ -253,10 +197,9 @@ export function analyseScenario(scenario: Scenario, options: AnalyseOptions = {}
 export interface ClaimResult {
   readonly claim: ScenarioClaim;
   readonly kind: ScenarioClaim['kind'];
-  /** True independent verification, or a regression lock. */
   readonly strength: 'verification' | 'regression-lock';
   readonly passed: boolean;
-  /** What was actually computed, for the failure message. */
+  /** What was computed, for the failure message. */
   readonly actual: string;
   readonly detail: string;
 }
@@ -268,14 +211,7 @@ const QUALITATIVE: ReadonlySet<ScenarioClaim['kind']> = new Set([
   'cleanOutsEquals',
 ]);
 
-/**
- * Checks each claim against the computed analysis.
- *
- * `breakEven` for `callEvSign` uses a tolerance of one hundredth of a chip. An exactly
- * zero EV is a measure-zero event with real numbers, so demanding exact equality would
- * make the claim unusable; a hundredth of a chip is far below anything a learner could
- * act on.
- */
+/** `callEvSign`'s `breakEven` allows 0.01 chips, because an exactly zero EV almost never occurs. */
 export function checkScenarioClaims(scenario: Scenario, analysis: ScenarioAnalysis): ClaimResult[] {
   const results: ClaimResult[] = [];
   const strengthOf = (kind: ScenarioClaim['kind']): ClaimResult['strength'] =>
@@ -399,7 +335,6 @@ export function checkScenarioClaims(scenario: Scenario, analysis: ScenarioAnalys
   return results;
 }
 
-/** A one-line human summary of a scenario's computed figures, for reports. */
 export function describeAnalysis(analysis: ScenarioAnalysis): string {
   const method = analysis.equity.method === 'exact-enumeration' ? 'exact' : 'sampled';
   const interval =

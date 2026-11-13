@@ -1,81 +1,12 @@
 /**
- * The price of a call: pot odds, the rule of 2 and 4, implied odds, and how often a
- * bet has to be defended against.
- *
- * Every function here answers one shape of question — "what would this call have to
- * be worth for it to be worth making?" — and every one returns its figure together
- * with the words that make the figure safe to use. A bare number is what makes a
- * learner confident and wrong, so nothing in this file returns a bare number.
- *
- * ## The convention that prevents the commonest error
- *
- * `pot` NEVER includes hero's own call. `potOdds(100, 50)` means "there are 100 in
- * the middle and it costs 50 to call", and the break-even equity is 50/150 = 33.3%.
- * Fold hero's call into the pot and every figure in this file is quietly wrong (that
- * same spot would read 50/200 = 25% and turn a fold into a call), so the exclusion is
- * restated in every doc comment and in the explanation strings the learner reads.
- *
- * ## The formula that gets misquoted most often
- *
- * A bet of B into a pot of P lays the caller `B / (P + 2B)`, not `B / (P + B)`. The
- * bet appears twice on purpose: once inside the money the caller stands to win, and
- * once as the money they have to put up. `B / (P + B)` is a real number — it is
- * `alpha`, the answer to the *bettor's* question of how often a bluff has to work —
- * and swapping the two is how "a pot-sized bet means the caller needs half the pot"
- * finds its way into print. The anchor to check any implementation against: a
- * pot-sized bet lays 2 to 1, so the caller needs a third, and a half-pot bet lays
- * 3 to 1, so the caller needs a quarter. `priceLaidByBet` is therefore written by
- * delegating to `potOdds` with a middle that already contains the bet, so the two
- * cannot drift apart as this file is edited.
- *
- * ## Units: fractions versus percentage points
- *
- * Probabilities and equities are fractions in 0..1 (`breakEvenEquity`,
- * `probability`, `alpha`). The rule-of-thumb figures are in percentage POINTS,
- * because that is how the shortcut is taught and how it is said out loud ("nine outs
- * is about thirty-six"). Field names carry the unit — `estimatePercent`,
- * `exactPercent`, `errorPoints` — because a silent factor of 100 between two values
- * both typed `number` is a bug nobody catches by reading.
- *
- * ## Money may be fractional; cards may not
- *
- * Chip amounts are validated as finite and not negative, but deliberately NOT as
- * integers. A pot of 150 is real chips, but `expectedAdditionalWinnings` is an
- * expectation over future streets, and 47.5 is a perfectly sensible estimate of one.
- * Card counts (`outs`, `unseen`, `cardsToCome`) must be whole numbers, because half a
- * card cannot come.
- *
- * ## Nothing here returns NaN, and nothing is silently clamped
- *
- * Bad input throws `OddsError` naming what arrived and what was expected. The one
- * division that cannot be dodged is the free call: with `toCall === 0` there is no
- * "X to 1" price at all, so `oddsRatio` is `null`.
- *
- * Three representations of "there is no price" were considered, and the history is
- * kept here because two of them are still the obvious-looking answer:
- *
- *  - **`NaN`** — rejected. It is what 0/0 produces, it poisons every arithmetic step
- *    downstream, and it compares false against itself, so even a caller that thinks
- *    to check for it usually checks wrongly.
- *  - **`0`** — rejected. A ratio of 0 reads as "the worst price there is" when the
- *    truth is "there is no price", and it is a *number*, so nothing forces a caller
- *    to notice. Two test helpers in `@prl/poker-ai` independently invented it and
- *    quietly asserted against a price that does not exist.
- *  - **`Infinity`** — tried, shipped, and wrong for a reason that has nothing to do
- *    with arithmetic: **JSON has no `Infinity`**. `JSON.stringify(Infinity)` is the
- *    string `"null"`, so the sentinel could not survive its own wire format. Every
- *    free-call spot reached the browser as `"oddsRatio": null` against a contract
- *    that declared `number`; `formatOdds` in `@prl/ui` threw `FormatError` inside
- *    `CoachPanel` and the error boundary replaced the whole `/play` route. Measured,
- *    not inferred: `in process: Infinity` / `on the wire: {"oddsRatio":null}`.
- *
- * `null` is what remains, and it is the better answer on its own merits rather than
- * by elimination. It is exactly what JSON already produces, so the declared type is
- * the type that crosses the wire; it reads as "no price" rather than as a bad price;
- * it can never be mistaken for 0 by a formatter; and — the part that matters most —
- * `number | null` makes TypeScript force every consumer to say what it does about a
- * free call, which is the thing nobody had done. The explanation string says the same
- * in words, because a learner does not read the type.
+ * Pot odds, the rule of 2 and 4, implied odds and defence frequency for a call.
+ * Every figure comes back with the words that make it safe to use.
+ * `pot` never includes hero's call, so `potOdds(100, 50)` needs 50/150, not 50/200.
+ * A bet B into P lays the caller `B / (P + 2B)`. `B / (P + B)` is `alpha`, the bettor's figure.
+ * Equities are fractions in 0..1. Rule-of-thumb fields are percentage points and say so in the name.
+ * Chips may be fractional, because later-street winnings are an expectation. Card counts are whole.
+ * A free call has no price, so `oddsRatio` is `null`. `Infinity` reached the browser as null and
+ * crashed `/play`, because JSON has no `Infinity`.
  */
 
 import { DECK_SIZE } from '@prl/poker-engine';
@@ -84,17 +15,10 @@ export class OddsError extends Error {
   override readonly name = 'OddsError';
 }
 
-/**
- * The most cards that can still be unseen while 1 or 2 cards are to come.
- *
- * With two cards to come the board holds three cards, and hero holds two, so five
- * cards are already known: 52 - 5 = 47. With one card to come it is 46. Deriving the
- * bound rather than writing `47` is what makes it obvious why an out count of 50 is
- * not a tight-fisted validation rule but an impossibility.
- */
+/** Hero's two cards and a three-card flop are known, so at most 52 - 5 = 47 cards are unseen. */
 const MAX_UNSEEN_WITH_CARDS_TO_COME = DECK_SIZE - 5;
 
-/** Chips: finite and not negative. Fractions are allowed — see the file header. */
+/** Chips are finite and not negative. Fractions are allowed. */
 function requireAmount(value: number, what: string, hint: string): void {
   if (!Number.isFinite(value)) {
     throw new OddsError(`${what} must be a finite number of units, received ${value}. ${hint}`);
@@ -104,7 +28,7 @@ function requireAmount(value: number, what: string, hint: string): void {
   }
 }
 
-/** Chips that must actually exist: a bet of 0 is a check, and lays nobody a price. */
+/** A bet of 0 is a check, and lays nobody a price. */
 function requirePositiveAmount(value: number, what: string, hint: string): void {
   requireAmount(value, what, hint);
   if (value === 0) {
@@ -112,7 +36,6 @@ function requirePositiveAmount(value: number, what: string, hint: string): void 
   }
 }
 
-/** A count of cards: a whole number, not negative. */
 function requireCardCount(value: number, what: string, hint: string): void {
   if (!Number.isInteger(value)) {
     throw new OddsError(`${what} must be a whole number of cards, received ${value}. ${hint}`);
@@ -122,15 +45,7 @@ function requireCardCount(value: number, what: string, hint: string): void {
   }
 }
 
-/**
- * Validates `cardsToCome` and narrows it.
- *
- * The parameter is typed `1 | 2`, so this looks redundant — it is not. These
- * functions sit behind an HTTP API where the value arrives as JSON, and a 3 that
- * TypeScript never saw would otherwise sail through and produce a figure for a
- * street that does not exist. Returning the narrowed value lets callers use the
- * result instead of the argument, with no cast anywhere.
- */
+/** The type says `1 | 2`, but the value arrives as JSON over HTTP, so a 3 must be refused here. */
 function requireCardsToCome(cardsToCome: number): 1 | 2 {
   if (cardsToCome !== 1 && cardsToCome !== 2) {
     throw new OddsError(
@@ -140,28 +55,23 @@ function requireCardsToCome(cardsToCome: number): 1 | 2 {
   return cardsToCome;
 }
 
-/** Units, printed without inventing precision the caller never supplied. */
 function units(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
-/** A fraction in 0..1 as a percentage with one decimal: 0.33333 becomes "33.3%". */
+/** 0.33333 becomes "33.3%". */
 function percent(fraction: number): string {
   return `${(fraction * 100).toFixed(1)}%`;
 }
 
-/** Percentage points, already scaled: 5.8834 becomes "5.9". */
+/** Percentage points, already scaled. 5.8834 becomes "5.9". */
 function points(value: number): string {
   return value.toFixed(1);
 }
 
 /**
- * "2 to 1", "3.33 to 1". Never reached without a price — see `potOdds`.
- *
- * `null` is accepted by the signature only so that callers holding a `PotOdds` can
- * pass its `oddsRatio` straight in where they have already established that there is
- * a price (`priceLaidByBet` requires a positive bet, so its ratio is always one).
- * Reaching here with no price is a bug in this file, and it says so.
+ * "2 to 1", "3.33 to 1". `null` is accepted so a caller can pass `oddsRatio` where it already
+ * knows there is a price. Reaching here without one is a bug in this file.
  */
 function ratioText(ratio: number | null): string {
   if (ratio === null) {
@@ -177,23 +87,14 @@ export interface PotOdds {
   /** Chips in the middle BEFORE hero's call. Never includes the call itself. */
   readonly pot: number;
   readonly toCall: number;
-  /** `toCall / (pot + toCall)` — the equity at which calling neither gains nor loses. */
+  /** `toCall / (pot + toCall)`, the equity at which calling neither gains nor loses. */
   readonly breakEvenEquity: number;
-  /**
-   * `pot / toCall` — "getting X to 1". `null` when the call is free, because there is
-   * no price to quote rather than a price of zero or an infinite one. See the file
-   * header for why it is `null` and not `Infinity`, `NaN` or `0`.
-   */
+  /** `pot / toCall`, "getting X to 1". `null` when the call is free. */
   readonly oddsRatio: number | null;
   readonly explanation: string;
 }
 
-/**
- * The price hero is being laid on a call.
- *
- * @param pot chips already in the middle, EXCLUDING hero's call
- * @param toCall what hero must put in to continue; 0 when checking is free
- */
+/** `pot` excludes hero's call. `toCall` is 0 when checking is free. */
 export function potOdds(pot: number, toCall: number): PotOdds {
   requireAmount(
     pot,
@@ -202,9 +103,7 @@ export function potOdds(pot: number, toCall: number): PotOdds {
   );
   requireAmount(toCall, 'toCall', 'Pass what the call costs hero, or 0 when there is nothing to call.');
 
-  // Both branches are written out rather than leaning on IEEE behaviour: with a pot
-  // of 0 and nothing to call, `toCall / (pot + toCall)` is 0/0, and returning NaN
-  // from a teaching tool is worse than returning nothing at all.
+  // A pot of 0 with nothing to call would be 0/0, so the free call is its own branch.
   const breakEvenEquity = toCall === 0 ? 0 : toCall / (pot + toCall);
   const oddsRatio = toCall === 0 ? null : pot / toCall;
 
@@ -236,18 +135,8 @@ export interface RuleOfThumbEstimate {
 }
 
 /**
- * The largest out count for which the shortcut still lands on something that could be
- * a probability: 25 with two cards to come, 50 with one.
- *
- * `outs * multiplier` is a straight line; the quantity it approximates is a curve that
- * flattens as it approaches certainty. The line crosses 100 while the curve never does,
- * so past this count the shortcut stops being an approximation and starts being a
- * category error — 45 outs x 4 is "180%", which is not a bad estimate of a probability,
- * it is not a probability at all.
- *
- * Exported rather than inlined because `ruleOf24` refuses above it and callers have to
- * be able to ask *before* calling whether the shortcut applies at all, without catching
- * an exception to find out.
+ * The largest out count whose shortcut stays at or below 100%. 25 with two cards to come, 50 with one.
+ * Exported so a caller can ask before `ruleOf24` refuses.
  */
 export function maximumOutsForRuleOf24(cardsToCome: 1 | 2): number {
   const streets = requireCardsToCome(cardsToCome);
@@ -255,27 +144,10 @@ export function maximumOutsForRuleOf24(cardsToCome: 1 | 2): number {
 }
 
 /**
- * The rule of 2 and 4: outs times 2 for one card to come, times 4 for two.
- *
- * The inaccuracy IS the teaching content here, so `caveat` names the direction and
- * the size of the error rather than hedging. Two things go wrong with the x4 form and
- * they are unrelated: it assumes hero gets to see both cards for the price being
- * quoted now (untrue as soon as a turn bet is coming), and the closed form it
- * approximates is not linear in the out count, so it drifts high as outs grow.
- *
- * This function deliberately does not take `unseen`, because that is the whole point
- * of a shortcut — it is the number a player can do in their head. `ruleOf24Accuracy`
- * is the function that puts it next to the truth.
- *
- * ## It refuses rather than returning a number above 100
- *
- * `outs * multiplier` is a line and the probability it stands in for is a curve that
- * flattens towards 1, so the two part company as the out count grows and the line
- * eventually leaves the unit interval altogether. A hand with 45 cards that improve it
- * is not a 180% favourite; it is a hand for which this shortcut has no meaning. Callers
- * that might be holding such a count check `maximumOutsForRuleOf24` first — the Coach
- * does, and refuses to publish the figure at all rather than clamping it, because a
- * clamped 100% would be a fabricated certainty rather than an honest silence.
+ * The rule of 2 and 4. `caveat` names the direction and size of the error, because the error is
+ * the lesson. It takes no `unseen`, since the shortcut is head arithmetic. `ruleOf24Accuracy`
+ * compares it with the exact figure. Above `maximumOutsForRuleOf24` it throws rather than clamp,
+ * because a clamped 100% would be a made-up certainty.
  */
 export function ruleOf24(outs: number, cardsToCome: 1 | 2): RuleOfThumbEstimate {
   requireCardCount(outs, 'outs', 'Pass the number of cards that would win the hand for hero.');
@@ -338,16 +210,11 @@ export interface RuleOfThumbAccuracy {
 }
 
 /**
- * The shortcut next to the truth, so the UI can show a learner the real error
- * instead of asserting that the shortcut is fine.
- *
- * @param exactEquity the exact figure as a FRACTION in 0..1, not a percentage.
- *   Typically `probabilityOfHitting(...).probability` for a pure draw, or hero's
- *   enumerated equity when the draw is not clean.
+ * The shortcut next to the exact figure. `exactEquity` is a fraction in 0..1, usually
+ * `probabilityOfHitting(...).probability` or hero's enumerated equity when the draw is not clean.
  */
 export function ruleOf24Accuracy(outs: number, cardsToCome: 1 | 2, exactEquity: number): RuleOfThumbAccuracy {
-  // Validating the shortcut's own inputs first means a bad `outs` reports itself as
-  // a bad `outs`, not as a mismatch against the exact figure.
+  // First, so a bad `outs` reports itself as a bad `outs`.
   const estimate = ruleOf24(outs, cardsToCome);
   if (!Number.isFinite(exactEquity)) {
     throw new OddsError(`exactEquity must be a finite probability between 0 and 1, received ${exactEquity}`);
@@ -393,23 +260,13 @@ export interface HitProbability {
   readonly cardsToCome: 1 | 2;
   /** A fraction in 0..1. */
   readonly probability: number;
-  /** The arithmetic, written out, so the learner can follow it rather than trust it. */
   readonly derivation: string;
 }
 
 /**
- * The exact probability of hitting at least one of `outs` cards with `cardsToCome`
- * still to come, from `unseen` cards.
- *
- * Closed form by complementary counting: work out the chance of missing EVERY card
- * and subtract it from 1. The direct route — adding `outs/unseen` for the turn to
- * `outs/(unseen-1)` for the river — double counts every run-out that hits twice and
- * overstates the result (9 outs on the flop comes out 38.7% instead of 35.0%), which
- * is why the complement is the form worth writing down.
- *
- * Note what this is NOT: it is the chance of a card arriving, not the chance of
- * winning. It assumes every out wins and that no out hands an opponent something
- * better, which is an assumption about the hand rather than about the arithmetic.
+ * The chance at least one out arrives, by complement (1 minus the chance every card misses).
+ * Adding the per-card chances double counts run-outs that hit twice (9 outs reads 38.7%, not 35.0%).
+ * It is the chance of a card arriving, not of winning.
  */
 export function probabilityOfHitting(outs: number, unseen: number, cardsToCome: 1 | 2): HitProbability {
   requireCardCount(outs, 'outs', 'Pass the number of unseen cards that would win the hand for hero.');
@@ -447,10 +304,8 @@ export function probabilityOfHitting(outs: number, unseen: number, cardsToCome: 
     };
   }
 
-  // Two cards. `misses < 2` is handled on its own rather than left to the general
-  // formula: with `misses === 0` the second factor would be `-1/(unseen-1)`, and
-  // getting the right answer out of a negative probability multiplied by zero is
-  // luck, not arithmetic.
+  // With `misses === 0` the general formula multiplies by `-1/(unseen-1)`, so fewer than two misses
+  // is certain and answered directly.
   if (misses < 2) {
     return {
       outs,
@@ -497,13 +352,8 @@ export interface ImpliedOdds {
 }
 
 /**
- * Pot odds with future streets folded in: the call is cheaper than it looks if
- * hitting wins more chips later.
- *
- * The `assumptions` array is not decoration. `pot` and `toCall` can be read off the
- * table; `expectedAdditionalWinnings` is a forecast about a person, and it is the
- * term that turns a fold into a call. Presenting the three as one number without
- * saying which of them is a guess is exactly the habit this app exists to break.
+ * Pot odds with later-street winnings added. `expectedAdditionalWinnings` is a forecast about a
+ * person, not a count off the table, which is why `assumptions` travels with the figure.
  */
 export function impliedOdds(input: {
   pot: number;
@@ -520,8 +370,7 @@ export function impliedOdds(input: {
   );
 
   const denominator = pot + toCall + expectedAdditionalWinnings;
-  // `toCall === 0` short-circuits for the same reason as in `potOdds`: a free call
-  // needs no equity at all, and with an empty pot the ratio would be 0/0.
+  // As in `potOdds`, a free call needs no equity, and an empty pot would be 0/0.
   const effectiveBreakEvenEquity = toCall === 0 ? 0 : toCall / denominator;
   const potPrice = potOdds(pot, toCall);
 
@@ -571,14 +420,8 @@ export interface ReverseImpliedOdds {
 }
 
 /**
- * The other half of the ledger: some hands keep costing money after the call.
- *
- * A dominated ace or a weak flush draw can arrive on the river and still be second
- * best, and the chips that go in on the way there are as real as the call itself.
- * The extra amount is added to BOTH sides — it is money hero pays (numerator) and
- * money that ends up in the pot hero is playing for (denominator) — which is what
- * makes the effective break-even equity strictly worse than the pot price whenever
- * the estimate is above zero.
+ * Pot odds with later-street losses added. The losses go into both the numerator (hero pays them)
+ * and the denominator (they end up in the pot), so any positive estimate worsens the break-even.
  */
 export function reverseImpliedOdds(input: {
   pot: number;
@@ -596,8 +439,7 @@ export function reverseImpliedOdds(input: {
 
   const numerator = toCall + expectedAdditionalLosses;
   const denominator = pot + numerator;
-  // `numerator === 0` means a free call with nothing expected to go wrong; anything
-  // else makes the denominator positive, since the pot is never negative.
+  // Any nonzero numerator makes the denominator positive, because the pot is never negative.
   const effectiveBreakEvenEquity = numerator === 0 ? 0 : numerator / denominator;
   const potPrice = potOdds(pot, toCall);
   const potPriceText = percent(potPrice.breakEvenEquity);
@@ -638,27 +480,17 @@ export function reverseImpliedOdds(input: {
 export interface DefenceFrequency {
   readonly pot: number;
   readonly betSize: number;
-  /** `pot / (pot + betSize)` — how often the bet must be called or raised. */
+  /** `pot / (pot + betSize)`, how often the bet must be called or raised. */
   readonly minimumDefenceFrequency: number;
-  /** `betSize / (pot + betSize)` — the share of the time a pure bluff must work. */
+  /** `betSize / (pot + betSize)`, how often a pure bluff must work. */
   readonly alpha: number;
   readonly explanation: string;
   readonly caveat: string;
 }
 
 /**
- * Minimum defence frequency and alpha, the two halves of the bettor's indifference.
- *
- * A bluff of `betSize` into `pot` risks the bet to win the pot, so it breaks even
- * when it works `betSize / (pot + betSize)` of the time — that is `alpha`. Defending
- * the rest of the time, `pot / (pot + betSize)`, is what stops any two cards betting
- * at a profit. The two are complements by construction and always sum to 1.
- *
- * Note carefully that alpha is NOT the price the bet lays the caller. Same pot, same
- * bet, different questions: alpha asks how often a bluff needs to succeed, while
- * `priceLaidByBet` asks what equity a call needs. A pot-sized bet gives alpha = 50%
- * and a caller's break-even of 33.3%. Confusing the two is the single most common
- * error in poker writing about this arithmetic.
+ * Minimum defence frequency and alpha, which always sum to 1. Alpha is not the price the bet lays
+ * the caller. A pot-sized bet gives alpha 50% and a caller's break-even of 33.3% (`priceLaidByBet`).
  */
 export function defenceFrequency(pot: number, betSize: number): DefenceFrequency {
   requireAmount(pot, 'pot', 'Pass the chips in the middle before the bet.');
@@ -693,19 +525,9 @@ export function defenceFrequency(pot: number, betSize: number): DefenceFrequency
 }
 
 /**
- * The price a bet of `betSize` into `pot` lays the caller.
- *
- * The caller has to put in `betSize` to win the pot plus the bet, so their
- * break-even equity is `betSize / (pot + 2 * betSize)`. The bet is in the
- * denominator twice, and that is the whole trick: once as part of the money on
- * offer, once as the money the caller has to risk. Sanity anchor: a pot-sized bet
- * lays 2 to 1 and asks the caller for a third of the pot; a half-pot bet lays 3 to 1
- * and asks for a quarter.
- *
- * Implemented by handing `potOdds` a middle that already contains the bet, so the
- * two functions cannot disagree. In the returned value, `pot` is therefore the money
- * in the middle AFTER the bet and BEFORE the call (`pot + betSize`), and `toCall` is
- * `betSize`.
+ * The caller's break-even against a bet is `betSize / (pot + 2 * betSize)`. A pot-sized bet lays
+ * 2 to 1 (a third), a half-pot bet 3 to 1 (a quarter). It delegates to `potOdds` so the two cannot
+ * disagree, so the returned `pot` is `pot + betSize` and `toCall` is `betSize`.
  */
 export function priceLaidByBet(pot: number, betSize: number): PotOdds {
   requireAmount(pot, 'pot', 'Pass the chips in the middle before the bet.');

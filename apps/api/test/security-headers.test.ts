@@ -1,17 +1,7 @@
 /**
- * Security-layer tests, run against a real Fastify instance with `app.inject()`.
- *
- * `inject()` drives the whole request lifecycle — hooks, validation, serialization, the error
- * handler — without opening a socket, so these are real end-to-end assertions with no port,
- * no fixture server and no timing flakiness.
- *
- * No database is involved: `buildApp` takes a `DatabaseHandle`, and the stubs below are all
- * these tests need. That seam is deliberate; if it ever stops working, this file stops
- * compiling, which is the right way to find out.
- *
- * The test routes registered here (`/api/v1/test-*`) exist only in this file. Routes are
- * added after `buildApp` returns and before the first `inject()`, which is exactly the seam
- * other agents will use.
+ * Security-layer tests against a real Fastify instance through `app.inject()`, which runs the whole
+ * request lifecycle without a socket. `buildApp` takes a `DatabaseHandle`, so stubs replace the
+ * database. The `/api/v1/test-*` routes exist only in this file.
  */
 
 import assert from 'node:assert/strict';
@@ -33,14 +23,13 @@ function testConfig(overrides: EnvRecord = {}): AppConfig {
     DATABASE_URL: 'postgresql://poker:poker@127.0.0.1:5432/poker_risk_lab',
     PUBLIC_WEB_ORIGIN: ALLOWED_ORIGIN,
     SESSION_COOKIE_SECRET: 'Zk7pQ2vR9tX4bN6mL1sD8gH3jF5wC0yA',
-    // Generous, so the header assertions below are never the thing that trips the limiter.
-    // The 429 shape gets its own app with a limit of one.
+    // Generous, so the limiter never trips the header assertions. The 429 case has its own app.
     RATE_LIMIT_MAX: '5000',
     ...overrides,
   });
 }
 
-/** A stub that answers without a database. `ok: false` exercises the degraded path. */
+/** `ok: false` exercises the degraded path. */
 function stubDatabase(check: DbCheck = { ok: true }): DatabaseHandle {
   return {
     ping: async () => check,
@@ -48,12 +37,7 @@ function stubDatabase(check: DbCheck = { ok: true }): DatabaseHandle {
   };
 }
 
-/**
- * Builds an app with the handful of routes these tests need.
- *
- * `/api/v1/test-boom` throws an error whose message looks exactly like the kind of internal
- * detail that must never reach a client.
- */
+/** `/api/v1/test-boom` throws a message shaped like internal detail that must never reach a client. */
 async function appWithTestRoutes(options: { config?: AppConfig; database?: DatabaseHandle } = {}) {
   const app = await buildApp({
     config: options.config ?? testConfig(),
@@ -65,8 +49,7 @@ async function appWithTestRoutes(options: { config?: AppConfig; database?: Datab
   app.post('/api/v1/test-guest', { schema: { body: { $ref: 'prl:createGuestBody#' } } }, async () => ({
     accepted: true,
   }));
-  // A rejected promise rather than an `async` throw, only because an async function with no
-  // `await` is a lint error. Fastify sees the same thing either way.
+  // A rejected promise because an async function with no `await` is a lint error.
   app.get('/api/v1/test-boom', () =>
     Promise.reject(new Error('SELECT session_token FROM sessions WHERE id = 42 -- internal detail')),
   );
@@ -93,7 +76,7 @@ interface ApiErrorShape {
   };
 }
 
-/** Asserts the body is the contract's error shape and returns it. */
+/** Asserts the contract's error shape and returns the body. */
 function asApiError(body: unknown): ApiErrorShape {
   assert.ok(typeof body === 'object' && body !== null, 'error body must be an object');
   assert.ok('error' in body, 'error body must have an `error` member');
@@ -129,7 +112,6 @@ function asApiError(body: unknown): ApiErrorShape {
   };
 }
 
-/** Mints a CSRF secret cookie and its matching token. */
 async function csrfPair(app: FastifyInstance): Promise<{ token: string; cookie: string }> {
   const response = await app.inject({ method: 'GET', url: '/api/v1/test-csrf' });
   assert.equal(response.statusCode, 200);
@@ -143,16 +125,9 @@ async function csrfPair(app: FastifyInstance): Promise<{ token: string; cookie: 
 }
 
 /**
- * Headers that must be on **every** response, not just the ones a handler produced.
- *
- * This list is the reason the security layer registers helmet in `onRequest` rather than
- * `onSend`: a 404, a 429, a refused preflight and a 500 are all answered before (or instead
- * of) a handler, and a header set that only appears on the happy path protects nothing on the
- * responses an attacker is actually provoking. The failure is easy to introduce — moving one
- * hook, or answering a request from an earlier hook — and invisible to a suite that only ever
- * asserts against `/health`.
- *
- * `strict-transport-security` is checked separately, because it is production-only.
+ * Headers that must be on every response. A 404, 429, refused preflight and 500 are answered
+ * before or instead of a handler, which is why helmet runs in `onRequest` rather than `onSend`.
+ * `strict-transport-security` is production-only and checked separately.
  */
 const ALWAYS_PRESENT_HEADERS = [
   'content-security-policy',
@@ -167,7 +142,7 @@ const ALWAYS_PRESENT_HEADERS = [
   'cache-control',
 ] as const;
 
-/** One non-handler path: what to send, and the status that proves it took that path. */
+/** A non-handler path and the status that proves it took that path. */
 interface HeaderCase {
   readonly label: string;
   readonly options: InjectOptions;
@@ -176,16 +151,13 @@ interface HeaderCase {
 
 const NON_HANDLER_CASES: readonly HeaderCase[] = [
   { label: '404 for an unknown route', options: { method: 'GET', url: '/api/v1/nope' }, status: 404 },
-  // Answered by the error handler, not the route.
   { label: '500 from a throwing handler', options: { method: 'GET', url: '/api/v1/test-boom' }, status: 500 },
-  // Answered by the CSRF hook, before validation.
   {
     label: '403 from the CSRF check',
     options: { method: 'POST', url: '/api/v1/test-mutate', payload: {} },
     status: 403,
   },
-  // Answered inside the CORS onRequest hook — the case most likely to lose headers, because
-  // it replies from a hook rather than returning a value.
+  // Replies from the CORS onRequest hook, the case most likely to lose headers.
   {
     label: '403 from a refused preflight',
     options: {
@@ -283,7 +255,7 @@ describe('security headers', () => {
   });
 
   it('keeps the header set on a 429, which is answered before any route logic', async () => {
-    // Its own app, because proving this needs a limit of one and the cases above need headroom.
+    // A limit of one, while the cases above need headroom.
     const app = await appWithTestRoutes({ config: testConfig({ RATE_LIMIT_MAX: '1' }) });
     assert.equal((await app.inject({ method: 'GET', url: '/api/v1/ready' })).statusCode, 200);
 
@@ -297,8 +269,7 @@ describe('security headers', () => {
   });
 
   it('sends HSTS on an error response too, not only on a healthy one', async () => {
-    // A transport-security header that appears only on 200s leaves every error response
-    // downgradeable, which is precisely the request an attacker gets to choose.
+    // HSTS only on 200s would leave every error response downgradeable.
     const app = await appWithTestRoutes({
       config: testConfig({
         NODE_ENV: 'production',
@@ -329,9 +300,7 @@ describe('security headers', () => {
       config: testConfig({
         NODE_ENV: 'production',
         PUBLIC_WEB_ORIGIN: 'https://app.example.test',
-        // Only so this test does not print request logs. NODE_ENV=production would otherwise
-        // switch the logger on, which is exactly what it should do. `fatal` because production
-        // refuses `silent`: a production process that logs nothing cannot say why it died.
+        // Quiet logs. Production refuses `silent`, so `fatal`.
         LOG_LEVEL: 'fatal',
       }),
     });
@@ -503,7 +472,6 @@ describe('error handling', () => {
     for (const leak of ['SELECT', 'session_token', 'internal detail', 'sessions', 'at ', '.ts:']) {
       assert.ok(!raw.includes(leak), `response leaked "${leak}": ${raw}`);
     }
-    // The request id is the only bridge between the client and the log line.
     assert.equal(body.error.requestId, header(response.headers, 'x-request-id'));
     await app.close();
   });
@@ -599,8 +567,8 @@ describe('rate limiting', () => {
   });
 
   it('counts a request before the CSRF check does, so a flood cannot be free', async () => {
-    // The ordering claim in plugins/security.ts, asserted. If the CSRF hook ever moves back to
-    // `onRequest`, this returns 403 and a caller can hammer the server without being counted.
+    // Pins the ordering in plugins/security.ts. With the CSRF hook in `onRequest`, this is a 403
+    // and the caller is never counted.
     const app = await appWithTestRoutes({ config: testConfig({ RATE_LIMIT_MAX: '1' }) });
     assert.equal((await app.inject({ method: 'GET', url: '/api/v1/ready' })).statusCode, 200);
 
@@ -619,7 +587,7 @@ describe('rate limiting', () => {
       url: '/api/v1/ready',
       headers: { 'x-forwarded-for': '9.9.9.9' },
     });
-    // TRUST_PROXY is false, so the header is ignored and the bucket is unchanged.
+    // TRUST_PROXY is false, so the header is ignored.
     assert.equal(spoofed.statusCode, 429);
     await app.close();
   });
@@ -666,46 +634,19 @@ describe('log redaction', () => {
     for (const key of ['displayName', 'holeCards', 'deck', 'salt', 'commitmentSalt']) {
       assert.ok(isSensitiveKey(key), `${key} must be treated as sensitive`);
     }
-    // Fields we rely on in log lines must NOT be censored, or the logs stop being useful.
+    // Fields the log lines rely on must not be censored.
     for (const key of ['clientKey', 'routePattern', 'statusCode', 'method', 'reqId', 'apiErrorCode']) {
       assert.ok(!isSensitiveKey(key), `${key} must stay readable`);
     }
   });
 
   /**
-   * The scrub, against the object it exists to stop — a real `HandState`, not a hand-written one.
-   *
-   * ## The defect
-   *
-   * The assertion above names `deck`, `salt` and `commitmentSalt`, and the denylist it checks
-   * carried exactly those spellings. None of them is a field of `HandState`. The fields that hold
-   * the hand's secrets are `deck`, `deckCursor`, `deckSalts`, `holeCardPositions` and
-   * `boardPositions` (see `packages/poker-engine/src/types.ts`, which calls the deck, the cursor
-   * and the salts "the hand's secrets"), and an exact-match list matched one of the five.
-   *
-   * Measured on 2026-08-27 by handing a real dealt state to `scrubLogObject`:
-   *
-   *     deck=REDACTED  deckCursor=present  deckSalts=present  holeCardPositions=present
-   *     deckSalts logged: {"0":208,"1":81,"2":117,"3":22,...}
-   *     identical to the real bytes: true
-   *
-   * `deckSalts` is a `Uint8Array`, so the recursive scrub walked it as an object and emitted the
-   * first `MAX_KEYS_PER_OBJECT` entries — two whole 32-byte commitment salts, byte for byte —
-   * while `logging.ts`'s own header promised that "hole cards, decks and commitment salts" never
-   * reach a log line.
-   *
-   * ## Why a real state and not a fixture of key names
-   *
-   * Because the defect WAS a fixture of key names. Every spelling in the old list was plausible
-   * and none was real, and a test that lists spellings can only ever re-assert the same guess. So
-   * this one dials the whole object out of the engine and then requires that every field which is
-   * not public information be gone — by walking the state's own keys, so a field added to
-   * `HandState` later arrives here as an unclassified key rather than as silence.
-   *
-   * ## Would it fail against the old code?
-   *
-   * Yes, and it did: run against the denylist as it stood, it reports `deckCursor`,
-   * `deckSalts` and `holeCardPositions` surviving.
+   * The scrub against a real dealt `HandState`, not a list of key names.
+   * The old denylist named `deck`, `salt` and `commitmentSalt`, and only `deck` is a real field.
+   * Measured on 2026-08-27, `deckSalts` (a `Uint8Array`) was walked as an object and logged two
+   * whole 32-byte commitment salts. This walks the state's own keys, so a new field arrives as an
+   * unclassified key. Against the old denylist it reports `deckCursor`, `deckSalts` and
+   * `holeCardPositions` surviving.
    */
   it('censors every secret on a real HandState, not the spellings someone guessed', () => {
     const dealt = startHand({
@@ -723,9 +664,7 @@ describe('log redaction', () => {
     const state = dealt.state;
 
     /**
-     * Every key of `HandState` that is public information, and therefore may survive a log line.
-     * Written as the ALLOWLIST rather than as a denylist of secrets, so a new secret field is a
-     * failure by default and a new public one is a deliberate edit here.
+     * Every public key of `HandState`. An allowlist, so a new secret field fails by default.
      */
     const publicKeys = new Set([
       'handId',
@@ -761,25 +700,22 @@ describe('log redaction', () => {
         'denylist in logging.ts must cover it, or it is public and belongs in `publicKeys` above.',
     );
 
-    // Named on its own as well as caught by the walk, because this is the field the incident was
-    // about: `deckSalts` is a `Uint8Array`, the scrub walks an array-like as an object, and the
-    // salts plus the published Merkle root are the material the commitment scheme withholds.
+    // Named on its own because it was the incident. The salts plus the published Merkle root are
+    // what the commitment scheme withholds.
     assert.equal(scrubbed['deckSalts'], CENSOR, 'the commitment salts must never reach a log line');
     assert.equal(scrubbed['deck'], CENSOR);
     assert.equal(scrubbed['deckCursor'], CENSOR);
     assert.equal(scrubbed['holeCardPositions'], CENSOR);
 
-    // And no card, under any key, in the whole scrubbed line. The quoted form, as everywhere else
-    // here: a bare "2c" occurs inside a 64-character hex root often enough to be flaky, and a card
-    // can only reach a log as a JSON string in the first place.
+    // No card under any key. Quoted, because a bare "2c" occurs in a 64-character hex root often
+    // enough to be flaky.
     const asText = JSON.stringify(scrubbed);
     const leakedCards = orderedDeck()
       .map((card) => cardToString(card))
       .filter((notation) => asText.includes(`"${notation}"`));
     assert.deepEqual(leakedCards, [], `card notation reached the log: ${leakedCards.join(', ')}`);
 
-    // And the positive control: the scrub is not simply censoring everything. A log line that said
-    // nothing would satisfy every assertion above and would be useless to an operator.
+    // Positive control. A log line that said nothing would pass every assertion above.
     assert.equal(scrubbed['handId'], state.handId);
     assert.equal(scrubbed['street'], 'preflop');
   });

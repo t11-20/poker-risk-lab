@@ -1,77 +1,10 @@
 /**
- * Tournament equity: what a stack of chips is worth when the prizes are a ladder.
- *
- * In a cash game a chip is a chip. In a tournament with a prize ladder it is not: you
- * cannot cash out chips, only finishing places pay, and first place does not pay
- * proportionally more than second. That makes the value of a chip *concave* in your
- * stack — the chips you win are worth less each than the chips you lose. Every "why
- * did folding that coinflip make sense?" question in tournament poker comes back to
- * that one sentence, and this file is where the app gets the numbers to show it.
- *
- * The ladder is the cause, not the tournament: with a single prize, ICM equity is
- * exactly stack share times that prize, perfectly linear, and a chip is a chip again.
- * `assumptions` reflects which of the two situations it was handed rather than
- * asserting the concavity lesson unconditionally.
- *
- * ## The model: Malmuth–Harville
- *
- * One assumption, applied repeatedly: your chance of finishing first is your share
- * of the chips in play. Remove the winner and their chips, and the same rule gives
- * the chance of finishing second among the rest; repeat down the paid places. Sum
- * `P(place) x prize(place)` and you have a player's expected prize.
- *
- * It is a *model*, and a crude one. It knows nothing about position, skill, or the
- * fact that a three-big-blind stack is about to be forced all-in while a
- * forty-big-blind stack is not. Its output is a way of seeing the shape of the
- * problem, not the value of a seat. `assumptions` on every result says so, because a
- * learner shown "your equity is 187.4 units" without that caveat has been taught
- * something false.
- *
- * ## The recursion, and why it is memoised on a bitmask
- *
- * Written out directly, "the probability that player i finishes in place p" sums over
- * every ordered sequence of the p-1 players who finished above them: n!/(n-p)! terms,
- * factorial in the number of paid places. Nearly all of that work is repeated,
- * because the probability of reaching a given position depends only on WHICH players
- * have already finished, not on the order they finished in.
- *
- * So the memo key is the *set* of finished players, as a bitmask:
- *
- *     Q(S) = probability that exactly the players in S take the top |S| places,
- *            in any order
- *     Q(empty) = 1
- *     Q(S)     = sum over j in S of  Q(S \ j) x stack_j / (total - stack(S \ j))
- *
- * The place number never needs to be part of the key: a set of size k can only ever
- * occupy places 1..k, so `place = |S| + 1` is implied by the key itself. That is what
- * turns a (set x place) table into a set table, and the factorial into 2^n subsets
- * with n terms each — 512 x 9 at the cap, which is nothing.
- *
- * Then, for a player i not in S:
- *
- *     P(i finishes in place |S|+1) = sum over S of  Q(S) x stack_i / (total - stack(S))
- *
- * and the equity is that, weighted by the prize for the place, summed.
- *
- * ## Why the player count is capped at 9
- *
- * Two reasons, and the second matters more. The first is cost: 2^n subsets is cheap
- * at 9 and unpleasant at 30, and an unmemoised implementation would already be
- * hopeless. The second is honesty. ICM's assumptions — no blind pressure, no skill
- * edge, no future structure — are a stretch at a nine-handed final table and simply
- * false across a 900-player field, where most of the variance comes from things this
- * model cannot see. Refusing the input is better than returning a confident number
- * about a situation the model does not describe.
- *
- * ## Busted players
- *
- * A stack of zero means already finished, so those players take the lowest places
- * still available and the players with chips compete for the places above. When more
- * than one player is on zero at the same time there is nothing in the model to
- * separate them, so they share those places' prizes equally — stated in
- * `assumptions` rather than quietly invented. Supporting zero is what lets
- * `icmVsChipEv` price an all-in where somebody actually busts, which is the only
- * interesting kind.
+ * Tournament equity by Malmuth–Harville. A player's chance of each place is their share of the chips
+ * still in play, applied place by place. With a prize ladder a chip won is worth less than a chip lost.
+ * With a single prize, equity is exactly stack share times the prize, and `assumptions` says which.
+ * The recursion is memoised on the set of finished players as a bitmask (the set's size implies the
+ * place), so it costs 2^n x n, 512 x 9 at the cap. A zero stack has already finished, takes the lowest
+ * open places, and shares their prizes equally with any other zero stack.
  */
 
 import { assertDistinctCards, type Card, cardsToString, DECK_SIZE, popCount13 } from '@prl/poker-engine';
@@ -83,9 +16,8 @@ export class IcmError extends Error {
 }
 
 /**
- * The cap on players in one ICM model. See the header for both reasons; the binding
- * one is that the model stops describing reality long before the arithmetic stops
- * being feasible.
+ * The model ignores blind pressure, skill and future structure, which is a stretch at a final table
+ * and false across a large field. That binds long before the 2^n cost does.
  */
 export const MAX_ICM_PLAYERS = 9;
 
@@ -144,21 +76,13 @@ function validateIcmInput(stacks: readonly number[], payouts: readonly number[])
   }
 }
 
-/**
- * Malmuth–Harville over players who all have chips.
- *
- * Returns expected prize per player. `stacks` must all be strictly positive and
- * `payouts[k]` is the prize for finishing in place k+1; places beyond the array pay
- * nothing.
- */
+/** Every stack must be positive. `payouts[k]` pays place k+1, and later places pay nothing. */
 function malmuthHarville(stacks: readonly number[], payouts: readonly number[]): number[] {
   const playerCount = stacks.length;
   const total = sum(stacks);
   const subsetCount = 1 << playerCount;
 
-  // Chip total of every subset, built bottom-up: a subset's total is its lowest
-  // member plus the total of the rest. Precomputing this is what keeps the recursion
-  // free of inner summations.
+  // Each subset's chip total is its lowest member plus the total of the rest.
   const subsetStack = new Float64Array(subsetCount);
   for (let mask = 1; mask < subsetCount; mask++) {
     const lowestBit = mask & -mask;
@@ -168,9 +92,8 @@ function malmuthHarville(stacks: readonly number[], payouts: readonly number[]):
     subsetStack[mask] = stack + (subsetStack[mask ^ lowestBit] ?? 0);
   }
 
-  // Q(mask): probability that exactly the players in `mask` take the top |mask|
-  // places. Memoised in a flat array rather than a Map — the key space is 2^n <= 512,
-  // so the whole table is smaller than a Map's first allocation.
+  // Q(mask) is the probability that exactly the players in `mask` take the top |mask| places.
+  // Q(S) = sum over j in S of Q(S \ j) x stack_j / (total - stack(S \ j)).
   const memo = new Float64Array(subsetCount);
   const memoFilled = new Uint8Array(subsetCount);
 
@@ -184,8 +107,7 @@ function malmuthHarville(stacks: readonly number[], payouts: readonly number[]):
       remainingBits ^= bit;
       const finisher = 31 - Math.clz32(bit);
       const without = mask ^ bit;
-      // The pool the finisher was drawn from: everyone who had not yet finished.
-      // Strictly positive because `finisher` is not in `without` and holds chips.
+      // Positive, because `finisher` is not in `without` and holds chips.
       const pool = total - (subsetStack[without] ?? 0);
       if (pool <= 0) throw new IcmError('ICM recursion reached an empty chip pool; stacks must be positive');
       const stack = stacks[finisher];
@@ -201,8 +123,7 @@ function malmuthHarville(stacks: readonly number[], payouts: readonly number[]):
   const equities = new Array<number>(playerCount).fill(0);
 
   for (let mask = 0; mask < subsetCount; mask++) {
-    // A 9-bit mask fits inside 13 bits, so the engine's popcount serves here and
-    // there is no reason for this package to carry a second one.
+    // A 9-bit mask fits the engine's 13-bit popcount.
     const placeIndex = popCount13(mask);
     if (placeIndex >= paidPlaces) continue;
     const prize = payouts[placeIndex] ?? 0;
@@ -222,12 +143,7 @@ function malmuthHarville(stacks: readonly number[], payouts: readonly number[]):
 }
 
 function icmAssumptions(bustedCount: number, playerCount: number, payouts: readonly number[]): string[] {
-  // The concavity lesson holds because the LADDER is flatter than the chip
-  // distribution. Take the ladder away and it stops being true: if only first place
-  // pays, ICM equity is exactly stack share times the prize, perfectly linear, and a
-  // chip really is a chip again. Stating the lesson unconditionally would be the kind
-  // of confident overclaim this app exists to argue against, so the note is chosen
-  // from the structure actually passed in.
+  // With one paid place ICM is linear in chips, so the concavity note would be false there.
   const onlyFirstPlacePays = payouts.slice(1).every((prize) => prize === 0);
   const notes = [
     "Finish probabilities come straight from chip counts: a player's chance of winning is taken as " +
@@ -265,11 +181,8 @@ function icmAssumptions(bustedCount: number, playerCount: number, payouts: reado
 }
 
 /**
- * Expected prize per player from stacks and a payout ladder.
- *
- * `payouts[0]` is first place. Places beyond the end of the array pay nothing, and
- * `payouts` may not list more places than there are players — that would put prizes
- * in the pool for finishes that have already happened.
+ * `payouts[0]` is first place. It may not list more places than players, because that would pool
+ * prizes for finishes already decided.
  */
 export function icmEquity(stacks: readonly number[], payouts: readonly number[]): IcmResult {
   validateIcmInput(stacks, payouts);
@@ -288,9 +201,7 @@ export function icmEquity(stacks: readonly number[], payouts: readonly number[])
   const equities = new Array<number>(playerCount).fill(0);
 
   if (bustedIndices.length > 0) {
-    // Busted players occupy the bottom places: 0-based place indices
-    // aliveCount..playerCount-1. Whatever those places pay is shared equally,
-    // because nothing in the model orders players who are all on zero.
+    // Zero stacks take places aliveCount..playerCount-1 and share them, since nothing orders them.
     let bottomPrizes = 0;
     for (let place = aliveIndices.length; place < playerCount; place++) {
       bottomPrizes += payouts[place] ?? 0;
@@ -300,7 +211,6 @@ export function icmEquity(stacks: readonly number[], payouts: readonly number[])
   }
 
   if (aliveIndices.length === 1) {
-    // One player holds every chip, so they finish first by definition.
     const winner = aliveIndices[0];
     if (winner === undefined) throw new IcmError('alive player index is missing');
     equities[winner] = payouts[0] ?? 0;
@@ -350,28 +260,17 @@ export interface IcmDecision {
   /** Expected prize equity gained, in prize units, relative to hero's equity now. */
   readonly icmEv: number;
   /**
-   * `icmEv` minus the same `chipEv` converted at the naive rate
-   * `prizePool / totalChips`. Negative means the spot is worth less than treating
-   * chips as money would suggest — the usual case for a marginal all-in.
+   * `icmEv` minus `chipEv` converted at `prizePool / totalChips`. Negative means the spot is worth
+   * less than its chips at face value, the usual case for a marginal all-in.
    */
   readonly divergence: number;
   readonly explanation: string;
 }
 
 /**
- * Prices one spot two ways: in chips, and in prize equity.
- *
- * `outcomeIfWin` and `outcomeIfLose` are full stack vectors after the hand, in the
- * same order as `stacks`, so they can describe any shape of result — hero doubles
- * through one opponent, hero busts, hero wins a three-way pot. Both must conserve
- * chips: the totals have to match `stacks`, because chips do not appear or vanish.
- * Getting that wrong silently is how a "surprising" ICM result usually turns out to
- * be an arithmetic mistake, so it throws instead.
- *
- * The two EVs are in different units — chips and prize units — and that is not an
- * oversight, it is the point. `divergence` is the only place they are compared, and
- * it does so through the one honest conversion available: the naive
- * "prize pool per chip" rate that a chip-chop model would use.
+ * One spot in chips and in prize equity. The outcomes are full stack vectors in `stacks` order, and
+ * each must total the same chips as `stacks` or it throws. The two EVs stay in their own units, and
+ * `divergence` alone compares them, at the flat prize-pool-per-chip rate.
  */
 export function icmVsChipEv(input: {
   stacks: readonly number[];
@@ -405,8 +304,7 @@ export function icmVsChipEv(input: {
     }
     validateNumbers(outcome, label);
     const outcomeTotal = sum(outcome);
-    // A relative tolerance, because chip counts can be large and the caller may have
-    // divided a pot. Anything looser than this is a real bookkeeping error.
+    // Relative, because chip counts can be large and a split pot leaves fractions.
     if (Math.abs(outcomeTotal - totalChips) > 1e-9 * Math.max(1, totalChips)) {
       throw new IcmError(
         `${label} totals ${outcomeTotal} chips but the table holds ${totalChips}; chips are neither ` +
@@ -466,48 +364,24 @@ export interface PushFoldResult {
 }
 
 /**
- * Sampling bounds for the equity-when-called figure.
- *
- * 20,000 trials puts the 95% interval on hero's pot share between ±0.5 and ±0.7
- * percentage points, depending on how lopsided the matchup is. The shove's chip EV
- * moves by `2 x stackBb x (1 - foldProbability)` per unit of equity error, so at 20 big
- * blinds against a range that always calls that is about ±0.27 big blinds — well inside
- * the error in assuming the caller uses exactly the stated range, which is the real
- * uncertainty in this figure and is not a sampling problem at all. The floor stops a
- * caller asking for a number too noisy to act on; the ceiling keeps one call from
- * monopolising a request handler. Both bounds are reported in `assumptions` at the
- * actual sample count used, so the caller never has to trust this comment.
+ * 20,000 trials put the 95% interval on hero's pot share at ±0.5 to ±0.7 points, about ±0.27 big
+ * blinds of chip EV at 20 big blinds against a range that always calls. The floor refuses a figure
+ * too noisy to act on. The ceiling keeps one call from holding a request handler.
  */
 const DEFAULT_PUSH_FOLD_SAMPLES = 20_000;
 const MIN_PUSH_FOLD_SAMPLES = 1_000;
 const MAX_PUSH_FOLD_SAMPLES = 200_000;
 const DEFAULT_PUSH_FOLD_SEED = 20_260_817;
 
-/** "1 big blind" / "2.5 big blinds" — the explanations are read by learners. */
 function bigBlinds(amount: number): string {
   return `${amount} big blind${amount === 1 ? '' : 's'}`;
 }
 
 /**
- * Chip EV of shoving the small blind heads-up, against a stated calling range.
- *
- * Three outcomes, and only three, because the shove ends the betting: the big blind
- * folds and hero takes their posted chips; the big blind calls and the hand runs out;
- * or hero folds and loses the posted small blind. No postflop play, no future streets,
- * so this is one of the very few poker spots whose chip EV can be written down in a
- * line and defended.
- *
- * Chip EV only. The prize ladder is not in here at all — feed the same spot to
- * `icmVsChipEv` for that, and expect the answer to change.
- *
- * ## Errors
- *
- * Its own parameters — stack, blinds, ante, sample count, seed, the number of cards —
- * raise `IcmError`. A card that is invalid or repeated raises `CardParseError` from the
- * engine and a malformed `callerRangeNotation` raises `RangeParseError` from ranges.ts,
- * both deliberately unwrapped: those messages already name the offending card or token,
- * and re-throwing them as `IcmError` would replace a precise diagnostic with a vague
- * one.
+ * Chip EV of a heads-up small-blind shove against a stated calling range, with no prize ladder.
+ * The shove ends the betting, so there are three outcomes and no postflop play.
+ * Bad cards and ranges throw the engine's `CardParseError` and `RangeParseError` unwrapped, because
+ * those messages name the offending token.
  */
 export function pushFoldChipEv(input: {
   heroCards: readonly Card[];
@@ -565,9 +439,7 @@ export function pushFoldChipEv(input: {
     throw new IcmError(`seed must be an integer so the figure is reproducible, received ${seed}`);
   }
 
-  // Hero's cards block the caller: they cannot hold a card hero is holding. Skipping
-  // this inflates the number of strong combinations in the calling range and makes
-  // the shove look worse than it is.
+  // Hero's cards are removed from the calling range, or its strong combinations are overcounted.
   const callerRange = parseRange(callerRangeNotation, heroCards);
   if (callerRange.combos.length === 0) {
     throw new IcmError(
@@ -575,8 +447,7 @@ export function pushFoldChipEv(input: {
     );
   }
 
-  // Fold probability is a property of the ASSUMED range, not a read on a person: the
-  // share of the caller's possible holdings that the range excludes.
+  // The share of the caller's possible holdings the assumed range excludes.
   const availableCombos = choose(DECK_SIZE - heroCards.length, 2);
   const callingCombos = callerRange.combos.length;
   const foldProbability = 1 - callingCombos / availableCombos;
@@ -596,11 +467,8 @@ export function pushFoldChipEv(input: {
   if (hero === undefined) throw new IcmError('equity result carried no players');
   const equityWhenCalled = hero.equity;
 
-  // Both EVs are measured against hero's stack BEFORE posting, so the posted small
-  // blind and ante appear as a cost in both branches and the comparison is honest.
-  //   folded through: hero collects the big blind's posted chips.
-  //   called:         a pot of 2 x stackBb, of which hero wins `equityWhenCalled`,
-  //                   against the stackBb hero put in.
+  // Both EVs are against hero's stack before posting, so the posted blind and ante cost both
+  // branches. Called, hero wins `equityWhenCalled` of 2 x stackBb against the stackBb put in.
   const wonWhenFoldedTo = bigBlindBb + anteBb;
   const netWhenCalled = 2 * stackBb * equityWhenCalled - stackBb;
   const chipEvOfPush = foldProbability * wonWhenFoldedTo + callProbability * netWhenCalled;
