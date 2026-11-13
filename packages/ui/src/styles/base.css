@@ -168,15 +168,26 @@ h6 {
  * `margin-block-start` is set with `:where()` at zero specificity on the first-child case so a
  * heading that opens a block does not push itself away from the top of it.
  */
+/* The two headline levels are set condensed and heavy: the width axis is what makes a headline
+   read as printed on a card rather than typed into a page, and it buys the size that a 360px
+   phone could not otherwise fit. `h3` and below stay at the reading width. */
+h1,
+h2 {
+  font-family: var(--prl-font-display);
+  font-stretch: var(--prl-stretch-display);
+}
+
 h1 {
   font-size: var(--prl-type-display-2);
+  font-weight: 800;
   letter-spacing: var(--prl-tracking-display-2);
+  line-height: 1.02;
 }
 
 h2 {
   margin-block: var(--prl-space-11) var(--prl-space-5);
   font-size: var(--prl-type-display-3);
-  font-weight: var(--prl-weight-semibold);
+  font-weight: var(--prl-weight-bold);
   letter-spacing: var(--prl-tracking-display-3);
   line-height: var(--prl-leading-heading);
 }

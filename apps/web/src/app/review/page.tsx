@@ -63,6 +63,7 @@ import { netWord } from '../../lib/net-words.ts';
 import { readerCallOptions } from '../../lib/server-session.ts';
 import '../../styles/page.css';
 import '../../styles/review.css';
+import { SuitMark } from '@/components/SuitMark.tsx';
 
 export const metadata: Metadata = {
   title: 'Review your hand history',
@@ -320,9 +321,7 @@ export default async function ReviewIndexPage({
     <div className="prl-container prl-review-page">
       <header className="prl-page-head">
         <p className="prl-eyebrow">
-          <span className="prl-index" aria-hidden="true">
-            05
-          </span>{' '}
+          <SuitMark area="review" />
           Review
         </p>
         {/* Carries the nav's word. It said "Hand history" under a nav that said "Review", and the

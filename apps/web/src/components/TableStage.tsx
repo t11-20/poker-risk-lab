@@ -289,15 +289,30 @@ function StageSkeleton(): ReactElement {
  */
 function IdleTable({ message }: { readonly message: string | undefined }): ReactElement {
   return (
-    <div className="prl-empty prl-play__idle">
-      <p className="prl-label">No table yet</p>
-      <p>
-        {message ??
-          'Nothing has been dealt and nothing is loading. The table is drawn here once there is one.'}
-      </p>
+    <div className="prl-play__idle">
+      {/* The table drawn empty: six places and yours marked, so the first screen of the product's
+          main feature shows what is about to happen rather than a dashed box saying nothing has. The
+          drawing is decorative; the sentence in the middle is what is read out. */}
+      <div aria-hidden="true" className="prl-play__idle-table">
+        {IDLE_SEATS.map((seat) => (
+          <span className="prl-play__idle-seat" data-seat={seat} key={seat}>
+            {seat === 'you' ? 'You' : null}
+          </span>
+        ))}
+      </div>
+      <div className="prl-play__idle-text">
+        <p className="prl-play__idle-title">No table yet</p>
+        <p>
+          {message ??
+            'Nothing has been dealt and nothing is loading. The table is drawn here once there is one.'}
+        </p>
+      </div>
     </div>
   );
 }
+
+/** The six places around the empty table, yours at the bottom where it is when you are dealt in. */
+const IDLE_SEATS = ['top-left', 'top', 'top-right', 'bottom-right', 'you', 'bottom-left'] as const;
 
 function CoachSkeleton(): ReactElement {
   return (

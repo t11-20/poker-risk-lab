@@ -55,6 +55,8 @@ const ROUTES = [
   '/terms',
   '/privacy',
   '/responsible-use',
+  // The evidence behind the home page's figures, moved off the home page in the 4.0 re-identity.
+  '/checks',
 ];
 
 /**
@@ -150,7 +152,15 @@ const CONTROLS = [
     width: 1440,
     expect: 'collision',
     what: 'the same defect, seen as glyphs painted across a collapsed label',
-    css: '.prl-play .prl-coach__section .prl-stat__pair { grid-template-columns: minmax(0, 1fr) auto; column-gap: 0; }',
+    // The value is set start-aligned as well, because whether the collapsed label's words land on
+    // the sentence's glyphs or in the gap beside them depends on the face. Measured at 1440px after
+    // the 4.0 typeface and sentence-case labels: the right-aligned sentence wrapped to leave its
+    // first 29px empty, the label's words ("Pot", "and", "price") fell exactly there (x 1034-1063
+    // against the value from 1063), and this control stopped being caught. Start-aligned, the
+    // sentence covers the label at any face, so the control tests the detector and not the font.
+    css:
+      '.prl-play .prl-coach__section .prl-stat__pair { grid-template-columns: minmax(0, 1fr) auto; column-gap: 0; } ' +
+      '.prl-play .prl-coach__section .prl-stat__value { justify-content: flex-start; text-align: start; }',
   },
   {
     id: 'negative-margin',

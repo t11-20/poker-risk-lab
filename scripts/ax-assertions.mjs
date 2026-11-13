@@ -346,8 +346,14 @@ async function gatherGlobal(page) {
   // G7, G8, G10: a real client-side navigation.
   const target = await page.evaluate(
     `(() => {
-      const link = [...document.querySelectorAll('nav[aria-label="Primary"] a')]
-        .find((a) => (a.textContent ?? '').trim() === 'Learn');
+      // The text a reader hears, so aria-hidden content is left out: since the suit marks (4.0)
+      // the link's textContent is "\u2660\uFE0ELearn" while its name is still "Learn".
+      const heard = (a) => {
+        const copy = a.cloneNode(true);
+        for (const hidden of copy.querySelectorAll('[aria-hidden="true"]')) hidden.remove();
+        return (copy.textContent ?? '').trim();
+      };
+      const link = [...document.querySelectorAll('nav[aria-label="Primary"] a')].find((a) => heard(a) === 'Learn');
       if (link === undefined) return null;
       link.setAttribute('data-prl-nav-source', '1');
       link.focus();

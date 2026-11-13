@@ -37,6 +37,9 @@
  *
  * ## "Where the numbers come from" is scoped on purpose — do not tighten it back
  *
+ * Its full text now lives on `/checks`, with one sentence and a link left here (the footer had
+ * grown to two screens on a phone). The history below applies to that text wherever it is.
+ *
  * That block used to end with: "There is no stored odds table anywhere in this product, so there is
  * no table that can be quietly wrong." It read well and it was false. `src/fixtures/*.ts` ships
  * eighteen stored `ruleOfThumb` blocks and twenty-one stored `heroEquity` values — stored odds
@@ -52,9 +55,10 @@
  * A server component: no state, no effects, no JavaScript shipped for a list of links.
  */
 
-import { formatIndex } from '@prl/ui';
 import Link from 'next/link';
 import type { ReactElement } from 'react';
+import { SuitMark } from '@/components/SuitMark.tsx';
+import { CHECKS_PATH } from '@/lib/checks.ts';
 import { DOCUMENT_DESTINATIONS, NAV_DESTINATIONS, RECORD_DESTINATION } from '@/lib/nav.ts';
 import { RECORD_PATH } from '@/lib/record-data.ts';
 import { SessionDuration } from './SessionDuration.tsx';
@@ -94,21 +98,19 @@ export function SiteFooter(): ReactElement {
         <nav aria-label="Sections" className="prl-footer__map">
           <p className="prl-footer__heading prl-label">Sections</p>
           <ul className="prl-footer__list">
-            {NAV_DESTINATIONS.map((destination, position) => (
+            {NAV_DESTINATIONS.map((destination) => (
               <li className="prl-footer__item" key={destination.href}>
                 <Link className="prl-footer__link" href={destination.href}>
-                  <span aria-hidden="true" className="prl-index">
-                    {formatIndex(position + 1)}
-                  </span>
+                  <SuitMark area={destination.area ?? null} />
                   <span className="prl-footer__link-label">{destination.label}</span>
                 </Link>
                 <span className="prl-footer__summary">{destination.summary}</span>
               </li>
             ))}
-            {/* After the five and unnumbered: see `RECORD_DESTINATION`. */}
+            {/* After the five and unmarked: see `RECORD_DESTINATION`. */}
             <li className="prl-footer__item">
               <Link className="prl-footer__link" href={RECORD_DESTINATION.href}>
-                <span aria-hidden="true" className="prl-index prl-index--blank" />
+                <SuitMark area={null} />
                 <span className="prl-footer__link-label">{RECORD_DESTINATION.label}</span>
               </Link>
               <span className="prl-footer__summary">{RECORD_DESTINATION.summary}</span>
@@ -143,23 +145,15 @@ export function SiteFooter(): ReactElement {
         <div className="prl-footer__statement">
           <p className="prl-footer__heading prl-label">Where the numbers come from</p>
           <p className="prl-footer__prose">
-            Every equity, out, price and expected value is computed from the actual deck at the moment you ask
-            for it. Nothing is looked up: there is no odds table inside the calculation, so there is no lookup
-            that can be quietly wrong. Each figure arrives with its method — exact enumeration or Monte Carlo
-            with an interval — and with the assumptions it was computed under.
-          </p>
-          <p className="prl-footer__prose">
-            There is one exception, and the page tells you about it rather than this paragraph. When the
-            service that computes those figures cannot be reached, a screen falls back to a bundled copy of
-            the same worked example so it is still readable, and says so at the top in a notice you cannot
-            miss. A bundled figure ships with the app instead of being computed for you, so it can be stale —
-            which is exactly why it is labelled where you are reading it and not only down here.
+            Every figure is computed from the actual deck when you ask for it, never looked up, and arrives
+            with its method and assumptions. <Link href={CHECKS_PATH}>How the numbers are checked</Link> says
+            what tests that, and where a bundled copy is shown instead.
           </p>
         </div>
 
         {/*
-          The documents. Not indexed: the `01…05` motif belongs to the numbered argument above, and
-          numbering these would say they are the next steps in it.
+          The documents. Unmarked: the suits belong to the five sections above, and a suit on a
+          document would say it is a part of the product rather than a statement about it.
         */}
         <nav aria-label="Documents" className="prl-footer__map">
           <p className="prl-footer__heading prl-label">Documents</p>

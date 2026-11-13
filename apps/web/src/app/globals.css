@@ -471,8 +471,59 @@ body {
   text-decoration: none;
 }
 
-.prl-shell__brand-index {
-  color: var(--prl-accent-text);
+/* ---- the suit marks (`SuitMark`) ----------------------------------------------------------- */
+
+/**
+ * Four-colour, like the deck on the table, so the four parts of the loop are told apart at a glance
+ * — and never by colour alone: the shape differs and the area's name is always beside it. The
+ * colours are the suit tokens on the card stock, and their lighter partners on the card back,
+ * where a spade in card ink would be navy on navy.
+ */
+.prl-suit-mark {
+  display: inline-block;
+  min-width: 1em;
+  color: var(--prl-mark-spade);
+  font-family: var(--prl-font-display);
+  font-stretch: var(--prl-stretch-display);
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+}
+
+.prl-suit-mark[data-area="play"] {
+  color: var(--prl-mark-heart);
+}
+
+.prl-suit-mark[data-area="lab"] {
+  color: var(--prl-mark-diamond);
+}
+
+.prl-suit-mark[data-area="review"] {
+  color: var(--prl-mark-club);
+}
+
+.prl-suit-mark[data-area="legends"] {
+  color: var(--prl-text);
+}
+
+.prl-nav__mark {
+  margin-inline-end: var(--prl-space-2);
+}
+
+/**
+ * On the current page the pill is filled with the accent, and a diamond in the accent on it measured
+ * 1.0:1 — the mark vanished exactly where it should say "you are here". On a filled pill it takes
+ * the pill's text colour, like the word beside it.
+ */
+.prl-nav__link[aria-current="page"] .prl-nav__mark {
+  color: inherit;
+}
+
+/* Page-head eyebrows set the mark and the area's name as two inline items with no gap of their own. */
+.prl-eyebrow .prl-suit-mark,
+.prl-play__eyebrow .prl-suit-mark,
+.prl-learn-page__eyebrow .prl-suit-mark {
+  margin-inline-end: var(--prl-space-3);
 }
 
 .prl-shell__brand-name {
@@ -528,7 +579,6 @@ body {
   font-weight: var(--prl-weight-medium);
   letter-spacing: var(--prl-tracking-label);
   text-decoration: none;
-  text-transform: uppercase;
   transition:
     background-color var(--prl-dur-instant) var(--prl-ease-hover),
     border-color var(--prl-dur-instant) var(--prl-ease-hover),
@@ -1038,7 +1088,6 @@ body {
   font-size: var(--prl-type-label);
   font-weight: var(--prl-weight-semibold);
   letter-spacing: var(--prl-tracking-label);
-  text-transform: uppercase;
 }
 
 .prl-footer__summary {
@@ -1112,6 +1161,10 @@ body {
 
 .prl-spine__label {
   color: var(--prl-text);
+}
+
+.prl-spine__mark {
+  margin-inline-end: var(--prl-space-3);
 }
 
 .prl-spine__detail {

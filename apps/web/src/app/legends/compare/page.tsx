@@ -47,6 +47,7 @@ import { CompareChoiceLimit } from '@/components/CompareChoiceLimit.tsx';
 import { DifficultyPicker } from '@/components/DifficultyPicker.tsx';
 import { LegendSigil } from '@/components/LegendSigil.tsx';
 import { ProfileDisclaimers } from '@/components/ProfileDisclaimers.tsx';
+import { SuitMark } from '@/components/SuitMark.tsx';
 import {
   COMPARE_SITUATION,
   DEFAULT_COMPARE_PROFILE_IDS,
@@ -135,9 +136,7 @@ export default async function ComparePage({
   return (
     <div className="prl-legend-page">
       <div className="prl-legend-head">
-        <span aria-hidden="true" className="prl-index">
-          04
-        </span>
+        <SuitMark area="legends" />
         <h1 className="prl-legend-head__title prl-display-2">One spot, several styles</h1>
         <p className="prl-legend-head__standfirst">
           The same cards, the same pot and the same price, handed to each style in turn. The analysis below is

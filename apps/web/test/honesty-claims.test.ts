@@ -70,6 +70,9 @@ const CLAIM_FILES: readonly (readonly string[])[] = [
   ['components', 'SiteFooter.tsx'],
   ['components', 'MetricsBand.tsx'],
   ['app', 'page.tsx'],
+  ['app', 'checks', 'page.tsx'],
+  ['lib', 'checks.ts'],
+  ['components', 'HomeSpot.tsx'],
   ['app', 'learn', 'page.tsx'],
   ['app', 'terms', 'page.tsx'],
   ['app', 'privacy', 'page.tsx'],
@@ -185,11 +188,16 @@ describe('nothing on screen claims an absence the fixtures contradict', () => {
   it('the footer still makes the honest version of the claim rather than saying nothing', () => {
     // Deleting the statement would be the other way to pass this file, and it would be a worse
     // product: the claim is the reason to trust the figures, and a narrower true one is still a
-    // claim. This asserts the replacement exists.
+    // claim. This asserts the replacement exists. Since 4.0 the full statement is on `/checks` and
+    // the footer carries one sentence and the link to it, so both are held: the footer may not
+    // drop the claim or the link, and the page may not drop either paragraph.
     const footer = read('components', 'SiteFooter.tsx');
-    assert.match(footer, /Nothing is looked up/u);
-    assert.match(footer, /bundled copy/u);
-    assert.match(footer, /says so at the top/u);
+    assert.match(footer, /never looked up/u);
+    assert.match(footer, /href=\{CHECKS_PATH\}/u);
+    const checks = read('app', 'checks', 'page.tsx');
+    assert.match(checks, /Nothing is looked up/u);
+    assert.match(checks, /bundled copy/u);
+    assert.match(checks, /says so at the top/u);
   });
 
   it('the fallback really is labelled on the page, which is what makes the footer true', () => {

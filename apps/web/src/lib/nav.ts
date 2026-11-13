@@ -38,25 +38,46 @@
 import { LEGAL_PATHS } from './legal-config.ts';
 import { RECORD_PATH } from './record-data.ts';
 
+/** The part of the product a destination belongs to; drawn by `SuitMark`. */
+export type NavArea = 'learn' | 'play' | 'lab' | 'legends' | 'review';
+
 export interface NavDestination {
   /** Route path. Matched exactly for `/`, by prefix for everything else. */
   readonly href: string;
-  /** The word on the control, uppercased by `--prl-type-label` in CSS, not in the string. */
+  /** The word on the control, in sentence case. */
   readonly label: string;
   /** One line for the footer and the not-found page. Not a marketing sentence. */
   readonly summary: string;
+  /** Present on the five sections; the documents and the record carry no mark. */
+  readonly area?: NavArea;
 }
 
 export const NAV_DESTINATIONS: readonly NavDestination[] = [
-  { href: '/learn', label: 'Learn', summary: 'Lessons, quizzes and the glossary.' },
-  { href: '/play', label: 'Play', summary: 'Tables against bots, AI Legends and private rooms.' },
-  { href: '/lab', label: 'Lab', summary: 'The Scenario Lab: change one input, watch the maths move.' },
+  { href: '/learn', area: 'learn', label: 'Learn', summary: 'Lessons, quizzes and the glossary.' },
+  {
+    href: '/play',
+    area: 'play',
+    label: 'Play',
+    summary: 'Tables against bots, AI Legends and private rooms.',
+  },
+  {
+    href: '/lab',
+    area: 'lab',
+    label: 'Lab',
+    summary: 'The Scenario Lab: change one input, watch the maths move.',
+  },
   {
     href: '/legends',
+    area: 'legends',
     label: 'Legends',
     summary: 'Twelve computer opponents, each a different style of play.',
   },
-  { href: '/review', label: 'Review', summary: 'Hand history, with every decision priced afterwards.' },
+  {
+    href: '/review',
+    area: 'review',
+    label: 'Review',
+    summary: 'Hand history, with every decision priced afterwards.',
+  },
 ];
 
 /**

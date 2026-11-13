@@ -34,6 +34,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 import { NotFoundBody } from '@/app/not-found.tsx';
 import { PostHandComparison } from '@/components/PostHandComparison.tsx';
+import { SuitMark } from '@/components/SuitMark.tsx';
 import {
   type HandComparisonProblem,
   LEGENDS_COMPARE_PATH,
@@ -66,9 +67,7 @@ function readHandId(raw: string | string[] | undefined): string | null {
 export function HandReviewHeader(): ReactElement {
   return (
     <div className="prl-legend-head">
-      <span aria-hidden="true" className="prl-index">
-        04
-      </span>
+      <SuitMark area="legends" />
       <h1 className="prl-legend-head__title prl-display-2">A finished hand, reviewed</h1>
       <p className="prl-legend-head__standfirst">
         Every decision in one hand, in order: what was done, what the analysis priced at the time, and what
